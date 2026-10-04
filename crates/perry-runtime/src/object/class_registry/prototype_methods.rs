@@ -53,6 +53,59 @@ pub unsafe extern "C" fn js_class_register_static_field(
     crate::object::class_value::note_static_field_defined(class_id, name);
 }
 
+/// [`js_class_register_static_field`] for a static PRIVATE field
+/// (`static #x`): the same store, then the storage key becomes an
+/// `ENTRY_PRIVATE` entry of the class function's bag, so no reflection path
+/// sees it (#11791).
+#[no_mangle]
+pub unsafe extern "C" fn js_class_register_static_private_field(
+    class_id: u32,
+    name_ptr: *const u8,
+    name_len: usize,
+    value: f64,
+    global_slot: *mut f64,
+) {
+    js_class_register_static_field(class_id, name_ptr, name_len, value, global_slot);
+    if class_id == 0 || name_ptr.is_null() || name_len == 0 {
+        return;
+    }
+    let name = std::slice::from_raw_parts(name_ptr, name_len);
+    crate::object::class_value::class_static_claim_private(class_id, name);
+}
+
+/// Define a static PRIVATE field of a fresh class evaluation on its class
+/// object: the ordinary store, then the key becomes an `ENTRY_PRIVATE` entry
+/// of the class object's own properties (#11791).
+#[no_mangle]
+pub unsafe extern "C" fn js_class_object_define_static_private(
+    class_object: *mut crate::object::ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) {
+    crate::object::js_object_set_field_by_name(class_object, key, value);
+    if key.is_null() {
+        return;
+    }
+    let addr = (class_object as u64 & crate::value::POINTER_MASK) as usize;
+    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+        return;
+    };
+    let name =
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
+    if header.obj_type == crate::gc::GC_TYPE_CLOSURE {
+        crate::closure::props::bag_claim_private(addr, name);
+    } else if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let obj = addr as *mut crate::object::ObjectHeader;
+        if !crate::object::key_attrs::object_key_is_private(obj, name) {
+            crate::object::key_attrs::apply_edits(
+                obj,
+                &[crate::object::key_attrs::AttrsEdit::Private(name)],
+            );
+        }
+    }
+}
+
 /// Read a computed instance-field key resolved at ClassDefinitionEvaluation.
 /// Fresh class values carry the hidden slot on their heap class object; plain
 /// class references use the class-id static side table.
@@ -200,6 +253,66 @@ pub(crate) fn invalidate_class_prototype_fast_guards_for_method(name: &str) {
     retire_prototype_dependent_caches();
 }
 
+/// A user operation (`Object.setPrototypeOf(C.prototype, X)`,
+/// `C.prototype.__proto__ = X`) replaced the `[[Prototype]]` of `proto`.
+///
+/// When `proto` is a declared class's prototype object, every member that
+/// class's instances inherited from its DECLARED ancestors is off their chain
+/// from now on, and whatever `X` carries is on it. The runtime walks over
+/// declared members stop at the relinked class
+/// (`instance_chain_parent_class_id`); what remains are the resolutions made
+/// before the relink or ahead of time:
+///
+/// * compiler-emitted direct-method arms (the dispatch tower, `super.m()`)
+///   resolved an inherited name to an ancestor's body along the declared
+///   `extends` chain. They are guarded by the per-name invalidation bytes, so
+///   the relink retires the slot of every method, getter and setter name an
+///   ancestor declares — exactly the names whose resolution it can change. A
+///   name the class itself declares still resolves to its own body, and a
+///   name no declared class carries never had a direct arm;
+/// The runtime's by-name method calls need nothing: they read the
+/// prototype chain's shapes (`native_call_method::class_holder`), and the
+/// relink restamps `proto`. Neither do the receiver-word site memos: the
+/// relink restamps `proto`'s shape, which their hop facts compare.
+///
+/// # Safety
+/// `proto` must point to a live, meta-capable object.
+pub(crate) unsafe fn class_prototype_relinked(proto: *mut crate::object::ObjectHeader) {
+    let cid = (*proto).class_id;
+    if cid == 0 || super::class_decl_prototype_object(cid) != proto {
+        return;
+    }
+    super::super::prototype_chain::note_class_chain_relinked();
+    let mut names: Vec<String> = Vec::new();
+    if let Ok(registry) = super::CLASS_VTABLE_REGISTRY.read() {
+        if let Some(reg) = registry.as_ref() {
+            let mut cur = cid;
+            for _ in 0..32 {
+                match super::get_parent_class_id(cur) {
+                    Some(pid) if pid != 0 && pid != cur => cur = pid,
+                    _ => break,
+                }
+                if let Some(vt) = reg.get(&cur) {
+                    names.extend(vt.methods.keys().cloned());
+                    names.extend(vt.accessors.keys().cloned());
+                }
+            }
+        }
+    }
+    for name in &names {
+        let slot = class_prototype_method_guard_slot(name) as usize;
+        #[cfg(not(test))]
+        PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD[slot]
+            .store(1, std::sync::atomic::Ordering::Release);
+        #[cfg(test)]
+        CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD
+            .write()
+            .unwrap()
+            .insert(slot as u16);
+    }
+    retire_prototype_dependent_caches();
+}
+
 pub(crate) fn invalidate_class_prototype_fast_guards() {
     #[cfg(not(test))]
     PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(1, std::sync::atomic::Ordering::Release);
@@ -207,6 +320,57 @@ pub(crate) fn invalidate_class_prototype_fast_guards() {
     CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(true, std::sync::atomic::Ordering::Release);
     // Unknown-key prototype surgery cannot use a scoped slot. Retire every
     // direct-method guard, then perform the common cache invalidations.
+    retire_prototype_dependent_caches();
+}
+
+/// Can a new `[[Prototype]]` on the object at `obj_ptr` change what a
+/// compiler-emitted direct-method arm resolved?
+///
+/// Those arms call a body the compiler resolved along a declared class's
+/// `extends` chain, for a receiver whose exact `(class_id, ShapeId)` the arm
+/// compares on every call. Their resolution can only move when the new link
+/// sits on such a chain or on such a receiver:
+///
+/// * a class instance (a real class id): conservatively retired, although its
+///   ShapeId already names the new prototype;
+/// * a declared class's prototype object: [`class_prototype_relinked`]
+///   retires the inherited names precisely, and this keeps the all-names latch
+///   on top;
+/// * an object perry cannot classify (not meta-capable, not regular): retired.
+///
+/// Every other target — an object literal, an `Object.create` result, a plain
+/// function's `.prototype` (`util.inherits`, `setPrototypeOf(Sub.prototype,
+/// Base.prototype)`; registered under the function's synthetic class id, which
+/// no compiled arm names), a dictionary built with `__proto__` — is on no
+/// declared class chain. A class whose chain later reaches it (`class X extends Sub`)
+/// resolves no inherited body statically through a function base, and an
+/// instance that later takes it as its prototype is re-stamped by that link.
+/// Retiring every direct arm in the process for these turned one
+/// `util.inherits` in any dependency into a 3.7x tax on every `this.m()`
+/// (#10504).
+///
+/// # Safety
+/// `obj_ptr` must be a heap address the caller already validated as an object.
+pub(crate) unsafe fn prototype_relink_may_retarget_direct_arms(obj_ptr: usize) -> bool {
+    let Some(obj) = crate::object::prototype_chain::meta_capable_object(obj_ptr) else {
+        return true;
+    };
+    if !crate::object::object_is_regular(obj) {
+        return true;
+    }
+    let class_id = (*obj).class_id;
+    if class_id != 0 && !super::is_anon_shape_class_id(class_id) {
+        return true;
+    }
+    super::class_id_for_decl_prototype_object(obj_ptr).is_some()
+}
+
+/// The cache retirements of [`invalidate_class_prototype_fast_guards`]
+/// without its all-names latch: for a prototype relink that
+/// [`prototype_relink_may_retarget_direct_arms`] proves cannot move a compiled
+/// direct arm. The runtime's `(class, name)` dispatch caches and element-shape
+/// proofs still restart.
+pub(crate) fn retire_prototype_caches_without_direct_arms() {
     retire_prototype_dependent_caches();
 }
 
@@ -344,6 +508,27 @@ pub unsafe extern "C" fn js_register_prototype_method(
     }
     if class_has_instance_getter(class_id, &name) {
         return;
+    }
+    // `C.prototype.__proto__ = v` is not a method install: it is a `[[Set]]`
+    // that reaches `Object.prototype`'s `__proto__` accessor, whose setter
+    // relinks the prototype exactly like `Object.setPrototypeOf`.
+    if name == "__proto__" {
+        let proto = super::class_decl_prototype_value(class_id);
+        if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let proto = scope.root_nanbox_f64(proto);
+            let value = scope.root_nanbox_f64(value);
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let key = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
+            crate::proxy::js_put_value_set(
+                proto.get_nanbox_f64(),
+                key,
+                value.get_nanbox_f64(),
+                proto.get_nanbox_f64(),
+                1,
+            );
+            return;
+        }
     }
     class_prototype_method_root_store(class_id, name, value.to_bits());
     // Ensure the receiver class can be `typeof`-detected. Method-less

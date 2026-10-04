@@ -1,0 +1,31 @@
+{
+  "tracked_inputs": 4994,
+  "test_only_delta": [
+    "crates/perry-runtime/src/arena/block/reuse_window_tests.rs"
+  ],
+  "result": {
+    "private_test_commit": "8e087ff43e",
+    "parent_private_commit": "3843fcb54a",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "perry-runtime",
+      "--lib",
+      "idle_eden_pages_leave_rss_without_releasing_recent_or_reused_blocks",
+      "--",
+      "--nocapture"
+    ],
+    "rc": 0,
+    "pid": 705445,
+    "elapsed_s": 100.22494201315567,
+    "log_sha256": "38959e4dbf0b08c8988ce5ecb50a7cb5997935dc53bfe9162fe88693ad0672ec",
+    "source_inputs_sha256": "ddadd281bc7f7bea7a408ddf47021b47b0867fae7461ee275b1221da508c8c99",
+    "scope": "Real Linux mincore subject: idle pages discarded, recent/in-use bytes intact, mapping and bitmap retained, subsequent reuse writable. Separate test checkout; app build/products unchanged."
+  },
+  "independently_verified": true,
+  "original_setup_failure_preserved": true,
+  "scope": "Private Linux residency/reuse test; moving-only page policy remains unapplied. Does not prove application peak savings."
+}

@@ -295,23 +295,50 @@ fn conns() -> &'static Mutex<HashMap<i64, H2Conn>> {
 
 /// Ids this module owns, kept separately from [`conns`] so that [`owns`] stays
 /// truthful while a record is checked out by [`with_owned`].
-fn owned_ids() -> &'static Mutex<std::collections::HashSet<i64>> {
-    static IDS: OnceLock<Mutex<std::collections::HashSet<i64>>> = OnceLock::new();
-    IDS.get_or_init(|| Mutex::new(std::collections::HashSet::new()))
+fn owned_ids() -> &'static Mutex<HashMap<i64, i64>> {
+    static IDS: OnceLock<Mutex<HashMap<i64, i64>>> = OnceLock::new();
+    IDS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 pub(crate) fn owns(id: i64) -> bool {
     owned_ids()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .contains(&id)
+        .contains_key(&id)
 }
 
-pub(crate) fn insert(conn: H2Conn) {
+fn socket_handle(id: i64) -> i64 {
     owned_ids()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .insert(conn.id);
+        .get(&id)
+        .copied()
+        .unwrap_or(0)
+}
+
+fn connection_id_for_socket(socket: i64) -> Option<i64> {
+    owned_ids()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find_map(|(id, handle)| (*handle == socket).then_some(*id))
+}
+
+/// Route a JS accepted-socket handle through the HTTP/2 transport owner.
+pub(crate) fn destroy_socket(socket: i64) -> bool {
+    if let Some(id) = connection_id_for_socket(socket) {
+        destroy_connection(id);
+        true
+    } else {
+        false
+    }
+}
+
+pub(crate) fn insert(conn: H2Conn, socket_handle: i64) {
+    owned_ids()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(conn.id, socket_handle);
     conns()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -493,16 +520,11 @@ fn on_accept(listener_id: i64, conn_id: i64) {
             return;
         }
     }
-    insert(conn);
-    // Give HTTP/2's `'connection'` listener a
-    // real socket argument too, same shared drain path as HTTP/1.1. Not
-    // stored on `H2Conn` — HTTP/2 streams don't wire `req.socket` from it
-    // (out of scope here; Node's own `Http2ServerRequest` has no `.socket`
-    // alias to a per-connection object the way `http`'s does).
     let connection_socket = crate::server::request::alloc_connection_socket(
         peer.as_ref().map(|e| e.address.clone()).unwrap_or_default(),
         peer.as_ref().map(|e| e.port).unwrap_or(0),
     );
+    insert(conn, connection_socket);
     crate::server::server::queue_turnloop_connection_event(server_handle, connection_socket);
     if let Err(_err) = tl::read_start(conn_id) {
         destroy_connection(conn_id);
@@ -660,46 +682,49 @@ pub(crate) fn connect_client(
     if id == perry_ffi::INVALID_HANDLE {
         return None;
     }
-    insert(H2Conn {
-        id,
-        role: Role::Client,
-        server_handle: 0,
-        session_handle,
-        core: None,
-        input: Vec::with_capacity(16 * 1024),
-        streams: Vec::new(),
-        secure: tls.is_some(),
-        // A client handshake has not started yet — `on_connect` installs the
-        // session once the socket is up — but the flag has to be set here,
-        // because `on_data` reads it to decide whether the first bytes are a
-        // ServerHello or an HTTP/2 preface.
-        handshaking: tls.is_some(),
-        connecting: true,
-        client_tls: tls,
-        alpn: None,
-        peer_address: String::new(),
-        peer_port: port,
-        buffered: 0,
-        // Node's `maxSessionMemory` default, in bytes.
-        max_session_memory: 10 * 1024 * 1024,
-        timer: Timer::None,
-        draining: false,
-        closing: false,
-        read_eof: false,
-        destroyed: false,
-        queued_opens: Vec::new(),
-        allow_http1: false,
-        // What this connection's core will actually advertise, so
-        // `clamp_to_core` in `control.rs` has something truthful to clamp a
-        // later `session.settings()` against.
-        settings: advertised_settings(&Http2SettingsState::default()),
-        preface_done: false,
-        core_settings_acked: false,
-        owed_settings_acks: 0,
-        goaway_opaque: Vec::new(),
-        peer_settings: None,
-        pending_controls: Vec::new(),
-    });
+    insert(
+        H2Conn {
+            id,
+            role: Role::Client,
+            server_handle: 0,
+            session_handle,
+            core: None,
+            input: Vec::with_capacity(16 * 1024),
+            streams: Vec::new(),
+            secure: tls.is_some(),
+            // A client handshake has not started yet — `on_connect` installs the
+            // session once the socket is up — but the flag has to be set here,
+            // because `on_data` reads it to decide whether the first bytes are a
+            // ServerHello or an HTTP/2 preface.
+            handshaking: tls.is_some(),
+            connecting: true,
+            client_tls: tls,
+            alpn: None,
+            peer_address: String::new(),
+            peer_port: port,
+            buffered: 0,
+            // Node's `maxSessionMemory` default, in bytes.
+            max_session_memory: 10 * 1024 * 1024,
+            timer: Timer::None,
+            draining: false,
+            closing: false,
+            read_eof: false,
+            destroyed: false,
+            queued_opens: Vec::new(),
+            allow_http1: false,
+            // What this connection's core will actually advertise, so
+            // `clamp_to_core` in `control.rs` has something truthful to clamp a
+            // later `session.settings()` against.
+            settings: advertised_settings(&Http2SettingsState::default()),
+            preface_done: false,
+            core_settings_acked: false,
+            owed_settings_acks: 0,
+            goaway_opaque: Vec::new(),
+            peer_settings: None,
+            pending_controls: Vec::new(),
+        },
+        0,
+    );
     // Node sets TCP_NODELAY on an HTTP/2 client socket.
     if tl::tcp_connect(id, super::SUBSYSTEM, host, port, true).is_err() {
         forget(id);
@@ -910,6 +935,7 @@ enum Handshake {
 /// multishot read; only the owning table changes, because both halves are the
 /// same subsystem. That is the whole reason this module shares slot 1.
 fn hand_to_http1(id: i64, pending: &[u8]) {
+    let connection_socket = socket_handle(id);
     let Some(conn) = forget(id) else { return };
     let mut leftover = conn.input;
     leftover.extend_from_slice(pending);
@@ -918,6 +944,7 @@ fn hand_to_http1(id: i64, pending: &[u8]) {
         conn.server_handle,
         conn.peer_address,
         conn.peer_port,
+        connection_socket,
         leftover,
     ) {
         let _ = tl::close(id);
@@ -1315,6 +1342,7 @@ fn on_eof(id: i64) {
 }
 
 fn on_closed(id: i64) {
+    let connection_socket = socket_handle(id);
     // `forget` may find nothing — an earlier failed write dropped the record
     // and left only the ownership entry — and the cleanup below still has to
     // run, because it is the ownership entry and the id itself that leak.
@@ -1333,6 +1361,9 @@ fn on_closed(id: i64) {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .remove(&id);
+    }
+    if connection_socket != 0 {
+        crate::server::turnloop_serve::note_closed_socket(connection_socket);
     }
     perry_ext_net::turnloop_tls_io::forget(id);
     // The terminal completion: no completion can name this id again, so it goes
@@ -1415,6 +1446,38 @@ mod prescan_tests {
             goaway_opaque: Vec::new(),
             peer_settings: None,
             pending_controls: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn terminal_close_queues_the_announced_socket_once() {
+        for destroyed_early in [false, true] {
+            let id = perry_ffi::reserve_handle_id();
+            let socket = crate::server::request::alloc_connection_socket(String::new(), 0);
+            let mut connection = conn(0, false);
+            connection.id = id;
+            insert(connection, socket);
+            assert_eq!(connection_id_for_socket(socket), Some(id));
+            if destroyed_early {
+                with_owned(id, |connection| connection.destroyed = true);
+                assert!(peek(id, |_| ()).is_none());
+                assert_eq!(connection_id_for_socket(socket), Some(id));
+            }
+
+            on_closed(id);
+            assert!(!owns(id));
+            assert_eq!(connection_id_for_socket(socket), None);
+            assert_eq!(
+                crate::server::turnloop_serve::take_closed_sockets(),
+                vec![socket]
+            );
+            assert!(crate::server::turnloop_serve::take_closed_sockets().is_empty());
+            crate::server::request::close_incoming_message(socket);
+            assert!(
+                perry_ffi::get_handle::<crate::server::request::IncomingMessage>(socket)
+                    .is_some_and(|message| message.close_emitted)
+            );
+            perry_ffi::drop_handle(socket);
         }
     }
 

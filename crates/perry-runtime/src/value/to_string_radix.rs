@@ -234,9 +234,8 @@ pub extern "C" fn js_jsvalue_to_string_radix(
     // the codegen routes any single-arg `.toString(x)` here. Dispatch back to
     // the Temporal method router so the options bag flows through, instead of
     // ToNumber-coercing it as a radix (which throws a spurious RangeError).
-    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(value) {
-        let result = crate::temporal::dispatch::call_method(value, "toString", &[radix_value]);
+        let result = crate::temporal::hooked::call_method(value, "toString", &[radix_value]);
         let rv = JSValue::from_bits(result.to_bits());
         if rv.is_string() {
             return rv.as_string_ptr() as *mut crate::string::StringHeader;

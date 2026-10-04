@@ -212,3 +212,26 @@ pub(super) fn accept_forwarding_target(user_addr: usize) -> bool {
     note_refused_forwarding_target();
     false
 }
+
+/// Resolve a live field's closure while collector traversal may still see a
+/// forwarding stub. Use the same validated source/target gates as the copying
+/// rewrite walk; never read closure payload metadata from a forwarded stub.
+#[cfg(any(debug_assertions, feature = "field-rep-assert", perry_gc_instruments))]
+pub(crate) fn field_rep_live_address(mut addr: usize) -> Option<usize> {
+    for _ in 0..64 {
+        let Some(header) = forwarding_walk_header(addr) else {
+            return Some(addr);
+        };
+        unsafe {
+            if (*header).gc_flags & GC_FLAG_FORWARDED == 0 {
+                return Some(addr);
+            }
+            let next = forwarding_address(header) as usize;
+            if next == addr || !accept_forwarding_target(next) {
+                return None;
+            }
+            addr = next;
+        }
+    }
+    None
+}

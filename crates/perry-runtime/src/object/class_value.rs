@@ -8,8 +8,9 @@
 //!   It is bit-identical to the int32 number equal to the class id, which is
 //!   #11414; the lane deletes it;
 //! * a class FUNCTION OBJECT: a `GC_TYPE_CLOSURE` cell whose code pointer is
-//!   [`js_class_constructor_called`] (its [[Call]], which throws) and whose
-//!   capture slot 0 holds the class id as an INT32 value.
+//!   [`js_class_constructor_called`] (its [[Call]], which throws), whose
+//!   capture slot 0 holds the class id as an INT32 value, and whose capture
+//!   slot 1 holds the class's `prototype` object ([`class_decl_prototype_link`]).
 //!
 //! Every decoder asks [`class_value_id`] (or [`class_value_id_bits`] /
 //! [`class_closure_id`] for the raw-word and raw-pointer spellings). Nothing
@@ -174,8 +175,10 @@ crate::perry_thread_local! {
     /// This agent's class function objects, indexed by class id: a page
     /// directory (`pages`, `len` pages) whose pages are leaked for the agent's
     /// life. Read without a borrow flag — the hot path is a TLS read, a bounds
-    /// check and two loads. A GC root (rewritten on a move) via
-    /// [`scan_class_value_roots_mut`].
+    /// check and two loads. Not a GC root: a class function object is pinned
+    /// (never moves, always a root of the pinned-object scan) and its edges
+    /// (`props`, the prototype link) are traced child slots like any other
+    /// closure's.
     static CLASS_VALUES: std::cell::Cell<(*mut *mut ClassValuePage, usize)> =
         const { std::cell::Cell::new((std::ptr::null_mut(), 0)) };
 }
@@ -228,10 +231,33 @@ fn class_value_slot(class_id: u32) -> *mut *mut ClosureHeader {
     }
 }
 
+/// Capture slot of a class function object holding its evaluation state, an
+/// INT32. `0`: the object names the class's evaluations as a group, so a
+/// per-evaluation class object's static writes are mirrored into it (#6530).
+/// `1`: the object IS its declaration's first evaluation (#11759 (c′)), a
+/// class of its own; later evaluations never write into it. Generated code
+/// sets it when the first evaluation hands the shared class out.
+const CLASS_EVALUATION_STATE_SLOT: usize = crate::codegen_abi::CLASS_EVALUATION_STATE_CAPTURE;
+
+/// Is class `class_id`'s function object its declaration's first evaluation
+/// (see [`CLASS_EVALUATION_STATE_SLOT`])? A class whose function object was
+/// never minted has no evaluation to protect.
+pub(crate) fn class_value_is_first_evaluation(class_id: u32) -> bool {
+    class_value_cached(class_id).is_some_and(|closure| {
+        // SAFETY: a live class function object minted with its capture slots.
+        unsafe {
+            *crate::closure::closure_capture_slots_mut(closure).add(CLASS_EVALUATION_STATE_SLOT)
+                == crate::codegen_abi::CLASS_FIRST_EVALUATION_STATE
+        }
+    })
+}
+
 /// Allocate the class function object for `class_id`: a closure born in the
 /// old generation and pinned (it lives as long as the agent and never moves),
 /// code pointer
-/// [`js_class_constructor_called`], capture slot 0 = the class id as INT32.
+/// [`js_class_constructor_called`], capture slot 0 = the class id as INT32,
+/// capture slot 1 = its evaluation state ([`CLASS_EVALUATION_STATE_SLOT`]),
+/// capture slot 2 = the class's `prototype` object once it exists.
 ///
 /// Never collects: callers hold raw receiver pointers across the lookup, so
 /// the old-arena allocation runs under a [`crate::gc::GcSuppressScope`].
@@ -243,24 +269,32 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         "a class function object belongs to a compiled class id, never a builtin or synthetic band: {class_id:#x}"
     );
     let _no_collect = crate::gc::GcSuppressScope::new();
-    let payload = crate::closure::closure_payload_size(1);
+    let payload = crate::closure::closure_payload_size(CLASS_VALUE_CAPTURES);
     let ptr = crate::arena::arena_alloc_gc_old_born_tenured(
         payload,
         std::mem::align_of::<ClosureHeader>(),
         crate::gc::GC_TYPE_CLOSURE,
     ) as *mut ClosureHeader;
     unsafe {
-        // GC_STORE_AUDIT(INIT): fresh class function object; the one capture
-        // is an INT32 class id and the props edge is null — pointer-free.
-        (*ptr).capture_count = 1;
+        // GC_STORE_AUDIT(INIT): fresh class function object; captures 0 and 1
+        // are INT32s (class id, evaluation state), capture 2 (the prototype
+        // link) starts `undefined` and the props edge is null. The arena birth
+        // leaves the layout UNKNOWN (never marked pointer-free) so the tracer reads capture 2 once it holds a pointer; that
+        // store goes through the slot barrier.
+        (*ptr).capture_count = CLASS_VALUE_CAPTURES as u32;
         (*ptr).shape_id = crate::closure::shape::function_class_shape();
         (*ptr).info = &CLASS_CONSTRUCTOR_INFO;
         (*ptr).props = std::ptr::null_mut();
+        let captures = crate::closure::closure_capture_slots_mut(ptr);
+        std::ptr::write(captures, crate::value::INT32_TAG | class_id as u64);
         std::ptr::write(
-            crate::closure::closure_capture_slots_mut(ptr),
-            crate::value::INT32_TAG | class_id as u64,
+            captures.add(CLASS_PROTOTYPE_LINK_CAPTURE),
+            crate::value::TAG_UNDEFINED,
         );
-        crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        std::ptr::write(
+            crate::closure::closure_capture_slots_mut(ptr).add(CLASS_EVALUATION_STATE_SLOT),
+            crate::value::INT32_TAG,
+        );
         // Born old AND pinned: the address is the class's identity for the
         // agent's life (compiled code keeps it in registers and allocas, the
         // metadata and weak tables compare it), so no collector may move it.
@@ -302,11 +336,11 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
 const INTRINSIC_OWN_DATA_KEYS: [&str; 2] = ["length", "name"];
 
 /// The attributes of a function's own `length` / `name`.
-const INTRINSIC_ATTRS: (bool, bool, bool) = (false, false, true);
+pub(crate) const INTRINSIC_ATTRS: (bool, bool, bool) = (false, false, true);
 
 /// The value of intrinsic own data property `key` of class `class_id`, if
 /// the class registered one.
-fn intrinsic_own_data_value(class_id: u32, key: &str) -> Option<f64> {
+pub(crate) fn intrinsic_own_data_value(class_id: u32, key: &str) -> Option<f64> {
     match key {
         "length" => super::class_registry::class_length_for_id(class_id).map(f64::from),
         "name" => super::class_registry::class_name_for_id(class_id).map(|name| {
@@ -319,7 +353,7 @@ fn intrinsic_own_data_value(class_id: u32, key: &str) -> Option<f64> {
 
 /// Does a static method or accessor of class `class_id` own `key`? Then it,
 /// not the intrinsic data property, is the class's own `key`.
-fn static_member_owns(class_id: u32, key: &str) -> bool {
+pub(crate) fn static_member_owns(class_id: u32, key: &str) -> bool {
     super::class_registry::class_has_own_static_method(class_id, key)
         || super::class_registry::class_registered_static_accessor_ptrs(class_id, key).is_some()
 }
@@ -469,6 +503,15 @@ pub(crate) fn static_method_property(
         StaticMethodProperty::Deleted
     };
     if name.starts_with('#') || is_internal_static_key(name) {
+        return live_or_next;
+    }
+    // A template evaluated to class objects keeps its statics on those objects
+    // (`define_class_object_own_properties`), each evaluation its own. The
+    // shared function object minted for the template is only the last-wins
+    // mirror of writes to any of them (`mirror_class_object_static_write`): it
+    // says nothing about what the declaration is, and one evaluation's
+    // `C.m = f` must not retire `m` for its siblings.
+    if super::class_registry::template_has_class_objects(class_id) {
         return live_or_next;
     }
     // A never-minted object owns exactly its declarations.
@@ -774,6 +817,94 @@ pub(crate) fn class_value_ptr(class_id: u32) -> *mut ClosureHeader {
     }
 }
 
+/// Captures of a class function object: the class id, the evaluation state
+/// ([`CLASS_EVALUATION_STATE_SLOT`]), then the prototype link.
+const CLASS_VALUE_CAPTURES: usize = 3;
+/// The capture holding the class's `prototype` object (NaN-boxed), or
+/// `undefined` before it exists.
+const CLASS_PROTOTYPE_LINK_CAPTURE: usize = 2;
+const _: () = assert!(CLASS_PROTOTYPE_LINK_CAPTURE != CLASS_EVALUATION_STATE_SLOT);
+const _: () = assert!(CLASS_EVALUATION_STATE_SLOT < CLASS_VALUE_CAPTURES);
+const _: () = assert!(CLASS_PROTOTYPE_LINK_CAPTURE < CLASS_VALUE_CAPTURES);
+
+/// The prototype-link word of class function object `closure`.
+///
+/// # Safety
+/// `closure` is a live class function object minted by [`class_value_mint`].
+#[inline]
+unsafe fn prototype_link_slot(closure: *mut ClosureHeader) -> *mut u64 {
+    crate::closure::closure_capture_slots_mut(closure).add(CLASS_PROTOTYPE_LINK_CAPTURE)
+}
+
+/// `C.prototype` of class `class_id` in this agent, or null when it does not
+/// exist yet: the link the class's own function object carries.
+///
+/// `prototype` is an own property of the class constructor
+/// (MakeConstructor: `{ [[Writable]]: false, [[Enumerable]]: false,
+/// [[Configurable]]: false }`), so the class→prototype link is a fact of the
+/// class object, fixed for the agent's life once made. The function object
+/// keeps it in a capture next to the class id, so the read is the class-value
+/// table's indexed loads plus one: no lock, no hash, no side table. A class
+/// whose function object was never minted has no prototype object either
+/// (minting builds it, see [`class_value_mint`]).
+///
+/// `class_id` is the prototype's identity id
+/// ([`super::class_registry::decl_prototype_identity_id`]).
+#[inline]
+pub(crate) fn class_decl_prototype_link(class_id: u32) -> *mut super::ObjectHeader {
+    let Some(closure) = class_value_cached(class_id) else {
+        return std::ptr::null_mut();
+    };
+    // SAFETY: a live class function object of this agent.
+    let bits = unsafe { *prototype_link_slot(closure) };
+    if crate::value::JSValue::from_bits(bits).is_pointer() {
+        (bits & crate::value::POINTER_MASK) as *mut super::ObjectHeader
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+/// Make `proto` class `class_id`'s prototype link and return the object it
+/// replaced (null when none). The class's function object is minted if
+/// needed; `proto` must be live and rooted by the caller.
+pub(crate) fn class_decl_prototype_link_store(
+    class_id: u32,
+    proto: *mut super::ObjectHeader,
+) -> *mut super::ObjectHeader {
+    let previous = class_decl_prototype_link(class_id);
+    let closure = class_value_ptr(class_id);
+    let bits = crate::value::POINTER_TAG | (proto as u64 & crate::value::POINTER_MASK);
+    // GC_STORE_AUDIT(SLOT): the class function object is pinned and old; its
+    // link slot is a traced capture slot, so the slot barrier remembers a
+    // young `proto` for the next minor and shades it for an incremental mark.
+    unsafe {
+        let slot = prototype_link_slot(closure);
+        *slot = bits;
+        crate::gc::runtime_write_barrier_slot(closure as usize, slot as usize, bits);
+    }
+    previous
+}
+
+/// Clear every minted class's prototype link (a test resetting the registry).
+#[cfg(test)]
+pub(crate) fn test_clear_class_decl_prototype_links() {
+    let (pages, len) = CLASS_VALUES.with(std::cell::Cell::get);
+    for i in 0..len {
+        // SAFETY: `pages` holds `len` page pointers (null or a live page).
+        let page = unsafe { *pages.add(i) };
+        if page.is_null() {
+            continue;
+        }
+        // SAFETY: a live leaked page of this agent.
+        for slot in unsafe { (*page).iter() } {
+            if !slot.is_null() {
+                // SAFETY: a live class function object of this agent.
+                unsafe { *prototype_link_slot(*slot) = crate::value::TAG_UNDEFINED };
+            }
+        }
+    }
+}
+
 /// The VALUE of class `class_id`'s constructor: its function object, NaN-boxed.
 #[inline]
 pub(crate) fn class_value(class_id: u32) -> f64 {
@@ -787,41 +918,6 @@ pub(crate) fn class_value(class_id: u32) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_class_value(class_id: i32) -> f64 {
     class_value(class_id as u32)
-}
-
-/// GC root scan for [`CLASS_VALUES`]; registered in `gc::mod`'s runtime
-/// scanner list.
-///
-/// A class function object is PINNED, and marking never queues a pinned
-/// header (`try_mark_*`: "pinned objects are always live"), so no collector
-/// enumerates its child slots from a root. Its one heap edge, the own-property
-/// bag (`props`, the statics), is therefore visited here as a root slot of its
-/// own: a full trace marks and traces the bag (and notes the shape it carries,
-/// which post-trace descriptor retirement reads), and a moving collection
-/// rewrites the edge. A minor also reaches the edge through the remembered set
-/// the `bag_ensure` store barrier dirtied; the second visit of a rewritten
-/// slot sees the forwarded address and is a no-op.
-pub(crate) fn scan_class_value_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let (pages, len) = CLASS_VALUES.with(std::cell::Cell::get);
-    for i in 0..len {
-        // SAFETY: `pages` holds `len` page pointers (null or a live page).
-        let page = unsafe { *pages.add(i) };
-        if page.is_null() {
-            continue;
-        }
-        // SAFETY: a live leaked page of this agent.
-        for slot in unsafe { (*page).iter_mut() } {
-            if slot.is_null() {
-                continue;
-            }
-            visitor.visit_raw_mut_ptr_slot(slot);
-            // SAFETY: a live class function object of this agent.
-            let props = unsafe { &mut (**slot).props };
-            if !props.is_null() {
-                visitor.visit_raw_mut_ptr_slot(props);
-            }
-        }
-    }
 }
 
 /// `C[prop]` for a class function object at `ptr` (routed by
@@ -1011,6 +1107,12 @@ pub(crate) fn class_static_own_accessor(
     class_id: u32,
     name: &str,
 ) -> Option<(crate::object::accessor_pair::Accessor, bool, bool)> {
+    // Static parent walks can reach registered builtin/synthetic ids. Those
+    // have their own dispatch and no compiled-class function object to query.
+    // Keep class_value_mint's contract intact instead of minting one on a miss.
+    if class_id == 0 || class_id >= 0x7FFF_FF00 {
+        return None;
+    }
     use crate::object::key_attrs as ka;
     let ptr = class_value_ptr(class_id) as usize;
     // SAFETY: this agent's live class closure; its bag (if any) is a live
@@ -1163,6 +1265,11 @@ fn is_internal_static_key(name: &str) -> bool {
 /// field or a runtime `C.x = v`): a slot of its function object's own-property
 /// bag.
 pub(crate) fn class_static_get(class_id: u32, name: &str) -> Option<f64> {
+    // A registered builtin parent has no compiled-class function object.
+    // Let the caller continue to its builtin static dispatch on a miss.
+    if class_id == 0 || class_id >= 0x7FFF_FF00 {
+        return None;
+    }
     let ptr = class_value_ptr(class_id) as usize;
     // SAFETY: `class_value_ptr` returns this agent's live class closure.
     unsafe {
@@ -1177,6 +1284,17 @@ pub(crate) fn class_static_get(class_id: u32, name: &str) -> Option<f64> {
 /// Define/overwrite class `class_id`'s own static data property `name`: the
 /// value only, the key keeps its attributes. Callers performing a [[Set]]
 /// have checked `writable` (the attributes live with the key).
+/// Make class `class_id`'s own static `name` a private element (#11791): the
+/// compiler calls this where it creates a static private field.
+pub(crate) fn class_static_claim_private(class_id: u32, name: &[u8]) {
+    let ptr = class_value_ptr(class_id) as usize;
+    if ptr == 0 {
+        return;
+    }
+    // SAFETY: this agent's live class closure.
+    unsafe { crate::closure::props::bag_claim_private(ptr, name) }
+}
+
 pub(crate) fn class_static_set(class_id: u32, name: &str, value: f64) {
     let ptr = class_value_ptr(class_id) as usize;
     // SAFETY: as above; the bag writers run under a GcSuppressScope.
@@ -1257,6 +1375,17 @@ pub(crate) fn class_static_entries(class_id: u32) -> Vec<(String, f64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn static_property_lookups_do_not_mint_builtin_class_values() {
+        for cid in [0, 0x7FFF_FF00, 0xFFFF_0024, u32::MAX] {
+            assert!(class_static_get(cid, "from").is_none());
+            assert!(class_static_own_accessor(cid, "from").is_none());
+            assert!(crate::object::class_registry::class_static_prototype(cid).is_null());
+            assert!(!crate::object::class_registry::class_static_prototype_is_nulled(cid));
+            assert!(class_value_cached(cid).is_none());
+        }
+    }
 
     fn register(cid: u32) {
         let mut guard = crate::object::REGISTERED_CLASS_IDS.write().unwrap();
@@ -1355,58 +1484,21 @@ mod tests {
         );
     }
 
-    /// The table is a root: the scan visits every minted class value.
-    #[test]
-    fn class_value_table_is_scanned() {
-        let cid = 0x6B01;
-        register(cid);
-        let ptr = class_value_ptr(cid) as usize;
-        let mut seen = false;
-        scan_class_value_roots_mut(&mut crate::gc::RuntimeRootVisitor::for_copy(
-            &mut |v: f64| {
-                let bits = v.to_bits();
-                if bits as usize == ptr || (bits & crate::value::POINTER_MASK) as usize == ptr {
-                    seen = true;
-                }
-            },
-        ));
-        assert!(seen, "the class-value table must be a GC root");
-    }
-
-    /// #11609: the class function object is pinned, and marking never queues a
-    /// pinned header, so its own-property bag (the statics) is reached only
-    /// because the class-value root scan visits the `props` edge itself.
-    /// Without that, a full trace never visits the bag: the shape the bag
-    /// carries is never noted as carried, post-trace descriptor retirement
-    /// drops it, and every static reads back as absent.
+    /// A class function object is traced like any other pinned object: a full
+    /// collection reaches its own-property bag (the statics) through the
+    /// pinned-object root scan, with no class-value scanner.
     #[test]
     fn a_full_collection_keeps_the_class_statics_bag() {
         let cid = 0x6B02;
         register(cid);
         // A unit-test thread may not have run `gc_init`'s scanner list.
-        crate::gc::gc_register_mutable_root_scanner(scan_class_value_roots_mut);
-        let ptr = class_value_ptr(cid) as usize;
+        crate::gc::gc_register_mutable_root_scanner(crate::gc::scan_pinned_object_roots_mut);
         let text = "static-payload-11609";
         let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
         class_static_set(
             cid,
             "k11609",
             f64::from_bits(crate::value::JSValue::string_ptr(s).bits()),
-        );
-        let mut saw_bag = false;
-        let bag = unsafe { crate::closure::props::bag_of(ptr) } as usize;
-        assert_ne!(bag, 0, "the static installed a bag");
-        scan_class_value_roots_mut(&mut crate::gc::RuntimeRootVisitor::for_copy(
-            &mut |v: f64| {
-                let bits = v.to_bits();
-                if bits as usize == bag || (bits & crate::value::POINTER_MASK) as usize == bag {
-                    saw_bag = true;
-                }
-            },
-        ));
-        assert!(
-            saw_bag,
-            "the root scan must visit the pinned class's bag edge"
         );
         crate::gc::js_gc_collect();
         crate::gc::js_gc_collect();
@@ -1421,6 +1513,135 @@ mod tests {
             .map(|(k, _)| k)
             .collect();
         assert!(keys.iter().any(|k| k == "k11609"), "own keys: {keys:?}");
+    }
+
+    /// The prototype link (capture 2) and the statics bag of an OLD, pinned
+    /// class hold young objects written after its birth: the slot barrier
+    /// remembers them, so a moving minor keeps them alive and rewrites both
+    /// edges. Dropping the barrier in `class_decl_prototype_link_store` makes
+    /// the link read back a stale address.
+    #[test]
+    fn young_values_in_an_old_class_survive_moving_minors() {
+        let _copying_nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+        crate::gc::register_runtime_handle_root_scanner_for_tests();
+        let cid = 0x6B04;
+        register(cid);
+        let _ = class_value_ptr(cid);
+        // The class is old and pinned from birth; everything below is young.
+        let proto = crate::object::js_object_alloc(0x6B05, 1);
+        crate::object::js_object_set_field(
+            proto,
+            0,
+            crate::value::JSValue::from_bits(crate::value::INT32_TAG | 4242),
+        );
+        let before = proto as usize;
+        class_decl_prototype_link_store(cid, proto);
+        let text = "young-static-6b04";
+        let s = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        class_static_set(
+            cid,
+            "k6b04",
+            f64::from_bits(crate::value::JSValue::string_ptr(s).bits()),
+        );
+        for _ in 0..3 {
+            let _ = crate::gc::gc_collect_minor();
+        }
+        let linked = class_decl_prototype_link(cid);
+        assert!(!linked.is_null());
+        assert_ne!(
+            linked as usize, before,
+            "forced evacuation must have moved the young prototype"
+        );
+        let field = crate::object::js_object_get_field(linked, 0);
+        assert_eq!(field.bits(), crate::value::INT32_TAG | 4242);
+        let got = class_static_get(cid, "k6b04").expect("the static survives minors");
+        let hdr = crate::value::JSValue::from_bits(got.to_bits()).as_string_ptr();
+        assert!(!hdr.is_null());
+        let bytes = unsafe { crate::string::OwnedStringBytes::copy_from_header(hdr) };
+        assert_eq!(bytes.as_bytes(), text.as_bytes());
+    }
+
+    /// Write once, then survive several minors with NO further writes. With
+    /// the promotion age pinned at 4 the young prototype stays young across
+    /// minors 1..=3, so the class (old, pinned) must stay in the minor scan
+    /// set the whole time: an entry is re-armed by every scan that still finds
+    /// a young referent, not consumed after one minor. Returns false (without
+    /// reading the possibly stale link) the first time the entry is missing.
+    fn write_once_then_minors(cid: u32, sabotage_drop_entry: bool) -> bool {
+        let _copying_nursery = crate::gc::CopyingNurseryTestGuard::new(0);
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let _force_evacuation = crate::gc::knob_overrides::ForcedEvacuationTestGuard::on();
+        let _age = crate::gc::pin_tenuring_survivals_for_test(4);
+        crate::gc::register_runtime_handle_root_scanner_for_tests();
+        register(cid);
+        let closure = class_value_ptr(cid);
+        let proto = crate::object::js_object_alloc(cid + 1, 1);
+        crate::object::js_object_set_field(
+            proto,
+            0,
+            crate::value::JSValue::from_bits(crate::value::INT32_TAG | 777),
+        );
+        class_decl_prototype_link_store(cid, proto);
+        let slot = unsafe { prototype_link_slot(closure) } as usize;
+        assert!(
+            crate::gc::old_slot_page_is_remembered_for_test(slot),
+            "the write must have remembered the class"
+        );
+        let _sabotage = sabotage_drop_entry.then(|| {
+            crate::gc::copy_decode_sabotage::Guard::arm(crate::gc::copy_decode_sabotage::CHILD)
+        });
+        let mut moved_from = proto as usize;
+        for minor in 1..=3 {
+            let _ = crate::gc::gc_collect_minor();
+            // No write since the first store. The referent must still be young
+            // (age < 4), so the entry must still be present.
+            if !crate::gc::old_slot_page_is_remembered_for_test(slot) {
+                return false;
+            }
+            let linked = class_decl_prototype_link(cid);
+            assert!(!linked.is_null());
+            assert!(
+                matches!(
+                    crate::arena::classify_heap_generation(linked as usize),
+                    crate::arena::HeapGeneration::Nursery
+                ),
+                "minor {minor}: the referent must still be young"
+            );
+            assert_ne!(
+                linked as usize, moved_from,
+                "minor {minor}: it must have moved"
+            );
+            moved_from = linked as usize;
+            let field = crate::object::js_object_get_field(linked, 0);
+            assert_eq!(field.bits(), crate::value::INT32_TAG | 777, "minor {minor}");
+        }
+        // The fourth survival promotes it; the value is intact afterwards too.
+        let _ = crate::gc::gc_collect_minor();
+        let linked = class_decl_prototype_link(cid);
+        let field = crate::object::js_object_get_field(linked, 0);
+        assert_eq!(
+            field.bits(),
+            crate::value::INT32_TAG | 777,
+            "after promotion"
+        );
+        true
+    }
+
+    #[test]
+    fn a_class_stays_remembered_while_its_referent_is_young() {
+        assert!(write_once_then_minors(0x6B10, false));
+    }
+
+    /// Sabotage: the scan loses the child, so the entry is dropped after the
+    /// first minor. The run must go red: either the collector's own
+    /// post-cycle coverage check fires (the expected panic) or the witness
+    /// above sees the entry missing and returns false (the `assert!` panic).
+    #[test]
+    #[should_panic]
+    fn dropping_the_entry_after_one_minor_is_caught() {
+        assert!(write_once_then_minors(0x6B20, true));
     }
 
     /// The kind is a shape fact: class function objects carry their own

@@ -5,7 +5,6 @@
 //! - Parent/shape ID (for inheritance and descriptor lookup)
 //! - Metadata pointer (for overflow storage and descriptor overrides)
 //! - Fields array (inline)
-
 use crate::arena::arena_alloc_gc;
 use crate::ArrayHeader;
 use crate::JSValue;
@@ -14,7 +13,6 @@ use std::collections::HashMap;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::RwLock;
-
 /// Minimum number of inline field slots every object is allocated with, even
 /// when it has fewer fields. This is a corruption-critical invariant: allocation,
 /// every field get/set bounds check, and every direct-slot read MUST use the
@@ -47,14 +45,12 @@ use std::sync::RwLock;
 /// all of them), so 2 is chosen as the one that keeps the most inline headroom
 /// for a dynamically-grown `{}` at zero byte cost.
 pub(crate) const INLINE_SLOT_FLOOR: usize = 2;
-
 // Submodules (issue #1103): behavior-preserving split of the former
 // 11.2k-line object.rs. Public re-exports keep FFI symbols stable.
 #[cfg(test)]
 mod test_root_helpers;
 #[cfg(test)]
 pub(crate) use test_root_helpers::*;
-
 pub(crate) mod alloc;
 mod alloc_basic;
 pub(crate) mod alloc_plain;
@@ -63,7 +59,7 @@ pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
     js_object_alloc_null_proto, js_object_alloc_with_parent, js_object_coerce,
 };
-pub(crate) use alloc_basic::object_alloc_plain;
+pub(crate) use alloc_basic::{object_alloc_born, object_alloc_plain};
 #[allow(unused_imports)]
 pub(crate) use alloc_plain::mark_object_plain_ordinary;
 pub use assign::*;
@@ -89,6 +85,7 @@ mod class_gc_roots;
 mod class_handles;
 pub mod class_image;
 mod class_registry;
+mod class_super_chain;
 pub(crate) mod class_value;
 #[cfg(test)]
 mod zeroed_cache_tests;
@@ -102,6 +99,7 @@ pub(crate) mod accessor_pair;
 pub(crate) mod attr_census;
 pub(crate) mod canonical_keys;
 mod census;
+mod constfn_key_add;
 pub(crate) mod field_rep;
 pub(crate) mod field_rep_store;
 pub(crate) mod key_attrs;
@@ -125,8 +123,8 @@ pub(crate) use field_get_set::scan_accessor_receiver_override_root_mut;
 mod field_set_by_name;
 mod gc_slots;
 pub(crate) use gc_slots::{
-    gc_field_slot_range, gc_shape_keys_edge_slot, rebuild_array_layout_from_slots,
-    rebuild_object_field_layout,
+    gc_field_slot_range, gc_shape_keys_edge_slot, gc_shape_prototype_edge_slot,
+    rebuild_array_layout_from_slots, rebuild_object_field_layout,
 };
 pub(crate) mod global_fetch;
 pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
@@ -135,8 +133,16 @@ pub(crate) use global_fetch::scan_pending_fetch_signal_root_mut;
 /// the GC contract.
 pub(crate) mod chain_store;
 mod global_this;
+#[cfg(feature = "dyn-eval")]
+pub(crate) use global_this::install_dyn_eval;
+#[cfg(feature = "temporal")]
+pub(crate) use global_this::{
+    install_temporal_namespace as global_this_install_temporal_namespace,
+    temporal_ctor_kind_impl as global_this_temporal_ctor_kind,
+    temporal_kind_prototype as global_this_temporal_kind_prototype,
+    temporal_subclass_super as global_this_temporal_subclass_super,
+};
 pub mod handle_expando;
-pub(crate) mod inherited_read_cache;
 pub(crate) mod prop_plan;
 pub(crate) mod proto_validity;
 pub(crate) use global_this::{
@@ -191,7 +197,9 @@ mod nm_namespace_hooks;
 pub(crate) use native_module::class_instance_has_member;
 pub(crate) use native_module::class_ref_id;
 pub(crate) use native_module::install_native_module_vtable;
-pub(crate) use native_module::{class_prototype_ref_id, SYMBOL_BOUND_METHOD_NAME};
+pub(crate) use native_module::{
+    class_method_entry_source_func_ptr, class_prototype_ref_id, SYMBOL_BOUND_METHOD_NAME,
+};
 mod native_module_crypto_key_object;
 mod native_module_crypto_random;
 mod native_module_dispatch;
@@ -210,6 +218,8 @@ pub(crate) mod native_this_alias;
 mod object_literal_ops;
 pub(crate) mod object_ops;
 pub(crate) mod own_override;
+#[cfg(test)]
+mod own_override_builtin_install_tests;
 #[cfg(test)]
 mod own_override_push_tests;
 pub(crate) use object_ops::{ensure_key_in_keys_array, install_builtin_getter};
@@ -286,9 +296,8 @@ pub use class_gc_roots::scan_class_inheritance_roots_mut;
 #[cfg(test)]
 pub(crate) use class_gc_roots::{
     test_class_parent_closure_root, test_class_prototype_object_root,
-    test_clear_class_inheritance_roots, test_decl_class_prototype_root,
-    test_seed_class_inheritance_roots, test_seed_class_parent_closure_root,
-    test_seed_decl_class_prototype_root,
+    test_clear_class_inheritance_roots, test_seed_class_inheritance_roots,
+    test_seed_class_parent_closure_root,
 };
 pub use class_registry::*;
 pub(crate) use collection_proto_thunks::{is_builtin_map_set_value, is_builtin_set_add_value};
@@ -364,6 +373,7 @@ pub(crate) use descriptor_state::{
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
+    class_object_default_to_string, class_object_registry_serves_static,
     private_evaluation_brand_value, private_lexical_brand_pop, private_lexical_brand_push,
     private_lexical_brand_stack_restore, private_lexical_brand_stack_savepoint,
     private_member_access_hints_restore, private_member_access_hints_savepoint,
@@ -386,7 +396,6 @@ pub use this_binding::{
 pub use to_string_tag::js_object_to_string;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 pub(crate) use to_string_tag::web_builtin_to_string_tag;
-
 /// An atomic GC root whose backing slot belongs to the calling Perry agent.
 ///
 /// The public handle stays process-global and contains no heap address. Every
@@ -397,42 +406,35 @@ pub(crate) use to_string_tag::web_builtin_to_string_tag;
 pub(crate) struct RealmAtomicI64 {
     slot: &'static crate::tls_hot::HotKey<AtomicI64>,
 }
-
 impl RealmAtomicI64 {
     // `pub(crate)` so a family that owns its own prototype singletons can
     // declare them in its own module (`timer.rs`) instead of parking them here.
     pub(crate) const fn new(slot: &'static crate::tls_hot::HotKey<AtomicI64>) -> Self {
         Self { slot }
     }
-
     #[inline(always)]
     pub(crate) fn load(&self, ordering: Ordering) -> i64 {
         self.slot.with(|slot| slot.load(ordering))
     }
-
     #[inline(always)]
     pub(crate) fn store(&self, value: i64, ordering: Ordering) {
         self.slot.with(|slot| {
             crate::gc::runtime_store_root_atomic_raw_i64(slot, value, ordering);
         });
     }
-
     #[inline(always)]
     pub(crate) fn with_slot<R>(&self, f: impl FnOnce(&AtomicI64) -> R) -> R {
         self.slot.with(f)
     }
-
     #[cfg(test)]
     pub(crate) fn test_slot_addr(&self) -> usize {
         self.slot.with(|slot| slot as *const AtomicI64 as usize)
     }
 }
-
 /// `u64` twin of [`RealmAtomicI64`] for NaN-boxed root words.
 pub(crate) struct RealmAtomicU64 {
     slot: &'static crate::tls_hot::HotKey<AtomicU64>,
 }
-
 impl RealmAtomicU64 {
     const fn new(slot: &'static crate::tls_hot::HotKey<AtomicU64>) -> Self {
         Self { slot }
@@ -717,6 +719,8 @@ mod keys_lookup;
 mod object_keys;
 pub(crate) mod shaped_symbols;
 pub(crate) use object_keys::ObjectKeys;
+pub(crate) mod define_own_data;
+pub(crate) mod dynamic_key_read;
 pub(crate) mod read_stub;
 pub(crate) use keys_lookup::*;
 
@@ -1772,11 +1776,7 @@ pub(crate) unsafe fn object_keys_and_live_slots(
 }
 
 pub(crate) mod meta_flags;
-pub(crate) use meta_flags::{
-    OBJECT_META_FLAG_CLASS_EVALUATION_PROTO, OBJECT_META_FLAG_EXOTIC_READ_RECEIVER,
-    OBJECT_META_FLAG_IS_PROTOTYPE, OBJECT_META_FLAG_PROTO_DIVERGED,
-    OBJECT_META_FLAG_USER_PROTO_OVERRIDE,
-};
+pub(crate) use meta_flags::{OBJECT_META_FLAG_EXOTIC_READ_RECEIVER, OBJECT_META_FLAG_IS_PROTOTYPE};
 
 pub(crate) mod meta_record;
 pub use meta_record::ObjectMeta;
@@ -1926,6 +1926,8 @@ unsafe fn set_object_keys_with_live_rep(
 /// #9180: the receiver `[[Set]]` own-key probe, split out to keep `tests.rs`
 /// under the 2000-line cap.
 #[cfg(test)]
+mod builtin_value_tests;
+#[cfg(test)]
 mod keys_front_offset_tests;
 #[cfg(test)]
 mod native_module_namespace_proto_tests;
@@ -1950,3 +1952,48 @@ mod transition_ic_tests;
 mod wide_field_read_tests;
 #[cfg(test)]
 mod wide_object_membership_tests;
+
+/// The key names in a compiler-packed key list. Codegen writes every name
+/// followed by a NUL (`codegen/mod.rs`, `expr/object_literal.rs`,
+/// `lower_call/new_alloc.rs`), so the names are the segments between the
+/// terminators, and an empty segment is a name: the key `""`. Only the empty
+/// segment after the final terminator is dropped.
+///
+/// Every reader used to drop ALL empty segments, so `{ "": v }` built a keys
+/// array shorter than its count and the shape mint refused the facts (an
+/// abort at the literal), and two modules' `{ "": v }` -- equal contents under
+/// one static ShapeId -- each built their own empty array, so the second
+/// module's static mint was refused (OpenCode's TUI: json5's reviver holder
+/// `{ "": root }`).
+pub(crate) fn packed_key_names(bytes: &[u8]) -> Vec<&[u8]> {
+    let mut names: Vec<&[u8]> = bytes.split(|&b| b == 0).collect();
+    if names.last().is_some_and(|s| s.is_empty()) {
+        names.pop();
+    }
+    names
+}
+
+#[cfg(test)]
+mod packed_key_names_tests {
+    use super::packed_key_names;
+
+    #[test]
+    fn the_empty_key_is_a_name_and_only_the_final_terminator_is_dropped() {
+        let names =
+            |b: &[u8]| -> Vec<Vec<u8>> { packed_key_names(b).iter().map(|s| s.to_vec()).collect() };
+        assert_eq!(names(b"a\0b\0"), vec![b"a".to_vec(), b"b".to_vec()]);
+        assert_eq!(
+            names(b"\0"),
+            vec![b"".to_vec()],
+            "{{ \"\": v }} has one key"
+        );
+        assert_eq!(names(b"\0a\0"), vec![b"".to_vec(), b"a".to_vec()]);
+        assert_eq!(names(b"a\0\0"), vec![b"a".to_vec(), b"".to_vec()]);
+        assert_eq!(
+            names(b"a\0b"),
+            vec![b"a".to_vec(), b"b".to_vec()],
+            "an unterminated last name"
+        );
+        assert!(names(b"").is_empty());
+    }
+}

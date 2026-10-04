@@ -134,8 +134,10 @@ pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut String
     } else {
         perry_uuid::v4()
     };
-    let uuid_str = uuid.as_str();
-    js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
+    // The bytes directly: `as_str` would re-validate 36 known-ASCII bytes as
+    // UTF-8 on every UUID only for the string constructor to copy them.
+    let uuid_bytes = uuid.as_bytes();
+    js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
 }
 
 /// Generate an RFC 9562 version 7 UUID — a 48-bit millisecond Unix
@@ -147,8 +149,8 @@ pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut String
 #[no_mangle]
 pub extern "C" fn js_crypto_random_uuidv7() -> *mut StringHeader {
     let uuid = perry_uuid::v7();
-    let uuid_str = uuid.as_str();
-    js_string_from_bytes(uuid_str.as_ptr(), uuid_str.len() as u32)
+    let uuid_bytes = uuid.as_bytes();
+    js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
 }
 
 /// Validates `randomUUID`'s options bag and returns `disableEntropyCache`.
@@ -315,6 +317,33 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
     };
     match method {
         "createHash" => js_crypto_create_hash(str_ptr(0)),
+        // #11617: one-shot `crypto.hash(alg, data, enc = "hex")` reached
+        // through a namespace value. The static lowering expands it to
+        // `createHash(alg).update(data).digest(enc)`; do the same here.
+        "hash" => {
+            let hash = js_crypto_create_hash(str_ptr(0));
+            let data = [arg(1)];
+            perry_runtime::object::js_native_call_method(
+                hash,
+                b"update".as_ptr() as *const i8,
+                6,
+                data.as_ptr(),
+                1,
+            );
+            let enc = if args_len >= 3 && !JSValue::from_bits(arg(2).to_bits()).is_undefined() {
+                arg(2)
+            } else {
+                f64::from_bits(JSValue::string_ptr(js_string_from_bytes(b"hex".as_ptr(), 3)).bits())
+            };
+            let enc = [enc];
+            perry_runtime::object::js_native_call_method(
+                hash,
+                b"digest".as_ptr() as *const i8,
+                6,
+                enc.as_ptr(),
+                1,
+            )
+        }
         "createSign" | "Sign" => js_crypto_create_sign(str_ptr(0)),
         "createVerify" | "Verify" => js_crypto_create_verify(str_ptr(0)),
         // One-shot `crypto.sign(alg, data, key[, cb])` / `crypto.verify(alg,

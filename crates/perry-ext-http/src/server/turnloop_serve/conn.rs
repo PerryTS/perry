@@ -23,7 +23,7 @@ use crate::server::request::{
     alloc_connection_socket, alloc_incoming_message, handle_to_pointer_f64, incoming_socket_assign,
     IncomingMessage,
 };
-use crate::server::response::{alloc_server_response_for_turnloop, ResponseShape};
+use crate::server::response::{alloc_http1_server_response_for_turnloop, ResponseShape};
 use crate::server::server::{with_base_server, HttpPendingRequest};
 
 /// The request being decoded, before it becomes an `IncomingMessage`.
@@ -182,7 +182,7 @@ fn closed_sockets() -> &'static Mutex<Vec<(u64, i64)>> {
     CLOSED.get_or_init(|| Mutex::new(Vec::new()))
 }
 
-fn note_closed_socket(socket_handle: i64) {
+pub(crate) fn note_closed_socket(socket_handle: i64) {
     closed_sockets()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -242,6 +242,21 @@ pub(crate) fn connections_of(server_handle: i64) -> Vec<i64> {
         .filter(|(_, c)| c.server_handle == server_handle)
         .map(|(id, _)| *id)
         .collect()
+}
+
+/// Route a JS accepted-socket handle to its live transport, if this is ours.
+pub(crate) fn destroy_socket(socket_handle: i64) -> bool {
+    let conn_id = conns()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .find_map(|(id, conn)| (conn.socket_handle == socket_handle).then_some(*id));
+    if let Some(conn_id) = conn_id {
+        destroy_connection(conn_id);
+        true
+    } else {
+        false
+    }
 }
 
 /// Whether a connection has a request in flight (`closeIdleConnections`,
@@ -385,6 +400,7 @@ pub(crate) fn adopt_alpn_http1(
     server_handle: i64,
     peer_address: String,
     peer_port: u16,
+    socket_handle: i64,
     leftover: Vec<u8>,
 ) -> bool {
     // `id` is a connection, not a listener, so the idle deadline comes from the
@@ -395,11 +411,7 @@ pub(crate) fn adopt_alpn_http1(
         with_base_server(server_handle, |s| s.keep_alive_timeout).unwrap_or(5_000.0);
     let mut input = Vec::with_capacity(8 * 1024);
     input.extend_from_slice(&leftover);
-    // Pre-existing gap, not this fix's scope: this ALPN handoff never queued
-    // `'connection'` (no `queue_turnloop_connection_event` call below) even
-    // before connection sockets existed. `req.socket` on it is still wired so a
-    // request landing here is consistent with the ordinary accept path.
-    let socket_handle = alloc_connection_socket(peer_address.clone(), peer_port);
+    // Keep the connection socket already announced by HTTP/2 admission.
     conns().lock().unwrap_or_else(|e| e.into_inner()).insert(
         id,
         Conn {
@@ -724,7 +736,8 @@ fn finish_request(c: &mut Conn, building: Building) -> (HttpPendingRequest, bool
     // `'connection'` listener's argument — same handle, every request on
     // this connection.
     incoming_socket_assign(im_handle, handle_to_pointer_f64(c.socket_handle));
-    let sr_handle = alloc_server_response_for_turnloop(c.id, c.seq, im_handle);
+    let sr_handle =
+        alloc_http1_server_response_for_turnloop(c.id, c.seq, im_handle, c.socket_handle);
 
     let is_check_continue = building.expects_continue
         && with_base_server(c.server_handle, |server| {

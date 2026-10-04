@@ -106,7 +106,7 @@
 // constant "off" (inlined, so every caller's guarded branch folds away and the
 // instrument links nothing); the rest of the module stays compiled so it
 // cannot rot, hence the allow.
-#![cfg_attr(not(feature = "gc-instruments"), allow(dead_code, unused_imports))]
+#![cfg_attr(not(perry_gc_instruments), allow(dead_code, unused_imports))]
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -245,13 +245,13 @@ thread_local! {
 
 /// Resolved `(seed, threshold)`, or `None` when the mode is off. Cached: the
 /// environment is read exactly once per process.
-#[cfg(not(feature = "gc-instruments"))]
+#[cfg(not(perry_gc_instruments))]
 #[inline(always)]
 fn resolved() -> Option<(u64, u64)> {
     None
 }
 
-#[cfg(feature = "gc-instruments")]
+#[cfg(perry_gc_instruments)]
 fn resolved() -> Option<(u64, u64)> {
     #[cfg(test)]
     if let Some(over) = SCHEDULE_OVERRIDE.with(std::cell::Cell::get) {
@@ -270,6 +270,29 @@ fn resolved() -> Option<(u64, u64)> {
         announce(seed, rate);
         install_failure_reporter();
         Some(resolved)
+    })
+}
+
+/// `PERRY_GC_BUDGETED_OLD_RECLAIM=1` (instrument builds only, #11842): old-gen
+/// reclaim is never collected synchronously at an allocation point or a
+/// precise safepoint. It stays due until a runtime safepoint (the microtask
+/// pump, the event loop) starts it as a budgeted full, so every major
+/// collection of an async program runs incrementally, with mutator windows
+/// inside its mark and its sweep. The seeded schedule above drives minors only;
+/// this is the knob for the budgeted full cycle. A program with no runtime
+/// safepoint never collects its old generation under it.
+#[cfg(not(perry_gc_instruments))]
+#[inline(always)]
+pub(crate) fn budgeted_old_reclaim_forced() -> bool {
+    false
+}
+
+#[cfg(perry_gc_instruments)]
+pub(crate) fn budgeted_old_reclaim_forced() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *crate::once_init::get_or_init(&CACHED, || {
+        super::env_flag_enabled("PERRY_GC_BUDGETED_OLD_RECLAIM")
     })
 }
 

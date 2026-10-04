@@ -31,11 +31,12 @@ use super::copying_parent_facts::{weak_holder_fact, ParentRemembering};
 use super::*;
 
 /// The slots, in visit order, the generic walk's layout arm hands the drain for
-/// this object: the keys edge and the meta record (null when absent), then the
-/// payload slots its selection names. Iterated, not stored.
+/// this object: the keys edge, the shape's prototype edge and the meta record
+/// (null when absent), then the payload slots its selection names. Iterated,
+/// not stored.
 #[derive(Clone)]
 struct PlainObjectPlan {
-    prefix: [*mut u64; 2],
+    prefix: [*mut u64; 3],
     next_prefix: usize,
     payload: HeapSlotRange,
     walk: PayloadWalk,
@@ -59,7 +60,7 @@ enum PayloadWalk {
 impl PlainObjectPlan {
     #[inline(always)]
     unsafe fn next_slot(&mut self) -> Option<*mut u64> {
-        while self.next_prefix < 2 {
+        while self.next_prefix < 3 {
             let slot = self.prefix[self.next_prefix];
             self.next_prefix += 1;
             if !slot.is_null() {
@@ -131,8 +132,8 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
         // `gc_child_slots` returns the EMPTY iterator: no shape, so no keys
         // edge and no carrier note, no meta edge, no payload.
         return PlainObjectPlan {
-            prefix: [std::ptr::null_mut(); 2],
-            next_prefix: 2,
+            prefix: [std::ptr::null_mut(); 3],
+            next_prefix: 3,
             payload: HeapSlotRange::new(std::ptr::null_mut(), 0),
             walk: PayloadWalk::Word(0),
         };
@@ -182,11 +183,13 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
         crate::object::shapes::note_old_generation_carrier(shape);
     }
     let keys_edge = crate::object::gc_shape_keys_edge_slot(shape);
+    let prototype_edge = crate::object::gc_shape_prototype_edge_slot(shape, false);
     // Visit order of the generic walk: prefix (none for objects), keys edge,
-    // meta, meta2 (none), payload.
+    // prototype edge, meta, meta2 (none), payload.
     PlainObjectPlan {
         prefix: [
             keys_edge.unwrap_or(std::ptr::null_mut()),
+            prototype_edge.unwrap_or(std::ptr::null_mut()),
             meta.unwrap_or(std::ptr::null_mut()),
         ],
         next_prefix: 0,

@@ -125,7 +125,7 @@ extern "C" fn yaml_stringify_closure(
     yaml_stringify(input, replacer, space)
 }
 
-pub fn js_bun_yaml() -> f64 {
+pub(crate) fn js_bun_yaml_impl() -> f64 {
     namespace_object(&[
         (
             b"parse",
@@ -144,7 +144,7 @@ extern "C" fn toml_parse_closure(
     input: f64,
 ) -> f64 {
     let source = value_to_string(input);
-    match toml_parse_result(&source) {
+    match toml_parse_result_impl(&source) {
         Ok(value) => value,
         Err(error) => crate::exception::js_throw(error),
     }
@@ -152,7 +152,7 @@ extern "C" fn toml_parse_closure(
 
 /// Shared by Bun.TOML.parse and the runtime import loader. Returning errors
 /// lets import() reject its promise without throwing through Rust I/O frames.
-pub(crate) fn toml_parse_result(source: &str) -> Result<f64, f64> {
+pub(crate) fn toml_parse_result_impl(source: &str) -> Result<f64, f64> {
     // `Value::from_str` in toml 1.x parses a single TOML value expression;
     // Bun.TOML.parse consumes a complete document, whose root is a table.
     let parsed = match toml::from_str::<toml::Table>(source) {
@@ -178,7 +178,7 @@ pub(crate) fn toml_parse_result(source: &str) -> Result<f64, f64> {
     }
 }
 
-pub fn js_bun_toml() -> f64 {
+pub(crate) fn js_bun_toml_impl() -> f64 {
     namespace_object(&[(
         b"parse",
         closure1("parse", crate::fn_info!(toml_parse_closure, 1)),
@@ -243,7 +243,7 @@ extern "C" fn semver_satisfies_closure(
     bool_value(satisfied)
 }
 
-pub fn js_bun_semver() -> f64 {
+pub(crate) fn js_bun_semver_impl() -> f64 {
     namespace_object(&[
         (
             b"order",
@@ -266,7 +266,7 @@ extern "C" fn jsonl_parse_chunk_closure(
     jsonl_parse_chunk(input, start, end)
 }
 
-pub fn js_bun_jsonl() -> f64 {
+pub(crate) fn js_bun_jsonl_impl() -> f64 {
     namespace_object(&[(
         b"parseChunk",
         closure3(
@@ -597,7 +597,7 @@ extern "C" fn xxhash64_closure(
     crate::value::js_nanbox_bigint(bigint as i64)
 }
 
-pub fn decorate_bun_hash(value: f64) -> f64 {
+pub(crate) fn decorate_bun_hash_impl(value: f64) -> f64 {
     let scope = RuntimeHandleScope::new();
     let hash = scope.root_nanbox_f64(value);
     let xxhash = scope.root_nanbox_f64(closure2(
@@ -626,7 +626,7 @@ pub extern "C" fn js_bun_generate_heap_snapshot(format: f64, encoding: f64) -> f
     if value_to_string(format) != "v8" {
         throw_type_error("Bun.generateHeapSnapshot format must be 'v8'");
     }
-    #[cfg(feature = "diagnostics")]
+    #[cfg(perry_diagnostics)]
     {
         let json = crate::gc::gc_build_v8_heap_snapshot_json();
         if !is_undefined_or_null(encoding) && value_to_string(encoding) == "arraybuffer" {
@@ -637,7 +637,7 @@ pub extern "C" fn js_bun_generate_heap_snapshot(format: f64, encoding: f64) -> f
         }
         boxed_str(json.as_bytes())
     }
-    #[cfg(not(feature = "diagnostics"))]
+    #[cfg(not(perry_diagnostics))]
     {
         let _ = encoding;
         throw_type_error("Heap snapshot diagnostics are not enabled in this Perry runtime")

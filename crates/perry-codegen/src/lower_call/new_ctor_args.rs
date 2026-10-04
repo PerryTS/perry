@@ -18,6 +18,7 @@ use perry_hir::{Expr, Param};
 use super::new_helpers::effective_constructor_param_count;
 use crate::expr::{lower_expr, nanbox_pointer_inline, FnCtx};
 use crate::nanbox::double_literal;
+use crate::rooting::{AccArray, RootedGroup};
 use crate::types::{DOUBLE, I32, I64};
 
 pub(crate) struct InlineConstructorScope {
@@ -303,58 +304,130 @@ pub(super) fn lower_constructor_arg(ctx: &mut FnCtx<'_>, arg: &Expr) -> Result<S
     lowered
 }
 
-/// Marshal the lowered `new`-site args into the value list a cross-module
-/// imported constructor symbol expects. The source module compiled the
-/// standalone `<class>_constructor(this, p0, …)` with `ctor.param_count`
-/// explicit slots, laid out as `[fixed..., user_rest?, arguments?]`. A user
-/// `...rest` slot (`ctor.has_rest`) must receive a PACKED ARRAY of every
-/// trailing arg — not the first trailing arg passed raw — and the synthesized
-/// `arguments` slot (`ctor.has_synthetic_arguments`, #10484) a packed array of
-/// EVERY arg. Mirrors the inline-ctor `inline_constructor_param_values`
-/// packing and the `method_has_rest` path for imported methods (#672). Returns
-/// exactly `ctor.param_count` value strings; missing fixed args are padded with
+/// Re-read constructor argument `i` from `group` **here**.
+///
+/// The re-read re-lowers a `Reload` operand, so it runs under the same
+/// `discard_expr_value` suppression [`lower_constructor_arg`] applied to the
+/// first lowering (#7590); `refresh_rooted_args` does the same for the whole
+/// list.
+pub(super) fn reread_constructor_arg(
+    ctx: &mut FnCtx<'_>,
+    group: &RootedGroup<'_>,
+    i: usize,
+) -> Result<String> {
+    let prev_discard = ctx.discard_expr_value;
+    ctx.discard_expr_value = false;
+    let out = group.reread(ctx, i);
+    ctx.discard_expr_value = prev_discard;
+    out
+}
+
+/// One operand of an imported-constructor dispatch.
+///
+/// None of the arms holds a register. A positional argument is named by its
+/// index in the caller's [`RootedGroup`] and an array by its group handle, so
+/// the only way to turn either into an operand is [`ImportedCtorArg::reread`],
+/// which re-reads it from its root at the point of use. Packing an array,
+/// pushing into it and looking up the class value all collect between the
+/// argument's lowering and the dispatch, and a register read before any of
+/// them names from-space after a moving cycle.
+pub(super) enum ImportedCtorArg {
+    /// Index of the lowered `new`-site argument in the caller's group.
+    Operand(usize),
+    /// Padding for a missing fixed argument.
+    Undefined,
+    Array(AccArray),
+}
+
+impl ImportedCtorArg {
+    /// Re-read this operand from its root **here**. Call it below the last
+    /// collecting step before the dispatch that consumes the value.
+    pub(super) fn reread(&self, ctx: &mut FnCtx<'_>, group: &RootedGroup<'_>) -> Result<String> {
+        Ok(match self {
+            Self::Operand(i) => reread_constructor_arg(ctx, group, *i)?,
+            Self::Undefined => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            Self::Array(acc) => {
+                let handle = group.read_array(ctx, *acc);
+                nanbox_pointer_inline(ctx.block(), &handle)
+            }
+        })
+    }
+}
+
+/// Pack the group operands `args` into a fresh array rooted in `group`.
+///
+/// Each element is re-read from its root immediately before its push: the
+/// array allocation and every earlier push collect, so a value read before
+/// them would store a from-space pointer into the array.
+fn pack_imported_args_array(
+    ctx: &mut FnCtx<'_>,
+    group: &mut RootedGroup<'_>,
+    args: std::ops::Range<usize>,
+) -> Result<AccArray> {
+    let cap = args.len().to_string();
+    let acc = group.begin_array(ctx, &cap);
+    for i in args {
+        let value = reread_constructor_arg(ctx, group, i)?;
+        group.push_array(ctx, acc, &value);
+    }
+    Ok(acc)
+}
+
+/// Marshal the `new`-site args into the value list a cross-module imported
+/// constructor symbol expects. The source module compiled the standalone
+/// `<class>_constructor(this, p0, …)` with `ctor.param_count` explicit slots,
+/// laid out as `[fixed..., user_rest?, arguments?]`. A user `...rest` slot
+/// (`ctor.has_rest`) must receive a PACKED ARRAY of every trailing arg — not
+/// the first trailing arg passed raw — and the synthesized `arguments` slot
+/// (`ctor.has_synthetic_arguments`, #10484) a packed array of EVERY arg.
+/// Mirrors the inline-ctor `inline_constructor_param_values` packing and the
+/// `method_has_rest` path for imported methods (#672). Returns exactly
+/// `ctor.param_count` operands; missing fixed args are padded with
 /// `undefined`.
+///
+/// `arg_count` is the number of `new`-site arguments, which occupy group
+/// indices `0..arg_count` in order. Every argument, positional or packed, is
+/// read from its root at its use; packed arrays live in the caller's group
+/// from allocation through dispatch.
 pub(super) fn marshal_imported_ctor_args(
     ctx: &mut FnCtx<'_>,
     ctor: &crate::codegen::ImportedCtor,
-    lowered_args: &[String],
-) -> Vec<String> {
-    let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    arg_count: usize,
+    group: &mut RootedGroup<'_>,
+) -> Result<Vec<ImportedCtorArg>> {
     let param_count = ctor.param_count;
+    let positional = |i: usize| {
+        if i < arg_count {
+            ImportedCtorArg::Operand(i)
+        } else {
+            ImportedCtorArg::Undefined
+        }
+    };
     let trailing = usize::from(ctor.has_rest) + usize::from(ctor.has_synthetic_arguments);
     if trailing > 0 && param_count >= trailing {
         let n_positional = param_count - trailing;
-        let mut out: Vec<String> = Vec::with_capacity(param_count);
-        for i in 0..n_positional {
-            out.push(
-                lowered_args
-                    .get(i)
-                    .cloned()
-                    .unwrap_or_else(|| undef.clone()),
-            );
-        }
+        let mut out: Vec<_> = (0..n_positional).map(positional).collect();
         if ctor.has_rest {
-            let tail: Vec<String> = lowered_args.iter().skip(n_positional).cloned().collect();
-            out.push(pack_lowered_args_array(ctx, &tail));
+            let tail = n_positional.min(arg_count)..arg_count;
+            out.push(ImportedCtorArg::Array(pack_imported_args_array(
+                ctx, group, tail,
+            )?));
         }
         if ctor.has_synthetic_arguments {
-            out.push(pack_lowered_args_array(ctx, lowered_args));
+            out.push(ImportedCtorArg::Array(pack_imported_args_array(
+                ctx,
+                group,
+                0..arg_count,
+            )?));
         }
-        out
+        Ok(out)
     } else {
         // No rest: positional, padded to `param_count` with `undefined`.
-        let mut out: Vec<String> = lowered_args.to_vec();
-        while out.len() < param_count {
-            out.push(undef.clone());
-        }
-        // #6537 review: `param_count.max(out.len())` made this a no-op, so a
-        // call site passing MORE args than the imported ctor's fixed arity
-        // emitted excess operands — violating the documented "returns exactly
-        // `ctor.param_count`" contract (the compiled `<class>_constructor`
-        // symbol has exactly that many post-`this` params; JS ignores extra
-        // ctor args). Truncate for real.
-        out.truncate(param_count);
-        out
+        // #6537 review: a call site passing MORE args than the imported
+        // ctor's fixed arity must not emit excess operands — the compiled
+        // `<class>_constructor` symbol has exactly `param_count` post-`this`
+        // params; JS ignores extra ctor args.
+        Ok((0..param_count).map(positional).collect())
     }
 }
 

@@ -1,8 +1,8 @@
-//! #10724: [`class_vtable_fast_guard`]'s own-key shadowing scan reads the
+//! #10724: [`class_receiver_fast_guard`]'s own-key shadowing scan reads the
 //! receiver's keys through the raw dense slots, never through the JS-facing
 //! element accessor.
 //!
-//! That scan runs on every dynamic method call on a class instance, once per
+//! Historically this ran on every dynamic method call on a class instance, once per
 //! own key. On a natively compiled `tsc --noEmit` it was 26.4 M of the 33.7 M
 //! `js_array_get_f64` calls, which is what made that accessor the top runtime
 //! symbol in #10724's profile. Counted, not timed: `test_element_accessor_calls`
@@ -12,8 +12,8 @@
 //! The other half is that the answer is unchanged: an own key equal to the
 //! method name still declines the fast path wherever it sits in the keys
 //! array, for short and long names, below and above the shape-index
-//! threshold. The byte comparison itself (`js_string_key_matches_bytes`) is the
-//! one the scan always used.
+//! threshold. #10502 additionally pins the number of stored-key byte reads
+//! after warmup, so a raw-slot linear scan also fails the complexity check.
 
 use super::*;
 
@@ -30,7 +30,7 @@ fn class_instance(class_id: u32, keys: &[&str]) -> f64 {
 }
 
 fn guard(receiver: f64, method: &str) -> Option<(usize, u32)> {
-    unsafe { class_vtable_fast_guard(receiver, method.as_bytes()) }
+    unsafe { class_receiver_fast_guard(receiver, method.as_bytes()) }
 }
 
 #[test]
@@ -86,4 +86,29 @@ fn wide_receiver_scan_is_accessor_free_and_still_sees_every_key() {
     assert!(guard(receiver, "field_47").is_none());
     assert!(guard(receiver, "field_48").is_some());
     assert_eq!(crate::array::test_element_accessor_calls(), before);
+}
+
+#[test]
+fn method_lookup_10502_warm_guard_work_is_independent_of_own_key_count() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    // Widths past `own_slot::DIRECT_SCAN_MAX_KEYS`: a narrower own key list is
+    // compared directly, which is bounded by that constant instead.
+    for width in [16, 64, 512] {
+        let names: Vec<String> = (0..width).map(|i| format!("f{i:03}")).collect();
+        let keys: Vec<&str> = names.iter().map(String::as_str).collect();
+        let receiver = class_instance(0x7A26, &keys);
+        assert!(guard(receiver, "absent_method").is_some());
+        let before = crate::string::test_key_byte_reads();
+        for _ in 0..100 {
+            assert!(guard(receiver, "absent_method").is_some());
+            for own in [keys[0], keys[width / 2], keys[width - 1]] {
+                assert!(guard(receiver, own).is_none());
+            }
+        }
+        let reads = crate::string::test_key_byte_reads() - before;
+        assert_eq!(
+            reads, 300,
+            "{width} keys: one validation per hit, no scan on absence"
+        );
+    }
 }

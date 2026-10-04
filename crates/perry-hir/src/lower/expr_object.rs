@@ -311,6 +311,12 @@ fn lower_method_prop(
         append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
     }
 
+    crate::lower::unrebound_params::note(
+        ctx,
+        &params,
+        method.function.params.iter().map(|p| &p.pat),
+        method.function.body.as_ref(),
+    );
     let mut body = if let Some(ref block) = method.function.body {
         lower_fn_body_block_stmt(ctx, block)?
     } else {
@@ -1385,11 +1391,25 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             vec![Expr::LocalGet(prop_key_id), Expr::LocalGet(value_id)],
                         )));
                     } else {
-                        body.push(Stmt::Expr(Expr::IndexSet {
-                            object: Box::new(Expr::LocalGet(param_id)),
-                            index: Box::new(key),
-                            value: Box::new(value),
-                        }));
+                        // A literal property is a definition
+                        // (CreateDataPropertyOrThrow), not an assignment: an
+                        // `Object.prototype` accessor for the key must not
+                        // run. The value is bound first so the operands of
+                        // the call are locals, as in the computed arm above.
+                        let value_name = format!("__perry_obj_iife_value_{}", body.len());
+                        let value_id = ctx.define_local(value_name.clone(), Type::Any);
+                        inner_local_ids.push(value_id);
+                        body.push(Stmt::Let {
+                            id: value_id,
+                            name: value_name,
+                            ty: Type::Any,
+                            mutable: false,
+                            init: Some(value),
+                        });
+                        body.push(Stmt::Expr(extern_call(
+                            "js_object_literal_define",
+                            vec![Expr::LocalGet(param_id), key, Expr::LocalGet(value_id)],
+                        )));
                     }
                 }
                 SpreadOp::MethodByName { key, closure } => {
@@ -1421,8 +1441,9 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     )));
                 }
                 SpreadOp::Assign { src } => {
+                    // CopyDataProperties: the spread DEFINES each property.
                     body.push(Stmt::Expr(extern_call(
-                        "js_object_assign_one",
+                        "js_object_literal_spread",
                         vec![Expr::LocalGet(param_id), src],
                     )));
                 }

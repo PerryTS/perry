@@ -85,7 +85,7 @@ pub extern "C" fn js_shape_seed_plain(
     }
     // SAFETY: compiler-owned static data of `packed_len` bytes.
     let bytes = unsafe { std::slice::from_raw_parts(packed, packed_len as usize) };
-    let names: Vec<&[u8]> = bytes.split(|&b| b == 0).filter(|s| !s.is_empty()).collect();
+    let names: Vec<&[u8]> = crate::object::packed_key_names(bytes);
     if names.len() != count as usize {
         return 0;
     }
@@ -104,15 +104,501 @@ pub extern "C" fn js_shape_seed_plain(
     id
 }
 
+/// LLVM's `{ i32, ptr }` entry in the generated static seed unit. The
+/// pointer names the defining body's one image-owned `JsFunctionInfo`, not a
+/// closure object; fresh factory closures with the same body share it.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct ConstFnStaticEntry {
+    pub slot: u32,
+    pub info: *const crate::closure::JsFunctionInfo,
+}
+
+/// Seed final shape facts before user code. This never allocates or stamps an
+/// object; only the post-construction finalizer may publish these facts on a
+/// receiver. All entries must name a permanent executable image.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn js_shape_seed_plain_constfn(
+    requested: u32,
+    packed: *const u8,
+    packed_len: u32,
+    count: u32,
+    live: u32,
+    rep: u64,
+    entries: *const ConstFnStaticEntry,
+    entry_count: u32,
+) -> u32 {
+    if requested == 0 || count == 0 || packed.is_null() || packed_len == 0 {
+        invalid_constfn_static_seed();
+    }
+    // SAFETY: compiler-owned static data of `packed_len` bytes.
+    let bytes = unsafe { std::slice::from_raw_parts(packed, packed_len as usize) };
+    let names: Vec<&[u8]> = crate::object::packed_key_names(bytes);
+    if names.len() != count as usize {
+        invalid_constfn_static_seed();
+    }
+    let infos = checked_constfn_static_entries(entries, entry_count);
+    let keys = unsafe { canonical_keys_for_names(&names) };
+    let id = shapes::publish_shape_result(shapes::final_shape_ensure_constfn(
+        keys.arr(),
+        keys.count(),
+        live,
+        0,
+        rep,
+        &infos,
+        Some(requested),
+    ));
+    // SAFETY: `id` was resolved from this agent's live slab record above.
+    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id)) };
+    note_static_request("seed-constfn", requested, id);
+    id
+}
+
+/// Seed the FINAL shape of a class with private elements (#11791) under the
+/// static id `requested`: the class's birth keys (`keys`, `key_count`, the
+/// keys global's canonical list) followed by the private fields' storage keys
+/// (`private_packed`, NUL-terminated names in the order construction claims
+/// them) as `ENTRY_PRIVATE` entries, the birth live bound `live`, the rep
+/// (`F64` lanes of numeric fields, private ones included) and the sorted
+/// brand list `brands`. Construction reaches these facts by its ordinary
+/// transitions (each claim is a canonical keys edge, each brand a brand
+/// transition, each lane the key-add rule), so a completed instance carries
+/// this id. Only facts are minted here; no object is stamped.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn js_object_final_shape_id_for_class_keys_static_private(
+    keys: u64,
+    key_count: u32,
+    live: u32,
+    class_id: u32,
+    requested: u32,
+    rep: u64,
+    private_packed: *const u8,
+    private_len: u32,
+    brands: *const u64,
+    brand_count: u32,
+) -> u32 {
+    if private_packed.is_null() && private_len != 0 || brands.is_null() && brand_count != 0 {
+        return 0;
+    }
+    let names: Vec<Vec<u8>> = if private_len == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: compiler-owned rodata of `private_len` bytes.
+        let bytes = unsafe { std::slice::from_raw_parts(private_packed, private_len as usize) };
+        crate::object::packed_key_names(bytes)
+            .into_iter()
+            .map(|name| name.to_vec())
+            .collect()
+    };
+    let mut brand_list: Vec<u64> = if brand_count == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: compiler-owned rodata of `brand_count` words.
+        unsafe { std::slice::from_raw_parts(brands, brand_count as usize) }.to_vec()
+    };
+    brand_list.sort_unstable();
+    brand_list.dedup();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proof = super::canonical_keys::SharedLayout::shape_cache_entry();
+    // The receiver's first claim extends the canonical form of its birth list
+    // (`ensure_key_in_keys_array_inner`); so does this.
+    let (mut list_root, mut count) = if names.is_empty() {
+        (
+            scope.root_raw_mut_ptr(keys as usize as *mut ArrayHeader),
+            key_count,
+        )
+    } else {
+        let base = unsafe {
+            super::canonical_keys::canonicalize(
+                &proof,
+                keys as usize as *mut ArrayHeader,
+                key_count,
+            )
+        };
+        (scope.root_raw_mut_ptr(base.as_ptr()), base.len())
+    };
+    for name in &names {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = scope.root_string_ptr(key);
+        let next = list_root.with_mut_ptr::<ArrayHeader, _>(|list| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
+                super::canonical_keys::extend_key_with_entry(
+                    &proof,
+                    super::canonical_keys::CanonicalKeys::from_rooted(list, count),
+                    key,
+                    super::key_attrs::PRIVATE_FIELD_ENTRY,
+                )
+            })
+        });
+        count = next.len();
+        list_root = scope.root_raw_mut_ptr(next.as_ptr());
+    }
+    let id = list_root.with_const_ptr::<ArrayHeader, _>(|list| {
+        let summary = unsafe { super::key_attrs::keys_summary_checked(list, count) };
+        shapes::publish_shape_result(shapes::shape_descriptor_intern_with_special(
+            list,
+            count,
+            live.max(count),
+            0,
+            shapes::ShapeObjectKind::Ordinary,
+            0,
+            shapes::class_proto_id(class_id),
+            summary,
+            rep,
+            &[],
+            &brand_list,
+            Some(requested).filter(|&id| id != 0),
+        ))
+    });
+    // SAFETY: `id` was resolved from this agent's live slab record above.
+    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id)) };
+    note_static_request("class-private", requested, id);
+    id
+}
+
+/// Mint final class/literal facts without stamping an object. Class
+/// registration seeds these facts separately from its Any/F64 allocation
+/// shape, after all prototype registrations; `requested == 0` requests a dynamic id.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn js_object_final_shape_id_for_class_keys_static_constfn(
+    keys: u64,
+    key_count: u32,
+    live: u32,
+    class_id: u32,
+    requested: u32,
+    rep: u64,
+    entries: *const ConstFnStaticEntry,
+    entry_count: u32,
+) -> u32 {
+    let infos = checked_constfn_static_entries(entries, entry_count);
+    let id = shapes::publish_shape_result(shapes::final_shape_ensure_constfn(
+        keys as usize as *const ArrayHeader,
+        key_count,
+        live,
+        class_id,
+        rep,
+        &infos,
+        Some(requested).filter(|&id| id != 0),
+    ));
+    // SAFETY: `id` was resolved from this agent's live slab record above.
+    unsafe { shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id)) };
+    note_static_request("class-constfn", requested, id);
+    id
+}
+
+/// Promote a completed ordinary object, never an allocation, to a static
+/// ConstFn shape. Refusals leave the receiver untouched. Return the refreshed
+/// object handle because minting/setup may move it. Keys, body infos and the
+/// requested id are compiler-owned permanent-image facts.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn js_object_finalize_constfn_static(
+    object: u64,
+    requested: u32,
+    packed: *const u8,
+    packed_len: u32,
+    count: u32,
+    live: u32,
+    class_id: u32,
+    rep: u64,
+    entries: *const ConstFnStaticEntry,
+    entry_count: u32,
+) -> u64 {
+    finalize_constfn_static(
+        object,
+        requested,
+        packed,
+        packed_len,
+        count,
+        live,
+        class_id,
+        rep,
+        entries,
+        entry_count,
+        false,
+    )
+}
+
+/// Thread reconstruction has completed all stores before this call. Unlike a
+/// compiled allocation, its ordinary base rep may be Any; every F64 lane is
+/// therefore validated from the current receiver before publishing final facts.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn finalize_constfn_static(
+    object: u64,
+    requested: u32,
+    packed: *const u8,
+    packed_len: u32,
+    count: u32,
+    live: u32,
+    class_id: u32,
+    rep: u64,
+    entries: *const ConstFnStaticEntry,
+    entry_count: u32,
+    rebuilt: bool,
+) -> u64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let root = scope.root_raw_mut_ptr(object as usize as *mut super::ObjectHeader);
+    let Some(infos) = parse_constfn_static_entries(entries, entry_count) else {
+        return object;
+    };
+    if packed.is_null() || packed_len == 0 || count == 0 || live < count {
+        return object;
+    }
+    // SAFETY: compiler-owned bytes for this call, containing exact key names.
+    let packed = unsafe { std::slice::from_raw_parts(packed, packed_len as usize) };
+    let Some(current) = root.with_mut_ptr::<super::ObjectHeader, _>(|obj| unsafe {
+        finalized_constfn_facts(obj, packed, count, live, class_id, rep, &infos, rebuilt)
+    }) else {
+        // Validation only reads inline data and Rust-owned metadata; it cannot collect.
+        return object;
+    };
+    let requested = Some(requested).filter(|&id| id != 0);
+    // A record already under the requested id (the seed's, or a worker's
+    // installed seed) is the only shape this receiver may take under that
+    // id. The mint would either hit it by facts or abort on the miss, and a
+    // miss is reachable from an ordinary receiver: equal key NAMES in a
+    // different keys array. Compare the complete record here instead; a match
+    // is stamped without minting, anything else is a refusal that leaves the
+    // receiver untouched.
+    if let Some((id, existing)) =
+        requested.and_then(|id| shapes::shape_descriptor_by_id(id).map(|d| (id, d)))
+    {
+        return root.with_mut_ptr::<super::ObjectHeader, _>(|obj| {
+            if final_record_names_receiver(&existing, &current, count, live, rep, &infos) {
+                // SAFETY: `obj` is the rooted receiver validated above;
+                // nothing between that validation and here can collect.
+                unsafe { shapes::stamp_object_shape_id_with_carrier_note(obj, id) };
+                note_static_request("finalized-constfn", id, id);
+            }
+            obj as usize as u64
+        });
+    }
+    // The mint must be treated as a collection point: the GC call-effects
+    // classifier cannot prove it non-collecting (the key-attribute and
+    // keys-array resolvers reach a collector). The receiver is therefore
+    // rooted across it and re-read below. The raw keys argument is the rooted
+    // receiver's keys array; if a collection inside the mint moved it, the
+    // minted record names the old address, and the identity check after the
+    // mint refuses instead of stamping it. No record sits under `requested`
+    // (checked above), so the adoption cannot be refused.
+    let (minted, obj) = root.across_mut::<super::ObjectHeader, _>(|| {
+        shapes::final_shape_ensure_constfn(
+            current.keys as usize as *const ArrayHeader,
+            count,
+            live,
+            class_id,
+            rep,
+            &infos,
+            requested,
+        )
+    });
+    // Reload and revalidate after the mint; no closure address spans it.
+    if let Some(current) =
+        unsafe { finalized_constfn_facts(obj, packed, count, live, class_id, rep, &infos, rebuilt) }
+    {
+        if let Ok(id) = minted {
+            // Still check the complete record here, including learned
+            // deprecation, before publication.
+            if shapes::shape_descriptor_by_id(id).is_some_and(|d| {
+                final_record_names_receiver(&d, &current, count, live, rep, &infos)
+            }) {
+                unsafe { shapes::stamp_object_shape_id_with_carrier_note(obj, id) };
+                note_static_request("finalized-constfn", requested.unwrap_or(0), id);
+            }
+        }
+    }
+    obj as usize as u64
+}
+
+/// Whether the shape record `d` describes the validated receiver `current`
+/// with the finalized ConstFn facts: the same keys array (identity, not just
+/// equal names), bounds, prototype and kind, a birth record with no learned
+/// deprecation, and exactly the requested bodies.
+fn final_record_names_receiver(
+    d: &shapes::ShapeDescriptor,
+    current: &shapes::ShapeDescriptor,
+    count: u32,
+    live: u32,
+    rep: u64,
+    infos: &[shapes::ConstFnSlotInfo],
+) -> bool {
+    d.keys == current.keys
+        && d.logical_key_count == count
+        && d.live_inline_slot_count == live
+        && d.proto_id == current.proto_id
+        && d.object_kind == current.object_kind
+        && d.semantic_generation == 0
+        && d.hole_count == 0
+        && d.summary == 0
+        && d.rep == rep
+        && d.deprecation_targets() == (0, 0)
+        && d.special_constfn_mask == infos.iter().fold(0, |mask, i| mask | (1 << i.slot))
+        && d.constfn_infos() == infos
+}
+
+/// No getter, proxy, or user code runs during this validation. All slots are
+/// read from the current rooted receiver and must be ordinary inline data.
+unsafe fn finalized_constfn_facts(
+    obj: *mut super::ObjectHeader,
+    packed: &[u8],
+    count: u32,
+    live: u32,
+    class_id: u32,
+    rep: u64,
+    infos: &[shapes::ConstFnSlotInfo],
+    rebuilt: bool,
+) -> Option<shapes::ShapeDescriptor> {
+    if obj.is_null()
+        || !shapes::shape_word_is_writable(obj)
+        || !(*obj).meta.is_null()
+        // A receiver whose shape names a recorded prototype keeps it: a
+        // static class shape names the class's.
+        || shapes::object_prototype_word(obj) != 0
+    {
+        return None;
+    }
+    let current = shapes::object_shape_descriptor(obj)?;
+    if !current.object_kind.is_ordinary_layout()
+        || current.logical_key_count != count
+        || current.live_inline_slot_count != live
+        || current.summary != 0
+        || current.hole_count != 0
+        || current.semantic_generation != 0
+        || current.proto_id != shapes::class_proto_id(class_id)
+        || (!rebuilt
+            && current.rep
+                != infos.iter().fold(rep, |r, i| {
+                    super::field_rep::with_slot_rep(r, i.slot as u32, super::field_rep::REP_ANY)
+                }))
+        || current.special_constfn_mask != 0
+    {
+        return None;
+    }
+    let names: Vec<&[u8]> = packed.strip_suffix(&[0])?.split(|&b| b == 0).collect();
+    if names.len() != count as usize || names.iter().any(|n| n.is_empty()) {
+        return None;
+    }
+    let (keys, len) = super::keys_array_dense_slots(current.keys as usize as *const ArrayHeader);
+    if keys.is_null() || len < count as usize {
+        return None;
+    }
+    for (slot, name) in names.iter().enumerate() {
+        let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
+        if crate::string::js_string_key_bytes(
+            crate::JSValue::from_bits((*keys.add(slot)).to_bits()),
+            &mut short,
+        )? != *name
+        {
+            return None;
+        }
+    }
+    let fields = (obj as *const u8).add(std::mem::size_of::<super::ObjectHeader>()) as *const u64;
+    if rebuilt {
+        if super::field_rep::has_deprecated(rep) {
+            return None;
+        }
+        for slot in 0..count.min(super::field_rep::REP_SLOTS) {
+            if super::field_rep::slot_rep(rep, slot) == super::field_rep::REP_F64 {
+                let bits = *fields.add(slot as usize);
+                if super::field_rep::f64_slot_bits(bits) != Some(bits) {
+                    return None;
+                }
+            }
+        }
+    }
+    for entry in infos {
+        if entry.slot as u32 >= count
+            || super::field_rep::slot_rep(rep, entry.slot as u32) != super::field_rep::REP_SPECIAL
+        {
+            return None;
+        }
+        let bits = *fields.add(entry.slot as usize);
+        if super::field_rep_store::constfn_store_info(bits)? != entry.info {
+            return None;
+        }
+        let closure =
+            (bits & crate::value::POINTER_MASK) as usize as *const crate::closure::ClosureHeader;
+        let info = &*(*closure).info;
+        // Arity is checked at method-site prime time. Every closure-specific
+        // direct-call exclusion is checked now before making the shape claim.
+        if info.code.is_null()
+            || !matches!(
+                crate::closure::resolve_strategy(info).kind(),
+                crate::closure::DispatchKind::Arity(_)
+            )
+            || super::class_registry::is_class_object_value(f64::from_bits(bits))
+            || super::global_this::is_function_prototype_object_value(f64::from_bits(bits))
+            || super::native_module::bound_native_callable_module_and_method(f64::from_bits(bits))
+                .is_some()
+            || info.code == super::global_this::global_this_builtin_noop_thunk as *const u8
+            || info.code == super::global_this::global_this_array_thunk as *const u8
+        {
+            return None;
+        }
+    }
+    Some(current)
+}
+
+fn checked_constfn_static_entries(
+    entries: *const ConstFnStaticEntry,
+    entry_count: u32,
+) -> Vec<shapes::ConstFnSlotInfo> {
+    parse_constfn_static_entries(entries, entry_count)
+        .unwrap_or_else(|| invalid_constfn_static_seed())
+}
+
+fn parse_constfn_static_entries(
+    entries: *const ConstFnStaticEntry,
+    entry_count: u32,
+) -> Option<Vec<shapes::ConstFnSlotInfo>> {
+    if entries.is_null() || entry_count == 0 || entry_count > super::field_rep::REP_SLOTS {
+        return None;
+    }
+    // SAFETY: compiler-owned static data of `entry_count` ABI entries.
+    let entries = unsafe { std::slice::from_raw_parts(entries, entry_count as usize) };
+    let mut infos = Vec::with_capacity(entries.len());
+    let mut previous = None;
+    for entry in entries {
+        if entry.slot >= super::field_rep::REP_SLOTS
+            || previous.is_some_and(|slot| entry.slot <= slot)
+            || entry.info.is_null()
+        {
+            return None;
+        }
+        // SAFETY: codegen names a `JsFunctionInfo` in its permanent image.
+        let info = unsafe { &*entry.info };
+        if info.flags & crate::codegen_abi::FN_PERMANENT_IMAGE == 0 {
+            return None;
+        }
+        infos.push(shapes::ConstFnSlotInfo {
+            slot: entry.slot as u8,
+            info: entry.info as usize as u64,
+        });
+        previous = Some(entry.slot);
+    }
+    Some(infos)
+}
+
+#[cold]
+fn invalid_constfn_static_seed() -> ! {
+    eprintln!("Perry internal error: invalid ConstFn static seed facts");
+    std::process::abort();
+}
+
 /// The static hit census (`PERRY_STATIC_SHAPE_CENSUS=1`): one stderr line per
 /// static-id request — which mint (`seed`, `class`, `typed`), the id
 /// requested, the id the mint returned. `requested != got` is a static MISS:
 /// the facts were already minted under another id, so births of this content
 /// stamp `got` while the guards compare the immediate `requested`. Requests
-/// happen only at seeds and module init, so the gate costs one load there.
+/// happen at seeds, module init and completed ConstFn reconstruction. A
+/// reconstruction requests 0 (lookup by facts), so it must still report the
+/// actual published id; other unassigned requests remain outside the census.
 pub(crate) fn note_static_request(path: &str, requested: u32, got: u32) {
     static CENSUS_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    if requested != 0
+    if (requested != 0 || path == "finalized-constfn")
         && *CENSUS_ENABLED.get_or_init(|| std::env::var_os("PERRY_STATIC_SHAPE_CENSUS").is_some())
     {
         let verdict = if requested == got { "hit" } else { "miss" };
@@ -188,6 +674,32 @@ static KEEP_JS_SHAPE_SEED_PLAIN: extern "C" fn(u32, *const u8, u32, u32, u32, u6
 
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
+static KEEP_JS_SHAPE_SEED_PLAIN_CONSTFN: extern "C" fn(
+    u32,
+    *const u8,
+    u32,
+    u32,
+    u32,
+    u64,
+    *const ConstFnStaticEntry,
+    u32,
+) -> u32 = js_shape_seed_plain_constfn;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_OBJECT_FINAL_SHAPE_ID_FOR_CLASS_KEYS_STATIC_CONSTFN: extern "C" fn(
+    u64,
+    u32,
+    u32,
+    u32,
+    u32,
+    u64,
+    *const ConstFnStaticEntry,
+    u32,
+) -> u32 = js_object_final_shape_id_for_class_keys_static_constfn;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
 static KEEP_JS_SHAPE_REGISTER_STATIC_SEED: extern "C" fn(extern "C" fn()) =
     js_shape_register_static_seed;
 
@@ -198,3 +710,22 @@ static KEEP_JS_SHAPE_RUN_STATIC_SEED: extern "C" fn() = js_shape_run_static_seed
 #[cfg(test)]
 #[path = "static_shapes_tests.rs"]
 mod tests;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_OBJECT_FINALIZE_CONSTFN_STATIC: extern "C" fn(
+    u64,
+    u32,
+    *const u8,
+    u32,
+    u32,
+    u32,
+    u32,
+    u64,
+    *const ConstFnStaticEntry,
+    u32,
+) -> u64 = js_object_finalize_constfn_static;
+
+#[cfg(all(test, target_os = "linux"))]
+#[path = "constfn_unload_tests.rs"]
+mod unload_tests;

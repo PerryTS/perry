@@ -382,6 +382,11 @@ pub(crate) fn declare_core(module: &mut LlModule) {
         VOID,
         &[I64, I64, I64, I64, I64, I64, I64],
     );
+    module.declare_function(
+        "js_register_class_method_with_entry",
+        VOID,
+        &[I64, I64, I64, I64, I64, I64, I64, I64],
+    );
     // #1787: register a class's standalone constructor so `new
     // <classObjectValue>()` can replay it on a dynamically-allocated instance.
     module.declare_function("js_register_class_constructor", VOID, &[I64, I64, I64, I64]);
@@ -427,6 +432,14 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_static_this_resolve_class", DOUBLE, &[I32, PTR]);
     module.declare_function("js_static_this_arm_classref", VOID, &[I32]);
     module.declare_function("js_static_method_entry_enter", VOID, &[I32, I64]);
+    module.declare_function("js_static_method_entry_enter_home", VOID, &[I32, I64, I64]);
+    module.declare_function("js_class_method_entry_enter_home", I64, &[I32, I64, I64]);
+    module.declare_function("js_class_method_entry_leave", VOID, &[I64]);
+    module.declare_function(
+        "js_register_class_method_entry",
+        VOID,
+        &[I64, I64, I64, I64],
+    );
     module.declare_function("js_static_method_entry_leave", VOID, &[]);
     module.declare_function(
         "js_class_static_call_guard",
@@ -520,6 +533,12 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     );
     module.declare_function(
         "js_object_literal_set_computed",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    // A static key of a source-ordered literal: CreateDataPropertyOrThrow.
+    module.declare_function(
+        "js_object_literal_define",
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );

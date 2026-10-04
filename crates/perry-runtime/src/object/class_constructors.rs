@@ -11,6 +11,10 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use super::class_registry::call_vtable_method;
+use super::class_super_chain::{
+    class_super_base, declared_chain_has_relinked_prototype, static_chain_relinked,
+    super_call_on_live_base, super_call_on_relinked_chain, super_home_owner,
+};
 use super::ObjectHeader;
 
 /// Replace the capture array carried by one heap class-expression value.
@@ -371,12 +375,13 @@ pub unsafe extern "C" fn js_class_register_capture_values(
     if class_id == 0 || values_ptr.is_null() {
         return;
     }
-    let mut values = Vec::with_capacity(len);
-    for i in 0..len {
-        values.push((*values_ptr.add(i)).to_bits());
-    }
+    // Every evaluation of a capturing class registers its snapshot: refill
+    // the template's entry in place rather than allocate a new one.
     CLASS_CAPTURE_VALUES.with(|m| {
-        m.borrow_mut().insert(class_id, values);
+        let mut m = m.borrow_mut();
+        let values = m.entry(class_id).or_default();
+        values.clear();
+        values.extend((0..len).map(|i| (*values_ptr.add(i)).to_bits()));
     });
 }
 
@@ -793,7 +798,6 @@ pub unsafe extern "C" fn js_super_construct_apply(
     // and stash the returned cell as the subclass instance's brand — the
     // `super(...spread)` counterpart of the `js_fetch_or_value_super` branch
     // that handles non-spread `super(a, b)`. (#5587)
-    #[cfg(feature = "temporal")]
     {
         let parent_val = crate::object::class_registry::js_get_dynamic_parent_value(child_cid);
         if crate::object::global_this::temporal_ctor_kind(parent_val).is_some() {
@@ -807,7 +811,7 @@ pub unsafe extern "C" fn js_super_construct_apply(
             for i in 0..n {
                 flat.push(crate::array::js_array_get_f64(arr, i as u32));
             }
-            crate::object::global_this::temporal_subclass_super(
+            crate::temporal::hooked::subclass_super(
                 parent_val,
                 this_box,
                 flat.as_ptr(),
@@ -823,10 +827,9 @@ pub unsafe extern "C" fn js_super_construct_apply(
     // reason as the instanceof probe: with the feature off no Intl
     // constructor value exists, so the branch is unreachable, and skipping it
     // keeps this always-live path from pinning the Intl constructor web.
-    #[cfg(feature = "intl-namespace")]
     {
         let parent_val = crate::object::class_registry::js_get_dynamic_parent_value(child_cid);
-        if crate::intl::is_intl_constructor_value(parent_val) {
+        if crate::intl::hooked::is_intl_constructor_value(parent_val) {
             let this_box = crate::value::js_nanbox_pointer(this_raw);
             let n = if arr.is_null() {
                 0
@@ -837,7 +840,12 @@ pub unsafe extern "C" fn js_super_construct_apply(
             for i in 0..n {
                 flat.push(crate::array::js_array_get_f64(arr, i as u32));
             }
-            crate::intl::intl_subclass_super(parent_val, this_box, flat.as_ptr(), flat.len());
+            crate::intl::hooked::intl_subclass_super(
+                parent_val,
+                this_box,
+                flat.as_ptr(),
+                flat.len(),
+            );
         }
     }
     undef
@@ -881,11 +889,7 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     // Repeated evaluations can share a template id, so the template parent
     // table cannot represent their heritage edge. Resolve the method's own
     // evaluation first, then read its pinned parent.
-    let lexical_owner = super::field_get_set::current_private_lexical_brand_value(child_class_id)
-        .or_else(|| {
-            super::field_get_set::private_evaluation_brand_value(this_value)
-                .and_then(|owner| pinned_class_object_for_ancestor(owner, child_class_id))
-        });
+    let lexical_owner = super_home_owner(child_class_id, this_value);
     let parent_owner = lexical_owner.and_then(|owner| {
         let object = crate::value::JSValue::from_bits(owner.to_bits()).as_pointer::<ObjectHeader>();
         super::class_registry::class_object_pinned_parent(object)
@@ -905,16 +909,67 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
     };
     let _parent_brand =
         super::field_get_set::PrivateHintBrandScope::new(parent_owner.map(f64::to_bits));
+    // `super.name` is a property lookup on the home object's CURRENT
+    // `[[Prototype]]`, with `this` as the receiver: a patched, deleted or
+    // accessor parent member and a relinked home all apply. Where the runtime
+    // models that chain end to end, read it; the declared-chain lookups below
+    // serve the rest (native and builtin bases, per-evaluation classes).
+    let is_static = super::class_ref_id(this_value).is_some()
+        || super::class_registry::is_class_object_value(this_value);
+    // A static member's declared lookup reads the class function objects (an
+    // assigned or deleted static ends it), so it is the property lookup unless
+    // a constructor on the way was relinked. An instance member reaches here
+    // when the compiler could not resolve the name or a prototype-surgery
+    // guard byte is set: the declared vtable no longer describes the chain.
+    let static_entry = if is_static {
+        super::class_registry::parent_static::lookup_static_method_owner(parent_cid, name)
+    } else {
+        None
+    };
+    let mut base = None;
+    // The probes below can allocate (materializing a prototype or a class
+    // value), so the receiver and the arguments ride across them in handles;
+    // the declared-chain paths below read the refreshed copies.
+    let refreshed_args: Vec<f64>;
+    let (this_value, args_ptr) = if static_entry.is_none()
+        || super::prototype_chain::any_class_chain_relinked()
+    {
+        let live_scope = crate::gc::RuntimeHandleScope::new();
+        let this_handle = live_scope.root_nanbox_f64(this_value);
+        let arg_handles =
+            live_scope.root_nanbox_f64_slice(if args_len > 0 && !args_ptr.is_null() {
+                std::slice::from_raw_parts(args_ptr, args_len)
+            } else {
+                &[]
+            });
+        let live = match static_entry {
+            Some((owner, _)) => static_chain_relinked(child_class_id, owner),
+            None => true,
+        };
+        if live {
+            base = class_super_base(child_class_id, parent_cid, lexical_owner, is_static);
+        }
+        refreshed_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+        (
+            this_handle.get_nanbox_f64(),
+            if refreshed_args.is_empty() {
+                args_ptr
+            } else {
+                refreshed_args.as_ptr()
+            },
+        )
+    } else {
+        (this_value, args_ptr)
+    };
+    if let Some(base) = base {
+        return super_call_on_live_base(name, this_value, args_ptr, args_len, base);
+    }
     // Static-context super call (`super.m()` inside a `static` method): the
     // receiver is the class constructor (a ClassRef), so resolve the PARENT's
     // STATIC method (not an instance/prototype method) and invoke it with
     // `this` bound to the current class. Refs class/super/in-static-methods.
-    if super::class_ref_id(this_value).is_some()
-        || super::class_registry::is_class_object_value(this_value)
-    {
-        if let Some((func_ptr, param_count, has_rest)) =
-            super::class_registry::lookup_static_method_in_chain(parent_cid, name)
-        {
+    if is_static {
+        if let Some((_, (func_ptr, param_count, has_rest))) = static_entry {
             crate::object::static_this_arm_if_unarmed(this_value);
             let result = if has_rest {
                 // Mirror `js_class_static_method_call`'s rest bundling: fixed
@@ -949,6 +1004,22 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
             return result;
         }
     }
+    // `super` is the home object's CURRENT `[[Prototype]]`. Once a user
+    // relinked the home class's prototype (`Object.setPrototypeOf(C.prototype,
+    // X)`), that is the recorded link: the declared parent's members are off
+    // the chain, and a name the link does not carry is not callable.
+    if super::class_registry::class_decl_prototype_relinked(child_class_id) {
+        return super_call_on_relinked_chain(
+            name,
+            this_value,
+            args_ptr,
+            args_len,
+            |key, receiver| {
+                super::class_registry::relinked_class_prototype_read(child_class_id, key, receiver)
+                    .flatten()
+            },
+        );
+    }
     // `lookup_class_method_in_chain` resolves under the registry read lock and
     // DROPS it before returning — the invoked method body may take the registry
     // write lock (a lazy `require()` registering a module class), so we must not
@@ -982,6 +1053,22 @@ pub unsafe extern "C" fn js_super_method_call_dynamic(
             crate::closure::JsThis::from_f64(this_value),
             args_ptr,
             args_len,
+        );
+    }
+    // An ANCESTOR's prototype was relinked: the declared-member walks above
+    // stop there, and the rest of the chain is its recorded link, which the
+    // generic class-chain read follows.
+    if declared_chain_has_relinked_prototype(parent_cid) {
+        return super_call_on_relinked_chain(
+            name,
+            this_value,
+            args_ptr,
+            args_len,
+            |key, receiver| {
+                super::class_registry::resolve_proto_chain_field_with_receiver(
+                    parent_cid, key, receiver,
+                )
+            },
         );
     }
     // #6316: the parent chain is real (an intermediate user class) but bottoms
@@ -1425,6 +1512,24 @@ unsafe fn replay_class_object_constructor_impl(
             );
         });
     }
+    // A receiver allocated by a STATICALLY declared subclass
+    // (`class Sub extends mixin(Base) {}`) carries no evaluation brand: only
+    // the `new <class value>` path stamps one. Running this evaluation's
+    // constructor on it without one left every private field the
+    // constructor declares unreachable, so `this.#x = v` threw "Cannot write
+    // private member #x to an object whose class did not declare it"
+    // (@npmcli/arborist's mixins). Brand it with this evaluation, the most
+    // derived one it has; a receiver already branded by a more-derived
+    // evaluation keeps that brand, whose pinned heritage reaches this one.
+    inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+        let value = crate::value::js_nanbox_pointer(inst as i64);
+        if super::field_get_set::private_evaluation_brand_value(value).is_none() {
+            super::field_get_set::stamp_private_evaluation_brand(
+                inst,
+                classobj_handle.get_nanbox_f64(),
+            );
+        }
+    });
     // Spec: a derived class with no own `constructor` gets the implicit
     // `constructor(...args) { super(...args) }` — the nearest ancestor's ctor
     // must run with the same argument list. `lookup_class_constructor` holds

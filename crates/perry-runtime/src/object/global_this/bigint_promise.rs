@@ -146,6 +146,25 @@ pub(crate) extern "C" fn object_group_by_thunk(
     super::super::js_object_group_by(items, callback)
 }
 
+/// `Map.groupBy` read as a value (`const g = Map.groupBy; g(items, cb)`).
+pub(crate) extern "C" fn map_group_by_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    items: f64,
+    callback: f64,
+) -> f64 {
+    super::super::js_map_group_by(items, callback)
+}
+
+/// `RegExp.escape` read as a value (`["a.b"].map(RegExp.escape)`).
+pub(crate) extern "C" fn regexp_escape_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    input: f64,
+) -> f64 {
+    crate::regex::js_regexp_escape(input)
+}
+
 pub(crate) extern "C" fn object_get_prototype_of_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
@@ -228,15 +247,20 @@ pub(crate) extern "C" fn array_from_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     value: f64,
+    map_fn: f64,
+    this_arg: f64,
 ) -> f64 {
+    // `Array.from(items, mapFn, thisArg)` read as a value (`const f = Array.from`,
+    // `Reflect.apply`, a spread call) must apply `mapFn`; only the first operand
+    // was declared, so the callback was dropped.
+    //
     // Reflective `Array.from.call(C, items)` / `Array.from.apply(C, [items])`
     // passes `C` as `this`. Run the spec algorithm — when `C IsConstructor`,
     // the result is built via `Construct(C)`. A plain reflective call (no
     // explicit receiver) leaves `this` as undefined / a non-constructor, so
     // the default `%Array%` path is taken.
     let c = this.as_f64();
-    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-    crate::array::array_from_full(c, value, undefined, undefined)
+    crate::array::array_from_full(c, value, map_fn, this_arg)
 }
 
 pub(crate) extern "C" fn array_of_thunk(

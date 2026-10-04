@@ -8,6 +8,7 @@ fn entry_opts(output_type: &str) -> CompileOptions {
         target: None,
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),
+        thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
@@ -26,6 +27,7 @@ fn entry_opts(output_type: &str) -> CompileOptions {
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
+        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -641,4 +643,23 @@ fn set_bun_platform_marker_lowers_to_the_runtime_flag_setter() {
     );
     // Control: the default (node) platform never emits the call.
     assert!(!emitted_ir("executable").contains("call void @js_set_bun_platform"));
+}
+
+#[test]
+fn eager_literal_pools_precede_all_bodies_but_deferred_pools_stay_lazy() {
+    let mut opts = entry_opts("executable");
+    opts.non_entry_module_prefixes = vec!["first_ts".into(), "later_ts".into(), "lazy_ts".into()];
+    opts.deferred_module_prefixes.insert("lazy_ts".into());
+    let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
+    let first_body = ir.find("call void @first_ts__init()").unwrap();
+    let later_body = ir.find("call void @later_ts__init()").unwrap();
+    let first_pool = ir
+        .find("ptr @__perry_prepare_literals_first_ts to i64")
+        .unwrap();
+    let later_pool = ir
+        .find("ptr @__perry_prepare_literals_later_ts to i64")
+        .unwrap();
+    assert!(first_pool < first_body && later_pool < first_body && first_body < later_body);
+    assert!(!ir.contains("ptr @__perry_prepare_literals_lazy_ts to i64"));
+    assert!(!ir.contains("call void @lazy_ts__init()"));
 }

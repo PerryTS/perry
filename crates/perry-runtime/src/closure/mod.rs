@@ -61,11 +61,13 @@ pub(crate) use registry::{
     info_versioned_loop_direct,
 };
 
-pub(crate) use dispatch::native_call_value_this;
 pub(crate) use dispatch::{
     bound_function_lazy_name, bound_function_length, bound_method_source_func_ptr,
     coerce_call_this, rebind_explicit_this, rebind_explicit_this_allocates,
     reify_function_method_value, reset_throw_not_callable_counter,
+};
+pub(crate) use dispatch::{
+    call_compiled_body_this, call_compiled_closure_this, native_call_value_this,
 };
 pub use dispatch::{
     clean_closure_ptr, dispatch_bound_function, dispatch_bound_method, get_valid_func_ptr,
@@ -85,10 +87,10 @@ pub(crate) use dynamic_props::test_clear_closure_side_tables;
 pub(crate) use dynamic_props::{
     clear_closure_side_tables_for_dead_ptr, clone_closure_rebind_this,
     closure_dynamic_props_owner_moved, closure_dynamic_side_tables_nonempty,
-    closure_get_dynamic_prop_keyed, closure_set_via_function_prototype_descriptor,
-    function_prototype_fallback_target, function_prototype_inherited_get,
-    prune_dead_closure_side_table_owners, prune_dead_closure_side_table_owners_young,
-    release_closure_side_table_owners_in_ranges,
+    closure_get_dynamic_prop_keyed, closure_reads_this_from_capture,
+    closure_set_via_function_prototype_descriptor, function_prototype_fallback_target,
+    function_prototype_inherited_get, prune_dead_closure_side_table_owners,
+    prune_dead_closure_side_table_owners_young, release_closure_side_table_owners_in_ranges,
 };
 pub use dynamic_props::{
     closure_delete_own_dynamic_prop, closure_dynamic_props_snapshot, closure_get_dynamic_prop,

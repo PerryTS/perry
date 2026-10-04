@@ -5,35 +5,11 @@
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
 
-fn undefined() -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
-}
-
 fn feature_disabled() -> ! {
     let message = b"Bun CLI utilities are not enabled in this optimized Perry runtime";
     let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let error = crate::error::js_error_new_with_message(message);
     crate::exception::js_throw(f64::from_bits(JSValue::pointer(error as *const u8).bits()))
-}
-
-pub fn js_bun_yaml() -> f64 {
-    undefined()
-}
-
-pub fn js_bun_toml() -> f64 {
-    undefined()
-}
-
-pub fn js_bun_semver() -> f64 {
-    undefined()
-}
-
-pub fn js_bun_jsonl() -> f64 {
-    undefined()
-}
-
-pub fn decorate_bun_hash(value: f64) -> f64 {
-    value
 }
 
 #[no_mangle]

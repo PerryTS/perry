@@ -236,7 +236,7 @@ fn readable_state_view_reads_live_stream_state() {
         js_object_get_field_by_name_f64(obj, hidden_key(b"_readableState")).to_bits(),
         view.to_bits()
     );
-    let read = |name: &[u8]| js_object_get_field_by_name_f64(view_obj, hidden_key(name));
+    let read = |name: &'static [u8]| js_object_get_field_by_name_f64(view_obj, hidden_key(name));
     assert_eq!(read(b"highWaterMark"), 65536.0);
     assert_eq!(read(b"length"), 0.0);
     assert_eq!(read(b"ended").to_bits(), TAG_FALSE);
@@ -275,7 +275,7 @@ fn writable_state_view_reads_live_stream_state() {
     let view = js_object_get_field_by_name_f64(obj, hidden_key(b"_writableState"));
     let view_obj = raw_ptr_from_value(view) as *const ObjectHeader;
     assert!(!view_obj.is_null());
-    let read = |name: &[u8]| js_object_get_field_by_name_f64(view_obj, hidden_key(name));
+    let read = |name: &'static [u8]| js_object_get_field_by_name_f64(view_obj, hidden_key(name));
     assert_eq!(read(b"highWaterMark"), 65536.0);
     assert_eq!(read(b"ended").to_bits(), TAG_FALSE);
     mark_writable_ended(stream);

@@ -1,0 +1,59 @@
+{
+  "geometry": {
+    "arena": {
+      "align": 8,
+      "blocks": 0,
+      "current": 24,
+      "generation": 32,
+      "size": 40,
+      "space": 33
+    },
+    "block": {
+      "align": 8,
+      "data": 16,
+      "dead_cycles": 40,
+      "object_starts": 0,
+      "offset": 32,
+      "old_free_holes": 44,
+      "pinned_summary": 45,
+      "size": 48,
+      "size_field": 24
+    },
+    "box_slice": {
+      "align": 8,
+      "length": 11,
+      "pointer": 2425061507072,
+      "size": 16,
+      "word_offsets": {
+        "pointer": 0,
+        "length": 8
+      }
+    },
+    "target_arch": "x86_64",
+    "target_os": "linux",
+    "usize_bytes": 8,
+    "vec": {
+      "align": 8,
+      "capacity": 17,
+      "length": 5,
+      "pointer": 2425061441536,
+      "size": 24,
+      "word_offsets": {
+        "pointer": 8,
+        "capacity": 0,
+        "length": 16
+      }
+    }
+  },
+  "private_commit": "2571f4839e",
+  "control_source_proof_sha256": "2a05a4acfb2980a8587eb548076e3e9762b2c83de2944fedd5332f7cb64b2c32",
+  "inputs_sha256": "12041b919293cc47389e161b3e64bbdfdfd85aea00a0e0172ae157a8c49c70aa",
+  "raw_sha256": {
+    "geometry.json": "de04f37f0fa36120ef04e6777a1b179e16964498c4960786ae3cd760522711e2",
+    "vec.bin": "858fc4199f1f991156767a095a955703f436aced7f2f1d7346d898814a5a92dd",
+    "box.bin": "5589c3eb9f0fce8468449d513ed0c8b95a0c6ba22f4a1f1e7e65f7d92dec5855"
+  },
+  "rustc": "rustc 1.100.0-nightly (f7d782a3b 2026-08-19)\nbinary: rustc\ncommit-hash: f7d782a3be46d6bb4b9792fe69a61db389ba1769\ncommit-date: 2026-08-19\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0-nightly\nLLVM version: 23.1.0\n",
+  "script_sha256": "7fb1da5f894f5d749d0c9c380a6a987a70dd9922eb6fe1318b00e088b6b45ff4",
+  "scope": "Exact test-compiled Linux arena field offsets and opaque std representations for an external observer; no production field changed. Before use, verify shipping access offsets and source geometry."
+}

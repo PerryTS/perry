@@ -229,6 +229,15 @@ fn emit_array_guard_word_ok(blk: &mut crate::block::LlBlock, word: &str) -> Stri
     blk.icmp_eq(I32, &masked, ARRAY_READ_GUARD_EXPECT_I32)
 }
 
+/// What a [`emit_array_region_guard`] receiver needs beyond the read facts.
+#[derive(Clone, Copy)]
+pub(crate) struct ArrayRegionDense<'a> {
+    /// The region stores elements: the integrity bits must be clear too.
+    pub(crate) store: bool,
+    /// The counter's bound (an `f64`): `bound <= length`.
+    pub(crate) len_bound: Option<&'a str>,
+}
+
 /// A loop region's array guard (#11650 regions, array slice S3): the S1 guard
 /// word, the prototype facts a hole read needs, and `max_index <u capacity`,
 /// checked once in the preheader (and at a re-check). On a pass it also
@@ -236,10 +245,21 @@ fn emit_array_guard_word_ok(blk: &mut crate::block::LlBlock, word: &str) -> Stri
 /// `base_slot`; F-body's element reads then load `base + 8 * idx` and select
 /// `undefined` for a hole. Returns the `i1` pass flag. The receiver is tested
 /// against the heap band before anything is dereferenced.
+///
+/// #10741: a receiver whose region also STORES elements, or indexes them by
+/// the loop counter, needs more, and `dense` asks for it: the store word
+/// (integrity bits clear), the dense raw-f64 layout bit (every slot in
+/// `[0, length)` a canonical double), and the bounds against `length`
+/// as well as `capacity` (`max_index < min(length, capacity)`, and
+/// `len_bound <= min(length, capacity)` for the counter's bound, an `f64`). A bare read is then one `load double`
+/// and a bare store of a proven double one `store double`: neither changes
+/// the length, the layout or any pointer the collector traces.
 pub(crate) fn emit_array_region_guard(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
     max_index: u32,
+    dense: Option<ArrayRegionDense<'_>>,
+    cap_bound: Option<&str>,
     base_slot: &str,
 ) -> String {
     let deref_idx = ctx.new_block("rloop.arr.deref");
@@ -262,7 +282,23 @@ pub(crate) fn emit_array_region_guard(
         let blk = ctx.block();
         let handle = blk.add(I64, &band_offset, "1048576");
         let word = emit_array_guard_word(blk, &handle);
-        let word_ok = emit_array_guard_word_ok(blk, &word);
+        let word_ok = match dense {
+            None => emit_array_guard_word_ok(blk, &word),
+            Some(d) => {
+                let mask = if d.store {
+                    ARRAY_STORE_GUARD_MASK_I32
+                } else {
+                    ARRAY_READ_GUARD_MASK_I32
+                };
+                let masked = blk.and(I32, &word, mask);
+                let ok = blk.icmp_eq(I32, &masked, ARRAY_READ_GUARD_EXPECT_I32);
+                // GC_ARRAY_RAW_F64_LAYOUT (0x80 in `_reserved`, the word's
+                // upper half): dense canonical raw f64, no holes.
+                let f64_bit = blk.and(I32, &word, "8388608"); // 0x80 << 16
+                let is_f64 = blk.icmp_ne(I32, &f64_bit, "0");
+                blk.and(I1, &ok, &is_f64)
+            }
+        };
         blk.cond_br(&word_ok, &cap_label, &join_label);
         handle
     };
@@ -275,7 +311,41 @@ pub(crate) fn emit_array_region_guard(
         let capacity_addr = blk.add(I64, &handle, "4");
         let capacity_ptr = blk.inttoptr(I64, &capacity_addr);
         let capacity = blk.load(I32, &capacity_ptr);
-        let fits = blk.icmp_ult(I32, &max_index.to_string(), &capacity);
+        let fits = match dense {
+            // Element receivers (no dense facts): every counter value is
+            // below `cap_bound`, an `f64`, so `cap_bound <= capacity` keeps
+            // each load inside the backing store; a slot in
+            // `[length, capacity)` holds a hole (the S0 invariant).
+            None => {
+                let fits = blk.icmp_ult(I32, &max_index.to_string(), &capacity);
+                match cap_bound {
+                    Some(bound) => {
+                        let cap_f = blk.uitofp(I32, &capacity, DOUBLE);
+                        let within = blk.fcmp("ole", bound, &cap_f);
+                        blk.and(I1, &fits, &within)
+                    }
+                    None => fits,
+                }
+            }
+            Some(d) => {
+                // #9784: the logical length does not prove the backing
+                // store (a presized array's capacity can be smaller): every
+                // slot the region touches is below BOTH.
+                let length_ptr = blk.inttoptr(I64, &handle);
+                let length = blk.load(I32, &length_ptr);
+                let shorter = blk.icmp_ult(I32, &length, &capacity);
+                let limit = blk.select(I1, &shorter, I32, &length, &capacity);
+                let fits = blk.icmp_ult(I32, &max_index.to_string(), &limit);
+                match d.len_bound {
+                    Some(bound) => {
+                        let len_f = blk.uitofp(I32, &limit, DOUBLE);
+                        let within = blk.fcmp("ole", bound, &len_f);
+                        blk.and(I1, &fits, &within)
+                    }
+                    None => fits,
+                }
+            }
+        };
         let pass = blk.and(I1, &proto_ok, &fits);
         let base = blk.array_elements_addr_with_capacity(&handle, &capacity);
         blk.br(&join_label);
@@ -294,6 +364,98 @@ pub(crate) fn emit_array_region_guard(
     let base = blk.phi(
         I64,
         &[("0", &pre_label), ("0", &deref_label), (&base, &cap_label)],
+    );
+    blk.store(I64, &base, base_slot);
+    pass
+}
+
+/// The `Float64Array` twin of [`emit_array_region_guard`]'s dense facts
+/// (#10741): a heap pointer whose GC header names a typed array (never
+/// forwarded: typed arrays live in the non-moving space), of element kind
+/// `Float64`, with inline storage (its own storage byte, header byte 10, is
+/// `TA_STORAGE_INLINE` — #10516 — so its elements start at payload `+16`), and
+/// the same bounds against its `length` (payload `+0`). On a pass it stores
+/// the element base into `base_slot`; F-body's reads and stores are then the
+/// same raw `f64` slots as a dense array's, its reads canonicalising a NaN
+/// (a typed array may hold any NaN payload). A typed array's length and kind
+/// never change and it is never moved, so nothing but a view creation (JS)
+/// can invalidate the facts.
+pub(crate) fn emit_typed_f64_region_guard(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    max_index: u32,
+    len_bound: Option<&str>,
+    base_slot: &str,
+) -> String {
+    let deref_idx = ctx.new_block("rloop.ta.deref");
+    let len_idx = ctx.new_block("rloop.ta.len");
+    let join_idx = ctx.new_block("rloop.ta.join");
+    let deref_label = ctx.block_label(deref_idx);
+    let len_label = ctx.block_label(len_idx);
+    let join_label = ctx.block_label(join_idx);
+    let pre_label = ctx.block().label.clone();
+    let band_offset = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv_box);
+        let band_offset = blk.sub(I64, &bits, HEAP_POINTER_BAND_BASE_I64);
+        let in_band = blk.icmp_ult(I64, &band_offset, HEAP_POINTER_BAND_SPAN_I64);
+        blk.cond_br(&in_band, &deref_label, &join_label);
+        band_offset
+    };
+    ctx.current_block = deref_idx;
+    let handle = {
+        let blk = ctx.block();
+        let handle = blk.add(I64, &band_offset, "1048576");
+        let word = emit_array_guard_word(blk, &handle);
+        // obj_type GC_TYPE_TYPED_ARRAY (11), not forwarded (0x80 in byte 1).
+        let masked = blk.and(I32, &word, "33023"); // 0x80FF
+        let is_ta = blk.icmp_eq(I32, &masked, "11");
+        let kind_addr = blk.add(I64, &handle, "8");
+        let kind_ptr = blk.inttoptr(I64, &kind_addr);
+        let kind = blk.load(I8, &kind_ptr);
+        let is_f64 = blk.icmp_eq(I8, &kind, "7"); // KIND_FLOAT64
+
+        // #10516: the receiver's own storage byte (header byte 10,
+        // `TA_STORAGE_INLINE` = 0) licenses `data == header + 16`. The
+        // process-wide `PERRY_TA_VIEW_GUARD` this used to read no longer
+        // exists, so referencing it left the symbol undefined.
+        let storage_addr = blk.add(I64, &handle, "10");
+        let storage_ptr = blk.inttoptr(I64, &storage_addr);
+        let storage = blk.load(I8, &storage_ptr);
+        let inline_storage = blk.icmp_eq(I8, &storage, "0");
+        let ok = blk.and(I1, &is_ta, &inline_storage);
+        let ok = blk.and(I1, &ok, &is_f64);
+        blk.cond_br(&ok, &len_label, &join_label);
+        handle
+    };
+    ctx.current_block = len_idx;
+    let (pass, base) = {
+        let blk = ctx.block();
+        let length_ptr = blk.inttoptr(I64, &handle);
+        let length = blk.load(I32, &length_ptr);
+        let mut fits = blk.icmp_ult(I32, &max_index.to_string(), &length);
+        if let Some(bound) = len_bound {
+            let len_f = blk.uitofp(I32, &length, DOUBLE);
+            let within = blk.fcmp("ole", bound, &len_f);
+            fits = blk.and(I1, &fits, &within);
+        }
+        let base = blk.add(I64, &handle, "16");
+        blk.br(&join_label);
+        (fits, base)
+    };
+    ctx.current_block = join_idx;
+    let blk = ctx.block();
+    let pass = blk.phi(
+        I1,
+        &[
+            ("false", &pre_label),
+            ("false", &deref_label),
+            (&pass, &len_label),
+        ],
+    );
+    let base = blk.phi(
+        I64,
+        &[("0", &pre_label), ("0", &deref_label), (&base, &len_label)],
     );
     blk.store(I64, &base, base_slot);
     pass
@@ -734,19 +896,22 @@ pub(super) fn lower_guarded_array_index_get(
     }
 
     ctx.current_block = fast_idx;
-    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FAST);
-    let fast_blk = ctx.block();
     let arr_handle = match (&inline_fast_handle, &runtime_fast_handle) {
-        (Some((inline_handle, inline_pred)), Some((runtime_handle, runtime_pred))) => fast_blk.phi(
-            I64,
-            &[
-                (inline_handle.as_str(), inline_pred.as_str()),
-                (runtime_handle.as_str(), runtime_pred.as_str()),
-            ],
-        ),
+        (Some((inline_handle, inline_pred)), Some((runtime_handle, runtime_pred))) => {
+            ctx.block().phi(
+                I64,
+                &[
+                    (inline_handle.as_str(), inline_pred.as_str()),
+                    (runtime_handle.as_str(), runtime_pred.as_str()),
+                ],
+            )
+        }
         (Some((handle, _)), None) | (None, Some((handle, _))) => handle.clone(),
         (None, None) => unreachable!("guarded array fast block has no predecessor handle"),
     };
+    // The handle PHI must precede the census load/add/store in this join.
+    crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FAST);
+    let fast_blk = ctx.block();
     let fast_val = if require_numeric_layout {
         // The guard on the way into this block (inline tier or the runtime
         // `numeric_array_index_get_guard`) already proved: a plain,

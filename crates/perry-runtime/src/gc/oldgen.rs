@@ -110,7 +110,7 @@ impl Default for EvacuationPolicyDecision {
 }
 
 #[derive(Clone, Copy, Default)]
-#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
+#[cfg_attr(not(perry_diagnostics), allow(dead_code))]
 pub(super) struct SweepTraceStats {
     pub(super) dead_bytes: u64,
     // Compatibility alias for dead_bytes.
@@ -664,9 +664,17 @@ impl MallocSweepCycleState {
             self.freed_bytes = self.freed_bytes.saturating_add(total_size as u64);
             layout_clear_for_ptr(user_ptr as usize);
             gc_type_finalize_unmarked_payload(obj_type, user_ptr);
-            let layout = Layout::from_size_align(total_size, 8).unwrap();
-            crate::gc::heap_generation::debug_assert_heap_change_open();
-            dealloc(header as *mut u8, layout);
+            if crate::arena::old_sweep_quarantine_enabled() {
+                crate::arena::retire_swept_object(
+                    header as usize,
+                    total_size,
+                    crate::arena::RetiredKind::Malloc,
+                );
+            } else {
+                let layout = Layout::from_size_align(total_size, 8).unwrap();
+                crate::gc::heap_generation::debug_assert_heap_change_open();
+                dealloc(header as *mut u8, layout);
+            }
             self.remove_tracked_header(header, obj_type, total_size as u64);
         }
     }
@@ -1154,8 +1162,6 @@ enum SweepCycleSubphase {
 pub(super) struct IncrementalSweepState {
     subphase: SweepCycleSubphase,
     dead_sets: Vec<usize>,
-    dead_buffers: Vec<usize>,
-    dead_typed_arrays: Vec<usize>,
     dead_lazy_arrays: Vec<usize>,
     malloc: MallocSweepCycleState,
     arena: ArenaSweepObjectsState,
@@ -1176,8 +1182,6 @@ impl IncrementalSweepState {
         Self {
             subphase: SweepCycleSubphase::Malloc,
             dead_sets: Vec::new(),
-            dead_buffers: Vec::new(),
-            dead_typed_arrays: Vec::new(),
             dead_lazy_arrays: Vec::new(),
             malloc: MallocSweepCycleState::new(sweep_malloc),
             arena: ArenaSweepObjectsState::new(
@@ -1196,9 +1200,10 @@ impl IncrementalSweepState {
     /// #6010: collect the dead registered Sets NOW (marks are fresh at
     /// sweep entry) and finalize their external buffers budget-chunked as the
     /// first sweep subphase. See `SweepCycleSubphase::CollectionSideBuffers`.
-    /// 2026-07-09 audit: buffers and typed arrays joined the same pattern —
-    /// their registry/side-table entries are pruned when the owner is
-    /// genuinely dead (full traces only; they are all tenured old residents).
+    /// Buffers and typed arrays left this pattern in #10694: their brand is
+    /// their GC type, so the per-object sweep finds a dead one through its
+    /// finalize hook (`BufferSideTables` / `TypedArraySideTables`) instead of a
+    /// registry scan.
     pub(super) fn with_dead_collection_finalize(
         mut self,
         full_trace: bool,
@@ -1213,9 +1218,6 @@ impl IncrementalSweepState {
             synchronous_full_trace,
         );
         self.dead_sets = crate::set::collect_dead_registered_sets_post_trace(full_trace);
-        self.dead_buffers = crate::buffer::collect_dead_registered_buffers_post_trace(full_trace);
-        self.dead_typed_arrays =
-            crate::typedarray::collect_dead_registered_typed_arrays_post_trace(full_trace);
         // #7539: lazy JSON arrays own their tape bytes outside the GC heap.
         // The copying minor has its own from-space pass; this covers the
         // non-copying cycles, including a dead owner sitting in the ACTIVE
@@ -1223,11 +1225,7 @@ impl IncrementalSweepState {
         self.dead_lazy_arrays = crate::json_tape_store::collect_owners(&|addr| unsafe {
             registered_lazy_array_is_dead_post_trace(addr, full_trace)
         });
-        if !self.dead_sets.is_empty()
-            || !self.dead_buffers.is_empty()
-            || !self.dead_typed_arrays.is_empty()
-            || !self.dead_lazy_arrays.is_empty()
-        {
+        if !self.dead_sets.is_empty() || !self.dead_lazy_arrays.is_empty() {
             self.subphase = SweepCycleSubphase::CollectionSideBuffers;
         }
         self
@@ -1248,10 +1246,6 @@ impl IncrementalSweepState {
                 while spent < budget {
                     if let Some(addr) = self.dead_sets.pop() {
                         crate::set::finalize_collected_dead_set(addr);
-                    } else if let Some(addr) = self.dead_buffers.pop() {
-                        crate::buffer::finalize_collected_dead_buffer(addr);
-                    } else if let Some(addr) = self.dead_typed_arrays.pop() {
-                        crate::typedarray::finalize_collected_dead_typed_array(addr);
                     } else if let Some(addr) = self.dead_lazy_arrays.pop() {
                         crate::json_tape_store::release(addr);
                     } else {
@@ -1260,11 +1254,7 @@ impl IncrementalSweepState {
                     }
                     spent += 1;
                 }
-                if self.dead_sets.is_empty()
-                    && self.dead_buffers.is_empty()
-                    && self.dead_typed_arrays.is_empty()
-                    && self.dead_lazy_arrays.is_empty()
-                {
+                if self.dead_sets.is_empty() && self.dead_lazy_arrays.is_empty() {
                     self.subphase = SweepCycleSubphase::Malloc;
                 }
                 false
@@ -1279,8 +1269,17 @@ impl IncrementalSweepState {
                 if self.arena.step(budget) {
                     self.arena.maybe_print_diag();
                     self.arena.push_live_block_holes();
+                    // `PERRY_GC_PROTECT_OLD_SWEEP`: no block is reset or released,
+                    // so a freed object's bytes are never handed out again.
+                    let keep_all;
+                    let block_has_live = if crate::arena::old_sweep_quarantine_enabled() {
+                        keep_all = vec![true; self.arena.block_has_live().len()];
+                        &keep_all[..]
+                    } else {
+                        self.arena.block_has_live()
+                    };
                     self.cleanup = Some(ArenaSweepCleanupState::new(
-                        self.arena.block_has_live(),
+                        block_has_live,
                         self.arena.block_snapshots(),
                         self.reclaim_dead_old_blocks,
                         self.targeted_old_blocks.as_ref(),

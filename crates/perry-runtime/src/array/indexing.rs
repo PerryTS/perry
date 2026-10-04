@@ -546,7 +546,12 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         }
     };
     unsafe {
-        if !raw_ptr.is_null() && (raw_ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
+        // #11875: the floor is the handle band, not one page. A Proxy held in
+        // a `T[]` binding (`sum(new Proxy(arr, {}))`) arrives as a masked
+        // proxy id in `[PROXY_ID_BAND_START, HANDLE_BAND_MAX)`, which the old
+        // `GC_HEADER_SIZE + 0x1000` floor let through to a header read from
+        // unmapped memory (SIGSEGV). Still a single compare.
+        if crate::value::addr_class::is_above_handle_band(raw_ptr as usize) {
             let gc_header =
                 (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
@@ -632,6 +637,12 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
 
     let cleaned = clean_arr_ptr(arr);
     if cleaned.is_null() {
+        // #11875: a Proxy held in a `T[]`-annotated binding. Its element read
+        // is the proxy's `[[Get]]` (the `get` trap, else the target), the same
+        // route `js_array_length` takes for its `length`.
+        if let Some(proxy) = array_ptr_as_proxy(arr) {
+            return crate::proxy::js_proxy_get(proxy, index as f64);
+        }
         // #7574: `a[i]` on a `class X extends Array` instance held in a
         // `T[]`-annotated binding. Read the object's indexed property through
         // the spec-generic `Get`, not the `ObjectHeader` words.
@@ -1278,6 +1289,13 @@ fn js_array_set_f64_extend_strict_impl(
     strict: bool,
     prototype_already_checked: bool,
 ) -> *mut ArrayHeader {
+    // #11891: a declared `T[]` receiver may be a Proxy handle rather than a
+    // heap array. Its [[Set]] must run before the dense lanes inspect layout;
+    // the PutValue funnel also enforces strict falsy-trap rejection.
+    if let Some(proxy) = array_ptr_as_proxy(arr) {
+        crate::proxy::js_put_value_set(proxy, index as f64, value, proxy, i32::from(strict));
+        return arr;
+    }
     // Two exact fast lanes, each storing only what the general path below
     // would store and declining every shape it cannot prove. The plain-number
     // lane (#8885) resolves the head itself, so a hit returns that head; the
@@ -1506,6 +1524,13 @@ pub extern "C" fn js_array_set_f64_extend(
     index: u32,
     value: f64,
 ) -> *mut ArrayHeader {
+    // #11891: direct/sloppy callers can also receive the masked id of a Proxy
+    // bound to `T[]`. Invoke its [[Set]] instead of treating the id as an
+    // invalid array and manufacturing an empty replacement.
+    if let Some(proxy) = array_ptr_as_proxy(arr) {
+        crate::proxy::js_put_value_set(proxy, index as f64, value, proxy, 0);
+        return arr;
+    }
     // Demote a uniquely-owned string source — see `js_array_set_f64`.
     crate::string::js_string_addref_if_heap_string(value);
     let cleaned = clean_arr_ptr_mut(arr);

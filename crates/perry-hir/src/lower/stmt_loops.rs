@@ -18,6 +18,8 @@ use swc_ecma_ast as ast;
 use super::*;
 use crate::ir::*;
 
+mod async_iterator_close;
+pub(crate) use async_iterator_close::emit_driver as async_iterator_close_driver;
 mod for_await_targets;
 use for_await_targets::{
     is_filehandle_readlines_for_await_target, is_fs_dir_for_await_target,
@@ -40,69 +42,6 @@ fn async_iterator_method_call(iterable: Expr) -> Expr {
     }
 }
 
-fn iterator_return_call(iter_id: LocalId, needs_await: bool) -> Expr {
-    let call = Expr::Call {
-        callee: Box::new(Expr::PropertyGet {
-            byte_offset: 0,
-            object: Box::new(Expr::LocalGet(iter_id)),
-            property: "return".to_string(),
-        }),
-        args: vec![],
-        type_args: vec![],
-        byte_offset: 0,
-    };
-    if needs_await {
-        Expr::Await(Box::new(call))
-    } else {
-        call
-    }
-}
-
-fn insert_iterator_return_before_abrupts(
-    stmts: &mut Vec<Stmt>,
-    iter_id: LocalId,
-    needs_await: bool,
-) {
-    let mut rewritten = Vec::with_capacity(stmts.len());
-    for stmt in stmts.drain(..) {
-        match stmt {
-            Stmt::Break => {
-                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
-                rewritten.push(Stmt::Break);
-            }
-            Stmt::LabeledBreak(label) => {
-                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
-                rewritten.push(Stmt::LabeledBreak(label));
-            }
-            Stmt::Return(value) => {
-                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
-                rewritten.push(Stmt::Return(value));
-            }
-            Stmt::Throw(expr) => {
-                rewritten.push(Stmt::Expr(iterator_return_call(iter_id, needs_await)));
-                rewritten.push(Stmt::Throw(expr));
-            }
-            Stmt::If {
-                condition,
-                mut then_branch,
-                mut else_branch,
-            } => {
-                insert_iterator_return_before_abrupts(&mut then_branch, iter_id, needs_await);
-                if let Some(else_stmts) = else_branch.as_mut() {
-                    insert_iterator_return_before_abrupts(else_stmts, iter_id, needs_await);
-                }
-                rewritten.push(Stmt::If {
-                    condition,
-                    then_branch,
-                    else_branch,
-                });
-            }
-            other => rewritten.push(other),
-        }
-    }
-    *stmts = rewritten;
-}
-
 /// Element source for a `for...of` binding: `__result.value` on the lazy
 /// iterator path, `__arr[__idx]` on the materialized-array path.
 pub(crate) fn lazy_or_index_elem(
@@ -122,21 +61,6 @@ pub(crate) fn lazy_or_index_elem(
             object: Box::new(Expr::LocalGet(arr_id)),
             index: Box::new(Expr::LocalGet(idx_id)),
         }
-    }
-}
-
-/// Wrap an iterator-protocol call result in the spec "If innerResult is not
-/// an Object, throw a TypeError" check (IteratorNext / IteratorClose).
-fn iterator_result_validated(call: Expr) -> Expr {
-    Expr::Call {
-        callee: Box::new(Expr::ExternFuncRef {
-            name: "js_iterator_result_validate".to_string(),
-            param_types: vec![Type::Any],
-            return_type: Type::Any,
-        }),
-        args: vec![call],
-        type_args: vec![],
-        byte_offset: 0,
     }
 }
 
@@ -166,8 +90,7 @@ pub(crate) fn iterator_next_call(iter_id: LocalId) -> Expr {
 /// here cannot carry an `await` in a `for` update clause, so they use this
 /// shape). An SSE consumer's `continue` on ping hung a bundled CLI app.
 ///
-/// The synthetic `if done break` is appended AFTER
-/// `insert_iterator_return_before_abrupts` runs over the user body, so the
+/// The async cleanup driver disables close before advancing, so this
 /// normal-completion exit never triggers a spurious IteratorClose.
 fn iter_driver_while_stmt(result_id: LocalId, next_call: Expr, rest: Vec<Stmt>) -> Stmt {
     let mut body = vec![
@@ -225,46 +148,71 @@ pub(crate) fn lazy_iter_for_stmt(
     }
 }
 
-/// Spec IteratorClose, guarded: `if (__iter.return != null) __iter.return();`.
-/// Array iterators have no `return` method, so the guard makes close a no-op
-/// for them (closing an array iterator is a spec no-op); generators / custom
-/// iterators run their `return` (which executes pending `finally` blocks).
-pub(crate) fn iterator_close_guarded_stmt(iter_id: LocalId) -> Stmt {
-    Stmt::If {
-        condition: Expr::Compare {
-            op: CompareOp::LooseNe,
-            left: Box::new(Expr::PropertyGet {
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(iter_id)),
-                property: "return".to_string(),
-            }),
-            right: Box::new(Expr::Null),
-        },
-        then_branch: vec![Stmt::Expr(iterator_result_validated(iterator_return_call(
-            iter_id, false,
-        )))],
-        else_branch: None,
+/// Use the runtime GetMethod/Call entry: read `return` once and preserve
+/// the iterator as the receiver without consulting a user-visible `.call`.
+fn iterator_close_stmt(iter_id: LocalId) -> Stmt {
+    Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_iterator_close_if_not_done".to_string(),
+            param_types: vec![Type::Any, Type::Any],
+            return_type: Type::Any,
+        }),
+        args: vec![Expr::LocalGet(iter_id), Expr::Bool(false)],
+        type_args: vec![],
+        byte_offset: 0,
+    })
+}
+
+/// Record a label only for the for-of loop it directly targets (including
+/// label chains). Lowering the body can then distinguish `continue here`
+/// from a continue that exits to an outer loop.
+pub(crate) fn record_iterator_loop_label(ctx: &mut LoweringContext, body: &ast::Stmt, label: &str) {
+    match body {
+        ast::Stmt::Labeled(labeled) => record_iterator_loop_label(ctx, &labeled.body, label),
+        ast::Stmt::ForOf(loop_stmt) => ctx
+            .iterator_loop_labels
+            .push((loop_stmt.span.lo.0, label.to_string())),
+        _ => {}
     }
 }
 
-/// Wrap a lazy `for...of` body (binding + user statements) in a `try/catch`
-/// that runs IteratorClose when the body completes abruptly with a *throw* —
-/// either an explicit `throw` statement or a runtime exception (a throwing
-/// setter in the LHS `PutValue`, a destructuring error, an assertion failure,
-/// a generator `.throw()` propagation). The `break`/`return`/labeled cases are
-/// handled separately by `insert_iterator_close_on_abrupt` (they are control
-/// flow, not exceptions, so this `catch` never sees them — no double-close).
-///
-/// Per spec, for a throw completion IteratorClose invokes `return` but does
-/// NOT validate its result and SWALLOWS any exception it raises — the original
-/// throw is the one that propagates. So the close here is unvalidated and
-/// itself wrapped in a result-swallowing `try/catch`, then the caught error is
-/// re-thrown.
+fn iterator_completion_stmt(state_id: LocalId, state: f64) -> Stmt {
+    Stmt::Expr(Expr::LocalSet(state_id, Box::new(Expr::Number(state))))
+}
+
+/// One existing body handler also owns close on control-flow completion.
+/// State 0 means normal/continue, 1 means an outgoing break/return, and 2
+/// means close has started. The finally-inlining pass runs inner user
+/// finallies before this close and evaluates return operands first. Setting
+/// 2 BEFORE GetMethod/Call prevents a close error caught here from closing
+/// again. Body throws still close once and retain their original exception.
 pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
     ctx: &mut LoweringContext,
     iter_id: LocalId,
-    body: Vec<Stmt>,
+    loop_byte_offset: u32,
+    mut body: Vec<Stmt>,
 ) -> Stmt {
+    let state_id = ctx.fresh_local();
+    let state_name = format!("__forof_completion_{}", state_id);
+    ctx.locals
+        .push((state_name.clone(), state_id, Type::Number));
+    let loop_labels: Vec<String> = ctx
+        .iterator_loop_labels
+        .iter()
+        .filter(|(offset, _)| *offset == loop_byte_offset)
+        .map(|(_, label)| label.clone())
+        .collect();
+    mark_iterator_completion_on_abrupt(ctx, &mut body, state_id, None, None, &[], &loop_labels);
+    body.insert(
+        0,
+        Stmt::Let {
+            id: state_id,
+            name: state_name,
+            ty: Type::Number,
+            mutable: true,
+            init: Some(Expr::Number(0.0)),
+        },
+    );
     let err_id = ctx.fresh_local();
     let err_name = format!("__forof_err_{}", err_id);
     ctx.locals.push((err_name.clone(), err_id, Type::Any));
@@ -273,47 +221,70 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
     ctx.locals
         .push((ret_err_name.clone(), ret_err_id, Type::Any));
 
-    // try { if (__iter.return != null) __iter.return(); } catch (_) {}
-    //
-    // The whole close — including the `__iter.return` *read* (which may be an
-    // accessor that throws) and the call's result — is inside the swallowing
-    // `try`: for a throw completion the close's own abrupt completion is
-    // discarded and the ORIGINAL throw propagates (spec IteratorClose, throw
-    // case). Keeping the `.return` read outside would let a throwing getter
-    // (`iterator-close-throw-get-method-abrupt`) replace the original error.
-    let guarded_close = Stmt::Try {
-        body: vec![Stmt::If {
-            condition: Expr::Compare {
-                op: CompareOp::LooseNe,
-                left: Box::new(Expr::PropertyGet {
-                    byte_offset: 0,
-                    object: Box::new(Expr::LocalGet(iter_id)),
-                    property: "return".to_string(),
+    let close_on_throw = Stmt::If {
+        condition: Expr::Compare {
+            op: CompareOp::Ne,
+            left: Box::new(Expr::LocalGet(state_id)),
+            right: Box::new(Expr::Number(2.0)),
+        },
+        then_branch: vec![
+            iterator_completion_stmt(state_id, 2.0),
+            Stmt::Try {
+                body: vec![iterator_close_stmt(iter_id)],
+                catch: Some(CatchClause {
+                    param: Some((ret_err_id, ret_err_name)),
+                    body: Vec::new(),
                 }),
-                right: Box::new(Expr::Null),
+                finally: None,
             },
-            then_branch: vec![Stmt::Expr(iterator_return_call(iter_id, false))],
-            else_branch: None,
-        }],
-        catch: Some(CatchClause {
-            param: Some((ret_err_id, ret_err_name)),
-            body: Vec::new(),
-        }),
-        finally: None,
+        ],
+        else_branch: None,
     };
-
     Stmt::Try {
         body,
         catch: Some(CatchClause {
             param: Some((err_id, err_name)),
-            body: vec![guarded_close, Stmt::Throw(Expr::LocalGet(err_id))],
+            body: vec![close_on_throw, Stmt::Throw(Expr::LocalGet(err_id))],
         }),
-        finally: None,
+        finally: Some(vec![Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(state_id)),
+                right: Box::new(Expr::Number(1.0)),
+            },
+            then_branch: vec![
+                iterator_completion_stmt(state_id, 2.0),
+                iterator_close_stmt(iter_id),
+            ],
+            else_branch: None,
+        }]),
     }
 }
 
+fn iterator_completion_snapshot(
+    ctx: &mut LoweringContext,
+    stmts: &mut Vec<Stmt>,
+    state_id: LocalId,
+) -> LocalId {
+    let id = ctx.fresh_local();
+    let name = format!("__forof_incoming_{}", id);
+    ctx.locals.push((name.clone(), id, Type::Number));
+    stmts.push(Stmt::Let {
+        id,
+        name,
+        ty: Type::Number,
+        mutable: false,
+        init: Some(Expr::LocalGet(state_id)),
+    });
+    id
+}
+
+fn iterator_completion_restore(state_id: LocalId, saved_id: LocalId) -> Stmt {
+    Stmt::Expr(Expr::LocalSet(state_id, Box::new(Expr::LocalGet(saved_id))))
+}
+
 /// Rewrite a synchronous `for...of` body so every abrupt completion that
-/// escapes the loop runs IteratorClose first. Per spec ForIn/OfBodyEvaluation:
+/// escapes the loop requests IteratorClose in its enclosing finally. Per spec ForIn/OfBodyEvaluation:
 /// an unlabeled `break` that targets this loop, a labeled `break`/`continue`
 /// that targets an enclosing construct, and a `return` all close the iterator.
 /// Unlabeled `continue` (next iteration) and `break`/`continue` captured by a
@@ -321,32 +292,76 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
 /// rewritten here: a `throw` caught by an in-body `try/catch` must not close,
 /// and the uncaught case is handled separately.
 ///
-/// `break_capture_depth` counts enclosing loops/switches inside the body (which
-/// capture an unlabeled `break`); `inner_labels` are labels declared within the
-/// body (which capture a matching labeled `break`/`continue`).
-pub(crate) fn insert_iterator_close_on_abrupt(
+/// Captured exits restore the completion present when their target was entered.
+/// This cancels a return overridden by an inner exit from finally, but retains
+/// an outer return when a loop inside its cleanup completes normally.
+/// Switches supply only a break target. Labels carry their own entry snapshot.
+/// Continuing a label on this for-of resets the pending close.
+fn mark_iterator_completion_on_abrupt(
+    ctx: &mut LoweringContext,
     stmts: &mut Vec<Stmt>,
-    iter_id: LocalId,
-    break_capture_depth: usize,
-    inner_labels: &[String],
+    state_id: LocalId,
+    break_target: Option<LocalId>,
+    continue_target: Option<LocalId>,
+    inner_labels: &[(String, LocalId)],
+    loop_labels: &[String],
 ) {
     let mut rewritten = Vec::with_capacity(stmts.len());
     for stmt in stmts.drain(..) {
         match stmt {
-            Stmt::Break if break_capture_depth == 0 => {
-                rewritten.push(iterator_close_guarded_stmt(iter_id));
+            Stmt::Continue => {
+                rewritten.push(match continue_target {
+                    Some(saved_id) => iterator_completion_restore(state_id, saved_id),
+                    None => iterator_completion_stmt(state_id, 0.0),
+                });
+                rewritten.push(Stmt::Continue);
+            }
+            Stmt::Break => {
+                rewritten.push(match break_target {
+                    Some(saved_id) => iterator_completion_restore(state_id, saved_id),
+                    None => iterator_completion_stmt(state_id, 1.0),
+                });
                 rewritten.push(Stmt::Break);
             }
-            Stmt::LabeledBreak(label) if !inner_labels.contains(&label) => {
-                rewritten.push(iterator_close_guarded_stmt(iter_id));
+            Stmt::LabeledBreak(label) => {
+                rewritten.push(match inner_labels.iter().rev().find(|(l, _)| l == &label) {
+                    Some((_, saved_id)) => iterator_completion_restore(state_id, *saved_id),
+                    None => iterator_completion_stmt(state_id, 1.0),
+                });
                 rewritten.push(Stmt::LabeledBreak(label));
             }
-            Stmt::LabeledContinue(label) if !inner_labels.contains(&label) => {
-                rewritten.push(iterator_close_guarded_stmt(iter_id));
+            Stmt::LabeledContinue(label) => {
+                rewritten.push(match inner_labels.iter().rev().find(|(l, _)| l == &label) {
+                    Some((_, saved_id)) => iterator_completion_restore(state_id, *saved_id),
+                    None => iterator_completion_stmt(
+                        state_id,
+                        if loop_labels.contains(&label) {
+                            0.0
+                        } else {
+                            1.0
+                        },
+                    ),
+                });
                 rewritten.push(Stmt::LabeledContinue(label));
             }
             Stmt::Return(value) => {
-                rewritten.push(iterator_close_guarded_stmt(iter_id));
+                // Operand failure remains a throw, not an outgoing return.
+                // Register the value as Any so cleanup can allocate/collect
+                // while the pending return remains rooted.
+                let value = value.map(|operand| {
+                    let id = ctx.fresh_local();
+                    let name = format!("__forof_return_{}", id);
+                    ctx.locals.push((name.clone(), id, Type::Any));
+                    rewritten.push(Stmt::Let {
+                        id,
+                        name,
+                        ty: Type::Any,
+                        mutable: false,
+                        init: Some(operand),
+                    });
+                    Expr::LocalGet(id)
+                });
+                rewritten.push(iterator_completion_stmt(state_id, 1.0));
                 rewritten.push(Stmt::Return(value));
             }
             Stmt::If {
@@ -354,18 +369,24 @@ pub(crate) fn insert_iterator_close_on_abrupt(
                 mut then_branch,
                 mut else_branch,
             } => {
-                insert_iterator_close_on_abrupt(
+                mark_iterator_completion_on_abrupt(
+                    ctx,
                     &mut then_branch,
-                    iter_id,
-                    break_capture_depth,
+                    state_id,
+                    break_target,
+                    continue_target,
                     inner_labels,
+                    loop_labels,
                 );
                 if let Some(else_stmts) = else_branch.as_mut() {
-                    insert_iterator_close_on_abrupt(
+                    mark_iterator_completion_on_abrupt(
+                        ctx,
                         else_stmts,
-                        iter_id,
-                        break_capture_depth,
+                        state_id,
+                        break_target,
+                        continue_target,
                         inner_labels,
+                        loop_labels,
                     );
                 }
                 rewritten.push(Stmt::If {
@@ -379,22 +400,44 @@ pub(crate) fn insert_iterator_close_on_abrupt(
                 mut catch,
                 mut finally,
             } => {
-                insert_iterator_close_on_abrupt(
+                mark_iterator_completion_on_abrupt(
+                    ctx,
                     &mut body,
-                    iter_id,
-                    break_capture_depth,
+                    state_id,
+                    break_target,
+                    continue_target,
                     inner_labels,
+                    loop_labels,
                 );
                 if let Some(c) = catch.as_mut() {
-                    insert_iterator_close_on_abrupt(
+                    // A handled override cancels only completion originating
+                    // in this try. A catch inside a pending return's cleanup
+                    // inherits state 1 and must retain that pending return.
+                    let mut entry = Vec::new();
+                    let saved_id = iterator_completion_snapshot(ctx, &mut entry, state_id);
+                    body.splice(0..0, entry);
+                    c.body
+                        .insert(0, iterator_completion_restore(state_id, saved_id));
+                    mark_iterator_completion_on_abrupt(
+                        ctx,
                         &mut c.body,
-                        iter_id,
-                        break_capture_depth,
+                        state_id,
+                        break_target,
+                        continue_target,
                         inner_labels,
+                        loop_labels,
                     );
                 }
                 if let Some(f) = finally.as_mut() {
-                    insert_iterator_close_on_abrupt(f, iter_id, break_capture_depth, inner_labels);
+                    mark_iterator_completion_on_abrupt(
+                        ctx,
+                        f,
+                        state_id,
+                        break_target,
+                        continue_target,
+                        inner_labels,
+                        loop_labels,
+                    );
                 }
                 rewritten.push(Stmt::Try {
                     body,
@@ -406,11 +449,15 @@ pub(crate) fn insert_iterator_close_on_abrupt(
                 condition,
                 mut body,
             } => {
-                insert_iterator_close_on_abrupt(
+                let saved_id = iterator_completion_snapshot(ctx, &mut rewritten, state_id);
+                mark_iterator_completion_on_abrupt(
+                    ctx,
                     &mut body,
-                    iter_id,
-                    break_capture_depth + 1,
+                    state_id,
+                    Some(saved_id),
+                    Some(saved_id),
                     inner_labels,
+                    loop_labels,
                 );
                 rewritten.push(Stmt::While { condition, body });
             }
@@ -418,11 +465,15 @@ pub(crate) fn insert_iterator_close_on_abrupt(
                 mut body,
                 condition,
             } => {
-                insert_iterator_close_on_abrupt(
+                let saved_id = iterator_completion_snapshot(ctx, &mut rewritten, state_id);
+                mark_iterator_completion_on_abrupt(
+                    ctx,
                     &mut body,
-                    iter_id,
-                    break_capture_depth + 1,
+                    state_id,
+                    Some(saved_id),
+                    Some(saved_id),
                     inner_labels,
+                    loop_labels,
                 );
                 rewritten.push(Stmt::DoWhile { body, condition });
             }
@@ -432,11 +483,15 @@ pub(crate) fn insert_iterator_close_on_abrupt(
                 update,
                 mut body,
             } => {
-                insert_iterator_close_on_abrupt(
+                let saved_id = iterator_completion_snapshot(ctx, &mut rewritten, state_id);
+                mark_iterator_completion_on_abrupt(
+                    ctx,
                     &mut body,
-                    iter_id,
-                    break_capture_depth + 1,
+                    state_id,
+                    Some(saved_id),
+                    Some(saved_id),
                     inner_labels,
+                    loop_labels,
                 );
                 rewritten.push(Stmt::For {
                     init,
@@ -449,12 +504,16 @@ pub(crate) fn insert_iterator_close_on_abrupt(
                 discriminant,
                 mut cases,
             } => {
+                let saved_id = iterator_completion_snapshot(ctx, &mut rewritten, state_id);
                 for case in cases.iter_mut() {
-                    insert_iterator_close_on_abrupt(
+                    mark_iterator_completion_on_abrupt(
+                        ctx,
                         &mut case.body,
-                        iter_id,
-                        break_capture_depth + 1,
+                        state_id,
+                        Some(saved_id),
+                        continue_target,
                         inner_labels,
+                        loop_labels,
                     );
                 }
                 rewritten.push(Stmt::Switch {
@@ -463,16 +522,23 @@ pub(crate) fn insert_iterator_close_on_abrupt(
                 });
             }
             Stmt::Labeled { label, mut body } => {
+                let saved_id = iterator_completion_snapshot(ctx, &mut rewritten, state_id);
                 let mut labels = inner_labels.to_vec();
-                labels.push(label.clone());
+                labels.push((label.clone(), saved_id));
                 let mut body_vec = vec![*body];
-                insert_iterator_close_on_abrupt(
+                mark_iterator_completion_on_abrupt(
+                    ctx,
                     &mut body_vec,
-                    iter_id,
-                    break_capture_depth,
+                    state_id,
+                    break_target,
+                    continue_target,
                     &labels,
+                    loop_labels,
                 );
-                body = Box::new(body_vec.into_iter().next().unwrap());
+                // Snapshot preludes belong before the labeled target; retain
+                // the actual loop as the label body (including label chains).
+                body = Box::new(body_vec.pop().unwrap());
+                rewritten.extend(body_vec);
                 rewritten.push(Stmt::Labeled { label, body });
             }
             other => rewritten.push(other),
@@ -559,11 +625,15 @@ fn lower_runtime_for_await_iterator(
         lower_stmt(ctx, module, &for_of_stmt.body)?;
     }
     let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
-    insert_iterator_return_before_abrupts(&mut user_body, iter_id, true);
     body_stmts.append(&mut user_body);
-    module
-        .init
-        .push(iter_driver_while_stmt(result_id, next_call, body_stmts));
+    async_iterator_close::emit_driver(
+        ctx,
+        &mut module.init,
+        iter_id,
+        result_id,
+        next_call,
+        body_stmts,
+    );
 
     ctx.pop_block_scope(for_scope_mark);
     Ok(())
@@ -849,19 +919,21 @@ pub(super) fn lower_stmt_for_of_inner(
             lower_stmt(ctx, module, &for_of_stmt.body)?;
         }
         let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
-        if is_node_readable_for_await
-            || is_filehandle_readlines_for_await
-            || is_fs_dir_for_await
-            || is_readline_interface_for_await
-            || (for_of_stmt.is_await && is_generator_call && !callee_is_async_gen)
-        {
-            insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
-        }
         body_stmts.append(&mut user_body);
-        // while (true) { __result = __iter.next(); if (__result.done) break; body }
-        module
-            .init
-            .push(iter_driver_while_stmt(result_id, next_call, body_stmts));
+        if needs_await {
+            async_iterator_close::emit_driver(
+                ctx,
+                &mut module.init,
+                iter_id,
+                result_id,
+                next_call,
+                body_stmts,
+            );
+        } else {
+            module
+                .init
+                .push(iter_driver_while_stmt(result_id, next_call, body_stmts));
+        }
 
         ctx.pop_block_scope(for_scope_mark);
         return Ok(false);
@@ -1612,18 +1684,16 @@ pub(super) fn lower_stmt_for_of_inner(
         _ => return Err(anyhow!("Unsupported for-of left-hand side")),
     };
 
-    // Lazy iterator path: rewrite the user body so every abrupt completion
-    // escaping the loop runs IteratorClose (`__iter.return()`) first.
+    // The lazy iterator body owns close via its generated catch/finally.
     if use_lazy_iter {
-        insert_iterator_close_on_abrupt(&mut loop_body, arr_id, 0, &[]);
         // Wrap ONLY the user body so a throw escaping it runs IteratorClose.
-        // break/return/labeled abrupts were already handled above; this covers
-        // the throw-completion case those intentionally leave alone. The
+        // The
         // element-`.value` read and binding statements stay OUTSIDE the wrapper:
         // per spec, IteratorValue throwing sets the iterator done and does NOT
         // close it (`iterator-next-result-value-attr-error`) — only an abrupt
         // body completion does.
-        let guarded_body = wrap_lazy_for_of_body_close_on_throw(ctx, arr_id, loop_body);
+        let guarded_body =
+            wrap_lazy_for_of_body_close_on_throw(ctx, arr_id, for_of_stmt.span.lo.0, loop_body);
         let mut full_body = binding_stmts;
         full_body.push(guarded_body);
         module

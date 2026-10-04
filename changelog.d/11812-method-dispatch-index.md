@@ -1,0 +1,5 @@
+Remove the remaining per-call own-key scans from runtime method dispatch (#10502). The vtable shadowing guard and both own-method fallback lookups now share the existing content-validated key index, building it on first method use even for small receivers. Complete indexes prove absence without scanning; method hits reload the current receiver slot, preserving replacement and receiver binding. Index maintenance continues to use the existing mutation and moving-GC paths.
+
+Regression coverage counts actual key-byte reads at 4, 64, and 512 keys, checks shadowing, duplicate names and logical prefixes, delete/re-add, method replacement, and a real copying collection that moves the indexed keys. A standalone Rust example calls the dispatcher ABI directly so compiler method-site caches cannot mask its cost.
+
+On Linux x86-64 with the `perry-dev` profile, marginal `instructions:u` (min of three runs, fitted 10k to 100k calls) fell from 14,805 to 3,091 per call for 64 keys and from 99,924 to 3,000 for 512 keys. The remaining constant dispatcher overhead is outside this change. All 4,832 runtime unit tests passed (five ignored).

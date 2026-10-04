@@ -1,0 +1,21 @@
+{
+  "previous_production_source_inputs": 5010,
+  "adopted_source_inputs": 5011,
+  "source_equivalent_to": "8e3013733da37ddc66998ee51b9bd1109a9175ec",
+  "previous_production_commit": "35c4a54c5b4348124860e5b1fce0f39de1753a5d",
+  "copied_paths": [
+    "crates/perry-runtime/src/arena/block.rs",
+    "crates/perry-runtime/src/arena/block/reuse_window_tests.rs",
+    "crates/perry-runtime/src/arena/mod.rs",
+    "crates/perry-runtime/src/arena/promote.rs",
+    "crates/perry-runtime/src/arena/quarantine.rs",
+    "crates/perry-runtime/src/arena/reset.rs",
+    "crates/perry-runtime/src/gc/cycle.rs",
+    "crates/perry-runtime/src/gc/mod.rs",
+    "crates/perry-runtime/src/gc/tests/eden_entry_residency.rs",
+    "crates/perry-runtime/src/gc/tests/mod.rs"
+  ],
+  "all_candidate_source_hashes_match": true,
+  "source_manifest_sha256": "5ef8d2840f6344a606008302f3d93f89373b94f288a155ba148e3f4ccff9c219",
+  "scope": "Exact previously measured once-advice candidate now included in draft PR. Deferred RSS query and learned-floor remain unapplied; no header, shape, ABI or collection-frequency changes."
+}

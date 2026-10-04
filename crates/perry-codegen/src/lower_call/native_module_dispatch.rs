@@ -62,13 +62,15 @@ pub fn native_module_lookup(
 }
 
 /// Lower a native module call through the dispatch table.
-/// For receiver-less calls, `recv_i64` should be None.
-/// For instance method calls, `recv_i64` should be Some(handle_i64_ssa).
+/// For receiver-less calls, `recv` should be None.
+/// For instance method calls, `recv` is the receiver expression: it is
+/// evaluated first and rooted across every argument with the arguments
+/// themselves (#11789 sweep), and its handle is unboxed from the re-read.
 #[allow(private_interfaces)]
 pub fn lower_native_module_dispatch(
     ctx: &mut FnCtx<'_>,
     sig: &NativeModSig,
-    recv_i64: Option<&str>,
+    recv: Option<&Expr>,
     args: &[Expr],
 ) -> Result<String> {
     // Native-table calls used to lower arguments into bare SSA registers one
@@ -77,17 +79,53 @@ pub fn lower_native_module_dispatch(
     // `https.createServer(options, common.mustCall(handler))`), leaving the
     // runtime with a valid-looking pointer to an evacuated `{}`. Root the
     // complete operand window and coerce only the post-window re-reads.
-    let arg_refs: Vec<&Expr> = args.iter().collect();
-    crate::rooting::with_operands_rooted(ctx, &arg_refs, |ctx, rooted_args| {
+    //
+    // #11789 sweep: the receiver is the first operand of the same window — an
+    // instance method's receiver was unboxed to a raw handle BEFORE the
+    // arguments were lowered, so `conn.query(String(x), work())` kept a bare
+    // handle across `work`. And a `VarArgsAsArray` tail allocates its array
+    // AFTER the re-read, so every operand's window is "collects" there.
+    let operands: Vec<&Expr> = recv.into_iter().chain(args.iter()).collect();
+    let has_receiver = recv.is_some();
+    let packs_varargs = sig.args.contains(&NativeArgKind::VarArgsAsArray);
+    // #11830: coercing a `StrPtr` argument (`js_value_to_str_ptr_for_ffi`)
+    // materialises a short string or `JSON.stringify`s an object, so it
+    // allocates and can run a user `toJSON` / `toString`. Doing it argument by
+    // argument left every earlier raw pointer one collection from stale. Each
+    // such operand is therefore coerced, in order, into its own rooted slot
+    // first, and the raw pointers are read back in one pass after the last
+    // coercion. A string literal is already a heap string and keeps the
+    // in-place conversion.
+    let first_arg = usize::from(has_receiver);
+    let packed_from = sig
+        .args
+        .iter()
+        .position(|k| *k == NativeArgKind::VarArgsAsArray)
+        .unwrap_or(usize::MAX);
+    let coerces: Vec<bool> = operands
+        .iter()
+        .enumerate()
+        .map(|(o, e)| {
+            o >= first_arg
+                && o - first_arg < packed_from
+                && sig.args.get(o - first_arg) == Some(&NativeArgKind::StrPtr)
+                && !matches!(e, Expr::String(_))
+        })
+        .collect();
+    let body = |ctx: &mut FnCtx<'_>, all_values: &[String]| -> Result<String> {
         // Build the LLVM arg list: receiver handle (if any) + coerced args.
         let mut llvm_args: Vec<(crate::types::LlvmType, String)> = Vec::new();
         let mut arg_types: Vec<crate::types::LlvmType> = Vec::new();
 
         // Receiver handle
-        if let Some(handle) = recv_i64 {
-            llvm_args.push((I64, handle.to_string()));
+        let rooted_args = if has_receiver {
+            let handle = unbox_to_i64(ctx.block(), &all_values[0]);
+            llvm_args.push((I64, handle));
             arg_types.push(I64);
-        }
+            &all_values[1..]
+        } else {
+            all_values
+        };
 
         // Coerce each arg per the sig's coercion rules.
         // If more args are passed than the sig declares, pass extras as F64.
@@ -116,6 +154,11 @@ pub fn lower_native_module_dispatch(
                 NativeArgKind::F64 => {
                     llvm_args.push((DOUBLE, lowered));
                     arg_types.push(DOUBLE);
+                }
+                // Already coerced to a rooted raw pointer (see `coerces`).
+                NativeArgKind::StrPtr if coerces[first_arg + i] => {
+                    llvm_args.push((I64, lowered));
+                    arg_types.push(I64);
                 }
                 NativeArgKind::StrPtr => {
                     let blk = ctx.block();
@@ -182,6 +225,25 @@ pub fn lower_native_module_dispatch(
             arg_types.push(DOUBLE);
         }
 
+        let thread_launch = matches!(
+            sig.runtime,
+            "js_thread_spawn" | "js_thread_parallel_map" | "js_thread_parallel_filter"
+        );
+        let runtime = if thread_launch {
+            let prepare = format!(
+                "__perry_prepare_thread_strings_{}",
+                ctx.strings.thread_literal_callback_prefix()
+            );
+            ctx.pending_declares
+                .push((prepare.clone(), crate::types::VOID, vec![]));
+            llvm_args.push((I64, format!("ptrtoint (ptr @{} to i64)", prepare)));
+            arg_types.push(I64);
+            format!("{}_with_literals", sig.runtime)
+        } else {
+            sig.runtime.to_string()
+        };
+        let runtime = runtime.as_str();
+
         // Determine return type for the declare
         let ret_type = match sig.ret {
             NativeRetKind::GcPtr
@@ -200,7 +262,7 @@ pub fn lower_native_module_dispatch(
         };
 
         ctx.pending_declares
-            .push((sig.runtime.to_string(), ret_type, arg_types));
+            .push((runtime.to_string(), ret_type, arg_types));
 
         let arg_slices: Vec<(crate::types::LlvmType, &str)> =
             llvm_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
@@ -295,7 +357,7 @@ pub fn lower_native_module_dispatch(
                 let raw = blk.call(I64, sig.runtime, &arg_slices);
                 Ok(nanbox_bigint_inline(blk, &raw))
             }
-            NativeRetKind::F64 => Ok(ctx.block().call(DOUBLE, sig.runtime, &arg_slices)),
+            NativeRetKind::F64 => Ok(ctx.block().call(DOUBLE, runtime, &arg_slices)),
             NativeRetKind::BoolI1 | NativeRetKind::BoolI32 => {
                 let blk = ctx.block();
                 let raw = blk.call(ret_type, sig.runtime, &arg_slices);
@@ -313,6 +375,40 @@ pub fn lower_native_module_dispatch(
                 Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
             }
         }
+    };
+    crate::rooting::with_rooted_group(ctx, operands.len(), |ctx, group| {
+        // Incremental, one operand at a time: each is rooted BEFORE the next is
+        // lowered. A `VarArgsAsArray` tail allocates its array after the
+        // re-read, so every window is "collects" there; a later coercion is a
+        // window too.
+        for (i, operand) in operands.iter().enumerate() {
+            let collects = packs_varargs
+                || coerces[i + 1..].iter().any(|c| *c)
+                || crate::rooting::any_operand_may_collect(ctx, operands[i + 1..].iter().copied());
+            group.lower(ctx, operand, collects)?;
+        }
+        let mut pending = coerces.iter().filter(|c| **c).count();
+        let mut coerced = Vec::with_capacity(operands.len());
+        for (i, needs) in coerces.iter().enumerate() {
+            coerced.push(if *needs {
+                pending -= 1;
+                Some(group.coerce_to_ptr(ctx, i, pending > 0, |ctx, v| {
+                    ctx.block()
+                        .call(I64, "js_value_to_str_ptr_for_ffi", &[(DOUBLE, v)])
+                })?)
+            } else {
+                None
+            });
+        }
+        // Below the last coercion: re-read everything, in operand order.
+        let mut values = Vec::with_capacity(operands.len());
+        for (i, emitted) in coerced.into_iter().enumerate() {
+            values.push(match emitted {
+                Some(e) => group.reread_emitted(ctx, e),
+                None => group.reread(ctx, i)?,
+            });
+        }
+        body(ctx, &values)
     })
 }
 

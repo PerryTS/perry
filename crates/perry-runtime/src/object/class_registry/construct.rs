@@ -1,3 +1,4 @@
+use super::super::native_module::worker_threads_construct;
 use super::*;
 use crate::JSValue;
 
@@ -37,6 +38,10 @@ pub extern "C" fn js_new_target_value() -> f64 {
     f64::from_bits(CURRENT_NEW_TARGET.with(|value| value.get()))
 }
 
+mod compiled_function;
+pub(crate) use compiled_function::{
+    forget_birth_record_of_class, ordinary_compiled_function_has_instance, OrdinaryInstanceof,
+};
 mod rooted_arguments;
 pub(crate) use rooted_arguments::construct_rooted_arguments;
 #[cfg(feature = "regex-engine")]
@@ -275,6 +280,15 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    // #10507: an ordinary compiled function is none of the exotic callees
+    // below — a fact of its body, read once from its info.
+    if let Some(closure) = compiled_function::ordinary_compiled_function(func_value) {
+        if let Some(result) = compiled_function::construct_ordinary_compiled_function(
+            func_value, closure, args_ptr, args_len,
+        ) {
+            return result;
+        }
+    }
     // A class value (its function object, or the legacy immediate) constructs
     // its class: decided first, one closure probe, before the exotic arms.
     if let Some(class_cid) = constructor_class_ref_id(func_value) {
@@ -480,6 +494,10 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                 let dispatch: crate::value::JsNativeEventsConstructFn = std::mem::transmute(ptr);
                 return dispatch(method.as_ptr(), method.len(), args_ptr, args_len);
             }
+        }
+        // `new ns.Worker(...)` on the worker_threads namespace as a value.
+        if let Some(worker) = worker_threads_construct(&module, &method, args_ptr, args_len) {
+            return worker;
         }
         if module == "zlib" && matches!(method.as_str(), "ZstdCompress" | "ZstdDecompress") {
             let ptr =
@@ -760,8 +778,29 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                 } else {
                     args[0]
                 };
-                let error = crate::error::js_error_new_kind_from_value(kind, message);
+                // `new E(message, options)`: the `{ cause }` option.
+                let error = match args.get(1) {
+                    Some(&options) => crate::error::js_error_new_kind_with_options_from_value(
+                        kind, message, options,
+                    ),
+                    None => crate::error::js_error_new_kind_from_value(kind, message),
+                };
                 return crate::value::js_nanbox_pointer(error as i64);
+            }
+            // `new (rebound AggregateError)(errors, message?, options?)`.
+            "AggregateError" => {
+                let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let arg = |i: usize| args.get(i).copied().unwrap_or(undefined);
+                let error = crate::error::js_aggregateerror_new_full(arg(0), arg(1), arg(2));
+                return crate::value::js_nanbox_pointer(error as i64);
+            }
+            // `new (rebound Proxy)(target, handler)`: the constructor a global
+            // value reaches through `Reflect.construct`, `new G.Proxy(...)` and a
+            // spread `new Proxy(...args)`.
+            "Proxy" => {
+                let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+                let arg = |i: usize| args.get(i).copied().unwrap_or(undefined);
+                return crate::proxy::js_proxy_new(arg(0), arg(1));
             }
             // #2889: `new (rebound RegExp)(pattern, flags)`.
             #[cfg(feature = "regex-engine")]
@@ -1011,10 +1050,11 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             .as_pointer::<ObjectHeader>();
         let class_cid = js_object_get_class_id(obj);
         if class_cid != 0 {
-            let inst = js_object_alloc(
-                class_cid,
-                crate::object::learned_inline_field_count(class_cid),
-            );
+            // The template's own record, named by the class object; an image
+            // static, so it stays put across every allocation below.
+            let cell = unsafe { super::super::field_get_set::class_object_template_cell(obj) };
+            let inst =
+                construct_class_object_instance(class_handle.get_nanbox_f64(), class_cid, cell);
             // #7280: root the instance across the replay — see the long note
             // in `construct_registered_class_ref`. The replay runs a user
             // constructor body, so a bare `*mut ObjectHeader` held across it
@@ -1022,9 +1062,6 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             // address. Reproduced by `new C()` where `C = mk()` is a class
             // EXPRESSION value.
             let inst_handle = scope.root_raw_mut_ptr(inst);
-            inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
-                link_class_object_instance_prototype(class_handle.get_nanbox_f64(), inst)
-            });
             // Every evaluation gets a distinct brand despite sharing its
             // class id. Stamp it before replay, where private access may occur.
             inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
@@ -1074,6 +1111,13 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                 && ctor_result.to_bits() != current_inst.to_bits()
             {
                 return ctor_result;
+            }
+            // A template recorded without heritage, of a class with no
+            // declared parent, has no builtin in its chain to back.
+            let heritage = cell.is_none_or(|cell| unsafe { cell.has_heritage() })
+                || get_parent_class_id(class_cid).is_some_and(|parent| parent != 0);
+            if !heritage {
+                return current_inst;
             }
             // `class X extends Request/Response {}` constructed via the dynamic
             // (class-expression value) path: the replayed ctor's `super()`
@@ -1213,34 +1257,13 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
         // result is discarded — JS `new` semantics use the receiver,
         // not the returned value (object returns would override, but
         // dayjs and siblings rely on the receiver mutation pattern).
-        // #7280: `nan_boxed` (the `this` this call is building) and
-        // the two DISPLACED new.target values are held across a call that runs a
-        // user constructor body — see the long note in
-        // `construct_registered_class_ref`. Unrooted, the evacuating minor
-        // moves the instance and this arm returns the pre-move address;
-        // reproduced by `new inst.ctor(x)` where `inst.ctor` is a plain
-        // function, 200/200 iterations wrong under
-        // `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1`.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let inst_handle = scope.root_nanbox_f64(nan_boxed);
-        let prev_new_target = crate::object::js_new_target_get();
-        let prev_new_target_handle = scope.root_nanbox_f64(prev_new_target);
-        crate::object::js_new_target_set(func_value);
-        let prev_current_new_target =
-            CURRENT_NEW_TARGET.with(|value| value.replace(func_value.to_bits()));
-        let prev_current_new_target_handle = scope.root_nanbox_u64(prev_current_new_target);
-        let result = crate::closure::native_call_value_this(
-            func_value,
-            crate::closure::JsThis::from_f64(inst_handle.get_nanbox_f64()),
-            args_ptr,
-            args_len,
+        // Reproduced unrooted by `new inst.ctor(x)` where `inst.ctor` is a
+        // plain function, 200/200 iterations wrong under
+        // `PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1`
+        // (#7280): the helper roots the instance across the body.
+        return compiled_function::run_constructor_body(
+            func_value, nan_boxed, args_ptr, args_len, false,
         );
-        CURRENT_NEW_TARGET.with(|value| value.set(prev_current_new_target_handle.get_nanbox_u64()));
-        crate::object::js_new_target_set(prev_new_target_handle.get_nanbox_f64());
-        if constructor_return_overrides_this(result) {
-            return result;
-        }
-        return inst_handle.get_nanbox_f64();
     }
     // Ordinary objects, symbols and every other non-callable heap value do not
     // have [[Construct]]. The historical placeholder return made `new
@@ -1374,7 +1397,9 @@ pub(crate) fn extends_target_must_throw(value: f64) -> bool {
         if !ptr.is_null() && is_valid_obj_ptr(ptr as *const u8) {
             // A bound *method* (class/instance method read as a value) is never
             // a constructor.
-            if crate::closure::closure_is_bound_method(ptr) {
+            if crate::closure::closure_is_bound_method(ptr)
+                || crate::closure::closure_body_is_non_constructor(ptr)
+            {
                 return true;
             }
             let fp = crate::closure::get_valid_func_ptr(ptr);
@@ -1430,6 +1455,11 @@ fn bound_function_target_ptr(value: f64) -> Option<*mut crate::closure::ClosureH
 
 pub(crate) fn is_bound_function_closure_value(value: f64) -> bool {
     bound_function_target_ptr(value).is_some()
+}
+
+/// `value`'s `[[BoundTargetFunction]]` when it is a bound function (one layer).
+pub(crate) fn bound_function_target_value(value: f64) -> Option<f64> {
+    bound_function_target_ptr(value).map(|ptr| crate::closure::js_closure_get_capture_f64(ptr, 0))
 }
 
 /// Walk through any number of `Function.prototype.bind` wrapper layers to the
@@ -1824,7 +1854,9 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                 let bits = result.to_bits();
                 let addr = if (bits >> 48) == 0x7FFD {
                     (bits & crate::value::POINTER_MASK) as usize
-                } else if (bits >> 48) == 0 && crate::buffer::is_registered_buffer(bits as usize) {
+                } else if (bits >> 48) == 0
+                    && crate::buffer::buffer_family_type_owned(bits as usize).is_some()
+                {
                     // ArrayBuffer and SharedArrayBuffer are represented by a
                     // raw BufferHeader pointer rather than a NaN-boxed object.
                     bits as usize

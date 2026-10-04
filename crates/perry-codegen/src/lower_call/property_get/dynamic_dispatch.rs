@@ -432,6 +432,7 @@ pub(crate) fn try_lower_instance_method_call(
                     Vec::new()
                 };
             let mut shape_probe_cid: Option<String> = None;
+            let mut site_arm: Option<(String, String)> = None;
             if !shape_probe_arms.is_empty() {
                 let (cid, shape_id) =
                     crate::lower_call::method_override::emit_inline_direct_method_shape_probe(
@@ -454,11 +455,53 @@ pub(crate) fn try_lower_instance_method_call(
                         .unwrap_or_else(|| ctx.block_label(own_idx));
                     let blk = ctx.block();
                     let cid_ok = blk.icmp_eq(I32, &cid, &class_id.to_string());
-                    let shape_ok = blk.icmp_eq(I32, &shape_id, expected_shape);
+                    let shape_ok = crate::typed_shape::emit_compatible_shape_eq(
+                        blk,
+                        &shape_id,
+                        expected_shape,
+                        &[],
+                    );
                     let exact = blk.and(I1, &cid_ok, &shape_ok);
                     blk.cond_br(&exact, &probe_dispatch_label, &miss_label);
                 }
                 ctx.current_block = own_idx;
+                // #10507: a receiver whose class id names no implementor
+                // (a plain object, a function-constructed instance, a
+                // primitive) can only reach the tower's default. It takes the
+                // universal method site instead — own and inherited entries
+                // call the body directly, and its miss is the same by-name
+                // dispatch — with no own-property probe call first.
+                let site_idx = ctx.new_block("idisp.site");
+                let own_call_idx = ctx.new_block("idisp.own_probe_call");
+                let site_label = ctx.block_label(site_idx);
+                let own_call_label = ctx.block_label(own_call_idx);
+                {
+                    let blk = ctx.block();
+                    let mut implementor_hit: Option<String> = None;
+                    for (class_id, _) in implementors.iter() {
+                        let eq = blk.icmp_eq(I32, &cid, &class_id.to_string());
+                        implementor_hit = Some(match implementor_hit {
+                            None => eq,
+                            Some(prev) => blk.or(I1, &prev, &eq),
+                        });
+                    }
+                    let hit = implementor_hit.unwrap_or_else(|| "false".to_string());
+                    blk.cond_br(&hit, &own_call_label, &site_label);
+                }
+                ctx.current_block = site_idx;
+                let v_site = crate::lower_call::console_promise::emit_native_method_str_dispatch(
+                    ctx,
+                    property,
+                    call_byte_offset,
+                    &recv_box,
+                    &static_user_args,
+                );
+                let after_site = ctx.block().label.clone();
+                if !ctx.block().is_terminated() {
+                    ctx.block().br(&probe_outer_merge_label);
+                }
+                site_arm = Some((v_site, after_site));
+                ctx.current_block = own_call_idx;
             }
 
             let own_method_probe = ctx.block().call(
@@ -580,8 +623,22 @@ pub(crate) fn try_lower_instance_method_call(
                 // fallback instead of re-entering this hard-coded tower.
                 probed_cid
             } else {
-                ctx.block()
-                    .call(I32, "js_object_get_class_id", &[(I64, &recv_handle)])
+                // A tower too wide for the shape probe still hard-codes the
+                // body each class id inherits along the declared `extends`
+                // chain. Prototype surgery on that name (an assignment,
+                // delete or redefinition, or a relinked class prototype)
+                // retires the arms: class id 0 matches no case and takes the
+                // runtime default, as the shape probe's miss does.
+                let raw_cid =
+                    ctx.block()
+                        .call(I32, "js_object_get_class_id", &[(I64, &recv_handle)]);
+                let blk = ctx.block();
+                let prototype_ok =
+                    crate::lower_call::method_override::emit_prototype_method_guard_ok(
+                        blk,
+                        &method_guard_slot_str,
+                    );
+                blk.select(I1, &prototype_ok, I32, &raw_cid, "0")
             };
 
             for (i, (case_cid, _)) in implementors.iter().enumerate() {
@@ -773,13 +830,14 @@ pub(crate) fn try_lower_instance_method_call(
 
             // Outer merge: phi over override and dispatch values.
             ctx.current_block = probe_outer_merge_idx;
-            let v_probe_phi = ctx.block().phi(
-                DOUBLE,
-                &[
-                    (v_override_probe.as_str(), after_override_probe.as_str()),
-                    (v_dispatch_phi.as_str(), after_dispatch_phi.as_str()),
-                ],
-            );
+            let mut outer_inputs: Vec<(&str, &str)> = vec![
+                (v_override_probe.as_str(), after_override_probe.as_str()),
+                (v_dispatch_phi.as_str(), after_dispatch_phi.as_str()),
+            ];
+            if let Some((v_site, after_site)) = site_arm.as_ref() {
+                outer_inputs.push((v_site.as_str(), after_site.as_str()));
+            }
+            let v_probe_phi = ctx.block().phi(DOUBLE, &outer_inputs);
             // The release has to post-dominate BOTH arms of the override probe
             // and every case block of the tower, which is why this group is
             // `open_rooted_group` and the release sits in the outer merge.

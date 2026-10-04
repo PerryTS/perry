@@ -19,9 +19,20 @@ use crate::url::abort::abort_signal_ptr_from_value;
 use crate::value::{js_jsvalue_to_string, JSValue};
 
 pub(crate) fn promise_value(value: f64) -> f64 {
+    // Creating the promise runs `promiseHooks` init hooks and resolving it runs
+    // `settled` hooks; either can collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
     let promise = crate::promise::js_promise_new();
-    crate::promise::js_promise_resolve(promise, value);
-    f64::from_bits(JSValue::pointer(promise as *const u8).bits())
+    let promise = scope.root_nanbox_f64(f64::from_bits(
+        JSValue::pointer(promise as *const u8).bits(),
+    ));
+    crate::promise::js_promise_resolve(
+        crate::value::js_nanbox_get_pointer(promise.get_nanbox_f64())
+            as *mut crate::promise::Promise,
+        value.get_nanbox_f64(),
+    );
+    promise.get_nanbox_f64()
 }
 
 pub(crate) fn promise_rejected(reason: f64) -> f64 {
@@ -1115,3 +1126,7 @@ thunk!(
     thunk_fs_promises_constants,
     "node:fs/promises.constants is not callable."
 );
+
+#[cfg(test)]
+#[path = "fs_promises_gc_tests.rs"]
+mod gc_tests;

@@ -1,5 +1,15 @@
 //! Readable `read()` consumption helpers, split from node_stream_readwrite.rs.
 use super::*;
+use crate::gc::{RuntimeHandle, RuntimeHandleScope};
+
+/// Test seam marking an allocation inside a window that holds JS values: a
+/// test installs a hook that collects here, standing in for a collection
+/// triggered by that allocation. Compiles to nothing outside tests.
+#[inline(always)]
+pub(super) fn allocation_point() {
+    #[cfg(test)]
+    rooted_gc_tests::at_allocation_point();
+}
 
 pub(super) fn read_stream_with_size_arg(stream: f64, size: f64) -> f64 {
     let size_value = JSValue::from_bits(size.to_bits());
@@ -14,8 +24,18 @@ pub(super) fn read_stream_with_size_arg(stream: f64, size: f64) -> f64 {
 }
 
 pub(super) fn read_stream_default_size(stream: f64) -> f64 {
-    invoke_read_once(stream);
-    read_stream_available_default(stream)
+    // `_read` is user code and can collect.
+    let scope = RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    invoke_read_once(stream.get_nanbox_f64());
+    read_stream_available_default(stream.get_nanbox_f64())
+}
+
+/// The byte length of `value`'s chunk bytes.
+fn chunk_byte_len(value: f64) -> usize {
+    let mut bytes = Vec::new();
+    append_chunk_bytes(value, &mut bytes, 0);
+    bytes.len()
 }
 
 pub(super) fn read_stream_available_default(stream: f64) -> f64 {
@@ -30,6 +50,13 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
         return read_stream_object_mode_chunk(stream);
     }
 
+    // Rebuilding the buffer and decoding allocate, so the stream and the
+    // buffered chunks are held in handles (a rooted GC array, never a Rust
+    // `Vec` the collector cannot see).
+    let scope = RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let s = || stream.get_nanbox_f64();
+
     // `read()` with no size argument mirrors Node's `howMuchToRead(NaN)`:
     // a FLOWING stream consumes ONE chunk (the buffer head) so 'data'
     // emission preserves chunk boundaries, while a paused stream drains the
@@ -37,14 +64,15 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
     // takes `state.buffer.first()` when `state.flowing && state.length`.
     // Sized `read(n)` (read_stream_exact_size) still spans chunks.
     // (#1545, #2484)
-    let mut values = Vec::new();
-    if let Some(chunks) = readable_hidden_chunks(stream) {
-        push_chunk_values(chunks, &mut values, 0);
-    }
-    if values.is_empty() {
-        if stream_hidden_ended(stream) {
-            cancel_readable_event(stream);
-            refresh_readable_aborted_flag(stream);
+    let values = match readable_hidden_chunks(s()) {
+        Some(chunks) => chunk_values_snapshot(&scope, chunks),
+        None => rooted_empty_array(&scope),
+    };
+    let len = rooted_array_len(&values);
+    if len == 0 {
+        if stream_hidden_ended(s()) {
+            cancel_readable_event(s());
+            refresh_readable_aborted_flag(s());
         }
         return f64::from_bits(TAG_NULL);
     }
@@ -55,161 +83,197 @@ pub(super) fn read_stream_available_default(stream: f64) -> f64 {
     // paused stream concatenates the entire buffer into a single string. So we
     // drain the whole buffer here only when paused AND a decoder is active;
     // otherwise fall through to the head-only path below.
-    if !readable_is_flowing(stream) && readable_encoding_tag(stream).is_some() {
-        return drain_whole_buffer(stream, values);
+    if !readable_is_flowing(s()) && readable_encoding_tag(s()).is_some() {
+        return drain_whole_buffer(&stream, &values);
     }
 
-    let head = values.remove(0);
-    let mut remaining_len = 0usize;
-    for value in &values {
-        let mut bytes = Vec::new();
-        append_chunk_bytes(*value, &mut bytes, 0);
-        remaining_len += bytes.len();
-    }
-    set_readable_buffer_values(stream, &values, remaining_len);
-    mark_disturbed(stream);
-    if stream_hidden_ended(stream) && remaining_len == 0 {
-        clear_pending_readable_chunks(stream);
-        queue_readable_event(stream);
-        schedule_readable_end(stream);
+    let head = scope.root_nanbox_f64(rooted_array_at(&values, 0));
+    let remaining_len: usize = (1..len)
+        .map(|i| chunk_byte_len(rooted_array_at(&values, i)))
+        .sum();
+    let remaining = rooted_array_tail(&scope, &values, 1);
+    set_readable_buffer_values(&stream, &remaining, remaining_len);
+    mark_disturbed(s());
+    if stream_hidden_ended(s()) && remaining_len == 0 {
+        clear_pending_readable_chunks(s());
+        queue_readable_event(s());
+        schedule_readable_end(s());
     }
 
-    if readable_encoding_tag(stream).is_some() {
-        return super::decode_readable_chunk_for_encoding(stream, head)
+    if readable_encoding_tag(s()).is_some() {
+        return super::decode_readable_chunk_for_encoding(s(), head.get_nanbox_f64())
             .unwrap_or(f64::from_bits(TAG_NULL));
     }
 
     let mut bytes = Vec::new();
-    append_chunk_bytes(head, &mut bytes, 0);
+    append_chunk_bytes(head.get_nanbox_f64(), &mut bytes, 0);
     buffer_value_from_bytes(&bytes)
+}
+
+/// Elements `from..` of the rooted array `values`, copied into a new GC array
+/// rooted in `scope`.
+fn rooted_array_tail<'s>(
+    scope: &'s RuntimeHandleScope,
+    values: &RuntimeHandle<'_>,
+    from: u32,
+) -> RuntimeHandle<'s> {
+    let len = rooted_array_len(values);
+    let tail = scope.root_nanbox_f64(box_pointer(crate::array::js_array_alloc(
+        len.saturating_sub(from),
+    ) as *const u8));
+    for i in from..len {
+        rooted_array_push(&tail, rooted_array_at(values, i));
+    }
+    tail
 }
 
 /// Paused-mode `read()` with no size: consume every buffered chunk and return
 /// them as one concatenated value (Node's `howMuchToRead(NaN)` returns
-/// `state.length` when the stream is not flowing).
-fn drain_whole_buffer(stream: f64, mut values: Vec<f64>) -> f64 {
-    clear_readable_buffer(stream);
-    mark_disturbed(stream);
-    clear_pending_readable_chunks(stream);
-    if stream_hidden_ended(stream) {
-        queue_readable_event(stream);
-        schedule_readable_end(stream);
+/// `state.length` when the stream is not flowing). Clearing the buffer leaves
+/// `values` the only holder of the chunks, so it must be a rooted GC array.
+fn drain_whole_buffer(stream: &RuntimeHandle<'_>, values: &RuntimeHandle<'_>) -> f64 {
+    let s = || stream.get_nanbox_f64();
+    clear_readable_buffer(s());
+    mark_disturbed(s());
+    clear_pending_readable_chunks(s());
+    if stream_hidden_ended(s()) {
+        queue_readable_event(s());
+        schedule_readable_end(s());
     }
 
-    if readable_encoding_tag(stream).is_some() {
-        let mut decoded = Vec::with_capacity(values.len());
-        for value in values {
-            if let Some(value) = super::decode_readable_chunk_for_encoding(stream, value) {
-                decoded.push(value);
+    if readable_encoding_tag(s()).is_some() {
+        let scope = RuntimeHandleScope::new();
+        let decoded = rooted_empty_array(&scope);
+        for i in 0..rooted_array_len(values) {
+            allocation_point();
+            if let Some(value) =
+                super::decode_readable_chunk_for_encoding(s(), rooted_array_at(values, i))
+            {
+                rooted_array_push(&decoded, value);
             }
         }
-        values = decoded;
-        if values.is_empty() {
+        let count = rooted_array_len(&decoded);
+        if count == 0 {
             return f64::from_bits(TAG_NULL);
         }
-        if values.len() == 1 {
-            return values[0];
+        if count == 1 {
+            return rooted_array_at(&decoded, 0);
         }
-        let result = crate::string::js_string_concat_chain(values.as_ptr(), values.len() as i32);
+        // `js_string_concat_chain` roots its parts before it allocates.
+        let parts: Vec<f64> = (0..count).map(|i| rooted_array_at(&decoded, i)).collect();
+        let result = crate::string::js_string_concat_chain(parts.as_ptr(), parts.len() as i32);
         return f64::from_bits(JSValue::string_ptr(result).bits());
     }
 
     let mut bytes = Vec::new();
-    for value in &values {
-        append_chunk_bytes(*value, &mut bytes, 0);
+    for i in 0..rooted_array_len(values) {
+        append_chunk_bytes(rooted_array_at(values, i), &mut bytes, 0);
     }
     buffer_value_from_bytes(&bytes)
 }
 
 pub(super) fn read_stream_exact_size(stream: f64, size: f64) -> f64 {
-    invoke_read_once(stream);
+    // `_read` is user code and can collect.
+    let scope = RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let s = || stream.get_nanbox_f64();
+    invoke_read_once(s());
     if size <= 0.0 {
         return f64::from_bits(TAG_NULL);
     }
     let requested = size as usize;
-    let available = get_hidden_value(stream, hidden_buffered_key())
+    let available = get_hidden_value(s(), hidden_buffered_key())
         .unwrap_or(0.0)
         .max(0.0) as usize;
     if available == 0 {
-        if stream_hidden_ended(stream) {
-            cancel_readable_event(stream);
-            refresh_readable_aborted_flag(stream);
+        if stream_hidden_ended(s()) {
+            cancel_readable_event(s());
+            refresh_readable_aborted_flag(s());
         }
         return f64::from_bits(TAG_NULL);
     }
-    if readable_encoding_tag(stream).is_some() {
-        return read_stream_available_default(stream);
+    if readable_encoding_tag(s()).is_some() {
+        return read_stream_available_default(s());
     }
-    if requested > available && !stream_hidden_ended(stream) {
+    if requested > available && !stream_hidden_ended(s()) {
         return f64::from_bits(TAG_NULL);
     }
     if requested >= available {
-        return read_stream_exact_bytes(stream, available);
+        return read_stream_exact_bytes(&stream, available);
     }
 
-    read_stream_exact_bytes(stream, requested)
+    read_stream_exact_bytes(&stream, requested)
 }
 
-fn sync_pending_readable_chunks_to_buffer(stream: f64) {
-    let mut pending = crate::array::js_array_alloc(0);
-    if let Some(chunks) = readable_hidden_chunks(stream) {
-        if is_array_like_value(chunks) {
-            let arr = raw_ptr_from_value(chunks) as *const crate::array::ArrayHeader;
-            let len = crate::array::js_array_length(arr);
-            for i in 0..len {
-                pending = crate::array::js_array_push_f64(
-                    pending,
-                    crate::array::js_array_get_f64(arr, i),
-                );
+fn sync_pending_readable_chunks_to_buffer(stream: &RuntimeHandle<'_>) {
+    let scope = RuntimeHandleScope::new();
+    let pending = rooted_empty_array(&scope);
+    if let Some(chunks) = readable_hidden_chunks(stream.get_nanbox_f64()) {
+        let chunks = scope.root_nanbox_f64(chunks);
+        if is_array_like_value(chunks.get_nanbox_f64()) {
+            for i in 0..rooted_array_len(&chunks) {
+                rooted_array_push(&pending, rooted_array_at(&chunks, i));
             }
-        } else if is_single_chunk_value(chunks) {
-            pending = crate::array::js_array_push_f64(pending, chunks);
+        } else if is_single_chunk_value(chunks.get_nanbox_f64()) {
+            rooted_array_push(&pending, chunks.get_nanbox_f64());
         }
     }
     set_hidden_value(
-        stream,
+        stream.get_nanbox_f64(),
         hidden_readable_pending_key(),
-        box_pointer(pending as *const u8),
+        pending.get_nanbox_f64(),
     );
 }
 
-fn set_readable_buffer_values(stream: f64, values: &[f64], byte_len: usize) {
-    if values.is_empty() || byte_len == 0 {
-        clear_readable_buffer(stream);
+/// Make the rooted array `values` (owned by the caller, not shared) the
+/// stream's buffer, holding `byte_len` bytes.
+fn set_readable_buffer_values(
+    stream: &RuntimeHandle<'_>,
+    values: &RuntimeHandle<'_>,
+    byte_len: usize,
+) {
+    if rooted_array_len(values) == 0 || byte_len == 0 {
+        clear_readable_buffer(stream.get_nanbox_f64());
         sync_pending_readable_chunks_to_buffer(stream);
         return;
     }
-    let mut arr = crate::array::js_array_alloc(values.len() as u32);
-    for value in values {
-        arr = crate::array::js_array_push_f64(arr, *value);
-    }
-    set_hidden_value(stream, hidden_chunks_key(), box_pointer(arr as *const u8));
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        hidden_chunks_key(),
+        values.get_nanbox_f64(),
+    );
     let remaining = byte_len as f64;
-    set_hidden_value(stream, hidden_buffered_key(), remaining);
-    set_hidden_value(stream, hidden_key(b"readableLength"), remaining);
+    set_hidden_value(stream.get_nanbox_f64(), hidden_buffered_key(), remaining);
+    set_hidden_value(
+        stream.get_nanbox_f64(),
+        hidden_key(b"readableLength"),
+        remaining,
+    );
     sync_pending_readable_chunks_to_buffer(stream);
 }
 
-fn read_stream_exact_bytes(stream: f64, requested: usize) -> f64 {
-    let mut values = Vec::new();
-    if let Some(chunks) = readable_hidden_chunks(stream) {
-        push_chunk_values(chunks, &mut values, 0);
-    }
-    if values.is_empty() {
+fn read_stream_exact_bytes(stream: &RuntimeHandle<'_>, requested: usize) -> f64 {
+    let s = || stream.get_nanbox_f64();
+    let scope = RuntimeHandleScope::new();
+    let values = match readable_hidden_chunks(s()) {
+        Some(chunks) => chunk_values_snapshot(&scope, chunks),
+        None => return f64::from_bits(TAG_NULL),
+    };
+    if rooted_array_len(&values) == 0 {
         return f64::from_bits(TAG_NULL);
     }
 
     let mut consumed = Vec::new();
-    let mut remaining_values = Vec::new();
+    let remaining_values = rooted_empty_array(&scope);
     let mut remaining_len = 0usize;
     let mut needed = requested;
 
-    for value in values {
+    for i in 0..rooted_array_len(&values) {
         let mut bytes = Vec::new();
-        append_chunk_bytes(value, &mut bytes, 0);
+        append_chunk_bytes(rooted_array_at(&values, i), &mut bytes, 0);
         if needed == 0 {
             remaining_len += bytes.len();
-            remaining_values.push(value);
+            rooted_array_push(&remaining_values, rooted_array_at(&values, i));
             continue;
         }
         if bytes.len() <= needed {
@@ -222,7 +286,9 @@ fn read_stream_exact_bytes(stream: f64, requested: usize) -> f64 {
         let rest = &bytes[needed..];
         if !rest.is_empty() {
             remaining_len += rest.len();
-            remaining_values.push(buffer_value_from_bytes(rest));
+            allocation_point();
+            let rest = buffer_value_from_bytes(rest);
+            rooted_array_push(&remaining_values, rest);
         }
         needed = 0;
     }
@@ -232,11 +298,11 @@ fn read_stream_exact_bytes(stream: f64, requested: usize) -> f64 {
     }
 
     set_readable_buffer_values(stream, &remaining_values, remaining_len);
-    mark_disturbed(stream);
-    if stream_hidden_ended(stream) && remaining_len == 0 {
-        clear_pending_readable_chunks(stream);
-        queue_readable_event(stream);
-        schedule_readable_end(stream);
+    mark_disturbed(s());
+    if stream_hidden_ended(s()) && remaining_len == 0 {
+        clear_pending_readable_chunks(s());
+        queue_readable_event(s());
+        schedule_readable_end(s());
     }
     buffer_value_from_bytes(&consumed)
 }
@@ -268,20 +334,28 @@ pub(super) fn read_stream_object_mode_chunk(stream: f64) -> f64 {
         clear_readable_buffer(stream);
         return f64::from_bits(TAG_NULL);
     }
-    let chunk = crate::array::js_array_shift_f64(arr);
-    let remaining = crate::array::js_array_length(arr) as f64;
-    set_hidden_value(stream, hidden_buffered_key(), remaining);
-    set_hidden_value(stream, hidden_key(b"readableLength"), remaining);
-    mark_disturbed(stream);
-    sync_pending_readable_chunks_to_buffer(stream);
-    if stream_hidden_ended(stream) && remaining == 0.0 {
-        clear_pending_readable_chunks(stream);
+    let remaining = (crate::array::js_array_length(arr) - 1) as f64;
+    // The bookkeeping below allocates; hold the stream and the chunk.
+    let scope = RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let chunk = scope.root_nanbox_f64(crate::array::js_array_shift_f64(arr));
+    let s = || stream.get_nanbox_f64();
+    set_hidden_value(s(), hidden_buffered_key(), remaining);
+    set_hidden_value(s(), hidden_key(b"readableLength"), remaining);
+    mark_disturbed(s());
+    sync_pending_readable_chunks_to_buffer(&stream);
+    if stream_hidden_ended(s()) && remaining == 0.0 {
+        clear_pending_readable_chunks(s());
         // Node never emits a final `readable` just to hand the consumer a
         // null at EOF: once `read()` returns the last buffered item from an
         // ended stream it transitions straight to `end` (endReadable). A
         // re-queued `readable` here makes a fixed-count consumer observe an
         // extra `read() === null` pair. (internal/streams/readable, v26)
-        schedule_readable_end(stream);
+        schedule_readable_end(s());
     }
-    chunk
+    chunk.get_nanbox_f64()
 }
+
+#[cfg(test)]
+#[path = "node_stream_rooted_gc_tests.rs"]
+mod rooted_gc_tests;

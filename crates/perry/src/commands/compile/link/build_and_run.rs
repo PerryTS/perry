@@ -198,6 +198,18 @@ pub(crate) fn build_and_run_link(
     if !is_windows {
         if is_android || is_linux || is_harmonyos {
             cmd.arg("-Wl,--gc-sections");
+            // Native glibc Linux only: not the static musl target, not a
+            // cross link (the probe tests the host toolchain), not Android or
+            // HarmonyOS. Falls back silently to today's link when unsupported.
+            if is_linux
+                && !is_musl
+                && !is_android
+                && !is_harmonyos
+                && matches!(target, None | Some("linux"))
+                && super::platform_cmd::linux_pack_relative_relocs_supported()
+            {
+                cmd.arg("-Wl,-z,pack-relative-relocs");
+            }
         } else if is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos {
             // ld64.lld called directly — no -Wl, prefix needed
             cmd.arg("-dead_strip");

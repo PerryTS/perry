@@ -684,19 +684,36 @@ date_setter_thunk!(date_set_utc_milliseconds, 1, 6);
 /// the feature off no program in this binary can call these thunks, so the
 /// fallback simply defers to the non-locale formatter instead of statically
 /// pinning the Intl formatting web from the always-installed Date prototype.
-#[cfg(not(feature = "intl-namespace"))]
+///
+/// The always-installed Date prototype reaches the Intl formatter only through
+/// the slot the `intl-namespace` install fills (see `crate::feature_hooks`);
+/// without it this defers to the non-locale formatter, exactly as a build
+/// without the feature does.
 fn date_to_locale_opts_impl(
     this: crate::closure::JsThis,
-    _rest: f64,
-    _ctx: crate::intl::TemporalLocaleCtx,
+    rest: f64,
+    ctx: crate::intl::TemporalLocaleCtx,
 ) -> f64 {
+    if let Some(format) = DATE_TO_LOCALE_OPTS.get() {
+        return format(this, rest, ctx);
+    }
     let this = require_date_this(this);
     let s = crate::date::js_date_to_locale_string(this);
     crate::value::js_nanbox_string(s as i64)
 }
 
+static DATE_TO_LOCALE_OPTS: crate::feature_hooks::Hook<
+    fn(crate::closure::JsThis, f64, crate::intl::TemporalLocaleCtx) -> f64,
+> = crate::feature_hooks::Hook::empty();
+
+/// The `intl-namespace` install's Date-prototype half.
 #[cfg(feature = "intl-namespace")]
-fn date_to_locale_opts_impl(
+pub(crate) fn install_date_to_locale_opts() {
+    DATE_TO_LOCALE_OPTS.set(date_to_locale_opts_intl);
+}
+
+#[cfg(feature = "intl-namespace")]
+fn date_to_locale_opts_intl(
     this: crate::closure::JsThis,
     rest: f64,
     ctx: crate::intl::TemporalLocaleCtx,

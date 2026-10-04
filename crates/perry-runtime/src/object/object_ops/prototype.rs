@@ -178,6 +178,26 @@ fn net_socket_prototype_value() -> f64 {
 }
 
 /// The resolution itself; see [`js_object_get_prototype_of`].
+/// `%Object.prototype%` for an ordinary object whose ShapeId records the
+/// default [[Prototype]] link and agrees with the object's own state, else
+/// `None`. Allocation-free.
+///
+/// # Safety
+/// `obj` is a live `GC_TYPE_OBJECT` cell.
+unsafe fn default_link_prototype(obj: *const ObjectHeader) -> Option<f64> {
+    use crate::object::shapes::{object_proto_id, object_shape_stamp, shape_proto_id};
+    let stamp = object_shape_stamp(obj);
+    if stamp == 0
+        || shape_proto_id(stamp) != Some(crate::object::shapes::PROTO_ID_DEFAULT)
+        || object_proto_id(obj) != crate::object::shapes::PROTO_ID_DEFAULT
+    {
+        return None;
+    }
+    let proto = crate::array::object_prototype_addr_if_resolved();
+    (proto != 0 && proto != obj as usize)
+        .then(|| f64::from_bits(crate::value::js_nanbox_pointer(proto as i64).to_bits()))
+}
+
 fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     // #2820: `Object.getPrototypeOf(null | undefined)` throws TypeError
@@ -205,10 +225,9 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     // (the test262 subclassing-ignored shape) requires that object, not `null`.
     // Resolve it via the live namespace; fall back to `null` only if Temporal
     // isn't reachable. (#5587)
-    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(obj_value) {
         if let Some(kind) = crate::temporal::temporal_kind(obj_value) {
-            let proto = crate::object::global_this::temporal_kind_prototype(kind);
+            let proto = crate::temporal::hooked::kind_prototype(kind);
             if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
                 return proto;
             }
@@ -663,6 +682,19 @@ fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                         return f64::from_bits(
                             crate::value::js_nanbox_pointer(synth_proto as i64).to_bits(),
                         );
+                    }
+                }
+                // A plain object whose ShapeId records the realm's default
+                // link: the shape IS the answer (`%Object.prototype%`), the
+                // same fact every inherited read of it rests on. The
+                // `constructor`-derived guess below reads `obj.constructor`
+                // by name and then the constructor's `prototype`, on every
+                // `instanceof` hop.
+                if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+                    && ((*obj).class_id == 0 || is_anon_shape_class_id((*obj).class_id))
+                {
+                    if let Some(proto) = default_link_prototype(obj) {
+                        return proto;
                     }
                 }
                 if let Some(proto) = constructor_dynamic_prototype(obj) {

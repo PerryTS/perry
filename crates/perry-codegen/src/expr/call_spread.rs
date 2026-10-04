@@ -383,18 +383,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         if !ctx.imported_vars.contains(name) && !ctx.namespace_imports.contains(name)
                             && ctx.class_ids.contains_key(name));
                 if !(crate::type_analysis::is_numeric_expr(ctx, index) && !object_is_class_ref) {
-                    let recv_box = lower_expr(ctx, object)?;
-                    let key_box = lower_expr(ctx, index)?;
+                    let rooted_operands: [&perry_hir::Expr; 2] = [object, index];
+                    let (rooted_values, rooted_group) =
+                        crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+                    let recv_box = rooted_values[0].clone();
+                    let key_box = rooted_values[1].clone();
                     // Same second window as the `PropertyGet` arm above:
                     // `recv_box` and `key_box` are unrooted across the bundle.
                     // #7640, not this change.
-                    return bundle_args_rooted(ctx, args, false, |ctx, acc| {
+                    let rooted_result = bundle_args_rooted(ctx, args, false, |ctx, acc| {
                         Ok(ctx.block().call(
                             DOUBLE,
                             "js_native_call_method_value_apply",
                             &[(DOUBLE, &recv_box), (DOUBLE, &key_box), (I64, acc)],
                         ))
                     });
+                    rooted_group.release(ctx);
+                    return rooted_result;
                 }
             }
 
@@ -539,29 +544,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     bundle_args_rooted(ctx, args, false, |_ctx, acc| Ok(acc.to_string()))?;
                 ("null".to_string(), "0".to_string(), acc_handle)
             } else {
-                // Marshal regular args into a stack buffer (or null/0 if none).
-                let (regs_ptr, regs_len) = if regular_count == 0 {
-                    ("null".to_string(), "0".to_string())
-                } else {
-                    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, regular_count);
-                    let mut idx = 0usize;
-                    for a in args {
-                        if let CallArg::Expr(e) = a {
-                            let v = lower_expr(ctx, e)?;
-                            let slot =
-                                ctx.block()
-                                    .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", idx))]);
-                            ctx.block().store(DOUBLE, &v, &slot);
-                            idx += 1;
-                        }
+                // Regular args are evaluated first, in source order, and each
+                // is rooted across the ones after it AND across the spread
+                // marshalling below (the spread source is user code, and
+                // `js_array_like_to_array` / the concat allocate). They are
+                // stored into the stack buffer from the re-read, below the
+                // spread handle's last emission (#11789 sweep: they used to be
+                // stored where they were lowered, so the buffer held pre-move
+                // addresses).
+                let mut regs_group = crate::rooting::open_rooted_group(regular_count);
+                let mut regs_roots: Vec<usize> = Vec::with_capacity(regular_count);
+                for a in args {
+                    if let CallArg::Expr(e) = a {
+                        regs_roots.push(regs_group.lower(ctx, e, true)?);
                     }
-                    let ptr_reg = ctx.block().next_reg();
-                    ctx.block().emit_raw(format!(
-                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
-                        ptr_reg, regular_count, buf_reg
-                    ));
-                    (ptr_reg, regular_count.to_string())
-                };
+                }
 
                 // Marshal spread sources. 0 → "0" handle; 1 → unbox the one
                 // array; multiple → concat onto a fresh array.
@@ -584,6 +581,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // the consuming call is the next emission.
                     bundle_args_rooted(ctx, args, true, |_ctx, acc| Ok(acc.to_string()))?
                 };
+                // Marshal the regular args into a stack buffer (or null/0 if none).
+                let (regs_ptr, regs_len) = if regular_count == 0 {
+                    ("null".to_string(), "0".to_string())
+                } else {
+                    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, regular_count);
+                    for (idx, root) in regs_roots.iter().enumerate() {
+                        let v = regs_group.reread(ctx, *root)?;
+                        let slot = ctx
+                            .block()
+                            .gep(DOUBLE, &buf_reg, &[(I64, &format!("{}", idx))]);
+                        ctx.block().store(DOUBLE, &v, &slot);
+                    }
+                    let ptr_reg = ctx.block().next_reg();
+                    ctx.block().emit_raw(format!(
+                        "{} = getelementptr [{} x double], ptr {}, i64 0, i64 0",
+                        ptr_reg, regular_count, buf_reg
+                    ));
+                    (ptr_reg, regular_count.to_string())
+                };
+                regs_group.release(ctx);
                 (regs_ptr, regs_len, spread_handle)
             };
 

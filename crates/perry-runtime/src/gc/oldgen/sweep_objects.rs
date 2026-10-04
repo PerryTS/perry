@@ -80,6 +80,11 @@ impl ArenaSweepObjectsState {
         let n_blocks = crate::arena::arena_block_count();
         let block_snapshots = crate::arena::arena_block_snapshots();
         crate::arena::old_pages_reset_sweep_accounting();
+        // #11842: no hole may be handed out while this walk runs; the walk's
+        // end lists them again (`push_live_block_holes`).
+        if reclaim_dead_old_blocks {
+            super::old_free_forget_until_rebuild();
+        }
         Self {
             cursor: crate::arena::ArenaObjectCursor::new(crate::arena::ArenaWalkOrder::BlockIndex),
             pending_old_unregister: Default::default(),
@@ -137,6 +142,7 @@ impl ArenaSweepObjectsState {
         self.survival_probe =
             !self.minor_sweep && super::super::promoted_cohort::survival::survival_probe_armed();
         if self.minor_sweep
+            || crate::arena::old_sweep_quarantine_enabled()
             || !self.reclaim_dead_old_blocks
             || self.targeted_old_blocks.is_some()
             || !census.is_armed()
@@ -641,9 +647,38 @@ impl ArenaSweepObjectsState {
             self.eden_dead_bytes = self.eden_dead_bytes.saturating_add(total_size as u64);
         }
         finalize_dead_arena_payload(header, user_ptr, self.overflow_active);
+        if crate::arena::old_sweep_quarantine_enabled() {
+            self.quarantine_dead_object(header, total_size, block_idx, dead_old);
+        }
         if self.reclaim_dead_old_blocks && dead_old {
             self.note_invalidated(block_idx);
             self.defer_old_unregister(header, total_size);
+        }
+    }
+
+    /// `PERRY_GC_PROTECT_OLD_SWEEP`: retire the object instead of letting its
+    /// bytes be reused. Its block counts as live, so it is never reset.
+    unsafe fn quarantine_dead_object(
+        &mut self,
+        header: *mut GcHeader,
+        total_size: usize,
+        block_idx: usize,
+        dead_old: bool,
+    ) {
+        let kind = if dead_old {
+            crate::arena::RetiredKind::Old
+        } else {
+            crate::arena::RetiredKind::Nursery
+        };
+        crate::arena::retire_swept_object(header as usize, total_size, kind);
+        if let Some(slot) = self.block_has_live.get_mut(block_idx) {
+            *slot = true;
+        }
+        if !(self.reclaim_dead_old_blocks && dead_old) {
+            // An old hole's header is invalidated by the page-index flush;
+            // invalidate this one the same way so no walker reads its payload.
+            (*header).obj_type = 0;
+            (*header).gc_flags = 0;
         }
     }
 

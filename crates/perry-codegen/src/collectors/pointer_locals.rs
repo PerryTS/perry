@@ -89,46 +89,34 @@ fn index_is_definitely_numeric(e: &Expr) -> bool {
     }
 }
 
+/// The type this analysis records for a value: what the value IS, never what
+/// a container it points at currently HOLDS.
+///
+/// A local's facts come from the writes to that local, and a write to an array
+/// element, a tuple slot or a map entry is not one: `a[0] = obj` leaves `a`'s
+/// write list as `[<literal>]`. Element types read off the literal would
+/// therefore describe the container as it was born, and an `IndexGet` (or
+/// `pop()`, `at()`, `Map#get` through `infer_expr_type`) would hand that stale
+/// description to the local it initializes. `const a = [0]; a[0] = obj;
+/// const x = a[0]` classified `x` as a Number, gave it no shadow slot, and left
+/// `obj` live in a plain alloca across every collection in its scope (#11862).
+/// HIR builds exactly that shape on its own: a shared-mutable class capture
+/// (#5951), and so a repeatable class declaration's evaluation owner, is boxed
+/// as `owner = [undefined]` and written with `owner[0] = <class object>`.
+///
+/// So contents are erased: arrays and tuples to `Any` elements, generics to no
+/// type arguments, objects to no properties, functions to an `Any` return.
+/// What stays is the outer variant, which is all the pointer classification
+/// needs (every container is pointer-bearing). A typed array is `Named`, keeps
+/// its name, and its element reads stay numeric by construction.
 fn pointer_analysis_type(ty: &Type) -> Type {
     pointer_analysis_type_inner(ty, 0)
 }
 
 fn pointer_analysis_type_inner(ty: &Type, depth: usize) -> Type {
-    if depth >= MAX_POINTER_ANALYSIS_TYPE_DEPTH {
-        return match ty {
-            Type::Array(_) => Type::Array(Box::new(Type::Any)),
-            Type::Tuple(_) => Type::Tuple(vec![Type::Any]),
-            Type::Object(_) => Type::Object(Default::default()),
-            Type::Function(ft) => Type::Function(FunctionType {
-                params: Vec::new(),
-                return_type: Box::new(Type::Any),
-                is_async: ft.is_async,
-                is_generator: ft.is_generator,
-            }),
-            Type::Union(_) => Type::Any,
-            Type::Promise(_) => Type::Promise(Box::new(Type::Any)),
-            Type::Generic { base, .. } => Type::Generic {
-                base: base.clone(),
-                type_args: Vec::new(),
-            },
-            other => other.clone(),
-        };
-    }
-
     match ty {
-        Type::Array(elem) => {
-            if depth + 1 >= MAX_POINTER_ANALYSIS_TYPE_DEPTH {
-                Type::Array(Box::new(Type::Any))
-            } else {
-                Type::Array(Box::new(pointer_analysis_type_inner(elem, depth + 1)))
-            }
-        }
-        Type::Tuple(elems) => Type::Tuple(
-            elems
-                .iter()
-                .map(|elem| pointer_analysis_type_inner(elem, depth + 1))
-                .collect(),
-        ),
+        Type::Array(_) => pointer_analysis_array_type(),
+        Type::Tuple(_) => Type::Tuple(vec![Type::Any]),
         Type::Object(_) => Type::Object(Default::default()),
         Type::Function(ft) => Type::Function(FunctionType {
             params: Vec::new(),
@@ -136,28 +124,30 @@ fn pointer_analysis_type_inner(ty: &Type, depth: usize) -> Type {
             is_async: ft.is_async,
             is_generator: ft.is_generator,
         }),
+        Type::Generic { base, .. } => Type::Generic {
+            base: base.clone(),
+            type_args: Vec::new(),
+        },
+        Type::Union(_) if depth >= MAX_POINTER_ANALYSIS_TYPE_DEPTH => Type::Any,
         Type::Union(variants) => Type::Union(
             variants
                 .iter()
                 .map(|variant| pointer_analysis_type_inner(variant, depth + 1))
                 .collect(),
         ),
+        Type::Promise(_) if depth >= MAX_POINTER_ANALYSIS_TYPE_DEPTH => {
+            Type::Promise(Box::new(Type::Any))
+        }
         Type::Promise(inner) => {
             Type::Promise(Box::new(pointer_analysis_type_inner(inner, depth + 1)))
         }
-        Type::Generic { base, type_args } => Type::Generic {
-            base: base.clone(),
-            type_args: type_args
-                .iter()
-                .map(|arg| pointer_analysis_type_inner(arg, depth + 1))
-                .collect(),
-        },
         other => other.clone(),
     }
 }
 
-fn pointer_analysis_array_type(elem: Type) -> Type {
-    Type::Array(Box::new(pointer_analysis_type_inner(&elem, 1)))
+/// An array value, its elements erased (see [`pointer_analysis_type`]).
+fn pointer_analysis_array_type() -> Type {
+    Type::Array(Box::new(Type::Any))
 }
 
 struct PointerAnalysisFacts<'a> {
@@ -415,25 +405,13 @@ pub fn collect_pointer_typed_locals(
             Expr::Sequence(exprs) => exprs.last().and_then(|last| {
                 expr_value_type(last, local_types, local_value_types, non_pointer_locals)
             }),
-            Expr::Array(elements) => {
-                let mut elem_ty: Option<Type> = None;
-                for elem in elements {
-                    let Some(ty) =
-                        expr_value_type(elem, local_types, local_value_types, non_pointer_locals)
-                    else {
-                        return Some(Type::Array(Box::new(Type::Any)));
-                    };
-                    match &elem_ty {
-                        None => elem_ty = Some(ty),
-                        Some(existing) if existing == &ty => {}
-                        Some(_) => return Some(pointer_analysis_array_type(Type::Any)),
-                    }
-                }
-                Some(pointer_analysis_array_type(elem_ty.unwrap_or(Type::Any)))
-            }
+            Expr::Array(_) => Some(pointer_analysis_array_type()),
             Expr::IndexGet { object, index } => {
                 match expr_value_type(object, local_types, local_value_types, non_pointer_locals)? {
-                    Type::Array(elem) => Some(*elem),
+                    // An element's type is unknown here: the analysis sees the
+                    // writes to the LOCAL, not to its elements (see
+                    // `pointer_analysis_type`, #11862).
+                    Type::Array(_) => None,
                     Type::String => Some(Type::String),
                     // A numerically-keyed element read of a non-BigInt typed
                     // array yields a Number (or `undefined` when out of
@@ -1734,6 +1712,91 @@ mod tests {
         }];
         let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
         assert!(slots.contains_key(&1), "Symbol local must be shadow-rooted");
+    }
+
+    /// #11862: `const a = [0]; a[0] = {}; const x = a[0]`. The write lands on
+    /// an element, not on `a`, so `a`'s literal says nothing about what `a[0]`
+    /// holds when `x` reads it. `x` must keep its slot. Before the fix the
+    /// literal's `Number` element classified `x` as a scalar.
+    #[test]
+    fn an_element_read_of_an_array_written_in_place_keeps_its_shadow_slot() {
+        let stmts = vec![
+            Stmt::Let {
+                id: 1,
+                name: "a".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Array(vec![Expr::Integer(0)])),
+            },
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::Integer(0)),
+                value: Box::new(Expr::Object(Vec::new())),
+            }),
+            Stmt::Let {
+                id: 2,
+                name: "x".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::Integer(0)),
+                }),
+            },
+        ];
+        let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
+        assert!(
+            slots.contains_key(&2),
+            "an element read must be shadow-rooted"
+        );
+    }
+
+    /// The shape HIR builds for a repeatable class declaration whose members
+    /// read its name (#5951 boxing of the evaluation owner): `owner =
+    /// [undefined]`, `C = (owner[0] = <class>, owner[0])`, `D = C`. Both
+    /// bindings hold the heap class object and must be rooted (#11862).
+    #[test]
+    fn a_boxed_class_evaluation_owner_binding_keeps_its_shadow_slot() {
+        let owner_read = || Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::Integer(0)),
+        };
+        let stmts = vec![
+            Stmt::Let {
+                id: 1,
+                name: "owner".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Array(vec![Expr::Undefined])),
+            },
+            Stmt::Let {
+                id: 2,
+                name: "C".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Sequence(vec![
+                    Expr::IndexSet {
+                        object: Box::new(Expr::LocalGet(1)),
+                        index: Box::new(Expr::Integer(0)),
+                        value: Box::new(Expr::Object(Vec::new())),
+                    },
+                    owner_read(),
+                ])),
+            },
+            Stmt::Let {
+                id: 3,
+                name: "D".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::LocalGet(2)),
+            },
+        ];
+        let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
+        assert!(
+            slots.contains_key(&2),
+            "the class binding must be shadow-rooted"
+        );
+        assert!(slots.contains_key(&3), "its alias must be shadow-rooted");
     }
 
     /// The other half, and the sharper one: the declared type is `any`, so the

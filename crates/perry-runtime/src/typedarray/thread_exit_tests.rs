@@ -12,11 +12,10 @@ fn thread_exit_invalidates_kind_cache() {
     .join()
     .unwrap();
 
-    // Probe the cache directly: the registry is thread-local and has gone
-    // away, but an old positive cache entry would misclassify a new Promise
+    // Probe the cache directly (never the retired address itself): an old
+    // positive cache entry would let emitted code misclassify a new Promise
     // allocated at the worker's former address (#11463).
     assert_ne!(ta_kind_cache_get(address), Some(Some(KIND_UINT8)));
-    assert_eq!(lookup_typed_array_kind(address), None);
 }
 
 #[test]

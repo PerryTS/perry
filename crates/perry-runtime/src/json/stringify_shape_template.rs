@@ -150,7 +150,7 @@ pub(crate) unsafe fn build_shape_prefix_template(first_elem_bits: u64) -> Option
     // array-of-objects fast path is unaffected for them. (#321 — a homogeneous
     // array of `class { toJSON() {…} }` instances must honour the prototype
     // `toJSON`.)
-    if !super::stringify_tojson_probe::class_is_plain_record((*obj).class_id) {
+    if !super::stringify_tojson_probe::object_is_plain_record(obj) {
         return None;
     }
     // #6519: a URL instance is a class_id-0 object but must serialize as its
@@ -382,7 +382,7 @@ pub(crate) unsafe fn try_emit_shape_element(
     // a fresh stringify-wide proof before it emits raw fields.
     *data_record_global_proof = false;
     if !global_to_json_absent
-        || !super::stringify_tojson_probe::class_is_plain_record((*obj).class_id)
+        || !super::stringify_tojson_probe::object_is_plain_record(obj)
         || crate::object::prototype_chain::object_static_prototype(obj as usize).is_some()
     {
         return false;

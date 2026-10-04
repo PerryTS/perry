@@ -34,6 +34,11 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // when it is non-zero (descriptors / typed-feedback in use). Defined in
     // perry-runtime as `PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`.
     module.add_external_global("PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED", I8);
+    // #11791: one bit per private-class template (low 16 bits of the class
+    // id), set once a fresh evaluation of it exists. A compiled private-access
+    // site trusts its cached ShapeId only while its template's bit is clear.
+    // perry-runtime: `ic_miss::private_guard_fast::PERRY_PRIVATE_TEMPLATE_EVALUATED`.
+    module.add_external_global("PERRY_PRIVATE_TEMPLATE_EVALUATED", "[1024 x i64]");
     // Sticky runtime flag (i8, 0 = valid) for class-prototype method guards.
     // Direct-method lowering reads it with acquire ordering before touching a
     // receiver header; prototype mutation stores 1 with release ordering.
@@ -71,6 +76,10 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // The key-add hit's chain-verdict generation and the store census
     // (expr/put_value_store_ic.rs, expr/store_census.rs).
     module.add_external_global("PERRY_PROTO_VALIDITY", I64);
+    // Sticky worker-start gate for process-global method sites. After it
+    // becomes nonzero, emitted sites use ordinary dispatch without touching
+    // primary-heap holder entries.
+    module.add_external_global("PERRY_METHOD_SITE_WORKERS_PRESENT", I8);
     module.add_external_global("PERRY_STORE_CENSUS", I64);
     // #10943: has ANY named property ever been installed on a non-ordinary
     // cell in this process? Zero is the own-override guard's own proof that a
@@ -90,17 +99,18 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // is not readable inline (`property_get/generic_dispatch.rs`).
     module.add_external_global("PERRY_EMPTY_SHAPE_DIR", I64);
     // #5525 follow-up: the process-global typed-array kind cache + the
-    // "any exotic views live" guard, exported from perry-runtime so the codegen
+    // exported from perry-runtime so the codegen
     // can emit a guarded *inline* typed-array element load at the access site
     // (cache probe + bounds check + direct slot load) instead of an out-of-line
     // `js_dyn_index_get` call. The cache is a fixed `[64 x i64]` array of
-    // `(addr << 8) | tag` words; the view guard is a single `i64` counter that
-    // reads 0 whenever every live typed array uses inline storage (so the
-    // inline `header + 16 + idx*elem_size` load matches the runtime `data_ptr`).
+    // `(addr << 8) | tag` words. The tag of an inline-storage typed array is
+    // its bare kind; an external-storage one (a view) carries `kind | 0x80`
+    // (#10516), so a guard comparing the tag with the expected kind admits
+    // only receivers whose `header + 16 + idx*elem_size` is the runtime
+    // `data_ptr`.
     module.add_external_global("PERRY_TA_KIND_CACHE", "[64 x i64]");
     // #9342: Uint8Array inline-read admission cache (buffer/header.rs).
     module.add_external_global("PERRY_U8_INLINE_CACHE", "[64 x i64]");
-    module.add_external_global("PERRY_TA_VIEW_GUARD", I64);
     module.add_external_global("PERRY_TA_OWN_PROPS_PRESENT", I8);
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
     module.declare_function("js_event_target_subclass_init", DOUBLE, &[DOUBLE, I32]);
@@ -112,7 +122,8 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // new/instanceof read class_id from it.
     module.declare_function("js_object_mark_class", VOID, &[I64]);
     // #6438: pin a per-evaluation class object's own parent edge.
-    module.declare_function("js_class_object_pin_parent", VOID, &[I64, I32]);
+    module.declare_function("js_class_evaluation_object", I64, &[I32, I32, I32, PTR]);
+    module.declare_function("js_class_object_set_ctor_caps", VOID, &[I64, DOUBLE, PTR]);
     // Shape-cache-aware variant: pre-populates keys_array via SHAPE_INLINE_CACHE,
     // so subsequent field stores can use index-based set_field (skipping the
     // per-call linear key-search done by js_object_set_field_by_name).
@@ -409,6 +420,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_wasi", VOID, &[]);
     module.declare_function("js_nm_install_zlib", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
+    module.declare_function("js_nm_enable_install_all", VOID, &[]);
     module.declare_function("js_object_get_field_ic_miss", DOUBLE, &[I64, I64, PTR]);
     module.declare_function(
         "js_object_get_field_ic_miss_packed",
@@ -632,12 +644,6 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     );
     module.declare_function("perry_transition_cache_base", PTR, &[]);
     module.declare_function("js_transition_ic_note_hit", VOID, &[]);
-    // #10834/#10842: the inherited-read cache hit, asked on the generic
-    // property read's declined-guard edge (`expr/property_get/
-    // generic_dispatch.rs`): masked receiver + interned key -> NaN-boxed
-    // value, or `TAG_HOLE` for a decline. A pure state read (see
-    // `gc_call_effects.rs`).
-    module.declare_function("js_inherited_read_cache_hit_f64", DOUBLE, &[PTR, PTR]);
     // The per-agent pointer block (`expr/agent_ptr.rs`), read inline on ELF
     // executables through the initial-exec TLS model; its slot-1 accessor,
     // and the method-call site's miss entry (`expr/method_site.rs`).

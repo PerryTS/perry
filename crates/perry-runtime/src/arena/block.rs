@@ -72,12 +72,26 @@ fn block_size_for(min_size: usize) -> usize {
 // caps → 235/221/226 MB). Recycling released blocks bounds ever-dirtied pages
 // at the CONCURRENT high-water instead.
 //
-// Pooled blocks are `MADV_FREE`d so the OS can take the pages under memory
-// pressure; contents are undefined on reuse, which every consumer tolerates
+// Blocks get one complete mutator interval to demonstrate reuse. Complete
+// interior pages of blocks still pooled are then returned to the OS; contents
+// are undefined on reuse, which every consumer tolerates
 // (blocks are bump-filled from offset 0 and re-registered by the arena that
 // adopts them). The pool is capped; overflow falls through to real dealloc,
 // and thread teardown (`Arena::drop`) never pools.
 // ---------------------------------------------------------------------------
+
+/// Only empty, arena-owned payload pages may be advised while mapped.
+pub(super) fn discard_empty_block_pages(block: &ArenaBlock) -> usize {
+    debug_assert_eq!(block.offset, 0);
+    unsafe { decommit::release(block.data, block.size) }
+}
+
+struct PooledBlock {
+    data: *mut u8,
+    size: usize,
+    /// Two publication boundaries leave one complete mutator interval to reuse it.
+    reuse_window: u8,
+}
 
 /// Owns the pooled blocks, so that a thread exiting with a non-empty pool
 /// releases them instead of leaking up to the process-wide pool cap.
@@ -93,7 +107,7 @@ fn block_size_for(min_size: usize) -> usize {
 /// pooled blocks — unbounded growth across repeated spawns, in the one change
 /// whose purpose is lowering RSS.
 struct BlockPool {
-    blocks: Vec<(*mut u8, usize)>,
+    blocks: Vec<PooledBlock>,
     drain_requested: bool,
 }
 
@@ -102,10 +116,11 @@ impl Drop for BlockPool {
         let bytes = self
             .blocks
             .iter()
-            .map(|&(_, size)| size)
+            .map(|block| block.size)
             .fold(0usize, usize::saturating_add);
         block_pool_process_bytes_sub(bytes);
-        for &(data, size) in &self.blocks {
+        for block in &self.blocks {
+            let (data, size) = (block.data, block.size);
             if data.is_null() || size == 0 {
                 continue;
             }
@@ -160,11 +175,10 @@ thread_local! {
 ///
 /// The original 64 MiB choice was measured on
 /// tree.ts (Mac mini M1, quiet): no pool -> 225 MB peak RSS; 64 MB pool ->
-/// 190 MB; 128 MB pool -> 210 MB. Bigger is NOT better — pooled pages are
-/// MADV_FREE'd but stay resident until the OS wants them, so an oversized
-/// pool trades fresh-segment growth for held free pages past the optimum.
-/// This is a cap, not a floor — the pool holds only blocks that were
-/// actually released, and the OS can take every pooled page under pressure.
+/// 190 MB; 128 MB pool -> 210 MB with lazy page release. Linux discards cold
+/// interior pages after the reuse window. This cap bounds both reusable address
+/// space and the temporary resident allowance for recently released blocks.
+/// Boundary pages can stay resident. The pool holds only blocks actually released.
 static BLOCK_POOL_PROCESS_BYTES: AtomicUsize = AtomicUsize::new(0);
 #[cfg(test)]
 static BLOCK_POOL_EXPLICIT_DRAINED_BYTES: AtomicUsize = AtomicUsize::new(0);
@@ -214,6 +228,9 @@ fn block_pool_cap_bytes() -> usize {
     crate::gc::gc_block_pool_cap_bytes()
 }
 
+#[path = "block/decommit.rs"]
+mod decommit;
+
 /// Offer a released block to the pool. Returns false (caller deallocs) when
 /// the pool is full or the block is null.
 pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
@@ -226,11 +243,13 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
     {
         return false;
     }
-    #[cfg(unix)]
-    unsafe {
-        libc::madvise(data as *mut libc::c_void, size, libc::MADV_FREE);
-    }
-    BLOCK_POOL.with(|p| p.borrow_mut().blocks.push((data, size)));
+    BLOCK_POOL.with(|p| {
+        p.borrow_mut().blocks.push(PooledBlock {
+            data,
+            size,
+            reuse_window: 2,
+        });
+    });
     BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_add(size)));
     true
 }
@@ -238,12 +257,38 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
 fn block_pool_take(size: usize) -> Option<*mut u8> {
     let taken = BLOCK_POOL.with(|p| {
         let mut pool = p.borrow_mut();
-        let idx = pool.blocks.iter().rposition(|&(_, s)| s == size)?;
-        Some(pool.blocks.swap_remove(idx).0)
+        let idx = pool.blocks.iter().rposition(|block| block.size == size)?;
+        Some(pool.blocks.swap_remove(idx).data)
     })?;
     BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_sub(size)));
     block_pool_process_bytes_sub(size);
     Some(taken)
+}
+
+/// Let recently released blocks prove reuse before discarding their pages.
+/// Called once at completed collection publication, on both copied and full
+/// paths. A block returned during a collection remains warm through the next
+/// complete mutator interval. If still unused at the following publication,
+/// discard its complete interior pages once. Critical/idle drains remain
+/// independent and can release the allocation without waiting for this window.
+/// Returns kernel-accepted bytes for live-subject residency tests.
+pub(crate) fn advance_block_pool_reuse_window() -> usize {
+    BLOCK_POOL.with(|pool| {
+        let mut released = 0usize;
+        for block in &mut pool.borrow_mut().blocks {
+            if block.reuse_window == 0 {
+                continue;
+            }
+            block.reuse_window -= 1;
+            if block.reuse_window == 0 {
+                // Only empty owned bytes are eligible; allocator boundary
+                // pages remain intact even after the reuse window expires.
+                released =
+                    released.saturating_add(unsafe { decommit::release(block.data, block.size) });
+            }
+        }
+        released
+    })
 }
 
 /// Release an arena block through the one pool-or-deallocate funnel. The
@@ -274,13 +319,14 @@ pub(crate) fn drain_block_pool() -> BlockPoolDrainStats {
     let entries = BLOCK_POOL.with(|pool| std::mem::take(&mut pool.borrow_mut().blocks));
     let bytes = entries
         .iter()
-        .map(|&(_, size)| size)
+        .map(|block| block.size)
         .fold(0usize, usize::saturating_add);
     let tracked = BLOCK_POOL_BYTES.with(|cell| cell.replace(0));
     debug_assert_eq!(tracked, bytes, "thread block-pool byte accounting drifted");
     block_pool_process_bytes_sub(bytes);
 
-    for &(data, size) in &entries {
+    for block in &entries {
+        let (data, size) = (block.data, block.size);
         if data.is_null() || size == 0 {
             continue;
         }
@@ -345,6 +391,7 @@ fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
             dead_cycles: 0,
             old_free_holes: false,
             pinned_summary: false,
+            idle_pages_discarded: false,
         });
     }
     let data = unsafe { alloc(layout) };
@@ -359,6 +406,7 @@ fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
         dead_cycles: 0,
         old_free_holes: false,
         pinned_summary: false,
+        idle_pages_discarded: false,
     })
 }
 
@@ -444,6 +492,10 @@ pub(crate) struct ArenaBlock {
     /// authority: this only says which blocks the walk must visit, so it may
     /// over-approximate and must never under-approximate.
     pub(crate) pinned_summary: bool,
+    /// Empty Eden payload pages were already discarded in this idle interval.
+    /// Reuse is detected at reset, after synchronizing the bump pointer. This
+    /// avoids an extra store in either inline or runtime allocation paths.
+    pub(crate) idle_pages_discarded: bool,
 }
 
 impl ArenaBlock {
@@ -460,6 +512,12 @@ impl ArenaBlock {
 
     #[inline]
     pub(crate) fn clear_object_starts(&mut self) {
+        // Reset callers clear object starts before zeroing a used offset.
+        // An already-empty reset must preserve the advice state; a used block
+        // starts a new idle interval and may have faulted its pages back in.
+        if self.offset != 0 {
+            self.idle_pages_discarded = false;
+        }
         self.object_starts.fill(0);
     }
 
@@ -654,6 +712,7 @@ impl Arena {
                 dead_cycles: 0,
                 old_free_holes: false,
                 pinned_summary: false,
+                idle_pages_discarded: false,
             }],
             current: 0,
             generation,
@@ -1237,8 +1296,13 @@ pub(crate) fn old_gen_in_use_bytes_sub(delta: usize) {
     OLD_GEN_IN_USE_BYTES.with(|c| c.set(c.get().saturating_sub(delta)));
 }
 
-/// Bytes currently held in this thread's recycled-block pool (MADV_FREE'd,
-/// still mapped). `PERRY_GC_CENSUS` reads it; nothing else should.
+/// Allocation bytes held in this thread's recycled-block pool. Interior pages
+/// may be nonresident; this is retained address space, not an RSS reading.
+/// `PERRY_GC_CENSUS` reads it; nothing else should.
 pub(crate) fn block_pool_bytes() -> usize {
     BLOCK_POOL_BYTES.with(Cell::get)
 }
+
+#[cfg(test)]
+#[path = "block/reuse_window_tests.rs"]
+mod reuse_window_tests;

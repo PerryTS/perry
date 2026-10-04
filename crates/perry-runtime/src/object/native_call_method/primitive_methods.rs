@@ -187,10 +187,9 @@ pub(super) unsafe fn dispatch_primitive(
     // `Temporal.*` value is a NaN-boxed pointer to a custom cell with no
     // codegen fast-path, so every method call funnels through here. The router
     // throws `TypeError` for an unknown method name on a real Temporal receiver.
-    #[cfg(feature = "temporal")]
     if crate::temporal::is_temporal_value(object) {
         let args = refreshed_args();
-        return Some(crate::temporal::dispatch::call_method(
+        return Some(crate::temporal::hooked::call_method(
             object,
             method_name,
             &args,
@@ -402,8 +401,12 @@ pub(super) unsafe fn dispatch_primitive(
     if crate::object::class_registry::is_class_object_value(object) {
         let class_id = crate::object::js_object_get_class_id(jsval.as_pointer::<ObjectHeader>());
         if class_id != 0
-            && crate::object::class_registry::lookup_static_method_in_chain(class_id, method_name)
-                .is_some()
+            && unsafe {
+                crate::object::class_object_registry_serves_static(
+                    jsval.as_pointer::<ObjectHeader>(),
+                    method_name,
+                )
+            }
         {
             let args = refreshed_args();
             return Some(crate::object::class_registry::js_class_static_method_call(
@@ -959,7 +962,7 @@ pub(super) unsafe fn dispatch_primitive(
     // `new Float64Array(...)` (and the other typed-array constructors)
     // returns the raw heap pointer bitcast to f64 — no POINTER_TAG —
     // so neither `is_pointer()` nor the handle dispatch above catches
-    // it. Detect via the `TYPED_ARRAY_REGISTRY` side table and route
+    // it. Detect via the typed array's own header and route
     // common methods (`sort`, `at`, `toSorted`, `toReversed`, `with`,
     // `findLast`, `findLastIndex`) to their `js_typed_array_*` runtime
     // helpers. Without this arm `(a: Float64Array).sort()` reached the
@@ -967,7 +970,8 @@ pub(super) unsafe fn dispatch_primitive(
     // bits classify as `is_number()` (top16 outside the tagged range).
     {
         let top16 = raw_bits >> 48;
-        if top16 == 0 && raw_bits >= 0x10000 {
+        // #10694: a raw word must be allocator-owned before the brand read.
+        if top16 == 0 && raw_bits >= 0x10000 && crate::buffer::header_is_owned(raw_bits as usize) {
             let addr = raw_bits as usize;
             if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
                 let ta = addr as *mut crate::typedarray::TypedArrayHeader;

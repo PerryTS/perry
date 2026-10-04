@@ -502,13 +502,18 @@ unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_coun
     let scope = crate::gc::RuntimeHandleScope::new();
     // Read before the mint: the prototype identity is a fact of the receiver
     // the dictionary shape must keep naming.
-    let proto_id = match shapes::object_shape_descriptor(obj) {
+    let current = shapes::object_shape_descriptor(obj);
+    let proto_id = match current.as_ref() {
         Some(d) => d.proto_id,
         None => shapes::object_proto_id(obj),
     };
     // Read from the PRIVATE list, not through `is_dictionary`: at the latch
     // the shape still publishes the old keys when this runs.
-    let extra_summary = private_list_summary(obj);
+    let receiver = shapes::ReceiverFacts {
+        extra_summary: private_list_summary(obj),
+        // The receiver's private brands survive the conversion (#11791).
+        brands: shapes::BrandList::copy_of(current.as_ref().map_or(&[][..], |d| d.brands())),
+    };
     // Charter step 3 (R2): the receiver's store facts, read before the mint.
     let kind = shapes::store_kind::mint_kind(shapes::ShapeObjectKind::Ordinary, obj);
     let handle = scope.root_raw_mut_ptr(obj);
@@ -523,7 +528,7 @@ unsafe fn restamp_dictionary_shape(obj: *mut ObjectHeader, live_inline_slot_coun
             kind,
             0,
             proto_id,
-            extra_summary,
+            receiver,
             None,
         ))
     });

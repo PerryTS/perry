@@ -9,6 +9,7 @@ fn empty_opts() -> CompileOptions {
         target: None,
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
+        thread_literal_module_prefixes: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -26,6 +27,7 @@ fn empty_opts() -> CompileOptions {
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
+        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -280,10 +282,19 @@ fn static_and_instance_methods_with_same_name_keep_distinct_symbols() {
     )
     .unwrap();
 
+    // The instance body, and its prototype function object's
+    // closure-convention entry `<body>__eclo`: exactly one definition each.
     assert_eq!(
         count(
             &ir,
-            "define double @perry_method_static_instance_symbol_hygiene_ts__x__lex"
+            "define double @perry_method_static_instance_symbol_hygiene_ts__x__lex("
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            &ir,
+            "define double @perry_method_static_instance_symbol_hygiene_ts__x__lex__eclo("
         ),
         1
     );

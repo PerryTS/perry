@@ -1,0 +1,18 @@
+{
+  "base": "2026ecfe6dd9df1a0a8616e3bc5c5561e8e0cf63",
+  "production_runtime": "6c761801fa4c76ad79b67bbc4338bee7739093b7",
+  "complete_cells": 306,
+  "builds": 45,
+  "private_entry": "6e311851fa6a6e0c981b7e2f2c34d3bdc5d3d2f9",
+  "cases": 17,
+  "all_raw_sources_products_oracles_counters_verified": true,
+  "auto_runtime_stamps": 12,
+  "inputs": {
+    "runs": "4b6dac1974117ec859e42fa7746d6ae1c1dd5813f614a85955a464727a581af8",
+    "builds": "41fcccf73e294e97f8ab1958b1b5442ab0ecdb80c8af124edabae2c417d27399",
+    "oracle": "2c7624378552bbed27dc711d3a6f7021dfcdd87e25bf59ac8ae3becd2efce70b",
+    "products": "af6194faf42848e7d8f434c38e6a8fba15c2cb4fd8bef29e51e89369f28a8026",
+    "summary": "9a949d7d89a383690ec9e7c7b0edf60bcd606346a0691abc7fcfbec24b82861a",
+    "auto-runtime-products": "ea49dc6e6b82c90afe9163296cc931a500eb84f16d9b5b13b9c63b6a304ca467"
+  }
+}

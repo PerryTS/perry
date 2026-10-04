@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::block::LlBlock;
 use crate::module::LlModule;
 use crate::strings::StringPool;
-use crate::types::{DOUBLE, I32, I64, PTR, VOID};
+use crate::types::{DOUBLE, I32, I64, I8, PTR, VOID};
 
 use super::ctor_arity::constructor_layout_params;
 use super::helpers::{sanitize_member, scoped_static_method_name};
@@ -25,13 +25,21 @@ use super::spec_function_length;
 /// runtime registry; no SSA value flows between ops — so splitting at op
 /// boundaries is safe and order-preserving (chunks run in sequence, ops in order
 /// within a chunk).
+#[derive(Default)]
+struct InitChunks {
+    ops: usize,
+    current: Option<usize>,
+    names: Vec<String>,
+}
+
 struct InitChunker<'a> {
     llmod: &'a mut LlModule,
     base_name: String,
     ops_per_chunk: usize,
-    ops_in_current: usize,
-    cur_idx: usize,
-    chunk_names: Vec<String>,
+    // Literal infrastructure may run before cyclic dependencies. Declared
+    // class metadata retains its existing module-body initialization boundary.
+    literals: bool,
+    phases: [InitChunks; 2],
 }
 
 impl<'a> InitChunker<'a> {
@@ -40,65 +48,64 @@ impl<'a> InitChunker<'a> {
             llmod,
             base_name,
             ops_per_chunk: ops_per_chunk.max(1),
-            // Force a fresh chunk on the first op.
-            ops_in_current: usize::MAX,
-            cur_idx: 0,
-            chunk_names: Vec::new(),
+            literals: true,
+            phases: Default::default(),
         }
     }
 
-    /// Start a fresh chunk function if the current one is full. Call ONCE at the
-    /// top of each loop iteration (one independent init op), before
-    /// [`current_block`]. Closes the previous chunk with `ret void`.
-    /// The module, for a definition an init op registers (the chunk being
-    /// filled is addressed by index, so appending functions is fine).
     fn module(&mut self) -> &mut LlModule {
         self.llmod
     }
 
     fn roll_if_full(&mut self) {
-        if self.ops_in_current >= self.ops_per_chunk {
-            if !self.chunk_names.is_empty() {
+        let phase = usize::from(!self.literals);
+        let state = &mut self.phases[phase];
+        if state.current.is_none() || state.ops >= self.ops_per_chunk {
+            if let Some(current) = state.current {
                 self.llmod
-                    .function_mut(self.cur_idx)
+                    .function_mut(current)
                     .unwrap()
                     .block_mut(0)
                     .unwrap()
                     .ret_void();
             }
-            let name = format!("{}_chunk{}", self.base_name, self.chunk_names.len());
+            let name = format!(
+                "{}_{}_chunk{}",
+                self.base_name,
+                if self.literals { "literal" } else { "class" },
+                state.names.len()
+            );
             self.llmod
                 .define_function(&name, VOID, vec![])
                 .create_block("entry");
-            self.cur_idx = self.llmod.function_count() - 1;
-            self.chunk_names.push(name);
-            self.ops_in_current = 0;
+            state.current = Some(self.llmod.function_count() - 1);
+            state.names.push(name);
+            state.ops = 0;
         }
     }
 
-    /// The current chunk's entry block, for emitting one op's instructions.
-    /// Counts as one op (a logical init step may emit several instructions onto
-    /// it). Always preceded by [`roll_if_full`].
     fn current_block(&mut self) -> &mut LlBlock {
-        self.ops_in_current += 1;
+        let state = &mut self.phases[usize::from(!self.literals)];
+        state.ops += 1;
         self.llmod
-            .function_mut(self.cur_idx)
+            .function_mut(state.current.unwrap())
             .unwrap()
             .block_mut(0)
             .unwrap()
     }
 
-    /// Close the final chunk and return all chunk function names, in order.
-    fn finish(self) -> Vec<String> {
-        if !self.chunk_names.is_empty() {
-            self.llmod
-                .function_mut(self.cur_idx)
-                .unwrap()
-                .block_mut(0)
-                .unwrap()
-                .ret_void();
-        }
-        self.chunk_names
+    fn finish(self) -> [Vec<String>; 2] {
+        self.phases.map(|state| {
+            if let Some(current) = state.current {
+                self.llmod
+                    .function_mut(current)
+                    .unwrap()
+                    .block_mut(0)
+                    .unwrap()
+                    .ret_void();
+            }
+            state.names
+        })
     }
 }
 
@@ -120,6 +127,7 @@ pub(super) fn emit_string_pool(
     llmod: &mut LlModule,
     strings: &StringPool,
     module_prefix: &str,
+    agent_strings_tls: bool,
     // #9188 follow-up: which registration spelling the name/source loops below
     // may use. `_static` hands the registry the `@.str.N` constant itself
     // instead of a slice to copy, which is sound only while this image stays
@@ -223,6 +231,9 @@ pub(super) fn emit_string_pool(
     // `js_register_function_source_static` call in `__perry_init_strings_<prefix>`
     // so `fn.toString()` can reconstruct the source.
     user_fn_source: &[(String, String, bool)],
+    // The templates the module evaluates per evaluation (`ClassExprFresh`):
+    // their static methods' entries run in the function object's home.
+    fresh_class_templates: &std::collections::HashSet<String>,
 ) {
     for entry in strings.iter() {
         // .rodata bytes — `[N+1 x i8]` because we include the null terminator.
@@ -244,9 +255,13 @@ pub(super) fn emit_string_pool(
                 entry.bytes_global
             ));
         }
-        // #10399: the string pool is populated by each module's init, which
-        // runs once per thread when the program has a Worker.
-        llmod.add_internal_module_state_global(&entry.handle_global, DOUBLE, "0.0");
+        // Worker module init and perry/thread's explicit string bootstrap each
+        // populate this slot in the allocating agent's own arena.
+        if agent_strings_tls {
+            llmod.add_internal_thread_local_global(&entry.handle_global, DOUBLE, "0.0");
+        } else {
+            llmod.add_internal_global(&entry.handle_global, DOUBLE, "0.0");
+        }
     }
 
     // Per-class packed-keys constants (rodata) — referenced by the
@@ -281,8 +296,8 @@ pub(super) fn emit_string_pool(
     // Pre-allocate string constants for function-name registration. Same
     // borrow-ordering constraint as the class-name constants below: we
     // must mint the rodata globals BEFORE `init_fn` claims `&mut llmod`.
-    // Each entry becomes one `js_register_function_name_static(<sym>, <str>,
-    // <len>)` call inside the init function. See #1202.
+    // Each entry becomes one relative record in the module's batched function
+    // name descriptor table. See #1202 and #11927.
     let mut user_fn_name_constants: Vec<(String, String, usize)> = Vec::new();
     // Deduplicated by CONTENT (#9486): the same display name is now registered
     // against several symbols — a top-level function's wrapper and its body,
@@ -447,7 +462,7 @@ pub(super) fn emit_string_pool(
         .unwrap_or(4000);
     let mut chunker = InitChunker::new(
         llmod,
-        format!("__perry_init_strings_{}", module_prefix),
+        format!("__perry_agent_strings_{}", module_prefix),
         ops_per_chunk,
     );
 
@@ -496,6 +511,39 @@ pub(super) fn emit_string_pool(
         blk.call_void("js_gc_register_global_root", &[(I64, &addr_i64)]);
     }
 
+    let [string_chunks, no_class_chunks] = chunker.finish();
+    debug_assert!(no_class_chunks.is_empty());
+    let agent_strings_name = format!("__perry_prepare_agent_strings_{}", module_prefix);
+    let ready = format!("__perry_agent_strings_ready_{}", module_prefix);
+    if agent_strings_tls {
+        llmod.add_internal_thread_local_global(&ready, I8, "0");
+    } else {
+        llmod.add_internal_global(&ready, I8, "0");
+    }
+    let prepare_strings = llmod.define_function(&agent_strings_name, VOID, vec![]);
+    prepare_strings.create_block("entry");
+    prepare_strings.create_block("prepare");
+    prepare_strings.create_block("done");
+    let prepare_label = prepare_strings.block_mut(1).unwrap().label.clone();
+    let done_label = prepare_strings.block_mut(2).unwrap().label.clone();
+    let blk = prepare_strings.block_mut(0).unwrap();
+    let prepared = blk.load(I8, &format!("@{}", ready));
+    let prepared = blk.icmp_ne(I8, &prepared, "0");
+    blk.cond_br(&prepared, &done_label, &prepare_label);
+    let blk = prepare_strings.block_mut(1).unwrap();
+    for name in &string_chunks {
+        blk.call_void(name, &[]);
+    }
+    blk.store(I8, "1", &format!("@{}", ready));
+    blk.br(&done_label);
+    prepare_strings.block_mut(2).unwrap().ret_void();
+
+    let mut chunker = InitChunker::new(
+        llmod,
+        format!("__perry_init_strings_{}", module_prefix),
+        ops_per_chunk,
+    );
+
     // An image that can be UNLOADED cannot lend its rodata to a registry that
     // never drops entries. Perry compiles TypeScript to a dylib plugin as well
     // as an executable, and `perry_plugin_unload` ends in `dlclose` — after
@@ -510,11 +558,6 @@ pub(super) fn emit_string_pool(
     } else {
         "js_register_function_name"
     };
-    let register_source_fn = if strings_outlive_registry {
-        "js_register_function_source_static"
-    } else {
-        "js_register_function_source"
-    };
     let register_class_source_fn = if strings_outlive_registry {
         "js_register_class_source_static"
     } else {
@@ -527,44 +570,81 @@ pub(super) fn emit_string_pool(
     // wrapper's compiled address (`__perry_wrap_<name>`), which is
     // what `js_closure_alloc_singleton` stamps into ClosureHeader.
     // See #1202.
-    for (wrapper_sym, name_const, name_len) in &user_fn_name_constants {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let wrapper_ref = format!("@{}", wrapper_sym);
-        let name_ref = format!("@{}", name_const);
-        let len_str = name_len.to_string();
-        // `_static` when this image outlives the registry, else the copying
-        // spelling: `@.str.N` is a `private unnamed_addr constant` in this
-        // module's rodata, which satisfies the process-lifetime contract only
-        // for an image nothing unloads (#9188).
-        blk.call_void(
-            register_name_fn,
-            &[(PTR, &wrapper_ref), (PTR, &name_ref), (I32, &len_str)],
+    if strings_outlive_registry {
+        let name_table = super::function_metadata_descriptors::emit_name_table(
+            chunker.module(),
+            module_prefix,
+            user_fn_name_constants
+                .iter()
+                .map(|(wrapper, name, len)| (wrapper.as_str(), name.as_str(), *len)),
         );
+        if let Some(table) = name_table {
+            chunker.roll_if_full();
+            chunker.current_block().call_void(
+                "js_register_function_names_static",
+                &[
+                    (PTR, &format!("@{}", table.global)),
+                    (I32, &table.len.to_string()),
+                ],
+            );
+        }
+    } else {
+        for (wrapper_sym, name_const, name_len) in &user_fn_name_constants {
+            chunker.roll_if_full();
+            chunker.current_block().call_void(
+                register_name_fn,
+                &[
+                    (PTR, &format!("@{wrapper_sym}")),
+                    (PTR, &format!("@{name_const}")),
+                    (I32, &name_len.to_string()),
+                ],
+            );
+        }
     }
 
     // #4101: register each function's retained source text against the same
     // wrapper/closure address `js_closure_alloc_singleton` stamps into the
     // ClosureHeader, so `fn.toString()` resolves the source by func_ptr.
-    for (wrapper_sym, source, is_non_strict_ordinary) in &user_fn_source_constants {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        let wrapper_ref = format!("@{}", wrapper_sym);
-        let source_ref = source.pointer(blk);
-        let len_str = source.byte_len.to_string();
-        // Same spelling choice as the names above (#9188), and the bigger half
-        // of the win: source text is registered for every function the bundle
-        // CONTAINS, to serve a `Function.prototype.toString()` that most
-        // programs never call.
-        blk.call_void(
-            register_source_fn,
-            &[
-                (PTR, &wrapper_ref),
-                (PTR, &source_ref),
-                (I32, &len_str),
-                (I32, if *is_non_strict_ordinary { "1" } else { "0" }),
-            ],
+    if strings_outlive_registry {
+        let source_table = super::function_metadata_descriptors::emit_source_table(
+            chunker.module(),
+            module_prefix,
+            user_fn_source_constants
+                .iter()
+                .map(|(wrapper, source, is_non_strict_ordinary)| {
+                    (
+                        wrapper.as_str(),
+                        source.constant_pointer(),
+                        source.byte_len,
+                        *is_non_strict_ordinary,
+                    )
+                }),
         );
+        if let Some(table) = source_table {
+            chunker.roll_if_full();
+            chunker.current_block().call_void(
+                "js_register_function_sources_static",
+                &[
+                    (PTR, &format!("@{}", table.global)),
+                    (I32, &table.len.to_string()),
+                ],
+            );
+        }
+    } else {
+        for (wrapper_sym, source, is_non_strict_ordinary) in &user_fn_source_constants {
+            chunker.roll_if_full();
+            let blk = chunker.current_block();
+            let source_ref = source.pointer(blk);
+            blk.call_void(
+                "js_register_function_source",
+                &[
+                    (PTR, &format!("@{wrapper_sym}")),
+                    (PTR, &source_ref),
+                    (I32, &source.byte_len.to_string()),
+                    (I32, if *is_non_strict_ordinary { "1" } else { "0" }),
+                ],
+            );
+        }
     }
 
     // #11420: every input to a class's birth [[Prototype]] identity
@@ -586,6 +666,7 @@ pub(super) fn emit_string_pool(
     // the user wrote. This is a distinct edge from the parent one on purpose:
     // `CLASS_REGISTRY`'s chain also resolves `super()`, static-method lookup
     // and vtable dispatch, so it must keep pointing at the real base.
+    chunker.literals = false;
     let mut origin_pairs: Vec<(u32, u32)> = Vec::new();
     for (name, &cid) in class_ids.iter() {
         let Some(class) = classes.get(name) else {
@@ -626,6 +707,7 @@ pub(super) fn emit_string_pool(
         }
         anon_shape_ids.sort_unstable();
         anon_shape_ids.dedup();
+        chunker.literals = true;
         for cid in anon_shape_ids {
             chunker.roll_if_full();
             let blk = chunker.current_block();
@@ -641,16 +723,14 @@ pub(super) fn emit_string_pool(
     // module init; every `new ClassName()` call from then on does a
     // single global load + inline allocator call (no SHAPE_CACHE
     // lookup, no js_build_class_keys_array overhead).
+    let literal_classes: std::collections::HashSet<_> = classes
+        .values()
+        .filter(|class| class.name.starts_with("__AnonShape_"))
+        .filter_map(|class| class_ids.get(&class.name).copied())
+        .collect();
     for (idx, (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words)) in
         class_keys_init_data.iter().enumerate()
     {
-        chunker.roll_if_full();
-        let blk = chunker.current_block();
-        // The birth's class id, typed-ness and live bound come from the ONE
-        // derivation the driver's pre-pass also uses to name this birth's
-        // content (`static_shape_ids::class_birth`); `requested` is that
-        // content's static id — the definer's for a structural stub of the
-        // definer's facts — (0 = none).
         let birth = super::static_shape_ids::class_birth(
             module_prefix,
             &class_keys_init_data[idx],
@@ -658,11 +738,35 @@ pub(super) fn emit_string_pool(
             class_birth_reps,
             class_ids,
         );
+        // Only synthetic ordinary-object layouts are safe before dependency
+        // bodies. User-class keys, prototypes and methods stay in the late phase.
+        chunker.literals = literal_classes.contains(&birth.class_id);
+        chunker.roll_if_full();
+        let blk = chunker.current_block();
+        // The birth's class id, typed-ness and live bound come from the ONE
+        // derivation the driver's pre-pass also uses to name this birth's
+        // content (`static_shape_ids::class_birth`); `requested` is that
+        // content's static id — the definer's for a structural stub of the
+        // definer's facts — (0 = none).
         let class_id = birth.class_id;
         let requested = super::static_shape_ids::requested_shape_id_for_keys_global(global_name)
             .unwrap_or(0)
             .to_string();
         let cid_str = class_id.to_string();
+        // A literal birth names the plain prototype (`BirthProto::Literal`), so
+        // its shape mints pass class id 0, exactly as the startup literal seed
+        // (`js_shape_seed_plain`) does. Passing the anonymous class's own id was
+        // equivalent only while that id had no vtable class: per-module class
+        // ids collide, so an `__AnonShape_*` id can also be another module's
+        // DECLARED class, and the mint then derived that class's prototype --
+        // different facts under the one static id the driver assigned to this
+        // content, which the mint refuses with an abort. The keys array still
+        // carries the real id (`js_build_class_keys_array` above).
+        let mint_cid_str = if birth.literal {
+            "0".to_string()
+        } else {
+            cid_str.clone()
+        };
         let fc_str = field_count.to_string();
         let packed_ref = if packed.is_empty() {
             "null".to_string()
@@ -732,7 +836,7 @@ pub(super) fn emit_string_pool(
                     (I64, &arr),
                     (I32, &fc_str),
                     (I32, &live.to_string()),
-                    (I32, &cid_str),
+                    (I32, &mint_cid_str),
                     (I32, &requested),
                     (I64, &rep_str),
                 ],
@@ -751,7 +855,7 @@ pub(super) fn emit_string_pool(
                         (I64, &arr),
                         (I32, &fc_str),
                         (I32, &birth_live.to_string()),
-                        (I32, &cid_str),
+                        (I32, &mint_cid_str),
                         (I64, &rep_str),
                     ],
                 ),
@@ -761,7 +865,7 @@ pub(super) fn emit_string_pool(
                     &[
                         (I64, &arr),
                         (I32, &fc_str),
-                        (I32, &cid_str),
+                        (I32, &mint_cid_str),
                         (I64, &rep_str),
                     ],
                 ),
@@ -809,6 +913,7 @@ pub(super) fn emit_string_pool(
     // where `Square extends Rectangle extends Shape`) terminate
     // prematurely. We emit one call per inheriting class, sorted by
     // class id for deterministic ordering.
+    chunker.literals = false;
     let mut parent_pairs: Vec<(u32, u32)> = Vec::new();
     for (name, &cid) in class_ids.iter() {
         if let Some(class) = classes.get(name) {
@@ -1005,6 +1110,7 @@ pub(super) fn emit_string_pool(
                     .iter()
                     .any(|p| p.is_rest && p.arguments_object.is_none()),
                 has_synth_args: f.params.iter().any(|p| p.arguments_object.is_some()),
+                home: fresh_class_templates.contains(class_name),
             });
         }
         // #1787: the standalone constructor `<prefix>__<class>_constructor`
@@ -1082,7 +1188,34 @@ pub(super) fn emit_string_pool(
             .unwrap_or(0);
         ctor_triples.push((cid, ctor_symbol, ctor_params, ctor_sig_caps));
     }
+    let fresh_cids: std::collections::HashSet<u32> = fresh_class_templates
+        .iter()
+        .filter_map(|name| class_ids.get(name).copied())
+        .collect();
+    // Each per-evaluation template's own record, its template cell
+    // (`fresh_class_templates::template_cell_global`). Every class object of
+    // the template names it (its first own key), so the runtime paths that
+    // start from one find it there.
+    let mut fresh_cells: Vec<(u32, usize)> = fresh_class_templates
+        .iter()
+        .filter_map(|name| {
+            let cid = *class_ids.get(name)?;
+            let words =
+                super::fresh_class_templates::template_cell_words(classes.get(name).copied());
+            Some((cid, words))
+        })
+        .collect();
+    fresh_cells.sort_unstable();
+    fresh_cells.dedup_by_key(|cell| cell.0);
+    for (cid, words) in fresh_cells {
+        let global = super::fresh_class_templates::template_cell_global(cid);
+        chunker.module().add_raw_global(format!(
+            "@{global} = internal global [{words} x i64] [i64 {words}{}]",
+            ", i64 0".repeat(words - 1)
+        ));
+    }
     method_triples.sort_unstable();
+    let mut method_entries: Vec<StaticMethodEntry> = Vec::new();
     for (
         cid,
         method_name,
@@ -1099,12 +1232,35 @@ pub(super) fn emit_string_pool(
         // The pre-intern pass before `emit_string_pool` ensured every
         // method name has a string pool entry; look it up here without
         // mutating the pool.
-        let entry = match strings.iter().find(|e| e.value == method_name) {
+        let entry = match strings.lookup(&method_name) {
             Some(e) => e,
             None => continue,
         };
         let bytes_global = format!("@{}", entry.bytes_global);
         let len_str = entry.byte_len.to_string();
+        // Every class prototype holds a function object of each method's own
+        // body, running this closure-convention entry: its JsFunctionInfo is the
+        // ConstFn fact the prototype's shape records for the method's slot. A
+        // per-evaluation template's evaluations each hold their own object, at
+        // home in that evaluation (`class_method_entry_enter_home`); a declared
+        // class's one object has no home and runs in its receiver's evaluation,
+        // exactly as a vtable call does.
+        // The entries are defined after every init chunk (below), so the
+        // init code module init runs stays contiguous: an entry runs only
+        // when its method value is called.
+        let home = fresh_cids.contains(&cid);
+        let entry_name = format!("{}__eclo", llvm_name);
+        let entry_ref = format!("@{}", entry_name);
+        method_entries.push(StaticMethodEntry {
+            cid,
+            llvm_name: llvm_name.clone(),
+            param_count,
+            spec_length,
+            has_user_rest: has_rest,
+            has_synth_args,
+            home,
+        });
+        let entry_info_ref = blk.fn_info_ref(&entry_name);
         // Cast the method function pointer to i64 via ptrtoint so the
         // runtime can store it as a `usize` in the VTABLE_REGISTRY
         // entry. The `inttoptr` round-trip in `call_vtable_method`
@@ -1112,10 +1268,16 @@ pub(super) fn emit_string_pool(
         let func_ref = format!("@{}", llvm_name);
         let func_i64 = blk.ptrtoint(&func_ref, I64);
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
+        let entry_i64 = blk.ptrtoint(&entry_info_ref, I64);
         let has_synth_args_str = if has_synth_args { "1" } else { "0" };
         let has_rest_str = if has_rest { "1" } else { "0" };
+        // One registration per method carries its entry. A declared class's
+        // method object names its entry's code when it is first built, so the
+        // init pays nothing more per method; each evaluation of a template
+        // builds its own objects from the template, so the name is
+        // registered here.
         blk.call_void(
-            "js_register_class_method",
+            "js_register_class_method_with_entry",
             &[
                 (I64, &cid.to_string()),
                 (I64, &bytes_i64),
@@ -1124,8 +1286,15 @@ pub(super) fn emit_string_pool(
                 (I64, &param_count.to_string()),
                 (I64, has_synth_args_str),
                 (I64, has_rest_str),
+                (I64, &entry_i64),
             ],
         );
+        if home {
+            blk.call_void(
+                register_name_fn,
+                &[(PTR, &entry_ref), (PTR, &bytes_global), (I32, &len_str)],
+            );
+        }
         blk.call_void(
             "js_register_class_string_member_order",
             &[
@@ -1166,7 +1335,7 @@ pub(super) fn emit_string_pool(
     {
         chunker.roll_if_full();
         let blk = chunker.current_block();
-        let entry = match strings.iter().find(|e| e.value == method_name) {
+        let entry = match strings.lookup(&method_name) {
             Some(e) => e,
             None => continue,
         };
@@ -1218,6 +1387,7 @@ pub(super) fn emit_string_pool(
                 spec_length,
                 has_user_rest,
                 has_synth_args,
+                home: fresh_cids.contains(&cid),
             },
         );
         let blk = chunker.current_block();
@@ -1447,7 +1617,7 @@ pub(super) fn emit_string_pool(
     for (cid, prop_name, llvm_name, is_static, definition_order) in getter_pairs {
         chunker.roll_if_full();
         let blk = chunker.current_block();
-        let entry = match strings.iter().find(|e| e.value == prop_name) {
+        let entry = match strings.lookup(&prop_name) {
             Some(e) => e,
             None => continue,
         };
@@ -1535,7 +1705,7 @@ pub(super) fn emit_string_pool(
     for (cid, prop_name, llvm_name, is_static, spec_length, definition_order) in setter_pairs {
         chunker.roll_if_full();
         let blk = chunker.current_block();
-        let entry = match strings.iter().find(|e| e.value == prop_name) {
+        let entry = match strings.lookup(&prop_name) {
             Some(e) => e,
             None => continue,
         };
@@ -1574,7 +1744,150 @@ pub(super) fn emit_string_pool(
         );
     }
 
-    let chunk_names = chunker.finish();
+    // Final class records follow all class/prototype registrations. They
+    // coexist with the ordinary allocation ids and never feed header images.
+    if super::static_constfn::has_final_shapes() {
+        let defined_classes: HashMap<_, _> = module_classes
+            .iter()
+            .filter_map(|class| class_ids.get(&class.name).map(|cid| (*cid, class)))
+            .collect();
+        for entry in class_keys_init_data {
+            let birth = super::static_shape_ids::class_birth(
+                module_prefix,
+                entry,
+                class_header_image_inits,
+                class_birth_reps,
+                class_ids,
+            );
+            let Some(ordinary) = birth.shape else {
+                continue;
+            };
+            let Some(class) = defined_classes.get(&birth.class_id).copied() else {
+                continue;
+            };
+            let Ok(shape) = super::static_constfn_class::class_final(
+                module_prefix,
+                class,
+                classes,
+                ordinary.rep,
+                birth.class_id,
+            ) else {
+                continue;
+            };
+            if shape.keys != ordinary.keys
+                || shape.live != ordinary.live
+                || shape.proto != ordinary.proto
+            {
+                continue;
+            }
+            let Some(id) = super::static_shape_ids::static_final_shape_id(&shape) else {
+                continue;
+            };
+            chunker.roll_if_full();
+            let blk = chunker.current_block();
+            // Registration calls above can collect; load the canonical keys
+            // afresh from their registered root immediately before the mint.
+            let keys = blk.load(I64, &format!("@{}", entry.0));
+            blk.call(
+                I32,
+                "js_object_final_shape_id_for_class_keys_static_constfn",
+                &[
+                    (I64, &keys),
+                    (I32, &shape.key_count.to_string()),
+                    (I32, &shape.live.to_string()),
+                    (I32, &birth.class_id.to_string()),
+                    (I32, &id.to_string()),
+                    (I64, &shape.rep.to_string()),
+                    (
+                        PTR,
+                        &format!(
+                            "@{}",
+                            super::static_constfn::entries_symbol(module_prefix, id)
+                        ),
+                    ),
+                    (I32, &shape.constfn.len().to_string()),
+                ],
+            );
+        }
+    }
+
+    // Completed private contents (#11791, `static_private_class`): minted by
+    // facts under their static ids after every class/prototype registration,
+    // before any instance can reach them.
+    if super::static_shape_ids::has_static_final_shapes() {
+        let defined_classes: HashMap<_, _> = module_classes
+            .iter()
+            .filter_map(|class| class_ids.get(&class.name).map(|cid| (*cid, class)))
+            .collect();
+        for entry in class_keys_init_data {
+            let birth = super::static_shape_ids::class_birth(
+                module_prefix,
+                entry,
+                class_header_image_inits,
+                class_birth_reps,
+                class_ids,
+            );
+            let Some(ordinary) = birth.shape else {
+                continue;
+            };
+            let Some(class) = defined_classes.get(&birth.class_id).copied() else {
+                continue;
+            };
+            let Some(shape) =
+                super::static_private_class::private_final(class, classes, &ordinary, &|name| {
+                    super::static_private_class::element_class_id_in(classes, class_ids, name)
+                })
+            else {
+                continue;
+            };
+            let Some(id) = super::static_shape_ids::static_final_shape_id(&shape) else {
+                continue;
+            };
+            super::static_private_class::emit_final_constants(
+                chunker.module(),
+                module_prefix,
+                &shape,
+                id,
+            );
+            let symbol = super::static_private_class::final_symbol(module_prefix, id);
+            let private_ptr = if shape.private.is_empty() {
+                "null".to_string()
+            } else {
+                format!("@{symbol}_keys")
+            };
+            let brands_ptr = if shape.brands.is_empty() {
+                "null".to_string()
+            } else {
+                format!("@{symbol}_brands")
+            };
+            chunker.roll_if_full();
+            let blk = chunker.current_block();
+            // Registration calls above can collect; load the canonical keys
+            // afresh from their registered root immediately before the mint.
+            let keys = blk.load(I64, &format!("@{}", entry.0));
+            blk.call(
+                I32,
+                "js_object_final_shape_id_for_class_keys_static_private",
+                &[
+                    (I64, &keys),
+                    (I32, &shape.key_count.to_string()),
+                    (I32, &shape.live.to_string()),
+                    (I32, &birth.class_id.to_string()),
+                    (I32, &id.to_string()),
+                    (I64, &shape.rep.to_string()),
+                    (PTR, &private_ptr),
+                    (I32, &shape.private.len().to_string()),
+                    (PTR, &brands_ptr),
+                    (I32, &shape.brands.len().to_string()),
+                ],
+            );
+        }
+    }
+
+    for e in &method_entries {
+        emit_class_method_entry(&mut chunker, e);
+    }
+    let [literal_chunks, class_chunks] = chunker.finish();
     record_fn_info_facts(
         llmod,
         module_prefix,
@@ -1598,11 +1911,42 @@ pub(super) fn emit_string_pool(
             user_fn_wrapper_strict,
         },
     );
+    // A cyclic importer can call a hoisted factory before this module body.
+    // Prepare literal strings/function info/ordinary-object layouts first,
+    // once per arena. Workers can enter __init_body directly, so the body
+    // also reaches this guarded preparation without allocating a second pool.
+    let prepare_name = format!("__perry_prepare_literals_{}", module_prefix);
+    let prepared = format!("__perry_literals_ready_{}", module_prefix);
+    if super::program_has_worker() {
+        llmod.add_internal_thread_local_global(&prepared, I8, "0");
+    } else {
+        llmod.add_internal_global(&prepared, I8, "0");
+    }
+    let prepare_fn = llmod.define_function(&prepare_name, VOID, vec![]);
+    prepare_fn.create_block("entry");
+    prepare_fn.create_block("prepare");
+    prepare_fn.create_block("done");
+    let prepare_label = prepare_fn.block_mut(1).unwrap().label.clone();
+    let done_label = prepare_fn.block_mut(2).unwrap().label.clone();
+    let blk = prepare_fn.block_mut(0).unwrap();
+    let ready = blk.load(I8, &format!("@{}", prepared));
+    let ready = blk.icmp_ne(I8, &ready, "0");
+    blk.cond_br(&ready, &done_label, &prepare_label);
+    let blk = prepare_fn.block_mut(1).unwrap();
+    blk.call_void(&agent_strings_name, &[]);
+    for cname in &literal_chunks {
+        blk.call_void(cname, &[]);
+    }
+    blk.store(I8, "1", &format!("@{}", prepared));
+    blk.br(&done_label);
+    prepare_fn.block_mut(2).unwrap().ret_void();
+
     let init_name = format!("__perry_init_strings_{}", module_prefix);
     let init_fn = llmod.define_function(&init_name, VOID, vec![]);
-    let _ = init_fn.create_block("entry");
+    init_fn.create_block("entry");
     let blk = init_fn.block_mut(0).unwrap();
-    for cname in &chunk_names {
+    blk.call_void(&prepare_name, &[]);
+    for cname in &class_chunks {
         blk.call_void(cname, &[]);
     }
     blk.ret_void();
@@ -1733,71 +2077,6 @@ fn record_fn_info_facts(llmod: &LlModule, module_prefix: &str, src: FnInfoFactSo
 #[path = "class_name_registration_tests.rs"]
 mod class_name_registration_tests;
 
-/// A ClassBody static method's closure-convention entry (`<body>__clo`).
-struct StaticMethodEntry {
-    cid: u32,
-    llvm_name: String,
-    param_count: u32,
-    spec_length: u32,
-    has_user_rest: bool,
-    has_synth_args: bool,
-}
-
-/// Define `<body>__clo(callee, this, args...)`, the code of a ClassBody static
-/// method's own function object: the call's `this` (the JS body ABI's receiver
-/// parameter) becomes the body's `this` (enter), the body runs, leave drops
-/// what enter set up. Arity, rest bundling, length and strictness are facts of
-/// the entry's own `JsFunctionInfo`, as for any function body (the caller
-/// registers the name against the code). Returns `(@<body>__clo,
-/// @<body>__clo$info)`: the code and the info a function object allocates
-/// from.
-fn emit_static_method_entry(
-    chunker: &mut InitChunker<'_>,
-    e: &StaticMethodEntry,
-) -> (String, String) {
-    use crate::fn_info::RestKind;
-    let entry_name = format!("{}__clo", e.llvm_name);
-    {
-        let n = e.param_count as usize;
-        let mut params: Vec<(crate::types::LlvmType, String)> =
-            vec![(I64, "%callee".to_string()), (I64, "%this".to_string())];
-        params.extend((0..n).map(|i| (DOUBLE, format!("%a{}", i))));
-        let f = chunker
-            .module()
-            .define_function(&entry_name, DOUBLE, params);
-        let _ = f.create_block("entry");
-        let b = f.block_mut(0).unwrap();
-        b.call_void(
-            "js_static_method_entry_enter",
-            &[(I32, &e.cid.to_string()), (I64, "%this")],
-        );
-        let arg_names: Vec<String> = (0..n).map(|i| format!("%a{}", i)).collect();
-        let call_args: Vec<(crate::types::LlvmType, &str)> =
-            arg_names.iter().map(|a| (DOUBLE, a.as_str())).collect();
-        let r = b.call(DOUBLE, &e.llvm_name, &call_args);
-        b.call_void("js_static_method_entry_leave", &[]);
-        b.ret(DOUBLE, &r);
-    }
-    let (rest, rest_kind) = match (e.has_user_rest, e.has_synth_args) {
-        (true, true) => (
-            Some(e.param_count.saturating_sub(2)),
-            Some(RestKind::UserAndArguments),
-        ),
-        (true, false) => (Some(e.param_count.saturating_sub(1)), Some(RestKind::User)),
-        (false, true) => (
-            Some(e.param_count.saturating_sub(1)),
-            Some(RestKind::SyntheticArguments),
-        ),
-        (false, false) => (None, None),
-    };
-    chunker.module().note_fn_info(&entry_name, |f| {
-        match (rest, rest_kind) {
-            (Some(fixed), Some(kind)) => f.set_rest(fixed as usize, kind),
-            _ => f.set_declared(e.param_count),
-        }
-        f.set_length(e.spec_length);
-        f.set_strict();
-    });
-    let info_ref = chunker.current_block().fn_info_ref(&entry_name);
-    (format!("@{}", entry_name), info_ref)
-}
+#[path = "method_entries.rs"]
+mod method_entries;
+use method_entries::{emit_class_method_entry, emit_static_method_entry, StaticMethodEntry};

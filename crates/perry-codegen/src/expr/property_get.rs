@@ -44,6 +44,7 @@ use super::property_get_names::{
     is_net_native_method_value, is_url_pattern_data_property,
 };
 
+mod accessor_arm;
 pub(crate) mod generic_dispatch;
 pub(crate) mod globalget;
 mod helpers;
@@ -75,6 +76,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     if let Some(v) = crate::stmt::region_loop::try_lower_bare_get(ctx, expr)? {
         return Ok(v);
     }
+    // #11791: an instance private field read is a shape compare and a slot load.
+    if let Expr::PropertyGet {
+        object, property, ..
+    } = expr
+    {
+        if let Some(site) = super::private_field_site::private_field_site(ctx, object, property, 0)
+        {
+            return super::private_field_site::lower_get(ctx, site, property);
+        }
+    }
     // #7219: reading `.buffer` on a tracked typed-array view HANDS OUT ITS
     // STORAGE, so the local's inline-storage proof stops holding from here on.
     //
@@ -92,8 +103,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // the buffer, and neither direction aliased: the repro summed 0 instead of
     // 10, and writing through `bytes` was equally invisible to `words`.
     //
-    // The runtime side already guards its own inline reader with
-    // `PERRY_TA_VIEW_GUARD`, which `register_view_meta` bumps. These tiers are
+    // The runtime side already guards its own inline reader with the typed
+    // array's storage byte, which `register_view_meta` sets. These tiers are
     // the compile-time proof that skips that check entirely, so the hazard has
     // to be recorded where the alias is created rather than where it is used.
     // `MutableAlias` is exactly what this is.
@@ -556,17 +567,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // An owning `TypedArrayHeader` also stores `length: u32` at payload
             // offset 0. The slow path used to resolve it by NAME — heap-copying
             // "length" and parsing it as a numeric index on every read. The
-            // header is authoritative while no live view exists
-            // (`PERRY_TA_VIEW_GUARD`) and no typed array has an own named
-            // property that could shadow the prototype getter.
+            // header is authoritative for a typed array whose own storage byte
+            // says inline (#10516: header byte 10, `TA_STORAGE_INLINE`) while
+            // no typed array has an own named property that could shadow the
+            // prototype getter.
             ctx.current_block = typed_array_idx;
             let is_typed_array = ctx.block().icmp_eq(I8, &gc_type, "11"); // GC_TYPE_TYPED_ARRAY
             let ta_header_ok = ctx.block().and(I1, &is_typed_array, &not_forwarded);
-            let view_guard = ctx.block().load(I64, "@PERRY_TA_VIEW_GUARD");
-            let no_views = ctx.block().icmp_eq(I64, &view_guard, "0");
+            let storage_addr = ctx.block().add(I64, &recv_handle, "10");
+            let storage_ptr = ctx.block().inttoptr(I64, &storage_addr);
+            let storage = ctx.block().load(I8, &storage_ptr);
+            let inline_storage = ctx.block().icmp_eq(I8, &storage, "0");
             let own_props = ctx.block().load(I8, "@PERRY_TA_OWN_PROPS_PRESENT");
             let no_own_props = ctx.block().icmp_eq(I8, &own_props, "0");
-            let ta_ok = ctx.block().and(I1, &ta_header_ok, &no_views);
+            let ta_ok = ctx.block().and(I1, &ta_header_ok, &inline_storage);
             let ta_ok = ctx.block().and(I1, &ta_ok, &no_own_props);
             ctx.block().cond_br(&ta_ok, &fast_label, &slow_label);
 
@@ -1491,24 +1505,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.class_ids.get(&class_name),
                         ctx.class_keys_globals.get(&class_name).cloned(),
                     ) {
-                        // #5093 loop versioning: inside the fast clone of a
-                        // class-field versioned loop, a tracked field read on
-                        // the proven receiver lowers to a bare slot load on
-                        // the preheader-cached object pointer — no shape
-                        // check, no guard call, no fallback (the preheader
-                        // proved the shape once and the call-free clone keeps
-                        // it true; see stmt/loops.rs).
-                        let loop_fact_ptr = match object.as_ref() {
-                            Expr::LocalGet(recv_id) => crate::expr::class_field_loop_fact_lookup(
-                                &ctx.class_field_loop_facts,
-                                *recv_id,
-                                &class_name,
-                                property,
-                            )
-                            .filter(|(_, loop_idx)| *loop_idx == field_index)
-                            .map(|(fact, _)| fact.obj_ptr.clone()),
-                            _ => None,
-                        };
                         // Representation-selection Phase 3b: shape-proven
                         // Ptr<Shape> local (collectors/ptr_shape.rs). The
                         // guard diamond is statically proven away — emit the
@@ -1587,54 +1583,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                                     format!("field_index={}", field_idx_str),
                                     "receiver_proof=ptr_shape_local".to_string(),
                                     format!("numeric_proven={}", numeric),
-                                ],
-                            );
-                            return Ok(val);
-                        }
-                        if let Some(obj_ptr) = loop_fact_ptr {
-                            let field_idx_str = field_index.to_string();
-                            let header_skip =
-                                crate::target_layout::object_header_size_bytes(ctx.target_triple)
-                                    .to_string();
-                            let blk = ctx.block();
-                            let fields_base = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-                            let field_ptr = blk.gep(DOUBLE, &fields_base, &[(I64, &field_idx_str)]);
-                            let val = blk.load(DOUBLE, &field_ptr);
-                            let fast = LoweredValue {
-                                semantic: SemanticKind::JsNumber,
-                                rep: NativeRep::F64,
-                                llvm_ty: DOUBLE,
-                                value: val.clone(),
-                            };
-                            ctx.record_lowered_value_with_access_mode_and_facts(
-                                "ClassFieldGet",
-                                None,
-                                "class_field_get.loop_raw_f64_load",
-                                &fast,
-                                Some(BoundsState::Guarded {
-                                    guard_id: "class_field_loop_preheader_check".to_string(),
-                                }),
-                                None,
-                                Some(BufferAccessMode::CheckedNative),
-                                None,
-                                None,
-                                None,
-                                vec![raw_f64_layout_fact(
-                                    None,
-                                    "consumed",
-                                    "class_field_loop_preheader_check",
-                                    None,
-                                )],
-                                Vec::new(),
-                                false,
-                                false,
-                                vec![
-                                    format!("class={}", class_name),
-                                    format!("field={}", property),
-                                    format!("field_index={}", field_idx_str),
-                                    "receiver_proof=loop_preheader_shape_check".to_string(),
-                                    "field_layout=raw_f64_slot_array".to_string(),
-                                    "loop_versioning=class_field_fast_clone".to_string(),
                                 ],
                             );
                             return Ok(val);

@@ -34,6 +34,14 @@
       "reason": "This iteration derives the typed-ABI metadata oracle while filtering globals; typed entry paths independently guard live argument and capture values."
     },
     {
+      "path": "crates/perry-codegen/src/codegen/static_constfn.rs",
+      "function": "static_method_lanes",
+      "access": "local_type_hint",
+      "count": 1,
+      "classification": "runtime-validated",
+      "reason": "The class hint only selects which completed ConstFn shapes a method site compares; the emitted full receiver-word compare (class id and ShapeId) is the proof that the slot holds the named body, and every other receiver takes the learned memo or the generic dispatch."
+    },
+    {
       "path": "crates/perry-codegen/src/codegen/typed_abi.rs",
       "function": "typed_arg_is_guard_candidate",
       "access": "local_type_hint",
@@ -683,11 +691,11 @@
     },
     {
       "path": "crates/perry-codegen/src/stmt/region_loop/guard.rs",
-      "function": "static_region_word",
+      "function": "static_class_name",
       "access": "local_type_hint",
       "count": 1,
       "classification": "runtime-validated",
-      "reason": "The declared class only picks a loop region's static supplier (its static ShapeId and slots); the region guard compares the receiver's own ShapeId against that id as an immediate, so a receiver of any other shape misses into the learned supplier and a wrong hint can only cost the static hit, never a wrong slot."
+      "reason": "The declared class only picks a region receiver's static supplier (its static ShapeId and slots): at planning, whether a receiver naming more keys than a learned word addresses may be planned at all, and at the guard, the id and constant slots. The guard compares the receiver's own ShapeId against that id as an immediate, so a receiver of any other shape takes the plain copy (a receiver wider than a learned word is guarded only when the same supplier still serves it at guard time, else the loop is lowered plainly); a wrong hint can only cost the region, never a wrong slot."
     }
   ]
 }

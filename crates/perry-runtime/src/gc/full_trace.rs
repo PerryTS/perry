@@ -16,6 +16,8 @@ pub(crate) fn begin_full_trace() {
     FULL_TRACE_ACTIVE.with(|active| {
         assert!(!active.replace(true), "full trace already active");
     });
+    // The prototype identity words emit their carrier edge once per trace.
+    crate::object::shapes::note_full_trace_begin();
     crate::proxy::gc_begin_full_trace();
     if let Some(hook) = FETCH_TRACE.with(Cell::get) {
         FETCH_TRACE_ARMED.with(|armed| armed.set(true));

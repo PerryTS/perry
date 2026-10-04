@@ -1,0 +1,121 @@
+diff --git a/crates/perry-runtime/src/arena/block.rs b/crates/perry-runtime/src/arena/block.rs
+index 515b8f1592..d678ff8661 100644
+--- a/crates/perry-runtime/src/arena/block.rs
++++ b/crates/perry-runtime/src/arena/block.rs
+@@ -82,0 +83,6 @@ fn block_size_for(min_size: usize) -> usize {
++/// Only empty, arena-owned payload pages may be advised while mapped.
++pub(super) fn discard_empty_block_pages(block: &ArenaBlock) -> usize {
++    debug_assert_eq!(block.offset, 0);
++    unsafe { decommit::release(block.data, block.size) }
++}
++
+diff --git a/crates/perry-runtime/src/arena/block/reuse_window_tests.rs b/crates/perry-runtime/src/arena/block/reuse_window_tests.rs
+index cf49a57e52..c97d9783b4 100644
+--- a/crates/perry-runtime/src/arena/block/reuse_window_tests.rs
++++ b/crates/perry-runtime/src/arena/block/reuse_window_tests.rs
+@@ -81,0 +82,55 @@ fn real_collection_publication_keeps_warm_pages_and_releases_unused_pages() {
++
++#[cfg(target_os = "linux")]
++#[test]
++fn collection_entry_discards_only_previously_idle_eden_pages_and_keeps_reuse_safe() {
++    crate::arena::tests::run_with_fresh_arenas(|| unsafe {
++        for _ in 0..8 {
++            crate::arena::arena_alloc(BLOCK_SIZE, 8);
++        }
++        super::super::sync_inline_arena_state();
++        let (mapping, size, bitmap, recent) = ARENA.with(|cell| {
++            let arena = &mut *cell.get();
++            assert!(arena.current >= 7);
++            let recent = arena.current;
++            for i in [0, 1, 2, recent - 4, recent] {
++                let block = &arena.blocks[i];
++                std::ptr::write_bytes(block.data, 0xa5, block.size);
++                assert!(resident_pages(block.data, block.size) > 100);
++            }
++            // Previous publication reset slot 0; slot 1 is a fresh reset with
++            // no elapsed interval. Slot 2 was reused after its previous reset.
++            for i in [0, 1, recent - 4, recent] {
++                arena.blocks[i].clear_object_starts();
++                arena.blocks[i].offset = 0;
++                arena.blocks[i].dead_cycles = u32::from(i != 1);
++            }
++            arena.blocks[2].dead_cycles = 1;
++            arena.resync_inline_to_current();
++            let block = &arena.blocks[0];
++            (block.data, block.size, block.object_starts_ptr(), recent)
++        });
++        assert!(crate::arena::discard_previously_idle_eden_pages() > 0);
++        assert_eq!(
++            resident_pages(mapping, size),
++            0,
++            "aged empty pages leave RSS"
++        );
++        ARENA.with(|cell| {
++            let arena = &mut *cell.get();
++            assert_eq!(arena.blocks[0].data, mapping);
++            assert_eq!(arena.blocks[0].object_starts_ptr(), bitmap);
++            assert_eq!(arena.blocks[0].dead_cycles, 1, "advice does not age blocks");
++            for i in [1, 2, recent - 4, recent] {
++                let block = &arena.blocks[i];
++                assert!(resident_pages(block.data, block.size) > 100);
++                assert_eq!(*block.data.add(4096), 0xa5);
++            }
++            let reused = arena.try_block_alloc(0, BLOCK_SIZE, 8).unwrap();
++            assert_eq!(reused, mapping);
++            std::ptr::write_bytes(reused, 0x5a, BLOCK_SIZE);
++        });
++        crate::arena::discard_previously_idle_eden_pages();
++        assert!(resident_pages(mapping, size) > 100);
++        assert_eq!(*mapping.add(4096), 0x5a, "reused data remains intact");
++    });
++}
+diff --git a/crates/perry-runtime/src/arena/mod.rs b/crates/perry-runtime/src/arena/mod.rs
+index 6afd722cea..91e5d77b13 100644
+--- a/crates/perry-runtime/src/arena/mod.rs
++++ b/crates/perry-runtime/src/arena/mod.rs
+@@ -125 +125,2 @@ pub(crate) use reset::{
+-    copying_prepare_to_space, copying_reset_from_spaces_and_flip, old_arena_reclaim_dead_blocks,
++    copying_prepare_to_space, copying_reset_from_spaces_and_flip, discard_previously_idle_eden_pages,
++    old_arena_reclaim_dead_blocks,
+diff --git a/crates/perry-runtime/src/arena/reset.rs b/crates/perry-runtime/src/arena/reset.rs
+index 1ef4262fa5..b4933a6b34 100644
+--- a/crates/perry-runtime/src/arena/reset.rs
++++ b/crates/perry-runtime/src/arena/reset.rs
+@@ -269,0 +270,25 @@ pub(crate) fn copying_reset_from_spaces_and_flip() -> ArenaResetStats {
++/// Discard empty Eden pages before collector scratch reaches its high-water.
++/// The existing idle count must precede this collection: nonmoving reset sets
++/// it after resetting, so doing this in that reset would skip the reuse interval.
++/// Advice keeps mappings, bitmaps, age and allocator accounting unchanged.
++/// Call once at collection entry, never at each budgeted slice.
++pub(crate) fn discard_previously_idle_eden_pages() -> usize {
++    sync_inline_arena_state();
++    ARENA.with(|cell| unsafe {
++        let arena = &*cell.get();
++        let current = arena.current;
++        let keep_low = current.saturating_sub(4);
++        let mut released = 0;
++        for (i, block) in arena.blocks.iter().enumerate() {
++            if !block.data.is_null()
++                && block.offset == 0
++                && block.dead_cycles != 0
++                && !(keep_low..=current).contains(&i)
++            {
++                released += super::block::discard_empty_block_pages(block);
++            }
++        }
++        released
++    })
++}
++
+diff --git a/crates/perry-runtime/src/gc/cycle.rs b/crates/perry-runtime/src/gc/cycle.rs
+index 6cd4ba06e0..b7c796bec5 100644
+--- a/crates/perry-runtime/src/gc/cycle.rs
++++ b/crates/perry-runtime/src/gc/cycle.rs
+@@ -626,0 +627 @@ impl GcCycleState {
++        crate::arena::discard_previously_idle_eden_pages();
+diff --git a/crates/perry-runtime/src/gc/mod.rs b/crates/perry-runtime/src/gc/mod.rs
+index 04887e8e91..94cdc25fb4 100644
+--- a/crates/perry-runtime/src/gc/mod.rs
++++ b/crates/perry-runtime/src/gc/mod.rs
+@@ -439,0 +440 @@ fn gc_collect_minor_with_trigger_inner(
++    crate::arena::discard_previously_idle_eden_pages();

@@ -20,7 +20,7 @@ pub const ARRAY_HEADER_SIZE: usize = 8;
 /// `agent_ptrs::PERRY_AGENT_PTRS`: the number of per-agent pointer slots.
 pub const AGENT_PTR_SLOTS: usize = 4;
 /// Slot 0: the address of this agent's ordinary shape-directory mirror
-/// (`shapes_store::ORDINARY_DIR`), which a generic read site passes to its
+/// (`shapes_store::AGENT_SHAPE_DIR[0]`), which a generic read site passes to its
 /// GC-leaf miss front (`js_object_get_field_ic_front`) so the front reads no
 /// thread-local. Slot 1 held the implicit-`this` cell's address until
 /// this-as-a-parameter deleted the cell, and is free; slot 2 is the stack limit.
@@ -61,9 +61,22 @@ pub const STATIC_CALL_MEMO_C_OFFSET: usize = 8;
 pub const STATIC_CALL_MEMO_OWNER_OFFSET: usize = 16;
 pub const STATIC_CALL_MEMO_VALUE_OFFSET: usize = 24;
 
+/// #11759 (c′): the capture slot of a class function object (an INT32) that
+/// says whether the object is its declaration's first evaluation, and the
+/// value generated code stores there when the first evaluation hands the
+/// shared class out (`INT32_TAG | 1`; the slot is born `INT32_TAG | 0`).
+pub const CLASS_EVALUATION_STATE_CAPTURE: usize = 1;
+pub const CLASS_FIRST_EVALUATION_STATE: u64 = 0x7FFE_0000_0000_0001;
+
 /// `gc::GC_TYPE_CLOSURE`: the GcHeader type byte (at payload - 8) that makes a
 /// cell a function object. The kind is this byte, never a payload magic.
 pub const GC_TYPE_CLOSURE: u8 = 4;
+/// `gc::GC_TYPE_BUFFER` and `gc::GC_TYPE_BUFFER_UINT8ARRAY`: the GcHeader type
+/// bytes of the two BYTE-VIEW buffer brands, a Node `Buffer` and a
+/// `BufferHeader`-backed `Uint8Array` (#10694: a buffer's flavor is its type
+/// byte). Emitted byte-access guards accept exactly these two.
+pub const GC_TYPE_BUFFER: u8 = 10;
+pub const GC_TYPE_BUFFER_UINT8ARRAY: u8 = 26;
 /// `gc::GC_FLAG_FORWARDED` (GcHeader byte 1): an evacuated from-space stub.
 pub const GC_FLAG_FORWARDED: u8 = 0x80;
 /// `gc::GC_HEADER_SIZE`.
@@ -344,6 +357,17 @@ pub const FN_NON_CONSTRUCTOR: u32 = 1 << 9;
 pub const FN_BUILTIN: u32 = 1 << 10;
 /// `declared` is valid.
 pub const FN_HAS_DECLARED: u32 = 1 << 11;
+/// Body metadata and code are linked into a permanent executable image.
+/// Dylib bodies omit this bit: a shape must not retain their info address
+/// beyond `dlclose` or mistake a reused address for the same body.
+pub const FN_PERMANENT_IMAGE: u32 = 1 << 12;
+/// The compiler emitted this body from JavaScript source (every info
+/// `perry-codegen` renders carries it; no runtime-native info does). A
+/// function object on such a body is never a built-in, bound, native-module
+/// or class constructor, so its `[[Construct]]` and `instanceof` are the
+/// ordinary ones: the runtime decides that from this bit, once per body,
+/// instead of probing the callee against every built-in on each use.
+pub const FN_COMPILED_BODY: u32 = 1 << 13;
 
 /// Byte offsets of the fields codegen emits and emitted code reads.
 pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;
@@ -534,6 +558,83 @@ pub const PIC_HOLDER_RECV_WORD: usize = 12;
 pub const PIC_HOLDER_OBJ_WORD: usize = 13;
 pub const PIC_HOLDER_SHAPE_WORD: usize = 14;
 pub const PIC_HOLDER_KIND_WORD: usize = 15;
+/// A class-accessor entry (#10498): its kind word carries
+/// [`PIC_HOLDER_ACCESSOR_BIT`] over the holder's inline slot (low 32 bits);
+/// [`PIC_HOLDER_PAIR_WORD`] holds the raw address of the accessor pair that
+/// slot held when the site primed (a strong root the collector rewrites), and
+/// [`PIC_HOLDER_GETTER_WORD`] the code the hit calls for the getter that pair
+/// names, as `double get(double this, i64 pair)` (0 when only the collecting
+/// slow call answers the entry: a setter-only pair, or a lane in the holder's
+/// spill storage, see [`PIC_HOLDER_SLOT_SPILL_BIT`]):
+/// a compiled class getter, which declares `this` only (the pair is
+/// over-applied), or the runtime's closure-getter entry, which calls the
+/// function object in the pair's getter element through the closure ABI. A
+/// hit is the receiver token, the holder's ShapeId and the slot's value equal
+/// to the pair: then the getter is called with the receiver as `this`.
+pub const PIC_HOLDER_ACCESSOR_BIT: i64 = 1 << 61;
+pub const PIC_HOLDER_PAIR_WORD: usize = 16;
+pub const PIC_HOLDER_GETTER_WORD: usize = 19;
+/// A holder slot word (the low 32 bits of an entry's kind) with this bit set
+/// names a position in the holder's SPILL storage, not an inline slot. The
+/// emitted accessor arm loads inline lanes only: a spill lane's accessor entry
+/// keeps getter word 0, and the collecting slow call answers it.
+pub const PIC_HOLDER_SLOT_SPILL_BIT: i64 = 1 << 31;
+
+/// `proxy::put_value::setter_site` (#10498): the word of a static-key store
+/// site's ways cache that names the site's compiled-setter entry, as
+/// [`SETTER_SITE_TAG`] over the entry's address ([`SETTER_SITE_ADDRESS_MASK`]).
+/// The entry is a `#[repr(C)]` record the emitted store tower reads
+/// (`perry-codegen/src/expr/put_value_store_ic/setter_arm.rs`): the receiver
+/// ShapeId and the holder ShapeId (u32 each), the holder's raw address, the
+/// holder's inline slot (u32), the raw address of the accessor pair that slot
+/// held at prime time, and the compiled setter it names
+/// (`double set(double this, double v)`).
+pub const PACKED_SET_SETTER_WORD: usize = 9;
+pub const SETTER_SITE_TAG: u64 = 0xA2C2_0000_0000_0000;
+pub const SETTER_SITE_ADDRESS_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+pub const SETTER_SITE_RECV_SHAPE_OFFSET: usize = 0;
+pub const SETTER_SITE_HOLDER_SHAPE_OFFSET: usize = 4;
+pub const SETTER_SITE_HOLDER_OFFSET: usize = 8;
+
+/// Byte offsets of the entry's pointer-sized fields and the u32 slot, for a
+/// target whose pointers are `ptr_bytes` wide (8 on LP64, 4 on ILP32 such as
+/// wasm32). The entry is `#[repr(C)]` with `usize` address fields, so the
+/// offsets after the two u32 ShapeIds follow the target's pointer width; the
+/// runtime asserts the `SETTER_SITE_*_OFFSET` constants (this crate's own
+/// target width) against `offset_of!`, and codegen asks for the width of the
+/// target it emits for.
+pub const fn setter_site_layout(ptr_bytes: usize) -> SetterSiteLayout {
+    let slot = SETTER_SITE_HOLDER_OFFSET + ptr_bytes;
+    let pair = (slot + 4).next_multiple_of(ptr_bytes);
+    SetterSiteLayout {
+        holder: SETTER_SITE_HOLDER_OFFSET,
+        slot,
+        pair,
+        code: pair + ptr_bytes,
+    }
+}
+
+/// See [`setter_site_layout`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SetterSiteLayout {
+    pub holder: usize,
+    pub slot: usize,
+    pub pair: usize,
+    pub code: usize,
+}
+
+const SETTER_SITE_NATIVE: SetterSiteLayout = setter_site_layout(core::mem::size_of::<usize>());
+pub const SETTER_SITE_SLOT_OFFSET: usize = SETTER_SITE_NATIVE.slot;
+pub const SETTER_SITE_PAIR_OFFSET: usize = SETTER_SITE_NATIVE.pair;
+pub const SETTER_SITE_CODE_OFFSET: usize = SETTER_SITE_NATIVE.code;
+const _: () = assert!(
+    setter_site_layout(8).slot == 16
+        && setter_site_layout(8).pair == 24
+        && setter_site_layout(8).code == 32
+        && setter_site_layout(4).slot == 12
+        && setter_site_layout(4).pair == 16
+        && setter_site_layout(4).code == 20
+);
 /// The site's holder state word, and its bit for a LATCHED site: one that
 /// refused, or whose non-own receivers took several shapes. Its misses ask the
 /// inherited-read hook, as a never-primed site's do.
@@ -559,13 +660,47 @@ pub const fn method_site_padded_argc(argc: usize) -> usize {
         padded
     }
 }
+/// The entry `slot` bit for an inherited entry (the direct holder's slot).
+/// Combined with [`METHOD_SITE_CONSTFN`] the holder's shape fixes the body.
+pub const METHOD_SITE_INHERITED: u64 = 1 << 63;
 /// The entry `slot` bit for an own key in the receiver's spill buffer.
 pub const METHOD_SITE_SPILL: u64 = 1 << 62;
 /// The entry `slot` bit for an own key of a function-object receiver: an
 /// inline slot of the object at `ClosureHeader::props`.
 pub const METHOD_SITE_FUNCTION_BAG: u64 = 1 << 61;
-/// The index bits of an entry's `slot` word (bit 60 is reserved for the
-/// accessor entry kind).
-pub const METHOD_SITE_INDEX_MASK: u64 = (1 << 60) - 1;
+/// An own inline method whose ShapeId fixes one static body. The hit loads
+/// the receiver's current closure slot for captures, but needs no closure
+/// kind or info load after the shape compare.
+pub const METHOD_SITE_CONSTFN: u64 = 1 << 59;
+/// The index bits of an entry's `slot` word (bit 60 remains reserved for the
+/// accessor entry kind; bit 59 is ConstFn).
+pub const METHOD_SITE_INDEX_MASK: u64 = (1 << 59) - 1;
 /// `object::ObjectMeta::spill` (the object-owned overflow buffer).
 pub const OBJECT_META_SPILL_OFFSET: usize = 32;
+
+/// `proxy::put_value::packed_add::PackedSetSite` — the static-key store
+/// site (`@perry_ic_N_packed_set`) the emitted `o.k = v` reads
+/// (`perry-codegen/src/expr/put_value_store_ic.rs`): the existing-key word,
+/// the primary key-add memo `{shapes, guard}`, the runtime's add-way block,
+/// and the site's ConstFn body.
+pub const PACKED_SET_SITE_WORDS: usize = 5;
+/// The site's one ConstFn body: the `JsFunctionInfo` address every
+/// ConstFn-flagged entry of the site (existing-key word, existing-key way,
+/// add memo) names, 0 until the first is published. Written once, before
+/// the first flagged entry, and never changed: a flagged entry hits only for
+/// a closure of exactly this body.
+pub const PACKED_SET_CONSTFN_INFO_WORD: usize = 4;
+/// The existing-key word's (and way's) bit for a slot whose lane is ConstFn
+/// in the word's ShapeId: the emitted hit stores only a closure of the site's
+/// body. Bit 63 is the `F64` lane bit; the slot index is below bit 62.
+pub const PACKED_SET_CONSTFN_SLOT: u64 = 1 << 62;
+/// The key-add guard's bit for a successor whose lane at the slot is
+/// ConstFn (the slot field is the guard's low 16 bits; bit 15 is the `F64`
+/// lane bit, the index is below bit 14).
+pub const PACKED_ADD_CONSTFN_SLOT: u64 = 1 << 14;
+/// `closure::CAPTURES_THIS_FLAG` / `closure::NO_THIS_REBIND_FLAG`, the high
+/// bits of `ClosureHeader::capture_count`. A closure with the first and not
+/// the second is a rebindable `this` clone, which never satisfies a ConstFn
+/// claim (`field_rep_store::constfn_store_info`).
+pub const CLOSURE_CAPTURES_THIS_FLAG: u32 = 0x8000_0000;
+pub const CLOSURE_NO_THIS_REBIND_FLAG: u32 = 0x4000_0000;

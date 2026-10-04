@@ -72,8 +72,10 @@ pub(super) fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut Ob
 /// subclass override.
 ///
 /// The native bases perry models by stamping their method surface onto the
-/// instance (`EventEmitter`, every `node:stream` class) install those methods as
-/// ORDINARY OWN PROPERTIES. Own properties legitimately shadow class methods, so
+/// instance (every `node:stream` class; `EventEmitter`'s methods live on the
+/// shared `EventEmitter.prototype` instead, see
+/// `inherited_event_emitter_method`) install those methods as ORDINARY OWN
+/// PROPERTIES. Own properties legitimately shadow class methods, so
 /// perry's own-property-override probe (issue #620,
 /// `perry-codegen/src/lower_call/method_override.rs`) selected the native
 /// closure in preference to the user's `class Bus extends EventEmitter { emit()
@@ -124,9 +126,56 @@ pub(crate) fn displaced_native_base_method(this_value: f64, name: &str) -> Optio
         if JSValue::from_bits(val.to_bits()).is_pointer() {
             Some(val)
         } else {
-            None
+            inherited_event_emitter_method(this_value, name)
         }
     }
+}
+
+/// `super.<name>` for a class whose chain bottoms out in `EventEmitter`: its
+/// methods are not stamped onto the instance but live on the shared
+/// `EventEmitter.prototype`, so walk the receiver's prototype chain to the
+/// first value of `name` that IS one of the native EventEmitter method bodies.
+/// The user's own overrides on the class prototypes in between are skipped by
+/// that identity test, so `super.emit` can never re-enter the override.
+fn inherited_event_emitter_method(this_value: f64, name: &str) -> Option<f64> {
+    let infos: Vec<StubFn> = super::emitter_methods()
+        .iter()
+        .filter(|(method, _)| *method == name)
+        .map(|(_, info)| *info)
+        .collect();
+    if infos.is_empty() {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let mut current = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(this_value));
+    for _ in 0..64 {
+        let proto = current.get_nanbox_f64();
+        if object_ptr_from_value(proto).is_none() {
+            return None;
+        }
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let value = unsafe {
+            crate::object::js_object_get_property_key(
+                current.get_nanbox_f64(),
+                f64::from_bits(JSValue::string_ptr(key).bits()),
+            )
+        };
+        let raw = raw_ptr_from_value(value);
+        if raw >= 0x10000 {
+            let func =
+                crate::closure::get_valid_func_ptr(raw as *const crate::closure::ClosureHeader);
+            if !func.is_null() {
+                let info = unsafe { (*(raw as *const crate::closure::ClosureHeader)).info };
+                if infos.iter().any(|candidate| std::ptr::eq(*candidate, info)) {
+                    return Some(value);
+                }
+            }
+        }
+        current = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
+            current.get_nanbox_f64(),
+        ));
+    }
+    None
 }
 
 /// True when the receiver's class chain declares `name` as a real class method —
@@ -140,7 +189,7 @@ fn class_chain_overrides(class_id: u32, name: &str) -> bool {
 pub(crate) fn install_methods_on_existing_object(
     obj: *mut ObjectHeader,
     this_value: f64,
-    methods: &[(&str, StubFn)],
+    methods: &[(&'static str, StubFn)],
     skip_names: &[&str],
 ) {
     // `js_closure_alloc` and the key interning below both allocate and can
@@ -192,7 +241,7 @@ pub(crate) fn install_methods_on_existing_object(
 
 /// The key an installed base method lands on: its plain name normally, or the
 /// reserved super-only key when the subclass overrides it (#6316).
-fn native_or_plain_key(name: &str, overridden: bool) -> *mut crate::string::StringHeader {
+fn native_or_plain_key(name: &'static str, overridden: bool) -> *mut crate::string::StringHeader {
     if overridden {
         native_base_super_key(name)
     } else {
@@ -244,6 +293,86 @@ pub(crate) fn install_event_emitter_prototype_methods(proto: *mut ObjectHeader) 
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
             key.with_const_ptr::<crate::StringHeader, _>(|key| {
                 js_object_set_field_by_name(proto, key, val.get_nanbox_f64())
+            })
+        });
+    }
+}
+
+/// node's `EventEmitter.prototype`: the instance-state defaults
+/// (`_events`/`_eventsCount`/`_maxListeners`) then the methods, in the order
+/// `lib/events.js` assigns them, with node's two aliases (`addListener` IS
+/// `on`, `off` IS `removeListener`). Every closure reads its receiver from the
+/// call-site `this` (slot 0 holds `TAG_UNDEFINED`), so ONE set of closures
+/// serves every emitter: no instance carries its own copy (#10508).
+pub(crate) fn install_event_emitter_prototype(proto: *mut ObjectHeader) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_raw_mut_ptr(proto);
+    let proto_value = proto.with_const_ptr::<ObjectHeader, _>(|proto| {
+        f64::from_bits(JSValue::pointer(proto as *const u8).bits())
+    });
+    super::install_event_emitter_prototype_state(proto_value);
+    let methods = super::emitter_methods();
+    let body = |name: &str| {
+        methods
+            .iter()
+            .find(|(method, _)| *method == name)
+            .map(|(_, info)| *info)
+    };
+    let mut values: Vec<(&str, crate::gc::RuntimeHandle<'_>)> = Vec::new();
+    for name in [
+        "setMaxListeners",
+        "getMaxListeners",
+        "emit",
+        "on",
+        "prependListener",
+        "once",
+        "prependOnceListener",
+        "removeListener",
+        "removeAllListeners",
+        "listeners",
+        "rawListeners",
+        "listenerCount",
+        "eventNames",
+    ] {
+        let Some(info) = body(name) else { continue };
+        let closure = js_closure_alloc(info, 1);
+        crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
+        let value = scope.root_nanbox_f64(f64::from_bits(
+            JSValue::pointer(closure as *const u8).bits(),
+        ));
+        values.push((name, value));
+    }
+    let value_of = |name: &str| {
+        values
+            .iter()
+            .find(|(method, _)| *method == name)
+            .map(|(_, value)| value.get_nanbox_f64())
+    };
+    for (name, source) in [
+        ("setMaxListeners", "setMaxListeners"),
+        ("getMaxListeners", "getMaxListeners"),
+        ("emit", "emit"),
+        ("addListener", "on"),
+        ("on", "on"),
+        ("prependListener", "prependListener"),
+        ("once", "once"),
+        ("prependOnceListener", "prependOnceListener"),
+        ("removeListener", "removeListener"),
+        ("off", "removeListener"),
+        ("removeAllListeners", "removeAllListeners"),
+        ("listeners", "listeners"),
+        ("rawListeners", "rawListeners"),
+        ("listenerCount", "listenerCount"),
+        ("eventNames", "eventNames"),
+    ] {
+        let Some(value) = value_of(source) else {
+            continue;
+        };
+        let value = scope.root_nanbox_f64(value);
+        let key = scope.root_string_ptr(hidden_key(name.as_bytes()));
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                js_object_set_field_by_name(proto, key, value.get_nanbox_f64())
             })
         });
     }
@@ -380,7 +509,7 @@ extern "C" fn ns_ee_async_resource_getter(
 pub(crate) unsafe fn install_event_emitter_async_resource_prototype(proto: *mut ObjectHeader) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_raw_mut_ptr(proto);
-    let install_method = |name: &str, function: *const crate::closure::JsFunctionInfo| {
+    let install_method = |name: &'static str, function: *const crate::closure::JsFunctionInfo| {
         let closure = js_closure_alloc(function, 1);
         crate::closure::js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64);
         let closure = scope.root_raw_mut_ptr(closure);

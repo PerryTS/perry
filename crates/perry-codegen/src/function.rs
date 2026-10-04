@@ -20,6 +20,10 @@ mod entry_allocas;
 
 use precise_roots::{lower_precise_roots_to_native_stack, retype_landing_pads_for_statepoints};
 
+/// The intrinsic [`LlFunction::entry_tls_address`] calls, for a thread-local
+/// global in address space 0.
+pub const TLS_ADDRESS_INTRINSIC: &str = "llvm.threadlocal.address.p0";
+
 pub struct LlFunction {
     pub name: String,
     pub return_type: LlvmType,
@@ -183,6 +187,10 @@ pub struct LlFunction {
     /// Entry/module-init functions use this for process-level diagnostics
     /// that must run regardless of which block reaches the normal epilogue.
     pre_return_void_calls: Vec<String>,
+    /// Thread-local globals whose current-thread address this function has
+    /// already computed in its entry block, with the SSA register holding it
+    /// (see [`Self::entry_tls_address`]).
+    entry_tls_addresses: Vec<(String, String)>,
 }
 
 /// Render the frame-push instruction. Kept in one place so the eager
@@ -308,6 +316,7 @@ impl LlFunction {
             force_shadow_frame: false,
             outline_straight_line_store_ics: false,
             pre_return_void_calls: Vec::new(),
+            entry_tls_addresses: Vec::new(),
         }
     }
 
@@ -443,14 +452,25 @@ impl LlFunction {
             &top_reg,
             &handle_reg,
         );
-        let region = if post_init {
-            &mut self.entry_post_init_setup
+        // #11836: in the post-init region the push goes FIRST. That region
+        // also holds the entry-hoisted `js_shadow_slot_bind` calls
+        // (`entry_init_load_rooted_global`, `root_entry_alloca`), and a bind
+        // binds into whatever frame is on top when it runs: before this
+        // functions push that is the callers frame (or none), so the slot is
+        // never rooted here and an evacuating minor leaves it naming
+        // from-space. The estimate-driven request pushes before any bind
+        // exists, so appending was enough there; the post-RS4GC retry
+        // (`request_shadow_frame_spill` on an already-lowered function, #8679)
+        // arrives after every bind was emitted. `entry_allocas` needs no such
+        // care: it is spliced above the post-init region, and this push reads
+        // allocas appended to it just above.
+        let (region, line_idx) = if post_init {
+            (&mut self.entry_post_init_setup, 0)
         } else {
-            &mut self.entry_allocas
+            let line_idx = self.entry_allocas.len();
+            (&mut self.entry_allocas, line_idx)
         };
-        let line_idx = region.len();
-        region.push(push_line);
-        region.extend(rest);
+        region.splice(line_idx..line_idx, std::iter::once(push_line).chain(rest));
         self.shadow_frame_push = Some(ShadowFramePush {
             post_init,
             line_idx,
@@ -556,6 +576,36 @@ impl LlFunction {
         let r = format!("%r{}", self.reg_counter.next());
         self.entry_allocas.push(format!("  {} = alloca {}", r, ty));
         r
+    }
+
+    /// The current thread's address of the thread-local global `@global`,
+    /// computed ONCE per function invocation at the top of the entry block
+    /// (`llvm.threadlocal.address`) and returned as an SSA `ptr` register that
+    /// every later access in the function reuses.
+    ///
+    /// Each textual use of a thread-local global is otherwise materialized
+    /// per basic block by the backend: a `tlv_get_addr` call on Darwin for
+    /// every load, and an `fs:`-based address recomputed every loop iteration
+    /// on x86_64. One address per invocation makes a hit a plain load.
+    ///
+    /// It is correct because a perry function invocation runs start to finish
+    /// on one thread: an agent never migrates a running frame, and every
+    /// re-entry (another agent calling the same function, an async or
+    /// generator step) is a new invocation that computes its own address. The
+    /// address is not a heap value, so collections never move it.
+    ///
+    /// The caller declares `llvm.threadlocal.address.p0` in the module.
+    pub fn entry_tls_address(&mut self, global: &str) -> String {
+        if let Some((_, reg)) = self.entry_tls_addresses.iter().find(|(g, _)| g == global) {
+            return reg.clone();
+        }
+        let reg = format!("%r{}", self.reg_counter.next());
+        self.entry_allocas.push(format!(
+            "  {reg} = call ptr @{TLS_ADDRESS_INTRINSIC}(ptr @{global})"
+        ));
+        self.entry_tls_addresses
+            .push((global.to_string(), reg.clone()));
+        reg
     }
 
     /// Allocate a fixed-size `[count x elem_ty]` array slot in the function
@@ -1642,6 +1692,58 @@ mod define_header_tests {
         assert!(shadow_ir.contains("call ptr @js_shadow_frame_enter(i32 1)"));
         assert!(shadow_ir.contains("call void @js_shadow_slot_bind(i32 0"));
         assert!(shadow_ir.contains("call void @js_shadow_frame_pop(i64"));
+    }
+
+    /// #11836: the late request must push the frame BEFORE the entry-hoisted
+    /// binds already sitting in the post-init region. A bind that runs first
+    /// binds into the caller's frame (or none), so the slot is not a root of
+    /// this frame and an evacuating minor leaves it naming from-space; the
+    /// prettier typescript plugin's module init then built objects over a
+    /// moved class-keys array.
+    #[test]
+    fn a_post_lowering_spill_pushes_the_frame_before_the_entry_binds() {
+        use crate::codegen::helpers::NativeRootsPin;
+        use crate::types::{I64, PTR};
+
+        let _native = NativeRootsPin::native();
+        let mut function = LlFunction::new("late_spill_order", crate::types::VOID, vec![]);
+        function.enable_post_init_shadow_frame(0);
+        let entry = function.create_block("entry");
+        entry.call_void("js_gc_init", &[]);
+        function.mark_entry_init_boundary();
+        // The shape `entry_init_load_rooted_global` leaves behind: a
+        // post-init load of the global into an entry slot, then its bind.
+        let slot = function.entry_init_load_global("perry_class_keys_m__C", I64);
+        let idx = function
+            .reserve_shadow_slot()
+            .expect("native lowering reserves a precise-root slot");
+        function.entry_setup_call_void(
+            "js_shadow_slot_bind",
+            &[(crate::types::I32, &idx.to_string()), (PTR, &slot)],
+        );
+        let entry = function.block_mut(0).expect("entry block");
+        let _ = entry.call(I64, "may_collect", &[]);
+        entry.ret_void();
+
+        assert!(function.request_shadow_frame_spill());
+        let shadow_ir = function.to_ir();
+        let position = |needle: &str| {
+            shadow_ir
+                .find(needle)
+                .unwrap_or_else(|| panic!("no `{needle}`:\n{shadow_ir}"))
+        };
+        let init = position("@js_gc_init(");
+        let enter = position("@js_shadow_frame_enter(");
+        let bind = position("call void @js_shadow_slot_bind(");
+        assert!(
+            enter < bind,
+            "the frame push must precede every entry bind, or the bind roots \
+             the slot in the caller's frame:\n{shadow_ir}"
+        );
+        assert!(
+            init < enter,
+            "the push still belongs after the init prelude:\n{shadow_ir}"
+        );
     }
 
     /// `force_external` drops only the linkage keyword. The codegen-unit path

@@ -323,12 +323,16 @@ impl LlModule {
         note(self.fn_infos.borrow_mut().facts_mut(body));
     }
 
+    pub(crate) fn request_static_seed_body(&mut self, body: &str) {
+        self.fn_infos.borrow_mut().request_static_seed_body(body);
+    }
+
     /// Emit the module's `JsFunctionInfo` globals (`crate::fn_info`): one
     /// definition per body this module defines that is allocated here, has
     /// recorded facts, or is an external-linkage value wrapper another module
     /// may allocate; an `external` declaration for every allocated body
     /// another module defines. Runs once, after every function exists.
-    pub(crate) fn emit_fn_infos(&mut self) {
+    pub(crate) fn emit_fn_infos(&mut self, permanent_image: bool) {
         let lines = {
             let functions = &self.functions;
             let by_name: std::collections::HashMap<&str, &LlFunction> =
@@ -348,6 +352,7 @@ impl LlModule {
                     })
                 },
                 exported,
+                permanent_image,
             )
         };
         self.globals.extend(lines);
@@ -449,7 +454,7 @@ impl LlModule {
     }
 
     /// #10399: the thread-local form of [`Self::add_internal_global`].
-    pub fn add_internal_thread_local_global(&mut self, name: &str, ty: LlvmType, init: &str) {
+    pub fn add_internal_thread_local_global(&mut self, name: &str, ty: &str, init: &str) {
         self.globals.push(format!(
             "@{} = internal thread_local global {} {}",
             name, ty, init
@@ -597,9 +602,10 @@ impl LlModule {
     }
 
     /// The module *skeleton*: everything [`to_ir`] emits EXCEPT function
-    /// definitions — header, string constants, globals, declarations (still
-    /// filtered against defined names, which the native path adds via the C
-    /// API), attribute groups and metadata.
+    /// definitions — header, string constants, globals, declarations,
+    /// attribute groups and metadata. Locally-defined functions are emitted
+    /// as declarations so globals with relative function references resolve
+    /// when the skeleton is parsed on its own.
     ///
     /// This is the only text the native construction path
     /// (`PERRY_LLVM_INPROCESS=native`) still parses: a few KB of module
@@ -628,11 +634,8 @@ impl LlModule {
             ir.push('\n');
         }
         ir.push('\n');
-        let defined: HashSet<&str> = self
-            .deduped_function_refs()
-            .iter()
-            .map(|f| f.name.as_str())
-            .collect();
+        let funcs = self.deduped_function_refs();
+        let defined: HashSet<&str> = funcs.iter().map(|f| f.name.as_str()).collect();
         for (name, decl) in &self.declarations {
             if defined.contains(name.as_str()) {
                 continue;
@@ -642,6 +645,10 @@ impl LlModule {
         }
         if crate::codegen::helpers::native_stack_roots_enabled() {
             push_statepoint_declarations(&mut ir);
+        }
+        for f in funcs {
+            ir.push_str(&declare_line_for(f));
+            ir.push('\n');
         }
         ir.push('\n');
         self.push_attrs_and_metadata(&mut ir);
@@ -1021,8 +1028,12 @@ impl LlModule {
         // of literal zeros in the Claude Code binary's `__data`, 8.2% of the
         // file, purely from the promotion. Only LOCAL-linkage definitions skip
         // it (`has_local_linkage`) — that covers every generated cache and
-        // table, and keeps a strong external definition's cross-module
-        // coalescing exactly as it was.
+        // table. An EXTERNAL definition keeps its cross-module coalescing, as
+        // `weak_odr` rather than `linkonce_odr`: both fold same-named copies,
+        // but `linkonce_odr` is discardable, and LLVM drops a sole definition
+        // that nothing in its own unit uses even when another object of the
+        // link names it (a ConstFn body's `$info`, referenced only by the
+        // static shape-seed object, vanished from the binary that way).
         let mut defining_unit_count: Vec<usize> = vec![0; all_globals.len()];
         if replicate_globals {
             for need in &bucket_needs {
@@ -1064,7 +1075,11 @@ impl LlModule {
                 let owns = global_owners[gi] == bi;
                 if (replicate_globals && referenced) || owns {
                     if replicate_globals {
-                        if defining_unit_count[gi] > 1 || !has_local_linkage(def) {
+                        if !has_local_linkage(def) {
+                            // External: another object may name it, so it must
+                            // coalesce without ever being discarded.
+                            pre.push_str(&promote_external_global_for_units(def));
+                        } else if defining_unit_count[gi] > 1 {
                             pre.push_str(&promote_global_for_units(def));
                         } else {
                             pre.push_str(def);

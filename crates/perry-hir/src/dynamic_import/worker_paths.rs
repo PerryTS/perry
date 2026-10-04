@@ -132,6 +132,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
 
     fn resolve(&mut self, expr: &Expr, depth: usize) -> Paths {
         self.tick(depth)?;
+        let expr = crate::tdz_check::without_checks(expr);
         match expr {
             Expr::Await(value) => self.resolve(value, depth + 1),
             Expr::String(value) => bounded(vec![value.clone()], &mut self.work),
@@ -280,6 +281,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
 
     fn registry(&mut self, object: &Expr, depth: usize) -> Paths {
         self.tick(depth)?;
+        let object = crate::tdz_check::without_checks(object);
         let values: Vec<&Expr> = match object {
             Expr::LocalGet(id) => {
                 if !self.locals.insert(*id) {
@@ -313,6 +315,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
     // Do not discard effects hidden in ternary conditions or registry indices.
     fn pure_selector(&mut self, expr: &Expr, depth: usize) -> Result<(), PathError> {
         self.tick(depth)?;
+        let expr = crate::tdz_check::without_checks(expr);
         match expr {
             Expr::Bool(_) | Expr::String(_) | Expr::Integer(_) | Expr::Number(_) => Ok(()),
             Expr::LocalGet(id) if self.arguments.contains_key(id) => Ok(()),
@@ -326,7 +329,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
 
     fn call(&mut self, callee: &Expr, args: &[Expr], depth: usize) -> Paths {
         self.tick(depth)?;
-        let mut target = callee;
+        let mut target = crate::tdz_check::without_checks(callee);
         let mut aliases = HashSet::new();
         while let Expr::LocalGet(id) = target {
             self.tick(depth + aliases.len())?;
@@ -338,6 +341,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
                 .get(id)
                 .ok_or("call target is mutable or is not a module-local helper")?
                 .borrow();
+            target = crate::tdz_check::without_checks(target);
         }
         let (id, params, body, generator) = match target {
             Expr::FuncRef(id) => {

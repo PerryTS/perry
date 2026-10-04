@@ -1,0 +1,2109 @@
+{
+  "scope": "User instruction self samples; approximate attribution, not exact instruction deltas, elapsed time, or peak RSS.",
+  "records": [
+    {
+      "prefix": "gc-auto-currentc170-qb6-v22",
+      "arm": "currentc170-base",
+      "case": "72-request-processing",
+      "repeat": 0,
+      "correct": true,
+      "sampling_period": 1000000,
+      "symbol_sha256": "14a3a6615b7547118546367ecb3556e68e07a40f78e5fae488032f1a1580b7f8",
+      "plain_sha256": "05846cc899f836c52ce53d789701c1cf6cc8c553f287add076783ef565b8509d",
+      "text_sha256": "b43cc8476a027b195a128d07bed4347273a39e5a987afa50c9ddd4abcd7004b9",
+      "attribution": {
+        "event_count_approx": 80330000000,
+        "samples": 80330,
+        "lost_samples": 0,
+        "gc_self_samples": 8794,
+        "arena_self_samples": 2335,
+        "unresolved_samples": 17,
+        "top_symbols": [
+          {
+            "percent": 5.45,
+            "samples": 4377,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::map::store::StringIndex>::insert"
+          },
+          {
+            "percent": 3.61,
+            "samples": 2903,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::map::compact_map_entries"
+          },
+          {
+            "percent": 1.93,
+            "samples": 1548,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 1.63,
+            "samples": 1312,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.55,
+            "samples": 1247,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+          },
+          {
+            "percent": 1.51,
+            "samples": 1213,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::native_get::try_data_get_bytes"
+          },
+          {
+            "percent": 1.36,
+            "samples": 1091,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::layout::layout_note_slot"
+          },
+          {
+            "percent": 1.28,
+            "samples": 1028,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] core::str::converts::from_utf8"
+          },
+          {
+            "percent": 1.23,
+            "samples": 986,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe"
+          },
+          {
+            "percent": 1.23,
+            "samples": 986,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memmove_avx512_unaligned_erms"
+          },
+          {
+            "percent": 1.15,
+            "samples": 921,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::is_closure_ptr"
+          },
+          {
+            "percent": 1.09,
+            "samples": 875,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved"
+          },
+          {
+            "percent": 1.07,
+            "samples": 863,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+          },
+          {
+            "percent": 0.98,
+            "samples": 791,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_closure_node_modules_qs_lib_utils_js__31"
+          },
+          {
+            "percent": 0.98,
+            "samples": 786,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.94,
+            "samples": 754,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 0.93,
+            "samples": 745,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::write_barrier_decoded_parent"
+          },
+          {
+            "percent": 0.79,
+            "samples": 636,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::map::rebuild_map_ptr_index"
+          },
+          {
+            "percent": 0.77,
+            "samples": 622,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::regex::perex_owner::GcProgram as perex::binding::ImmutableProgram>::with_words::<core::result::Result<core::result::Result<core::result::Result<perex::executor::Progress, perex::executor::ExecError>, perex::binding::PairError<perry_runtime::regex::perex_owner::OwnerError, perry_runtime::regex::perex_owner::OwnerError>>, perex::binding::BoundProgramError<perry_runtime::regex::perex_owner::OwnerError>>, <perex::binding::BoundProgram<perry_runtime::regex::perex_owner::GcProgram>>::with_view<core::result::Result<core::result::Result<perex::executor::Progress, perex::executor::ExecError>, perex::binding::PairError<perry_runtime::regex::perex_owner::OwnerError, perry_runtime::regex::perex_owner::OwnerError>>, <perex::binding::BoundResources<perry_runtime::regex::perex_owner::GcProgram, perry_runtime::regex::perex_owner::HeapSubject> as perex::executor::Resources>::with_views<core::result::Result<perex::executor::Progress, perex::executor::ExecError>, <perex::executor::Search<perex::binding::BoundResources<perry_runtime::regex::perex_owner::GcProgram, perry_runtime::regex::perex_owner::HeapSubject>, perex::executor::Scratch>>::run_with::{closure#0}>::{closure#0}>::{closure#0}>"
+          },
+          {
+            "percent": 0.75,
+            "samples": 602,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::regex::perex_runtime::find_near::<perry_runtime::regex::perex_owner::HeapSubject, perry_runtime::regex::perex_runtime::poll>"
+          },
+          {
+            "percent": 0.73,
+            "samples": 583,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::is_class_object_ptr"
+          },
+          {
+            "percent": 0.72,
+            "samples": 577,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::filter::may_have_descriptor_entry"
+          },
+          {
+            "percent": 0.69,
+            "samples": 554,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_tables::count_new_young_layout_record"
+          },
+          {
+            "percent": 0.66,
+            "samples": 534,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] js_array_alloc"
+          },
+          {
+            "percent": 0.65,
+            "samples": 524,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::string::intern::intern_dispatch_bytes"
+          },
+          {
+            "percent": 0.63,
+            "samples": 509,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.62,
+            "samples": 500,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::runtime_write_barrier_gc_slot"
+          },
+          {
+            "percent": 0.62,
+            "samples": 495,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::map::is_registered_map"
+          },
+          {
+            "percent": 0.61,
+            "samples": 487,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::exception::try_push_with_kind::{closure#0}"
+          },
+          {
+            "percent": 0.6,
+            "samples": 485,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.59,
+            "samples": 477,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::get_accessor_descriptor"
+          },
+          {
+            "percent": 0.59,
+            "samples": 473,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::roots::runtime_handles::runtime_handle_stack_cold"
+          },
+          {
+            "percent": 0.59,
+            "samples": 470,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::array::header_gc_slots::store_array_slot_resolved"
+          },
+          {
+            "percent": 0.58,
+            "samples": 464,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::array::indexing::js_array_set_f64_extend_resolved"
+          },
+          {
+            "percent": 0.58,
+            "samples": 463,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] js_put_value_set"
+          },
+          {
+            "percent": 0.56,
+            "samples": 452,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_slot_lookup_verdict"
+          },
+          {
+            "percent": 0.55,
+            "samples": 444,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] <hashbrown::raw::RawTable<(usize, alloc::vec::Vec<(alloc::string::String, u64)>)>>::remove_entry::<hashbrown::map::equivalent_key<usize, usize, alloc::vec::Vec<(alloc::string::String, u64)>>::{closure#0}>"
+          },
+          {
+            "percent": 0.55,
+            "samples": 439,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] <perex::executor::Vm>::run"
+          },
+          {
+            "percent": 0.53,
+            "samples": 427,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::state::class_id_for_decl_prototype_object"
+          },
+          {
+            "percent": 0.53,
+            "samples": 426,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::barrier_child_prologue"
+          }
+        ]
+      },
+      "data_sha256": "b48794c44e3a124058048c3e2c218361ef6f85547777645ac4e737a22d8cad3d",
+      "report_sha256": "ca6024a71373398d44f181816aa4668081308e475ab56d8d8e4f6b194e1e6ab0"
+    },
+    {
+      "prefix": "gc-auto-currentc170-qb6-v22",
+      "arm": "currentc170-gc",
+      "case": "72-request-processing",
+      "repeat": 0,
+      "correct": true,
+      "sampling_period": 1000000,
+      "symbol_sha256": "d0ab4c55342e66a7a952fd1a212a7f40ad38b3fe381a2a3d3f1f380487da1442",
+      "plain_sha256": "afad1fc8fec52d12c701b919b586b5fb4016e8f0e749966423043b904c70024c",
+      "text_sha256": "a3d065fc88cb315e59b946a14624861687db4cb3573ebbe88450773237c4e4c1",
+      "attribution": {
+        "event_count_approx": 80350000000,
+        "samples": 80350,
+        "lost_samples": 0,
+        "gc_self_samples": 8979,
+        "arena_self_samples": 2678,
+        "unresolved_samples": 21,
+        "top_symbols": [
+          {
+            "percent": 5.21,
+            "samples": 4190,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::map::store::StringIndex>::insert"
+          },
+          {
+            "percent": 3.83,
+            "samples": 3075,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::map::compact_map_entries"
+          },
+          {
+            "percent": 1.84,
+            "samples": 1478,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 1.71,
+            "samples": 1377,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.58,
+            "samples": 1269,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+          },
+          {
+            "percent": 1.54,
+            "samples": 1241,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::native_get::try_data_get_bytes"
+          },
+          {
+            "percent": 1.39,
+            "samples": 1115,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::layout::layout_note_slot"
+          },
+          {
+            "percent": 1.2,
+            "samples": 968,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] core::str::converts::from_utf8"
+          },
+          {
+            "percent": 1.2,
+            "samples": 967,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::is_closure_ptr"
+          },
+          {
+            "percent": 1.05,
+            "samples": 847,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+          },
+          {
+            "percent": 1.04,
+            "samples": 836,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memmove_avx512_unaligned_erms"
+          },
+          {
+            "percent": 1.04,
+            "samples": 834,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.01,
+            "samples": 813,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_closure_node_modules_qs_lib_utils_js__31"
+          },
+          {
+            "percent": 1.0,
+            "samples": 803,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.99,
+            "samples": 794,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved"
+          },
+          {
+            "percent": 0.98,
+            "samples": 785,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::class_meta_registry::get_parent_class_id"
+          },
+          {
+            "percent": 0.97,
+            "samples": 780,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::write_barrier_decoded_parent"
+          },
+          {
+            "percent": 0.96,
+            "samples": 770,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe"
+          },
+          {
+            "percent": 0.87,
+            "samples": 702,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::regex::perex_runtime::find_near::<perry_runtime::regex::perex_owner::HeapSubject, perry_runtime::regex::perex_runtime::poll>"
+          },
+          {
+            "percent": 0.8,
+            "samples": 644,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id"
+          },
+          {
+            "percent": 0.75,
+            "samples": 605,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::map::rebuild_map_ptr_index"
+          },
+          {
+            "percent": 0.69,
+            "samples": 558,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.69,
+            "samples": 556,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] js_array_alloc"
+          },
+          {
+            "percent": 0.69,
+            "samples": 552,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::filter::may_have_descriptor_entry"
+          },
+          {
+            "percent": 0.68,
+            "samples": 549,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::regex::perex_owner::GcProgram as perex::binding::ImmutableProgram>::with_words::<core::result::Result<core::result::Result<core::result::Result<perex::executor::Progress, perex::executor::ExecError>, perex::binding::PairError<perry_runtime::regex::perex_owner::OwnerError, perry_runtime::regex::perex_owner::OwnerError>>, perex::binding::BoundProgramError<perry_runtime::regex::perex_owner::OwnerError>>, <perex::binding::BoundProgram<perry_runtime::regex::perex_owner::GcProgram>>::with_view<core::result::Result<core::result::Result<perex::executor::Progress, perex::executor::ExecError>, perex::binding::PairError<perry_runtime::regex::perex_owner::OwnerError, perry_runtime::regex::perex_owner::OwnerError>>, <perex::binding::BoundResources<perry_runtime::regex::perex_owner::GcProgram, perry_runtime::regex::perex_owner::HeapSubject> as perex::executor::Resources>::with_views<core::result::Result<perex::executor::Progress, perex::executor::ExecError>, <perex::executor::Search<perex::binding::BoundResources<perry_runtime::regex::perex_owner::GcProgram, perry_runtime::regex::perex_owner::HeapSubject>, perex::executor::Scratch>>::run_with::{closure#0}>::{closure#0}>::{closure#0}>"
+          },
+          {
+            "percent": 0.65,
+            "samples": 525,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::array::header_gc_slots::store_array_slot_resolved"
+          },
+          {
+            "percent": 0.65,
+            "samples": 523,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::exception::try_push_with_kind::{closure#0}"
+          },
+          {
+            "percent": 0.65,
+            "samples": 522,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::string::intern::intern_dispatch_bytes"
+          },
+          {
+            "percent": 0.62,
+            "samples": 495,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::get_accessor_descriptor"
+          },
+          {
+            "percent": 0.61,
+            "samples": 489,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] <perex::executor::Vm>::run"
+          },
+          {
+            "percent": 0.59,
+            "samples": 474,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_tables::count_new_young_layout_record"
+          },
+          {
+            "percent": 0.55,
+            "samples": 442,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.55,
+            "samples": 442,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::roots::runtime_handles::runtime_handle_stack_cold"
+          },
+          {
+            "percent": 0.54,
+            "samples": 433,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::is_class_object_ptr"
+          },
+          {
+            "percent": 0.54,
+            "samples": 430,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::runtime_write_barrier_gc_slot"
+          },
+          {
+            "percent": 0.53,
+            "samples": 429,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::barrier_child_prologue"
+          },
+          {
+            "percent": 0.53,
+            "samples": 427,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::map::store::is_live_map"
+          },
+          {
+            "percent": 0.52,
+            "samples": 415,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] js_put_value_set"
+          },
+          {
+            "percent": 0.51,
+            "samples": 412,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_slot_lookup_verdict"
+          },
+          {
+            "percent": 0.5,
+            "samples": 402,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::state::class_id_for_decl_prototype_object"
+          }
+        ]
+      },
+      "data_sha256": "a45bbfbe75524ea95c30e8298a431ac6db66aab1ab79581227e5d9da8d57f391",
+      "report_sha256": "5729cafafc8b1818204512a1063a6997c26baa367b46dfd93d8fd265dc4697c8"
+    },
+    {
+      "prefix": "gc-auto-currentc170-qb6-v22",
+      "arm": "currentc170-base",
+      "case": "zodwork",
+      "repeat": 0,
+      "correct": true,
+      "sampling_period": 250000,
+      "symbol_sha256": "24bfb441507fdc1fd705dca6d3b7b0a4a62d04732712d7741024cab0631571ea",
+      "plain_sha256": "79e88e0e2e6c7d2c2ea4c90c5b091f1632b5751a5c392d54c28512d84536aa83",
+      "text_sha256": "3f611bbde38b626f79c80b27924ed7015e06ccb79e0ed6272b755c338ec7e6d4",
+      "attribution": {
+        "event_count_approx": 894750000,
+        "samples": 3579,
+        "lost_samples": 0,
+        "gc_self_samples": 238,
+        "arena_self_samples": 167,
+        "unresolved_samples": 4,
+        "top_symbols": [
+          {
+            "percent": 3.52,
+            "samples": 126,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write"
+          },
+          {
+            "percent": 3.52,
+            "samples": 126,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved"
+          },
+          {
+            "percent": 2.99,
+            "samples": 107,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::method_owner_class_id"
+          },
+          {
+            "percent": 2.96,
+            "samples": 106,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_function_bind"
+          },
+          {
+            "percent": 2.63,
+            "samples": 94,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 2.54,
+            "samples": 91,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::is_closure_ptr"
+          },
+          {
+            "percent": 2.46,
+            "samples": 88,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_get::try_data_get_bytes"
+          },
+          {
+            "percent": 2.4,
+            "samples": 86,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_class_method_bind"
+          },
+          {
+            "percent": 2.35,
+            "samples": 84,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_method_site_miss"
+          },
+          {
+            "percent": 2.21,
+            "samples": 79,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+          },
+          {
+            "percent": 2.01,
+            "samples": 72,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] core::str::converts::from_utf8"
+          },
+          {
+            "percent": 2.01,
+            "samples": 72,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.98,
+            "samples": 71,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::props::object_own_get"
+          },
+          {
+            "percent": 1.96,
+            "samples": 70,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_typed_feedback_native_call_method"
+          },
+          {
+            "percent": 1.51,
+            "samples": 54,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&(u32, alloc::string::String)>"
+          },
+          {
+            "percent": 1.48,
+            "samples": 53,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::state::class_decl_prototype_object"
+          },
+          {
+            "percent": 1.17,
+            "samples": 42,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>"
+          },
+          {
+            "percent": 1.17,
+            "samples": 42,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.12,
+            "samples": 40,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_descriptor_intern_with_special_mode"
+          },
+          {
+            "percent": 1.12,
+            "samples": 40,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::spill::overflow_get"
+          },
+          {
+            "percent": 1.01,
+            "samples": 36,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] node_modules_zod_lib_index_mjs__ZodType_constructor"
+          },
+          {
+            "percent": 0.89,
+            "samples": 32,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.89,
+            "samples": 32,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_native_call_method"
+          },
+          {
+            "percent": 0.89,
+            "samples": 32,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_module::class_prototype_method_value_for_name"
+          },
+          {
+            "percent": 0.87,
+            "samples": 31,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_object_set_field"
+          },
+          {
+            "percent": 0.87,
+            "samples": 31,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_array_dense_slots"
+          },
+          {
+            "percent": 0.81,
+            "samples": 29,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] <std::thread::local::LocalKey<core::cell::RefCell<std::collections::hash::map::HashMap<usize, u32, perry_runtime::fast_hash::PtrHasher>>>>::with::<perry_runtime::object::native_module::callable_exports::builtin_closure_metadata::builtin_closure_length::{closure#0}, core::option::Option<u32>>"
+          },
+          {
+            "percent": 0.81,
+            "samples": 29,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_object_get_own_field_or_undef"
+          },
+          {
+            "percent": 0.81,
+            "samples": 29,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::is_registered_class_prototype_object"
+          },
+          {
+            "percent": 0.75,
+            "samples": 27,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.67,
+            "samples": 24,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] mi_theap_malloc_aligned"
+          },
+          {
+            "percent": 0.67,
+            "samples": 24,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::closure_get_dynamic_prop_keyed"
+          },
+          {
+            "percent": 0.67,
+            "samples": 24,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::slot_store::store_object_field_slot"
+          },
+          {
+            "percent": 0.64,
+            "samples": 23,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.64,
+            "samples": 23,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_object_get_field"
+          },
+          {
+            "percent": 0.64,
+            "samples": 23,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_string_from_bytes_with_capacity"
+          },
+          {
+            "percent": 0.64,
+            "samples": 23,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::alloc::object_alloc_class_inline_keys_impl"
+          },
+          {
+            "percent": 0.59,
+            "samples": 21,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_object_kind_by_id"
+          },
+          {
+            "percent": 0.56,
+            "samples": 20,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_closure_alloc"
+          },
+          {
+            "percent": 0.56,
+            "samples": 20,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_closure_node_modules_zod_lib_index_mjs__254"
+          }
+        ]
+      },
+      "data_sha256": "9a7b89fb07905045095f25f2ff0f949e1101ba8d9280cd590ccec13b6722191c",
+      "report_sha256": "4b147fdeb6211ee0fa2e77168c136c5d49d2bead2f9506d7b99d4ed35ceee24a"
+    },
+    {
+      "prefix": "gc-auto-currentc170-qb6-v22",
+      "arm": "currentc170-gc",
+      "case": "zodwork",
+      "repeat": 0,
+      "correct": true,
+      "sampling_period": 250000,
+      "symbol_sha256": "9709b466730d24a823bb4863eec494635a781ae2e06238dfcb005f00e45e4d23",
+      "plain_sha256": "2ace9c8d0a87acf01a846ad3cc3e74351e96a414cfb49f813286ca18c85123c1",
+      "text_sha256": "f8f26be158ca338b1ff60ef915441fa2213da4061490c4982ad839dd54e2f7e8",
+      "attribution": {
+        "event_count_approx": 920750000,
+        "samples": 3683,
+        "lost_samples": 0,
+        "gc_self_samples": 226,
+        "arena_self_samples": 138,
+        "unresolved_samples": 6,
+        "top_symbols": [
+          {
+            "percent": 3.86,
+            "samples": 142,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write"
+          },
+          {
+            "percent": 3.23,
+            "samples": 119,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved"
+          },
+          {
+            "percent": 3.23,
+            "samples": 119,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_get::try_data_get_bytes"
+          },
+          {
+            "percent": 3.04,
+            "samples": 112,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 2.91,
+            "samples": 107,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+          },
+          {
+            "percent": 2.85,
+            "samples": 105,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_function_bind"
+          },
+          {
+            "percent": 2.82,
+            "samples": 104,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::method_owner_class_id"
+          },
+          {
+            "percent": 2.44,
+            "samples": 90,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::is_closure_ptr"
+          },
+          {
+            "percent": 2.14,
+            "samples": 79,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.87,
+            "samples": 69,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_method_site_miss"
+          },
+          {
+            "percent": 1.76,
+            "samples": 65,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_typed_feedback_native_call_method"
+          },
+          {
+            "percent": 1.74,
+            "samples": 64,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] core::str::converts::from_utf8"
+          },
+          {
+            "percent": 1.68,
+            "samples": 62,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::props::object_own_get"
+          },
+          {
+            "percent": 1.28,
+            "samples": 47,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>"
+          },
+          {
+            "percent": 1.19,
+            "samples": 44,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_class_method_bind"
+          },
+          {
+            "percent": 1.09,
+            "samples": 40,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::state::class_decl_prototype_object"
+          },
+          {
+            "percent": 1.09,
+            "samples": 40,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_descriptor_intern_with_special_mode"
+          },
+          {
+            "percent": 1.09,
+            "samples": 40,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::spill::overflow_get"
+          },
+          {
+            "percent": 1.06,
+            "samples": 39,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_object_get_own_field_or_undef"
+          },
+          {
+            "percent": 1.0,
+            "samples": 37,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] node_modules_zod_lib_index_mjs__ZodType_constructor"
+          },
+          {
+            "percent": 0.95,
+            "samples": 35,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.95,
+            "samples": 35,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::is_registered_class_prototype_object"
+          },
+          {
+            "percent": 0.95,
+            "samples": 35,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_object_kind_by_id"
+          },
+          {
+            "percent": 0.87,
+            "samples": 32,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_object_set_field"
+          },
+          {
+            "percent": 0.84,
+            "samples": 31,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_module::class_prototype_method_value_for_name"
+          },
+          {
+            "percent": 0.81,
+            "samples": 30,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_native_call_method"
+          },
+          {
+            "percent": 0.76,
+            "samples": 28,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_closure_alloc"
+          },
+          {
+            "percent": 0.73,
+            "samples": 27,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] <std::thread::local::LocalKey<core::cell::RefCell<std::collections::hash::map::HashMap<usize, u32, perry_runtime::fast_hash::PtrHasher>>>>::with::<perry_runtime::object::native_module::callable_exports::builtin_closure_metadata::builtin_closure_length::{closure#0}, core::option::Option<u32>>"
+          },
+          {
+            "percent": 0.71,
+            "samples": 26,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::alloc::object_alloc_class_inline_keys_impl"
+          },
+          {
+            "percent": 0.68,
+            "samples": 25,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail"
+          },
+          {
+            "percent": 0.65,
+            "samples": 24,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::gc::roots::runtime_handles::runtime_handle_stack_cold"
+          },
+          {
+            "percent": 0.65,
+            "samples": 24,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::slot_store::store_object_field_slot"
+          },
+          {
+            "percent": 0.65,
+            "samples": 24,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::proxy::private_element_receiver"
+          },
+          {
+            "percent": 0.62,
+            "samples": 23,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_nanbox_get_pointer"
+          },
+          {
+            "percent": 0.62,
+            "samples": 23,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_closure_node_modules_zod_lib_index_mjs__254"
+          },
+          {
+            "percent": 0.62,
+            "samples": 23,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::closure_get_dynamic_prop_keyed"
+          },
+          {
+            "percent": 0.6,
+            "samples": 22,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 0.57,
+            "samples": 21,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::accessors::own_data_field_by_name"
+          },
+          {
+            "percent": 0.57,
+            "samples": 21,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_array_dense_slots"
+          },
+          {
+            "percent": 0.54,
+            "samples": 20,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&(u32, alloc::string::String)>"
+          }
+        ]
+      },
+      "data_sha256": "0d1b5af081f53531fa4a1e00f83fd38d13673652f322311edeb6414395c79638",
+      "report_sha256": "403a5e9763fde0b8fd639d169a54e0576409eb60c4f9e380f486505563e54515"
+    },
+    {
+      "prefix": "gc-auto-currentc170-qb6-v22",
+      "arm": "currentc170-gc",
+      "case": "zodwork",
+      "repeat": 1,
+      "correct": true,
+      "sampling_period": 250000,
+      "symbol_sha256": "9709b466730d24a823bb4863eec494635a781ae2e06238dfcb005f00e45e4d23",
+      "plain_sha256": "2ace9c8d0a87acf01a846ad3cc3e74351e96a414cfb49f813286ca18c85123c1",
+      "text_sha256": "f8f26be158ca338b1ff60ef915441fa2213da4061490c4982ad839dd54e2f7e8",
+      "attribution": {
+        "event_count_approx": 553000000,
+        "samples": 2212,
+        "lost_samples": 0,
+        "gc_self_samples": 149,
+        "arena_self_samples": 110,
+        "unresolved_samples": 4,
+        "top_symbols": [
+          {
+            "percent": 5.24,
+            "samples": 116,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write"
+          },
+          {
+            "percent": 4.02,
+            "samples": 89,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::is_closure_ptr"
+          },
+          {
+            "percent": 3.98,
+            "samples": 88,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_function_bind"
+          },
+          {
+            "percent": 3.84,
+            "samples": 85,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::method_owner_class_id"
+          },
+          {
+            "percent": 3.3,
+            "samples": 73,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 3.25,
+            "samples": 72,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 2.98,
+            "samples": 66,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_method_site_miss"
+          },
+          {
+            "percent": 2.76,
+            "samples": 61,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_typed_feedback_native_call_method"
+          },
+          {
+            "percent": 2.58,
+            "samples": 57,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved"
+          },
+          {
+            "percent": 2.22,
+            "samples": 49,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>"
+          },
+          {
+            "percent": 1.85,
+            "samples": 41,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::props::object_own_get"
+          },
+          {
+            "percent": 1.76,
+            "samples": 39,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::ic_miss::private_evaluation_brand_value"
+          },
+          {
+            "percent": 1.18,
+            "samples": 26,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_closure_alloc"
+          },
+          {
+            "percent": 1.13,
+            "samples": 25,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_class_method_bind"
+          },
+          {
+            "percent": 1.08,
+            "samples": 24,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+          },
+          {
+            "percent": 0.99,
+            "samples": 22,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_native_call_method"
+          },
+          {
+            "percent": 0.99,
+            "samples": 22,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::registration::is_class_id_registered"
+          },
+          {
+            "percent": 0.99,
+            "samples": 22,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_module::class_prototype_method_value_for_name"
+          },
+          {
+            "percent": 0.99,
+            "samples": 22,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_descriptor_intern_with_special_mode"
+          },
+          {
+            "percent": 0.95,
+            "samples": 21,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_object_set_field"
+          },
+          {
+            "percent": 0.9,
+            "samples": 20,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] <std::thread::local::LocalKey<core::cell::RefCell<std::collections::hash::map::HashMap<usize, u32, perry_runtime::fast_hash::PtrHasher>>>>::with::<perry_runtime::object::native_module::callable_exports::builtin_closure_metadata::builtin_closure_length::{closure#0}, core::option::Option<u32>>"
+          },
+          {
+            "percent": 0.9,
+            "samples": 20,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.9,
+            "samples": 20,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::state::class_decl_prototype_object"
+          },
+          {
+            "percent": 0.86,
+            "samples": 19,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] core::str::converts::from_utf8"
+          },
+          {
+            "percent": 0.77,
+            "samples": 17,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_array_alloc"
+          },
+          {
+            "percent": 0.77,
+            "samples": 17,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::is_class_object_ptr"
+          },
+          {
+            "percent": 0.77,
+            "samples": 17,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail"
+          },
+          {
+            "percent": 0.68,
+            "samples": 15,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.68,
+            "samples": 15,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.68,
+            "samples": 15,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_object_get_field"
+          },
+          {
+            "percent": 0.68,
+            "samples": 15,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::canonical_keys::probe_node"
+          },
+          {
+            "percent": 0.63,
+            "samples": 14,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_object_get_own_field_or_undef"
+          },
+          {
+            "percent": 0.63,
+            "samples": 14,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 0.63,
+            "samples": 14,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::class_meta::class_name_for_id"
+          },
+          {
+            "percent": 0.63,
+            "samples": 14,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::spill::overflow_get"
+          },
+          {
+            "percent": 0.59,
+            "samples": 13,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] js_object_get_class_id"
+          },
+          {
+            "percent": 0.59,
+            "samples": 13,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::alloc::object_alloc_class_inline_keys_impl"
+          },
+          {
+            "percent": 0.59,
+            "samples": 13,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::ic_miss::take_private_method_owner_hint"
+          },
+          {
+            "percent": 0.59,
+            "samples": 13,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::slot_store::store_object_field_slot"
+          },
+          {
+            "percent": 0.54,
+            "samples": 12,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::is_registered_class_prototype_object"
+          }
+        ]
+      },
+      "data_sha256": "2826007663c4ebfad39efce3d86e858ae0adafb19b97d3ac8194d956f2f02f68",
+      "report_sha256": "d5fceb63aad6a80651de2f84aaec3299b4900cf4596b7d0765b9060d589ad4d8"
+    },
+    {
+      "prefix": "gc-auto-currentc170-qb6-v22",
+      "arm": "currentc170-base",
+      "case": "zodwork",
+      "repeat": 1,
+      "correct": true,
+      "sampling_period": 250000,
+      "symbol_sha256": "24bfb441507fdc1fd705dca6d3b7b0a4a62d04732712d7741024cab0631571ea",
+      "plain_sha256": "79e88e0e2e6c7d2c2ea4c90c5b091f1632b5751a5c392d54c28512d84536aa83",
+      "text_sha256": "3f611bbde38b626f79c80b27924ed7015e06ccb79e0ed6272b755c338ec7e6d4",
+      "attribution": {
+        "event_count_approx": 551750000,
+        "samples": 2207,
+        "lost_samples": 0,
+        "gc_self_samples": 173,
+        "arena_self_samples": 125,
+        "unresolved_samples": 7,
+        "top_symbols": [
+          {
+            "percent": 6.89,
+            "samples": 152,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] <core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write"
+          },
+          {
+            "percent": 4.17,
+            "samples": 92,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::is_closure_ptr"
+          },
+          {
+            "percent": 3.81,
+            "samples": 84,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::method_owner_class_id"
+          },
+          {
+            "percent": 3.26,
+            "samples": 72,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_class_method_bind"
+          },
+          {
+            "percent": 3.04,
+            "samples": 67,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 2.99,
+            "samples": 66,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_method_site_miss"
+          },
+          {
+            "percent": 2.9,
+            "samples": 64,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 2.54,
+            "samples": 56,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_function_bind"
+          },
+          {
+            "percent": 2.22,
+            "samples": 49,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved"
+          },
+          {
+            "percent": 1.63,
+            "samples": 36,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::props::object_own_get"
+          },
+          {
+            "percent": 1.54,
+            "samples": 34,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.4,
+            "samples": 31,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] <std::thread::local::LocalKey<core::cell::RefCell<std::collections::hash::map::HashMap<usize, u32, perry_runtime::fast_hash::PtrHasher>>>>::with::<perry_runtime::object::native_module::callable_exports::builtin_closure_metadata::builtin_closure_length::{closure#0}, core::option::Option<u32>>"
+          },
+          {
+            "percent": 1.36,
+            "samples": 30,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 1.36,
+            "samples": 30,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>"
+          },
+          {
+            "percent": 1.27,
+            "samples": 28,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_typed_feedback_native_call_method"
+          },
+          {
+            "percent": 1.22,
+            "samples": 27,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::state::class_decl_prototype_object"
+          },
+          {
+            "percent": 1.22,
+            "samples": 27,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_descriptor_intern_with_special_mode"
+          },
+          {
+            "percent": 1.0,
+            "samples": 22,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] core::str::converts::from_utf8"
+          },
+          {
+            "percent": 1.0,
+            "samples": 22,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_native_call_method"
+          },
+          {
+            "percent": 1.0,
+            "samples": 22,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::field_set_by_name::tail::set_field_by_name_object_tail"
+          },
+          {
+            "percent": 0.95,
+            "samples": 21,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_object_set_field"
+          },
+          {
+            "percent": 0.91,
+            "samples": 20,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_object_get_own_field_or_undef"
+          },
+          {
+            "percent": 0.86,
+            "samples": 19,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.86,
+            "samples": 19,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+          },
+          {
+            "percent": 0.86,
+            "samples": 19,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_get::try_data_get_bytes"
+          },
+          {
+            "percent": 0.82,
+            "samples": 18,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] <std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&(u32, alloc::string::String)>"
+          },
+          {
+            "percent": 0.77,
+            "samples": 17,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.77,
+            "samples": 17,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::native_module::class_prototype_method_value_for_name"
+          },
+          {
+            "percent": 0.72,
+            "samples": 16,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::alloc::object_alloc_class_inline_keys_impl"
+          },
+          {
+            "percent": 0.72,
+            "samples": 16,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::registration::is_class_id_registered"
+          },
+          {
+            "percent": 0.68,
+            "samples": 15,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_closure_alloc"
+          },
+          {
+            "percent": 0.68,
+            "samples": 15,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_object_get_field"
+          },
+          {
+            "percent": 0.68,
+            "samples": 15,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] mi_theap_malloc_aligned"
+          },
+          {
+            "percent": 0.68,
+            "samples": 15,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::closure_get_dynamic_prop_keyed"
+          },
+          {
+            "percent": 0.68,
+            "samples": 15,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_object_kind_by_id"
+          },
+          {
+            "percent": 0.68,
+            "samples": 15,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memmove_avx512_unaligned_erms"
+          },
+          {
+            "percent": 0.59,
+            "samples": 13,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] js_nanbox_get_pointer"
+          },
+          {
+            "percent": 0.54,
+            "samples": 12,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::gc::layout::layout_note_slot"
+          },
+          {
+            "percent": 0.54,
+            "samples": 12,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::object::spill::overflow_get"
+          },
+          {
+            "percent": 0.54,
+            "samples": 12,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-zodwork-symbols",
+            "symbol": "[.] perry_runtime::set::is_registered_set"
+          }
+        ]
+      },
+      "data_sha256": "0e29e99e19ad89399f9a002e448f1abf0378332535cc6edd32bb2a39ed57f49a",
+      "report_sha256": "553d4ec74f82abc983b1ef334cedae41a67db77e6b97a0af9229cd0b4156bd22"
+    },
+    {
+      "prefix": "gc-auto-currentc170-qb6-v22",
+      "arm": "currentc170-gc",
+      "case": "72-request-processing",
+      "repeat": 1,
+      "correct": true,
+      "sampling_period": 1000000,
+      "symbol_sha256": "d0ab4c55342e66a7a952fd1a212a7f40ad38b3fe381a2a3d3f1f380487da1442",
+      "plain_sha256": "afad1fc8fec52d12c701b919b586b5fb4016e8f0e749966423043b904c70024c",
+      "text_sha256": "a3d065fc88cb315e59b946a14624861687db4cb3573ebbe88450773237c4e4c1",
+      "attribution": {
+        "event_count_approx": 80837000000,
+        "samples": 80837,
+        "lost_samples": 0,
+        "gc_self_samples": 8916,
+        "arena_self_samples": 2728,
+        "unresolved_samples": 17,
+        "top_symbols": [
+          {
+            "percent": 5.25,
+            "samples": 4246,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::map::store::StringIndex>::insert"
+          },
+          {
+            "percent": 3.63,
+            "samples": 2932,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::map::compact_map_entries"
+          },
+          {
+            "percent": 2.05,
+            "samples": 1660,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 1.75,
+            "samples": 1413,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::native_get::try_data_get_bytes"
+          },
+          {
+            "percent": 1.73,
+            "samples": 1400,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.44,
+            "samples": 1167,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+          },
+          {
+            "percent": 1.36,
+            "samples": 1099,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memmove_avx512_unaligned_erms"
+          },
+          {
+            "percent": 1.27,
+            "samples": 1027,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::layout::layout_note_slot"
+          },
+          {
+            "percent": 1.25,
+            "samples": 1011,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe"
+          },
+          {
+            "percent": 1.23,
+            "samples": 996,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::is_closure_ptr"
+          },
+          {
+            "percent": 1.23,
+            "samples": 993,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] core::str::converts::from_utf8"
+          },
+          {
+            "percent": 1.12,
+            "samples": 908,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+          },
+          {
+            "percent": 1.12,
+            "samples": 906,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.04,
+            "samples": 841,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.95,
+            "samples": 771,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_closure_node_modules_qs_lib_utils_js__31"
+          },
+          {
+            "percent": 0.92,
+            "samples": 747,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::write_barrier_decoded_parent"
+          },
+          {
+            "percent": 0.91,
+            "samples": 739,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved"
+          },
+          {
+            "percent": 0.86,
+            "samples": 699,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::is_class_object_ptr"
+          },
+          {
+            "percent": 0.8,
+            "samples": 647,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::map::rebuild_map_ptr_index"
+          },
+          {
+            "percent": 0.74,
+            "samples": 595,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] js_array_alloc"
+          },
+          {
+            "percent": 0.72,
+            "samples": 580,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.72,
+            "samples": 578,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::regex::perex_owner::GcProgram as perex::binding::ImmutableProgram>::with_words::<core::result::Result<core::result::Result<core::result::Result<perex::executor::Progress, perex::executor::ExecError>, perex::binding::PairError<perry_runtime::regex::perex_owner::OwnerError, perry_runtime::regex::perex_owner::OwnerError>>, perex::binding::BoundProgramError<perry_runtime::regex::perex_owner::OwnerError>>, <perex::binding::BoundProgram<perry_runtime::regex::perex_owner::GcProgram>>::with_view<core::result::Result<core::result::Result<perex::executor::Progress, perex::executor::ExecError>, perex::binding::PairError<perry_runtime::regex::perex_owner::OwnerError, perry_runtime::regex::perex_owner::OwnerError>>, <perex::binding::BoundResources<perry_runtime::regex::perex_owner::GcProgram, perry_runtime::regex::perex_owner::HeapSubject> as perex::executor::Resources>::with_views<core::result::Result<perex::executor::Progress, perex::executor::ExecError>, <perex::executor::Search<perex::binding::BoundResources<perry_runtime::regex::perex_owner::GcProgram, perry_runtime::regex::perex_owner::HeapSubject>, perex::executor::Scratch>>::run_with::{closure#0}>::{closure#0}>::{closure#0}>"
+          },
+          {
+            "percent": 0.69,
+            "samples": 560,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::regex::perex_runtime::find_near::<perry_runtime::regex::perex_owner::HeapSubject, perry_runtime::regex::perex_runtime::poll>"
+          },
+          {
+            "percent": 0.68,
+            "samples": 553,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::map::store::is_live_map"
+          },
+          {
+            "percent": 0.67,
+            "samples": 540,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_tables::count_new_young_layout_record"
+          },
+          {
+            "percent": 0.67,
+            "samples": 539,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::filter::may_have_descriptor_entry"
+          },
+          {
+            "percent": 0.66,
+            "samples": 531,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::string::intern::intern_dispatch_bytes"
+          },
+          {
+            "percent": 0.62,
+            "samples": 501,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::runtime_write_barrier_gc_slot"
+          },
+          {
+            "percent": 0.6,
+            "samples": 486,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::array::header_gc_slots::store_array_slot_resolved"
+          },
+          {
+            "percent": 0.6,
+            "samples": 482,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::get_accessor_descriptor"
+          },
+          {
+            "percent": 0.59,
+            "samples": 477,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] <perex::executor::Vm>::run"
+          },
+          {
+            "percent": 0.59,
+            "samples": 476,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.59,
+            "samples": 475,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] <hashbrown::raw::RawTable<(usize, alloc::vec::Vec<alloc::sync::Arc<perry_runtime::atomics_futex::Waiter>>)>>::remove_entry::<hashbrown::map::equivalent_key<usize, usize, alloc::vec::Vec<alloc::sync::Arc<perry_runtime::atomics_futex::Waiter>>>::{closure#0}>"
+          },
+          {
+            "percent": 0.59,
+            "samples": 474,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::barrier_child_prologue"
+          },
+          {
+            "percent": 0.58,
+            "samples": 469,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_slot_lookup_verdict"
+          },
+          {
+            "percent": 0.57,
+            "samples": 461,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::array::indexing::js_array_set_f64_extend_resolved"
+          },
+          {
+            "percent": 0.55,
+            "samples": 447,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::roots::runtime_handles::runtime_handle_stack_cold"
+          },
+          {
+            "percent": 0.53,
+            "samples": 429,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] js_put_value_set"
+          },
+          {
+            "percent": 0.51,
+            "samples": 410,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::state::class_id_for_decl_prototype_object"
+          },
+          {
+            "percent": 0.49,
+            "samples": 393,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-gc-72-request-processing-symbols",
+            "symbol": "[.] mi_theap_malloc_aligned"
+          }
+        ]
+      },
+      "data_sha256": "bbaabc686b2393d18fc2697527cf448648b2956d70651908873bf66a98afcb66",
+      "report_sha256": "a263338ef45f48089a6ab25d61f739048098170122fc1046f9946a9294100752"
+    },
+    {
+      "prefix": "gc-auto-currentc170-qb6-v22",
+      "arm": "currentc170-base",
+      "case": "72-request-processing",
+      "repeat": 1,
+      "correct": true,
+      "sampling_period": 1000000,
+      "symbol_sha256": "14a3a6615b7547118546367ecb3556e68e07a40f78e5fae488032f1a1580b7f8",
+      "plain_sha256": "05846cc899f836c52ce53d789701c1cf6cc8c553f287add076783ef565b8509d",
+      "text_sha256": "b43cc8476a027b195a128d07bed4347273a39e5a987afa50c9ddd4abcd7004b9",
+      "attribution": {
+        "event_count_approx": 81166000000,
+        "samples": 81166,
+        "lost_samples": 0,
+        "gc_self_samples": 8736,
+        "arena_self_samples": 2475,
+        "unresolved_samples": 16,
+        "top_symbols": [
+          {
+            "percent": 5.32,
+            "samples": 4317,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::map::store::StringIndex>::insert"
+          },
+          {
+            "percent": 3.67,
+            "samples": 2982,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::map::compact_map_entries"
+          },
+          {
+            "percent": 2.29,
+            "samples": 1857,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memcmp_evex_movbe"
+          },
+          {
+            "percent": 1.69,
+            "samples": 1368,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::native_get::try_data_get_bytes"
+          },
+          {
+            "percent": 1.68,
+            "samples": 1363,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.52,
+            "samples": 1235,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes"
+          },
+          {
+            "percent": 1.34,
+            "samples": 1091,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::layout::layout_note_slot"
+          },
+          {
+            "percent": 1.27,
+            "samples": 1032,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::closure::dynamic_props::is_closure_ptr"
+          },
+          {
+            "percent": 1.19,
+            "samples": 964,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::get_field_by_name::get_field_by_name_past_data_probe"
+          },
+          {
+            "percent": 1.15,
+            "samples": 934,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] core::str::converts::from_utf8"
+          },
+          {
+            "percent": 1.12,
+            "samples": 913,
+            "dso": "libc.so.6",
+            "symbol": "[.] __memmove_avx512_unaligned_erms"
+          },
+          {
+            "percent": 1.02,
+            "samples": 829,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::field_get_set::get_field_by_name_tail::get_field_by_name_object_tail"
+          },
+          {
+            "percent": 1.02,
+            "samples": 827,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::arena::allocators::arena_alloc"
+          },
+          {
+            "percent": 1.0,
+            "samples": 808,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] _mi_page_malloc_zero"
+          },
+          {
+            "percent": 0.98,
+            "samples": 798,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_closure_node_modules_qs_lib_utils_js__31"
+          },
+          {
+            "percent": 0.97,
+            "samples": 789,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::keys_lookup::keys_find_slot_by_bytes_resolved"
+          },
+          {
+            "percent": 0.9,
+            "samples": 733,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::parent_static::is_class_object_ptr"
+          },
+          {
+            "percent": 0.89,
+            "samples": 726,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier::write_barrier_decoded_parent"
+          },
+          {
+            "percent": 0.79,
+            "samples": 642,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::regex::perex_runtime::find_near::<perry_runtime::regex::perex_owner::HeapSubject, perry_runtime::regex::perex_runtime::poll>"
+          },
+          {
+            "percent": 0.78,
+            "samples": 635,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::regex::perex_owner::GcProgram as perex::binding::ImmutableProgram>::with_words::<core::result::Result<core::result::Result<core::result::Result<perex::executor::Progress, perex::executor::ExecError>, perex::binding::PairError<perry_runtime::regex::perex_owner::OwnerError, perry_runtime::regex::perex_owner::OwnerError>>, perex::binding::BoundProgramError<perry_runtime::regex::perex_owner::OwnerError>>, <perex::binding::BoundProgram<perry_runtime::regex::perex_owner::GcProgram>>::with_view<core::result::Result<core::result::Result<perex::executor::Progress, perex::executor::ExecError>, perex::binding::PairError<perry_runtime::regex::perex_owner::OwnerError, perry_runtime::regex::perex_owner::OwnerError>>, <perex::binding::BoundResources<perry_runtime::regex::perex_owner::GcProgram, perry_runtime::regex::perex_owner::HeapSubject> as perex::executor::Resources>::with_views<core::result::Result<perex::executor::Progress, perex::executor::ExecError>, <perex::executor::Search<perex::binding::BoundResources<perry_runtime::regex::perex_owner::GcProgram, perry_runtime::regex::perex_owner::HeapSubject>, perex::executor::Scratch>>::run_with::{closure#0}>::{closure#0}>::{closure#0}>"
+          },
+          {
+            "percent": 0.77,
+            "samples": 629,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::map::rebuild_map_ptr_index"
+          },
+          {
+            "percent": 0.76,
+            "samples": 617,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::filter::may_have_descriptor_entry"
+          },
+          {
+            "percent": 0.73,
+            "samples": 589,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::map::is_registered_map"
+          },
+          {
+            "percent": 0.72,
+            "samples": 584,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] js_array_alloc"
+          },
+          {
+            "percent": 0.7,
+            "samples": 571,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_classified"
+          },
+          {
+            "percent": 0.63,
+            "samples": 509,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::array::header_gc_slots::store_array_slot_resolved"
+          },
+          {
+            "percent": 0.62,
+            "samples": 507,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] <perry_runtime::gc::copying::CopyingNurseryCollector>::mark_addr"
+          },
+          {
+            "percent": 0.62,
+            "samples": 507,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::layout_tables::count_new_young_layout_record"
+          },
+          {
+            "percent": 0.61,
+            "samples": 494,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::array::indexing::js_array_set_f64_extend_resolved"
+          },
+          {
+            "percent": 0.61,
+            "samples": 492,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::string::intern::intern_dispatch_bytes"
+          },
+          {
+            "percent": 0.6,
+            "samples": 491,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::runtime_write_barrier_gc_slot"
+          },
+          {
+            "percent": 0.6,
+            "samples": 488,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::descriptor_state::get_accessor_descriptor"
+          },
+          {
+            "percent": 0.57,
+            "samples": 459,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] <hashbrown::raw::RawTable<(usize, alloc::vec::Vec<(alloc::string::String, u64)>)>>::remove_entry::<hashbrown::map::equivalent_key<usize, usize, alloc::vec::Vec<(alloc::string::String, u64)>>::{closure#0}>"
+          },
+          {
+            "percent": 0.56,
+            "samples": 455,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] <perex::executor::Vm>::run"
+          },
+          {
+            "percent": 0.55,
+            "samples": 443,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::roots::runtime_handles::runtime_handle_stack_cold"
+          },
+          {
+            "percent": 0.54,
+            "samples": 441,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] js_put_value_set"
+          },
+          {
+            "percent": 0.54,
+            "samples": 438,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::class_registry::class_meta::is_anon_shape_class_id"
+          },
+          {
+            "percent": 0.51,
+            "samples": 418,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::gc::barrier_store::barrier_child_prologue"
+          },
+          {
+            "percent": 0.51,
+            "samples": 417,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::exception::try_push_with_kind::{closure#0}"
+          },
+          {
+            "percent": 0.49,
+            "samples": 401,
+            "dso": "gc-auto-qb6-currentc170-v22-currentc170-base-72-request-processing-symbols",
+            "symbol": "[.] perry_runtime::object::shapes::shape_slot_lookup_verdict"
+          }
+        ]
+      },
+      "data_sha256": "ce7c79719b149e8e37897fb09217bc2c9c75291337fa1e38213edaf89500d2f2",
+      "report_sha256": "680b45ee34658c9bcc9678e48e345bb62def5e641cee33a635003ae51b991533"
+    }
+  ]
+}

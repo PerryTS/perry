@@ -1,0 +1,55 @@
+{
+  "base": "2026ecfe6dd9df1a0a8616e3bc5c5561e8e0cf63",
+  "production_runtime": "6c761801fa4c76ad79b67bbc4338bee7739093b7",
+  "private_entry": "6e311851fa6a6e0c981b7e2f2c34d3bdc5d3d2f9",
+  "commands": [
+    {
+      "arm": "entry",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "perry-runtime",
+        "--lib",
+        "real_full_collection_gives_eden_a_reuse_interval_then_discards_idle_pages",
+        "--",
+        "--nocapture"
+      ],
+      "rc": 0,
+      "pid": 1336127,
+      "elapsed_s": 101.5861421842128,
+      "log_sha256": "5edd682690fe49761201b2e9a7477393c2ec0398a1fa16b4963bb999dd4bd0e6",
+      "source_inputs_sha256": "bf9f243bfbc6ab1b151f2ce7c7f347a59b7ce99ca5947b44d02138d6733db72d",
+      "scope": "Test-only fixture overlay, actual strings and full collections; no manually written idle ages. Control omits the private shipping policy."
+    },
+    {
+      "arm": "control",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "perry-runtime",
+        "--lib",
+        "real_full_collection_gives_eden_a_reuse_interval_then_discards_idle_pages",
+        "--",
+        "--nocapture"
+      ],
+      "rc": 101,
+      "pid": 1339849,
+      "elapsed_s": 121.20612533576787,
+      "log_sha256": "d8820e51394f6b1cafb44ea2714c2bf6501ce95ad45ada0cd30520cd4cbde6c6",
+      "source_inputs_sha256": "d2807a85ef1c03fdd76b585bd7f24eb64bcd480b1a8b2cd9c522846f23ee5da4",
+      "scope": "Test-only fixture overlay, actual strings and full collections; no manually written idle ages. Control omits the private shipping policy."
+    }
+  ],
+  "source_counts": {
+    "entry": 5000,
+    "control": 5000
+  },
+  "test_source_sha256": "777d252462b23b92a40340f0e7f52fbff8efeca27bc7d26d2bb79453c510d60f",
+  "scope": "Real nursery strings, actual full publication, intervening mutator allocation and second real collection. Candidate residency/reuse contract passes; baseline fails precisely that contract, not a fixture precondition. Original cursor-fixture failure preserved; shipping policy unadopted."
+}

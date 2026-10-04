@@ -47,6 +47,7 @@ fn empty_opts() -> CompileOptions {
         target: None,
         is_entry_module: false,
         non_entry_module_prefixes: Vec::new(),
+        thread_literal_module_prefixes: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -64,6 +65,7 @@ fn empty_opts() -> CompileOptions {
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
+        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -7630,12 +7632,11 @@ fn boxed_local_storage_module(name: &str, init: Expr, replacement: Expr) -> Modu
 
 #[test]
 fn abrupt_captured_local_assignment_does_not_emit_orphan_write_barrier() {
-    // An unresolved Worker construction lowers to a runtime throw followed by
-    // `unreachable`.  The enclosing LocalSet must not create its post-store
-    // write-barrier blocks after that terminator: the store and its SSA inputs
-    // were never emitted, so such a block is unreachable *and* refers to
-    // undefined registers (the Pi agent bundle exposed this at LLVM parse
-    // time).
+    // An unresolved Worker construction asks the runtime worker entry table
+    // (`js_worker_threads_worker_new_by_spec`), which throws only if no entry
+    // matches, so the block stays open and the store after it is live. The
+    // module must still verify (the Pi agent bundle once exposed an orphan
+    // post-store write-barrier block at LLVM parse time).
     let replacement = Expr::WorkerNew {
         partial: false,
         paths: Vec::new(),
@@ -7649,62 +7650,12 @@ fn abrupt_captured_local_assignment_does_not_emit_orphan_write_barrier() {
         replacement,
     );
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
-    let throw = ir
-        .find("call void @js_throw_error_with_code")
-        .expect("unresolved Worker construction should lower to the deferred runtime throw");
-    let function_tail = &ir[throw..];
-    let function_end = function_tail
-        .find("\n}\n")
-        .expect("throwing closure should have a complete definition");
-    let throwing_body = &function_tail[..function_end];
-
     assert!(
-        throwing_body.contains("\n  unreachable"),
-        "fixture should terminate the assignment before its store:\n{throwing_body}"
+        ir.contains("@js_worker_threads_worker_new_by_spec("),
+        "the unresolved Worker should defer to the runtime worker entry table"
     );
-    // #11450: the store after the throw is lowered into a predecessor-less
-    // block (dead code), so whatever it emits must be well-formed IR rather
-    // than a barrier naming registers dropped from the terminated block.
-    assert_code_after_unresolved_worker_is_dead(throwing_body);
     perry_codegen::testing::verify_ir(&ir, "abrupt_captured_local_set_barrier")
         .unwrap_or_else(|e| panic!("LLVM verifier rejected the module: {e}\n{ir}"));
-}
-
-/// Everything lowered after an unresolved Worker's `unreachable` sits in the
-/// `worker.unresolved.after` block, which no branch targets (#11450).
-///
-/// #10812's entry-level stack-guard check creates its `stack_guard.ok` block
-/// *before* the function body (including the throw) is lowered into it, and
-/// creates the paired `stack_guard.overflow` block right after — so that
-/// live, unrelated block can now render, by block-creation order, textually
-/// between the throw's `unreachable` and the dead `worker.unresolved.after`
-/// block below it. That is harmless (it is reached from the guard's
-/// fast-path branch, not from anything after the throw), so the check below
-/// only looks at the throw's *own* block — the text up to the next block
-/// label, whatever that label turns out to be — rather than assuming the
-/// dead block is textually adjacent.
-fn assert_code_after_unresolved_worker_is_dead(after_throw: &str) {
-    let throw_block_tail: String = after_throw
-        .lines()
-        .skip(1) // the `call void @js_throw_error_with_code(...)` line itself
-        .take_while(|l| !(l.ends_with(':') && !l.starts_with(' ')))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(
-        throw_block_tail.trim_end().ends_with("unreachable"),
-        "the throw's own block must terminate in `unreachable`:\n{after_throw}"
-    );
-    let dead_label = after_throw
-        .lines()
-        .find_map(|l| {
-            l.strip_suffix(':')
-                .filter(|l| l.starts_with("worker.unresolved.after"))
-        })
-        .unwrap_or_else(|| panic!("no dead continuation block after the throw:\n{after_throw}"));
-    assert!(
-        !after_throw.contains(&format!("label %{dead_label}")),
-        "the dead continuation block must have no predecessors:\n{after_throw}"
-    );
 }
 
 #[test]
@@ -7777,21 +7728,10 @@ fn abrupt_constructor_argument_stops_anonymous_object_construction() {
         }))],
     );
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
-    let body = probe_body(&ir);
-    let throw = body
-        .find("call void @js_throw_error_with_code")
-        .expect("unresolved Worker construction should emit its runtime throw");
-    let after_throw = &body[throw..];
-
     assert!(
-        after_throw.contains("\n  unreachable"),
-        "the dynamic Worker fallback must terminate the path:\n{after_throw}"
+        ir.contains("@js_worker_threads_worker_new_by_spec("),
+        "the unresolved Worker should defer to the runtime worker entry table"
     );
-    // #11450: the later field, allocation and constructor diamond are lowered
-    // into a predecessor-less block after the throw. They are dead, and the
-    // module must verify: none of them may name a register dropped from the
-    // terminated block.
-    assert_code_after_unresolved_worker_is_dead(after_throw);
     perry_codegen::testing::verify_ir(&ir, "abrupt_anonymous_object_constructor_arg")
         .unwrap_or_else(|e| panic!("LLVM verifier rejected the module: {e}\n{ir}"));
 }
@@ -7948,6 +7888,44 @@ fn tdz_numeric_const_read_is_not_constant_folded() {
     assert!(
         !ir.contains("double 4.200000e+01"),
         "the pre-declaration read must NOT be constant-folded to its later value:\n{ir}"
+    );
+}
+
+/// #11826: a module-level TDZ check reads the binding's global, which starts
+/// out as the TDZ sentinel. Neither the global's initial value nor the
+/// checked operand may be the constant the declarator installs later (the
+/// lesson of the #9762 revert above), or a read before the declaration would
+/// pass the check and see 42.
+#[test]
+fn module_tdz_check_reads_the_sentinel_seeded_global_not_the_folded_constant() {
+    let body = vec![Stmt::Return(Some(Expr::Sequence(vec![
+        perry_hir::tdz_check::check(9, "value"),
+        Expr::LocalGet(9),
+    ])))];
+    let mut fixture = module("module_tdz_check.ts", body);
+    fixture.init = vec![Stmt::Let {
+        id: 9,
+        name: "value".to_string(),
+        ty: Type::Number,
+        mutable: false,
+        init: Some(Expr::Number(42.0)),
+    }];
+    let ir = String::from_utf8(compile_module(&fixture, empty_opts()).unwrap()).unwrap();
+    let global = ir
+        .lines()
+        .find(|line| line.starts_with("@perry_global_") && line.contains("__9 ="))
+        .unwrap_or_else(|| panic!("the checked binding must live in a module global:\n{ir}"));
+    assert!(
+        global.to_ascii_uppercase().contains("7FFC000000000011"),
+        "the checked binding's global must start as TAG_TDZ, not undefined or 42: {global}"
+    );
+    assert!(
+        ir.contains("icmp eq i64 %") && ir.contains("9222246136947933201"),
+        "the check compares the global's bits with TAG_TDZ:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_throw_reference_error_tdz(double"),
+        "a dead-zone read raises the TDZ ReferenceError:\n{ir}"
     );
 }
 
@@ -15483,11 +15461,12 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
     );
     assert!(
         ir.contains(
-            "_packed_set = private global [4 x i64] \
-             [i64 4294967295, i64 4294967295, i64 0, i64 0]"
+            "_packed_set = private global [5 x i64] \
+             [i64 4294967295, i64 4294967295, i64 0, i64 0, i64 0]"
         ),
         "the site record must be born EMPTY: its existing-key word and its key-add \
-         pre-shape word both 0xFFFF_FFFF, which no receiver word equals:\n{ir}"
+         pre-shape word both 0xFFFF_FFFF, which no receiver word equals, and no \
+         ConstFn body:\n{ir}"
     );
     assert!(
         ir.contains("put.add.check") && ir.contains("put.add.hit.store"),
@@ -15710,6 +15689,44 @@ fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
 // this file runs on a pull request (`cargo-test` is `--lib --bins`), and a
 // write-barrier IR assertion is the ONLY detector for a deleted barrier — so
 // it has to live where the next PR to move that store will run it.
+
+/// The `js_put_value_set_packed_miss` entries of `module`'s IR, counted per
+/// literal key `0..keys` (the key operand traced back to the load of
+/// `@<module>_.str.K.handle`). A miss entry whose key is not such a literal
+/// fails the test.
+fn put_miss_entries_per_key(ir: &str, module: &str, keys: usize) -> Vec<usize> {
+    let handle = format!("{module}_.str.");
+    let mut key_of: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut counts = vec![0; keys];
+    for line in ir.lines() {
+        let line = line.trim();
+        let Some((lhs, rhs)) = line.split_once(" = ") else {
+            continue;
+        };
+        let traced = |v: Option<&str>| v.and_then(|v| key_of.get(v.trim())).copied();
+        let key = if let Some(rest) = rhs.strip_prefix("load double, ptr @") {
+            rest.strip_prefix(handle.as_str())
+                .and_then(|r| r.strip_suffix(".handle"))
+                .and_then(|k| k.parse::<usize>().ok())
+        } else if let Some(rest) = rhs.strip_prefix("bitcast double ") {
+            traced(rest.split(' ').next())
+        } else if let Some(rest) = rhs.strip_prefix("and i64 ") {
+            traced(rest.split(',').next())
+        } else if let Some(args) = rhs.strip_prefix("call double @js_put_value_set_packed_miss(") {
+            match traced(args.split(", ").nth(1).and_then(|a| a.strip_prefix("i64 "))) {
+                Some(k) if k < keys => counts[k] += 1,
+                _ => panic!("a miss entry whose key is not a literal key handle: {line}\n{ir}"),
+            }
+            None
+        } else {
+            None
+        };
+        if let Some(k) = key {
+            key_of.insert(lhs.to_string(), k);
+        }
+    }
+    counts
+}
 
 #[test]
 fn nested_same_shape_object_writes_version_one_through_four_fields() {
@@ -15981,12 +15998,14 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             && !rejected.contains("object_array_write.loop.fast"),
         "five fields must remain outside the bounded clone:\n{rejected}"
     );
-    assert_eq!(
-        rejected
-            .matches("call double @js_put_value_set_packed_miss(")
-            .count(),
-        5,
-        "the bounded rejection must preserve the one miss entry of each of the five semantic write sites:\n{rejected}"
+    // `const object = objects[inner]` is an element receiver, so a loop
+    // region versions the rejected loop and the five sites are lowered once
+    // per generic copy of the body. Every copy must keep each site's miss
+    // entry: the entries come in whole sets, the same count for every key.
+    let per_key = put_miss_entries_per_key(&rejected, "nested_object_write5_loop", 5);
+    assert!(
+        per_key[0] >= 1 && per_key.iter().all(|c| *c == per_key[0]),
+        "the bounded rejection must preserve the miss entry of each of the five semantic write sites in every copy (entries per key: {per_key:?}):\n{rejected}"
     );
 
     let mut nonfinite_body = loop_body(1);

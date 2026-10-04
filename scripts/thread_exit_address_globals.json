@@ -19,7 +19,7 @@
   {
    "type": "Hook",
    "verdict": "no_heap_address",
-   "why": "perry-stdlib's link-time feature slot (common/feature_hooks.rs): an AtomicUsize holding only the bits of a plain `fn` pointer (set() asserts size_of::<F>() == usize and stores a code address; 0 = uninstalled). It never holds a heap or arena address, so thread exit cannot leave it dangling."
+   "why": "the link-time feature slot (perry-runtime/src/feature_hooks.rs, also used by perry-stdlib): an AtomicUsize holding only the bits of a plain `fn` pointer (set() asserts size_of::<F>() == usize and stores a code address; 0 = uninstalled). It never holds a heap or arena address, so thread exit cannot leave it dangling."
   }
  ],
  "entries": [
@@ -1536,22 +1536,6 @@
    "hook": "invalidate_caches_in_range"
   },
   {
-   "file": "crates/perry-runtime/src/typedarray/mod.rs",
-   "names": [
-    "PERRY_TA_VIEW_GUARD"
-   ],
-   "verdict": "no_heap_address",
-   "why": "#[no_mangle] count of live non-owning typed-array views, inc/dec by the view register/unregister paths; a counter (a worker exiting with views live only leaves it high, which disables the inline fast path, never makes it unsound)."
-  },
-  {
-   "file": "crates/perry-runtime/src/typedarray/mod.rs",
-   "names": [
-    "TYPED_ARRAY_ADDR_WINDOW"
-   ],
-   "verdict": "conservative_filter",
-   "why": "Min/max address ever passed to register_typed_array (widened at typedarray/mod.rs:404); a stale window only answers 'maybe', after which the authoritative per-thread TYPED_ARRAY_REGISTRY (thread-local, :180) decides."
-  },
-  {
    "file": "crates/perry-runtime/src/dgram_reactor.rs",
    "names": [
     "LIVE"
@@ -1982,15 +1966,6 @@
   {
    "file": "crates/perry-runtime/src/buffer/header.rs",
    "names": [
-    "EXTERNAL_UINT8ARRAY_REGISTRY"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Addresses of externally-marked Uint8Arrays; same removal gap, freed addresses dropped at thread exit.",
-   "hook": "release_external_buffer_registries_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
-   "names": [
     "EXTERNAL_CRYPTO_KEY_META_REGISTRY"
    ],
    "verdict": "thread_exit_invalidated",
@@ -2004,22 +1979,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Stores the extern \"C\" fn pointer installed once by perry-stdlib via js_set_crypto_key_death_hook (header.rs:80); code address."
-  },
-  {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
-   "names": [
-    "BUFFER_LIKE_ADDR_WINDOW"
-   ],
-   "verdict": "conservative_filter",
-   "why": "Monotone lo/hi address window over every buffer-like registration; a stale bound only admits more addresses to the slow path. Authoritative: BUFFER_REGISTRY (thread-local), shared_sab's registry via is_registered_buffer_slow."
-  },
-  {
-   "file": "crates/perry-runtime/src/buffer/header.rs",
-   "names": [
-    "UINT8ARRAY_ADDR_WINDOW"
-   ],
-   "verdict": "conservative_filter",
-   "why": "Monotone lo/hi window over Uint8Array marks; staleness only widens admission. Authoritative: UINT8ARRAY_FROM_CTOR (thread-local) and EXTERNAL_UINT8ARRAY_REGISTRY via is_uint8array_buffer_slow."
   },
   {
    "file": "crates/perry-runtime/src/buffer/header.rs",
@@ -2506,30 +2465,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the enum diagnostic sink getter; Rust-owned config, no addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/hot_diag.rs",
-   "names": [
-    "BUFFER_SINK"
-   ],
-   "verdict": "no_heap_address",
-   "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the buffer diagnostic sink getter; Rust-owned config, no addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/hot_diag.rs",
-   "names": [
-    "BUF_WIN_LO"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Diagnostic-only lower bound of the buffer-registry min/max window, stored by buffer_note_probe (hot_diag.rs:1462) and only ever formatted into the [buffer-diag] stderr dump; it is a number never dereferenced nor used as a lookup key, so staleness can only misreport a statistic."
-  },
-  {
-   "file": "crates/perry-runtime/src/hot_diag.rs",
-   "names": [
-    "BUF_WIN_HI"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Diagnostic-only upper bound of the buffer-registry window, stored by buffer_note_probe (hot_diag.rs:1463) and only printed by buffer_dump; never dereferenced nor used for a lookup."
   },
   {
    "file": "crates/perry-runtime/src/hot_diag.rs",
@@ -3735,14 +3670,6 @@
   {
    "file": "crates/perry-runtime/src/registry_latch.rs",
    "names": [
-    "WINDOW"
-   ],
-   "verdict": "no_heap_address",
-   "why": "#[cfg(test)] function-local fixture (concurrent_admits_never_drop_an_address) admitting synthetic integers 0x1_0000+i; never holds a real heap address and does not exist in production. | (second declaration) #[cfg(test)] function-local RegistryAddrWindow fixture (window_admit_is_visible_to_another_thread) admitting the synthetic constant 0x4000; test-only."
-  },
-  {
-   "file": "crates/perry-runtime/src/registry_latch.rs",
-   "names": [
     "FILTER"
    ],
    "verdict": "no_heap_address",
@@ -4004,6 +3931,14 @@
   {
    "file": "crates/perry-runtime/src/object/method_site.rs",
    "names": [
+    "METHOD_SITES"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "The values are addresses of MethodSite records allocated by pic_slot_resolve_init from the process-lifetime PicArena (std::alloc chunks, never freed), not from any thread's GC arena. Before workers start, primary-heap holders are visited by the primary agent's scan_method_site_roots_mut. Worker startup atomically gates all site reads and later publishes without writing live entries; thereafter no agent reads or scans the stale holder words, allowing their objects to collect."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/method_site.rs",
+   "names": [
     "SITE_REFUSED"
    ],
    "verdict": "no_heap_address",
@@ -4015,7 +3950,15 @@
     "HOLDER_SITES"
    ],
    "verdict": "process_global_allocation",
-   "why": "The addresses of read-site `PicCache`s, each allocated by `field_get_set::ic_slot::pic_arena_alloc` from `std::alloc::alloc_zeroed` chunks that are never freed and belong to no thread's arena, so thread exit cannot free or reuse them. The primary-heap holder and hop addresses the caches hold are written only by the primary agent (`prime_read_holder` checks `current_agent() == PRIMARY_AGENT` and `WORKER_AGENTS_EXIST`), are strong roots visited by `scan_read_holder_roots_mut`, and are emptied by `empty_read_holder_entries` when the first worker agent starts."
+   "why": "The addresses of read-site `PicCache`s, each allocated by `field_get_set::ic_slot::pic_arena_alloc` from `std::alloc::alloc_zeroed` chunks that are never freed and belong to no thread's arena, so thread exit cannot free or reuse them. Primary-heap holder and hop addresses are written only by the primary agent and traced by its scan_read_holder_roots_mut until the atomic worker-start gate is set. Thereafter no agent reads or scans stale holder words, allowing their objects to collect."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/method_site/chain_memo.rs",
+   "names": [
+    "CHAIN_MEMOS"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "The addresses of site chain memos (`ChainMemo`), each allocated by `field_get_set::ic_slot::pic_slot_resolve` from the process-lifetime PicArena (`std::alloc::alloc_zeroed` chunks that are never freed and belong to no thread's arena), so thread exit cannot free or reuse them. Primary-heap prototype addresses in a memo are written only by the primary agent and traced by its scan_chain_memo_roots_mut until the atomic worker-start gate is set. Thereafter no agent reads, records or scans a memo, allowing their objects to collect."
   },
   {
    "file": "crates/perry-stdlib/src/common/handle_lifecycle.rs",
@@ -4028,20 +3971,21 @@
   {
    "file": "crates/perry-runtime/src/object/shapes_store.rs",
    "names": [
-    "ORDINARY_DIR"
+    "AGENT_SHAPE_DIR"
    ],
    "verdict": "per_thread",
-   "why": "`#[thread_local]` static (not `thread_local!`, so the megamorphic read reaches it with one thread-pointer-relative load): each thread mirrors ITS OWN ShapeSlab page directory (a Rust-heap Vec pointer and length, never an arena address), republished on every change to `pages` and cleared by ShapeSlab::drop before the Vec is freed; const-initialised to (null, 0) with no drop glue."
+   "why": "`#[thread_local]` static (not `thread_local!`, so every by-id shape lookup reaches it with one thread-pointer-relative load and no runtime-state fetch): each thread mirrors ITS OWN agent ShapeSlab page directories (per band a Rust-heap Vec pointer and length, never an arena address), republished on every change to a band's page vector and reset to empty by ShapeSlab::drop before the Vecs are freed; const-initialised to (null, 0) per band with no drop glue."
   },
   {
    "file": "crates/perry-runtime/src/object/shapes_store.rs",
    "names": [
     "EMPTY_CHUNK",
     "EMPTY_PAGE",
+    "EMPTY_PAGE_ENTRY",
     "PERRY_EMPTY_SHAPE_DIR"
    ],
    "verdict": "no_heap_address",
-   "why": "Shared all-empty shape-slab structure (a chunk of EMPTY records, a page of pointers to that chunk, an empty page directory). Every pointer inside is the address of another immutable static in the program image, never an arena or heap address; nothing ever writes them, so an exited thread's Arena::drop cannot leave them dangling."
+   "why": "Shared all-empty shape-slab structure (a chunk of EMPTY records, a page of pointers to that chunk, a directory entry pointing at that page, an empty ordinary-band directory). Every pointer inside is the address of another immutable static in the program image, never an arena or heap address; nothing ever writes them, so an exited thread's Arena::drop cannot leave them dangling."
   },
   {
    "file": "crates/perry-runtime/src/object/static_shapes.rs",

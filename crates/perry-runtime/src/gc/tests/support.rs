@@ -1074,7 +1074,7 @@ pub(super) unsafe fn restamp_with_rep(obj: *mut crate::object::ObjectHeader, rep
         d.object_kind,
         d.hole_count,
         d.proto_id,
-        d.summary,
+        crate::object::shapes::ReceiverFacts::of_descriptor(&d, d.summary),
         rep,
         None,
     ));

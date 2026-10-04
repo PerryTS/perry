@@ -75,14 +75,15 @@ fn name_kind(name: &str) -> &'static str {
 /// `"an instance of Buffer, TypedArray, or DataView"`, `"one of type string
 /// or object"` — matching how node renders its `expected` array.
 pub fn throw_invalid_arg_type(name: &str, expected: &str, value: f64) -> ! {
-    let message = format!(
-        "The \"{}\" {} must be {}. Received {}",
-        name,
-        name_kind(name),
-        expected,
-        describe_received(value)
-    );
-    throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE")
+    crate::fs::validate::throw_received_type_error(
+        &format!(
+            "The \"{}\" {} must be {}. Received ",
+            name,
+            name_kind(name),
+            expected
+        ),
+        value,
+    )
 }
 
 /// Render the `Received …` clause of an `ERR_OUT_OF_RANGE` message. node
@@ -436,3 +437,13 @@ static KEEP_VALIDATE_CRYPTO_KEY_ARG: unsafe extern "C" fn(f64, *const u8, u32) =
 #[used(compiler)]
 static KEEP_VALIDATE_INTEGER_ARG: unsafe extern "C" fn(f64, *const u8, u32, f64, f64) =
     js_runtime_validate_integer_arg;
+
+/// Shared received-value rendering for extension crates; no validation policy.
+#[no_mangle]
+pub extern "C" fn js_runtime_describe_received(value: f64) -> f64 {
+    crate::value::js_nanbox_string(crate::fs::validate::describe_received_js(value) as i64)
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_DESCRIBE_RECEIVED: extern "C" fn(f64) -> f64 = js_runtime_describe_received;

@@ -5,7 +5,6 @@
 crates/perry-runtime/src/alloc_census.rs::FILTER
 crates/perry-runtime/src/arena/quarantine.rs::ON
 crates/perry-runtime/src/array/subclass_elements.rs::ON
-crates/perry-runtime/src/buffer/header.rs::EXTERNAL_UINT8ARRAYS_NONEMPTY
 crates/perry-runtime/src/bun_compat/plugin.rs::LOADER_CALLS
 crates/perry-runtime/src/bun_compat/plugin.rs::SETUP_CALLS
 crates/perry-runtime/src/dgram_reactor.rs::LIVE
@@ -38,7 +37,6 @@ crates/perry-runtime/src/object/class_meta_registry.rs::PARENT_DENSE_INCOMPLETE
 crates/perry-runtime/src/object/delete_rest.rs::ON
 crates/perry-runtime/src/object/field_get_set/enumeration.rs::ON
 crates/perry-runtime/src/object/field_get_set/ic_miss.rs::ON
-crates/perry-runtime/src/object/inherited_read_cache.rs::ON
 crates/perry-runtime/src/object/map_set_subclass.rs::ITERATOR_PROTOCOL_TOUCHED
 crates/perry-runtime/src/object/native_module_registry.rs::NM_DISPATCH_REGISTRY
 crates/perry-runtime/src/object/prop_plan.rs::ON

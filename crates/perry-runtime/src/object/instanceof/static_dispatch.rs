@@ -170,11 +170,22 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // has `Function.prototype` in its prototype chain. Keep `CLASS_ID_FUNCTION`
     // in sync with perry-codegen/src/expr/instance_misc1.rs.
     if class_id == CLASS_ID_FUNCTION {
-        return if value_is_callable(value) {
-            true_val
-        } else {
-            false_val
-        };
+        if value_is_callable(value) {
+            return true_val;
+        }
+        // An ordinary object whose recorded chain reaches a function
+        // (`Object.create(fn)`) has `Function.prototype` on it too.
+        let addr = value_addr(value);
+        if addr != 0
+            && unsafe { crate::object::prototype_chain::meta_capable_object(addr) }.is_some()
+            && crate::object::prototype_chain::object_static_prototype(addr).is_some()
+        {
+            let function = js_get_global_this_builtin_value(b"Function".as_ptr(), 8);
+            if ordinary_has_instance_prototype_walk(value, function) {
+                return true_val;
+            }
+        }
+        return false_val;
     }
     if class_id == CLASS_ID_URL {
         let addr = value_addr(value);
@@ -369,7 +380,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             (bits & 0x0000_FFFF_FFFF_FFFF) as usize
         } else {
             let top16 = (bits >> 48) as u16;
-            if top16 == 0 && bits >= 0x1000 {
+            // #10694: a raw word must be allocator-owned before the brand read.
+            if top16 == 0 && bits >= 0x1000 && crate::buffer::header_is_owned(bits as usize) {
                 bits as usize
             } else {
                 0
@@ -578,6 +590,39 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
                 return false_val;
             }
+            // A relinked class prototype (or a replaced instance prototype)
+            // can end the chain before `Object.prototype`.
+            if let Some(header) =
+                unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
+            {
+                if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+                    let obj_class_id =
+                        unsafe { (*(value_addr(value) as *const ObjectHeader)).class_id };
+                    if let Some(answer) =
+                        relinked_instance_chain_answer(value, obj_class_id, CLASS_ID_OBJECT)
+                    {
+                        return if answer { true_val } else { false_val };
+                    }
+                }
+            }
+            // An ordinary object whose chain ends in null before it reaches
+            // `Object.prototype` (`Object.create(null)`) is not an instance.
+            // Only a cell born null, a receiver with a recorded prototype, or
+            // a program that ever replaced one can have such a chain.
+            let addr = jsval.as_pointer::<u8>() as usize;
+            if let Some(obj) = unsafe { crate::object::prototype_chain::meta_capable_object(addr) }
+            {
+                let born_null =
+                    unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) }
+                        .is_some_and(|h| h._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0);
+                if (born_null
+                    || crate::object::prototype_chain::any_class_chain_relinked()
+                    || crate::object::prototype_chain::object_static_prototype(addr).is_some())
+                    && crate::object::prototype_chain::prototype_chain_ends_in_null_before_object_prototype(addr)
+                {
+                    return false_val;
+                }
+            }
             // Covers every heap object, including a Date (now a NaN-boxed
             // `DateCell` pointer — #2089) and an Invalid Date.
             return true_val;
@@ -585,7 +630,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         let top16 = (bits >> 48) as u16;
         if top16 == 0 && bits >= 0x1000 {
             let addr = bits as usize;
-            if crate::buffer::is_registered_buffer(addr)
+            // #10694: a raw word must be allocator-owned before the brand read.
+            if crate::buffer::buffer_family_type_owned(addr).is_some()
                 || crate::set::is_registered_set(addr)
                 || crate::map::is_registered_map(addr)
                 || crate::typedarray::lookup_typed_array_kind(addr).is_some()
@@ -622,7 +668,8 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
             (bits & 0x0000_FFFF_FFFF_FFFF) as usize
         } else {
             let top16 = (bits >> 48) as u16;
-            if top16 == 0 && bits >= 0x1000 {
+            // #10694: a raw word must be allocator-owned before the brand read.
+            if top16 == 0 && bits >= 0x1000 && crate::buffer::header_is_owned(bits as usize) {
                 bits as usize
             } else {
                 0
@@ -804,6 +851,11 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         // walk also follows the generic-origin edge, so a dynamic RHS holding a
         // generic class (`const C = Gen; x instanceof C`) matches an instance of
         // one of its specializations.
+        if let Some(answer) =
+            super::relinked_object_chain_answer(obj_ptr, value, obj_class_id, class_id)
+        {
+            return if answer { true_val } else { false_val };
+        }
         if class_chain_reaches(obj_class_id, class_id) {
             return true_val;
         }

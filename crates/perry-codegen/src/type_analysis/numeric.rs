@@ -351,6 +351,9 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::PropertyGet {
             object, property, ..
         } => {
+            if crate::stmt::region_loop::is_f64_read(ctx, e) {
+                return true;
+            }
             if matches!(
                 crate::lower_call::guarded_path_type(ctx, e),
                 Some(HirType::Number | HirType::Int32)
@@ -699,6 +702,23 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
         Expr::PropertyGet {
             object, property, ..
         } => {
+            if crate::stmt::region_loop::is_f64_read(ctx, e) {
+                return true;
+            }
+            // #11759 (c′): the receiver is the guarded `new` of a repeatable
+            // class declaration, an instance of SOME evaluation of the
+            // template. Which fields hold a Number on every reachable store
+            // is a template fact (`ShapeProof::lineage`), so whatever route
+            // reads the field — the scalar a replaced first-evaluation `new`
+            // keeps, or a later evaluation's guarded read — hands back the
+            // Number that was stored: canonical, since every raw-f64 store
+            // canonicalizes and every boxed read of a Number is its double.
+            if let Expr::LocalGet(id) = object.as_ref() {
+                if let Some(fact) = ctx.native_facts.shape_lineage_local(*id) {
+                    return !ctx.boxed_vars.contains(id)
+                        && fact.numeric_fields.contains(property.as_str());
+                }
+            }
             let Some(fact) = ctx.ptr_shape_receiver_fact(object.as_ref()) else {
                 return false;
             };
@@ -1044,6 +1064,7 @@ pub(crate) fn is_bool_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::MapHas { .. }
         | Expr::MapDelete { .. } => true,
         Expr::ArrayIncludes { .. } => true,
+        Expr::ClassIsFirstEvaluation { .. } => true,
         Expr::LocalGet(id) => matches!(ctx.stable_local_type_proof(id), Some(HirType::Boolean)),
         _ => false,
     }

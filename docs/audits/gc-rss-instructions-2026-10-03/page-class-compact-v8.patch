@@ -1,0 +1,238 @@
+diff --git a/crates/perry-runtime/src/arena/page_meta/page_class.rs b/crates/perry-runtime/src/arena/page_meta/page_class.rs
+index b546322f20..506df2d266 100644
+--- a/crates/perry-runtime/src/arena/page_meta/page_class.rs
++++ b/crates/perry-runtime/src/arena/page_meta/page_class.rs
+@@ -7,23 +7,61 @@
+ 
+ use super::*;
+ 
+-/// One entry of the direct-indexed table: the range last confirmed for this
+-/// 1 MiB class, stamped with the invalidation epoch it was confirmed under.
++/// A cached exact range. Keeping its length in u32 makes the entry 32 bytes
++/// on 64-bit targets, rather than 40. Wider ranges stay in the authoritative
++/// map and simply cannot be cached in this arm. The object-start bitmap and
++/// its full original base are preserved; neither is rebased to a class fence.
+ #[derive(Clone, Copy)]
+ struct PageClassEntry {
+-    range: PageGenerationRange,
++    base: usize,
++    object_starts: *mut u64,
+     epoch: u64,
++    length: u32,
++    generation: HeapGeneration,
++    space: HeapSpace,
+ }
+ 
+ impl PageClassEntry {
+-    /// The filler every unwritten slot holds. `epoch: 0` is the sentinel no
+-    /// live epoch ever takes (`epoch` starts at 1 and [`PageGenerationCacheSet::
+-    /// invalidate`] steps over 0 on wrap), so a freshly allocated table is
+-    /// entirely dead without a second "valid" flag to keep coherent.
++    // Epoch zero is never live: the table's current epoch starts at one.
+     const DEAD: Self = Self {
+-        range: PageGenerationCache::empty().range,
++        base: 0,
++        object_starts: std::ptr::null_mut(),
+         epoch: 0,
++        length: 0,
++        generation: HeapGeneration::Unknown,
++        space: HeapSpace::Unknown,
+     };
++
++    fn new(range: PageGenerationRange, epoch: u64) -> Option<Self> {
++        let length = u32::try_from(range.end.checked_sub(range.base)?).ok()?;
++        Some(Self {
++            base: range.base,
++            object_starts: range.object_starts,
++            epoch,
++            length,
++            generation: range.generation,
++            space: range.space,
++        })
++    }
++
++    #[inline]
++    fn contains(self, addr: usize) -> bool {
++        // A below-base address wraps to a large delta and is rejected by the
++        // same compare as an above-end address. Construction checked the full
++        // interval, so reconstructing its end below cannot overflow.
++        addr.wrapping_sub(self.base) < self.length as usize
++    }
++
++    #[inline]
++    fn range(self) -> PageGenerationRange {
++        PageGenerationRange {
++            base: self.base,
++            end: self.base + self.length as usize,
++            generation: self.generation,
++            space: self.space,
++            object_starts: self.object_starts,
++        }
++    }
+ }
+ 
+ /// Initial span of the direct table, in 1 MiB classes, and how far below the
+@@ -49,7 +87,7 @@ impl PageClassEntry {
+ /// measured 1,021, which is not a margin. `S = N / 2` covers **2,048** for the
+ /// same 4,096 entries: **twice the measured span at identical cost**.
+ ///
+-/// So `N = 4096, S = 2048`: 4,096 x 40 B = **160 KB** on each thread that
++/// So `N = 4096, S = 2048`: 4,096 x 32 B = **128 KB** on each thread that
+ /// classifies, allocated only on that thread's first insert, covering any span
+ /// up to 2,048 classes wherever the first registration falls within it.
+ ///
+@@ -189,14 +227,14 @@ pub(super) struct PageGenerationCacheSet {
+     hits: u64,
+     misses: u64,
+     // ---- cold: written on the miss path or rarer ----
+-    /// Misses the authoritative map could answer, i.e. misses that cached
+-    /// something. `misses - inserts` is the population that is in no
+-    /// registered block at all — the 22 % the bounds check is supposed to
+-    /// reject for free.
++    /// Successful cache inserts after an authoritative-map hit. Refused
++    /// inserts also classify registered addresses; only
++    /// `misses - inserts - refused` counts unregistered addresses.
+     inserts: u64,
+-    /// Rebases performed and inserts refused past the cap — the two paths the
+-    /// span measurement could not rule out.
++    /// Rebases performed.
+     rebases: u64,
++    /// Inserts refused past the span cap or because their exact range
++    /// length does not fit the compact entry.
+     refused: u64,
+     /// Lookups that missed because the key was OUTSIDE `[base, base + len)`.
+     /// See the increment site for why this is the counter that matters.
+@@ -234,9 +272,9 @@ impl PageGenerationCacheSet {
+             let idx = key.wrapping_sub(self.base);
+             if idx < self.table.len() {
+                 let e = &self.table[idx];
+-                if e.epoch == self.epoch && e.range.contains(addr) {
++                if e.epoch == self.epoch && e.contains(addr) {
+                     self.hits += 1;
+-                    return Some(e.range);
++                    return Some(e.range());
+                 }
+             } else {
+                 // Miss-path only, so it costs nothing on a hit — and it is the
+@@ -272,6 +310,12 @@ impl PageGenerationCacheSet {
+             };
+         }
+         if self.arm == ARM_TABLE {
++            let Some(entry) = PageClassEntry::new(range, self.epoch) else {
++                // This is an acceleration cache, never the authority. Keep
++                // every full-width range in the map and decline this insert.
++                self.refused += 1;
++                return;
++            };
+             if self.table.is_empty() {
+                 // The base is taken from the FIRST insert, minus slack. Never a
+                 // constant: the arena's placement moves with ASLR.
+@@ -290,8 +334,8 @@ impl PageGenerationCacheSet {
+                 idx = key - self.base;
+             }
+             self.table[idx] = PageClassEntry {
+-                range,
+                 epoch: self.epoch,
++                ..entry
+             };
+             self.inserts += 1;
+             return;
+@@ -408,11 +452,10 @@ pub(crate) fn page_class_table_report() {
+     if tot == 0 {
+         return;
+     }
+-    // `misses - inserts` is the population in no registered block at all: the
+-    // map had no answer either, so nothing was cached. Reported apart because
+-    // the two halves are removed by different properties of the table — the
+-    // first by capacity, the second by the bounds check.
+-    let unregistered = st.misses.saturating_sub(st.inserts);
++    // Both stored and refused inserts follow an authoritative-map hit. A
++    // refusal is still a registered miss, not an unknown heap address.
++    let registered = st.inserts + st.refused;
++    let unregistered = st.misses.saturating_sub(registered);
+     let arm_name = match st.arm {
+         ARM_WAYS => "4way",
+         ARM_TABLE => "table",
+@@ -428,7 +471,7 @@ miss_registered={} miss_unregistered={} miss_out_of_span={} span={} rebases={} r
+         100.0 * st.hits as f64 / tot as f64,
+         st.misses,
+         100.0 * st.misses as f64 / tot as f64,
+-        st.inserts,
++        registered,
+         unregistered,
+         st.oos,
+         st.span,
+@@ -459,6 +502,64 @@ mod page_class_table_tests {
+ 
+     const MB: usize = 1 << GENERATION_CLASS_SHIFT;
+ 
++    #[test]
++    fn compact_entry_keeps_exact_bounds_epoch_and_bitmap_origin() {
++        #[cfg(target_pointer_width = "64")]
++        assert_eq!(std::mem::size_of::<PageClassEntry>(), 32);
++        let base = usize::MAX - u32::MAX as usize;
++        let range = PageGenerationRange {
++            base,
++            end: usize::MAX,
++            generation: HeapGeneration::Old,
++            space: HeapSpace::PromotedYoung,
++            object_starts: std::ptr::NonNull::<u64>::dangling().as_ptr(),
++        };
++        let entry = PageClassEntry::new(range, 731).unwrap();
++        assert_eq!(entry.epoch, 731);
++        assert_eq!(entry.range(), range);
++        for address in [0, base - 1, base, base + 7, usize::MAX - 1, usize::MAX] {
++            assert_eq!(entry.contains(address), range.contains(address));
++        }
++        assert!(!PageClassEntry::DEAD.contains(0));
++    }
++
++    #[test]
++    fn wider_than_u32_range_stays_authoritative_without_truncation() {
++        // Synthetic ranges exercise >4 GiB without allocating a >4 GiB heap.
++        // Nursery registration does not allocate old-page occupancy records.
++        #[cfg(target_pointer_width = "64")]
++        fresh(|| {
++            let base = 0x9d0_0000_0000usize + 16;
++            let size = u32::MAX as usize + 1;
++            register_block_space(base, size, HeapGeneration::Nursery, HeapSpace::NurseryEden);
++            for address in [base, base + 8, base + size - 1, base + 8] {
++                assert_eq!(classify_heap_generation(address), HeapGeneration::Nursery);
++                assert_eq!(classify_heap_space(address), HeapSpace::NurseryEden);
++            }
++            assert_eq!(classify_heap_generation(base - 1), HeapGeneration::Unknown);
++            assert_eq!(
++                classify_heap_generation(base + size),
++                HeapGeneration::Unknown
++            );
++            if page_class_table_enabled() {
++                let stats = table_stats();
++                assert_eq!(
++                    stats.hits, 0,
++                    "wide range must never answer from truncated cache"
++                );
++                assert!(
++                    stats.refused >= 8,
++                    "LIVE SUBJECT: attempted wide inserts were refused"
++                );
++                assert_eq!(stats.inserts, 0);
++                assert_eq!(
++                    stats.span, 0,
++                    "wide ranges alone need no acceleration storage"
++                );
++            }
++        });
++    }
++
+     /// The base is taken from the FIRST registration, wherever it is — not
+     /// from a constant. An arena that starts at a high address (ASLR moved the
+     /// base by 0x142920 classes between two measured runs) must hit the table,
+@@ -578,7 +679,7 @@ mod page_class_table_tests {
+     /// (`PageGenerationSlot::Multiple`); an entry confirmed for one must not
+     /// answer for an address in the other.
+     ///
+-    /// Sabotage: drop `e.range.contains(addr)` from `lookup` — the second
++    /// Sabotage: drop `e.contains(addr)` from `lookup` — the second
+     /// classification returns the first range's generation for an address that
+     /// is not in it.
+     ///

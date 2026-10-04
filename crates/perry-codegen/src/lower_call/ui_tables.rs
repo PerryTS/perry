@@ -510,6 +510,7 @@ pub fn lower_perry_ui_table_call(
         Vec::with_capacity(declared_arg_count);
     let mut runtime_param_types: Vec<crate::types::LlvmType> =
         Vec::with_capacity(declared_arg_count);
+    let mut ui_args_group: Option<crate::rooting::RootedGroup<'_>> = None;
     if uniform_padding {
         // Preserve JavaScript evaluation semantics: `setPadding(widget,
         // next())` calls `next` once, then fans that one result out to the
@@ -526,55 +527,13 @@ pub fn lower_perry_ui_table_call(
             runtime_param_types.push(DOUBLE);
         }
     } else {
-        for (kind, arg) in sig.args.iter().zip(args.iter().take(declared_arg_count)) {
-            match kind {
-                UiArgKind::Widget => {
-                    // Widgets are NaN-boxed pointers. Lower as JSValue,
-                    // strip the POINTER_TAG bits to get the raw 1-based
-                    // handle as i64.
-                    let v = lower_expr(ctx, arg)?;
-                    let blk = ctx.block();
-                    let h = unbox_to_i64(blk, &v);
-                    llvm_args.push((I64, h));
-                    runtime_param_types.push(I64);
-                }
-                UiArgKind::Str => {
-                    let h = super::get_raw_string_ptr(ctx, arg)?;
-                    llvm_args.push((I64, h));
-                    runtime_param_types.push(I64);
-                }
-                UiArgKind::F64 => {
-                    let v = lower_expr(ctx, arg)?;
-                    llvm_args.push((DOUBLE, v));
-                    runtime_param_types.push(DOUBLE);
-                }
-                UiArgKind::Closure => {
-                    // Closures are NaN-boxed pointers passed as f64. The
-                    // runtime side calls `js_closure_call0` (or callN) on
-                    // them, so it expects the f64 representation.
-                    let v = lower_expr(ctx, arg)?;
-                    llvm_args.push((DOUBLE, v));
-                    runtime_param_types.push(DOUBLE);
-                }
-                UiArgKind::I64Raw => {
-                    // Numeric arg the runtime wants as i64 (e.g. enum tag or
-                    // boolean flag). Perry booleans are NaN-boxed at JSValue
-                    // boundaries, so preserve a proven native i1 and widen it
-                    // before the generic numeric fptosi path.
-                    let i = if can_lower_proven_boolean_to_number(ctx, arg) {
-                        let boolean = lower_expr_value(ctx, arg)?
-                            .expect("a proven native Boolean must lower to a native value");
-                        debug_assert!(matches!(boolean.rep, NativeRep::I1));
-                        ctx.block().zext(I1, &boolean.value, I64)
-                    } else {
-                        let v = lower_expr(ctx, arg)?;
-                        ctx.block().fptosi(DOUBLE, &v, I64)
-                    };
-                    llvm_args.push((I64, i));
-                    runtime_param_types.push(I64);
-                }
-            }
-        }
+        ui_args_group = Some(lower_ui_args_by_kind(
+            ctx,
+            &sig.args,
+            &args[..declared_arg_count.min(args.len())],
+            &mut llvm_args,
+            &mut runtime_param_types,
+        )?);
     }
 
     // Lazy-declare the runtime function so the linker pulls in the
@@ -596,7 +555,7 @@ pub fn lower_perry_ui_table_call(
     // tuple's second field is `String` and `blk.call` expects `&str`.
     let arg_slices: Vec<(crate::types::LlvmType, &str)> =
         llvm_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
-    match sig.ret {
+    let result: Result<String> = match sig.ret {
         UiReturnKind::Widget | UiReturnKind::Promise => {
             // Scope `blk` so the mutable borrow on `ctx` is released
             // before the optional `apply_inline_style` call re-borrows.
@@ -635,7 +594,130 @@ pub fn lower_perry_ui_table_call(
             let raw = blk.call(I64, sig.runtime, &arg_slices);
             Ok(blk.sitofp(I64, &raw, DOUBLE))
         }
+    };
+    if let Some(group) = ui_args_group {
+        group.release(ctx);
     }
+    result
+}
+
+/// Lower a `perry/*` call's arguments by their declared [`UiArgKind`], rooting
+/// every heap-valued one across the arguments after it (#11789 sweep).
+///
+/// A `Str` argument's ABI form is the RAW address of a movable string, and a
+/// `Closure` / `F64` argument is a NaN-boxed value; converting each where it
+/// was lowered froze its pre-move address while the later arguments ran
+/// (`Text(String(x), work())`). The `Widget` and `I64Raw` kinds are complete
+/// the moment they are lowered — a widget is an opaque 1-based handle and an
+/// `I64Raw` an integer — so they are converted in place. The other three are
+/// rooted in one group, re-read below the last argument, and only then turned
+/// into their ABI form. The caller releases the returned group BELOW the call
+/// that consumes `llvm_args`.
+///
+/// Converting a `Str` argument is itself a collecting step (#11830): a value
+/// that is not already a heap string is materialised, number-formatted or run
+/// through a user `toString`. So the conversions are a second window. Every
+/// `Str` that needs one is converted in operand order into its own rooted
+/// slot, and the raw pointers are taken from those slots in one pass after the
+/// last conversion. A `Str` that is a string literal is already a heap string
+/// and is converted in that final pass like before.
+pub(super) fn lower_ui_args_by_kind<'a>(
+    ctx: &mut FnCtx<'_>,
+    kinds: &[UiArgKind],
+    args: &'a [Expr],
+    llvm_args: &mut Vec<(crate::types::LlvmType, String)>,
+    runtime_param_types: &mut Vec<crate::types::LlvmType>,
+) -> Result<crate::rooting::RootedGroup<'a>> {
+    enum Slot {
+        Ready(crate::types::LlvmType, String),
+        Rooted(UiArgKind, usize, Option<crate::rooting::EmittedValue>),
+    }
+    let pairs: Vec<(&UiArgKind, &'a Expr)> = kinds.iter().zip(args.iter()).collect();
+    // A `Str` operand that is not a literal is coerced to a string pointer by a
+    // call that can allocate and run user code.
+    let coerced: Vec<bool> = pairs
+        .iter()
+        .map(|(kind, arg)| matches!(kind, UiArgKind::Str) && !matches!(arg, Expr::String(_)))
+        .collect();
+    let mut group = crate::rooting::open_rooted_group(pairs.len());
+    let mut slots: Vec<Slot> = Vec::with_capacity(pairs.len());
+    for (i, (kind, arg)) in pairs.iter().enumerate() {
+        let collects = coerced[i + 1..].iter().any(|c| *c)
+            || crate::rooting::any_operand_may_collect(
+                ctx,
+                pairs[i + 1..].iter().map(|(_, later)| *later),
+            );
+        match kind {
+            UiArgKind::Widget => {
+                // Widgets are NaN-boxed handles. Lower as JSValue, strip the
+                // POINTER_TAG bits to get the raw 1-based handle as i64.
+                let v = lower_expr(ctx, arg)?;
+                let h = unbox_to_i64(ctx.block(), &v);
+                slots.push(Slot::Ready(I64, h));
+            }
+            UiArgKind::I64Raw => {
+                // Numeric arg the runtime wants as i64 (e.g. enum tag or
+                // boolean flag). Perry booleans are NaN-boxed at JSValue
+                // boundaries, so preserve a proven native i1 and widen it
+                // before the generic numeric fptosi path.
+                let i = if can_lower_proven_boolean_to_number(ctx, arg) {
+                    let boolean = lower_expr_value(ctx, arg)?
+                        .expect("a proven native Boolean must lower to a native value");
+                    debug_assert!(matches!(boolean.rep, NativeRep::I1));
+                    ctx.block().zext(I1, &boolean.value, I64)
+                } else {
+                    let v = lower_expr(ctx, arg)?;
+                    ctx.block().fptosi(DOUBLE, &v, I64)
+                };
+                slots.push(Slot::Ready(I64, i));
+            }
+            UiArgKind::Str | UiArgKind::F64 | UiArgKind::Closure => {
+                slots.push(Slot::Rooted(**kind, group.lower(ctx, arg, collects)?, None));
+            }
+        }
+    }
+    // The conversion window: each coerced `Str` becomes a rooted pointer, in
+    // operand order, before any raw pointer is handed to the call.
+    let mut remaining = coerced.iter().filter(|c| **c).count();
+    for (slot, needs) in slots.iter_mut().zip(coerced.iter()) {
+        if let (Slot::Rooted(_, root, emitted), true) = (slot, needs) {
+            remaining -= 1;
+            *emitted = Some(group.coerce_to_ptr(ctx, *root, remaining > 0, |ctx, v| {
+                ctx.block()
+                    .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, v)])
+            })?);
+        }
+    }
+    for slot in slots {
+        match slot {
+            Slot::Ready(ty, value) => {
+                llvm_args.push((ty, value));
+                runtime_param_types.push(ty);
+            }
+            Slot::Rooted(kind, root, emitted) => {
+                if matches!(kind, UiArgKind::Str) {
+                    let h = match emitted {
+                        Some(e) => group.reread_emitted(ctx, e),
+                        None => {
+                            let v = group.reread(ctx, root)?;
+                            ctx.block()
+                                .call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &v)])
+                        }
+                    };
+                    llvm_args.push((I64, h));
+                    runtime_param_types.push(I64);
+                } else {
+                    // `F64` is a number; `Closure` a NaN-boxed pointer passed
+                    // as f64 (the runtime side calls `js_closure_call0` / `N`
+                    // on it, so it expects the f64 representation).
+                    let v = group.reread(ctx, root)?;
+                    llvm_args.push((DOUBLE, v));
+                    runtime_param_types.push(DOUBLE);
+                }
+            }
+        }
+    }
+    Ok(group)
 }
 
 /// Convert a native integer predicate without turning its flag into a JS number.

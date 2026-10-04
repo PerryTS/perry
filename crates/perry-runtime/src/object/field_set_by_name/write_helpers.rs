@@ -62,7 +62,11 @@ pub(super) unsafe fn string_key_eq(key: *const crate::StringHeader, expected: &[
 /// rejected assignment never desyncs the ClassRef read path from the class
 /// object's real state. Internal `__perry_*` markers (the pinned-parent
 /// edge) stay object-local. Last-wins across evaluations of the same class
-/// statement, matching the established template-cid compromise.
+/// statement, matching the established template-cid compromise — except
+/// when the class function object is itself the declaration's first
+/// evaluation (#11759 (c′)): then it is a class of its own, compiled code
+/// reaches every later evaluation through its evaluated value, and a later
+/// evaluation's statics must never overwrite the first one's.
 pub(super) unsafe fn mirror_class_object_static_write(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
@@ -71,6 +75,7 @@ pub(super) unsafe fn mirror_class_object_static_write(
     if !crate::object::is_class_object_ptr(obj as *const u8)
         || (*obj).class_id == 0
         || key.is_null()
+        || crate::object::class_value::class_value_is_first_evaluation((*obj).class_id)
     {
         return;
     }

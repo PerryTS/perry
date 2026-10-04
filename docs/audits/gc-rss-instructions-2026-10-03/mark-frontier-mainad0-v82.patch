@@ -1,0 +1,249 @@
+diff --git a/crates/perry-runtime/src/gc/cycle.rs b/crates/perry-runtime/src/gc/cycle.rs
+index b7c796bec5..2e7cc261f1 100644
+--- a/crates/perry-runtime/src/gc/cycle.rs
++++ b/crates/perry-runtime/src/gc/cycle.rs
+@@ -74,7 +74,6 @@ pub(super) struct GcCycleStepResult {
+ 
+ struct TraceWorklistCycleState {
+     worklist: Vec<*mut GcHeader>,
+-    cursor: usize,
+     minor_only: bool,
+ }
+ 
+@@ -82,22 +81,16 @@ impl TraceWorklistCycleState {
+     fn new(minor_only: bool) -> Self {
+         Self {
+             worklist: take_mark_seeds(),
+-            cursor: 0,
+             minor_only,
+         }
+     }
+ 
+     fn step(&mut self, valid_ptrs: &ValidPointerSet, budget: usize) -> bool {
+         self.absorb_mark_seeds();
+-        let done = drain_trace_worklist_step(
+-            &mut self.worklist,
+-            &mut self.cursor,
+-            valid_ptrs,
+-            self.minor_only,
+-            budget,
+-        );
++        let (done, _) =
++            drain_trace_worklist_step(&mut self.worklist, valid_ptrs, self.minor_only, budget);
+         self.absorb_mark_seeds();
+-        done && self.cursor >= self.worklist.len()
++        done && self.worklist.is_empty()
+     }
+ 
+     fn absorb_mark_seeds(&mut self) {
+@@ -121,7 +114,6 @@ struct BlockPersistCycleState {
+     subphase: BlockPersistSubphase,
+     stats: BlockPersistTraceStats,
+     worklist: Vec<*mut GcHeader>,
+-    worklist_cursor: usize,
+     arena_cursor: Option<crate::arena::ArenaObjectCursor>,
+     block_has_live: Vec<bool>,
+     general_n: usize,
+@@ -135,7 +127,6 @@ impl BlockPersistCycleState {
+             subphase: BlockPersistSubphase::StartIteration,
+             stats: BlockPersistTraceStats::default(),
+             worklist: Vec::new(),
+-            worklist_cursor: 0,
+             arena_cursor: None,
+             block_has_live: Vec::new(),
+             general_n: 0,
+@@ -173,22 +164,14 @@ impl BlockPersistCycleState {
+                         self.subphase = BlockPersistSubphase::Done;
+                         return true;
+                     }
+-                    self.worklist_cursor = 0;
+                     self.subphase = BlockPersistSubphase::DrainMarkedObjects;
+                 }
+                 BlockPersistSubphase::DrainMarkedObjects => {
+                     if remaining == 0 {
+                         return false;
+                     }
+-                    let before = self.worklist_cursor;
+-                    let done = drain_trace_worklist_step(
+-                        &mut self.worklist,
+-                        &mut self.worklist_cursor,
+-                        valid_ptrs,
+-                        false,
+-                        remaining,
+-                    );
+-                    let consumed = self.worklist_cursor.saturating_sub(before);
++                    let (done, consumed) =
++                        drain_trace_worklist_step(&mut self.worklist, valid_ptrs, false, remaining);
+                     remaining = remaining.saturating_sub(consumed);
+                     if !done {
+                         return false;
+diff --git a/crates/perry-runtime/src/gc/tests/mark_frontier.rs b/crates/perry-runtime/src/gc/tests/mark_frontier.rs
+new file mode 100644
+index 0000000000..bd04475dc6
+--- /dev/null
++++ b/crates/perry-runtime/src/gc/tests/mark_frontier.rs
+@@ -0,0 +1,94 @@
++use super::super::*;
++use super::support::*;
++
++fn assert_budgeted_frontier(root: usize, objects: &[usize], capacity_limit: usize) {
++    clear_marks();
++    clear_mark_seeds();
++    let valid = build_valid_pointer_set();
++    assert!(try_mark_value(POINTER_TAG | root as u64, &valid));
++    clear_mark_seeds();
++    let mut worklist = vec![unsafe { header_from_user_ptr(root as *const u8) }];
++    let mut processed = 0;
++    assert_eq!(
++        drain_trace_worklist_step(&mut worklist, &valid, false, 0),
++        (false, 0)
++    );
++    assert_eq!(processed, 0);
++    assert_eq!(worklist.len(), 1);
++    loop {
++        let before = processed;
++        let (done, consumed) = drain_trace_worklist_step(&mut worklist, &valid, false, 7);
++        processed += consumed;
++        assert!(
++            processed - before <= 7,
++            "each bounded step preserves its budget"
++        );
++        assert!(
++            worklist.capacity() <= capacity_limit,
++            "processed entries must not accumulate"
++        );
++        if done {
++            assert!(worklist.is_empty());
++            break;
++        }
++        assert!(processed > before);
++    }
++    assert!(
++        processed <= objects.len(),
++        "cycles and aliases must not queue objects twice"
++    );
++    for &address in objects {
++        let header = unsafe { header_from_user_ptr(address as *const u8) };
++        assert_ne!(
++            unsafe { (*header).gc_flags } & GC_FLAG_MARKED,
++            0,
++            "reachable object was lost"
++        );
++    }
++    clear_marks();
++    clear_mark_seeds();
++}
++
++#[test]
++fn cyclic_chain_keeps_only_pending_headers_across_budgeted_steps() {
++    let _guard = CopyingNurseryTestGuard::new(1);
++    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
++    let objects: Vec<_> = (0..4096)
++        .map(|_| crate::array::js_array_alloc_with_length(1))
++        .collect();
++    for (index, &array) in objects.iter().enumerate() {
++        let next = objects[(index + 1) % objects.len()];
++        crate::array::js_array_set_f64(array, 0, f64::from_bits(ptr_bits(next as usize)));
++    }
++    let addresses: Vec<_> = objects.iter().map(|&p| p as usize).collect();
++    assert_budgeted_frontier(addresses[0], &addresses, 8);
++}
++
++#[test]
++fn shared_binary_tree_preserves_all_live_objects_with_a_small_frontier() {
++    let _guard = CopyingNurseryTestGuard::new(1);
++    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
++    let objects: Vec<_> = (0..8191)
++        .map(|_| crate::array::js_array_alloc_with_length(2))
++        .collect();
++    for (index, &array) in objects.iter().enumerate() {
++        let left = 2 * index + 1;
++        if left < objects.len() {
++            crate::array::js_array_set_f64(
++                array,
++                0,
++                f64::from_bits(ptr_bits(objects[left] as usize)),
++            );
++            crate::array::js_array_set_f64(
++                array,
++                1,
++                f64::from_bits(ptr_bits(objects[left + 1] as usize)),
++            );
++        } else {
++            // An alias to the root checks termination as well as reachability.
++            crate::array::js_array_set_f64(array, 0, f64::from_bits(ptr_bits(objects[0] as usize)));
++        }
++    }
++    let addresses: Vec<_> = objects.iter().map(|&p| p as usize).collect();
++    assert_budgeted_frontier(addresses[0], &addresses, 32);
++}
+diff --git a/crates/perry-runtime/src/gc/tests/mod.rs b/crates/perry-runtime/src/gc/tests/mod.rs
+index ce0453949f..1a2ebf507a 100644
+--- a/crates/perry-runtime/src/gc/tests/mod.rs
++++ b/crates/perry-runtime/src/gc/tests/mod.rs
+@@ -58,6 +58,7 @@ mod layout_inline_mask;
+ mod layout_pointer_free_hazard;
+ mod layout_residue_histogram;
+ mod layout_trace;
++mod mark_frontier;
+ mod lazy_intrinsic_towers;
+ mod lazy_tape_side_alloc;
+ mod leaf_marks;
+diff --git a/crates/perry-runtime/src/gc/trace.rs b/crates/perry-runtime/src/gc/trace.rs
+index 3bb4d99af8..62f8b9cf36 100644
+--- a/crates/perry-runtime/src/gc/trace.rs
++++ b/crates/perry-runtime/src/gc/trace.rs
+@@ -1530,32 +1530,38 @@ pub(super) fn drain_trace_worklist_inner(
+     valid_ptrs: &ValidPointerSet,
+     minor_only: bool,
+ ) {
+-    let mut cursor = 0;
+-    while !drain_trace_worklist_step(worklist, &mut cursor, valid_ptrs, minor_only, usize::MAX) {}
++    while !drain_trace_worklist_step(worklist, valid_ptrs, minor_only, usize::MAX).0 {}
+ }
+ 
+ pub(super) fn drain_trace_worklist_step(
+     worklist: &mut Vec<*mut GcHeader>,
+-    cursor: &mut usize,
+     valid_ptrs: &ValidPointerSet,
+     minor_only: bool,
+     budget: usize,
+-) -> bool {
++) -> (bool, usize) {
+     let mut remaining = budget;
+-    while remaining > 0 && *cursor < worklist.len() {
+-        let header = worklist[*cursor];
+-        // #10182: the drain visits headers in queue order and each one is a
+-        // cold DRAM read on a heap larger than the cache (a 20 MB JSON tree);
+-        // start the read of the entry a few places ahead, as the copying
+-        // minor's drain already does. A prefetch cannot fault.
+-        if let Some(&ahead) = worklist.get(*cursor + super::prefetch::PREFETCH_DISTANCE) {
+-            super::prefetch::prefetch_read(ahead as usize);
+-        }
+-        *cursor += 1;
++    while remaining > 0 {
++        let Some(header) = worklist.pop() else {
++            break;
++        };
++        // Keep only pending headers. The previous queue retained every
++        // processed header until the drain ended, including on long chains
++        // where the pending frontier contains just one object. Marking a
++        // child before pushing it keeps cycles and shared children finite.
++        // Prefetch an existing pending entry; descendants discovered below
++        // can change the next entry, but a prefetch cannot fault.
++        if let Some(index) = worklist
++            .len()
++            .checked_sub(super::prefetch::PREFETCH_DISTANCE)
++        {
++            super::prefetch::prefetch_read(worklist[index] as usize);
++        }
+         trace_one_worklist_header(header, valid_ptrs, worklist, minor_only);
+         remaining -= 1;
+     }
+-    *cursor >= worklist.len()
++    // Return work consumed instead of maintaining a second counter on every
++    // header. Budgeted block persistence still charges exactly the same units.
++    (worklist.is_empty(), budget - remaining)
+ }
+ 
+ pub(super) fn trace_one_worklist_header(

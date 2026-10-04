@@ -98,7 +98,7 @@
 7 crates/perry-runtime/src/node_stream/async_iterator.rs
 2 crates/perry-runtime/src/node_stream_dispatch.rs
 8 crates/perry-runtime/src/node_stream_iter_helpers.rs
-27 crates/perry-runtime/src/node_stream_pipeline.rs
+26 crates/perry-runtime/src/node_stream_pipeline.rs
 7 crates/perry-runtime/src/node_stream_tests.rs
 10 crates/perry-runtime/src/node_stream_tests_extra.rs
 4 crates/perry-runtime/src/node_submodules/mod.rs
@@ -131,7 +131,7 @@
 4 crates/perry-runtime/src/object/object_ops/from_entries.rs
 5 crates/perry-runtime/src/object/object_ops/keys_array.rs
 6 crates/perry-runtime/src/object/polymorphic_index.rs
-3 crates/perry-runtime/src/object/reflect_support.rs
+2 crates/perry-runtime/src/object/reflect_support.rs
 2 crates/perry-runtime/src/object/spill.rs
 2 crates/perry-runtime/src/object/typed_array_define.rs
 3 crates/perry-runtime/src/os.rs
@@ -141,7 +141,7 @@
 9 crates/perry-runtime/src/promise/microtasks.rs
 1 crates/perry-runtime/src/promise/native_async.rs
 3 crates/perry-runtime/src/promise/rejection.rs
-3 crates/perry-runtime/src/promise/then.rs
+2 crates/perry-runtime/src/promise/then.rs
 8 crates/perry-runtime/src/proxy.rs
 6 crates/perry-runtime/src/proxy/put_value.rs
 11 crates/perry-runtime/src/regex/match_all.rs

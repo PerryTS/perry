@@ -1,0 +1,13 @@
+{
+  "complete_cells": 48,
+  "source_binary_products_stdout_rss_counters_summary_verified": true,
+  "inputs": {
+    "runs": "69848d66bb6bae0a25e41c8242ffe86a9f61cd627fdc97250bc3d57ea0be5ea2",
+    "builds": "9d75e339d6ca0be0519f6b9f9c2b63fbd1d907a60d043d2b8c190dd5bcd76a80",
+    "oracle": "46af5eed7e50e1c6950dcf152b9b2cad941e50f29f49e6f5c42e4f2c22380752",
+    "products": "cc7d13d9e22026e8c51b205f08ab562c23a61f0685425169169a5b8124325000",
+    "summary": "dc5edf423c864d7b8a36b6e8b716e6edc1aeb0b196b263205b6568e358cf4e77"
+  },
+  "build_verification_sha256": "1b102de721841704ab1ca072830ec6c950d9016de011e8e35aaf6771c1aa7f98",
+  "limitations": "Private four-case full-runtime comparison, three repeats on a shared host. No full normal-auto acceptance; probes unapplied."
+}

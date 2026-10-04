@@ -1,0 +1,33 @@
+{
+  "original_driver_exit": 1,
+  "driver_failure": "Verifier queried wrapper exit receipt before EXIT trap wrote it; no application run failed",
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "production_runtime": "4f9121c09b642a007e592c1d91cbe86d5d122851",
+  "private_entry": "6e311851fa6a6e0c981b7e2f2c34d3bdc5d3d2f9",
+  "tracked_source_counts": {
+    "base": 5003,
+    "gc": 5010,
+    "entry": 5010
+  },
+  "linked_executions": 66,
+  "actual_moving_protected": 33,
+  "cases": [
+    "test_gap_10507_function_constructors",
+    "test_gap_10753_dynamic_key_read",
+    "test_gap_byname_function_reads",
+    "test_gap_byname_inherited_reads",
+    "test_gap_class_accessor_shape_facts",
+    "test_gap_class_expr_fresh_static_blocks_this",
+    "test_gap_gc_11789_closure_call_args",
+    "test_gap_gc_11816_array_callback_element",
+    "test_gap_gc_container_value_rooting",
+    "test_gap_gc_define_properties_key_rooting",
+    "test_gap_gc_store_ic_old_to_young"
+  ],
+  "all_raw_sources_products_oracles_counters_verified": true,
+  "inputs": {
+    "runs": "cf4e490b3542b870e01cb7c0ab254b5a3f4d1c7c5f8979168bd7a2a23ecb8e3b",
+    "products": "6a2f1e71ad109cf11bafba465a5de8d484a194d3f4f3ea5fb36be8f59ed0297e",
+    "derived-source": "21b8ed18dc85e2ce86f7d10d14f44dd9de2acbd2ca140322e5fa6c139e1c4061"
+  }
+}

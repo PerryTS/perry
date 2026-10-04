@@ -77,23 +77,8 @@ pub fn native_units_mode() -> NativeMode {
 /// Build the module natively: parse the skeleton text, then construct every
 /// function body through the C API via the dialect reader.
 fn build_native_module<'ctx>(context: &'ctx Context, llmod: &LlModule) -> Result<Module<'ctx>> {
-    let mut skeleton = llmod.skeleton_ir();
+    let skeleton = llmod.skeleton_ir();
     let funcs = llmod.deduped_function_refs();
-    // Append a declare for every define: the skeleton's globals can
-    // reference defined functions (extern-closure descriptors hold wrapper
-    // function addresses), and calls to functions defined later in the
-    // module are module-scope forward references. Parsing declares with the
-    // define's real signature covers both; `declare_from_header` upgrades
-    // linkage when the body is read.
-    for f in &funcs {
-        let tys = f
-            .params
-            .iter()
-            .map(|(t, _)| t.to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        skeleton.push_str(&format!("declare {} @{}({})\n", f.return_type, f.name, tys));
-    }
     let module = crate::inprocess::parse_ir_text(context, &skeleton, "perry_native_module")?;
     let gc_leaf_callees = crate::gc_call_effects::transitive_leaf_functions(&funcs);
     let (typed_insts, raw_insts) =

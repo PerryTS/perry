@@ -325,6 +325,41 @@ fn compute_object_cache_key_with_env(
             "0"
         },
     );
+    // The entry module's `main` registers every worker entry of the program.
+    if opts.is_entry_module {
+        h.field(
+            "worker_entries",
+            &format!("{:?}", perry_codegen::worker_entries()),
+        );
+    }
+    // Both values change objects outside the module containing the launch.
+    h.field(
+        "thread_literal_tls",
+        if perry_codegen::program_has_thread_agents() {
+            "1"
+        } else {
+            "0"
+        },
+    );
+    // Immutable-global transfer (perry-codegen codegen/global_transfer.rs)
+    // changes every eligible binding's storage, reads and initializer in
+    // modules that never launch a thread; versioned with its runtime ABI.
+    h.field(
+        "thread_global_transfer",
+        if perry_codegen::program_has_thread_agents() && !perry_codegen::program_has_worker() {
+            "leaf-v1"
+        } else {
+            "0"
+        },
+    );
+    // First prefix is the callback owner, so order changes the launch symbol
+    // and which module defines the graph body even with unchanged membership.
+    // Module identity is already in the HIR hash; no additional owner flag is
+    // needed. Hash the full ordered vector for owner and graph invalidation.
+    h.field(
+        "thread_literal_modules",
+        &format!("{:?}", opts.thread_literal_module_prefixes),
+    );
     // Design step 4 (DESIGN 7.2): the static ShapeIds this module's code
     // embeds as immediates. A cached object is reused exactly when every id
     // it embeds is unchanged.
@@ -859,6 +894,16 @@ fn compute_object_cache_key_with_env(
         h.field("short_spread_method_candidates", &value);
     }
 
+    // #10498: other modules' class accessors decide which of this module's
+    // sites carry an accessor arm.
+    h.field(
+        "program_class_accessor_names",
+        &opts
+            .program_class_accessor_names
+            .as_deref()
+            .map_or_else(|| "*".to_string(), |names| names.cache_key()),
+    );
+
     // #8775 reverse-flow object candidates likewise affect modules that do
     // not import the producer and therefore are not covered by the imported
     // class/object fingerprint above.
@@ -1225,6 +1270,10 @@ fn compute_object_cache_key_with_env(
     h.field(
         "env_method_site",
         env_var("PERRY_METHOD_SITE").as_deref().unwrap_or(""),
+    );
+    h.field(
+        "env_constfn_shape",
+        env_var("PERRY_CONSTFN_SHAPE").as_deref().unwrap_or(""),
     );
     h.field(
         "env_agent_ptr_access",

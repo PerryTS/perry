@@ -243,6 +243,8 @@ pub(crate) fn global_builtin_constructor_class_id(name: &str) -> u32 {
         // through the same runtime probe as the compile-time-literal form.
         "WeakMap" => 0xFFFF002C,
         "WeakSet" => 0xFFFF002D,
+        "WeakRef" => crate::weakref::CLASS_ID_WEAKREF,
+        "FinalizationRegistry" => crate::weakref::CLASS_ID_FINALIZATION_REGISTRY,
         "RegExp" => 0xFFFF0021,
         "ArrayBuffer" => 0xFFFF0025,
         "SharedArrayBuffer" => 0xFFFF002E,
@@ -535,7 +537,8 @@ fn rhs_is_object_value(value: f64) -> bool {
     let top16 = bits >> 48;
     if top16 == 0 && bits >= 0x1000 {
         let addr = bits as usize;
-        return crate::buffer::is_registered_buffer(addr)
+        // #10694: a raw word must be allocator-owned before the brand read.
+        return crate::buffer::buffer_family_type_owned(addr).is_some()
             || crate::set::is_registered_set(addr)
             || crate::map::is_registered_map(addr)
             || crate::typedarray::lookup_typed_array_kind(addr).is_some()
@@ -683,6 +686,100 @@ pub(crate) fn class_chain_reaches(start: u32, want: u32) -> bool {
     }
 }
 
+/// `value instanceof <class want>` (`value` an ordinary object of class
+/// `start`) when the declared class ids may not describe its chain: its shape
+/// names a prototype other than the one class `start` implies (a user
+/// `setPrototypeOf`/`__proto__`, `Object.create`, a function constructor's
+/// instance, an evaluated class), or a class declaration prototype on the way
+/// from `start` was re-pointed. Then `OrdinaryHasInstance` walks the live
+/// chain, reading each hop's prototype from its shape. `None` means the
+/// declared walk answers: the receiver's shape names its class's prototype
+/// and no declaration prototype was ever relinked (one latch load), or
+/// `want` is reached first.
+/// `want` is a compiled class, or `Object` (its reserved id), whose
+/// constructor is the global one.
+#[inline(always)]
+pub(crate) fn relinked_instance_chain_answer(value: f64, start: u32, want: u32) -> Option<bool> {
+    let obj = value_addr(value) as *const ObjectHeader;
+    if obj.is_null() {
+        return None;
+    }
+    relinked_object_chain_answer(obj, value, start, want)
+}
+
+/// [`relinked_instance_chain_answer`] for a caller that already holds the
+/// receiver `obj` (`value`'s live `GC_TYPE_OBJECT`).
+#[inline(always)]
+pub(crate) fn relinked_object_chain_answer(
+    obj: *const ObjectHeader,
+    value: f64,
+    start: u32,
+    want: u32,
+) -> Option<bool> {
+    // SAFETY: every caller has proved a live `GC_TYPE_OBJECT` receiver.
+    // The common receiver's ShapeId names an unlinked identity: the default,
+    // its own class's or a per-object one, none of them foreign (a class
+    // instance linked anywhere but its class's declaration prototype has a
+    // linked identity). One compare of the header word decides, before the
+    // shape record or any registry is read.
+    if unsafe { crate::object::shapes::shape_word_may_be_linked((*obj).parent_class_id) } {
+        // SAFETY: as above.
+        let identity = unsafe { crate::object::shapes::object_shape_identity(obj) };
+        if identity != (crate::object::shapes::PROTO_ID_CLASS | u64::from(start))
+            && identity != crate::object::shapes::class_proto_id(start)
+            && identity != crate::object::shapes::PROTO_ID_PER_OBJECT
+            && super::prototype_chain::object_prototype_is_foreign(obj as usize)
+        {
+            return live_chain_answer(value, want);
+        }
+    }
+    if !super::prototype_chain::any_class_chain_relinked() {
+        return None;
+    }
+    relinked_declared_chain_answer(value, start, want)
+}
+
+/// The receiver's own (shape-recorded) chain decides.
+#[cold]
+#[inline(never)]
+fn live_chain_answer(value: f64, want: u32) -> Option<bool> {
+    const CLASS_ID_OBJECT: u32 = 0xFFFF0050;
+    if want == 0 || (want != CLASS_ID_OBJECT && !super::is_class_id_registered(want)) {
+        return None;
+    }
+    let constructor = if want == CLASS_ID_OBJECT {
+        js_get_global_this_builtin_value(b"Object".as_ptr(), 6)
+    } else {
+        super::class_constructor_ref_value(want)
+    };
+    Some(ordinary_has_instance_prototype_walk(value, constructor))
+}
+
+/// [`relinked_instance_chain_answer`] once a class declaration prototype was
+/// ever re-pointed: the live chain decides from the first relinked
+/// declaration prototype on the declared walk.
+#[cold]
+#[inline(never)]
+fn relinked_declared_chain_answer(value: f64, start: u32, want: u32) -> Option<bool> {
+    if start == 0 {
+        return None;
+    }
+    let mut cur = start;
+    for _ in 0..64 {
+        if cur == want || crate::object::class_generic_origin(cur) == Some(want) {
+            return None;
+        }
+        if super::class_registry::class_decl_prototype_relinked(cur) {
+            return live_chain_answer(value, want);
+        }
+        match get_parent_class_id(cur) {
+            Some(pid) if pid != 0 && pid != cur => cur = pid,
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// The parent-only half of [`class_chain_reaches`], used to continue a walk that
 /// has already stepped onto a generic origin. Separate so the two edges cannot
 /// recurse into each other without bound.
@@ -788,6 +885,9 @@ fn subclass_of_builtin_reaches(value: f64, class_id: u32) -> bool {
         return false;
     }
     let cur = unsafe { (*obj).class_id };
+    if let Some(answer) = relinked_instance_chain_answer(value, cur, class_id) {
+        return answer;
+    }
     // #10624: only pay for the value-aware walk once something has pinned
     // per-evaluation heritage.
     let reaches =
@@ -801,33 +901,10 @@ fn subclass_of_builtin_reaches(value: f64, class_id: u32) -> bool {
     }
 
     // #9362: util.inherits(DerivedClass, BaseClass) links DerivedClass.prototype
-    // to BaseClass.prototype at runtime; it does not (and must not) create an
-    // extends edge between the constructor objects. The class-id fast path
-    // above therefore misses even though the observable prototype chain
-    // contains BaseClass.prototype. Only pay for the spec prototype walk when
-    // the candidate class's declaration prototype has a user-selected parent.
-    // The two `class_decl_prototype_object` probes are class registry reads
-    // (TLS + RwLock + map, ~130 instructions each) and they ran EAGERLY on
-    // every call that got this far — which is every MISS, the path this whole
-    // ladder exists to answer `false` on. They exist only to ask a question
-    // whose answer is `false` for every receiver in a process that never
-    // re-points an object's prototype, and the latch answers that for the
-    // whole process in one load. Set, never cleared, and published before the
-    // flag it guards, so it can only ever be conservatively true.
-    if super::prototype_chain::any_user_prototype_override() {
-        let candidate_proto = super::class_registry::class_decl_prototype_object(cur);
-        let target_proto = super::class_registry::class_decl_prototype_object(class_id);
-        if !candidate_proto.is_null()
-            && !target_proto.is_null()
-            && super::prototype_chain::object_has_user_prototype_override(candidate_proto as usize)
-            && ordinary_has_instance_prototype_walk(
-                value,
-                super::class_constructor_ref_value(class_id),
-            )
-        {
-            return true;
-        }
-    }
+    // to BaseClass.prototype at runtime without an extends edge between the
+    // constructors. That relink is a shape fact of the prototype it moved
+    // (`relinked_instance_chain_answer` above walks the live chain from it),
+    // so no further escape hatch is needed here.
     false
 }
 

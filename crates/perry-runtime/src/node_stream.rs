@@ -62,6 +62,10 @@ pub(crate) fn has_stream_listeners(stream: f64, event: &[u8]) -> bool {
 // #3049 — `process.setMaxListeners` reuses the EventEmitter setter
 // validation (TypeError/RangeError + fractional/Infinity storage).
 pub(crate) use event_emitter::validate_max_listeners;
+// node EventEmitter instance state (EventEmitter.init) and the prototype defaults.
+pub(crate) use event_emitter::{
+    init_event_emitter_capture, init_event_emitter_state, install_event_emitter_prototype_state,
+};
 pub use event_emitter::{
     js_node_stream_method_event_names, js_node_stream_method_get_max_listeners,
     js_node_stream_method_listener_count, js_node_stream_method_listeners,
@@ -101,8 +105,9 @@ const STREAM_READABLE_SCHEDULED_KEY: &[u8] = b"__perryStreamReadableScheduled";
 const STREAM_END_SCHEDULED_KEY: &[u8] = b"__perryStreamEndScheduled";
 const STREAM_END_EMITTED_KEY: &[u8] = b"__perryStreamEndEmitted";
 const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
-const STREAM_MAX_LISTENERS_KEY: &[u8] = b"__perryStreamMaxListeners";
-const STREAM_CAPTURE_REJECTIONS_KEY: &[u8] = b"__perryStreamCaptureRejections";
+/// An emitter's `captureRejections` flag (node's `this[kCapture]`). Internal:
+/// hidden from own-key enumeration (`is_internal_runtime_key_bytes`).
+pub(crate) const STREAM_CAPTURE_REJECTIONS_KEY: &[u8] = b"__perryStreamCaptureRejections";
 const EVENT_EMITTER_ASYNC_RESOURCE_KEY: &[u8] = b"__perryEventEmitterAsyncResource";
 const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
 const WRITABLE_FINISH_SCHEDULED_KEY: &[u8] = b"__perryWritableFinishScheduled";
@@ -307,13 +312,15 @@ extern "C" fn ns_readable_from_drain(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream =
+        scope.root_nanbox_f64(f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64));
     set_hidden_value(
-        stream,
+        stream.get_nanbox_f64(),
         hidden_drain_scheduled_key(),
         f64::from_bits(TAG_FALSE),
     );
-    drain_readable_from_events(stream);
+    drain_readable_from_events(stream.get_nanbox_f64());
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -333,7 +340,7 @@ extern "C" fn ns_readable_event_microtask(
         hidden_readable_scheduled_key(),
         f64::from_bits(TAG_FALSE),
     );
-    let _ = emit_stream_event(stream, string_value(b"readable"), &[]);
+    let _ = emit_stream_event(stream, literal_string_value(b"readable"), &[]);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -363,17 +370,21 @@ extern "C" fn ns_readable_resume_microtask(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let stream = f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64);
+    // `resume` listeners can collect before the flush (#11828).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream =
+        scope.root_nanbox_f64(f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64));
+    let s = || stream.get_nanbox_f64();
     set_hidden_value(
-        stream,
+        s(),
         hidden_readable_resume_scheduled_key(),
         f64::from_bits(TAG_FALSE),
     );
-    if readable_is_flowing(stream) && !stream_destroyed(stream) {
-        let _ = emit_stream_event(stream, string_value(b"resume"), &[]);
-        flush_pending_readable_chunks(stream);
-        schedule_readable_from_drain(stream);
-        invoke_read_once(stream);
+    if readable_is_flowing(s()) && !stream_destroyed(s()) {
+        let _ = emit_stream_event(s(), literal_string_value(b"resume"), &[]);
+        flush_pending_readable_chunks(s());
+        schedule_readable_from_drain(s());
+        invoke_read_once(s());
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -444,7 +455,7 @@ extern "C" fn ns_finished_signal_abort(
     if let Some(signal_obj) = object_ptr_from_value(signal) {
         crate::url::js_abort_signal_remove_listener(
             signal_obj,
-            string_value(b"abort"),
+            literal_string_value(b"abort"),
             box_pointer(closure as *const u8),
         );
     }
@@ -476,7 +487,7 @@ extern "C" fn ns_writable_finish_microtask(
         if is_callable_value(callback) {
             call_listener_args(stream, callback, &[]);
         }
-        let _ = emit_stream_event(stream, string_value(b"finish"), &[]);
+        let _ = emit_stream_event(stream, literal_string_value(b"finish"), &[]);
         let readable_done = get_hidden_value(stream, hidden_readable_flag_key()).is_none()
             || has_truthy_hidden(stream, hidden_end_emitted_key());
         if readable_done {
@@ -1003,10 +1014,10 @@ fn install_pipe_destination_listeners(src: f64, dest: f64) {
         close_value,
         finish_value,
     );
-    add_stream_listener_for_event(dest, string_value(b"unpipe"), unpipe_value);
-    add_stream_listener_for_event(dest, string_value(b"error"), error_value);
-    add_stream_listener_for_event(dest, string_value(b"close"), close_value);
-    add_stream_listener_for_event(dest, string_value(b"finish"), finish_value);
+    add_stream_listener_for_event(dest, literal_string_value(b"unpipe"), unpipe_value);
+    add_stream_listener_for_event(dest, literal_string_value(b"error"), error_value);
+    add_stream_listener_for_event(dest, literal_string_value(b"close"), close_value);
+    add_stream_listener_for_event(dest, literal_string_value(b"finish"), finish_value);
 }
 
 fn add_pipe_drain_listener(src: f64, dest: f64) {
@@ -1015,7 +1026,7 @@ fn add_pipe_drain_listener(src: f64, dest: f64) {
     js_closure_set_capture_f64(listener, 0, src);
     js_closure_set_capture_f64(listener, 1, dest);
     js_closure_set_capture_f64(listener, 2, value);
-    add_stream_listener_for_event(dest, string_value(b"drain"), value);
+    add_stream_listener_for_event(dest, literal_string_value(b"drain"), value);
 }
 
 fn schedule_pipe_destination_finish(dest: f64) {
@@ -1302,11 +1313,14 @@ fn normalize_writable_write_chunk(stream: f64, chunk: f64, encoding: f64) -> (f6
         }
         let enc_tag = crate::buffer::js_encoding_tag_from_value(encoding);
         let buf = crate::buffer::js_buffer_from_value(chunk.to_bits() as i64, enc_tag);
-        return (box_pointer(buf as *const u8), string_value(b"buffer"));
+        return (
+            box_pointer(buf as *const u8),
+            literal_string_value(b"buffer"),
+        );
     }
     let raw = raw_ptr_from_value(chunk);
     if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
-        return (chunk, string_value(b"buffer"));
+        return (chunk, literal_string_value(b"buffer"));
     }
     (chunk, encoding)
 }
@@ -1326,13 +1340,13 @@ fn writable_should_decode_string(stream: f64) -> bool {
 
 fn writable_default_encoding(stream: f64) -> f64 {
     get_hidden_value(stream, hidden_writable_default_encoding_key())
-        .unwrap_or_else(|| string_value(b"utf8"))
+        .unwrap_or_else(|| literal_string_value(b"utf8"))
 }
 
 fn write_writable_chunk(stream: f64, chunk: f64, enc: f64, cb: f64) -> f64 {
     if stream_hidden_ended(stream) {
         let err = writable_write_after_end_error();
-        let _ = emit_stream_event(stream, string_value(b"error"), &[err]);
+        let _ = emit_stream_event(stream, literal_string_value(b"error"), &[err]);
         return f64::from_bits(TAG_FALSE);
     }
     if JSValue::from_bits(chunk.to_bits()).is_null() {
@@ -1398,7 +1412,7 @@ fn complete_writable_write(stream: f64, len: f64, callback: f64, err: f64) {
             && !has_truthy_hidden(stream, hidden_key(b"destroyed"));
         set_writable_need_drain(stream, false);
         if should_emit_drain {
-            let _ = emit_stream_event(stream, string_value(b"drain"), &[]);
+            let _ = emit_stream_event(stream, literal_string_value(b"drain"), &[]);
         }
         finish_pending_pipe_destination_if_ready(stream);
         schedule_pending_writable_finish_if_ready(stream);
@@ -1433,7 +1447,7 @@ fn finish_stream(stream: f64, callback: Option<f64>) {
     {
         set_hidden_value(stream, hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
         refresh_readable_aborted_flag(stream);
-        let _ = emit_stream_event(stream, string_value(b"end"), &[]);
+        let _ = emit_stream_event(stream, literal_string_value(b"end"), &[]);
         end_pipe_destinations(stream);
     }
     if writable_length(stream) > 0.0 {
@@ -1850,6 +1864,10 @@ pub(crate) use dispatch::*;
 #[path = "node_stream_iter_helpers.rs"]
 mod iter_helpers;
 use iter_helpers::*;
+
+#[path = "node_stream_rooted_values.rs"]
+mod rooted_values;
+use rooted_values::*;
 
 #[path = "node_stream_pipeline.rs"]
 mod pipeline;

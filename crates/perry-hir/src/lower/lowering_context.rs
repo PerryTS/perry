@@ -128,6 +128,8 @@ pub(crate) struct MixinFn {
 }
 
 pub struct LoweringContext {
+    /// Labels and source spans of the for-of loops currently being lowered.
+    pub iterator_loop_labels: Vec<(u32, String)>,
     /// Counter for generating unique local IDs
     pub(crate) next_local_id: LocalId,
     /// User-visible declaration spans keyed by the `LocalId` allocated during
@@ -161,6 +163,10 @@ pub struct LoweringContext {
     /// LocalIds that represent immutable bindings (`const`, imports, and
     /// other lexical bindings that must throw when assigned).
     pub(crate) immutable_locals: HashSet<LocalId>,
+    /// Parameters that nothing in their function can rebind after entry
+    /// (`lower::unrebound_params`). A read of one yields the value of any
+    /// earlier read. Ids are unique per lowering, so the set is never pruned.
+    pub(crate) unrebound_params: HashSet<LocalId>,
     /// Global variables: name -> (id, type)
     // #854: initialized in `new` but currently unread (globals tracked
     // elsewhere). Retained alongside `next_global_id` for the global table.
@@ -408,6 +414,22 @@ pub struct LoweringContext {
     /// per-evaluation `ClassExprFresh` binding. A static write through such a
     /// class's name must reach the evaluated object, not the template.
     pub(crate) per_evaluation_class_decls: HashSet<String>,
+    /// #11759 (c′): locals that hold an evaluation of a class declaration
+    /// whose later evaluations are fresh (the declaration's binding and its
+    /// members' self-binding) → (template, its declared static field names).
+    /// `new C()` and `C.<static>` through such a local test whether it holds
+    /// the first evaluation and then take the static form.
+    pub(crate) shared_first_class_bindings: HashMap<LocalId, (String, Vec<String>)>,
+    /// #11759 (c′): declarations whose parent is a shared-first declaration of
+    /// the same body, resolved statically to its template → the parent's
+    /// binding (`ClassExprFresh::evaluated_parent`).
+    pub(crate) evaluated_parent_bindings: HashMap<String, LocalId>,
+    /// #11759 (c′): template → the declaration's own binding, for a
+    /// shared-first declaration. The template-keyed capture snapshot
+    /// (`RegisterClassCaptures`, read when the shared class is constructed by
+    /// value) belongs to the first evaluation only; later evaluations carry
+    /// their own capture arrays.
+    pub(crate) shared_first_decl_locals: HashMap<String, LocalId>,
     /// #11142: the active `class_expr_self_bindings` entries that belong to
     /// per-evaluation class DECLARATIONS. `new C()` and `x instanceof C` in
     /// such a body construct and test against the evaluation too.
@@ -643,6 +665,14 @@ pub struct LoweringContext {
     /// (non-var) bindings. Populated by pre_register_forward_captured_lets
     /// and drained when the body's prealloc set is assembled.
     pub(crate) tdz_forward_ids: HashSet<LocalId>,
+    /// #11826: ids of the module-level `let`/`const` bindings (pre-registered
+    /// before the main pass). `module_tdz` gives them their dead zone.
+    pub(crate) module_lexical_ids: HashSet<LocalId>,
+    /// #11826: for each class a top-level statement defined directly, the
+    /// `module.init` length when that statement began. A class absent here
+    /// (one defined inside a function body or expression) counts as defined
+    /// at the start.
+    pub(crate) class_def_positions: HashMap<String, usize>,
     /// Names of lexical `let`/`const`/`class` bindings declared in the current
     /// (or an enclosing, same-function) block scope that are still resolvable as
     /// forward references — i.e. a bare read of the name before its declarator

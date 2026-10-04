@@ -912,8 +912,16 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             computed_keys,
             computed_statics,
             captured_args,
+            shared_first_evaluation,
+            evaluated_parent,
             ..
         } => {
+            if let Some(init) = shared_first_evaluation {
+                walk(init, out);
+            }
+            if let Some(parent) = evaluated_parent {
+                walk(parent, out);
+            }
             for (_, v) in named_statics {
                 walk(v, out);
             }

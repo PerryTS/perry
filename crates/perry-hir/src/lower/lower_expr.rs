@@ -114,8 +114,14 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
         ast::Expr::Ident(ident) => lower_ident_expr(ctx, ident),
         ast::Expr::Bin(bin) => lower_bin_expr(ctx, bin),
         ast::Expr::Unary(unary) => lower_unary_expr(ctx, unary),
-        ast::Expr::Call(call) => expr_call::lower_call(ctx, call),
-        ast::Expr::Member(member) => expr_member::lower_member(ctx, member),
+        ast::Expr::Call(call) => {
+            let call = expr_call::lower_call(ctx, call)?;
+            Ok(crate::lower_decl::guard_shared_first_static_call(ctx, call))
+        }
+        ast::Expr::Member(member) => {
+            let read = expr_member::lower_member(ctx, member)?;
+            Ok(crate::lower_decl::guard_shared_first_static_get(ctx, read))
+        }
         ast::Expr::Paren(paren) => lower_expr(ctx, &paren.expr),
         ast::Expr::Assign(assign) => expr_assign::lower_assign(ctx, assign),
         ast::Expr::Cond(cond) => expr_misc::lower_cond(ctx, cond),
@@ -193,7 +199,10 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
             }
             Ok(Expr::This)
         }
-        ast::Expr::New(new_expr) => expr_new::lower_new(ctx, new_expr),
+        ast::Expr::New(new_expr) => {
+            let construct = expr_new::lower_new(ctx, new_expr)?;
+            Ok(crate::lower_decl::guard_shared_first_new(ctx, construct))
+        }
         ast::Expr::Arrow(arrow) => expr_function::lower_arrow(ctx, arrow),
         ast::Expr::Fn(fn_expr) => expr_function::lower_fn_expr(ctx, fn_expr),
         ast::Expr::Await(await_expr) => expr_misc::lower_await(ctx, await_expr),

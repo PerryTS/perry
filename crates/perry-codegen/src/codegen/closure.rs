@@ -123,7 +123,7 @@ fn emit_public_typed_closure_trampoline(
             ))
         }
     };
-    let public_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let public_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let typed_name = match kind {
         TypedFunctionTrampolineKind::F64 => typed_f64_closure_name(&public_name),
         TypedFunctionTrampolineKind::I32 => typed_i32_closure_name(&public_name),
@@ -235,7 +235,7 @@ pub(super) fn compile_typed_string_closure(
         }
     };
 
-    let generic_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let generic_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let llvm_name = typed_string_closure_name(&generic_name);
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
     llvm_params.push((I64, "%this_closure".to_string()));
@@ -283,7 +283,7 @@ pub(super) fn compile_typed_f64_closure(
         _ => return Err(anyhow!("compile_typed_f64_closure: expected Expr::Closure")),
     };
 
-    let generic_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let generic_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let llvm_name = typed_f64_closure_name(&generic_name);
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
     llvm_params.push((I64, "%this_closure".to_string()));
@@ -328,7 +328,7 @@ pub(super) fn compile_typed_i1_closure(
         _ => return Err(anyhow!("compile_typed_i1_closure: expected Expr::Closure")),
     };
 
-    let generic_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let generic_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let llvm_name = typed_i1_closure_name(&generic_name);
     let param_reps = typed_param_reps_for_params(params)
         .ok_or_else(|| anyhow!("typed-i1 closure '{}' has unsupported parameter", func_id))?;
@@ -373,7 +373,7 @@ pub(super) fn compile_typed_i32_closure(
         _ => return Err(anyhow!("compile_typed_i32_closure: expected Expr::Closure")),
     };
 
-    let generic_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let generic_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let llvm_name = typed_i32_closure_name(&generic_name);
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
     llvm_params.push((I64, "%this_closure".to_string()));
@@ -510,7 +510,7 @@ pub(super) fn compile_closure(
     closure_relevant_ids.extend(params.iter().map(|p| p.id));
     closure_relevant_ids.extend(captures.iter().copied());
 
-    let public_llvm_name = format!("perry_closure_{}__{}", module_prefix, func_id);
+    let public_llvm_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let regex_factory_identity = (!is_async
         && !is_generator
         && params.is_empty()
@@ -555,6 +555,7 @@ pub(super) fn compile_closure(
 
     let ic_base = llmod.ic_counter;
     let buffer_alias_base = llmod.buffer_alias_counter;
+    let closure_function_index = llmod.function_count();
     let lf = llmod.define_function(&llvm_name, DOUBLE, llvm_params);
     // #7908: closures live outside `hir.functions`, so they do not pass
     // through `codegen/function.rs`, which applies this same collector result
@@ -1045,6 +1046,7 @@ pub(super) fn compile_closure(
         proven_local_types: std::collections::HashMap::new(),
         guarded_discriminant_aliases: std::collections::HashMap::new(),
         module_global_proven_types: &cross_module.module_global_proven_types,
+        module_global_transfers: &cross_module.module_global_transfers,
         reassigned_locals,
         const_string_locals: std::collections::HashMap::new(),
         const_number_locals: std::collections::HashMap::new(),
@@ -1181,7 +1183,6 @@ pub(super) fn compile_closure(
         array_length_snapshots: HashMap::new(),
         string_window_array_facts: Vec::new(),
         suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
-        class_field_loop_facts: Vec::new(),
         region_loops: Vec::new(),
         region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
@@ -1222,6 +1223,7 @@ pub(super) fn compile_closure(
         imported_vars: &cross_module.imported_vars,
         imported_object_literals: &cross_module.imported_object_literals,
         short_spread_method_candidates: &cross_module.short_spread_method_candidates,
+        program_class_accessor_names: cross_module.program_class_accessor_names.as_deref(),
         object_literal_method_candidates: &cross_module.object_literal_method_candidates,
         compile_time_constants: native_facts.compile_time_constants(),
         target_triple: &cross_module.target_triple,
@@ -1424,6 +1426,27 @@ pub(super) fn compile_closure(
     }
     for raw in &typed_parse_rodata {
         llmod.add_raw_global(raw.clone());
+    }
+    // Step 5C: a compact public body that a completed shape's ConstFn lane
+    // names is called DIRECTLY by static method lanes; admit it to the early
+    // (pre-statepoint) inliner so those calls flatten like a class method's
+    // exact-receiver clone. Every other caller reaches it through a code
+    // pointer, which the inliner never touches.
+    if llvm_name == public_llvm_name
+        && typed_public_trampoline.is_none()
+        && !trusted_box_captures
+        && !is_async
+        && !is_generator
+        && super::static_shape_ids::body_has_constfn_lane(&llvm_name)
+    {
+        if let Some(lowered) = llmod.function_mut(closure_function_index) {
+            if super::helpers::guarded_specialization_admits_preinline(
+                lowered.estimated_ir_bytes(),
+                body.len(),
+            ) {
+                lowered.pre_statepoint_inline = true;
+            }
+        }
     }
     if !trusted_box_captures {
         if let Some(kind) = typed_public_trampoline {

@@ -25,18 +25,32 @@ pub(super) fn selection_by_shape(
     shape: Option<ShapeRecordRef>,
     payload: HeapSlotRange,
 ) -> HeapPayloadSlotSelection {
-    selection_for_rep(shape.map_or(0, |record| record.rep()), payload)
+    selection_for_rep_with_special(
+        shape.map_or(0, |record| record.rep()),
+        shape.map_or(0, |record| record.special_constfn_mask()),
+        payload,
+    )
 }
 
 /// The payload selection for an object whose shape carries `rep`: every
 /// non-`Any` lane is skipped, everything else gets the tag test.
 #[inline]
+#[cfg(test)]
 fn selection_for_rep(rep: u64, payload: HeapSlotRange) -> HeapPayloadSlotSelection {
+    selection_for_rep_with_special(rep, 0, payload)
+}
+
+#[inline]
+fn selection_for_rep_with_special(
+    rep: u64,
+    special_constfn_mask: u32,
+    payload: HeapSlotRange,
+) -> HeapPayloadSlotSelection {
     let slot_count = payload.slot_count();
     if slot_count == 0 {
         return HeapPayloadSlotSelection::Empty;
     }
-    let skip = field_rep::non_any_slot_bits(rep);
+    let skip = field_rep::non_pointer_slot_bits(rep, special_constfn_mask);
     if skip == 0 || slot_count > INLINE_MASK_SLOTS {
         return HeapPayloadSlotSelection::All { cursor: 0 };
     }
@@ -155,6 +169,22 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn constfn_special_lane_is_traced_but_optional_nopointer_is_skipped() {
+        let mut slots = [0u64; 4];
+        let payload = HeapSlotRange::new(slots.as_mut_ptr(), slots.len());
+        let rep = field_rep::with_slot_rep(
+            field_rep::with_slot_rep(0, 0, field_rep::REP_SPECIAL),
+            1,
+            field_rep::REP_SPECIAL,
+        );
+        // Slot 0 is a current closure; slot 1 demonstrates the reserved
+        // NoPointer interpretation if P5 is accepted. No producer exists yet.
+        let selection = selection_for_rep_with_special(rep, 0b01, payload);
+        assert!(selection_visits(&selection, 0));
+        assert!(!selection_visits(&selection, 1));
+    }
+
     /// `{n: 1.5, s: "txt"}` and its shape; the key-adds earn `n` an `F64`
     /// lane and leave `s` `Any` (P2b).
     unsafe fn number_and_string() -> (*mut crate::object::ObjectHeader, u32) {
@@ -212,7 +242,7 @@ mod tests {
                     d.object_kind,
                     d.hole_count,
                     d.proto_id,
-                    d.summary,
+                    crate::object::shapes::ReceiverFacts::of_descriptor(&d, d.summary),
                     field_rep::with_slot_rep(d.rep, 1, field_rep::REP_F64),
                     None,
                 ),

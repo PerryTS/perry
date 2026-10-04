@@ -1259,7 +1259,7 @@ fn local_refs(stmts: &[Stmt]) -> Vec<u32> {
 /// `Expr::Closure` arm); and `element_read_seeds` uses it for the read seeds,
 /// where `bounded_induction` already refuses to license anything under
 /// `in_closure`, so a closure-body read is never a seed to find.
-fn walk_stmts<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
+pub(super) fn walk_stmts<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
     for s in stmts {
         f(s);
         match s {

@@ -105,7 +105,17 @@ pub(in crate::child_process) fn cp_exec_async(
         cp_box_string(public_spawnfile.as_deref().unwrap_or(&file)),
     );
 
-    match command.spawn() {
+    #[cfg(not(windows))]
+    let launch = command.spawn();
+    #[cfg(windows)]
+    let launch = super::super::windows_child::spawn(
+        &mut command,
+        &[CpStdio::Ignore, CpStdio::Pipe, CpStdio::Pipe],
+        run_options.argv0.as_deref(),
+        run_options.clear_environment,
+        run_options.detached,
+    );
+    match launch {
         Ok(mut child) => {
             let pid = child.id();
             // Duplicate the process handle BEFORE `child` moves to the waiter

@@ -1,0 +1,221 @@
+diff --git a/crates/perry-runtime/src/gc/roots/stack_maps.rs b/crates/perry-runtime/src/gc/roots/stack_maps.rs
+index 91bcdffb2f..ecb82e9d06 100644
+--- a/crates/perry-runtime/src/gc/roots/stack_maps.rs
++++ b/crates/perry-runtime/src/gc/roots/stack_maps.rs
+@@ -1747,6 +1747,10 @@ mod unwind_contract;
+ #[path = "stack_maps_decode_tests.rs"]
+ mod decode_tests;
+ 
++#[cfg(test)]
++#[path = "stack_maps_prefix_tests.rs"]
++mod prefix_tests;
++
+ // The only test anywhere that runs BOTH aarch64 walkers over a frame whose
+ // layout is known, and requires each to land on the word the record names.
+ // Same platform set as `fp_chain` itself.
+diff --git a/crates/perry-runtime/src/gc/roots/stack_maps_lazy.rs b/crates/perry-runtime/src/gc/roots/stack_maps_lazy.rs
+index 422fec7e52..a62b3c7810 100644
+--- a/crates/perry-runtime/src/gc/roots/stack_maps_lazy.rs
++++ b/crates/perry-runtime/src/gc/roots/stack_maps_lazy.rs
+@@ -124,6 +124,8 @@ impl<'a> RecordWalk<'a> {
+             return Step::Done;
+         }
+         self.remaining -= 1;
++        #[cfg(test)]
++        DECODE_STEPS.with(|steps| steps.set(steps.get() + 1));
+         let Some((header, next)) = read_varint(self.bytes, self.cursor, self.blob_end) else {
+             return Step::Malformed;
+         };
+@@ -562,6 +564,10 @@ pub(super) struct RecordMatch {
+     pub(super) functions: core::ops::Range<usize>,
+     /// The instruction offset every matched record carries.
+     pub(super) offset: u32,
++    /// Exclusive upper bound of matching record indices across every owning
++    /// entry. Offsets may be unsorted and repeated; the lookup proves no later
++    /// record matches before the stream decoder can stop at this bound.
++    pub(super) record_limit: u32,
+ }
+ 
+ /// Find the records for `ip`: the nearest-offset match inside the function
+@@ -590,7 +596,7 @@ pub(super) fn match_records(
+     let end = functions.partition_point(|entry| entry.address <= address);
+     let target = u32::try_from(ip.checked_sub(address)?).ok()?;
+ 
+-    let mut best: Option<(u32, u32)> = None; // (distance, offset)
++    let mut best: Option<(u32, u32, u32)> = None; // (distance, offset, record limit)
+     for entry in &functions[start..end] {
+         let bytes = *sections.get(entry.section as usize)?;
+         for index in 0..entry.record_count {
+@@ -599,18 +605,23 @@ pub(super) fn match_records(
+                 continue;
+             };
+             let distance = offset.abs_diff(target);
+-            if best.is_none_or(|(best_distance, _)| distance < best_distance) {
+-                best = Some((distance, offset));
++            if best.is_none_or(|(best_distance, _, _)| distance < best_distance) {
++                best = Some((distance, offset, index + 1));
++            } else if let Some((_, best_offset, limit)) = best.as_mut() {
++                if offset == *best_offset {
++                    *limit = (*limit).max(index + 1);
++                }
+             }
+         }
+     }
+-    let (distance, offset) = best?;
++    let (distance, offset, record_limit) = best?;
+     if distance as usize > max_delta {
+         return None;
+     }
+     Some(RecordMatch {
+         functions: start..end,
+         offset,
++        record_limit,
+     })
+ }
+ 
+@@ -624,6 +635,7 @@ pub(super) struct MatchedRecords<'a> {
+     sections: &'a [&'static [u8]],
+     range: core::ops::Range<usize>,
+     offset: u32,
++    record_limit: u32,
+     walk: Option<(usize, RecordWalk<'static>, u32)>,
+ }
+ 
+@@ -638,6 +650,7 @@ impl<'a> MatchedRecords<'a> {
+             sections,
+             range: matched.functions.clone(),
+             offset: matched.offset,
++            record_limit: matched.record_limit,
+             walk: None,
+         }
+     }
+@@ -655,7 +668,7 @@ impl<'a> MatchedRecords<'a> {
+                         bytes,
+                         entry.blob_end as usize,
+                         entry.stream_at as usize,
+-                        entry.record_count,
++                        entry.record_count.min(self.record_limit),
+                     ),
+                     0,
+                 ));
+@@ -796,3 +809,8 @@ pub(super) fn test_blob_multi_at(origin: u64, functions: &[TestFunction]) -> Vec
+     }
+     bytes
+ }
++
++#[cfg(test)]
++crate::perry_thread_local! {
++    pub(super) static DECODE_STEPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
++}
+diff --git a/crates/perry-runtime/src/gc/roots/stack_maps_prefix_tests.rs b/crates/perry-runtime/src/gc/roots/stack_maps_prefix_tests.rs
+new file mode 100644
+index 0000000000..e729588664
+--- /dev/null
++++ b/crates/perry-runtime/src/gc/roots/stack_maps_prefix_tests.rs
+@@ -0,0 +1,106 @@
++//! Preserve all matched roots while avoiding unrelated record-stream suffixes.
++use super::*;
++
++fn index(functions: &[lazy::TestFunction]) -> StackMapIndex {
++    let bytes = Box::leak(lazy::test_blob_multi(functions).into_boxed_slice());
++    build_index_from_sections_lazy(vec![bytes])
++}
++
++fn records(count: usize, root: i32) -> Vec<(u32, Vec<(u16, i32)>)> {
++    (0..count)
++        .map(|i| (64 + i as u32 * 8, vec![(DWARF_REG_FP_AARCH64, root)]))
++        .collect()
++}
++
++fn matched(
++    index: &StackMapIndex,
++    ip: usize,
++) -> Vec<(usize, Vec<StackMapLocation>, Vec<StackMapDerived>)> {
++    let found = index
++        .match_records(ip)
++        .expect("fixture must have a native root match");
++    index.materialise(Some(&found))
++}
++
++#[test]
++fn early_native_root_does_not_decode_unrelated_suffix() {
++    let mut rows = records(500, -8);
++    rows[0].0 = 16;
++    let ix = index(&[(0x1000, 64, rows)]);
++    lazy::DECODE_STEPS.with(|s| s.set(0));
++    let found = matched(&ix, 0x1010);
++    assert_eq!(found.len(), 1);
++    assert_eq!(
++        found[0].1,
++        vec![StackMapLocation {
++            dwarf_reg: DWARF_REG_FP_AARCH64,
++            offset: -8
++        }]
++    );
++    assert_eq!(lazy::DECODE_STEPS.with(|s| s.get()), 1);
++}
++
++#[test]
++fn unsorted_late_duplicate_offset_keeps_every_native_root() {
++    let mut rows = records(500, -8);
++    rows[2] = (16, vec![(DWARF_REG_FP_AARCH64, -16)]);
++    rows[401] = (16, vec![(DWARF_REG_FP_AARCH64, -24)]);
++    let ix = index(&[(0x1000, 64, rows)]);
++    lazy::DECODE_STEPS.with(|s| s.set(0));
++    let found = matched(&ix, 0x1010);
++    assert_eq!(found.len(), 2);
++    assert_eq!(
++        found.iter().map(|r| r.1[0].offset).collect::<Vec<_>>(),
++        [-16, -24]
++    );
++    assert_eq!(lazy::DECODE_STEPS.with(|s| s.get()), 402);
++}
++
++#[test]
++fn folded_functions_keep_all_roots_from_both_sections() {
++    let mut first = records(600, -8);
++    first[1].0 = 16;
++    let mut second = records(900, -16);
++    second[30].0 = 16;
++    let a = Box::leak(lazy::test_blob_multi(&[(0x1000, 64, first)]).into_boxed_slice());
++    let b = Box::leak(lazy::test_blob_multi(&[(0x1000, 64, second)]).into_boxed_slice());
++    let ix = build_index_from_sections_lazy(vec![a, b]);
++    lazy::DECODE_STEPS.with(|s| s.set(0));
++    let mut found = matched(&ix, 0x1010);
++    found.sort_by_key(|r| r.1[0].offset);
++    assert_eq!(
++        found.iter().map(|r| r.1[0].offset).collect::<Vec<_>>(),
++        [-16, -8]
++    );
++    assert_eq!(lazy::DECODE_STEPS.with(|s| s.get()), 62);
++}
++
++#[test]
++fn equally_near_offsets_preserve_existing_stream_order_tie() {
++    let ix = index(&[(
++        0x1000,
++        64,
++        vec![
++            (32, vec![(DWARF_REG_FP_AARCH64, -8)]),
++            (0, vec![(DWARF_REG_FP_AARCH64, -16)]),
++            (64, vec![(DWARF_REG_FP_AARCH64, -24)]),
++        ],
++    )]);
++    lazy::DECODE_STEPS.with(|s| s.set(0));
++    let found = matched(&ix, 0x1010);
++    assert_eq!(found.len(), 1);
++    assert_eq!(found[0].1[0].offset, -8);
++    assert_eq!(lazy::DECODE_STEPS.with(|s| s.get()), 1);
++}
++
++#[test]
++#[should_panic(expected = "does not decode")]
++fn malformed_selected_prefix_still_fails_closed() {
++    let mut bytes =
++        lazy::test_blob_multi(&[(0x1000, 64, vec![(16, vec![(DWARF_REG_FP_AARCH64, -8)])])]);
++    let stream_at = 16 + 12 + 4 + 4;
++    bytes[stream_at] = 1; // Repeat without a previous root payload.
++    let bytes = Box::leak(bytes.into_boxed_slice());
++    let ix = build_index_from_sections_lazy(vec![bytes]);
++    let _ = matched(&ix, 0x1010);
++}

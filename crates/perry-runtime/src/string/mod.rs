@@ -107,6 +107,8 @@ mod append;
 mod base64_codec;
 mod char_ops;
 mod compare;
+#[cfg(test)]
+pub(crate) use compare::test_key_byte_reads;
 pub(crate) mod concat;
 pub(crate) mod concat_site;
 mod format;
@@ -235,11 +237,11 @@ pub use html::{
     js_string_fontcolor, js_string_fontsize, js_string_italics, js_string_link, js_string_small,
     js_string_strike, js_string_sub, js_string_sup,
 };
-pub(crate) use intern::atom_for_key;
 pub use intern::js_string_pool_atom;
 pub(crate) use intern::INTERN_MAX_BYTE_LEN;
+pub(crate) use intern::{atom_for_key, atom_lookup};
 #[cfg(test)]
-pub(crate) use intern::{atom_lookup, is_atom_for_test, test_evict_interned};
+pub(crate) use intern::{is_atom_for_test, test_evict_interned};
 pub use intern::{js_string_intern, scan_intern_table_roots, scan_intern_table_roots_mut};
 #[cfg(test)]
 pub(crate) use intern::{
@@ -304,8 +306,9 @@ pub(crate) const STRING_FLAG_JSON_ESCAPE_FREE: u32 = 1 << 1;
 /// describes one payload, so it must never reach another string:
 /// `init_string_header` strips it from every constructed string, and the
 /// in-place writers (`js_string_append`, `js_string_append_chain`) clear it on
-/// the destination they change. A validated header is already shared
-/// (`js_string_addref`), so it is never itself mutated in place afterwards.
+/// the destination they change. The flag must not be read as "shared": a
+/// search that reads a string in place (`perex_owner::InPlace`) validates it
+/// without marking it shared, so a later in-place append is what clears it.
 pub(crate) const STRING_FLAG_WTF8_VALIDATED: u32 = 1 << 2;
 
 /// A static empty string that can be used as a safe fallback for null pointers.

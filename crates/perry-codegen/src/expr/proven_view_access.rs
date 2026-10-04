@@ -145,6 +145,38 @@ fn proven_view_for(
     object: &Expr,
     index: &Expr,
 ) -> Option<(u32, crate::native_value::BufferViewSlot)> {
+    let (id, view) = proven_view_receiver(ctx, object)?;
+    let stable_u32_index = crate::stmt::stable_packed_loop::has_u32_index_fact(ctx, index);
+    if !stable_u32_index {
+        if !index_is_exact_i32_shape(ctx, index) {
+            return None;
+        }
+        if !can_lower_expr_as_i32(
+            index,
+            &ctx.i32_counter_slots,
+            ctx.flat_const_arrays,
+            &ctx.array_row_aliases,
+            ctx.integer_locals,
+            &ctx.const_number_locals,
+            ctx.clamp3_functions,
+            ctx.clamp_u8_functions,
+            ctx.integer_returning_functions,
+            ctx.i32_identity_functions,
+        ) {
+            return None;
+        }
+    }
+    Some((id, view))
+}
+
+/// The receiver half of [`proven_view_for`]: `object` is a storage-proven
+/// view whose cached data pointer and length are valid here. Also the
+/// receiver gate of the guarded tier (`expr/proven_view_guarded.rs`), which
+/// tests the index at run time instead of proving its shape.
+pub(crate) fn proven_view_receiver(
+    ctx: &FnCtx<'_>,
+    object: &Expr,
+) -> Option<(u32, crate::native_value::BufferViewSlot)> {
     if ctx.disable_buffer_fast_path {
         return None;
     }
@@ -169,26 +201,6 @@ fn proven_view_for(
     // A closure-captured receiver can be reassigned between proof and access.
     if ctx.closure_captures.contains_key(id) {
         return None;
-    }
-    let stable_u32_index = crate::stmt::stable_packed_loop::has_u32_index_fact(ctx, index);
-    if !stable_u32_index {
-        if !index_is_exact_i32_shape(ctx, index) {
-            return None;
-        }
-        if !can_lower_expr_as_i32(
-            index,
-            &ctx.i32_counter_slots,
-            ctx.flat_const_arrays,
-            &ctx.array_row_aliases,
-            ctx.integer_locals,
-            &ctx.const_number_locals,
-            ctx.clamp3_functions,
-            ctx.clamp_u8_functions,
-            ctx.integer_returning_functions,
-            ctx.i32_identity_functions,
-        ) {
-            return None;
-        }
     }
     Some((*id, view))
 }
@@ -236,7 +248,7 @@ fn proven_u32_view_value(ctx: &FnCtx<'_>, value: &Expr) -> bool {
 
 /// Data pointer + entry-derived length for the proven view. The length load
 /// is `invariant` — a non-view typed array's length is immutable.
-fn load_data_and_len(
+pub(super) fn load_data_and_len(
     ctx: &mut FnCtx<'_>,
     view: &crate::native_value::BufferViewSlot,
 ) -> (String, String) {
@@ -299,35 +311,8 @@ pub(crate) fn try_lower_proven_view_checked_f64_load(
 
     ctx.current_block = load_idx;
     let (load_val, load_end) = {
+        let val = emit_elem_load_f64(ctx, &view, &data_ptr, &idx_i32);
         let blk = ctx.block();
-        let idx_i64 = blk.zext(I32, &idx_i32, I64);
-        let byte_off = if view.element_width_bytes > 1 {
-            blk.shl(
-                I64,
-                &idx_i64,
-                &view.element_width_bytes.trailing_zeros().to_string(),
-            )
-        } else {
-            idx_i64
-        };
-        let elem_ptr = blk.gep(I8, &data_ptr, &[(I64, &byte_off)]);
-        let raw = blk.load(elem_llvm_ty(&view.elem), &elem_ptr);
-        let val = match view.elem {
-            BufferElem::I8 => blk.sitofp(I8, &raw, DOUBLE),
-            BufferElem::U8 | BufferElem::U8Clamped => blk.uitofp(I8, &raw, DOUBLE),
-            BufferElem::I16 => blk.sitofp(I16, &raw, DOUBLE),
-            BufferElem::U16 => blk.uitofp(I16, &raw, DOUBLE),
-            BufferElem::I32 => blk.sitofp(I32, &raw, DOUBLE),
-            BufferElem::U32 => blk.uitofp(I32, &raw, DOUBLE),
-            // #10779: float lanes are arbitrary user bytes; canonicalise their
-            // NaNs so they cannot alias a NaN-box tag. Integer lanes cannot be
-            // NaN and pay nothing.
-            BufferElem::F32 => {
-                let widened = blk.fpext(F32, &raw, DOUBLE);
-                crate::expr::nanbox_inline::canonicalize_lane_f64(blk, &widened)
-            }
-            BufferElem::F64 => crate::expr::nanbox_inline::canonicalize_lane_f64(blk, &raw),
-        };
         let end = blk.label.clone();
         blk.br(&merge_label);
         (val, end)
@@ -367,6 +352,45 @@ pub(crate) fn try_lower_proven_view_checked_f64_load(
     );
     attach_buffer_view_facts(ctx, &view);
     Ok(Some(result))
+}
+
+/// The element at in-bounds `idx_i32` of a proven view, as the JS Number
+/// double a read yields.
+pub(super) fn emit_elem_load_f64(
+    ctx: &mut FnCtx<'_>,
+    view: &crate::native_value::BufferViewSlot,
+    data_ptr: &str,
+    idx_i32: &str,
+) -> String {
+    let blk = ctx.block();
+    let idx_i64 = blk.zext(I32, idx_i32, I64);
+    let byte_off = if view.element_width_bytes > 1 {
+        blk.shl(
+            I64,
+            &idx_i64,
+            &view.element_width_bytes.trailing_zeros().to_string(),
+        )
+    } else {
+        idx_i64
+    };
+    let elem_ptr = blk.gep(I8, data_ptr, &[(I64, &byte_off)]);
+    let raw = blk.load(elem_llvm_ty(&view.elem), &elem_ptr);
+    match view.elem {
+        BufferElem::I8 => blk.sitofp(I8, &raw, DOUBLE),
+        BufferElem::U8 | BufferElem::U8Clamped => blk.uitofp(I8, &raw, DOUBLE),
+        BufferElem::I16 => blk.sitofp(I16, &raw, DOUBLE),
+        BufferElem::U16 => blk.uitofp(I16, &raw, DOUBLE),
+        BufferElem::I32 => blk.sitofp(I32, &raw, DOUBLE),
+        BufferElem::U32 => blk.uitofp(I32, &raw, DOUBLE),
+        // #10779: float lanes are arbitrary user bytes; canonicalise their
+        // NaNs so they cannot alias a NaN-box tag. Integer lanes cannot be
+        // NaN and pay nothing.
+        BufferElem::F32 => {
+            let widened = blk.fpext(F32, &raw, DOUBLE);
+            crate::expr::nanbox_inline::canonicalize_lane_f64(blk, &widened)
+        }
+        BufferElem::F64 => crate::expr::nanbox_inline::canonicalize_lane_f64(blk, &raw),
+    }
 }
 
 /// Inline checked Uint32Array read that preserves the raw lane for a native
@@ -452,7 +476,7 @@ pub(crate) fn try_lower_proven_view_checked_u32_load(
     Ok(Some(lowered))
 }
 
-fn emit_proven_view_store(
+pub(super) fn emit_proven_view_store(
     ctx: &mut FnCtx<'_>,
     view: &crate::native_value::BufferViewSlot,
     data_ptr: &str,

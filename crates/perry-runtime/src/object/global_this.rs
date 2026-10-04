@@ -42,6 +42,13 @@ mod bigint_promise;
 mod builtin_thunks;
 mod ctor_thunks;
 mod fetch_globals;
+
+/// `dyn-eval` install: every hub slot the script evaluator fills in this
+/// module (see `crate::feature_hooks`).
+#[cfg(feature = "dyn-eval")]
+pub(crate) fn install_dyn_eval() {
+    fetch_globals::install_global_eval();
+}
 mod generator;
 mod install_static;
 mod math_temporal;
@@ -86,9 +93,9 @@ pub(crate) use array_error::{
 pub(crate) use bigint_promise::{
     array_from_thunk, array_is_array_thunk, array_of_thunk, bigint_as_int_n_thunk,
     bigint_as_n_dispatch, bigint_as_uint_n_thunk, json_is_raw_json_thunk, json_parse_thunk,
-    json_raw_json_thunk, json_stringify_thunk, number_is_finite_thunk, number_is_integer_thunk,
-    number_is_nan_thunk, number_is_safe_integer_thunk, number_parse_float_thunk,
-    number_parse_int_thunk, object_assign_thunk, object_create_thunk,
+    json_raw_json_thunk, json_stringify_thunk, map_group_by_thunk, number_is_finite_thunk,
+    number_is_integer_thunk, number_is_nan_thunk, number_is_safe_integer_thunk,
+    number_parse_float_thunk, number_parse_int_thunk, object_assign_thunk, object_create_thunk,
     object_define_properties_thunk, object_define_property_thunk, object_entries_thunk,
     object_freeze_thunk, object_from_entries_thunk, object_get_own_property_descriptor_thunk,
     object_get_own_property_descriptors_thunk, object_get_own_property_names_thunk,
@@ -101,22 +108,23 @@ pub(crate) use bigint_promise::{
     reflect_get_own_property_descriptor_thunk, reflect_get_prototype_of_thunk, reflect_get_thunk,
     reflect_has_thunk, reflect_is_extensible_thunk, reflect_own_keys_thunk,
     reflect_prevent_extensions_thunk, reflect_set_prototype_of_thunk, reflect_set_thunk,
-    string_from_char_code_static, string_from_code_point_static, string_raw_static,
-    symbol_for_thunk, symbol_key_for_thunk, typed_array_from_thunk, typed_array_of_thunk,
+    regexp_escape_thunk, string_from_char_code_static, string_from_code_point_static,
+    string_raw_static, symbol_for_thunk, symbol_key_for_thunk, typed_array_from_thunk,
+    typed_array_of_thunk,
 };
 pub use bigint_promise::{js_bigint_as_int_n_call, js_bigint_as_uint_n_call};
 pub use builtin_thunks::js_function_ctor_from_strings;
 pub(crate) use builtin_thunks::{
-    global_this_array_thunk, global_this_atob_thunk, global_this_boolean_thunk,
-    global_this_btoa_thunk, global_this_decode_uri_component_thunk, global_this_decode_uri_thunk,
-    global_this_encode_uri_component_thunk, global_this_encode_uri_thunk,
-    global_this_error_capture_stack_trace_thunk, global_this_error_is_error_thunk,
-    global_this_error_prepare_stack_trace_thunk, global_this_escape_thunk,
-    global_this_function_call_thunk, global_this_gc_thunk, global_this_is_finite_thunk,
-    global_this_is_nan_thunk, global_this_number_thunk, global_this_object_thunk,
-    global_this_parse_float_thunk, global_this_parse_int_thunk, global_this_string_thunk,
-    global_this_structured_clone_thunk, global_this_unescape_thunk, js_math_round_value,
-    proxy_revocable_thunk,
+    global_this_array_thunk, global_this_atob_thunk, global_this_bigint_thunk,
+    global_this_boolean_thunk, global_this_btoa_thunk, global_this_decode_uri_component_thunk,
+    global_this_decode_uri_thunk, global_this_encode_uri_component_thunk,
+    global_this_encode_uri_thunk, global_this_error_capture_stack_trace_thunk,
+    global_this_error_is_error_thunk, global_this_error_prepare_stack_trace_thunk,
+    global_this_escape_thunk, global_this_function_call_thunk, global_this_gc_thunk,
+    global_this_is_finite_thunk, global_this_is_nan_thunk, global_this_number_thunk,
+    global_this_object_thunk, global_this_parse_float_thunk, global_this_parse_int_thunk,
+    global_this_string_thunk, global_this_structured_clone_thunk, global_this_symbol_thunk,
+    global_this_unescape_thunk, js_math_round_value, proxy_revocable_thunk,
 };
 pub use ctor_thunks::js_webcrypto_illegal_constructor;
 pub(crate) use ctor_thunks::{
@@ -172,10 +180,13 @@ pub(crate) use install_static::{
 #[cfg(feature = "temporal")]
 pub(crate) use math_temporal::install_temporal_namespace;
 #[cfg(feature = "temporal")]
+pub(crate) use math_temporal::temporal_ctor_kind_impl;
+#[cfg(feature = "temporal")]
 pub(crate) use math_temporal::temporal_kind_prototype;
 pub(crate) use math_temporal::{install_math_namespace, temporal_ctor_kind};
 pub(crate) use object_intrinsic::{
-    ensure_object_intrinsics, object_intrinsics_for_realm, object_prototype_intrinsic_bits,
+    ensure_object_intrinsics, ensure_object_prototype_shape, object_intrinsics_for_realm,
+    object_prototype_intrinsic_bits,
 };
 pub(crate) use populate::{
     default_prepare_stack_trace_func_ptr, populate_global_this_builtins,

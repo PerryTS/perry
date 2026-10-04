@@ -114,6 +114,29 @@ pub(crate) fn dense_spread_source(value: f64) -> Option<*const ArrayHeader> {
     Some(arr)
 }
 
+/// Cheap call-spread admission for the overwhelmingly common plain Array.
+///
+/// `js_array_like_to_array` has already established `IsArray(value)`. When the
+/// global iterator protocol is pristine, the resolved array's canonical shape
+/// proves that no own key can shadow `@@iterator` and that its prototype is
+/// `%Array.prototype%`. That is the same one-word shape test used by the other
+/// array fast paths. Every mismatch is deliberately inconclusive and falls
+/// through to [`dense_spread_source`]'s complete proof.
+#[inline]
+pub(crate) fn plain_call_spread_source(value: f64) -> Option<*const ArrayHeader> {
+    if crate::array::array_iteration_not_pristine() {
+        return None;
+    }
+    let raw = crate::value::js_nanbox_get_pointer(value) as *const ArrayHeader;
+    let arr = crate::array::clean_arr_ptr(raw);
+    if arr.is_null() {
+        return None;
+    }
+    // SAFETY: `clean_arr_ptr` returned the live, forwarding-resolved ordinary
+    // Array head, and no allocation or safepoint intervenes before this load.
+    unsafe { crate::array::array_has_plain_shape_resolved(arr).then_some(arr) }
+}
+
 /// #10524: must `const [a, b] = value` drive the spec iterator protocol, or may
 /// it read `value[0]`, `value[1]` directly?
 ///
@@ -650,8 +673,12 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         let bits = src as u64;
         let raw_addr = if (bits >> 48) >= 0x7FF8 {
             (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-        } else {
+        } else if crate::buffer::header_is_owned(bits as usize) {
+            // #10694: a raw word must be allocator-owned before the typed-array
+            // probe reads its header.
             bits as usize
+        } else {
+            0
         };
         if crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
             return crate::typedarray::typed_array_to_array(

@@ -101,7 +101,7 @@
 // constant "off" (inlined, so every caller's guarded branch folds away and the
 // instrument links nothing); the rest of the module stays compiled so it
 // cannot rot, hence the allow.
-#![cfg_attr(not(feature = "gc-instruments"), allow(dead_code, unused_imports))]
+#![cfg_attr(not(perry_gc_instruments), allow(dead_code, unused_imports))]
 
 use super::*;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering as AtomicOrdering};
@@ -149,13 +149,13 @@ thread_local! {
     static MODE_OVERRIDE: Cell<Option<FromSpaceProtection>> = const { Cell::new(None) };
 }
 
-#[cfg(not(feature = "gc-instruments"))]
+#[cfg(not(perry_gc_instruments))]
 #[inline(always)]
 pub(crate) fn fromspace_protection_mode() -> FromSpaceProtection {
     FromSpaceProtection::Off
 }
 
-#[cfg(feature = "gc-instruments")]
+#[cfg(perry_gc_instruments)]
 pub(crate) fn fromspace_protection_mode() -> FromSpaceProtection {
     #[cfg(test)]
     if let Some(mode) = MODE_OVERRIDE.with(Cell::get) {
@@ -387,7 +387,7 @@ unsafe fn poison(data: *mut u8, used: usize) {
 
 /// The page-aligned interior of `[base, base + size)`, or `None` when the block
 /// is too small / too badly aligned to contain a whole page.
-fn page_interior(base: usize, size: usize) -> Option<(usize, usize)> {
+pub(super) fn page_interior(base: usize, size: usize) -> Option<(usize, usize)> {
     let page = page_size();
     let start = base.checked_add(page - 1)? & !(page - 1);
     let end = (base.checked_add(size)?) & !(page - 1);
@@ -399,7 +399,7 @@ fn page_interior(base: usize, size: usize) -> Option<(usize, usize)> {
 }
 
 #[cfg(unix)]
-fn mprotect_range(base: usize, len: usize, prot: libc::c_int) -> bool {
+pub(super) fn mprotect_range(base: usize, len: usize, prot: libc::c_int) -> bool {
     // SAFETY: `base`/`len` are page-aligned and describe memory this process
     // owns (an arena block detached from the arena and held by the quarantine).
     unsafe { libc::mprotect(base as *mut libc::c_void, len, prot) == 0 }
@@ -408,7 +408,7 @@ fn mprotect_range(base: usize, len: usize, prot: libc::c_int) -> bool {
 /// Non-Unix: there is no `mprotect`. Reporting failure is what makes the
 /// degradation to poison-only visible in `bytes_protected` rather than silent.
 #[cfg(not(unix))]
-fn mprotect_range(_base: usize, _len: usize, _prot: i32) -> bool {
+pub(super) fn mprotect_range(_base: usize, _len: usize, _prot: i32) -> bool {
     false
 }
 
@@ -578,6 +578,7 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
                 dead_cycles: 0,
                 old_free_holes: false,
                 pinned_summary: false,
+                idle_pages_discarded: false,
             });
         }
         ensure_usable_current_block(arena);
@@ -892,7 +893,7 @@ extern "C" fn fromspace_fault_handler(
     unix,
     any(target_os = "macos", all(target_os = "linux", target_env = "gnu"))
 ))]
-fn emit_native_backtrace() {
+pub(super) fn emit_native_backtrace() {
     const MAX_FRAMES: usize = 64;
     let mut frames = [std::ptr::null_mut::<libc::c_void>(); MAX_FRAMES];
     // SAFETY: `backtrace`/`backtrace_symbols_fd` are the async-signal-safe pair
@@ -909,7 +910,7 @@ fn emit_native_backtrace() {
     unix,
     not(any(target_os = "macos", all(target_os = "linux", target_env = "gnu")))
 ))]
-fn emit_native_backtrace() {}
+pub(super) fn emit_native_backtrace() {}
 
 /// Name the objects that still HOLD the stale address, not just the frame that
 /// dereferenced it (#8082).
@@ -1138,6 +1139,7 @@ mod tombstone_tests {
             dead_cycles: 0,
             old_free_holes: false,
             pinned_summary: false,
+            idle_pages_discarded: false,
         }
     }
 
@@ -1175,6 +1177,7 @@ mod tombstone_tests {
                 dead_cycles: 0,
                 old_free_holes: false,
                 pinned_summary: false,
+                idle_pages_discarded: false,
             }],
             current: 0,
             generation: HeapGeneration::Nursery,

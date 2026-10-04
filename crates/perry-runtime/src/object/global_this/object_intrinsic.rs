@@ -47,6 +47,15 @@ pub(crate) fn ensure_object_intrinsics() -> ObjectPair {
     if OBJECT_INTRINSICS_BUILDING.with(|b| b.swap(true, Ordering::AcqRel)) {
         return (std::ptr::null_mut(), std::ptr::null_mut());
     }
+    // `ensure_object_prototype_shape` may have installed a shape-only sentinel
+    // for allocation-free prototype-chain proofs. It was never observable as
+    // the intrinsic; retire its two roots before building the complete pair.
+    // The build runs under `GcSuppressScope`, so the sentinel cannot move or be
+    // collected in the rootless interval.
+    if ctor == 0 && proto != 0 {
+        crate::object::OBJECT_INTRINSIC_PROTO_PTR.store(0, Ordering::Release);
+        crate::array::forget_object_prototype_intrinsic();
+    }
     let built = build_object_intrinsics();
     if let Some((ctor, proto)) = built {
         crate::object::OBJECT_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
@@ -55,6 +64,46 @@ pub(crate) fn ensure_object_intrinsics() -> ObjectPair {
     }
     OBJECT_INTRINSICS_BUILDING.with(|b| b.store(false, Ordering::Release));
     built.unwrap_or((std::ptr::null_mut(), std::ptr::null_mut()))
+}
+
+/// A shape-owned stand-in for an as-yet unmaterialized `%Object.prototype%`.
+///
+/// Ordinary objects name the realm default prototype in their ShapeId before
+/// any observable use has to allocate the intrinsic. A store proof still has
+/// to account for Annex B's inherited `__proto__` accessor, but constructing
+/// the complete intrinsic just to inspect that fact allocates its constructor
+/// and method closures. Keep the blocking property as an accessor entry on a
+/// real shaped object instead. The ordinary prototype accessors never expose
+/// this sentinel: [`ensure_object_intrinsics`] replaces it with the complete
+/// pair before returning an observable prototype.
+pub(crate) fn ensure_object_prototype_shape() -> *mut ObjectHeader {
+    let current = crate::object::OBJECT_INTRINSIC_PROTO_PTR.load(Ordering::Acquire);
+    if current != 0 {
+        return current as *mut ObjectHeader;
+    }
+    if OBJECT_INTRINSICS_BUILDING.with(|b| b.swap(true, Ordering::AcqRel)) {
+        return std::ptr::null_mut();
+    }
+
+    // No collection may see the raw object before the intrinsic root is
+    // published. Unlike the complete intrinsic this sentinel is not immortal:
+    // replacing the root lets the next collection reclaim it.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let proto = js_object_alloc(0, 0);
+    if !proto.is_null() {
+        let key = crate::string::js_string_from_bytes(b"__proto__".as_ptr(), 9);
+        js_object_set_field_by_name(proto, key, f64::from_bits(crate::value::TAG_UNDEFINED));
+        super::super::set_builtin_accessor_descriptor(
+            proto as usize,
+            "__proto__".to_string(),
+            super::super::AccessorDescriptor { get: 0, set: 0 },
+            crate::object::PropertyAttrs::new(true, false, true),
+        );
+        crate::object::OBJECT_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
+        crate::array::note_object_prototype_intrinsic(proto as usize);
+    }
+    OBJECT_INTRINSICS_BUILDING.with(|b| b.store(false, Ordering::Release));
+    proto
 }
 
 /// The `%Object%` / `%Object.prototype%` pair for the realm whose global is

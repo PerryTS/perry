@@ -5,7 +5,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use super::{lower_expr, FnCtx};
+use super::FnCtx;
 use crate::block::LlBlock;
 use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
@@ -940,51 +940,67 @@ pub(crate) fn lower_stream_super_init(
     // back to TAG_UNDEFINED — matches the existing `new ReadableStream
     // / WritableStream / TransformStream` lowerings in
     // `lower_call/builtin.rs`.
-    let mut start = undef_lit.clone();
-    let mut pull = undef_lit.clone();
-    let mut cancel = undef_lit.clone();
-    let mut write = undef_lit.clone();
-    let mut close = undef_lit.clone();
-    let mut abort = undef_lit.clone();
-    let mut transform = undef_lit.clone();
-    let mut flush = undef_lit.clone();
-
-    if let Some(props) = opts_props {
-        for (k, vexpr) in &props {
-            match (kind, k.as_str()) {
-                ("readable", "start") => start = lower_expr(ctx, vexpr)?,
-                ("readable", "pull") => pull = lower_expr(ctx, vexpr)?,
-                ("readable", "cancel") => cancel = lower_expr(ctx, vexpr)?,
-                ("writable", "write") => write = lower_expr(ctx, vexpr)?,
-                ("writable", "close") => close = lower_expr(ctx, vexpr)?,
-                ("writable", "abort") => abort = lower_expr(ctx, vexpr)?,
-                ("transform", "transform") => transform = lower_expr(ctx, vexpr)?,
-                ("transform", "flush") => flush = lower_expr(ctx, vexpr)?,
-                _ => {
-                    // Lower for side effects (closure-capture collection,
-                    // string-pool registration, etc.) but discard the value.
-                    let _ = lower_expr(ctx, vexpr)?;
-                }
-            }
+    // #11789 sweep: every option value, the stream-strategy `highWaterMark`
+    // included, is lowered and rooted FIRST, in source order, each across the
+    // ones after it (the callbacks are closures, so each is an allocation and
+    // `start` is held while `pull` is built). They are read back together
+    // below the last one and only then assigned to their callback slot.
+    const START: usize = 0;
+    const PULL: usize = 1;
+    const CANCEL: usize = 2;
+    const WRITE: usize = 3;
+    const CLOSE: usize = 4;
+    const ABORT: usize = 5;
+    const TRANSFORM: usize = 6;
+    const FLUSH: usize = 7;
+    const HWM: usize = 8;
+    let mut operands: Vec<&Expr> = Vec::new();
+    let mut targets: Vec<Option<usize>> = Vec::new();
+    if let Some(props) = &opts_props {
+        for (k, vexpr) in props {
+            let target = match (kind, k.as_str()) {
+                ("readable", "start") => Some(START),
+                ("readable", "pull") => Some(PULL),
+                ("readable", "cancel") => Some(CANCEL),
+                ("writable", "write") => Some(WRITE),
+                ("writable", "close") => Some(CLOSE),
+                ("writable", "abort") => Some(ABORT),
+                ("transform", "transform") => Some(TRANSFORM),
+                ("transform", "flush") => Some(FLUSH),
+                // Lowered for side effects (closure-capture collection,
+                // string-pool registration, etc.) but the value is discarded.
+                _ => None,
+            };
+            operands.push(vexpr);
+            targets.push(target);
         }
     } else if let Some(first) = super_args.first() {
         // Caller passed something that isn't a recognized shape — lower
         // for side effects so closure analysis stays consistent.
-        let _ = lower_expr(ctx, first)?;
+        operands.push(first);
+        targets.push(None);
     }
-
-    let mut hwm = double_literal(1.0);
-    if let Some(qprops) = qstrat_props {
-        for (k, vexpr) in &qprops {
-            if k == "highWaterMark" {
-                hwm = lower_expr(ctx, vexpr)?;
-            } else {
-                let _ = lower_expr(ctx, vexpr)?;
-            }
+    if let Some(qprops) = &qstrat_props {
+        for (k, vexpr) in qprops {
+            operands.push(vexpr);
+            targets.push((k == "highWaterMark").then_some(HWM));
         }
     } else if let Some(second) = super_args.get(1) {
-        let _ = lower_expr(ctx, second)?;
+        operands.push(second);
+        targets.push(None);
     }
+    let (operand_values, stream_group) =
+        crate::lower_call::lower_operand_list_rooted(ctx, &operands)?;
+    let mut slots: [String; 8] = std::array::from_fn(|_| undef_lit.clone());
+    let mut hwm = double_literal(1.0);
+    for (target, value) in targets.iter().zip(operand_values) {
+        match target {
+            Some(HWM) => hwm = value,
+            Some(slot) => slots[*slot] = value,
+            None => {}
+        }
+    }
+    let [start, pull, cancel, write, close, abort, transform, flush] = slots;
 
     // `this` (NaN-boxed pointer) — the runtime shim stashes the handle
     // on it via `js_object_set_field_by_name`.
@@ -1043,6 +1059,7 @@ pub(crate) fn lower_stream_super_init(
         }
         _ => unreachable!(),
     }
+    stream_group.release(ctx);
 
     Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
 }
@@ -1056,14 +1073,13 @@ pub(crate) fn lower_node_stream_super_init(
     super_args: &[Expr],
 ) -> Result<String> {
     let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-    let opts = if let Some(first) = super_args.first() {
-        lower_expr(ctx, first)?
-    } else {
-        undef_lit.clone()
-    };
-    for arg in super_args.iter().skip(1) {
-        let _ = lower_expr(ctx, arg)?;
-    }
+    // #11789 sweep: the options are held across the (ignored) trailing
+    // arguments' evaluation.
+    let (arg_values, args_group) = crate::lower_call::lower_call_args_rooted(ctx, super_args)?;
+    let opts = arg_values
+        .first()
+        .cloned()
+        .unwrap_or_else(|| undef_lit.clone());
 
     let this_box = match ctx.this_stack.last().cloned() {
         Some(slot) => ctx.block().load(DOUBLE, &slot),
@@ -1083,6 +1099,7 @@ pub(crate) fn lower_node_stream_super_init(
     };
     ctx.block()
         .call(DOUBLE, runtime_fn, &[(DOUBLE, &this_box), (DOUBLE, &opts)]);
+    args_group.release(ctx);
 
     Ok(undef_lit)
 }
@@ -1093,10 +1110,7 @@ pub(crate) fn lower_node_stream_super_init(
 /// (mirrors `lower_node_stream_super_init` / the EventEmitter subclass init).
 pub(crate) fn lower_array_super_init(ctx: &mut FnCtx<'_>, super_args: &[Expr]) -> Result<String> {
     let undef_lit = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-    let mut args = Vec::with_capacity(super_args.len());
-    for arg in super_args {
-        args.push(lower_expr(ctx, arg)?);
-    }
+    let (args, args_group) = crate::lower_call::lower_call_args_rooted(ctx, super_args)?;
 
     let this_box = match ctx.this_stack.last().cloned() {
         Some(slot) => ctx.block().load(DOUBLE, &slot),
@@ -1132,24 +1146,30 @@ pub(crate) fn lower_array_super_init(ctx: &mut FnCtx<'_>, super_args: &[Expr]) -
         ],
     );
 
-    Ok(undef_lit)
+    let rooted_result = undef_lit;
+    args_group.release(ctx);
+    Ok(rooted_result)
 }
 
-/// #5137: install the bare EventEmitter listener/emit surface onto `this_box`
-/// for a source-compiled `class X extends EventEmitter` (node:events). Shared
-/// by the explicit-`super()` arm (`expr/this_super_call.rs`) and the
+/// #5137: node's `EventEmitter.init` on `this_box` for a source-compiled
+/// `class X extends EventEmitter` (node:events). Shared by the
+/// explicit-`super()` arm (`expr/this_super_call.rs`) and the
 /// no-own-constructor `new` path (`lower_call/new.rs`). The runtime helper
-/// reuses the generic `ns_*` emitter closures (they key all state off the
-/// receiver), so a plain object that never went through a stream constructor
-/// gets working `.on`/`.emit`/`.once`/…. Reached when an EventEmitter
+/// gives `this` its own `_events`/`_eventsCount`/`_maxListeners`; the
+/// `.on`/`.emit`/`.once`/… methods are inherited from the shared
+/// `EventEmitter.prototype`, as in node. Reached when an EventEmitter
 /// subclass's real npm source is compiled — e.g. commander's `Command` under
 /// `perry.compilePackages`, where the `new Command()` → `js_commander_*`
 /// native-shim path is intentionally off.
-pub(crate) fn lower_event_emitter_subclass_init(ctx: &mut FnCtx<'_>, this_box: &str) {
+pub(crate) fn lower_event_emitter_subclass_init(
+    ctx: &mut FnCtx<'_>,
+    this_box: &str,
+    options_box: &str,
+) {
     ctx.block().call(
         DOUBLE,
         "js_event_emitter_subclass_init",
-        &[(DOUBLE, this_box)],
+        &[(DOUBLE, this_box), (DOUBLE, options_box)],
     );
 }
 

@@ -425,4 +425,231 @@ mod tests {
             assert_eq!(ROOTED_READS.load(Ordering::Relaxed), 1);
         }
     }
+
+    #[test]
+    fn unscanned_lazy_descriptor_invokes_getter_without_losing_neighbour() {
+        let _hook = HookGuard::install_counting_hook();
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let hdr = scope.root_raw_mut_ptr::<LazyArrayHeader>(fixture(b"[10,20,30]"));
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 20.0);
+            assert!(hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| (*hdr).materialized.is_null()));
+            let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::closure::js_closure_alloc(crate::fn_info!(descriptor_getter, 0), 0) as i64,
+            ));
+            let desc = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+            let key = crate::string::js_string_from_bytes(b"get".as_ptr(), 3);
+            desc.with_mut_ptr(|desc| {
+                crate::object::js_object_set_field_by_name(desc, key, getter.get_nanbox_f64())
+            });
+            let key = crate::string::js_string_from_bytes(b"1".as_ptr(), 1);
+            hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| {
+                desc.with_mut_ptr::<crate::ObjectHeader, _>(|desc| {
+                    crate::object::js_object_define_property(
+                        crate::value::js_nanbox_pointer(hdr as i64),
+                        f64::from_bits(JSValue::string_ptr(key).bits()),
+                        crate::value::js_nanbox_pointer(desc as i64),
+                    )
+                })
+            });
+            assert!(hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| {
+                let arr = resolve_materialized_array(hdr);
+                !arr.is_null()
+                    && crate::object::get_accessor_descriptor(arr as usize, "1").is_some()
+            }));
+            assert_eq!(hdr.with_mut_ptr(|hdr| probe(hdr, 1)), MISS);
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 61.0);
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 2)).as_number(), 30.0);
+        }
+    }
+    unsafe fn define_test_index(receiver: f64, fields: &[(&str, f64)]) {
+        test_index_definition(receiver, fields, false);
+    }
+
+    unsafe fn test_index_definition(receiver: f64, fields: &[(&str, f64)], reflect: bool) -> f64 {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(receiver);
+        let fields: Vec<_> = fields
+            .iter()
+            .map(|(name, value)| (*name, scope.root_nanbox_f64(*value)))
+            .collect();
+        let desc = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        for (name, value) in fields {
+            let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+                name.as_ptr(),
+                name.len() as u32,
+            ));
+            desc.with_mut_ptr(|desc| {
+                key.with_const_ptr(|key| {
+                    crate::object::js_object_set_field_by_name(desc, key, value.get_nanbox_f64())
+                })
+            });
+        }
+        let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"1".as_ptr(), 1));
+        let define = if reflect {
+            crate::proxy::js_reflect_define_property
+        } else {
+            crate::object::js_object_define_property
+        };
+        desc.with_mut_ptr::<crate::ObjectHeader, _>(|desc| {
+            key.with_mut_ptr(|key| {
+                define(
+                    receiver.get_nanbox_f64(),
+                    f64::from_bits(JSValue::string_ptr(key).bits()),
+                    crate::value::js_nanbox_pointer(desc as i64),
+                )
+            })
+        })
+    }
+
+    extern "C" fn replacement_getter(
+        _: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        92.0
+    }
+
+    #[test]
+    fn unscanned_lazy_nonconfigurable_index_rejects_getter_redefinition() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let hdr = scope.root_raw_mut_ptr(fixture(b"[10,20,30]"));
+            assert!(hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| (*hdr).materialized.is_null()));
+            let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::closure::js_closure_alloc(crate::fn_info!(descriptor_getter, 0), 0) as i64,
+            ));
+            hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| {
+                define_test_index(
+                    crate::value::js_nanbox_pointer(hdr as i64),
+                    &[
+                        ("get", getter.get_nanbox_f64()),
+                        ("configurable", f64::from_bits(JSValue::bool(false).bits())),
+                    ],
+                );
+            });
+            let replacement = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::closure::js_closure_alloc(crate::fn_info!(replacement_getter, 0), 0) as i64,
+            ));
+            let result = crate::exception::catch_js_throw(|| {
+                hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| {
+                    define_test_index(
+                        crate::value::js_nanbox_pointer(hdr as i64),
+                        &[("get", replacement.get_nanbox_f64())],
+                    );
+                });
+            });
+            assert!(
+                result.is_err(),
+                "a different non-configurable getter must throw"
+            );
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 61.0);
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 2)).as_number(), 30.0);
+        }
+    }
+
+    #[test]
+    fn unscanned_lazy_reflect_redefinition_returns_false_and_preserves_getter() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let hdr = scope.root_raw_mut_ptr(fixture(b"[10,20,30]"));
+            assert!(hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| (*hdr).materialized.is_null()));
+            let define_index = |fields: &[(&str, f64)], reflect: bool| {
+                hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| {
+                    test_index_definition(
+                        crate::value::js_nanbox_pointer(hdr as i64),
+                        fields,
+                        reflect,
+                    )
+                })
+            };
+            let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::closure::js_closure_alloc(crate::fn_info!(descriptor_getter, 0), 0) as i64,
+            ));
+            define_index(
+                &[
+                    ("get", getter.get_nanbox_f64()),
+                    ("configurable", f64::from_bits(JSValue::bool(false).bits())),
+                ],
+                false,
+            );
+            let replacement = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::closure::js_closure_alloc(crate::fn_info!(replacement_getter, 0), 0) as i64,
+            ));
+            let result = crate::exception::catch_js_throw(|| {
+                define_index(&[("get", replacement.get_nanbox_f64())], true)
+            });
+            assert!(result.is_ok(), "Reflect rejection must not throw");
+            assert_eq!(result.unwrap().to_bits(), JSValue::bool(false).bits());
+            let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"1".as_ptr(), 1));
+            let deleted = hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| {
+                key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                    crate::proxy::js_reflect_delete(
+                        crate::value::js_nanbox_pointer(hdr as i64),
+                        crate::value::js_nanbox_string(key as i64),
+                    )
+                })
+            });
+            assert_eq!(deleted.to_bits(), JSValue::bool(false).bits());
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 61.0);
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 2)).as_number(), 30.0);
+        }
+    }
+
+    #[test]
+    fn unscanned_lazy_accessor_to_data_clears_getter_and_keeps_attrs() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let hdr = scope.root_raw_mut_ptr(fixture(b"[10,20,30]"));
+            assert!(hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| (*hdr).materialized.is_null()));
+            let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+                crate::closure::js_closure_alloc(crate::fn_info!(descriptor_getter, 0), 0) as i64,
+            ));
+            let define_index = |fields: &[(&str, f64)], reflect: bool| {
+                hdr.with_mut_ptr::<LazyArrayHeader, _>(|hdr| {
+                    test_index_definition(
+                        crate::value::js_nanbox_pointer(hdr as i64),
+                        fields,
+                        reflect,
+                    )
+                })
+            };
+            define_index(
+                &[
+                    ("get", getter.get_nanbox_f64()),
+                    ("configurable", f64::from_bits(JSValue::bool(true).bits())),
+                ],
+                false,
+            );
+            define_index(
+                &[("enumerable", f64::from_bits(JSValue::bool(false).bits()))],
+                false,
+            );
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 61.0);
+            define_index(
+                &[
+                    ("value", 73.0),
+                    ("writable", f64::from_bits(JSValue::bool(false).bits())),
+                    ("configurable", f64::from_bits(JSValue::bool(false).bits())),
+                ],
+                false,
+            );
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 73.0);
+            let arr = hdr.with_mut_ptr(|hdr| resolve_materialized_array(hdr));
+            assert!(crate::object::get_accessor_descriptor(arr as usize, "1").is_none());
+            let attrs = crate::object::get_property_attrs(arr as usize, "1").unwrap();
+            assert!(!attrs.writable() && !attrs.enumerable() && !attrs.configurable());
+            let result = crate::exception::catch_js_throw(|| {
+                define_index(&[("value", 74.0)], false);
+            });
+            assert!(
+                result.is_err(),
+                "the new data attributes must reject a value change"
+            );
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 1)).as_number(), 73.0);
+            assert_eq!(hdr.with_mut_ptr(|hdr| lazy_get(hdr, 2)).as_number(), 30.0);
+        }
+    }
 }

@@ -7,7 +7,7 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 
 pub(crate) fn declare_streams_events(module: &mut LlModule) {
     // ========== node:stream stubs (issue #631) ==========
-    module.declare_function("js_event_emitter_subclass_init", DOUBLE, &[DOUBLE]); // #5137 EE subclass init
+    module.declare_function("js_event_emitter_subclass_init", DOUBLE, &[DOUBLE, DOUBLE]); // #5137 EE subclass init (this, options)
     module.declare_function(
         "js_event_emitter_async_resource_subclass_init",
         DOUBLE,

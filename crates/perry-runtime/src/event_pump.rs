@@ -180,6 +180,19 @@ pub(crate) fn with_pool_driver<R>(f: impl FnOnce(&mut turnloop::Loop) -> R) -> O
     with_net_driver(f)
 }
 
+/// Whether this thread owns its agent's loop and that loop still has work in
+/// flight (a socket, a pool job): something only a turn here will complete.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn agent_loop_has_outstanding_work() -> bool {
+    agent_loop::has_outstanding_work()
+}
+
+/// Wake `agent`'s loop; see `agent_loop::notify_agent`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn notify_agent_loop(agent: crate::agent::AgentId) {
+    agent_loop::notify_agent(agent);
+}
+
 /// turnloop P4 (DESIGN §9, "`run_pending` becomes a bounded `turn`"): drive
 /// this agent's loop for at most `budget_ms`, dispatching whatever completes.
 ///

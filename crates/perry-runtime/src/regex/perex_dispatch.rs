@@ -115,13 +115,7 @@ pub(crate) fn execute(
         if crate::hot_diag::regex_on() {
             crate::hot_diag::regex_counters(|d| d.perex_canonical_execs += 1);
         }
-        let re =
-            crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut RegExpHeader;
-        return input
-            .with_const_ptr(|input| {
-                api::execute_with_resources(re, input, materialize, budget, memory, poll, reuse)
-            })
-            .map(|result| result.map(ExecResult::Builtin));
+        return builtin(receiver, input, materialize, budget, memory, poll, reuse);
     }
     require_object(receiver.get_nanbox_f64())?;
     input.with_mut_ptr::<StringHeader, _>(|input| crate::string::js_string_addref(input));
@@ -148,11 +142,26 @@ pub(crate) fn execute(
             "RegExp builtin exec requires a RegExp receiver",
         ));
     }
-    // `execute_with_resources` roots both before it allocates.
-    input
-        .with_const_ptr::<StringHeader, _>(|input| {
-            api::execute_with_resources(re, input, materialize, budget, memory, poll, reuse)
-        })
+    builtin(receiver, input, materialize, budget, memory, poll, reuse)
+}
+
+/// RegExpBuiltinExec on the validated RegExp `receiver` holds, over the
+/// caller's rooted `input`.
+fn builtin(
+    receiver: &RuntimeHandle<'_>,
+    input: &RuntimeHandle<'_>,
+    materialize: bool,
+    budget: &mut Budget,
+    memory: &MemoryBudget,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+    reuse: Option<&api::Reuse<'_, '_>>,
+) -> Result<Option<ExecResult>, EngineError> {
+    let output = if materialize {
+        api::ExecOutput::Object
+    } else {
+        api::ExecOutput::Test
+    };
+    api::execute_rooted(receiver, input, output, budget, memory, poll, reuse)
         .map(|result| result.map(ExecResult::Builtin))
 }
 
@@ -218,12 +227,8 @@ pub(crate) fn set_last_index(owner: &RuntimeHandle<'_>, value: f64) -> Result<()
     let value = scope.root_nanbox_f64(value);
     let re = crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()) as *mut RegExpHeader;
     if super::is_valid_regex_ptr(re) {
-        if crate::object::get_property_attrs(re as usize, "lastIndex")
-            .is_some_and(|a| !a.writable())
-        {
-            return Err(EngineError::Type(
-                "Cannot assign to read only property 'lastIndex' of object",
-            ));
+        if !super::last_index_writable(re) {
+            return Err(EngineError::Type(super::LAST_INDEX_READ_ONLY));
         }
         super::js_regexp_set_last_index(re, value.get_nanbox_f64());
         return Ok(());

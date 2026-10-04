@@ -1,4 +1,3 @@
-use super::decl_prototype_table::DeclPrototypeTable;
 use super::*;
 use crate::object::class_image::{
     ImageTable, StaticAccessorTable, StaticMethodTable, StringMemberOrderTable,
@@ -345,6 +344,11 @@ pub struct VTableMethodEntry {
     /// `has_synthetic_arguments`: the rest slot holds only the args from the
     /// rest position onward, so apply/dynamic dispatch bundles them correctly.
     pub has_rest: bool,
+    /// The method's closure-convention entry (`<method>__eclo`'s
+    /// `JsFunctionInfo`): the prototype holds a function object running it
+    /// (each evaluation's prototype its own, for a `ClassExprFresh` class).
+    /// 0 for a method registered without one (runtime-built classes).
+    pub entry: usize,
 }
 
 /// The compiled halves of one declared accessor, each 0 when that half is
@@ -468,6 +472,14 @@ pub static CLASS_STRING_MEMBER_ORDERS: ImageTable<RwLock<Option<StringMemberOrde
 pub static CLASS_METHOD_BIND_LENGTHS: ImageTable<RwLock<Option<HashMap<(u32, String), u32>>>> =
     ImageTable::new(|image| &image.method_bind_lengths);
 
+/// The closure-convention entry registered for method `name` of per-evaluation
+/// class `class_id` (its vtable entry's `entry`), if any.
+pub(crate) fn class_method_entry(class_id: u32, name: &str) -> Option<usize> {
+    let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
+    let entry = guard.as_ref()?.get(&class_id)?.methods.get(name)?.entry;
+    (entry != 0).then_some(entry)
+}
+
 /// Default-aware spec `.length` for STATIC methods, keyed (class_id, name).
 /// Distinct from `CLASS_METHOD_BIND_LENGTHS` (instance methods) so a class with
 /// both `static m(a, b = 1)` and `m(c)` keeps independent lengths instead of
@@ -557,16 +569,6 @@ pub(crate) fn class_prototype_object_addr_index_rekey(old: usize, new: usize) {
 crate::perry_thread_local! {}
 
 crate::perry_thread_local! {
-    /// Lazily materialized `Class.prototype` objects for declared ES classes.
-    /// These are separate from `CLASS_PROTOTYPE_OBJECTS`: that older table is
-    /// intentionally overloaded for synthetic prototype sources and static
-    /// inheritance shortcuts. Declared class prototypes need stable heap identity
-    /// for `typeof C.prototype`, `Object.getPrototypeOf(new C())`, and
-    /// `C.prototype.isPrototypeOf(instance)` without perturbing those paths.
-    pub static CLASS_DECL_PROTOTYPE_OBJECTS: RwLock<Option<DeclPrototypeTable>> = RwLock::new(None);
-}
-
-crate::perry_thread_local! {
     /// #5024 followup: prototype methods registered via `Object.defineProperty(
     /// Class.prototype, name, desc)` WITHOUT an explicit `enumerable: true` are
     /// non-enumerable (spec default for defineProperty). The plain
@@ -645,6 +647,18 @@ crate::perry_thread_local! {
     pub static CLASS_DYNAMIC_PARENT_VALUE: RwLock<Option<HashMap<u32, u64>>> = RwLock::new(None);
 }
 
+/// The `js_register_class_parent_dynamic` stash for `class_id`: the parent
+/// value its latest evaluation registered.
+pub(crate) fn stashed_dynamic_parent_value(class_id: u32) -> Option<f64> {
+    CLASS_DYNAMIC_PARENT_VALUE.with(|table| {
+        let guard = table.read().unwrap();
+        guard
+            .as_ref()
+            .and_then(|m| m.get(&class_id).copied())
+            .map(f64::from_bits)
+    })
+}
+
 crate::perry_thread_local! {
     /// #6530: maps a template class_id to the raw NaN-boxed POINTER bits of the
     /// per-evaluation CLASS OBJECT the class statement materialized as (marked by
@@ -672,6 +686,13 @@ pub(crate) fn class_object_value_root_store(class_id: u32, obj_ptr: *mut ObjectH
     if class_id == 0 || obj_ptr.is_null() {
         return;
     }
+    // #11759 (c′): the class function object is the declaration's first
+    // evaluation, and a later evaluation is a class of its own. It never
+    // stands in for the template: `C.x` on the first evaluation and the
+    // `constructor` of its instances stay the first evaluation's.
+    if crate::object::class_value::class_value_is_first_evaluation(class_id) {
+        return;
+    }
     CLASS_OBJECT_EVER.store(true, std::sync::atomic::Ordering::Relaxed);
     let bits = crate::value::js_nanbox_pointer(obj_ptr as i64).to_bits();
     CLASS_OBJECT_VALUES.with(|table| {
@@ -682,6 +703,17 @@ pub(crate) fn class_object_value_root_store(class_id: u32, obj_ptr: *mut ObjectH
         guard.as_mut().unwrap().insert(class_id, bits);
     });
     crate::gc::runtime_write_barrier_root_raw_ptr(obj_ptr);
+}
+
+/// Has a class object of template `class_id` been created? The answer is the
+/// template's own entry in `CLASS_OBJECT_VALUES`, stored with its first class
+/// object, not a copy of it: the answer stays `true` only while no writer
+/// removes an entry. A program with no per-evaluation class pays one relaxed
+/// load.
+#[inline]
+pub(crate) fn template_has_class_objects(class_id: u32) -> bool {
+    CLASS_OBJECT_EVER.load(std::sync::atomic::Ordering::Relaxed)
+        && class_object_value_for_cid(class_id).is_some()
 }
 
 /// Read back the class object registered for `class_id`, or `None` when the
@@ -732,6 +764,12 @@ pub(crate) fn class_prototype_object_root_store(class_id: u32, proto_ptr: *mut O
         }
         guard.as_mut().unwrap().insert(class_id, proto_ptr as usize)
     });
+    if let Some(old) = old.filter(|&old| old != 0 && old != proto_ptr as usize) {
+        // SAFETY: the registry held `old` as a live root until this store.
+        unsafe {
+            super::construct::forget_birth_record_of_class(old as *mut ObjectHeader, class_id)
+        };
+    }
     class_prototype_object_addr_index_rekey(old.unwrap_or(0), proto_ptr as usize);
     crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
     // A materialized prototype object can carry arbitrary later-added
@@ -749,6 +787,7 @@ pub(crate) fn class_static_prototype_root_store(class_id: u32, proto_ptr: *mut O
     if class_id == 0 || proto_ptr.is_null() {
         return;
     }
+    super::super::prototype_chain::note_class_chain_relinked();
     let bits = crate::value::js_nanbox_pointer(proto_ptr as i64).to_bits();
     crate::closure::closure_set_static_prototype(
         crate::object::class_value::class_value_ptr(class_id) as usize,
@@ -761,6 +800,7 @@ pub(crate) fn class_static_prototype_root_clear(class_id: u32) {
     if class_id == 0 {
         return;
     }
+    super::super::prototype_chain::note_class_chain_relinked();
     crate::closure::closure_set_static_prototype(
         crate::object::class_value::class_value_ptr(class_id) as usize,
         crate::value::TAG_NULL,
@@ -768,7 +808,9 @@ pub(crate) fn class_static_prototype_root_clear(class_id: u32) {
 }
 
 fn class_recorded_prototype_bits(class_id: u32) -> Option<u64> {
-    if class_id == 0 {
+    // Constructor-chain reads can reach builtin/synthetic parents. Their
+    // prototypes are handled by builtin dispatch, not compiled-class closures.
+    if class_id == 0 || class_id >= 0x7FFF_FF00 {
         return None;
     }
     let class_id = crate::object::class_generic_origin(class_id).unwrap_or(class_id);
@@ -793,22 +835,46 @@ pub(crate) fn class_static_prototype(class_id: u32) -> *mut ObjectHeader {
     }
 }
 
+/// Link `proto_ptr` as declared class `class_id`'s `prototype` object: the
+/// class function object's own link (`class_value::class_decl_prototype_link`).
 pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *mut ObjectHeader) {
     if class_id == 0 || proto_ptr.is_null() {
         return;
     }
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        let mut guard = table.write().unwrap();
-        guard
-            .get_or_insert_with(DeclPrototypeTable::default)
-            .insert(class_id, proto_ptr as usize);
-    });
-    crate::gc::runtime_write_barrier_root_raw_ptr(proto_ptr);
+    let displaced =
+        crate::object::class_value::class_decl_prototype_link_store(class_id, proto_ptr);
     // Its sole caller, `class_decl_prototype_value`, argues at length against
     // bumping VTABLE_GEN here (it would disarm dispatch speculation for a
     // whole class hierarchy). The lookup-surface generation is the separate
     // counter that exists for exactly this store (#10696).
     super::class_lookup_surface_gen_bump();
+    if !displaced.is_null() && displaced != proto_ptr {
+        retire_displaced_decl_prototype(displaced);
+    }
+}
+
+/// A bare CLASS prototype identity (`shapes::PROTO_ID_CLASS | class`) names
+/// its holder through the class's prototype link, so the link `class -> C.prototype` is a
+/// fact of every receiver ShapeId that carries the identity. The link is
+/// written once per class identity; a write that REPLACES it (or a
+/// generic-origin redirect that changes what it answers) must leave no site
+/// trusting the old holder. The displaced prototype takes a semantic shape
+/// transition: a process-unique ShapeId no site was trained on. Every site
+/// that names that holder compares its ShapeId on each hit, so the relink is
+/// seen through shapes alone, without a global generation word.
+pub(crate) fn retire_displaced_decl_prototype(old: *mut ObjectHeader) {
+    if old.is_null() {
+        return;
+    }
+    // The mint is a no-move window here: `old` is a raw link address.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    // SAFETY: `old` was a linked (rooted) prototype object until the store
+    // above, and nothing between that read and here can collect.
+    unsafe {
+        if crate::object::shapes::object_shape_stamp(old) != 0 {
+            crate::object::shapes::transition_object_shape_semantics(old);
+        }
+    }
 }
 
 pub(crate) fn class_parent_closure_root_store(class_id: u32, closure_addr: usize) {
@@ -889,23 +955,18 @@ pub(crate) fn builtin_parent_ctor_in_chain(class_id: u32) -> Option<f64> {
 /// `descriptor_state::disable_inline_guards_for_descriptor_target` on every
 /// `Object.defineProperty`.
 ///
-/// #9180: this was a linear scan over every materialized declared-class
-/// prototype, on the strength of a "the table is small and this is a cold
-/// reflection path" comment that a bundled application falsifies twice over
-/// — it was 3.10% of `cc --help`. Callers ask about arbitrary objects, so the
-/// common case is a MISS, and a miss walked the whole table.
-/// [`DeclPrototypeTable`] carries the inverse of the map next to it and keeps
-/// the two in step by construction; see that module for why the invalidation
-/// is structural rather than enumerated.
+/// Callers ask about arbitrary objects (#9180: on a bundled application most
+/// asks are misses, run thousands of times during module init), so the answer
+/// is two reads, never a walk: a declared prototype is allocated with its
+/// class's identity id in its header (`class_decl_prototype_value`), a word
+/// that is never rewritten after birth, and it is exactly the object that
+/// class's link names. Any other object either carries another class id or
+/// is not the linked one.
 pub(crate) fn class_id_for_decl_prototype_object(ptr: usize) -> Option<u32> {
-    if ptr == 0 {
-        return None;
-    }
-    CLASS_DECL_PROTOTYPE_OBJECTS
-        .with(|table| table.read().ok()?.as_ref()?.class_id_for(ptr))
+    decl_prototype_class_id(ptr)
         // #11043: a capture-carrying class (`ClassExprFresh`) gets a distinct
-        // prototype object per evaluation instead of the table entry above,
-        // but it is built exactly like one — physical constructor + methods,
+        // prototype object per evaluation instead of the link above, but it
+        // is built exactly like one — physical constructor + methods,
         // ClassBody accessors living only in the template's vtable. Every
         // reflection site keyed on this lookup (descriptors, own keys,
         // `defineProperty`, `hasOwn`, `delete`) must therefore see it too, or
@@ -913,6 +974,28 @@ pub(crate) fn class_id_for_decl_prototype_object(ptr: usize) -> Option<u32> {
         // { x: { enumerable: true } })` replaces `get x`/`set x` with a
         // read-only `undefined` data property (whatwg-url's `URL`).
         .or_else(|| super::super::field_get_set::class_evaluation_prototype_class_id(ptr))
+}
+
+/// The declared class whose linked prototype is the object at `ptr`.
+///
+/// The answer is proven by the final compare, not by the header read: the
+/// link names exactly one live object start, so whatever class id a header
+/// read at a non-prototype yields, that class's link is not `ptr`. The read
+/// itself only needs to be safe for a live allocation or non-pointer bits
+/// (`try_read_gc_header`'s contract), which is what every caller passes.
+#[inline]
+fn decl_prototype_class_id(ptr: usize) -> Option<u32> {
+    // SAFETY: a live GC allocation's address or arbitrary non-pointer bits.
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(ptr) }?;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        return None;
+    }
+    // SAFETY: the header names an ordinary object at `ptr`; its first word
+    // is the class id.
+    let class_id = unsafe { (*(ptr as *const ObjectHeader)).class_id };
+    (class_id != 0
+        && crate::object::class_value::class_decl_prototype_link(class_id) as usize == ptr)
+        .then_some(class_id)
 }
 
 /// #7757: a monomorphized specialization (`Gen$num`) must present the GENERIC's
@@ -933,16 +1016,12 @@ pub(crate) fn decl_prototype_identity_id(class_id: u32) -> u32 {
     crate::object::class_generic_origin(class_id).unwrap_or(class_id)
 }
 
+/// `C.prototype` of declared class `class_id` (a specialization answers with
+/// its generic's) if this agent built it, else null. The class function
+/// object's link: indexed loads, no lock, no map.
+#[inline]
 pub(crate) fn class_decl_prototype_object(class_id: u32) -> *mut ObjectHeader {
-    let class_id = decl_prototype_identity_id(class_id);
-    CLASS_DECL_PROTOTYPE_OBJECTS.with(|table| {
-        if let Ok(read) = table.read() {
-            if let Some(map) = read.as_ref() {
-                return map.get(class_id).unwrap_or(0) as *mut ObjectHeader;
-            }
-        }
-        std::ptr::null_mut()
-    })
+    crate::object::class_value::class_decl_prototype_link(decl_prototype_identity_id(class_id))
 }
 
 pub(crate) fn class_decl_prototype_method_names(class_id: u32) -> Vec<String> {
@@ -1063,6 +1142,100 @@ pub(super) fn install_class_decl_prototype_method_field(
     });
 }
 
+/// Install one computed Symbol ClassBody member on the materialized declared
+/// prototype. The class registries retain compiled dispatch metadata, while
+/// the prototype shape is the authoritative record that the property exists:
+/// deleting the shape entry therefore cannot be resurrected by a registry
+/// fallback.
+pub(super) fn install_class_decl_prototype_symbol_member(
+    proto: *mut ObjectHeader,
+    class_id: u32,
+    sym_key: usize,
+) {
+    if proto.is_null() || sym_key == 0 {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto_h = scope.root_raw_mut_ptr(proto);
+    let sym = f64::from_bits(crate::JSValue::pointer(sym_key as *const u8).bits());
+    let sym_h = scope.root_nanbox_f64(sym);
+    // SAFETY: `sym_key` came from the registered ClassBody symbol table and
+    // remains rooted by that registry for the class lifetime.
+    let display_name = unsafe { crate::symbol::symbol_function_name(sym_key) };
+
+    if let Some((raw_get, raw_set)) =
+        super::class_own_symbol_accessor_ptrs(class_id, sym_key, false)
+    {
+        let get = scope.root_nanbox_f64(super::class_accessor_function_value(
+            raw_get,
+            false,
+            false,
+            &display_name,
+            None,
+        ));
+        let set = scope.root_nanbox_f64(super::class_accessor_function_value(
+            raw_set,
+            true,
+            false,
+            &display_name,
+            None,
+        ));
+        let proto_value =
+            proto_h.with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
+        unsafe {
+            crate::symbol::set_symbol_accessor_property(
+                proto_value,
+                sym_h.get_nanbox_f64(),
+                if raw_get == 0 {
+                    0
+                } else {
+                    get.get_nanbox_u64()
+                },
+                if raw_set == 0 {
+                    0
+                } else {
+                    set.get_nanbox_u64()
+                },
+            );
+        }
+    } else if let Some((func_ptr, param_count, has_rest)) =
+        super::class_own_symbol_method(class_id, sym_key, false)
+    {
+        let value = scope.root_nanbox_f64(crate::object::build_symbol_bound_method_closure(
+            crate::object::class_prototype_ref_value(class_id),
+            func_ptr,
+            param_count,
+            has_rest,
+            false,
+            &display_name,
+        ));
+        let proto_value =
+            proto_h.with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
+        unsafe {
+            crate::symbol::define_symbol_data_property(
+                proto_value,
+                sym_h.get_nanbox_f64(),
+                value.get_nanbox_f64(),
+            );
+        }
+    } else {
+        return;
+    }
+
+    let owner = proto_h.with_mut_ptr::<ObjectHeader, _>(|p| p as usize);
+    crate::symbol::set_symbol_property_attrs(owner, sym_key, PropertyAttrs::new(true, false, true));
+}
+
+fn install_class_decl_prototype_symbol_members(proto: *mut ObjectHeader, class_id: u32) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto_h = scope.root_raw_mut_ptr(proto);
+    for sym_key in super::class_own_symbol_member_keys(class_id, false) {
+        proto_h.with_mut_ptr(|p: *mut ObjectHeader| {
+            install_class_decl_prototype_symbol_member(p, class_id, sym_key)
+        });
+    }
+}
+
 /// The class's own string-keyed prototype members in ClassBody order, each
 /// with whether it is an accessor (else a method).
 pub(crate) fn class_prototype_member_names(class_id: u32) -> Vec<(String, bool)> {
@@ -1103,6 +1276,34 @@ fn install_class_decl_prototype_method_fields(proto: *mut ObjectHeader, class_id
             }
         });
     }
+}
+
+/// The decl prototype `proto` of `class_id`, complete and linked: each method
+/// was claimed with its attributes and then stored, and the link restamped
+/// it, neither of which carries a lane. Its shape names each method's own
+/// body, as an ordinary key-add of the same function object would: the slot
+/// is a ConstFn lane (step 5C), and a later store of anything else to it
+/// generalizes the lane through the store check.
+fn learn_decl_prototype_method_lanes(proto: *mut ObjectHeader, class_id: u32) {
+    let home = super::super::class_prototype_ref_value(class_id).to_bits();
+    unsafe {
+        crate::object::shapes::learn_object_constfn_lanes(proto, |_, bits| {
+            class_method_entry_object_of(bits, home)
+        });
+    }
+}
+
+/// Is `bits` a function object running a class method's closure-convention
+/// entry whose one capture is `home`?
+unsafe fn class_method_entry_object_of(bits: u64, home: u64) -> bool {
+    let value = JSValue::from_bits(bits);
+    if !value.is_pointer() {
+        return false;
+    }
+    let closure = value.as_pointer::<crate::closure::ClosureHeader>();
+    crate::closure::is_closure_ptr(closure as usize)
+        && crate::closure::real_capture_count((*closure).capture_count) == 1
+        && crate::closure::js_closure_get_capture_bits(closure, 0) == home
 }
 
 fn class_parent_prototype_bits(value: f64) -> Option<u64> {
@@ -1194,9 +1395,32 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
+    // The class's function object carries the link, and minting it builds
+    // the prototype through this function (its `prototype` own property), so
+    // mint it first: a prototype is built once per class per agent, by the
+    // innermost of the two calls.
+    crate::object::class_value::class_value_ptr(class_id);
     let existing = class_decl_prototype_object(class_id);
     if !existing.is_null() {
         return crate::value::js_nanbox_pointer(existing as i64);
+    }
+
+    // The [[Prototype]] it links to, resolved before the object exists (a
+    // parent that cannot be one throws before anything is linked).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let parent_proto_bits = decl_prototype_parent_bits(class_id);
+    let parent_proto = scope.root_heap_word_u64(parent_proto_bits.unwrap_or(0));
+    let existing = class_decl_prototype_object(class_id);
+    if !existing.is_null() {
+        return crate::value::js_nanbox_pointer(existing as i64);
+    }
+    if parent_proto_bits.is_some() {
+        if let Some(proto) = super::decl_prototype_birth::decl_prototype_born_final(
+            class_id,
+            parent_proto.get_heap_word_u64(),
+        ) {
+            return proto;
+        }
     }
 
     // Inline room for `constructor` and every declared member, so the
@@ -1237,6 +1461,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         PropertyAttrs::new(true, false, true),
     );
     install_class_decl_prototype_method_fields(proto, class_id);
+    install_class_decl_prototype_symbol_members(proto, class_id);
 
     // #5024 followup: backfill assignment-registered prototype methods
     // (`Class.prototype.m = fn`, stored in CLASS_PROTOTYPE_METHODS) onto the
@@ -1260,10 +1485,30 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
         unsafe { mirror_prototype_method_on_object(proto, &name, value_bits, enumerable) };
     }
 
+    if parent_proto_bits.is_some() {
+        let proto = class_decl_prototype_object(class_id);
+        if !proto.is_null() {
+            super::super::prototype_chain::object_set_static_prototype(
+                proto as usize,
+                parent_proto.get_heap_word_u64(),
+            );
+        }
+    }
+
+    let proto = class_decl_prototype_object(class_id);
+    learn_decl_prototype_method_lanes(proto, class_id);
+    crate::value::js_nanbox_pointer(proto as i64)
+}
+
+/// The [[Prototype]] of declared class `class_id`'s prototype object: its
+/// parent class's prototype, the evaluated parent's, a runtime function
+/// parent's `.prototype`, `null` for `extends null`, or `Object.prototype`.
+/// Throws when a function-valued parent has no valid `.prototype`.
+fn decl_prototype_parent_bits(class_id: u32) -> Option<u64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let dynamic_parent = scope.root_nanbox_f64(js_get_dynamic_parent_value(class_id));
     let null_heritage = dynamic_parent.get_nanbox_f64().to_bits() == crate::value::TAG_NULL;
-    let parent_proto_bits = if null_heritage {
+    if null_heritage {
         // A class extending null creates a prototype object whose
         // [[Prototype]] is null, not Object.prototype.  Record TAG_NULL
         // explicitly so "no custom link" is not mistaken for the ordinary
@@ -1347,20 +1592,7 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
                 global_object_prototype_bits()
             }
         }
-    };
-    if let Some(bits) = parent_proto_bits {
-        let bits = scope.root_heap_word_u64(bits);
-        let proto = class_decl_prototype_object(class_id);
-        if !proto.is_null() {
-            super::super::prototype_chain::object_set_static_prototype(
-                proto as usize,
-                bits.get_heap_word_u64(),
-            );
-        }
     }
-
-    let proto = class_decl_prototype_object(class_id);
-    crate::value::js_nanbox_pointer(proto as i64)
 }
 
 pub(crate) fn class_decl_prototype_value_for_instance_class(class_id: u32) -> Option<f64> {

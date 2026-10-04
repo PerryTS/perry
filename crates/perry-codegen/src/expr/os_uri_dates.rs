@@ -41,16 +41,13 @@ pub(crate) fn lower_date_setter(
     field: i32,
 ) -> Result<String> {
     let d = lower_expr(ctx, date)?;
-    let mut arg_vals: Vec<String> = Vec::with_capacity(args.len());
-    for a in args {
-        arg_vals.push(lower_expr(ctx, a)?);
-    }
+    let (arg_vals, args_group) = crate::lower_call::lower_call_args_rooted(ctx, args)?;
     // #10463: the buffer is an entry-block alloca. Emitted here, in whatever
     // block is current, it grew the stack on every loop iteration.
     let (args_ptr, argc) = lower_js_args_array(ctx, &arg_vals);
     let is_utc_str = if is_utc { "1" } else { "0" };
     let field_str = format!("{}", field);
-    Ok(ctx.block().call(
+    let rooted_result = ctx.block().call(
         DOUBLE,
         "js_date_apply_setter",
         &[
@@ -60,7 +57,9 @@ pub(crate) fn lower_date_setter(
             (PTR, &args_ptr),
             (I32, &argc),
         ],
-    ))
+    );
+    args_group.release(ctx);
+    Ok(rooted_result)
 }
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
@@ -110,26 +109,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // slots are passed as TAG_UNDEFINED so the runtime can detect
             // and skip them.
             let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            let warning = if let Some(e) = args.first() {
-                lower_expr(ctx, e)?
-            } else {
-                undef.clone()
-            };
-            let type_v = if let Some(e) = args.get(1) {
-                lower_expr(ctx, e)?
-            } else {
-                undef.clone()
-            };
-            let code_v = if let Some(e) = args.get(2) {
-                lower_expr(ctx, e)?
-            } else {
-                undef.clone()
-            };
+            let (arg_values, arg_group) =
+                crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
+            let warning = arg_values.first().cloned().unwrap_or_else(|| undef.clone());
+            let type_v = arg_values.get(1).cloned().unwrap_or_else(|| undef.clone());
+            let code_v = arg_values.get(2).cloned().unwrap_or_else(|| undef.clone());
             ctx.block().call_void(
                 "js_process_emit_warning",
                 &[(DOUBLE, &warning), (DOUBLE, &type_v), (DOUBLE, &code_v)],
             );
-            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+            let result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            arg_group.release(ctx);
+            Ok(result)
         }
         Expr::ProcessCpuUsage(prior) => {
             let prior_val = if let Some(e) = prior {
@@ -224,9 +215,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             index,
             value,
         } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let idx_d = lower_expr(ctx, index)?;
-            let val_d = lower_expr(ctx, value)?;
+            let rooted_operands: [&perry_hir::Expr; 3] = [array, index, value];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let arr_box = rooted_values[0].clone();
+            let idx_d = rooted_values[1].clone();
+            let val_d = rooted_values[2].clone();
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let result = blk.call(
@@ -234,7 +228,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_array_with",
                 &[(I64, &arr_handle), (DOUBLE, &idx_d), (DOUBLE, &val_d)],
             );
-            Ok(nanbox_pointer_inline(blk, &result))
+            let rooted_result = nanbox_pointer_inline(blk, &result);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::ArrayReverseValue { receiver } => {
             let receiver_d = lower_expr(ctx, receiver)?;
@@ -248,9 +244,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             start,
             end,
         } => {
-            let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
-            let target_d = lower_expr(ctx, target)?;
-            let start_d = lower_expr(ctx, start)?;
+            let rooted_temp_0 = Expr::LocalGet(*array_id);
+            let rooted_operands: [&perry_hir::Expr; 3] = [&rooted_temp_0, target, start];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let arr_box = rooted_values[0].clone();
+            let target_d = rooted_values[1].clone();
+            let start_d = rooted_values[2].clone();
             let (has_end_str, end_d) = if let Some(e) = end {
                 let v = lower_expr(ctx, e)?;
                 ("1".to_string(), v)
@@ -270,7 +270,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (DOUBLE, &end_d),
                 ],
             );
-            Ok(nanbox_pointer_inline(blk, &result))
+            let rooted_result = nanbox_pointer_inline(blk, &result);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::ArrayCopyWithinValue {
             receiver,
@@ -278,16 +280,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             start,
             end,
         } => {
-            let receiver_box = lower_expr(ctx, receiver)?;
-            let target_d = lower_expr(ctx, target)?;
-            let start_d = lower_expr(ctx, start)?;
+            let rooted_operands: [&perry_hir::Expr; 3] = [receiver, target, start];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let receiver_box = rooted_values[0].clone();
+            let target_d = rooted_values[1].clone();
+            let start_d = rooted_values[2].clone();
             let (has_end_str, end_d) = if let Some(e) = end {
                 let v = lower_expr(ctx, e)?;
                 ("1".to_string(), v)
             } else {
                 ("0".to_string(), "0.0".to_string())
             };
-            Ok(ctx.block().call(
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_array_copy_within_value",
                 &[
@@ -297,7 +302,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (I32, &has_end_str),
                     (DOUBLE, &end_d),
                 ],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::ArrayToReversed { array } => {
             let arr_box = lower_expr(ctx, array)?;
@@ -333,15 +340,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             delete_count,
             items,
         } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let start_d = lower_expr(ctx, start)?;
-            let count_d = lower_expr(ctx, delete_count)?;
+            let rooted_operands: [&perry_hir::Expr; 3] = [array, start, delete_count];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let arr_box = rooted_values[0].clone();
+            let start_d = rooted_values[1].clone();
+            let count_d = rooted_values[2].clone();
 
             // Lower items to a Vec of f64 expressions
-            let mut item_vals: Vec<String> = Vec::new();
-            for it in items {
-                item_vals.push(lower_expr(ctx, it)?);
-            }
+            let (item_vals, args_group) = crate::lower_call::lower_call_args_rooted(ctx, items)?;
 
             let arr_handle = unbox_to_i64(ctx.block(), &arr_box);
             // #10463: entry-block buffer (see `lower_date_setter`).
@@ -359,21 +366,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     (I32, &items_count_str),
                 ],
             );
-            Ok(nanbox_pointer_inline(blk, &result))
+            let rooted_result = nanbox_pointer_inline(blk, &result);
+            rooted_group.release(ctx);
+            let rooted_result = rooted_result;
+            args_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::ArrayAt { array, index } => {
             // arr.at(i) — negative index counts from the end. The
             // runtime handles the negative-index adjustment +
             // bounds clamp.
-            let arr_box = lower_expr(ctx, array)?;
-            let idx_d = lower_expr(ctx, index)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [array, index];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let arr_box = rooted_values[0].clone();
+            let idx_d = rooted_values[1].clone();
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            Ok(blk.call(
+            let rooted_result = blk.call(
                 DOUBLE,
                 "js_array_at",
                 &[(I64, &arr_handle), (DOUBLE, &idx_d)],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::DateSetUtcMinutes { date, args } => {
             lower_date_setter(ctx, date, args, true, DATE_FIELD_MINUTES)

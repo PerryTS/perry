@@ -9,6 +9,8 @@ pub mod fork;
 #[cfg(windows)]
 pub(crate) mod ipc_transport;
 #[cfg(windows)]
+mod windows_child;
+#[cfg(windows)]
 pub(crate) mod windows_fork;
 // #2130: V8 structured-clone codec for `serialization: 'advanced'` IPC.
 pub(crate) mod v8_serde;

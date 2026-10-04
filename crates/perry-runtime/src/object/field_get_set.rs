@@ -125,7 +125,8 @@ pub extern "C" fn js_fetch_unwrap_handle(value: f64) -> f64 {
 /// instance (a plain heap object) can only reach its members through this
 /// stashed cell. Stored as a real pointer-valued field so GC keeps the cell
 /// alive and rewrites the slot on evacuation. (#5587)
-#[cfg(feature = "temporal")]
+// Ungated: always-live property lookup compares against it (see
+// `crate::temporal::hooked`), and a constant keeps nothing alive.
 pub(crate) const TEMPORAL_SUBCLASS_CELL_FIELD: &[u8] = b"__perry_temporal_cell__";
 
 /// Has any `class X extends Temporal.<Type>` instance EVER stashed a cell in
@@ -206,6 +207,12 @@ pub(crate) use accessors::scan_accessor_receiver_override_root_mut;
 mod array_retargeted_proto;
 mod buffer_own_prop;
 mod class_object_props;
+mod class_object_template;
+pub(crate) use class_object_template::{
+    class_object_template_cell, is_evaluation_prototype_with_methods, record_instance_link,
+    static_method_value_runs, template_instance, TemplateCell, TemplateInstance,
+    CLASS_TEMPLATE_KEY,
+};
 mod crypto_key;
 pub(crate) mod entries_shape;
 pub(crate) mod enumeration;
@@ -228,6 +235,8 @@ mod probe_dispatch;
 /// #9131: per-instance `[[Prototype]]` override lookup, split out of
 /// `get_field_by_name_tail.rs` for the 2000-line cap.
 mod prototype_override;
+/// A builtin's spec `Get` as a read site: an emitted site's two words, per agent.
+pub(crate) mod runtime_read_site;
 #[allow(dead_code)] // #9244: field-get short-circuits removed; kept for the method path.
 
 /// Size of the direct-mapped `(keys_ptr, key_hash, field_index)` inline
@@ -270,8 +279,10 @@ pub(crate) use accessors::{
     primitive_tagged_prototype_property, string_index_value,
 };
 pub(crate) use class_object_props::{
-    class_evaluation_prototype_class_id, class_object_materialized_prototype,
-    class_object_prototype_value,
+    class_evaluation_prototype_class_id, class_object_default_to_string,
+    class_object_has_prototype_property, class_object_materialized_prototype,
+    class_object_prototype_value, class_object_registry_serves_static, class_object_source_text,
+    define_class_object_own_properties,
 };
 pub(crate) use crypto_key::{
     crypto_key_property_value, CLASS_ID_BOXED_BIGINT, CLASS_ID_BOXED_BOOLEAN,
@@ -280,6 +291,7 @@ pub(crate) use crypto_key::{
 pub(crate) use enumeration::{
     canonical_array_index, ecma_own_key_order, instance_private_key_hidden,
     is_internal_runtime_key, is_internal_runtime_key_bytes, keys_contain_array_index,
+    own_key_hidden_bytes, own_keys_may_hide,
 };
 pub use enumeration::{
     js_for_in_keys_value, js_object_entries, js_object_entries_value, js_object_keys,
@@ -292,7 +304,7 @@ pub use field_ops::{
 };
 pub use for_in_stable::js_for_in_keys_stable_value;
 pub(crate) use get_field_by_name::class_value_get_field;
-pub(crate) use get_field_by_name::get_field_by_name_past_inherited_cache;
+pub(crate) use get_field_by_name::get_field_by_name_after_site_miss;
 pub use get_field_by_name::js_object_get_field_by_name;
 pub(crate) use get_field_by_name_async::async_resource_property;
 pub(crate) use get_field_by_name_tail::get_field_by_name_object_tail;
@@ -327,6 +339,7 @@ pub(crate) use ic_miss::{get_field_ic_dispatch, pic_outlined_mru_hit};
 // The read path's spill flip, shared with the static-key store IC's ways
 // (`proxy/put_value/packed_set.rs`): one encoding for both compact words.
 pub(crate) use ic_miss::PACKED_SPILL_FLIP;
+pub(crate) use ic_miss::PRIVATE_FRESH_EVALUATION_BRAND;
 #[cfg(test)]
 pub(crate) use ic_miss::{
     primitive_proto_method_name_static, test_pending_private_access_owner,

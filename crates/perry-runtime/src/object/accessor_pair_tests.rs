@@ -17,6 +17,23 @@ unsafe fn closure_bits() -> u64 {
     crate::value::js_nanbox_pointer(c as i64).to_bits()
 }
 
+/// A non-arrow closure whose body reads `this` from its reserved last capture
+/// (an object-literal method).
+unsafe fn this_capturing_closure_bits() -> u64 {
+    extern "C" fn reads_capture(
+        _c: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
+    let c = crate::closure::js_closure_alloc(
+        crate::fn_info!(reads_capture, 0),
+        1 | crate::closure::CAPTURES_THIS_FLAG,
+    );
+    assert!(crate::closure::closure_reads_this_from_capture(c));
+    crate::value::js_nanbox_pointer(c as i64).to_bits()
+}
+
 #[test]
 fn a_pair_round_trips_both_forms() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -38,6 +55,72 @@ fn a_pair_round_trips_both_forms() {
             None,
             "a slot without a pair is not one"
         );
+    }
+}
+
+#[test]
+fn site_getter_word_probe_names_each_call_form() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    // This probe validates pair representation, without invoking user code
+    // or collecting between construction of the cases and their assertions.
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let closure_word = holder_closure_getter_entry();
+    unsafe {
+        for (acc, answer) in [
+            (
+                Accessor {
+                    raw_get: 0x5555_1234_5678,
+                    ..Default::default()
+                },
+                Some(0x5555_1234_5678),
+            ),
+            (
+                Accessor {
+                    raw_set: 0x5555_8765_4320,
+                    ..Default::default()
+                },
+                Some(0),
+            ),
+            (
+                Accessor {
+                    static_get: 0x5555_1234_5678,
+                    ..Default::default()
+                },
+                None,
+            ),
+            // A function-object getter is called through the closure ABI,
+            // whatever setter the pair also holds.
+            (
+                Accessor {
+                    get: closure_bits(),
+                    raw_set: 0x5555_8765_4320,
+                    ..Default::default()
+                },
+                Some(closure_word),
+            ),
+            (
+                Accessor {
+                    get: closure_bits(),
+                    ..Default::default()
+                },
+                Some(closure_word),
+            ),
+            // A body that reads `this` from its reserved capture needs a
+            // rebound clone per receiver: not callable through the entry.
+            (
+                Accessor {
+                    get: this_capturing_closure_bits(),
+                    ..Default::default()
+                },
+                None,
+            ),
+            (Accessor::default(), None),
+        ] {
+            let pair = pair_new(acc);
+            let value = crate::value::js_nanbox_pointer(pair as i64).to_bits();
+            assert_eq!(site_getter_word_of_value(value), answer);
+        }
+        assert_eq!(site_getter_word_of_value(crate::value::TAG_UNDEFINED), None);
     }
 }
 

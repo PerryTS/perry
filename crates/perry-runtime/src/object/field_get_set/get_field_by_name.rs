@@ -72,29 +72,7 @@ pub extern "C" fn js_object_get_field_by_name(
         }
         return JSValue::undefined();
     }
-    // Lane 3 hook C: the same inherited-read entry, for the callers that do
-    // not come through a per-site cache (the recursive prototype hop, native
-    // callers, `js_object_get_field_by_name_f64`). It goes BEFORE
-    // `try_data_get_by_name` because that is the walk it replaces; a decline
-    // costs an epoch load and one failed compare.
-    use crate::object::inherited_read_cache::{inherited_read_cache_lookup, Lookup};
-    match unsafe { inherited_read_cache_lookup(obj, key) } {
-        Lookup::Hit(value) => return value,
-        // A walk from this pair was refused and recorded: do not prime again.
-        Lookup::Declined => return get_field_by_name_past_inherited_cache(obj, key),
-        Lookup::Unknown => {}
-    }
     if let Some(value) = unsafe { super::super::native_get::try_data_get_by_name(obj, key) } {
-        return value;
-    }
-    // Hook D: the data probe missed, so this read is headed for the generic
-    // walk. Record what that walk finds (an inherited holder, or that the key
-    // is absent from the whole chain) so the next read of this (receiver
-    // shape, key) pair is served by the lookup above. The prime proves the
-    // key is not an own property before it walks.
-    if let Some(value) =
-        unsafe { crate::object::inherited_read_cache::inherited_read_cache_prime_by_name(obj, key) }
-    {
         return value;
     }
     get_field_by_name_past_data_probe(obj, key)
@@ -103,7 +81,7 @@ pub extern "C" fn js_object_get_field_by_name(
 /// `C.key` for a class constructor value (its function object, or the legacy
 /// INT32 immediate / `C.prototype` reference): the class-static lookup. Split
 /// out so a class function object is routed here BEFORE the closure arms of
-/// the generic read (`get_field_by_name_past_inherited_cache`), which it
+/// the generic read (`get_field_by_name_after_site_miss`), which it
 /// would otherwise walk end to end first.
 #[inline(never)]
 pub(crate) fn class_value_get_field(
@@ -573,14 +551,8 @@ mod primitive_proto_accessor_tests_10648 {
     }
 }
 
-/// The same read for a caller that has ALREADY asked the inherited-read cache
-/// and been refused.
-///
-/// `get_field_ic_miss_impl` is exactly that caller: it consults the cache at
-/// the top and falls through to here at the bottom. Asking twice is not free —
-/// a read the cache refuses (an accessor on the prototype is the common one)
-/// would pay two lookups per read for two answers that are the same.
-pub(crate) fn get_field_by_name_past_inherited_cache(
+/// The generic read after a site's own-key and holder-shape probes declined.
+pub(crate) fn get_field_by_name_after_site_miss(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
@@ -590,9 +562,7 @@ pub(crate) fn get_field_by_name_past_inherited_cache(
     get_field_by_name_past_data_probe(obj, key)
 }
 
-/// [`get_field_by_name_past_inherited_cache`] for a caller that has also
-/// already run `try_data_get_by_name` and been refused (hook D in
-/// `js_object_get_field_by_name`), so the probe is not paid twice.
+/// The generic read after `try_data_get_by_name` has already declined.
 fn get_field_by_name_past_data_probe(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
@@ -1158,8 +1128,21 @@ fn get_field_by_name_past_data_probe(
                 if !name.is_empty()
                     && !super::super::class_registry::class_static_key_deleted(class_id, name)
                 {
-                    if super::super::class_registry::lookup_static_method_in_chain(class_id, name)
-                        .is_some()
+                    // A class object owns every static method its template
+                    // declares (`define_class_object_own_properties`), and so
+                    // does each earlier evaluation it inherits from, so a
+                    // declaration of a per-evaluation class found here was
+                    // DELETED from its object: it must not come back. Only a
+                    // method of a shared (never-evaluated-to-an-object) class
+                    // is served from the registry.
+                    if super::super::class_registry::lookup_static_method_owner(class_id, name)
+                        .is_some_and(|(owner, _)| {
+                            let object_owned =
+                                super::super::class_registry::class_object_value_for_cid(owner)
+                                    .is_some()
+                                    || owner == class_id;
+                            !object_owned
+                        })
                     {
                         let heap_name = {
                             let layout =
@@ -1644,7 +1627,6 @@ fn get_field_by_name_past_data_probe(
     // bare value is rare; the `value.method()` call form is handled in
     // `js_native_call_method`). `obj` may be NaN-boxed (top16 0x7FFD) or a
     // raw-I64 pointer (top16 0).
-    #[cfg(feature = "temporal")]
     {
         let bits = obj as u64;
         let top16 = bits >> 48;
@@ -1675,7 +1657,7 @@ fn get_field_by_name_past_data_probe(
                     ) {
                         return JSValue::from_bits(v.to_bits());
                     }
-                    if let Some(v) = crate::temporal::dispatch::get_property(boxed, &name) {
+                    if let Some(v) = crate::temporal::hooked::get_property(boxed, &name) {
                         return JSValue::from_bits(v.to_bits());
                     }
                     // A prototype METHOD read as a value (`d.abs`, not `d.abs()`):
@@ -1684,7 +1666,7 @@ fn get_field_by_name_past_data_probe(
                     // spread/dynamic call `d[m](...args)` to a property read + apply,
                     // so the read must yield a callable. Only bind genuine method
                     // names so an unknown property still reads as `undefined`. (#5587)
-                    if crate::temporal::dispatch::has_method(boxed, &name) {
+                    if crate::temporal::hooked::has_method(boxed, &name) {
                         let heap_name = {
                             let layout =
                                 std::alloc::Layout::from_size_align(key_bytes.len().max(1), 1)

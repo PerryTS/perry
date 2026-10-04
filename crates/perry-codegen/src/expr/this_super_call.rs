@@ -211,38 +211,53 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Materialize the args array (spread elements appended via
             // the runtime spread helper).
             let zero = "0".to_string();
-            let mut arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &zero)]);
-            for a in call_args {
-                match a {
-                    perry_hir::CallArg::Expr(e) => {
-                        let v = lower_expr(ctx, e)?;
-                        arr = ctx.block().call(
-                            I64,
-                            "js_array_push_f64",
-                            &[(I64, &arr), (DOUBLE, &v)],
-                        );
+            let acc0 = ctx.block().call(I64, "js_array_alloc", &[(I32, &zero)]);
+            // #11789 sweep: the accumulating array is the only reference to every
+            // argument pushed so far while the NEXT argument (user code, or a
+            // spread driving an iterator) is lowered, so it lives in a rooted
+            // accumulator for the whole loop, exactly as `bundle_args_rooted`
+            // keeps its own.
+            let arr = rooting::with_rooted_accumulator(
+                ctx,
+                Repr::Ptr,
+                &acc0,
+                true,
+                |ctx, acc| {
+                    for a in call_args {
+                        match a {
+                            perry_hir::CallArg::Expr(e) => {
+                                let v = lower_expr(ctx, e)?;
+                                acc.advance(
+                                    ctx,
+                                    "js_array_push_f64",
+                                    &[rooting::Arg::Plain(DOUBLE, &v)],
+                                );
+                            }
+                            perry_hir::CallArg::Spread(e) => {
+                                // Route every spread operand through the full iterator
+                                // protocol (`js_array_spread_append` -> `array_from_
+                                // spread_value`): it drives a custom `[Symbol.iterator]`
+                                // (`super(...iter)`), spreads the arguments OBJECT
+                                // (`super(...arguments)`), arrays, sets/maps, typed
+                                // arrays, and strings, AND propagates an abrupt
+                                // completion from a throwing iterator step/value — the
+                                // `call-spread-*-iter` / `call-spread-err-*` cases. The
+                                // old `js_array_push_spread_any` only handled arrays and
+                                // array-like (`.length`) objects, so a plain iterable
+                                // (no `.length`) contributed zero args.
+                                let v = lower_expr(ctx, e)?;
+                                acc.advance(
+                                    ctx,
+                                    "js_array_spread_append",
+                                    &[rooting::Arg::Plain(DOUBLE, &v)],
+                                );
+                            }
+                        }
                     }
-                    perry_hir::CallArg::Spread(e) => {
-                        // Route every spread operand through the full iterator
-                        // protocol (`js_array_spread_append` -> `array_from_
-                        // spread_value`): it drives a custom `[Symbol.iterator]`
-                        // (`super(...iter)`), spreads the arguments OBJECT
-                        // (`super(...arguments)`), arrays, sets/maps, typed
-                        // arrays, and strings, AND propagates an abrupt
-                        // completion from a throwing iterator step/value — the
-                        // `call-spread-*-iter` / `call-spread-err-*` cases. The
-                        // old `js_array_push_spread_any` only handled arrays and
-                        // array-like (`.length`) objects, so a plain iterable
-                        // (no `.length`) contributed zero args.
-                        let v = lower_expr(ctx, e)?;
-                        arr = ctx.block().call(
-                            I64,
-                            "js_array_spread_append",
-                            &[(I64, &arr), (DOUBLE, &v)],
-                        );
-                    }
-                }
-            }
+                    Ok(())
+                },
+                |_ctx, final_array| Ok(final_array.to_string()),
+            )?;
             // Invoke the closest registered ancestor ctor through the
             // CLASS_CONSTRUCTORS registry. KNOWN GAP: constructions from
             // METHOD bodies (standalone-ctor path) currently lose the
@@ -557,10 +572,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // `resolve_search_params_receiver`.
                     if parent_name == "URLSearchParams" {
                         let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                        let mut lowered: Vec<String> = Vec::with_capacity(super_args.len());
-                        for a in super_args {
-                            lowered.push(lower_expr(ctx, a)?);
-                        }
+                        let (lowered, args_group) =
+                            crate::lower_call::lower_call_args_rooted(ctx, super_args)?;
                         let init = lowered.first().cloned().unwrap_or_else(|| undef.clone());
                         let this_box = match ctx.this_stack.last().cloned() {
                             Some(slot) => ctx.block().load(DOUBLE, &slot),
@@ -577,7 +590,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &current_class_name,
                             crate::lower_call::FieldInitMode::SelfOnly,
                         )?;
-                        return Ok(undef);
+                        let rooted_result = undef;
+                        args_group.release(ctx);
+                        return Ok(rooted_result);
                     }
                     // #321 / #66 (#1787 follow-up): `class Sub extends <runtimeValueFn>`
                     // — the parent is a runtime-value function/closure (the IIFE-
@@ -915,28 +930,35 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
                     }
                     // #5137: `class X extends EventEmitter` (node:events) —
-                    // `super()` installs the bare EventEmitter listener/emit
-                    // surface onto `this` (see `lower_event_emitter_subclass_init`).
-                    // `super(opts)` takes an optional options bag in Node; we lower
-                    // the args for side effects but the bare emitter seeds no state.
+                    // `super(opts)` runs node's `EventEmitter.init(opts)` on
+                    // `this` (see `lower_event_emitter_subclass_init`); the
+                    // methods are inherited from the shared
+                    // `EventEmitter.prototype`. Every argument is lowered (in
+                    // order, rooted across the later ones); the first is the
+                    // options bag (`captureRejections`).
                     if parent_name.as_str() == "EventEmitter" {
-                        for a in super_args {
-                            let _ = lower_expr(ctx, a)?;
-                        }
-                        let this_box = match ctx.this_stack.last().cloned() {
-                            Some(slot) => ctx.block().load(DOUBLE, &slot),
-                            None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-                        };
-                        lower_event_emitter_subclass_init(ctx, &this_box);
-                        bind_derived_this_after_super(ctx);
+                        let operands: Vec<_> = super_args.iter().collect();
                         let current_class_name =
                             ctx.class_stack.last().cloned().unwrap_or_default();
-                        crate::lower_call::apply_field_initializers_recursive(
-                            ctx,
-                            &current_class_name,
-                            crate::lower_call::FieldInitMode::SelfOnly,
-                        )?;
-                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                        return rooting::with_operands_rooted(ctx, &operands, |ctx, lowered| {
+                            let options = lowered.first().cloned().unwrap_or_else(|| {
+                                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                            });
+                            let this_box = match ctx.this_stack.last().cloned() {
+                                Some(slot) => ctx.block().load(DOUBLE, &slot),
+                                None => {
+                                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                                }
+                            };
+                            lower_event_emitter_subclass_init(ctx, &this_box, &options);
+                            bind_derived_this_after_super(ctx);
+                            crate::lower_call::apply_field_initializers_recursive(
+                                ctx,
+                                &current_class_name,
+                                crate::lower_call::FieldInitMode::SelfOnly,
+                            )?;
+                            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+                        });
                     }
                     if parent_name.as_str() == "EventEmitterAsyncResource" {
                         let operands: Vec<_> = super_args.iter().collect();
@@ -1030,10 +1052,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // `instanceof Event` and EventTarget dispatch acceptance.
                     if matches!(parent_name.as_str(), "Event" | "CustomEvent") {
                         let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                        let mut lowered: Vec<String> = Vec::with_capacity(super_args.len());
-                        for a in super_args {
-                            lowered.push(lower_expr(ctx, a)?);
-                        }
+                        let (lowered, args_group) =
+                            crate::lower_call::lower_call_args_rooted(ctx, super_args)?;
                         let arg0 = lowered.first().cloned().unwrap_or_else(|| undef.clone());
                         let arg1 = lowered.get(1).cloned().unwrap_or_else(|| undef.clone());
                         let this_box = match ctx.this_stack.last().cloned() {
@@ -1068,7 +1088,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &current_class_name,
                             crate::lower_call::FieldInitMode::SelfOnly,
                         )?;
-                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                        let rooted_result =
+                            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        args_group.release(ctx);
+                        return Ok(rooted_result);
                     }
                     // `class X extends DOMException` (undici's WebSocketError
                     // and its module-init inheritability probe): `super(message,
@@ -1077,10 +1100,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // (registered at class-definition time) keeps `instanceof`.
                     if parent_name.as_str() == "DOMException" {
                         let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                        let mut lowered: Vec<String> = Vec::with_capacity(super_args.len());
-                        for a in super_args {
-                            lowered.push(lower_expr(ctx, a)?);
-                        }
+                        let (lowered, args_group) =
+                            crate::lower_call::lower_call_args_rooted(ctx, super_args)?;
                         let arg0 = lowered.first().cloned().unwrap_or_else(|| undef.clone());
                         let arg1 = lowered.get(1).cloned().unwrap_or_else(|| undef.clone());
                         let this_box = match ctx.this_stack.last().cloned() {
@@ -1100,7 +1121,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &current_class_name,
                             crate::lower_call::FieldInitMode::SelfOnly,
                         )?;
-                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                        let rooted_result =
+                            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        args_group.release(ctx);
+                        return Ok(rooted_result);
                     }
                     // `class X extends Promise` — `super(executor)` runs the
                     // ECMA-262 27.2.3.1 Promise constructor against a hidden
@@ -1111,10 +1135,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     // own `constructor`/`instanceof` identity.
                     if parent_name.as_str() == "Promise" {
                         let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                        let mut lowered: Vec<String> = Vec::with_capacity(super_args.len());
-                        for a in super_args {
-                            lowered.push(lower_expr(ctx, a)?);
-                        }
+                        let (lowered, args_group) =
+                            crate::lower_call::lower_call_args_rooted(ctx, super_args)?;
                         let executor = lowered.first().cloned().unwrap_or_else(|| undef.clone());
                         let this_box = match ctx.this_stack.last().cloned() {
                             Some(slot) => ctx.block().load(DOUBLE, &slot),
@@ -1133,7 +1155,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &current_class_name,
                             crate::lower_call::FieldInitMode::SelfOnly,
                         )?;
-                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                        let rooted_result =
+                            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        args_group.release(ctx);
+                        return Ok(rooted_result);
                     }
                     let fetch_subclass_fn = match parent_name.as_str() {
                         "Request" => Some("js_request_subclass_init"),
@@ -1142,10 +1167,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     };
                     if let Some(runtime_fn) = fetch_subclass_fn {
                         let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-                        let mut lowered: Vec<String> = Vec::with_capacity(super_args.len());
-                        for a in super_args {
-                            lowered.push(lower_expr(ctx, a)?);
-                        }
+                        let (lowered, args_group) =
+                            crate::lower_call::lower_call_args_rooted(ctx, super_args)?;
                         let arg0 = lowered.first().cloned().unwrap_or_else(|| undef.clone());
                         let arg1 = lowered.get(1).cloned().unwrap_or_else(|| undef.clone());
                         let this_box = match ctx.this_stack.last().cloned() {
@@ -1167,7 +1190,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &current_class_name,
                             crate::lower_call::FieldInitMode::SelfOnly,
                         )?;
-                        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                        let rooted_result =
+                            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                        args_group.release(ctx);
+                        return Ok(rooted_result);
                     }
                     // Built-in parent (Error, TypeError, RangeError, etc.)
                     // — user classes extending them need `super(message)` to
@@ -1202,10 +1228,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             | "BigInt64Array"
                             | "BigUint64Array"
                     ) {
-                        let mut lowered_args = Vec::with_capacity(super_args.len());
-                        for arg in super_args {
-                            lowered_args.push(lower_expr(ctx, arg)?);
-                        }
+                        let (lowered_args, args_group) =
+                            crate::lower_call::lower_call_args_rooted(ctx, super_args)?;
                         let (args_ptr, args_len) = if lowered_args.is_empty() {
                             ("null".to_string(), "0".to_string())
                         } else {
@@ -1254,7 +1278,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &current_class_name,
                             crate::lower_call::FieldInitMode::SelfOnly,
                         )?;
-                        return Ok(constructed);
+                        let rooted_result = constructed;
+                        args_group.release(ctx);
+                        return Ok(rooted_result);
                     }
                     let is_error_like = matches!(
                         parent_name.as_str(),
@@ -1268,10 +1294,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             | "AggregateError"
                     );
                     // Lower args — at most 1 (message) for Error-like.
-                    let mut lowered_args: Vec<String> = Vec::with_capacity(super_args.len());
-                    for a in super_args {
-                        lowered_args.push(lower_expr(ctx, a)?);
-                    }
+                    let (lowered_args, args_group) =
+                        crate::lower_call::lower_call_args_rooted(ctx, super_args)?;
                     if is_error_like {
                         // Need the `this` pointer to set fields on.
                         let this_slot = ctx.this_stack.last().cloned();
@@ -1346,15 +1370,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         &current_class_name,
                         crate::lower_call::FieldInitMode::SelfOnly,
                     )?;
-                    return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                    let rooted_result =
+                        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    args_group.release(ctx);
+                    return Ok(rooted_result);
                 }
             };
 
             // Lower the super-call args.
-            let mut lowered_args: Vec<String> = Vec::with_capacity(super_args.len());
-            for a in super_args {
-                lowered_args.push(lower_expr(ctx, a)?);
-            }
+            let (mut lowered_args, args_group) =
+                crate::lower_call::lower_call_args_rooted(ctx, super_args)?;
 
             // #6326: the parent is a real user class, but the chain BOTTOMS OUT
             // in a native base whose surface perry stamps onto the instance —
@@ -1401,7 +1426,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &current_class_name,
                     crate::lower_call::FieldInitMode::AfterRoot,
                 )?;
-                return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+                let rooted_result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                args_group.release(ctx);
+                return Ok(rooted_result);
             }
 
             // Inline the parent constructor with the SAME this and a
@@ -1754,7 +1781,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             )?;
 
             // super() evaluates to undefined in JS.
-            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
+            let rooted_result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            args_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- isNaN(x) — global, coerces via ToNumber --------

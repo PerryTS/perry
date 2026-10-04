@@ -64,24 +64,28 @@ use crate::types::{DOUBLE, I1, I16, I32, I64, I8};
 mod arrays;
 mod bare;
 mod guard;
+mod numeric_expression;
 mod plan;
 mod verify;
 
-use self::arrays::ArrayRecv;
 pub(crate) use self::arrays::{
-    alias_clone, emit_poll_refresh, is_bare_index_get, try_lower_bare_index_get, unalias_clone,
+    alias_clone, emit_poll_refresh, is_bare_index_get, is_f64_index_read, try_lower_bare_index_get,
+    try_lower_bare_index_set, unalias_clone,
 };
+use self::arrays::{ArrayRecv, ArrayUse, Env};
 use self::bare::note;
 pub(crate) use self::bare::{try_lower_bare_get, try_lower_bare_put, try_lower_fact_add_tree};
 use self::guard::{
-    decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, field_i32, handle_of,
-    lower_recv, store_admission,
+    decode_slots, emit_body_guard_direct, emit_guard, emit_guard_word, emit_recheck_eq,
+    emit_value_tests, field_i32, handle_of, has_static_supplier, lower_recv, static_class_name,
+    static_keys_served, store_admission,
 };
+pub(crate) use self::numeric_expression::try_lower_numeric_compare;
 use self::plan::{
     accesses, assigned, body_nodes, body_refused, fact_tree_leaves, plan, receiver_eligible, Plan,
     Recheck,
 };
-use self::verify::{successors, verify};
+use self::verify::{successors, verify, verify_exit_effects};
 
 const SLOT_BITS: u32 = 6;
 const PRIME_ATTEMPTS: &str = "8";
@@ -177,6 +181,9 @@ impl Recv {
 #[derive(Clone)]
 pub(crate) struct Receiver {
     pub(crate) recv: Recv,
+    /// Report provenance only: a Ptr<Shape> fact selected the static supplier.
+    /// No slot or representation decision may consult this flag.
+    uses_ptr_shape_class: bool,
     pub(crate) keys: Vec<String>,
     pub(crate) has_store: bool,
     /// Bit `i`: the body stores `keys[i]` (the runtime then requires it inline).
@@ -184,14 +191,64 @@ pub(crate) struct Receiver {
     /// Bit `i`: a bare store may write `keys[i]` a value not proven a
     /// canonical double (the word must then give it an `Any` lane).
     boxed_mask: u32,
+    /// Bit `i`: a read assumes the key holds a raw canonical Number (R).
+    r_mask: u32,
+    /// Bit `i`: an R key the guard value-tests on the object when the word
+    /// carries `VALUE_TEST_BIT` (a lane that is not an identity F64 lane).
+    /// Before the guard: the R keys the plan lets a STATIC word value-test.
+    /// After it: a static word's exact `Any`-lane R keys, or every R key of a
+    /// learned word (which may ask for any of them).
+    vt_mask: u32,
     /// `i1`: the guard matched this receiver's SPILL word (flipped id).
     spill: String,
     sites: Option<(String, String)>,
     /// The region word, an SSA value of the preheader (loop regions) or of
     /// the tail's guard block (body regions).
     word: String,
+    /// Actual accepted header for a static guard; slot bits remain constant.
+    expected_shape: Option<String>,
     /// Each key's slot (`i64`), decoded once from `word`.
     slots: Vec<String>,
+    /// A static supplier's slots, compile-time constants (any number of keys).
+    static_slots: Option<Vec<u32>>,
+    /// A body region nested in a loop region, F copy: the loop's preheader
+    /// guard (and its re-check) already proved this loop-invariant receiver,
+    /// and its facts are FRESH at the split (the body region is entered only
+    /// from the loop's F-body), so the body region copies the loop's guard
+    /// results instead of guarding it again (D2).
+    inherited: bool,
+}
+
+/// Whether this exact fresh bare read is protected by an R bit in an
+/// active F clone. The published word (or exact static birth id) guarantees
+/// the slot holds a canonical raw JS Number — by its identity F64 lane, or by
+/// the guard's value test when the word carries `VALUE_TEST_BIT`; G and
+/// post-loop have no Active fact and therefore never answer true.
+pub(crate) fn is_f64_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = e
+    else {
+        return false;
+    };
+    let Some(recv) = Recv::of(object) else {
+        return false;
+    };
+    let ptr = e as *const Expr as usize;
+    // bare::try_lower_bare_get consults only the innermost Active fact.
+    // Looking through the stack would claim Number for a read the inner
+    // clone actually lowers through the generic path.
+    ctx.region_loop_facts.last().is_some_and(|facts| {
+        facts.bare.contains(&ptr)
+            && facts.receivers.iter().any(|rv| {
+                rv.recv == recv
+                    && rv
+                        .keys
+                        .iter()
+                        .position(|key| key == property)
+                        .is_some_and(|i| rv.r_mask & (1 << i) != 0)
+            })
+    })
 }
 
 /// A region whose body has not been lowered yet: `lower_stmts` recognises the
@@ -209,6 +266,11 @@ pub(crate) struct Pending {
     recheck: Recheck,
     receivers: Vec<Receiver>,
     bare: HashSet<usize>,
+    bare_reads: Vec<(usize, Recv, String)>,
+    number_local_uses: HashSet<u32>,
+    declared_locals: HashSet<u32>,
+    number_locals: Vec<u32>,
+    entry_tests: Vec<u32>,
     trees: HashSet<usize>,
     token: u64,
     /// Loop regions: which split copy [`lower_loop`] is lowering — the one
@@ -216,6 +278,8 @@ pub(crate) struct Pending {
     spill_mode: bool,
     /// Loop regions: array receivers (S3), guarded in the preheader.
     arrays: Vec<ArrayRecv>,
+    /// Statements after which F-body sets the dirty flag.
+    dirty_after: HashSet<usize>,
     /// Loop regions with array receivers: the body region split inside
     /// F-body (a per-iteration receiver read from the array). Its fact
     /// trees' generic arms set the loop's dirty flag (its `dirty_slot` is the
@@ -255,6 +319,7 @@ pub(crate) struct Active {
     /// Array receivers (S3) and the emitted bare element reads.
     arrays: Vec<ArrayRecv>,
     emitted_arr: Vec<(usize, usize)>,
+    dirty_after: HashSet<usize>,
 }
 
 thread_local! {
@@ -263,6 +328,9 @@ thread_local! {
     static CONST_MODULE_GLOBALS: std::cell::RefCell<HashSet<u32>> =
         std::cell::RefCell::new(HashSet::new());
     static NEXT_TOKEN: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+    /// Loop region token -> the bound's Number scope (see `begin_with`).
+    static BOUND_SCOPES: std::cell::RefCell<HashMap<u64, u32>> =
+        std::cell::RefCell::new(HashMap::new());
     static STATS: std::cell::RefCell<[u64; 6]> = const { std::cell::RefCell::new([0; 6]) };
 }
 
@@ -311,7 +379,7 @@ fn candidates_for_loop(
     let written = assigned(body, &extra);
     accesses(body)
         .into_iter()
-        .map(|(r, _, _)| r)
+        .map(|(r, _, _, _, _)| r)
         .filter(|r| match r {
             Recv::Local(id) => !written.contains(id),
             Recv::This => true,
@@ -330,7 +398,52 @@ pub(crate) fn begin(
     body: &[Stmt],
     update: Option<&Expr>,
 ) -> Result<Option<u64>> {
-    begin_with(ctx, cond, body, update, false)
+    begin_with(ctx, cond, body, update, Admit::Any)
+}
+
+/// Which regions a `begin` may form.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Admit {
+    Any,
+    /// A loop region with a bare element read (S3).
+    Arrays,
+    /// A loop region whose array use loads the per-iteration receiver
+    /// (`const o = xs[i]`) and whose nested body region proves it.
+    Elements,
+}
+
+/// [`begin`] for a loop whose body binds an element receiver of the
+/// counter: only an element region is formed (see [`Admit::Elements`]). The
+/// region tier then owns the loop ahead of the array tiers that would load
+/// the element in a call-free clone, where no region can split the body. A
+/// body with a nested loop is not taken. That is a cost choice, not a
+/// soundness rule (the planner walks a nested loop to its fixpoint): while a
+/// region's facts are active no loop forms a region of its own
+/// ([`begin_with`]), so in the element region's F copy the inner loop, which
+/// usually runs the most, would lose its region.
+pub(crate) fn begin_for_elements(
+    ctx: &mut FnCtx<'_>,
+    cond: Option<&Expr>,
+    body: &[Stmt],
+    update: Option<&Expr>,
+) -> Result<Option<u64>> {
+    if !arrays::element_loads_enabled() || contains_loop(body) {
+        return Ok(None);
+    }
+    begin_with(ctx, cond, body, update, Admit::Elements)
+}
+
+fn contains_loop(ss: &[Stmt]) -> bool {
+    ss.iter().any(|s| match s {
+        Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::For { .. } => true,
+        Stmt::If {
+            then_branch,
+            else_branch,
+            ..
+        } => contains_loop(then_branch) || else_branch.as_deref().is_some_and(contains_loop),
+        Stmt::Switch { cases, .. } => cases.iter().any(|c| contains_loop(&c.body)),
+        _ => false,
+    })
 }
 
 /// [`begin`] for a loop a specialised tier versioned and whose slow copy
@@ -341,7 +454,7 @@ pub(crate) fn begin_for_arrays(
     body: &[Stmt],
     update: Option<&Expr>,
 ) -> Result<Option<u64>> {
-    begin_with(ctx, cond, body, update, true)
+    begin_with(ctx, cond, body, update, Admit::Arrays)
 }
 
 fn begin_with(
@@ -349,7 +462,7 @@ fn begin_with(
     cond: Option<&Expr>,
     body: &[Stmt],
     update: Option<&Expr>,
-    arrays_only: bool,
+    admit: Admit,
 ) -> Result<Option<u64>> {
     if disabled()
         || crate::codegen::full_outline_ic_enabled()
@@ -365,32 +478,71 @@ fn begin_with(
     }
     // A loop region; failing that, a body region (per-iteration receiver).
     let cands = candidates_for_loop(ctx, cond, body, update);
-    let arrs = arrays::candidates(ctx, cond, body, update);
+    // The loop's invariant receivers join a body region's own binding: one
+    // walk plans them together, so a read of one does not stale the other's
+    // facts (`bi.x - bj.x`, `bi` loop-invariant, `bj` per iteration).
+    let cands_for_body = if joint_body_enabled() {
+        cands.clone()
+    } else {
+        HashSet::new()
+    };
+    // Receivers whose class the compiler names: their static supplier may
+    // serve more keys than one learned word addresses.
+    let wide: HashMap<Recv, String> = cands
+        .iter()
+        .filter_map(|r| static_class_name(ctx, *r, None).map(|c| (*r, c)))
+        .collect();
+    let env = arrays::loop_env(ctx, cond, body, update);
+    // The counter bound `B` of `i < B`: an array guard with the counter
+    // checks `B <= capacity` (or `<= length`) as an `f64` compare, which a
+    // non-Number fails (a NaN-boxed non-double is a NaN). In the split loop,
+    // entered only on a passing guard, a `B` the loop never writes is
+    // therefore a Number: it is planned and lowered as one there (a scope
+    // closed before the plain copy is lowered, and at once if no array
+    // region with the counter forms).
+    let bound_scope = match env.counter {
+        Some(arrays::Counter {
+            bound: arrays::Bound::Local(b),
+            ..
+        }) if arrays::element_loads_enabled()
+            && !crate::type_analysis::is_numeric_expr(ctx, &Expr::LocalGet(b)) =>
+        {
+            let sc = ctx.next_loop_proof_scope_id();
+            ctx.receiver_descriptors.materialize_number_locals(sc, &[b]);
+            Some(sc)
+        }
+        _ => None,
+    };
+    let arrs = arrays::candidates(ctx, cond, body, update, &env);
     // Array receivers (S3): the loop region, with the body region nested in
     // its F-body when there is one. Without a bare element read, today's
     // choice below.
     let mut nested: Option<(Plan, Option<(usize, Plan)>)> = None;
     if !arrs.is_empty() {
-        let inner = body_region_plan(ctx, body);
+        let inner = body_region_plan(ctx, body, &cands_for_body, &wide);
         let p = plan(
             ctx,
             body,
             cands.clone(),
+            &wide,
             arrs,
+            &env,
             Some((cond, update)),
-            inner.as_ref().map(|(k, ip)| (*k, &ip.bare, &ip.trees)),
-        )
-        // A re-check every iteration re-derives the array's facts every
-        // iteration: that is the straight-line read's cost, plus a split.
-        .filter(|p| !p.arrays.is_empty() && p.recheck != Recheck::Always);
+            inner
+                .as_ref()
+                .map(|(k, ip)| (*k, &ip.bare, &ip.trees, &ip.stale_at)),
+        );
         if std::env::var("PERRY_REGION_DIAG").as_deref() == Ok("4") {
             eprintln!(
                 "[perry region] array plan in {}: {:?}",
                 ctx.func.name,
                 p.as_ref()
-                    .map(|p| (p.recheck, p.arrays.len(), p.bare.len()))
+                    .map(|p| (p.recheck, p.arrays.clone(), p.bare.len()))
             );
         }
+        // A re-check every iteration re-derives the array's facts every
+        // iteration: that is the straight-line read's cost, plus a split.
+        let p = p.filter(|p| !p.arrays.is_empty() && p.recheck != Recheck::Always);
         if let Some(p) = p {
             let bare = p.bare.len() + inner.as_ref().map_or(0, |(_, ip)| ip.bare.len());
             if pays(ctx, "loop", body_nodes(body), bare) {
@@ -398,17 +550,59 @@ fn begin_with(
             }
         }
     }
-    if nested.is_none() && arrays_only {
+    if admit == Admit::Elements
+        && !nested
+            .as_ref()
+            .is_some_and(|(p, inner)| inner.is_some() && p.arrays.iter().any(|(_, u)| u.element))
+    {
+        nested = None;
+    }
+    // The bound scope stands only for a region whose guard checks the bound.
+    if let Some(sc) = bound_scope {
+        let guarded = nested
+            .as_ref()
+            .is_some_and(|(p, _)| p.arrays.iter().any(|(_, u)| u.counter || u.element));
+        if !guarded {
+            nested = None;
+            ctx.receiver_descriptors.dematerialize_scope(sc);
+        }
+    }
+    let bound_scope = bound_scope.filter(|_| nested.is_some());
+    if nested.is_none() && admit != Admit::Any {
         return Ok(None);
     }
     let (first, inner) = match nested {
         Some((p, inner)) => (Some(p), inner),
         None => (
-            plan(ctx, body, cands, HashMap::new(), Some((cond, update)), None)
-                .filter(|p| pays(ctx, "loop", body_nodes(body), p.bare.len())),
+            plan(
+                ctx,
+                body,
+                cands.clone(),
+                &wide,
+                HashMap::new(),
+                &Env::default(),
+                Some((cond, update)),
+                None,
+            )
+            .filter(|p| pays(ctx, "loop", body_nodes(body), p.bare.len())),
             None,
         ),
     };
+    // The guard is emitted now, in the context the plan was made in: a
+    // receiver wider than a learned word must still name its class.
+    let first = first.filter(|p| {
+        p.receivers.iter().all(|(r, k, _, _, bm, _)| {
+            k.len() <= MAX_KEYS
+                || static_class_name(ctx, *r, None)
+                    .is_some_and(|c| static_keys_served(ctx, &c, k, *bm))
+        })
+    });
+    if first.is_none() {
+        if let Some(sc) = bound_scope {
+            ctx.receiver_descriptors.dematerialize_scope(sc);
+        }
+    }
+    let bound_scope = bound_scope.filter(|_| first.is_some());
     if let Some(p) = first {
         let token = NEXT_TOKEN.with(|t| {
             let v = t.get();
@@ -419,35 +613,104 @@ fn begin_with(
         let mut receivers: Vec<Receiver> = p
             .receivers
             .iter()
-            .map(|(r, k, st, sm, bm)| Receiver {
+            .map(|(r, k, st, sm, bm, rm)| Receiver {
                 recv: *r,
+                uses_ptr_shape_class: false,
                 keys: k.clone(),
                 has_store: *st,
                 stored_mask: effective_stored_mask(*sm, k.len()),
                 boxed_mask: *bm,
+                r_mask: *rm,
+                // A static word's value-tested R is re-tested at every
+                // re-check; a loop that re-checks every iteration would pay
+                // that test every iteration for what R saves, so it takes no
+                // value-tested R (a learned word is decided by its bit).
+                vt_mask: if p.recheck == Recheck::Always { 0 } else { *rm },
                 spill: "false".to_string(),
                 sites: None,
                 word: String::new(),
+                expected_shape: None,
                 slots: Vec::new(),
+                static_slots: None,
+                inherited: false,
             })
             .collect();
+        // D2: the nested body region's loop-invariant receivers are guarded
+        // here, once, with the loop's own (and re-checked with them); the
+        // body region's F copy inherits the result. A receiver wider than a
+        // learned word is inherited only when its static supplier serves it
+        // (otherwise the body region guards it itself, or not at all).
+        if let Some((_, ip)) = &inner {
+            for (r, k, st, sm, bm, rm) in &ip.receivers {
+                if !cands.contains(r)
+                    || receivers.iter().any(|rv| rv.recv == *r)
+                    || (k.len() > MAX_KEYS
+                        && !static_class_name(ctx, *r, None)
+                            .is_some_and(|c| static_keys_served(ctx, &c, k, *bm)))
+                {
+                    continue;
+                }
+                receivers.push(Receiver {
+                    recv: *r,
+                    uses_ptr_shape_class: false,
+                    keys: k.clone(),
+                    has_store: *st,
+                    stored_mask: effective_stored_mask(*sm, k.len()),
+                    boxed_mask: *bm,
+                    r_mask: *rm,
+                    vt_mask: *rm,
+                    spill: "false".to_string(),
+                    sites: None,
+                    word: String::new(),
+                    expected_shape: None,
+                    slots: Vec::new(),
+                    static_slots: None,
+                    inherited: false,
+                });
+            }
+        }
         let mut all = "true".to_string();
         for rv in receivers.iter_mut() {
             let (word, pass, spill) = emit_guard(ctx, rv)?;
             rv.spill = spill;
+            let pass = emit_value_tests(ctx, rv, &word, &pass)?;
             all = ctx.block().and(I1, &all, &pass);
             decode_slots(ctx, rv, &word);
         }
         let mut arrs: Vec<ArrayRecv> = Vec::new();
-        for (r, m) in &p.arrays {
+        for (r, u) in &p.arrays {
             let a = ArrayRecv {
                 recv: *r,
-                max_index: *m,
+                max_index: u.max_index,
+                dense: u.dense(),
+                store: u.store,
+                typed: u.dense() && !arrays::declared_plain_array(ctx, *r),
+                counter: env.counter.filter(|_| u.counter || u.element),
+                aliases: env
+                    .aliases
+                    .iter()
+                    .filter(|(_, src)| Recv::Local(**src) == *r)
+                    .map(|(a, _)| *a)
+                    .collect(),
                 base_slot: ctx.func.alloca_entry(I64),
             };
             let pass = arrays::emit_guard(ctx, &a)?;
             all = ctx.block().and(I1, &all, &pass);
             arrs.push(a);
+        }
+        let loop_control: Vec<&Expr> = cond.into_iter().chain(update).collect();
+        let (number_locals, entry_tests) = number_facts(
+            ctx,
+            body,
+            &loop_control,
+            &receivers,
+            &p.bare_reads,
+            &p.number_local_uses,
+            &p.declared_locals,
+        );
+        if !entry_tests.is_empty() {
+            let number_ok = emit_number_entry_tests(ctx, &entry_tests)?;
+            all = ctx.block().and(I1, &all, &number_ok);
         }
         ctx.block().store(I1, &all, &valid_slot);
         let dirty_slot = ctx.func.alloca_entry(I1);
@@ -456,6 +719,8 @@ fn begin_with(
         let inner = inner.map(|(k, ip)| {
             let mut ib = body_pending(ip, body, k);
             ib.dirty_slot = Some(dirty_slot.clone());
+            // The loop's dirty points in the tail are set from F-tail.
+            ib.dirty_after = p.dirty_after.clone();
             ib.parent_valid = Some(valid_slot.clone());
             Box::new(ib)
         });
@@ -468,19 +733,28 @@ fn begin_with(
             recheck: p.recheck,
             receivers,
             bare: p.bare,
+            bare_reads: p.bare_reads,
+            number_local_uses: p.number_local_uses,
+            declared_locals: p.declared_locals,
+            number_locals,
+            entry_tests,
             trees: p.trees,
             token,
             spill_mode: false,
             arrays: arrs,
+            dirty_after: p.dirty_after,
             inner,
             parent_valid: None,
             retry: None,
         });
+        if let Some(sc) = bound_scope {
+            BOUND_SCOPES.with(|m| m.borrow_mut().insert(token, sc));
+        }
         return Ok(Some(token));
     }
     // Body region: the first `const o = <expr>` whose binding the rest of the
     // body reads or writes by static key.
-    if let Some((k, p)) = body_region_plan(ctx, body) {
+    if let Some((k, p)) = body_region_plan(ctx, body, &cands_for_body, &wide) {
         let pending = body_pending(p, body, k);
         let token = pending.token;
         ctx.region_loops.push(pending);
@@ -492,10 +766,30 @@ fn begin_with(
 
 /// The body region of `body`: the first `const o = <expr>` whose binding the
 /// rest of the body reads or writes by static key, and its plan.
-fn body_region_plan(ctx: &FnCtx<'_>, body: &[Stmt]) -> Option<(usize, Plan)> {
+/// `PERRY_REGION_JOINT=0` (compile time): a body region plans its own
+/// binding alone (A/B).
+fn joint_body_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_REGION_JOINT").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// `extra`: the enclosing loop's invariant receivers (eligible, never written
+/// in the loop), planned together with the per-iteration binding. Each is
+/// guarded at the split with the binding; the facts of all of them hold
+/// until the first operation that may run JS.
+fn body_region_plan(
+    ctx: &FnCtx<'_>,
+    body: &[Stmt],
+    extra: &HashSet<Recv>,
+    wide: &HashMap<Recv, String>,
+) -> Option<(usize, Plan)> {
     for (i, s) in body.iter().enumerate() {
         let Stmt::Let {
-            id, init: Some(_), ..
+            id,
+            init: Some(init),
+            ..
         } = s
         else {
             continue;
@@ -521,13 +815,135 @@ fn body_region_plan(ctx: &FnCtx<'_>, body: &[Stmt]) -> Option<(usize, Plan)> {
         }
         let mut cands = HashSet::new();
         cands.insert(Recv::Local(*id));
-        if let Some(p) = plan(ctx, tail, cands, HashMap::new(), None, None)
-            .filter(|p| pays(ctx, "body", body_nodes(tail), p.bare.len()))
+        cands.extend(extra.iter().copied());
+        let mut wide = wide.clone();
+        if let Some(c) = static_class_name(ctx, Recv::Local(*id), Some(init)) {
+            wide.insert(Recv::Local(*id), c);
+        }
+        if let Some(p) = plan(
+            ctx,
+            tail,
+            cands,
+            &wide,
+            HashMap::new(),
+            &Env::default(),
+            None,
+            None,
+        )
+        .filter(|p| pays(ctx, "body", body_nodes(tail), p.bare.len()))
         {
             return Some((i + 1, p));
         }
     }
     None
+}
+
+/// Resolve the planner's exact fresh reads against the R guaranteed by
+/// each receiver's chosen supplier, then run the existing Number-local
+/// greatest fixed point with those reads as additional leaves.
+fn number_facts(
+    ctx: &FnCtx<'_>,
+    tail: &[Stmt],
+    loop_control: &[&Expr],
+    receivers: &[Receiver],
+    bare_reads: &[(usize, Recv, String)],
+    number_local_uses: &HashSet<u32>,
+    declared_locals: &HashSet<u32>,
+) -> (Vec<u32>, Vec<u32>) {
+    let f64_reads: HashSet<usize> = bare_reads
+        .iter()
+        .filter_map(|(ptr, recv, key)| {
+            receivers.iter().find(|rv| rv.recv == *recv).and_then(|rv| {
+                rv.keys
+                    .iter()
+                    .position(|k| k == key)
+                    .filter(|i| rv.r_mask & (1 << i) != 0)
+                    .map(|_| *ptr)
+            })
+        })
+        .collect();
+    number_facts_from_reads(
+        ctx,
+        tail,
+        loop_control,
+        &f64_reads,
+        number_local_uses,
+        declared_locals,
+    )
+}
+
+/// The same 5L fixed point is used while planning and while lowering. The
+/// planner supplies only exact fresh bare reads protected by its proposed R.
+/// `loop_control` is a loop region's condition and update: they run between
+/// F iterations, after the one preheader test, so their writes are judged
+/// with the body's.
+fn number_facts_from_reads(
+    ctx: &FnCtx<'_>,
+    tail: &[Stmt],
+    loop_control: &[&Expr],
+    f64_reads: &HashSet<usize>,
+    number_local_uses: &HashSet<u32>,
+    declared_locals: &HashSet<u32>,
+) -> (Vec<u32>, Vec<u32>) {
+    if f64_reads.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+    let entry_candidates: HashSet<u32> = number_local_uses
+        .iter()
+        .copied()
+        .filter(|id| {
+            ctx.locals.contains_key(id)
+                && !declared_locals.contains(id)
+                && !ctx.boxed_vars.contains(id)
+                && !ctx.module_globals.contains_key(id)
+                && !ctx.number_by_construction_locals.contains(id)
+        })
+        .collect();
+    let empty_inits = HashMap::new();
+    let empty_ids = HashSet::new();
+    let empty_fields = HashSet::new();
+    let assumptions = crate::collectors::RegionNumberAssumptions {
+        entry_candidates: &entry_candidates,
+        static_numbers: ctx.number_by_construction_locals,
+        f64_reads,
+        loop_control,
+    };
+    let numeric = crate::collectors::collect_numeric_by_construction_locals_in_region(
+        tail,
+        &ctx.boxed_vars,
+        ctx.module_globals,
+        ctx.not_bigint_locals,
+        &empty_inits,
+        &empty_ids,
+        &empty_ids,
+        &empty_fields,
+        Some(&assumptions),
+    );
+    let mut locals: Vec<u32> = numeric
+        .iter()
+        .copied()
+        .filter(|id| !ctx.number_by_construction_locals.contains(id))
+        .collect();
+    locals.sort_unstable();
+    let mut tests: Vec<u32> = locals
+        .iter()
+        .copied()
+        .filter(|id| entry_candidates.contains(id))
+        .collect();
+    tests.sort_unstable();
+    (locals, tests)
+}
+
+/// Strict Number entry condition for each loop-carried local that the F
+/// clone assumes. The same check is repeated when G can re-enter F.
+fn emit_number_entry_tests(ctx: &mut FnCtx<'_>, ids: &[u32]) -> Result<String> {
+    let mut ok = "true".to_string();
+    for &id in ids {
+        let value = lower_expr(ctx, &Expr::LocalGet(id))?;
+        let number = crate::stmt::loops::emit_js_value_is_number(ctx, &value);
+        ok = ctx.block().and(I1, &ok, &number);
+    }
+    Ok(ok)
 }
 
 /// A body region's pending split at `split_at`.
@@ -540,16 +956,22 @@ fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
     let receivers: Vec<Receiver> = p
         .receivers
         .iter()
-        .map(|(r, k, st, sm, bm)| Receiver {
+        .map(|(r, k, st, sm, bm, rm)| Receiver {
             recv: *r,
+            uses_ptr_shape_class: false,
             keys: k.clone(),
             has_store: *st,
             stored_mask: effective_stored_mask(*sm, k.len()),
             boxed_mask: *bm,
+            r_mask: *rm,
+            vt_mask: *rm,
             spill: "false".to_string(),
             sites: None,
             word: String::new(),
+            expected_shape: None,
             slots: Vec::new(),
+            static_slots: None,
+            inherited: false,
         })
         .collect();
     Pending {
@@ -561,10 +983,16 @@ fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
         recheck: Recheck::None,
         receivers,
         bare: p.bare,
+        bare_reads: p.bare_reads,
+        number_local_uses: p.number_local_uses,
+        declared_locals: p.declared_locals,
+        number_locals: Vec::new(),
+        entry_tests: Vec::new(),
         trees: p.trees,
         token,
         spill_mode: false,
         arrays: Vec::new(),
+        dirty_after: HashSet::new(),
         inner: None,
         parent_valid: None,
         retry: None,
@@ -660,6 +1088,7 @@ pub(crate) fn lower_loop(
         .position(|p| p.token == t)
         .expect("the region is still registered");
     let pending = ctx.region_loops.remove(pos);
+    close_bound_scope(ctx, t);
     ctx.current_block = plain;
     note(ctx, Route::RloopPlain);
     let r = lower(ctx);
@@ -681,8 +1110,37 @@ fn any_flag(ctx: &mut FnCtx<'_>, flags: &[String]) -> String {
     acc
 }
 
+/// `lower_stmts`' per-statement hook: in F-body, a statement after which the
+/// facts may be stale sets the dirty flag (see `Plan::dirty_after`).
+pub(crate) fn after_stmt(ctx: &mut FnCtx<'_>, s: &Stmt) {
+    let Some(slot) = ctx.region_loop_facts.last().and_then(|a| {
+        a.dirty_after
+            .contains(&(s as *const Stmt as usize))
+            .then(|| a.dirty_slot.clone())
+            .flatten()
+    }) else {
+        return;
+    };
+    if !ctx.block().is_terminated() {
+        ctx.block().store(I1, "true", &slot);
+    }
+}
+
+fn close_bound_scope(ctx: &mut FnCtx<'_>, token: u64) {
+    if let Some(sc) = BOUND_SCOPES.with(|m| m.borrow_mut().remove(&token)) {
+        ctx.receiver_descriptors.dematerialize_scope(sc);
+    }
+}
+
+/// Is the region `token` registered (its split copy is being lowered)?
+/// [`lower_loop`] unregisters it while it lowers the plain copy.
+pub(crate) fn is_registered(ctx: &FnCtx<'_>, token: u64) -> bool {
+    ctx.region_loops.iter().any(|p| p.token == token)
+}
+
 pub(crate) fn end(ctx: &mut FnCtx<'_>, token: Option<u64>) {
     if let Some(t) = token {
+        close_bound_scope(ctx, t);
         ctx.region_loops.retain(|p| p.token != t);
     }
 }
@@ -691,9 +1149,7 @@ pub(crate) fn end(ctx: &mut FnCtx<'_>, token: Option<u64>) {
 /// not split: G-body contains calls, and those tiers discard a clone that
 /// does.
 fn in_call_free_clone(ctx: &FnCtx<'_>) -> bool {
-    !ctx.class_field_loop_facts.is_empty()
-        || !ctx.element_shape_loop_facts.is_empty()
-        || !ctx.stable_packed_loop_facts.is_empty()
+    !ctx.element_shape_loop_facts.is_empty() || !ctx.stable_packed_loop_facts.is_empty()
 }
 
 /// `lower_stmts`' hook: is `stmts` a registered region body?
@@ -729,7 +1185,12 @@ pub(crate) fn lower_split(
     let parent_valid = ctx.region_loops[idx].parent_valid.clone();
     // A body region's binding was declared by the prefix just lowered: if its
     // lowering gave it a special representation, the tail lowers plainly.
-    if split_at > 0 && !receivers.iter().all(|rv| receiver_eligible(ctx, rv.recv)) {
+    if split_at > 0
+        && !receivers.iter().all(|rv| {
+            receiver_eligible(ctx, rv.recv)
+                && (rv.keys.len() <= MAX_KEYS || has_static_supplier(ctx, rv))
+        })
+    {
         if let Some(v) = &parent_valid {
             ctx.block().store(I1, "false", v);
         }
@@ -745,9 +1206,15 @@ pub(crate) fn lower_split(
     };
     let retry = ctx.region_loops[idx].retry.clone();
     let bare = ctx.region_loops[idx].bare.clone();
+    let bare_reads = ctx.region_loops[idx].bare_reads.clone();
+    let number_local_uses = ctx.region_loops[idx].number_local_uses.clone();
+    let declared_locals = ctx.region_loops[idx].declared_locals.clone();
+    let planned_number_locals = ctx.region_loops[idx].number_locals.clone();
+    let planned_entry_tests = ctx.region_loops[idx].entry_tests.clone();
     let trees = ctx.region_loops[idx].trees.clone();
     let dirty_slot = ctx.region_loops[idx].dirty_slot.clone();
     let arrs = ctx.region_loops[idx].arrays.clone();
+    let dirty_after = ctx.region_loops[idx].dirty_after.clone();
     // The layouts F-body must serve: a loop region's split copy was chosen by
     // its preheader (one layout); a body region chooses per iteration, so it
     // carries the all-inline copy and, unless every key it names is stored
@@ -772,7 +1239,7 @@ pub(crate) fn lower_split(
 
     // Where the entry decision is emitted; its terminator is written LAST,
     // once `verify` has judged F-body.
-    let decide;
+    let mut decide;
     let mut decide_top: Option<(usize, String, String)> = None;
     // With a nested body region the top tests the dirty flag first: G-body
     // sets it to come back (`Pending::retry`); `decide_top` then carries
@@ -814,14 +1281,20 @@ pub(crate) fn lower_split(
                     let recv_box = lower_recv(ctx, rv.recv)?;
                     let h = handle_of(ctx, &recv_box);
                     let sid = field_i32(ctx, &h, 4);
-                    let exp = ctx.block().trunc(I64, &rv.word, I32);
+                    let exp = if let Some(expected) = &rv.expected_shape {
+                        expected.clone()
+                    } else {
+                        ctx.block().trunc(I64, &rv.word, I32)
+                    };
                     // The spill copy runs only on flipped (spill) words.
                     let exp = if modes[0] {
                         ctx.block().xor(I32, &exp, FLIP_I32)
                     } else {
                         exp
                     };
-                    let eq = ctx.block().icmp_eq(I32, &sid, &exp);
+                    // A re-check follows JS that may have written an R slot
+                    // of a value-tested lane: the values are tested again.
+                    let eq = emit_recheck_eq(ctx, rv, &sid, &exp)?;
                     let eq = if rv.has_store {
                         let adm = store_admission(ctx, &h, false);
                         ctx.block().and(I1, &eq, &adm)
@@ -834,6 +1307,10 @@ pub(crate) fn lower_split(
                     let pass = arrays::emit_guard(ctx, a)?;
                     ok = ctx.block().and(I1, &ok, &pass);
                 }
+                if !planned_entry_tests.is_empty() {
+                    let number_ok = emit_number_entry_tests(ctx, &planned_entry_tests)?;
+                    ok = ctx.block().and(I1, &ok, &number_ok);
+                }
                 ctx.block().store(I1, &ok, slot);
                 ctx.block().store(I1, "false", &d_slot);
                 let rc_idx = ctx.current_block;
@@ -841,10 +1318,16 @@ pub(crate) fn lower_split(
                 decide = (rc_idx, ok);
             }
         }
-        None if receivers.len() == 1 => {
-            // Body region, one receiver: load the word now (F-body decodes
-            // it); the rest of the guard is emitted at the end, as branches
-            // straight into whichever F copies verified.
+        None if receivers.len() == 1
+            && !receivers[0].inherited
+            && !has_static_supplier(ctx, &receivers[0]) =>
+        {
+            // Body region, one receiver with no static supplier: load the
+            // learned word now (F-body decodes it); the rest of the guard is
+            // emitted at the end, as branches straight into whichever F
+            // copies verified. A receiver whose class names a static id takes
+            // the full guard below: the static supplier is exclusive (DESIGN
+            // §4.1), so a learned word must not replace it here.
             let (sites, word) = emit_guard_word(ctx, &mut receivers[0]);
             receivers[0].word = word.clone();
             direct = Some((sites, word));
@@ -852,17 +1335,42 @@ pub(crate) fn lower_split(
             decide = (ctx.current_block, String::new());
         }
         None => {
-            // Body region: the full guard, every iteration.
+            // Body region: the full guard, every iteration (an inherited
+            // receiver's was the loop's).
             let mut all = "true".to_string();
             for rv in receivers.iter_mut() {
+                if rv.inherited {
+                    continue;
+                }
                 let (word, pass, spill) = emit_guard(ctx, rv)?;
                 rv.spill = spill;
+                let pass = emit_value_tests(ctx, rv, &word, &pass)?;
                 all = ctx.block().and(I1, &all, &pass);
                 decode_slots(ctx, rv, &word);
             }
             stat(1, 1);
             decide = (ctx.current_block, all);
         }
+    }
+
+    let (number_locals, entry_tests) = if valid_slot.is_some() {
+        (planned_number_locals, planned_entry_tests)
+    } else {
+        // Only a body region gets here: it has no loop control of its own,
+        // and its tests run at the split on every entry.
+        number_facts(
+            ctx,
+            tail,
+            &[],
+            &receivers,
+            &bare_reads,
+            &number_local_uses,
+            &declared_locals,
+        )
+    };
+    if valid_slot.is_none() && direct.is_none() && !entry_tests.is_empty() {
+        let number_ok = emit_number_entry_tests(ctx, &entry_tests)?;
+        decide.1 = ctx.block().and(I1, &decide.1, &number_ok);
     }
 
     // F-body, once per layout; each copy is verified on its own IR.
@@ -876,10 +1384,16 @@ pub(crate) fn lower_split(
         let fl = ctx.block_label(fb);
         ctx.current_block = fb;
         note(ctx, Route::RloopF);
+        if receivers.iter().any(|rv| rv.r_mask != 0) {
+            note(ctx, Route::RloopFRep);
+        }
         if let Some(d) = &retry {
             ctx.block().store(I1, "true", d);
         }
         let scan_start = ctx.func.num_blocks();
+        let number_scope = ctx.next_loop_proof_scope_id();
+        ctx.receiver_descriptors
+            .materialize_number_locals(number_scope, &number_locals);
         ctx.region_loop_facts.push(Active {
             receivers: receivers.clone(),
             bare: bare.clone(),
@@ -890,10 +1404,18 @@ pub(crate) fn lower_split(
             spill: mode,
             arrays: arrs.clone(),
             emitted_arr: Vec::new(),
+            dirty_after: dirty_after.clone(),
         });
         let r = match &inner {
             Some(ib) => {
-                ctx.region_loops.push((**ib).clone());
+                let mut ib = (**ib).clone();
+                for irv in ib.receivers.iter_mut() {
+                    if let Some(prv) = receivers.iter().find(|p| p.recv == irv.recv) {
+                        *irv = prv.clone();
+                        irv.inherited = true;
+                    }
+                }
+                ctx.region_loops.push(ib);
                 let j = ctx.region_loops.len() - 1;
                 let r = lower_split(ctx, tail, j, lower_list);
                 ctx.region_loops.truncate(j);
@@ -902,6 +1424,7 @@ pub(crate) fn lower_split(
             None => lower_list(ctx, tail),
         };
         let active = ctx.region_loop_facts.pop().expect("pushed above");
+        ctx.receiver_descriptors.dematerialize_scope(number_scope);
         r?;
         if !ctx.block().is_terminated() {
             ctx.block().br(&join_l);
@@ -916,6 +1439,15 @@ pub(crate) fn lower_split(
             .copied()
             .collect();
         let ok = verify(ctx, fb, scan_start, scan_end, &all_emitted)
+            && verify_exit_effects(
+                ctx,
+                fb,
+                scan_start,
+                scan_end,
+                recheck,
+                dirty_slot.as_deref(),
+                valid_slot.as_deref(),
+            )
             && arrays::verify_arrays(
                 ctx,
                 fb,
@@ -998,7 +1530,16 @@ pub(crate) fn lower_split(
             slow_l.clone()
         };
         let rv = receivers[0].clone();
-        emit_body_guard_direct(ctx, &rv, sites, word, &inline_t, &spill_t, &slow_l)?;
+        emit_body_guard_direct(
+            ctx,
+            &rv,
+            sites,
+            word,
+            &entry_tests,
+            &inline_t,
+            &spill_t,
+            &slow_l,
+        )?;
     } else if copies.len() == 2 {
         // Body region: the guard passed -> pick the copy for the word's layout.
         let target = |c: &(String, bool)| if c.1 { c.0.clone() } else { slow_l.clone() };

@@ -1266,7 +1266,7 @@ pub(crate) fn lower(
         // for runtime-dispatched arguments (which inspects the NaN-box tag to
         // distinguish a numeric length from a source-array pointer).
         // Result is a normal POINTER_TAG JS value. Element/property fast paths
-        // mask off the tag before consulting TYPED_ARRAY_REGISTRY, and runtime
+        // mask off the tag before reading the typed array's header, and runtime
         // consumers such as Atomics require the value to satisfy is_pointer().
         Expr::TypedArrayNew { kind, arg } => {
             let kind_str = (*kind as i32).to_string();
@@ -1387,8 +1387,12 @@ pub(crate) fn lower(
         // update the local/capture/global slot, but the call's *value* is
         // the array length read from the new header.
         Expr::ArrayUnshift { array_id, value } => {
-            let v = lower_expr(ctx, value)?;
-            let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
+            let rooted_temp_1 = Expr::LocalGet(*array_id);
+            let rooted_operands: [&perry_hir::Expr; 2] = [value, &rooted_temp_1];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let v = rooted_values[0].clone();
+            let arr_box = rooted_values[1].clone();
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             let new_handle = blk.call(
@@ -1406,7 +1410,9 @@ pub(crate) fn lower(
             crate::lower_array_method::emit_grow_mutator_writeback(ctx, *array_id, &new_box)?;
             let len_i32 = crate::expr::array_length::emit_array_length_i32(ctx, &new_handle);
             let len_f64 = ctx.block().uitofp(I32, &len_i32, DOUBLE);
-            Ok(len_f64)
+            let rooted_result = len_f64;
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- arr.entries() / .keys() / .values() --------

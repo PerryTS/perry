@@ -404,12 +404,6 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
     // it needs a death story of its own -- otherwise a recycled holder address
     // becomes a false hit that reads a live object's slot for the wrong key
     // (rewrite_raw_addr's #8174 note).
-    DeadKeyPrune {
-        table: "INHERITED_READ_CACHE",
-        owner: DeadKeyOwner::Any,
-        prune: crate::object::inherited_read_cache::prune_dead_inherited_cache_entries,
-        young_prune: None,
-    },
     // #6759 C1: shape records are keyed on keys_array addresses; drop the
     // ones whose keys_array died (memory only — per-hit validation covers
     // correctness for anything this misses).
@@ -418,6 +412,16 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         owner: DeadKeyOwner::Any,
         prune: crate::object::shapes::prune_dead_shape_keys,
         young_prune: Some(crate::object::shapes::prune_dead_shape_keys_young),
+    },
+    // A prototype identity's word is traced through its carriers; a word whose
+    // prototype died has none left, so it is cleared.
+    DeadKeyPrune {
+        table: "state().shapes prototype words + identity index",
+        owner: DeadKeyOwner::Any,
+        prune: crate::object::shapes::prune_dead_shape_prototypes,
+        // A minor roots every young word (`scan_shape_prototype_words_mut`),
+        // so only a full trace can find a word's prototype dead.
+        young_prune: None,
     },
     // #10868 step 2.5 stage 1b: the canonical keys trie holds its arrays
     // WEAKLY, so a node whose array did not survive has to be reaped here or
@@ -463,12 +467,13 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::closure::prune_dead_closure_side_table_owners,
         young_prune: Some(crate::closure::prune_dead_closure_side_table_owners_young),
     },
-    #[cfg(feature = "dyn-eval")]
+    // Always listed; the prunes forward to the interpreter once `dyn-eval` is
+    // installed (see `crate::dyn_eval_hooks`).
     DeadKeyPrune {
         table: "dyn_eval::LIFETIME.owners + FN_REGISTRY",
         owner: DeadKeyOwner::Closure,
-        prune: crate::dyn_eval::prune_dead_function_owners,
-        young_prune: Some(crate::dyn_eval::prune_dead_function_owners_young),
+        prune: crate::dyn_eval_hooks::prune_dead_function_owners,
+        young_prune: Some(crate::dyn_eval_hooks::prune_dead_function_owners_young),
     },
     DeadKeyPrune {
         table: "BUILTIN_CLOSURE_LENGTH + BUILTIN_CLOSURE_NON_CONSTRUCTABLE",

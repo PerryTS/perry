@@ -139,6 +139,27 @@ pub(crate) fn proxy_set_with_receiver(
     )
 }
 
+/// The receivers the key-add lane serves, decided from the header and the
+/// class id before the key is looked at: a heap object whose class id is 0
+/// or a registered object-literal shape. The lane refuses every other
+/// receiver anyway; asking first keeps it from resolving the key.
+///
+/// # Safety
+/// `addr` is the payload of a POINTER-tagged value.
+#[inline]
+unsafe fn plain_store_receiver(addr: usize) -> bool {
+    if !crate::value::addr_class::is_above_handle_band(addr) {
+        return false;
+    }
+    match crate::value::addr_class::try_read_gc_header(addr) {
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            let class_id = (*(addr as *const crate::ObjectHeader)).class_id;
+            class_id == 0 || crate::object::is_anon_shape_class_id(class_id)
+        }
+        _ => false,
+    }
+}
+
 /// Assignment PutValue for a property reference. Returns the assigned RHS value
 /// on success or sloppy failure, and throws TypeError when strict code attempts
 /// a failed [[Set]].
@@ -179,22 +200,42 @@ pub extern "C" fn js_put_value_set(
         if unsafe { crate::object::try_existing_own_data_overwrite(obj, key_ptr, value) } {
             return value;
         }
-        // Charter step 3: a key this receiver shape inherits as an accessor
-        // runs its setter from the inherited-access table.
-        if crate::value::addr_class::is_above_handle_band(obj as usize) {
-            if let Some(interned) = unsafe {
-                crate::object::chain_store::interned_key_for_store(f64::from_bits(key_bits))
-            } {
-                if unsafe {
-                    crate::object::inherited_read_cache::inherited_write_through(
-                        obj, interned, value,
+    }
+    // A key the receiver lacks: the append its shape's key-add edge names
+    // (`(ShapeId, key) -> target`), for a plain receiver whose prototype chain
+    // cannot intercept the key — the same lane a cached computed write site
+    // takes on its miss (`js_put_value_set_dyn_ic_miss`). It allocates only
+    // after its pre-checks pass and hands back re-rooted operands whenever it
+    // did, so a miss continues below with live values.
+    let (target, key, value, receiver) = {
+        let mut refreshed: Option<(f64, f64, f64)> = None;
+        if target_bits == receiver.to_bits()
+            && (target_bits & !POINTER_MASK) == POINTER_TAG
+            && unsafe { plain_store_receiver((target_bits & POINTER_MASK) as usize) }
+        {
+            if let Some(key_ptr) =
+                unsafe { crate::object::chain_store::interned_key_for_store(key) }
+            {
+                let obj = (target_bits & POINTER_MASK) as *mut crate::ObjectHeader;
+                if let Some(stored) =
+                    crate::object::object_set_field_by_name_transition_only_fast_value(
+                        obj,
+                        key_ptr,
+                        value,
+                        &mut refreshed,
                     )
-                } {
-                    return value;
+                {
+                    return stored;
                 }
             }
         }
-    }
+        match refreshed {
+            // The key the lane used is the interned twin of the same text, so
+            // it stands in for the original key value on the general path.
+            Some((t, k, v)) => (t, k, v, t),
+            None => (target, key, value, receiver),
+        }
+    };
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let target_handle = scope.root_nanbox_f64(target);
@@ -371,9 +412,37 @@ pub extern "C" fn js_put_value_set(
                 "Cannot set property {key_name} of #<{class_name}> which has only a getter"
             ));
         }
+        // Node names a class instance by its class: `#<Account>`.
+        if let Some(class_name) = class_instance_display_name(receiver) {
+            crate::collection_iter::throw_type_error(&format!(
+                "Cannot assign to read only property '{key_name}' of object '#<{class_name}>'"
+            ));
+        }
         crate::error::throw_immutable_write(0, &key_name);
     }
     value_handle.get_nanbox_f64()
+}
+
+/// The class name of a compiled class instance, for error texts; `None` for
+/// every other value.
+fn class_instance_display_name(receiver: f64) -> Option<String> {
+    let recv = crate::JSValue::from_bits(receiver.to_bits());
+    if !recv.is_pointer() {
+        return None;
+    }
+    let object = recv.as_pointer::<crate::ObjectHeader>();
+    // SAFETY: the header is read through the checked reader, and only an
+    // ordinary object is asked for its shape.
+    let is_object = unsafe { crate::value::addr_class::try_read_gc_header(object as usize) }
+        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
+    if !is_object || !unsafe { crate::object::object_is_shaped(object) } {
+        return None;
+    }
+    let class_id = crate::object::js_object_get_class_id(object);
+    if class_id == 0 {
+        return None;
+    }
+    crate::object::class_name_for_id(class_id)
 }
 
 /// For a refused strict write: when the key resolves on `receiver`'s chain to
@@ -418,6 +487,7 @@ pub use packed_add::PackedSetSite;
 pub(crate) use packed_add::{
     census as store_census, C_REP_CONVERGE, C_REP_MIGRATE, C_REP_VALIDITY_BUMP,
 };
+pub(crate) use packed_set::scan_setter_site_roots_mut;
 pub use packed_set::{js_put_value_set_packed_miss, PACKED_SET_EMPTY};
 pub(crate) use packed_set::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
 
@@ -655,11 +725,6 @@ pub extern "C" fn js_put_value_set_ic_miss(
         // The descriptor above already proves this stamp is live, so the
         // token comes from the header word rather than from a second full
         // lookup-and-copy of the same id (see `dyn_ic_try_store`).
-        // D3(b): a marked prototype's shape is never learned by a store cache,
-        // so every write to it reaches a funnel that bumps PERRY_PROTO_VALIDITY.
-        if !crate::object::proto_validity::store_cache_may_learn(obj) {
-            return result;
-        }
         let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
             | crate::object::shapes::object_shape_stamp(obj) as u64;
 
@@ -1283,14 +1348,17 @@ pub extern "C" fn js_put_value_set_dyn_ic_miss(
         let Some(idx) = own_idx else {
             return result;
         };
+        // Generated own-slot hits write raw bits. A ConstFn target must
+        // keep using the checked store funnel so an incompatible overwrite
+        // invalidates its body fact before changing the slot.
+        if crate::object::field_rep::slot_rep(shape.rep, idx)
+            == crate::object::field_rep::REP_SPECIAL
+        {
+            return result;
+        }
         // The descriptor above already proves this stamp is live, so the
         // token comes from the header word rather than from a second full
         // lookup-and-copy of the same id (see `dyn_ic_try_store`).
-        // D3(b): a marked prototype's shape is never learned by a store cache,
-        // so every write to it reaches a funnel that bumps PERRY_PROTO_VALIDITY.
-        if !crate::object::proto_validity::store_cache_may_learn(obj) {
-            return result;
-        }
         let shape_token = crate::object::shapes::PIC_ID_TOKEN_BIT
             | crate::object::shapes::object_shape_stamp(obj) as u64;
         let key_bits = key.to_bits() as i64;
@@ -1649,6 +1717,7 @@ fn object_array_numeric_write_slots(
             unsafe { validated_object(first_bits) },
             "first receiver is not an eligible regular shared-shape object",
         )?;
+    let shared_rep = crate::object::field_rep_store::shape_rep(shared_shape_id);
     let mut slots = [0u16; 4];
     for index in 0..keys.len() {
         // `find_slot` caps the shared keys array at 4096 entries, so every
@@ -1657,6 +1726,15 @@ fn object_array_numeric_write_slots(
             unsafe { find_slot(shared_keys, shared_key_count, decoded_keys[index]) },
             "target key is absent from the shared shape",
         )?;
+        // A finite Number preserves Any/F64, but contradicts a ConstFn body
+        // fact. The clone writes without the checked slot funnel, so SPECIAL
+        // targets must take the ordinary loop before any slot is published.
+        if crate::object::field_rep::slot_rep(shared_rep, slot)
+            == crate::object::field_rep::REP_SPECIAL
+        {
+            trace_object_array_numeric_write_rejection("target slot carries a SPECIAL fact");
+            return None;
+        }
         slots[index] = trace_object_array_numeric_write_stage(
             u16::try_from(slot).ok(),
             "target slot cannot be encoded",
@@ -1916,3 +1994,7 @@ pub extern "C" fn js_object_array_numeric_write2_guard(
     };
     (u64::from(slots[1]) + 1) << 32 | (u64::from(slots[0]) + 1)
 }
+
+#[cfg(test)]
+#[path = "put_value/numeric_write_constfn_tests.rs"]
+mod numeric_write_constfn_tests;

@@ -843,20 +843,30 @@ pub extern "C" fn js_promise_finally(
     let on_finally_handle = scope.root_raw_const_ptr(on_finally);
     // See the sibling in `then`: the allocating call and the re-read are one
     // combinator so the order cannot drift apart (#7341).
-    let (next, promise) =
-        promise_handle.across_mut::<Promise, _>(|| js_promise_new_with_parent(promise));
-    let on_finally = on_finally_handle.get_raw_const_ptr::<crate::closure::ClosureHeader>();
-    let next_i64 = next as i64;
+    let (next, _) = promise_handle.across_mut::<Promise, _>(|| js_promise_new_with_parent(promise));
+    // #11821: each wrapper allocation can collect; `next`, the callback, the
+    // receiver and the first wrapper are re-read from roots after each one.
+    let next_handle = scope.root_raw_mut_ptr(next);
 
     // Build the fulfilled wrapper: captures [on_finally, next].
-    let fulfill_wrap = js_closure_alloc(crate::fn_info!(finally_fulfill_wrapper, 1), 2);
+    let (fulfill_wrap, on_finally) = on_finally_handle
+        .across_const::<crate::closure::ClosureHeader, _>(|| {
+            js_closure_alloc(crate::fn_info!(finally_fulfill_wrapper, 1), 2)
+        });
     js_closure_set_capture_ptr(fulfill_wrap, 0, on_finally as i64);
-    js_closure_set_capture_ptr(fulfill_wrap, 1, next_i64);
+    next_handle.with_mut_ptr::<Promise, _>(|next| {
+        js_closure_set_capture_ptr(fulfill_wrap, 1, next as i64)
+    });
+    let fulfill_handle = scope.root_raw_mut_ptr(fulfill_wrap);
 
     // Build the rejected wrapper: captures [on_finally, next].
-    let reject_wrap = js_closure_alloc(crate::fn_info!(finally_reject_wrapper, 1), 2);
+    let (reject_wrap, on_finally) = on_finally_handle
+        .across_const::<crate::closure::ClosureHeader, _>(|| {
+            js_closure_alloc(crate::fn_info!(finally_reject_wrapper, 1), 2)
+        });
     js_closure_set_capture_ptr(reject_wrap, 0, on_finally as i64);
-    js_closure_set_capture_ptr(reject_wrap, 1, next_i64);
+    next_handle
+        .with_mut_ptr::<Promise, _>(|next| js_closure_set_capture_ptr(reject_wrap, 1, next as i64));
 
     // Register wrappers on `promise`.  Crucially, set `promise.next = null`
     // so the microtask runner does NOT attempt to resolve `next` after calling
@@ -877,85 +887,104 @@ pub extern "C" fn js_promise_finally(
     // routes hung forever (#5437). Dispatch each settled attach as a
     // `Task::Inline` carrying ITS OWN wrapper instead; the slots stay
     // untouched.
-    unsafe {
-        match (*promise).state {
-            PromiseState::Pending => {
-                // The slots are single-valued: if a reaction is already
-                // registered (`p.then(cb); p.finally(end)` while pending, or
-                // two pending `.finally()`s), the old unconditional store
-                // overwrote its wrapper AND nulled `promise.next`, so the
-                // earlier callback never ran and its chained promise never
-                // settled. Divert later reactions to the overflow table; the
-                // wrapper owns its `next` (null here), matching the settled
-                // arms below.
-                //
-                // A non-null `next` also counts as occupancy: a degenerate
-                // no-arg `p.then()` parks with both handler slots null and
-                // only `next` set — nulling that `next` here would strand its
-                // chained promise forever.
-                let slot_occupied = !(*promise).on_fulfilled.is_null()
-                    || !(*promise).on_rejected.is_null()
-                    || !(*promise).next.is_null();
-                if slot_occupied {
-                    push_overflow_reaction(
-                        promise,
-                        fulfill_wrap,
-                        reject_wrap,
-                        ptr::null_mut(),
-                        capture_context(),
-                    );
-                } else {
-                    store_promise_closure_slot(
-                        promise,
-                        std::ptr::addr_of_mut!((*promise).on_fulfilled),
-                        fulfill_wrap,
-                    );
-                    store_promise_closure_slot(
-                        promise,
-                        std::ptr::addr_of_mut!((*promise).on_rejected),
-                        reject_wrap,
-                    );
-                    // Wrappers own next; runner must not touch it.
-                    store_promise_next_slot(
-                        promise,
-                        std::ptr::addr_of_mut!((*promise).next),
-                        ptr::null_mut(),
-                    );
-                    set_promise_callback_context(promise);
-                }
-            }
-            PromiseState::Fulfilled => {
-                // Capture the attach-time async context: these arms no longer
-                // store into the promise's context slot, so
-                // `context_for_promise` could hand back a context stored by
-                // an EARLIER reaction on the same promise.
-                let context = capture_context();
-                TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::Inline(
-                        fulfill_wrap,
-                        (*promise).value,
-                        ptr::null_mut(),
-                        true,
-                        context,
-                    ));
-                });
-            }
-            PromiseState::Rejected => {
-                let context = capture_context();
-                TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::Inline(
-                        reject_wrap,
-                        (*promise).reason,
-                        ptr::null_mut(),
-                        false,
-                        context,
-                    ));
-                });
-            }
-        }
-    }
+    // #11821 tail: `fulfill_wrap` and `promise` are read from their roots in
+    // argument position, and `next` is the post-registration address.
+    let ((), next) = next_handle.across_mut::<Promise, _>(|| {
+        fulfill_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|fulfill_wrap| {
+            promise_handle.with_mut_ptr::<Promise, _>(|promise| unsafe {
+                register_finally_reactions(promise, fulfill_wrap, reject_wrap)
+            })
+        })
+    });
 
     next
+}
+
+/// Attach `.finally()`'s two wrappers to `promise` (split out of
+/// `js_promise_finally` so its rooted pointers are passed in argument position).
+///
+/// # Safety
+/// `promise`, `fulfill_wrap` and `reject_wrap` must be live, current pointers.
+unsafe fn register_finally_reactions(
+    promise: *mut Promise,
+    fulfill_wrap: *mut crate::closure::ClosureHeader,
+    reject_wrap: *mut crate::closure::ClosureHeader,
+) {
+    match (*promise).state {
+        PromiseState::Pending => {
+            // The slots are single-valued: if a reaction is already
+            // registered (`p.then(cb); p.finally(end)` while pending, or
+            // two pending `.finally()`s), the old unconditional store
+            // overwrote its wrapper AND nulled `promise.next`, so the
+            // earlier callback never ran and its chained promise never
+            // settled. Divert later reactions to the overflow table; the
+            // wrapper owns its `next` (null here), matching the settled
+            // arms below.
+            //
+            // A non-null `next` also counts as occupancy: a degenerate
+            // no-arg `p.then()` parks with both handler slots null and
+            // only `next` set — nulling that `next` here would strand its
+            // chained promise forever.
+            let slot_occupied = !(*promise).on_fulfilled.is_null()
+                || !(*promise).on_rejected.is_null()
+                || !(*promise).next.is_null();
+            if slot_occupied {
+                push_overflow_reaction(
+                    promise,
+                    fulfill_wrap,
+                    reject_wrap,
+                    ptr::null_mut(),
+                    capture_context(),
+                );
+            } else {
+                store_promise_closure_slot(
+                    promise,
+                    std::ptr::addr_of_mut!((*promise).on_fulfilled),
+                    fulfill_wrap,
+                );
+                store_promise_closure_slot(
+                    promise,
+                    std::ptr::addr_of_mut!((*promise).on_rejected),
+                    reject_wrap,
+                );
+                // Wrappers own next; runner must not touch it.
+                store_promise_next_slot(
+                    promise,
+                    std::ptr::addr_of_mut!((*promise).next),
+                    ptr::null_mut(),
+                );
+                set_promise_callback_context(promise);
+            }
+        }
+        PromiseState::Fulfilled => {
+            // Capture the attach-time async context: these arms no longer
+            // store into the promise's context slot, so
+            // `context_for_promise` could hand back a context stored by
+            // an EARLIER reaction on the same promise.
+            let context = capture_context();
+            TASK_QUEUE.with(|q| {
+                q.borrow_mut().push_back(Task::Inline(
+                    fulfill_wrap,
+                    (*promise).value,
+                    ptr::null_mut(),
+                    true,
+                    context,
+                ));
+            });
+        }
+        PromiseState::Rejected => {
+            let context = capture_context();
+            TASK_QUEUE.with(|q| {
+                q.borrow_mut().push_back(Task::Inline(
+                    reject_wrap,
+                    (*promise).reason,
+                    ptr::null_mut(),
+                    false,
+                    context,
+                ));
+            });
+        }
+    }
 }
 
 // ── #1545: bound then/catch/finally for promise *value-reads* ────────────────
@@ -1664,6 +1693,14 @@ fn finally_wrapper_common(
 
     let on_finally = js_closure_get_capture_ptr(closure, 0) as *const crate::closure::ClosureHeader;
     let next = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+    // #11821: `onFinally()` is user code and the continuations below allocate;
+    // any of them can run a moving minor. The original outcome (`orig`) and
+    // `next` were Rust locals across those calls, so `next` settled with a
+    // pre-move address — `await p.finally(cleanup)` resumed with a dangling
+    // value. Every later read comes from these roots.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let orig_handle = scope.root_nanbox_f64(orig);
+    let next_handle = scope.root_raw_mut_ptr(next);
 
     // Non-callable onFinally (e.g. `.finally(1)`): act like `.then(undefined,
     // undefined)` — pass the original outcome through after one extra hop.
@@ -1689,9 +1726,11 @@ fn finally_wrapper_common(
         Ok(ret) => ret,
         Err(exc) => {
             // onFinally threw — reject `next` with the thrown value.
-            if !next.is_null() {
-                js_promise_reject(next, exc);
-            }
+            next_handle.with_mut_ptr::<Promise, _>(|next| {
+                if !next.is_null() {
+                    js_promise_reject(next, exc);
+                }
+            });
             return undef;
         }
     };
@@ -1703,10 +1742,13 @@ fn finally_wrapper_common(
     if js_value_is_promise(cleanup) != 0 {
         let inner = crate::value::js_nanbox_get_pointer(cleanup) as *mut Promise;
         if !inner.is_null() {
+            let cleanup_handle = scope.root_nanbox_f64(cleanup);
             // On cleanup fulfillment: settle `next` with the original outcome.
             let on_ok = js_closure_alloc(crate::fn_info!(finally_cleanup_fulfill, 1), 3);
-            js_closure_set_capture_ptr(on_ok, 0, next as i64);
-            js_closure_set_capture_f64(on_ok, 1, orig);
+            next_handle.with_mut_ptr::<Promise, _>(|next| {
+                js_closure_set_capture_ptr(on_ok, 0, next as i64)
+            });
+            js_closure_set_capture_f64(on_ok, 1, orig_handle.get_nanbox_f64());
             js_closure_set_capture_f64(
                 on_ok,
                 2,
@@ -1716,9 +1758,18 @@ fn finally_wrapper_common(
                     crate::value::TAG_FALSE
                 }),
             );
+            let on_ok_handle = scope.root_raw_mut_ptr(on_ok);
             // On cleanup rejection: reject `next` with the cleanup reason.
-            let on_err = js_closure_alloc(crate::fn_info!(finally_cleanup_reject, 1), 1);
-            js_closure_set_capture_ptr(on_err, 0, next as i64);
+            // (`on_ok` is re-read after the allocation; the capture store
+            // below does not allocate.)
+            let (on_err, on_ok) =
+                on_ok_handle.across_mut::<crate::closure::ClosureHeader, _>(|| {
+                    js_closure_alloc(crate::fn_info!(finally_cleanup_reject, 1), 1)
+                });
+            next_handle.with_mut_ptr::<Promise, _>(|next| {
+                js_closure_set_capture_ptr(on_err, 0, next as i64)
+            });
+            let cleanup = cleanup_handle.get_nanbox_f64();
             // Use Invoke(cleanup, "then", …) to respect any user-installed own
             // `then` property on the cleanup promise (observable-then-calls tests).
             // Wrap in a try-frame: call_receiver_then can throw (e.g. non-callable
@@ -1732,9 +1783,11 @@ fn finally_wrapper_common(
             }) {
                 Ok(()) => {}
                 Err(exc) => {
-                    if !next.is_null() {
-                        js_promise_reject(next, exc);
-                    }
+                    next_handle.with_mut_ptr::<Promise, _>(|next| {
+                        if !next.is_null() {
+                            js_promise_reject(next, exc);
+                        }
+                    });
                 }
             }
             return undef;
@@ -1743,7 +1796,10 @@ fn finally_wrapper_common(
 
     // Plain (non-thenable) return value: pass the original outcome through
     // after one extra microtask hop.
-    finally_settle_next_with_extra_hop(next, orig, is_fulfilled);
+    // `finally_settle_next_with_extra_hop` roots `next` before it allocates.
+    next_handle.with_mut_ptr::<Promise, _>(|next| {
+        finally_settle_next_with_extra_hop(next, orig_handle.get_nanbox_f64(), is_fulfilled)
+    });
     undef
 }
 
@@ -1761,10 +1817,17 @@ fn finally_settle_next_with_extra_hop(next: *mut Promise, orig: f64, is_fulfille
     } else {
         crate::fn_info!(finally_passthrough_reject, 1)
     };
+    // #11821: both allocations below can collect.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let next_handle = scope.root_raw_mut_ptr(next);
+    let orig_handle = scope.root_nanbox_f64(orig);
     let pass = js_closure_alloc(pass_fn, 2);
-    js_closure_set_capture_ptr(pass, 0, next as i64);
-    js_closure_set_capture_f64(pass, 1, orig);
-    let undef_promise = js_promise_resolved(f64::from_bits(crate::value::TAG_UNDEFINED));
+    next_handle.with_mut_ptr::<Promise, _>(|next| js_closure_set_capture_ptr(pass, 0, next as i64));
+    js_closure_set_capture_f64(pass, 1, orig_handle.get_nanbox_f64());
+    let pass_handle = scope.root_raw_mut_ptr(pass);
+    let (undef_promise, pass) = pass_handle.across_mut::<crate::closure::ClosureHeader, _>(|| {
+        js_promise_resolved(f64::from_bits(crate::value::TAG_UNDEFINED))
+    });
     // js_promise_then's side-effect is enqueuing `pass` to run next iteration.
     js_promise_then(undef_promise, pass, ptr::null());
 }

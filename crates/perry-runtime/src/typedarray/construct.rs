@@ -65,7 +65,9 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
         // numeric-length interpretation for genuine doubles.
         if top16 == 0 && bits >= 0x10000 {
             let addr = bits as usize;
-            if lookup_typed_array_kind(addr).is_some() {
+            // A raw word may be a subnormal length: the allocator must vouch
+            // for it before the typed-array probe reads its header (#10694).
+            if crate::buffer::header_is_owned(addr) && lookup_typed_array_kind(addr).is_some() {
                 return typed_array_copy_from_typed_array(
                     kind as u8,
                     addr as *const TypedArrayHeader,

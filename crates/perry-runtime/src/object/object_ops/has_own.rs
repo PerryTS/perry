@@ -152,9 +152,8 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             if let Some(class_id) = super::super::class_ref_id(obj_value) {
                 let is_prototype = super::super::class_prototype_ref_id(obj_value).is_some();
                 let present = if is_prototype {
-                    super::super::class_registry::class_has_own_symbol_member(
-                        class_id, sym_key, false,
-                    )
+                    let proto = super::super::class_registry::class_decl_prototype_value(class_id);
+                    crate::symbol::js_object_has_own_symbol(proto, key_value)
                 } else {
                     crate::symbol::class_static_symbol_lookup(class_id, key_value).is_some()
                         || super::super::class_registry::class_has_own_symbol_member(
@@ -162,16 +161,6 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                         )
                 };
                 return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
-            }
-            let obj_key = crate::symbol::obj_key_from_f64(obj_value);
-            if let Some(class_id) =
-                super::super::class_registry::class_id_for_decl_prototype_object(obj_key)
-            {
-                if super::super::class_registry::class_has_own_symbol_member(
-                    class_id, sym_key, false,
-                ) {
-                    return f64::from_bits(TAG_TRUE);
-                }
             }
             let present = crate::symbol::js_object_has_own_symbol(obj_value, key_value);
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
@@ -244,6 +233,15 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
                 })
                 .unwrap_or(false);
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
+        }
+
+        // A class object owns `prototype` without storing it.
+        if super::super::class_registry::is_class_object_value(obj_value)
+            && super::super::has_own_helpers::str_from_string_header(key_str).is_some_and(|key| {
+                super::super::field_get_set::class_object_has_prototype_property(key.as_bytes())
+            })
+        {
+            return f64::from_bits(TAG_TRUE);
         }
 
         if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
@@ -436,10 +434,11 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
-        // Private elements (`#x`) — and perry's hidden `__perry_collection_backing__`
-        // runtime-internal field — sit in a class instance's keys_array but are
-        // never reflectable own properties, so `Object.hasOwn` must report false
-        // for them. Plain literals keep class_id 0.
+        // Perry's hidden runtime-internal keys of a class instance sit in the
+        // keys_array but are never reflectable own properties, so
+        // `Object.hasOwn` must report false. A private field (#11791) is an
+        // entry of the key list, not a property: the lookup below reads its
+        // entry where it finds the key.
         if (*obj).class_id != 0 {
             if let Some(key) = super::super::has_own_helpers::str_from_string_header(key_str) {
                 if super::super::field_get_set::is_internal_runtime_key(key) {
@@ -448,7 +447,7 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             }
         }
 
-        if own_key_present(obj, key_str) {
+        if super::own_property_present(obj, key_str) {
             return f64::from_bits(TAG_TRUE);
         }
 
@@ -718,7 +717,7 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // `class … extends Map/Set` backing field) physically live in a class
         // instance's keys_array but must never be observable, so report them as
         // non-enumerable like private (`#`) elements.
-        if (*obj).class_id != 0 && super::super::field_get_set::is_internal_runtime_key(key_name) {
+        if super::super::field_get_set::own_key_hidden_bytes(obj, key_name.as_bytes()) {
             return f64::from_bits(TAG_FALSE);
         }
         if !own_key_present(obj, key_str) {

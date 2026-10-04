@@ -707,7 +707,9 @@ pub(crate) fn tower_route_profitable(
     super::repsel_benefit::tower_route_profitable(method, &fields, &pshape_methods)
 }
 
-/// Does the method body READ `this.<declared chain field>` anywhere?
+/// Does the method body READ `this.<declared chain field>` anywhere? A
+/// private field of `this` counts (#11791): it is a field of the chain too,
+/// and the clone takes its call off the generic method path.
 fn method_reads_chain_field(method: &Function, fields: &HashSet<String>) -> bool {
     let mut found = false;
     super::scalar_method_dispatch::for_each_expr_in_stmts(&method.body, &mut |e| {
@@ -718,8 +720,12 @@ fn method_reads_chain_field(method: &Function, fields: &HashSet<String>) -> bool
             object, property, ..
         } = e
         {
-            if matches!(object.as_ref(), Expr::This) && fields.contains(property.as_str()) {
-                found = true;
+            match object.as_ref() {
+                Expr::This => found = fields.contains(property.as_str()),
+                Expr::PrivateGuard {
+                    kind: 0, object, ..
+                } => found = matches!(object.as_ref(), Expr::This),
+                _ => {}
             }
         }
     });

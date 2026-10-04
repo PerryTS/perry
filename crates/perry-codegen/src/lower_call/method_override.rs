@@ -13,8 +13,13 @@ use crate::nanbox::double_literal;
 use crate::native_value::LoweredValue;
 use crate::types::{DOUBLE, I1, I32, I64, I8};
 
-const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
-const GC_TYPE_OBJECT: &str = "2";
+use super::direct_method_guard::{
+    emit_direct_method_site_word, emit_direct_method_site_word_with_memo,
+    emit_inline_direct_method_shape_guard, emit_learned_word_hit,
+};
+
+pub(super) const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
+pub(super) const GC_TYPE_OBJECT: &str = "2";
 // The first four bytes before an ObjectHeader are, in little-endian order,
 // `gtype: u8`, `flags: u8`, and `reserved: u16`.  One masked i32 load can
 // therefore prove the three fields the direct-method contract consumes:
@@ -26,9 +31,16 @@ const GC_TYPE_OBJECT: &str = "2";
 // Mask: 0x0800_0000 (descriptor bit) | 0x0000_8000 (forwarded bit) |
 // 0x0000_00ff (the complete gtype byte). The exact class/ShapeId comparison
 // rejects the numeric-proof sibling.
-const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "134250751"; // 0x0800_80ff
-const SHAPE_ID_BASE_NEG_I32: &str = "-2147483648"; // subtract 0x8000_0000
-const SHAPE_ID_RANGE_LEN: &str = "1073741824"; // 0x4000_0000
+pub(super) const GC_OBJECT_METHOD_GUARD_MASK_I32: &str = "134250751"; // 0x0800_80ff
+                                                                      // The learned-word arms test only the kind and the forwarding bit. Every
+                                                                      // descriptor install on a `GC_TYPE_OBJECT` changes its ShapeId (RULE 1,
+                                                                      // `perry-runtime` `descriptor_state::note_descriptor_target_edits`), so the
+                                                                      // exact word compare already subsumes the descriptor bit; the runtime only
+                                                                      // learns a word whose key list lacks the method name, and an accessor or
+                                                                      // attribute for that name would have to add the key.
+pub(super) const GC_OBJECT_LEARNED_GUARD_MASK_I32: &str = "33023"; // 0x0000_80ff
+pub(super) const SHAPE_ID_BASE_NEG_I32: &str = "-2147483648"; // subtract 0x8000_0000
+pub(super) const SHAPE_ID_RANGE_LEN: &str = "1073741824"; // 0x4000_0000
 
 /// A deliberately small constructive Boolean proof for method returns.
 ///
@@ -227,96 +239,31 @@ fn method_inline_probe_enabled() -> bool {
     })
 }
 
-pub(crate) fn emit_inline_direct_method_shape_guard(
-    ctx: &mut FnCtx<'_>,
-    recv_box: &str,
-    expected_class_id: &str,
-    expected_shape_id: &str,
+/// `i1`: no prototype surgery has retired direct-method arms for the name
+/// whose guard slot is `method_guard_slot` (the low 16 bits of its dispatch
+/// hash) — neither the all-names byte nor that name's byte is set.
+///
+/// A compiler-resolved method body for an INHERITED name (the dispatch tower,
+/// `super.m()`) assumes the declared `extends` chain is the instance chain.
+/// Assigning, deleting or redefining a prototype member, or relinking a class
+/// prototype (`Object.setPrototypeOf(C.prototype, X)`), sets these bytes
+/// (`perry-runtime` `class_registry/prototype_methods.rs`); a set byte sends
+/// the site to its runtime dispatch.
+pub(crate) fn emit_prototype_method_guard_ok(
+    blk: &mut crate::block::LlBlock,
     method_guard_slot: &str,
-    fast_label: &str,
-    fallback_label: &str,
-    // `true` at sites whose receiver may arrive in the internal raw-address
-    // form (top word zero); `false` where the receiver is a user-visible
-    // NaN-box, so that a plain double whose bit pattern happens to land in
-    // the heap address range (a positive subnormal) can never reach the
-    // header load — it misses to the runtime guard instead.
-    accept_raw_ptr: bool,
-) {
-    let deref_idx = ctx.new_block("method_direct.inline_deref");
-    let deref_label = ctx.block_label(deref_idx);
-    let heap_floor =
-        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
-    let heap_ceiling =
-        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
-
-    {
-        let blk = ctx.block();
-        let invalidated =
-            blk.load_atomic_acquire(I8, "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", 1);
-        let all_methods_ok = blk.icmp_eq(I8, &invalidated, "0");
-        let method_slot_ptr = blk.gep(
-            I8,
-            "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD",
-            &[(I64, method_guard_slot)],
-        );
-        let method_invalidated = blk.load_atomic_acquire(I8, &method_slot_ptr, 1);
-        let method_ok = blk.icmp_eq(I8, &method_invalidated, "0");
-        let prototype_ok = blk.and(I1, &all_methods_ok, &method_ok);
-        let recv_bits = blk.bitcast_double_to_i64(recv_box);
-        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
-        let tag = blk.lshr(I64, &recv_bits, "48");
-        let is_tagged_ptr = blk.icmp_eq(I64, &tag, POINTER_TAG_HI16);
-        // Internal method ABIs also carry an unboxed raw object address in a
-        // double-sized slot. `normalize_raw_object_addr` accepts exactly this
-        // top-word-zero form; all other non-pointer NaN-box tags remain
-        // rejected before dereference.
-        let is_ptr = if accept_raw_ptr {
-            let is_raw_ptr = blk.icmp_eq(I64, &tag, "0");
-            blk.or(I1, &is_tagged_ptr, &is_raw_ptr)
-        } else {
-            is_tagged_ptr
-        };
-        let above_floor = blk.icmp_uge(I64, &recv_handle, &heap_floor);
-        let below_ceiling = blk.icmp_ult(I64, &recv_handle, &heap_ceiling);
-        let in_heap_range = blk.and(I1, &above_floor, &below_ceiling);
-        let ptr_safe = blk.and(I1, &is_ptr, &in_heap_range);
-        let can_deref = blk.and(I1, &prototype_ok, &ptr_safe);
-        blk.cond_br(&can_deref, &deref_label, fallback_label);
-    }
-
-    ctx.current_block = deref_idx;
-    {
-        let blk = ctx.block();
-        let recv_bits = blk.bitcast_double_to_i64(recv_box);
-        let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
-        let obj_ptr = blk.inttoptr(I64, &recv_handle);
-
-        let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
-        let gc_header = blk.load(I32, &gc_header_ptr);
-        let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
-        let gc_header_ok = blk.icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
-
-        // ObjectHeader begins with adjacent `class_id: u32` and
-        // `shape_id: u32`. Compare them as one packed word. The expected
-        // ShapeId is still range-checked below, so equality proves the live
-        // receiver's class is non-zero and its ShapeId is in-domain without
-        // four separate field predicates.
-        let class_shape = blk.load(I64, &obj_ptr);
-        let expected_shape_i64 = blk.zext(I32, expected_shape_id, I64);
-        let expected_shape_high = blk.shl(I64, &expected_shape_i64, "32");
-        let expected_class_shape = blk.or(I64, &expected_shape_high, expected_class_id);
-        let class_shape_ok = blk.icmp_eq(I64, &class_shape, &expected_class_shape);
-
-        // `is_shape_id` is `[0x8000_0000, 0xC000_0000)`. Subtract the base
-        // modulo i32 and compare with the range length, matching the runtime
-        // helper. Equality above transfers this proof to the live header.
-        let shape_id_rel = blk.add(I32, expected_shape_id, SHAPE_ID_BASE_NEG_I32);
-        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, SHAPE_ID_RANGE_LEN);
-
-        let pass = blk.and(I1, &gc_header_ok, &class_shape_ok);
-        let pass = blk.and(I1, &pass, &shape_valid);
-        blk.cond_br(&pass, fast_label, fallback_label);
-    }
+) -> String {
+    let invalidated =
+        blk.load_atomic_acquire(I8, "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", 1);
+    let all_methods_ok = blk.icmp_eq(I8, &invalidated, "0");
+    let method_slot_ptr = blk.gep(
+        I8,
+        "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD",
+        &[(I64, method_guard_slot)],
+    );
+    let method_invalidated = blk.load_atomic_acquire(I8, &method_slot_ptr, 1);
+    let method_ok = blk.icmp_eq(I8, &method_invalidated, "0");
+    blk.and(I1, &all_methods_ok, &method_ok)
 }
 
 /// Inline form of the runtime probe `js_method_direct_shape_class`: resolve
@@ -477,7 +424,14 @@ fn emit_inline_exact_argument_shape_guard(
         let expected_shape_high = blk.shl(I64, &expected_shape_i64, "32");
         let expected_class_shape =
             blk.or(I64, &expected_shape_high, &expected_class_id.to_string());
-        let class_shape_ok = blk.icmp_eq(I64, &class_shape, &expected_class_shape);
+        let class_shape_ok = crate::typed_shape::emit_compatible_class_shape_eq(
+            blk,
+            &class_shape,
+            &expected_class_id.to_string(),
+            expected_shape_id,
+            &expected_class_shape,
+            &[],
+        );
         let shape_id_rel = blk.add(I32, expected_shape_id, SHAPE_ID_BASE_NEG_I32);
         let shape_valid = blk.icmp_ult(I32, &shape_id_rel, SHAPE_ID_RANGE_LEN);
         let pass = blk.and(I1, &gc_header_ok, &class_shape_ok);
@@ -750,27 +704,36 @@ pub(super) fn emit_own_method_override_check(
     let bytes_global = format!("@{}", entry.bytes_global);
     let name_len_str = entry.byte_len.to_string();
 
-    let blk = ctx.block();
-    let own_method = blk.call(
+    // A receiver whose exact word the runtime already proved has no own
+    // property of this name skips the by-name probe (the probe scanned every
+    // own key on every call; an `EventEmitter` subclass carries ~30).
+    let site_word = emit_direct_method_site_word(ctx);
+    let learned_hit = emit_learned_word_hit(ctx, recv_box, &site_word);
+    let probe_idx = ctx.new_block("ovrcheck.probe");
+    let override_idx = ctx.new_block("ovrcheck.override");
+    let static_idx = ctx.new_block("ovrcheck.static");
+    let merge_idx = ctx.new_block("ovrcheck.merge");
+    let probe_label = ctx.block_label(probe_idx);
+    let override_label = ctx.block_label(override_idx);
+    let static_label = ctx.block_label(static_idx);
+    let merge_label = ctx.block_label(merge_idx);
+    ctx.block()
+        .cond_br(&learned_hit, &static_label, &probe_label);
+
+    ctx.current_block = probe_idx;
+    let own_method = ctx.block().call(
         DOUBLE,
-        "js_object_get_own_field_or_undef",
+        "js_object_get_own_field_or_undef_learn",
         &[
             (DOUBLE, recv_box),
             (crate::types::PTR, &bytes_global),
             (I64, &name_len_str),
+            (crate::types::PTR, &site_word),
         ],
     );
     let own_bits = ctx.block().bitcast_double_to_i64(&own_method);
     let undef_bits_str = format!("{}", crate::nanbox::TAG_UNDEFINED as i64);
     let is_undef = ctx.block().icmp_eq(I64, &own_bits, &undef_bits_str);
-
-    let override_idx = ctx.new_block("ovrcheck.override");
-    let static_idx = ctx.new_block("ovrcheck.static");
-    let merge_idx = ctx.new_block("ovrcheck.merge");
-    let override_label = ctx.block_label(override_idx);
-    let static_label = ctx.block_label(static_idx);
-    let merge_label = ctx.block_label(merge_idx);
-
     ctx.block()
         .cond_br(&is_undef, &static_label, &override_label);
 
@@ -1056,6 +1019,38 @@ pub(super) fn emit_guarded_direct_method_call(
         && !multi_arm
         && !crate::expr::typed_feedback_emission_enabled()
         && method_inline_probe_enabled();
+    // Every site whose guard is emitted inline also compares the site's
+    // learned word: a receiver of the DECLARED class whose exact pair is not
+    // the birth pair (a field added on one constructor path, a private brand,
+    // a native base's own method surface) is proved once by the runtime and
+    // then called directly. The learned arm calls the declared class's
+    // ordinary body, never a clone that assumes the birth layout; a multi-arm
+    // site compares it after every subclass arm.
+    //
+    // When the declared-class arm is an argument-typed dispatch (typed f64,
+    // i32, i1 or string parameters) and no proven-`this` clone is in play,
+    // that arm assumes nothing about the receiver: it guards only the
+    // arguments, then calls the parameter-typed clone or the internal generic
+    // body. The public wrapper is exactly that dispatch behind one more call,
+    // and the vtable reaches it for every receiver of the class. So the learned
+    // arm joins the declared-class arm instead of re-entering the method
+    // through its public wrapper.
+    let learned_joins_fast_arm = typed_f64_receiver_direct_fn.is_none()
+        && pshape_fn.is_none()
+        && (typed_direct_fn.is_some()
+            || typed_i32_direct_fn.is_some()
+            || typed_i1_direct_fn.is_some()
+            || typed_string_direct_fn.is_some());
+    let learned_site: Option<(String, usize)> =
+        (inline_single_arm || probe_before_runtime_guard || multi_arm).then(|| {
+            let word = emit_direct_method_site_word_with_memo(ctx);
+            (word, ctx.new_block("method_direct.learned"))
+        });
+    let learned_label = learned_site.as_ref().map(|(_, idx)| ctx.block_label(*idx));
+    let learned_arg = learned_site
+        .as_ref()
+        .zip(learned_label.as_ref())
+        .map(|((word, _), label)| (word.as_str(), label.as_str()));
     if multi_arm {
         let (cid, shape_id) =
             emit_inline_direct_method_shape_probe(ctx, recv_box, &method_guard_slot_str);
@@ -1063,24 +1058,54 @@ pub(super) fn emit_guarded_direct_method_call(
             let next = sub_test_labels[0].clone();
             let blk = ctx.block();
             let cid_ok = blk.icmp_eq(I32, &cid, &expected_class_id_str);
-            let shape_ok = blk.icmp_eq(I32, &shape_id, &expected_shape_id);
+            let shape_ok = crate::typed_shape::emit_compatible_shape_eq(
+                blk,
+                &shape_id,
+                &expected_shape_id,
+                &[],
+            );
             let pass = blk.and(I1, &cid_ok, &shape_ok);
             blk.cond_br(&pass, &fast_label, &next);
         }
+        // The probe's `(0, 0)` decline never equals the word: it starts
+        // all-ones and the runtime only stores real receiver words, whose
+        // class id and ShapeId are both non-zero.
+        let multi_learned_idx = learned_site
+            .as_ref()
+            .map(|_| ctx.new_block("method_direct.learned_check"));
+        let after_arms = multi_learned_idx
+            .map(|idx| ctx.block_label(idx))
+            .unwrap_or_else(|| fallback_label.clone());
         for (i, arm) in subclass_arms.iter().enumerate() {
             ctx.current_block = sub_test_idxs[i];
             let next = sub_test_labels
                 .get(i + 1)
                 .cloned()
-                .unwrap_or_else(|| fallback_label.clone());
+                .unwrap_or_else(|| after_arms.clone());
             let case_label = sub_case_labels[i].clone();
             let class_id_str = arm.class_id.to_string();
             let arm_shape_id = subclass_shape_ids[i].clone();
             let blk = ctx.block();
             let cid_ok = blk.icmp_eq(I32, &cid, &class_id_str);
-            let shape_ok = blk.icmp_eq(I32, &shape_id, &arm_shape_id);
+            let shape_ok =
+                crate::typed_shape::emit_compatible_shape_eq(blk, &shape_id, &arm_shape_id, &[]);
             let pass = blk.and(I1, &cid_ok, &shape_ok);
             blk.cond_br(&pass, &case_label, &next);
+        }
+        if let (Some(idx), Some((word, _)), Some(label)) = (
+            multi_learned_idx,
+            learned_site.as_ref(),
+            learned_label.as_ref(),
+        ) {
+            ctx.current_block = idx;
+            let blk = ctx.block();
+            let shape_wide = blk.zext(I32, &shape_id, I64);
+            let shape_high = blk.shl(I64, &shape_wide, "32");
+            let class_wide = blk.zext(I32, &cid, I64);
+            let packed = blk.or(I64, &shape_high, &class_wide);
+            let learned = blk.load_atomic_monotonic(I64, word, 8);
+            let hit = blk.icmp_eq(I64, &packed, &learned);
+            blk.cond_br(&hit, label, &fallback_label);
         }
         ctx.current_block = guard_idx;
     }
@@ -1094,6 +1119,7 @@ pub(super) fn emit_guarded_direct_method_call(
             &fast_label,
             &fallback_label,
             true,
+            learned_arg,
         );
     }
     if probe_before_runtime_guard {
@@ -1108,6 +1134,7 @@ pub(super) fn emit_guarded_direct_method_call(
             &fast_label,
             &runtime_guard_label,
             false,
+            learned_arg,
         );
         ctx.current_block = runtime_guard_idx;
     }
@@ -1820,6 +1847,26 @@ pub(super) fn emit_guarded_direct_method_call(
         sub_values.push((value, after));
     }
 
+    // The learned arm: the receiver is an instance of the declared class whose
+    // exact word the runtime proved shadows nothing (`learned_check` above),
+    // and the prototype guard bytes were re-checked on the way in. The
+    // ordinary body runs its own receiver guards, so no layout is assumed.
+    let learned_value = learned_site.as_ref().and_then(|(_, idx)| {
+        ctx.current_block = *idx;
+        if learned_joins_fast_arm {
+            ctx.block().br(&fast_label);
+            return None;
+        }
+        let target = direct_call_fn.unwrap_or(direct_fn);
+        let value = ctx.block().call(DOUBLE, target, direct_arg_slices);
+        let truthy = truthy_result_kind.map(|kind| constructive_truthy(ctx, kind, &value));
+        let after = ctx.block().label.clone();
+        if !ctx.block().is_terminated() {
+            ctx.block().br(&merge_label);
+        }
+        Some((value, truthy, after))
+    });
+
     ctx.current_block = fallback_idx;
     let (args_ptr, args_len) = if fallback_user_args.is_empty() {
         ("null".to_string(), "0".to_string())
@@ -1847,16 +1894,44 @@ pub(super) fn emit_guarded_direct_method_call(
         );
     }
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
-    let fallback_value = ctx.block().call(
-        DOUBLE,
-        "js_native_call_method_by_id",
-        &[
-            (DOUBLE, recv_box),
-            (I64, &method_id),
-            (crate::types::PTR, &args_ptr),
-            (I64, &args_len),
-        ],
-    );
+    let fallback_value = match learned_site.as_ref() {
+        Some((word, _)) => {
+            // The learned word is consulted only behind the prototype guard
+            // bytes, so while they are set (a prototype member of this
+            // method's name was assigned, deleted or redefined) nothing the
+            // runtime could learn would ever be read: the miss edge then
+            // passes the site's address tagged with bit 0, and the runtime
+            // learns nothing. Either way the word is followed by the site's
+            // chain memo slot, from which a receiver the arms decline repeats
+            // its by-name answer instead of walking the prototype chain.
+            let blk = ctx.block();
+            let prototype_ok = emit_prototype_method_guard_ok(blk, &method_guard_slot_str);
+            let no_learn = blk.gep(I8, word, &[(I64, "1")]);
+            let site = blk.select(I1, &prototype_ok, crate::types::PTR, word, &no_learn);
+            ctx.block().call(
+                DOUBLE,
+                "js_native_call_method_by_id_learn",
+                &[
+                    (DOUBLE, recv_box),
+                    (I64, &method_id),
+                    (crate::types::PTR, &args_ptr),
+                    (I64, &args_len),
+                    (crate::types::PTR, &site),
+                    (I32, &expected_class_id_str),
+                ],
+            )
+        }
+        None => ctx.block().call(
+            DOUBLE,
+            "js_native_call_method_by_id",
+            &[
+                (DOUBLE, recv_box),
+                (I64, &method_id),
+                (crate::types::PTR, &args_ptr),
+                (I64, &args_len),
+            ],
+        ),
+    };
     let fallback_truthy = truthy_result_kind.map(|_| total_value_truthy(ctx, &fallback_value));
     let after_fallback = ctx.block().label.clone();
     if !ctx.block().is_terminated() {
@@ -1867,6 +1942,9 @@ pub(super) fn emit_guarded_direct_method_call(
     let mut phi_inputs: Vec<(&str, &str)> = Vec::with_capacity(sub_values.len() + 2);
     phi_inputs.push((fast_value.as_str(), after_fast.as_str()));
     for (value, label) in &sub_values {
+        phi_inputs.push((value.as_str(), label.as_str()));
+    }
+    if let Some((value, _, label)) = learned_value.as_ref() {
         phi_inputs.push((value.as_str(), label.as_str()));
     }
     phi_inputs.push((fallback_value.as_str(), after_fallback.as_str()));
@@ -1881,6 +1959,14 @@ pub(super) fn emit_guarded_direct_method_call(
         ));
         for (value, label) in &sub_truthy_values {
             truthy_inputs.push((value.as_str(), label.as_str()));
+        }
+        if let Some((_, truthy, label)) = learned_value.as_ref() {
+            truthy_inputs.push((
+                truthy
+                    .as_deref()
+                    .expect("truthy mode constructs a learned-arm truthiness value"),
+                label.as_str(),
+            ));
         }
         truthy_inputs.push((
             fallback_truthy

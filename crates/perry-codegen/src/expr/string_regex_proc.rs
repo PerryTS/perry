@@ -44,34 +44,51 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // NaN-boxed array. The runtime reads `callSite.raw` (array-like),
             // interleaves the substitutions, and throws TypeError on nullish
             // callSite / raw.
-            let cs = lower_expr(ctx, call_site)?;
+            // #11789 sweep: the call site is held across the substitutions'
+            // evaluation and the array's allocation.
+            let mut raw_group = crate::rooting::open_rooted_group(1);
+            let cs_root = raw_group.lower(ctx, call_site, true)?;
             let subs_arr = lower_array_literal(ctx, substitutions)?;
+            let cs = raw_group.reread(ctx, cs_root)?;
             let blk = ctx.block();
             let handle = blk.call(I64, "js_string_raw", &[(DOUBLE, &cs), (DOUBLE, &subs_arr)]);
-            Ok(nanbox_string_inline(blk, &handle))
+            let boxed = nanbox_string_inline(blk, &handle);
+            raw_group.release(ctx);
+            Ok(boxed)
         }
         // -------- str.at(i) — returns single-char string or undefined --------
         Expr::StringAt { string, index } => {
-            let s_box = lower_expr(ctx, string)?;
-            let idx_d = lower_expr(ctx, index)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [string, index];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let s_box = rooted_values[0].clone();
+            let idx_d = rooted_values[1].clone();
             let blk = ctx.block();
             // #11519: an SSO receiver has no header behind its masked bits.
             let s_handle = crate::expr::unbox_ffi_str_arg(blk, &s_box);
             let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
             // Runtime returns NaN-boxed f64 directly (string or undefined).
-            Ok(blk.call(DOUBLE, "js_string_at", &[(I64, &s_handle), (I32, &idx_i32)]))
+            let rooted_result =
+                blk.call(DOUBLE, "js_string_at", &[(I64, &s_handle), (I32, &idx_i32)]);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::StringCodePointAt { string, index } => {
-            let s_box = lower_expr(ctx, string)?;
-            let idx_d = lower_expr(ctx, index)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [string, index];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let s_box = rooted_values[0].clone();
+            let idx_d = rooted_values[1].clone();
             let blk = ctx.block();
             let s_handle = crate::expr::unbox_ffi_str_arg(blk, &s_box);
             let idx_i32 = blk.fptosi(DOUBLE, &idx_d, I32);
-            Ok(blk.call(
+            let rooted_result = blk.call(
                 DOUBLE,
                 "js_string_code_point_at",
                 &[(I64, &s_handle), (I32, &idx_i32)],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::RegExpSource(o) => {
             let r_box = lower_expr(ctx, o)?;
@@ -161,13 +178,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `defineProperties` arm doesn't fire and we fall here. Route
             // to a runtime helper that iterates the descriptor object's
             // own keys and reuses `js_object_define_property` per key.
-            let t = lower_expr(ctx, target)?;
-            let d = lower_expr(ctx, descs)?;
-            Ok(ctx.block().call(
+            let rooted_operands: [&perry_hir::Expr; 2] = [target, descs];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let t = rooted_values[0].clone();
+            let d = rooted_values[1].clone();
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_object_define_properties",
                 &[(DOUBLE, &t), (DOUBLE, &d)],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::ObjectSetPrototypeOf(obj, proto) => {
             // chalk's foundation idiom (`Object.setPrototypeOf(closure,
@@ -184,13 +206,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // throws `TypeError: value is not a function` because
             // `Object` isn't a runtime object with method dispatch.
             // chalk's `import chalk from "chalk"` died at module init.
-            let obj_v = lower_expr(ctx, obj)?;
-            let proto_v = lower_expr(ctx, proto)?;
-            Ok(ctx.block().call(
+            let rooted_operands: [&perry_hir::Expr; 2] = [obj, proto];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let obj_v = rooted_values[0].clone();
+            let proto_v = rooted_values[1].clone();
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_object_set_prototype_of",
                 &[(DOUBLE, &obj_v), (DOUBLE, &proto_v)],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::MathExpm1(o) => {
             let v = lower_math_operand(ctx, o)?;
@@ -307,8 +334,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &result))
         }
         Expr::ArrayFlatMap { array, callback } => {
-            let arr_box = lower_expr(ctx, array)?;
-            let cb_box = lower_expr(ctx, callback)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [array, callback];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let arr_box = rooted_values[0].clone();
+            let cb_box = rooted_values[1].clone();
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
             // #4091: throw TypeError for a non-callable callback before iterating.
@@ -318,7 +348,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_array_flatMap",
                 &[(I64, &arr_handle), (I64, &cb_handle)],
             );
-            Ok(nanbox_pointer_inline(blk, &result))
+            let rooted_result = nanbox_pointer_inline(blk, &result);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- Math.sin/cos via LLVM intrinsics --------
@@ -384,15 +416,20 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_string_inline(blk, &handle))
         }
         Expr::RegExpSetLastIndex { regex, value } => {
-            let r_box = lower_expr(ctx, regex)?;
-            let v = lower_expr(ctx, value)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [regex, value];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let r_box = rooted_values[0].clone();
+            let v = rooted_values[1].clone();
             let blk = ctx.block();
             let r_handle = unbox_to_i64(blk, &r_box);
             blk.call_void(
                 "js_regexp_set_last_index",
                 &[(I64, &r_handle), (DOUBLE, &v)],
             );
-            Ok(v)
+            let rooted_result = v;
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::ProcessStdin => Ok(ctx.block().call(DOUBLE, "js_process_stdin", &[])),
         Expr::ProcessStdout => Ok(ctx.block().call(DOUBLE, "js_process_stdout", &[])),
@@ -513,16 +550,21 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // validates the label, stores per-instance state, and returns a
             // small-int handle. NaN-box with POINTER_TAG so the handle reads
             // back through `decoder_handle_id` for decode/property access.
-            let label = lower_expr(ctx, label)?;
-            let fatal = lower_expr(ctx, fatal)?;
-            let ignore_bom = lower_expr(ctx, ignore_bom)?;
+            let rooted_operands: [&perry_hir::Expr; 3] = [label, fatal, ignore_bom];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let label = rooted_values[0].clone();
+            let fatal = rooted_values[1].clone();
+            let ignore_bom = rooted_values[2].clone();
             let blk = ctx.block();
             let h = blk.call(
                 I64,
                 "js_text_decoder_new",
                 &[(DOUBLE, &label), (DOUBLE, &fatal), (DOUBLE, &ignore_bom)],
             );
-            Ok(nanbox_pointer_inline(blk, &h))
+            let rooted_result = nanbox_pointer_inline(blk, &h);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::TextEncoderEncode(o) => {
             // encoder.encode(str) — runtime returns an i64 pointer to an
@@ -537,30 +579,40 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &arr_ptr))
         }
         Expr::TextEncoderEncodeInto { source, dest } => {
-            let source = lower_expr(ctx, source)?;
-            let dest = lower_expr(ctx, dest)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [source, dest];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let source = rooted_values[0].clone();
+            let dest = rooted_values[1].clone();
             let blk = ctx.block();
             let obj_ptr = blk.call(
                 I64,
                 "js_text_encoder_encode_into_llvm",
                 &[(DOUBLE, &source), (DOUBLE, &dest)],
             );
-            Ok(nanbox_pointer_inline(blk, &obj_ptr))
+            let rooted_result = nanbox_pointer_inline(blk, &obj_ptr);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::TextDecoderDecode { decoder, input } => {
             // decoder.decode(bufOrArr) — runtime reads the decoder handle's
             // encoding/fatal state and decodes `input` (BufferHeader-backed
             // value from `encoder.encode(...)` or `new Uint8Array([...])`).
             // NaN-box the result with STRING_TAG.
-            let dec = lower_expr(ctx, decoder)?;
-            let v = lower_expr(ctx, input)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [decoder, input];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let dec = rooted_values[0].clone();
+            let v = rooted_values[1].clone();
             let blk = ctx.block();
             let str_ptr = blk.call(
                 I64,
                 "js_text_decoder_decode_llvm",
                 &[(DOUBLE, &dec), (DOUBLE, &v)],
             );
-            Ok(nanbox_string_inline(blk, &str_ptr))
+            let rooted_result = nanbox_string_inline(blk, &str_ptr);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         Expr::TextDecoderEncoding(d) => {
             let dec = lower_expr(ctx, d)?;

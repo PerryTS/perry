@@ -336,7 +336,10 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
     // the CLASS_PROTOTYPE_OBJECTS map (the same #711/#809 vehicle), resolved
     // via `resolve_proto_chain_field`; the class_id parent edge above keeps
     // method/`new`/instanceof dispatch on the existing fast path.
-    if tag == POINTER_TAG {
+    // #11759 (c′): a later evaluation pins its parent on its own class object;
+    // the template's static parent stays the first evaluation's.
+    if tag == POINTER_TAG && !crate::object::class_value::class_value_is_first_evaluation(class_id)
+    {
         let ptr = crate::value::js_nanbox_get_pointer(parent_value) as *mut ObjectHeader;
         if !ptr.is_null() && js_object_get_class_id(ptr as *const ObjectHeader) != 0 {
             class_prototype_object_root_store(class_id, ptr);
@@ -355,57 +358,54 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
 
 /// Own-property key under which a per-evaluation class object
 /// (`ClassExprFresh`) pins ITS OWN parent class value. See
-/// `js_class_object_pin_parent`.
+/// `js_class_evaluation_object`.
 pub(crate) const CLASS_OBJECT_PARENT_KEY: &str = "__perry_parent_class";
 
-/// #6438: pin THIS evaluation's parent onto a per-evaluation class object.
-///
-/// `CLASS_DYNAMIC_PARENT_VALUE` is keyed by the child's **class id**, i.e. by
-/// the compile-time template — so a class expression evaluated N times with a
-/// DIFFERENT parent each time (effect's
-/// `class DeclareClass extends make(ast) { … }`, where `make(ast)` returns a
-/// fresh class per call) collapses to last-wins: every DeclareClass would walk
-/// to the LAST `make(ast)` and read that evaluation's `static ast`.
-///
-/// Codegen calls this immediately after `RegisterClassParentDynamic` in the
-/// same lowered Sequence, so the table still holds *this* evaluation's parent.
-/// Copy it onto the class object as an own property; later evaluations
-/// overwrite the table but each object already carries its own edge. Same
-/// write-right-before-use shape the capture snapshot already uses.
-///
-/// A no-parent class expression pins nothing (the getter yields undefined or a
-/// static ClassRef fallback, which the field walk treats as "no own edge").
-#[no_mangle]
-pub extern "C" fn js_class_object_pin_parent(obj: i64, template_class_id: u32) {
+/// The ordinary path of one evaluation's class object
+/// (`js_class_evaluation_object`): give `obj`, a newborn class object of
+/// template `template_class_id`, its own `length`, `name` and static methods
+/// (with or without heritage), then pin `parent`, this evaluation's heritage,
+/// onto it. Without the pin, a factory invoked more than once (effect's
+/// `class DeclareClass extends make(ast) { … }`) has every instance walk to
+/// the LAST parent (#6438). `record` sees the finished object and its parent.
+/// Returns `obj`'s current address.
+pub(crate) unsafe fn class_object_define_members(
+    obj: *mut crate::object::ObjectHeader,
+    template_class_id: u32,
+    static_field_mask: u32,
+    parent: f64,
+    record: &dyn Fn(*mut crate::object::ObjectHeader, f64),
+) -> *mut crate::object::ObjectHeader {
     const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    if obj == 0 || template_class_id == 0 {
-        return;
+    if obj.is_null() || template_class_id == 0 {
+        return obj;
     }
-    // The template stash, deliberately: this records the heritage the
-    // `RegisterClassParentDynamic` call immediately preceding us evaluated for
-    // THIS evaluation. `js_get_dynamic_parent_value`'s active-replay override
-    // would answer with an enclosing constructor replay's parent when a factory
-    // is re-entered from inside a constructor body.
-    let parent = template_dynamic_parent_value(template_class_id);
-    if parent.to_bits() == TAG_UNDEFINED {
-        return;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let class = scope.root_raw_mut_ptr(obj);
+    let parent = scope.root_nanbox_f64(parent);
+    class.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        crate::object::field_get_set::define_class_object_own_properties(obj, static_field_mask);
+    });
+    if parent.get_nanbox_f64().to_bits() != TAG_UNDEFINED {
+        // #10624: arm BEFORE the write it advertises (the ordering rule in
+        // `registry_latch.rs`) — everything the latch gates (this own-property
+        // write, and `pin_instance_constructing_class`'s later instance pin,
+        // which never fires without this one already having happened) follows
+        // in this thread's program order.
+        super::evaluation_heritage::CLASS_OBJECT_HERITAGE_PIN_LATCH.arm();
+        let key_bytes = CLASS_OBJECT_PARENT_KEY.as_bytes();
+        let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+        class.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+            crate::object::js_object_set_field_by_name(obj, key, parent.get_nanbox_f64())
+        });
     }
-    // #10624: arm BEFORE the write it advertises (the ordering rule in
-    // `registry_latch.rs`) — everything the latch gates (this own-property
-    // write, and `pin_instance_constructing_class`'s later instance pin,
-    // which never fires without this one already having happened) follows
-    // in this thread's program order.
-    super::evaluation_heritage::CLASS_OBJECT_HERITAGE_PIN_LATCH.arm();
-    let key_bytes = CLASS_OBJECT_PARENT_KEY.as_bytes();
-    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-    crate::object::js_object_set_field_by_name(
-        obj as *mut crate::object::ObjectHeader,
-        key,
-        parent,
-    );
+    class.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        record(obj, parent.get_nanbox_f64());
+        obj
+    })
 }
 
-/// Read back the parent pinned by `js_class_object_pin_parent`, or `None` when
+/// Read back the parent pinned by `js_class_evaluation_object`, or `None` when
 /// this class object has no own parent edge.
 ///
 /// Scans the keys array DIRECTLY rather than going through the by-name read
@@ -473,6 +473,34 @@ pub(crate) fn class_object_own_field_bytes(
     None
 }
 
+/// Does class object `obj` have an own property `want`, whatever it holds (a
+/// data value, `undefined` included, or an accessor)?
+pub(crate) fn class_object_owns_key_bytes(
+    obj: *const crate::object::ObjectHeader,
+    want: &[u8],
+) -> bool {
+    if obj.is_null()
+        || !crate::value::addr_class::is_above_handle_band(obj as usize)
+        || !crate::object::is_valid_obj_ptr(obj as *const u8)
+    {
+        return false;
+    }
+    unsafe {
+        let keys_view = crate::object::object_keys(obj);
+        let keys = keys_view.arr();
+        if keys.is_null() {
+            return false;
+        }
+        let (slots, slot_len) = crate::object::keys_array_dense_slots(keys);
+        (0..(keys_view.count() as usize).min(slot_len)).any(|i| {
+            crate::string::js_string_key_matches_bytes(
+                crate::JSValue::from_bits((*slots.add(i)).to_bits()),
+                want,
+            )
+        })
+    }
+}
+
 /// Read back the parent constructor value stashed at class-definition time by
 /// `js_register_class_parent_dynamic` (see `CLASS_DYNAMIC_PARENT_VALUE`).
 /// `super()` in a `class X extends <runtime-value>` body uses this so the
@@ -506,12 +534,11 @@ pub(crate) fn template_dynamic_parent_value(class_id: u32) -> f64 {
     if class_id == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let dynamic_parent = CLASS_DYNAMIC_PARENT_VALUE.with(|table| {
-        let guard = table.read().unwrap();
-        guard.as_ref().and_then(|m| m.get(&class_id).copied())
-    });
-    if let Some(bits) = dynamic_parent {
-        return f64::from_bits(bits);
+    // #11759 (c′): a first evaluation keeps its static heritage.
+    if !crate::object::class_value::class_value_is_first_evaluation(class_id) {
+        if let Some(parent) = super::stashed_dynamic_parent_value(class_id) {
+            return parent;
+        }
     }
     // #5957/#806: no dynamic VALUE stashed — fall back to the STATIC
     // parent-id edge as a ClassRef. An `extends <call>(...)` mixin
@@ -775,9 +802,14 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                         param_count: param_count as u32,
                         has_synthetic_arguments: false,
                         has_rest: has_rest != 0,
+                        entry: 0,
                     },
                 );
             }
+        }
+        let proto = super::state::class_decl_prototype_object(class_id);
+        if is_static == 0 && !proto.is_null() {
+            super::state::install_class_decl_prototype_symbol_member(proto, class_id, sym_key);
         }
         VTABLE_GEN.fetch_add(1, Ordering::Release);
         return;
@@ -848,6 +880,7 @@ pub unsafe extern "C" fn js_register_class_computed_method(
                 // so they never receive a synthesized arguments object.
                 has_synthetic_arguments: false,
                 has_rest: has_rest != 0,
+                entry: 0,
             },
         );
         // Backfill when reflection already materialized `C.prototype`.
@@ -901,6 +934,10 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
                 entry.1 = setter_ptr as usize;
             }
         });
+        let proto = super::state::class_decl_prototype_object(class_id);
+        if is_static == 0 && !proto.is_null() {
+            super::state::install_class_decl_prototype_symbol_member(proto, class_id, sym_key);
+        }
         VTABLE_GEN.fetch_add(1, Ordering::Release);
         return;
     }
@@ -1030,213 +1067,6 @@ pub(crate) fn lookup_static_method_owner(
         }
     }
     None
-}
-
-pub(crate) fn lookup_class_symbol_method_in_chain(
-    class_id: u32,
-    sym_key: usize,
-    is_static: bool,
-) -> Option<(usize, u32, bool)> {
-    CLASS_SYMBOL_METHODS.with(|table| {
-        let guard = table.read().ok()?;
-        let map = guard.as_ref()?;
-        let mut cid = class_id;
-        let mut depth = 0usize;
-        while cid != 0 && depth < 32 {
-            if let Some(&entry) = map.get(&(cid, sym_key, is_static)) {
-                return Some(entry);
-            }
-            match get_parent_class_id(cid) {
-                Some(p) if p != 0 && p != cid => {
-                    cid = p;
-                    depth += 1;
-                }
-                _ => break,
-            }
-        }
-        None
-    })
-}
-
-include!("parent_static/private_and_dynamic.rs");
-include!("parent_static/static_accessor_call.rs");
-
-/// Presence-only check (`[[HasProperty]]`, never `[[Get]]`) for a Symbol-keyed
-/// METHOD or ACCESSOR declared on `class_id` or any ancestor. These computed
-/// members register into `CLASS_SYMBOL_METHODS` / `CLASS_SYMBOL_ACCESSORS`, which
-/// the generic symbol resolver (`js_object_get_symbol_property`) does NOT consult
-/// — so `sym in Class` reported false even though `Class[sym](...)` dispatches
-/// fine through the direct-call path. Walks the parent chain like
-/// `lookup_class_symbol_method_in_chain`, but returns a bool and also covers
-/// accessors so a static/instance `get [sym]()` is detected without invoking the
-/// getter. Refs #6160.
-pub(crate) fn class_has_symbol_member_in_chain(
-    class_id: u32,
-    sym_key: usize,
-    is_static: bool,
-) -> bool {
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while cid != 0 && depth < 32 {
-        let key = (cid, sym_key, is_static);
-        let in_methods = CLASS_SYMBOL_METHODS.with(|table| {
-            table
-                .read()
-                .ok()
-                .and_then(|g| g.as_ref().map(|m| m.contains_key(&key)))
-                .unwrap_or(false)
-        });
-        if in_methods {
-            return true;
-        }
-        let in_accessors = CLASS_SYMBOL_ACCESSORS.with(|table| {
-            table
-                .read()
-                .ok()
-                .and_then(|g| g.as_ref().map(|m| m.contains_key(&key)))
-                .unwrap_or(false)
-        });
-        if in_accessors {
-            return true;
-        }
-        match get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    false
-}
-
-pub(crate) fn class_own_symbol_member_keys(class_id: u32, is_static: bool) -> Vec<usize> {
-    let mut keys = Vec::new();
-    CLASS_SYMBOL_METHODS.with(|table| {
-        if let Ok(methods) = table.read() {
-            if let Some(map) = methods.as_ref() {
-                for &(cid, sym_key, static_flag) in map.keys() {
-                    if cid == class_id && static_flag == is_static && !keys.contains(&sym_key) {
-                        keys.push(sym_key);
-                    }
-                }
-            }
-        }
-    });
-    CLASS_SYMBOL_ACCESSORS.with(|table| {
-        if let Ok(accessors) = table.read() {
-            if let Some(map) = accessors.as_ref() {
-                for &(cid, sym_key, static_flag) in map.keys() {
-                    if cid == class_id && static_flag == is_static && !keys.contains(&sym_key) {
-                        keys.push(sym_key);
-                    }
-                }
-            }
-        }
-    });
-    crate::cold_sort::sort_by_key(&mut keys, |sym_key| unsafe {
-        let ptr = *sym_key as *const crate::symbol::SymbolHeader;
-        let symbol_id = if ptr.is_null() { u64::MAX } else { (*ptr).id };
-        let definition_order = CLASS_SYMBOL_MEMBER_ORDERS.with(|orders| {
-            orders.read().ok().and_then(|guard| {
-                guard
-                    .as_ref()
-                    .and_then(|map| map.get(&(class_id, symbol_id, is_static)).copied())
-            })
-        });
-        if let Some(order) = definition_order {
-            (0u8, order, symbol_id)
-        } else {
-            (1u8, u32::MAX, symbol_id)
-        }
-    });
-    keys
-}
-
-pub(crate) unsafe fn class_symbol_getter_value(
-    class_id: u32,
-    sym_key: usize,
-    receiver: f64,
-    is_static: bool,
-) -> Option<f64> {
-    CLASS_SYMBOL_ACCESSORS.with(|table| {
-        let guard = table.read().ok()?;
-        let map = guard.as_ref()?;
-        let mut cid = class_id;
-        let mut depth = 0usize;
-        while cid != 0 && depth < 32 {
-            if let Some(&(getter, _)) = map.get(&(cid, sym_key, is_static)) {
-                if getter == 0 {
-                    return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
-                }
-                let result = if is_static {
-                    crate::object::static_private_owner_push(receiver);
-                    let f = crate::closure::body_call::js_bare_body_fn!(getter as *const u8;);
-                    let result = f();
-                    crate::object::static_private_owner_pop();
-                    result
-                } else {
-                    let f = crate::closure::body_call::js_method_body_fn!(getter as *const u8;);
-                    f(receiver)
-                };
-                return Some(result);
-            }
-            match get_parent_class_id(cid) {
-                Some(p) if p != 0 && p != cid => {
-                    cid = p;
-                    depth += 1;
-                }
-                _ => break,
-            }
-        }
-        None
-    })
-}
-
-pub(crate) unsafe fn class_symbol_setter_apply(
-    class_id: u32,
-    sym_key: usize,
-    receiver: f64,
-    value: f64,
-    is_static: bool,
-) -> bool {
-    CLASS_SYMBOL_ACCESSORS.with(|table| {
-        let guard = match table.read() {
-            Ok(g) => g,
-            Err(_) => return false,
-        };
-        let Some(map) = guard.as_ref() else {
-            return false;
-        };
-        let mut cid = class_id;
-        let mut depth = 0usize;
-        while cid != 0 && depth < 32 {
-            if let Some(&(_, setter)) = map.get(&(cid, sym_key, is_static)) {
-                if setter != 0 {
-                    if is_static {
-                        crate::object::static_private_owner_push(receiver);
-                        let f =
-                            crate::closure::body_call::js_bare_body_fn!(setter as *const u8; a0);
-                        let _ = f(value);
-                        crate::object::static_private_owner_pop();
-                    } else {
-                        let f =
-                            crate::closure::body_call::js_method_body_fn!(setter as *const u8; a0);
-                        let _ = f(receiver, value);
-                    }
-                }
-                return true;
-            }
-            match get_parent_class_id(cid) {
-                Some(p) if p != 0 && p != cid => {
-                    cid = p;
-                    depth += 1;
-                }
-                _ => break,
-            }
-        }
-        false
-    })
 }
 
 /// Apply an instance `set name(v)` accessor from the class vtable chain,
@@ -1922,12 +1752,32 @@ pub fn lookup_class_method_in_chain(class_id: u32, name: &str) -> Option<(usize,
                 return Some(entry);
             }
         }
-        match get_parent_class_id(cur) {
-            Some(pid) if pid != 0 => cur = pid,
-            _ => return None,
+        match instance_chain_parent_class_id(cur) {
+            Some(pid) => cur = pid,
+            None => return None,
         }
     }
     None
+}
+
+/// The next class on an INSTANCE chain after `cid`: the declared parent,
+/// unless a user operation (`Object.setPrototypeOf(C.prototype, X)`,
+/// `C.prototype.__proto__ = X`) replaced the `[[Prototype]]` of `cid`'s
+/// prototype object. That prototype's recorded link is then the chain, and a
+/// walk over declared class members must stop at `cid`: the parent's methods,
+/// getters and setters are off the chain (the generic read continues on the
+/// recorded link). The static side (`C.__proto__`) is a different object and
+/// keeps the declared parent.
+///
+/// The relink check runs only when a declared parent exists, so a walk that
+/// answers from the receiver's own class, or reaches a root class, pays
+/// nothing for it.
+#[inline]
+pub(crate) fn instance_chain_parent_class_id(cid: u32) -> Option<u32> {
+    match get_parent_class_id(cid) {
+        Some(pid) if pid != 0 && !super::class_decl_prototype_relinked(cid) => Some(pid),
+        _ => None,
+    }
 }
 
 /// True when `ptr` is the prototype OBJECT of some registered class. Class
@@ -1959,9 +1809,9 @@ pub fn method_owner_class_id(class_id: u32, name: &str) -> Option<u32> {
                 return Some(cur);
             }
         }
-        match get_parent_class_id(cur) {
-            Some(pid) if pid != 0 => cur = pid,
-            _ => return None,
+        match instance_chain_parent_class_id(cur) {
+            Some(pid) => cur = pid,
+            None => return None,
         }
     }
     None
@@ -1974,3 +1824,12 @@ mod unstamped_tests;
 #[cfg(test)]
 #[path = "parent_static/shape_authority_tests_8067.rs"]
 mod shape_authority_tests_8067;
+
+include!("parent_static/private_and_dynamic.rs");
+include!("parent_static/static_accessor_call.rs");
+
+mod symbol_members;
+pub(crate) use symbol_members::{
+    class_has_symbol_member_in_chain, class_own_symbol_member_keys, class_symbol_getter_value,
+    class_symbol_setter_apply, lookup_class_symbol_method_in_chain,
+};

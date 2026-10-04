@@ -187,6 +187,15 @@ pub(crate) fn declared_property_type_from_annotation(
 /// default until their full lowering contract is explicitly reviewed here.
 pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirType> {
     match init {
+        // #11759 (c′): `new C()` guarded on the first evaluation proves what
+        // its static construction proves.
+        Expr::Conditional {
+            condition,
+            then_expr,
+            ..
+        } if matches!(condition.as_ref(), Expr::ClassIsFirstEvaluation { .. }) => {
+            proven_type_from_init(ctx, then_expr)
+        }
         Expr::LocalGet(id) => ctx.stable_local_type_proof(id).cloned(),
         Expr::Undefined | Expr::Void(_) => Some(HirType::Void),
         Expr::Null => Some(HirType::Null),
@@ -231,6 +240,26 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             Some(HirType::Number)
         }
         Expr::String(_) | Expr::WtfString(_) | Expr::I18nString { .. } | Expr::TypeOf(_) => {
+            Some(HirType::String)
+        }
+        // `String(x)` and `${x}` return a string primitive or throw, whatever
+        // `x` is (#10762). Without this, `const s = String(n)` lost the proof
+        // its own initializer carries, and `s.charCodeAt(i)` fell to the
+        // generic method site while `String(n).charCodeAt(i)` took the inline
+        // string lowering. The value may be SSO, not only a heap string; the
+        // string lowerings tag-dispatch a proven local for exactly that.
+        Expr::StringCoerce(_) | Expr::TemplateStringCoerce(_) => Some(HirType::String),
+        // `+` with a string literal on either side concatenates: a string or a
+        // throw, whatever the other operand is (`"" + n`, `"k" + i`). Only a
+        // literal counts; a declared `string` operand is not a proof (#7837).
+        Expr::Binary {
+            op: BinaryOp::Add,
+            left,
+            right,
+        } if [left, right]
+            .iter()
+            .any(|side| matches!(side.as_ref(), Expr::String(_) | Expr::WtfString(_))) =>
+        {
             Some(HirType::String)
         }
         // `Symbol()` identities are system-allocated and never relocated;
@@ -371,6 +400,16 @@ pub(crate) fn is_imported_native_constructor_class(
 /// - **PropertyGet on a known class field** → the field's declared type
 pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirType> {
     match init {
+        // #11759 (c′): `new C()` / `C.<static>` guarded on the first
+        // evaluation refines as its static form; a later evaluation builds an
+        // instance of the same class code.
+        Expr::Conditional {
+            condition,
+            then_expr,
+            ..
+        } if matches!(condition.as_ref(), Expr::ClassIsFirstEvaluation { .. }) => {
+            refine_type_from_init(ctx, then_expr)
+        }
         // Numeric literals + arithmetic results: refine to Number so the
         // for-loop counter `let i = 0` (and any other untyped numeric
         // local) gets recognized by `is_numeric_expr`. Without this,

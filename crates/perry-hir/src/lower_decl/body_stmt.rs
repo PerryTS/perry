@@ -7,9 +7,9 @@ use crate::analysis::*;
 use crate::destructuring::*;
 use crate::ir::*;
 use crate::lower::{
-    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, insert_iterator_close_on_abrupt,
-    labeled_body_targets_loop, lazy_iter_for_stmt, lazy_or_index_elem, lower_expr,
-    wrap_lazy_for_of_body_close_on_throw, LoweringContext,
+    collect_for_of_pattern_leaves, emit_for_of_pattern_binding, labeled_body_targets_loop,
+    lazy_iter_for_stmt, lazy_or_index_elem, lower_expr, wrap_lazy_for_of_body_close_on_throw,
+    LoweringContext,
 };
 use crate::lower_patterns::*;
 
@@ -28,9 +28,8 @@ use class_self_binding::{decl_self_binding_init, decl_self_binding_owner, lower_
 use gen_capture_scan::nested_generator_references_outer_locals;
 
 use detect::{
-    insert_iterator_return_before_abrupts, is_fs_dir_for_await_target, is_node_readable_expr,
-    is_readline_interface_for_await_target, is_web_readable_stream_expr,
-    web_readable_stream_values_receiver,
+    is_fs_dir_for_await_target, is_node_readable_expr, is_readline_interface_for_await_target,
+    is_web_readable_stream_expr, web_readable_stream_values_receiver,
 };
 
 use for_await::lower_runtime_for_await_iterator_body;
@@ -369,6 +368,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 // #11142: a self-binding capture holds the evaluated class
                 // object, so snapshot the captures only once it exists.
                 let mut deferred_capture_snapshot = None;
+                let mut early_capture_snapshot = None;
                 if !captured_exprs.is_empty() {
                     let snapshot = Stmt::Expr(Expr::RegisterClassCaptures {
                         class_name: class.name.clone(),
@@ -377,7 +377,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     if decl_self_binding.is_some() {
                         deferred_capture_snapshot = Some(snapshot);
                     } else {
-                        result.push(snapshot);
+                        early_capture_snapshot = Some(snapshot);
                     }
                 }
                 // Captures (#6465), private brands (#5893), computed names,
@@ -396,10 +396,28 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         .iter()
                         .any(|m| m.name.starts_with("__perry_static_init_"));
                 let has_private_elements = class.has_private_elements();
-                let fresh_binding = has_private_elements
+                // Captures alone need a class object per evaluation only when
+                // the instances carry them: a guarded class environment
+                // (#11759 (c′)) gives the first evaluation the environment's
+                // slots and each later one its own capture array.
+                let per_evaluation_state = has_private_elements
                     || class.extends_expr.is_some()
                     || !computed_keys.is_empty()
-                    || (!captured_exprs.is_empty() && !has_static_state)
+                    || (!captured_exprs.is_empty()
+                        && !has_static_state
+                        && !ctx.is_class_env_guarded(&class.name));
+                // #11759 (c′): a declaration that may be evaluated more than
+                // once and has no other per-evaluation state keeps the shared
+                // class for its FIRST evaluation; later ones are fresh.
+                let shares_first_evaluation = !per_evaluation_state
+                    && crate::lower_decl::class_decl::may_evaluate_repeatedly(
+                        ctx,
+                        class_decl.class.span,
+                        class.extends_expr.is_some(),
+                        class.native_extends.is_some(),
+                    );
+                let fresh_binding = per_evaluation_state
+                    || shares_first_evaluation
                     // #11157: members that captured the self-binding need it.
                     || decl_self_binding.is_some();
                 let named_statics: Vec<(String, Expr)> = if fresh_binding {
@@ -449,16 +467,45 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 // classes initialized. Interleaved in source order (see
                 // `build_interleaved_static_init_stmts`), with lexical `this`
                 // in field initializers bound to the class ref.
-                if !fresh_binding {
-                    result.extend(
-                        crate::lower_decl::build_interleaved_static_init_stmts_after_computed_names(
-                            &class_decl.class.body,
-                            &class.name,
-                            &class.fields,
-                            &class.static_fields,
-                            &class.static_methods,
-                        ),
-                    );
+                let shared_static_init = (!fresh_binding || shares_first_evaluation).then(|| {
+                    crate::lower_decl::build_interleaved_static_init_stmts_after_computed_names(
+                        &class_decl.class.body,
+                        &class.name,
+                        &class.fields,
+                        &class.static_fields,
+                        &class.static_methods,
+                    )
+                });
+                // #11759 (c′): the template-keyed capture snapshot belongs to
+                // the first evaluation (the shared class, constructed by value
+                // from it); a later evaluation carries its own array.
+                let first_evaluation_snapshot = if shares_first_evaluation {
+                    early_capture_snapshot
+                        .take()
+                        .or_else(|| deferred_capture_snapshot.take())
+                } else {
+                    None
+                };
+                result.extend(early_capture_snapshot);
+                // The first evaluation runs the shared class's static
+                // initialization; it is a sequence of expression statements.
+                let mut shared_first_evaluation = None;
+                if let Some(stmts) = shared_static_init {
+                    if !fresh_binding {
+                        result.extend(stmts);
+                    } else {
+                        let exprs: Vec<Expr> = first_evaluation_snapshot
+                            .into_iter()
+                            .chain(stmts)
+                            .map(|stmt| match stmt {
+                                Stmt::Expr(expr) => expr,
+                                other => unreachable!(
+                                    "static initialization lowers to expression statements, got {other:?}"
+                                ),
+                            })
+                            .collect();
+                        shared_first_evaluation = Some(Box::new(Expr::Sequence(exprs)));
+                    }
                 }
                 let evaluation_owner = decl_self_binding_owner(
                     ctx,
@@ -472,6 +519,12 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 let template_name = class.name.clone();
                 if fresh_binding {
                     ctx.per_evaluation_class_decls.insert(template_name.clone());
+                }
+                if shares_first_evaluation {
+                    // `C.prototype.m = v` writes THIS evaluation's prototype,
+                    // never the template-keyed side table every evaluation
+                    // shares (#11134's rule for fresh class expressions).
+                    ctx.fresh_evaluation_classes.insert(template_name.clone());
                 }
                 ctx.pending_classes.push(class);
                 // #6465/#5893/#9502 (see `fresh_binding` above): bind the
@@ -490,6 +543,19 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     let binding_name = class_decl.ident.sym.to_string();
                     let class_local = ctx.define_local(binding_name.clone(), Type::Any);
                     ctx.record_local_source_span(class_local, class_decl.ident.span);
+                    if shares_first_evaluation {
+                        ctx.shared_first_decl_locals
+                            .insert(template_name.clone(), class_local);
+                        let statics = crate::lower_decl::class_decl::declared_static_field_names(
+                            &class_decl.class,
+                        );
+                        ctx.shared_first_class_bindings
+                            .insert(class_local, (template_name.clone(), statics));
+                    }
+                    let evaluated_parent = ctx
+                        .evaluated_parent_bindings
+                        .get(&template_name)
+                        .map(|id| Box::new(Expr::LocalGet(*id)));
                     result.push(Stmt::Let {
                         id: class_local,
                         name: binding_name,
@@ -504,6 +570,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                 computed_statics,
                                 static_init_order,
                                 captured_args: captured_exprs,
+                                shared_first_evaluation,
+                                evaluated_parent,
                             },
                         )),
                         mutable: false,
@@ -713,7 +781,10 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 });
                 return Ok(result);
             }
+            let label_scope = ctx.iterator_loop_labels.len();
+            crate::lower::record_iterator_loop_label(ctx, &labeled_stmt.body, &label);
             let inner = lower_body_stmt(ctx, &labeled_stmt.body)?;
+            ctx.iterator_loop_labels.truncate(label_scope);
             // If the body lowered to a single statement, wrap it directly.
             // Otherwise wrap the first statement (preserving any hoisted lets before it).
             if inner.len() == 1 {
@@ -1060,7 +1131,9 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // one shared scope key: a second case re-declaring the name is a
             // redeclaration, not a shadow.
             let mut saved_class_renames = Vec::new();
+            let mut saved_forward_classes = Vec::new();
             let mut tdz_boxes = Vec::new();
+            crate::lower_decl::register_switch_case_tdz_lets(ctx, &switch_stmt.cases);
             for case in &switch_stmt.cases {
                 tdz_boxes.extend(crate::lower_decl::rebind_nested_forward_scope_lets(
                     ctx, &case.cons,
@@ -1069,6 +1142,9 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     ctx,
                     switch_stmt.span.lo.0,
                     &case.cons,
+                ));
+                saved_forward_classes.extend(crate::lower_decl::enter_forward_class_scope(
+                    ctx, &case.cons,
                 ));
             }
 
@@ -1083,6 +1159,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 cases.push(SwitchCase { test, body });
             }
 
+            crate::lower_decl::exit_forward_class_scope(ctx, saved_forward_classes);
             crate::lower_decl::exit_class_rename_scope(ctx, saved_class_renames);
             exit_interface_scope(ctx, interfaces);
             ctx.pop_block_scope(switch_scope_mark);
@@ -1499,36 +1576,35 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         });
                     }
                 }
-                let mut user_body = lower_body_stmt(ctx, &for_of_stmt.body)?;
-                if is_node_readable_for_await
-                    || is_filehandle_readlines_for_await
-                    || is_fs_dir_for_await
-                    || is_readline_interface_for_await
-                    || (for_of_stmt.is_await && is_generator_call && !callee_is_async_gen)
-                {
-                    insert_iterator_return_before_abrupts(&mut user_body, iter_id, needs_await);
-                }
-                body_stmts.extend(user_body);
-
-                // Advance-at-top driver (see lower_decl/body_stmt/for_await.rs):
-                // `continue` must re-run `next()`, not re-process the same result.
-                let mut loop_body = vec![
-                    Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))),
-                    Stmt::If {
-                        condition: Expr::PropertyGet {
-                            byte_offset: 0,
-                            object: Box::new(Expr::LocalGet(result_id)),
-                            property: "done".to_string(),
+                body_stmts.extend(lower_body_stmt(ctx, &for_of_stmt.body)?);
+                if needs_await {
+                    crate::lower::async_iterator_close_driver(
+                        ctx,
+                        &mut result,
+                        iter_id,
+                        result_id,
+                        next_call,
+                        body_stmts,
+                    );
+                } else {
+                    let mut loop_body = vec![
+                        Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))),
+                        Stmt::If {
+                            condition: Expr::PropertyGet {
+                                byte_offset: 0,
+                                object: Box::new(Expr::LocalGet(result_id)),
+                                property: "done".to_string(),
+                            },
+                            then_branch: vec![Stmt::Break],
+                            else_branch: None,
                         },
-                        then_branch: vec![Stmt::Break],
-                        else_branch: None,
-                    },
-                ];
-                loop_body.extend(body_stmts);
-                result.push(Stmt::While {
-                    condition: Expr::Bool(true),
-                    body: loop_body,
-                });
+                    ];
+                    loop_body.extend(body_stmts);
+                    result.push(Stmt::While {
+                        condition: Expr::Bool(true),
+                        body: loop_body,
+                    });
+                }
 
                 ctx.pop_block_scope(scope_mark);
                 return Ok(result);
@@ -2071,12 +2147,16 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
 
             // Lazy path: run IteratorClose on abrupt completions.
             if use_lazy_iter {
-                insert_iterator_close_on_abrupt(&mut loop_body, arr_id, 0, &[]);
                 // Wrap ONLY the user body so a throw escaping it runs
                 // IteratorClose; the element-`.value` read and binding stay
                 // outside (IteratorValue throwing does not close — spec
                 // `iterator-next-result-value-attr-error`).
-                let guarded_body = wrap_lazy_for_of_body_close_on_throw(ctx, arr_id, loop_body);
+                let guarded_body = wrap_lazy_for_of_body_close_on_throw(
+                    ctx,
+                    arr_id,
+                    for_of_stmt.span.lo.0,
+                    loop_body,
+                );
                 let mut full_body = binding_stmts;
                 full_body.push(guarded_body);
                 result.push(lazy_iter_for_stmt(arr_id, result_id, full_body));

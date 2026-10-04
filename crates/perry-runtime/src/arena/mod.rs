@@ -19,12 +19,19 @@ mod map_allocations;
 mod page_meta;
 mod pinned;
 pub(crate) use pinned::{collect_pinned_arena_headers, note_pinned_arena_header};
+/// #11842: record, poison and protect what the non-moving sweeps free.
+mod old_sweep_quarantine;
 /// #7742: whole-block in-place promotion of a (near-)fully-live young
 /// generation, in place of object-by-object evacuation.
 mod promote;
 /// #7154 tooling: from-space quarantine + poison + `mprotect` so a stale
 /// pointer faults at the instruction that used it. Default-off.
 mod quarantine;
+pub(crate) use old_sweep_quarantine::{
+    note_sweep_started, old_sweep_quarantine_enabled, retire_swept_object, RetiredKind,
+};
+#[cfg(test)]
+pub(crate) use old_sweep_quarantine::{old_sweep_quarantine_stats, OldSweepProtectionGuard};
 mod reset;
 mod stats;
 /// #11471: thread-exit release of process-global address-keyed tables.
@@ -37,6 +44,8 @@ mod tests;
 #[cfg(test)]
 mod tests_batch_unregister;
 #[cfg(test)]
+mod tests_page_meta_audit;
+#[cfg(test)]
 mod tests_promoted_runs;
 
 // Cross-sibling shared types/thread-locals (used by sibling modules via
@@ -48,12 +57,12 @@ pub(crate) use allocators::{
 #[cfg(test)]
 pub(crate) use block::old_gen_in_use_bytes_slot_index;
 pub(crate) use block::{
-    arena_cell_alloc, arena_cell_try_alloc_current, drain_block_pool_if_requested,
-    new_object_start_bitmap, old_gen_in_use_bytes_sub, release_arena_block,
-    request_block_pool_drain, Arena, ArenaBlock, ArenaBlockRelease, BlockPoolDrainStats,
-    ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE, FRESH_GENERAL_BLOCK_MIN_USED_BYTES,
-    INLINE_STATE, LONGLIVED_ARENA, OBJECT_START_SHIFT, OLD_ARENA, OLD_GEN_IN_USE_BYTES,
-    SURVIVOR_ARENA_0, SURVIVOR_ARENA_1,
+    advance_block_pool_reuse_window, arena_cell_alloc, arena_cell_try_alloc_current,
+    drain_block_pool_if_requested, new_object_start_bitmap, old_gen_in_use_bytes_sub,
+    release_arena_block, request_block_pool_drain, Arena, ArenaBlock, ArenaBlockRelease,
+    BlockPoolDrainStats, ACTIVE_SURVIVOR, ARENA, ARENA_TOTAL_BYTES, BLOCK_SIZE,
+    FRESH_GENERAL_BLOCK_MIN_USED_BYTES, INLINE_STATE, LONGLIVED_ARENA, OBJECT_START_SHIFT,
+    OLD_ARENA, OLD_GEN_IN_USE_BYTES, SURVIVOR_ARENA_0, SURVIVOR_ARENA_1,
 };
 /// #7469 hot-TLS plumbing — see `crate::tls_hot`. The `*_hot_addr` half is
 /// consumed by `tls_hot::fill`; the `hot_*` half is the cached accessor the
@@ -68,7 +77,7 @@ pub(crate) use block::{
 };
 pub(crate) use page_meta::{
     address_span_overlaps_pages, defer_old_object_page_registration, page_class_table_report,
-    register_block_space_with_object_starts, register_old_object_pages,
+    register_block_space_with_object_starts, register_old_object_pages, shrink_page_tables,
     unregister_block_generation, unregister_old_block_pages, OLD_GEN_RECLAIM_POOLED_BYTES,
     OLD_GEN_RECLAIM_RETURNED_BYTES, OLD_GEN_RECLAIM_REUSABLE_BYTES,
 };
@@ -98,7 +107,7 @@ pub(crate) use allocators::{
 };
 
 // walk.rs
-#[cfg(feature = "diagnostics")]
+#[cfg(perry_diagnostics)]
 pub(crate) use walk::ArenaRegionTelemetry;
 pub use walk::{
     arena_block_count, arena_in_use_bytes, arena_total_bytes, arena_walk_objects,
@@ -119,7 +128,8 @@ pub(crate) use walk::{old_arena_block_for_test, old_arena_note_listed_hole_for_t
 pub(crate) use reset::{
     active_survivor_block_index_range, block_in_copying_from_space,
     copying_active_survivor_in_use_bytes, copying_from_space_in_use_bytes,
-    copying_prepare_to_space, copying_reset_from_spaces_and_flip, old_arena_reclaim_dead_blocks,
+    copying_prepare_to_space, copying_reset_from_spaces_and_flip,
+    discard_previously_idle_eden_pages, old_arena_reclaim_dead_blocks,
     old_arena_reclaim_selected_dead_blocks, survivor_arena_reclaim_dead_blocks,
     survivor_block_index_range, ArenaResetEmptyBlocksState, OldArenaReclaimDeadBlocksState,
     SurvivorArenaReclaimDeadBlocksState,

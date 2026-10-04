@@ -157,6 +157,66 @@ fn a_region_word_refuses_a_boxed_store_into_an_f64_lane() {
     );
 }
 
+/// P7: a learned region publishes a Number-read (R) word for an exact F64
+/// identity lane as it is. On any other non-SPECIAL inline lane (an `Any`
+/// lane, or a deprecated F64 one) it publishes the word with
+/// `REGION_LOOP_WORD_VALUE_TEST`, so the emitted guard tests the slot's value
+/// on the object before F runs. An R key a bare store may write a non-Number
+/// into is refused: no guard-time test could cover that store.
+#[test]
+fn a_region_prime_value_tests_a_requested_number_read_on_a_non_identity_lane() {
+    use super::shapes::{
+        js_region_loop_prime, REGION_GUARD_WORD_EMPTY, REGION_LOOP_WORD_VALUE_TEST,
+    };
+    use core::sync::atomic::{AtomicU64, Ordering};
+
+    let k = keys(b"p7a\0p7b\0", 2);
+    let typed = js_object_shape_id_for_class_keys(k, 2, CID, REP_F64);
+    let untyped = js_object_shape_id_for_class_keys(k, 2, CID, REP_ANY);
+    let (a, b) = unsafe {
+        let (slots, len) = crate::object::keys_array_dense_slots_resolved(
+            k as usize as *const crate::array::ArrayHeader,
+        );
+        assert!(len >= 2);
+        ((*slots).to_bits(), (*slots.add(1)).to_bits())
+    };
+    let site = AtomicU64::new(REGION_GUARD_WORD_EMPTY);
+    let prime = |id, key, stored, boxed, r_mask| unsafe {
+        js_region_loop_prime(&site, id, 1, key, 0, 0, 0, 0, 0, stored, boxed, r_mask)
+    };
+    let tested = |word: u64| word & REGION_LOOP_WORD_VALUE_TEST != 0;
+
+    // An Any lane: published, and the guard must test the value.
+    let word = prime(untyped, a, 0, 0, 1);
+    assert_ne!(word, REGION_GUARD_WORD_EMPTY);
+    assert_eq!(site.load(Ordering::Relaxed), word);
+    assert_eq!(word as u32, untyped);
+    assert!(tested(word), "R on an Any lane must ask for a value test");
+    // The same key read without R asks for nothing.
+    assert!(!tested(prime(untyped, a, 0, 0, 0)));
+    // The typed shape's second key is an Any lane; its first is identity F64.
+    assert!(tested(prime(typed, b, 0, 0, 1)));
+    let word = prime(typed, a, 0, 0, 1);
+    assert_ne!(word, REGION_GUARD_WORD_EMPTY);
+    assert!(!tested(word), "an identity F64 lane needs no value test");
+
+    // A bare store that may write a non-Number into an R key: refused. The
+    // same store without R is admitted, so the refusal is the R + boxed pair.
+    assert_ne!(prime(untyped, a, 1, 1, 0), REGION_GUARD_WORD_EMPTY);
+    site.store(REGION_GUARD_WORD_EMPTY, Ordering::Relaxed);
+    assert_eq!(prime(untyped, a, 1, 1, 1), REGION_GUARD_WORD_EMPTY);
+    assert_eq!(site.load(Ordering::Relaxed), REGION_GUARD_WORD_EMPTY);
+
+    // A deprecated lane is no longer an identity fact for a new learned
+    // region: its R is served by the value test.
+    assert!(super::shapes::shape_record_by_id(typed)
+        .expect("typed shape record")
+        .deprecate_rep_slot(0));
+    let word = prime(typed, a, 0, 0, 1);
+    assert_ne!(word, REGION_GUARD_WORD_EMPTY);
+    assert!(tested(word), "a deprecated lane must ask for a value test");
+}
+
 /// Design step 4 x T1: the rep is part of a static id's content, so a class
 /// birth with an `F64` lane adopts its static id like an all-`Any` one, and
 /// the same keys with the other rep are another content under another id.
@@ -295,4 +355,95 @@ fn every_birth_path_of_a_rep_literal_and_class_stamps_one_shape_and_fills_its_f6
             }
         }
     }
+}
+
+/// A completed CF shape can serve an unrelated numeric lane, but a raw
+/// Number store cannot preserve the method body's invariant. In particular,
+/// boxed_mask=0 is not permission to bypass the checked SPECIAL store funnel.
+#[test]
+fn a_region_constfn_shape_keeps_numeric_admission_and_refuses_special_stores() {
+    use super::field_rep::REP_SPECIAL;
+    use super::shapes::{js_region_loop_pack, js_region_loop_prime, REGION_GUARD_WORD_EMPTY};
+    use super::static_shapes::{
+        js_object_final_shape_id_for_class_keys_static_constfn, ConstFnStaticEntry,
+    };
+    use core::sync::atomic::{AtomicU64, Ordering};
+
+    extern "C" fn body(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        7.0
+    }
+    let _lock = crate::gc::global_side_table_test_lock();
+    let info = crate::fn_info!(body, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+    let entries = [ConstFnStaticEntry { slot: 0, info }];
+    let k = keys(b"p7cf_method\0p7cf_x\0", 2);
+    let rep = REP_SPECIAL | (REP_F64 << 2);
+    let completed = js_object_final_shape_id_for_class_keys_static_constfn(
+        k,
+        2,
+        2,
+        CID,
+        0,
+        rep,
+        entries.as_ptr(),
+        1,
+    );
+    let descriptor = shape_descriptor_by_id(completed).expect("completed CF record");
+    assert_eq!(descriptor.special_constfn_mask, 1);
+    assert_eq!(descriptor.rep, rep);
+    assert_eq!(descriptor.constfn_infos()[0].info, info as usize as u64);
+    let (method, x) = unsafe {
+        let (slots, len) = crate::object::keys_array_dense_slots_resolved(
+            k as usize as *const crate::array::ArrayHeader,
+        );
+        assert!(len >= 2);
+        ((*slots).to_bits(), (*slots.add(1)).to_bits())
+    };
+    let pack = |stored_mask| js_region_loop_pack(completed, 2, method, x, 0, 0, 0, stored_mask, 0);
+    assert_ne!(
+        pack(0),
+        REGION_GUARD_WORD_EMPTY,
+        "read-only CF keys remain admitted"
+    );
+    assert_ne!(
+        pack(2),
+        REGION_GUARD_WORD_EMPTY,
+        "Number store to x remains admitted"
+    );
+    assert_eq!(
+        pack(1),
+        REGION_GUARD_WORD_EMPTY,
+        "even a Number cannot bare-store the CF method"
+    );
+    let site = AtomicU64::new(REGION_GUARD_WORD_EMPTY);
+    let prime = |stored_mask, r_mask| unsafe {
+        js_region_loop_prime(
+            &site,
+            completed,
+            2,
+            method,
+            x,
+            0,
+            0,
+            0,
+            0,
+            stored_mask,
+            0,
+            r_mask,
+        )
+    };
+    assert_ne!(
+        prime(2, 2),
+        REGION_GUARD_WORD_EMPTY,
+        "numeric x read/store really primes R"
+    );
+    site.store(REGION_GUARD_WORD_EMPTY, Ordering::Relaxed);
+    assert_eq!(
+        prime(1, 0),
+        REGION_GUARD_WORD_EMPTY,
+        "CF store refused even without R or boxed bits"
+    );
+    assert_eq!(site.load(Ordering::Relaxed), REGION_GUARD_WORD_EMPTY);
 }

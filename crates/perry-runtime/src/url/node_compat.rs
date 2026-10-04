@@ -108,17 +108,9 @@ mod tests {
     use super::resolve_path_to_file_url_posix;
 
     fn cwd() -> String {
-        std::env::current_dir()
-            .expect("current dir")
-            .to_string_lossy()
-            .trim_end_matches('/')
-            .to_string()
+        crate::path::posix_cwd().trim_end_matches('/').to_string()
     }
 
-    /// Unix-only: the `../` case needs a `/`-separated cwd for the posix
-    /// resolver to pop a segment — on a Windows host the backslashed cwd is
-    /// a single opaque segment to the pinned posix machinery.
-    #[cfg(not(windows))]
     #[test]
     fn path_to_file_url_posix_preserves_relative_trailing_slash() {
         // The expectation reads `current_dir()` here and the resolver reads
@@ -127,13 +119,7 @@ mod tests {
         // between the two (#6965). Hold the crate-wide cwd lock.
         let _cwd_lock = crate::test_support::process_cwd_test_lock();
         let cwd = cwd();
-        let parent = std::env::current_dir()
-            .expect("current dir")
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("/"))
-            .to_string_lossy()
-            .trim_end_matches('/')
-            .to_string();
+        let parent = crate::path::resolve_posix_str("..");
 
         assert_eq!(
             resolve_path_to_file_url_posix("relative/"),
@@ -609,11 +595,9 @@ pub extern "C" fn js_url_domain_to_unicode(input_f64: f64) -> f64 {
         // CANONICALIZED host, not the raw input: `/`, `?`, `#` and `\` terminate
         // the host, so `domainToUnicode("a/b")` is `"a"`. Feeding the raw input to
         // `domain_to_unicode` skipped that truncation and echoed `"a/b"` back.
-        #[cfg(feature = "url-engine")]
-        Some(canon) => idna::domain_to_unicode(&canon).0,
-        // URL engine gated off: no IDNA, so return the canonical host unchanged.
-        #[cfg(not(feature = "url-engine"))]
-        Some(canon) => canon,
+        // Without the URL engine there is no IDNA: return the canonical host
+        // unchanged, as a build without `url-engine` does.
+        Some(canon) => super::idna_domain_to_unicode(&canon).unwrap_or(canon),
     };
     create_string_f64(&out)
 }

@@ -116,6 +116,7 @@ pub struct ServerResponse {
     pub send_date: bool,
     pub strict_content_length: bool,
     pub req_handle: i64,
+    pub socket_handle: i64,
     /// True for direct `new http.OutgoingMessage()` handles. They share the
     /// outgoing header/writable surface but are not a live ServerResponse.
     pub outgoing_message_only: bool,
@@ -201,6 +202,7 @@ impl ServerResponse {
             send_date: true,
             strict_content_length: false,
             req_handle: 0,
+            socket_handle: 0,
             outgoing_message_only: false,
             buffered_body: Vec::new(),
             needs_drain: false,
@@ -1571,7 +1573,8 @@ pub(crate) fn _force_link_helpers(v: f64) -> bool {
 #[path = "response_turnloop.rs"]
 mod turnloop_shape;
 pub(crate) use turnloop_shape::{
-    alloc_server_response_for_turnloop, req_handle_of, stream_receiver_gone,
+    alloc_http1_server_response_for_turnloop, alloc_server_response_for_turnloop, req_handle_of,
+    stream_receiver_gone,
 };
 
 #[cfg(test)]

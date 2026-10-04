@@ -416,7 +416,7 @@ fn dladdr_info(ip: usize) -> Option<libc::Dl_info> {
 /// `gc::instruments::INSTRUMENT_KNOBS`).
 #[cfg(unix)]
 fn stack_symbols_enabled() -> bool {
-    if !cfg!(feature = "gc-instruments") {
+    if !cfg!(perry_gc_instruments) {
         return false;
     }
     static ENABLED: OnceLock<bool> = OnceLock::new();
@@ -1011,7 +1011,7 @@ mod tests {
     /// `PERRY_STACK_SYMBOLS`; no in-process test mutates the cached flag.
     /// The table is served by `gc-instruments` (#11541): without the feature
     /// the knob aborts at startup, so there is no opted-in state to test.
-    #[cfg(all(unix, feature = "gc-instruments"))]
+    #[cfg(all(unix, perry_gc_instruments))]
     #[test]
     fn describe_ip_names_a_kept_runtime_symbol_when_nm_is_opted_in() {
         const CHILD_ENV: &str = "PERRY_TEST_STACK_SYMBOLS_NM_CHILD";

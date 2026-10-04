@@ -1172,11 +1172,11 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
             let (field_index, _) = class
                 .fields
                 .iter()
-                .filter(|field| field.key_expr.is_none())
+                // Packed slots: private fields are not slots of the class
+                // layout (#11791), so they are not counted either.
+                .filter(|field| field.key_expr.is_none() && !field.is_private)
                 .enumerate()
-                .find(|(_, field)| {
-                    !field.is_private && field.decorators.is_empty() && field.name == field_name
-                })?;
+                .find(|(_, field)| field.decorators.is_empty() && field.name == field_name)?;
             let prologue_stmt_index = method
                 .body
                 .iter()

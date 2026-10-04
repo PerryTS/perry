@@ -231,6 +231,9 @@ pub extern "C" fn js_register_class_generic_origin(class_id: u32, generic_id: u3
     if class_id == 0 || generic_id == 0 || class_id == generic_id {
         return;
     }
+    // The declared prototype `class_id`'s bare CLASS identity named before
+    // the redirect: a site may hold it as a shape-pinned holder.
+    let before = crate::object::class_decl_prototype_object(class_id);
     GENERIC_ORIGIN_LATCH.arm();
     {
         let mut g = CLASS_GENERIC_ORIGIN.write().unwrap();
@@ -244,6 +247,11 @@ pub extern "C" fn js_register_class_generic_origin(class_id: u32, generic_id: u3
     // `lookup_prototype_method`'s chain hop to the generic's id, so a cached
     // per-class-id chain verdict must retire (#10696).
     crate::object::class_lookup_surface_gen_bump();
+    // A redirect that changes the holder retires the old one's ShapeId, as a
+    // registry replacement does (`retire_displaced_decl_prototype`).
+    if !before.is_null() && crate::object::class_decl_prototype_object(class_id) != before {
+        crate::object::class_registry::retire_displaced_decl_prototype(before);
+    }
 }
 
 /// Keepalive anchor: emitted only from generated module-init code, so the

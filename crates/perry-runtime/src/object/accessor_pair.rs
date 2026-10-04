@@ -119,27 +119,6 @@ fn static_of(word: u64) -> usize {
     }
 }
 
-/// The accessor a pair VALUE holds, without re-proving that it is one — for a
-/// cache hit whose entry proved it at prime time (the holder's key is an
-/// accessor, and a slot of an accessor key is written only by an accessor
-/// install, which transitions the holder's ShapeId).
-///
-/// # Safety
-/// `value` is a NaN-boxed pointer to a pair.
-#[inline(always)]
-pub(crate) unsafe fn pair_of_value_unchecked(value: u64) -> Accessor {
-    let w = crate::array::array_elements_ptr((value & POINTER_MASK) as *const ArrayHeader);
-    let (raw_get_word, raw_set_word) = (*w.add(PAIR_RAW_GET), *w.add(PAIR_RAW_SET));
-    Accessor {
-        get: closure_of(*w.add(PAIR_GET)),
-        set: closure_of(*w.add(PAIR_SET)),
-        raw_get: raw_of(raw_get_word),
-        raw_set: raw_of(raw_set_word),
-        static_get: static_of(raw_get_word),
-        static_set: static_of(raw_set_word),
-    }
-}
-
 #[inline]
 fn closure_word(bits: u64) -> u64 {
     if bits == 0 {
@@ -210,6 +189,92 @@ pub(crate) unsafe fn pair_of_value(value: u64) -> Option<Accessor> {
         static_get: static_of(raw_get_word),
         static_set: static_of(raw_set_word),
     })
+}
+
+/// How a read site's accessor entry calls the getter at an already-proved
+/// accessor slot: the word it keeps in `PIC_HOLDER_GETTER_WORD`. Asked when
+/// the site primes. A pair is immutable once published, so the site keeps the
+/// answer with the pair it came from, and each hit compares the slot's value
+/// with that pair (the value may be replaced without a holder ShapeId
+/// transition).
+///
+/// * a compiled instance class getter: its code address, called as
+///   `fn(this) -> value`;
+/// * a setter-only pair with a compiled setter: 0 (the read is `undefined`);
+/// * a getter that is a function object (a compiled function body or a
+///   builtin thunk) binding `this` from its call's receiver: the address of
+///   [`holder_closure_getter`], which the hit calls with the pair; it calls
+///   the pair's getter closure through the closure ABI with the receiver as
+///   `this`, the call `[[Get]]` makes.
+///
+/// `None` for a getter whose body reads `this` from its reserved capture
+/// slot (an object-literal method, which `[[Get]]` must call through a clone
+/// rebound to the receiver), for a static entry, and for a pair with neither
+/// half.
+///
+/// # Safety
+/// `value` is the slot value of a key proved to carry `ENTRY_ACCESSOR`.
+#[inline]
+pub(crate) unsafe fn site_getter_word_of_value(value: u64) -> Option<usize> {
+    if value & TAG_MASK != POINTER_TAG {
+        return None;
+    }
+    let pair = (value & POINTER_MASK) as *const ArrayHeader;
+    let header = crate::value::addr_class::try_read_gc_header(pair as usize)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY || (*pair).length as usize != PAIR_LEN {
+        return None;
+    }
+    let w = crate::array::array_elements_ptr(pair);
+    let raw_get = raw_of(*w.add(PAIR_RAW_GET));
+    if raw_get != 0 {
+        return Some(raw_get);
+    }
+    let get = closure_of(*w.add(PAIR_GET));
+    if get != 0 {
+        let closure = (get & POINTER_MASK) as usize;
+        if !crate::closure::is_closure_ptr(closure)
+            || crate::closure::closure_reads_this_from_capture(
+                closure as *const crate::closure::ClosureHeader,
+            )
+        {
+            return None;
+        }
+        return Some(holder_closure_getter_entry());
+    }
+    (raw_of(*w.add(PAIR_RAW_SET)) != 0).then_some(0)
+}
+
+/// The code a site accessor entry calls for a function-object getter, as
+/// `double get(double this, i64 pair)` (`perry_abi::PIC_HOLDER_GETTER_WORD`).
+#[inline]
+pub(crate) fn holder_closure_getter_entry() -> usize {
+    holder_closure_getter as *const () as usize
+}
+
+/// [`holder_closure_getter_entry`]: call the getter closure `pair` holds with
+/// `this` through the closure ABI. The site's hit has just compared the
+/// holder's lane with `pair` (immutable once published, and a strong root of
+/// the entry), so the closure is the getter `[[Get]]` calls; nothing between
+/// the load and the call collects.
+#[inline(always)]
+unsafe fn holder_closure_getter_call(this: f64, pair: i64) -> f64 {
+    let w = crate::array::array_elements_ptr(pair as usize as *const ArrayHeader);
+    let closure = (*w.add(PAIR_GET) & POINTER_MASK) as *const crate::closure::ClosureHeader;
+    crate::closure::js_closure_call0(closure, crate::closure::JsThis::from_f64(this))
+}
+
+// `extern "C-unwind"` in unwinding (test) builds so a getter's throw reaches
+// the caller's landing pad; production keeps plain C, as `js_closure_call0`
+// does (#8479).
+#[cfg(panic = "abort")]
+pub(crate) extern "C" fn holder_closure_getter(this: f64, pair: i64) -> f64 {
+    unsafe { holder_closure_getter_call(this, pair) }
+}
+
+/// See the production definition above.
+#[cfg(not(panic = "abort"))]
+pub(crate) extern "C-unwind" fn holder_closure_getter(this: f64, pair: i64) -> f64 {
+    unsafe { holder_closure_getter_call(this, pair) }
 }
 
 /// The accessor stored in `obj`'s slot for key position `pos`.

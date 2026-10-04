@@ -698,7 +698,13 @@ pub fn run_with_parse_cache(
                 .join("llvm");
             let _ = std::fs::create_dir_all(&dir);
             std::env::set_var("PERRY_SAVE_LL", &dir);
-            std::env::set_var("PERRY_LLVM_KEEP_IR", "1");
+            // Deliberately NOT `PERRY_LLVM_KEEP_IR` (#11495). `PERRY_SAVE_LL`
+            // alone writes every module's `.ll` here, which is the whole
+            // documented contract. KEEP_IR additionally parks a marked-keep
+            // scratch dir and a native-reps JSON in `$TMPDIR` per module,
+            // which the stale reaper must never touch, so every traced
+            // compile (the gc-root-dominance corpus runs hundreds) leaked
+            // them for good. Set KEEP_IR yourself when you want those.
             // The per-module object cache short-circuits codegen for unchanged
             // modules — which means `emit_module` (and thus the .ll write)
             // never runs and the trace dir comes up empty. Force a full
@@ -1128,6 +1134,28 @@ pub fn run_with_parse_cache(
 
     classify_eager_modules(&mut ctx, &entry_path);
 
+    let sanitize_name = |s: &str| -> String {
+        let mut out: String = s
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        if out
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            out.insert(0, '_');
+        }
+        out
+    };
+
     // #10399: whole-program Worker detection, before ANY module codegen runs.
     //
     // A `worker_threads` worker is a real OS thread sharing this address
@@ -1149,6 +1177,43 @@ pub fn run_with_parse_cache(
         found
     });
     perry_codegen::set_program_has_worker(program_has_worker);
+    // Immutable module-global leaves (perry-codegen codegen/global_transfer.rs)
+    // must be published by producer modules that never launch an agent
+    // themselves, so the decision is whole-program, like the Worker flag.
+    let program_has_thread_agents = ctx.native_modules.values().any(|module| {
+        let mut found = false;
+        perry_hir::for_each_module_expr(module, &mut |expr| {
+            if matches!(expr, perry_hir::Expr::NativeMethodCall { module, method, .. }
+                if module == "perry/thread"
+                    && matches!(method.as_str(), "spawn" | "parallelMap" | "parallelFilter"))
+            {
+                found = true;
+            }
+        });
+        found
+    });
+    perry_codegen::set_program_has_thread_agents(program_has_thread_agents);
+    let thread_literal_module_prefixes: Vec<String> = if program_has_thread_agents {
+        let mut prefixes: Vec<_> = ctx
+            .native_modules
+            .values()
+            .map(|module| sanitize_name(&module.name))
+            .collect();
+        // Match prepare_module's actual entry path and codegen's sanitized
+        // HIR identity. Entry need not sort first, and may have no launches.
+        let owner = ctx
+            .native_modules
+            .get(&entry_path)
+            .map(|module| sanitize_name(&module.name))
+            .ok_or_else(|| anyhow!("thread literal callback entry is not a native module"))?;
+        prefixes.sort();
+        prefixes.dedup();
+        prefixes.retain(|prefix| prefix != &owner);
+        prefixes.insert(0, owner);
+        prefixes
+    } else {
+        Vec::new()
+    };
     // #11394: every method name the program writes onto a builtin prototype;
     // codegen routes those calls through a lookup-first runtime entry.
     perry_codegen::set_program_patched_proto_methods(perry_hir::patched_prototype_methods(
@@ -1178,7 +1243,7 @@ pub fn run_with_parse_cache(
         .native_module_imports
         .iter()
         .any(|m| m.strip_prefix("node:").unwrap_or(m) == "tls");
-    let native_provider_installs: Vec<String> = perry_codegen::native_provider_install_symbols(
+    let mut native_provider_installs: Vec<String> = perry_codegen::native_provider_install_symbols(
         ctx.native_module_imports
             .iter()
             .map(String::as_str)
@@ -1188,6 +1253,15 @@ pub fn run_with_parse_cache(
                     || optimized_libs::wrapper_is_sole_provider(module)
             }),
     );
+    // #11616: only the direct `process.getBuiltinModule(id)` call reaches the
+    // devirt entry that arms the install-all hooks. Reached any other way — a
+    // `const proc = process` alias, `process?.getBuiltinModule?.(id)` — the
+    // returned module's methods had no dispatch and all returned undefined.
+    // The feature scan sees every spelling, so arm the hooks up front.
+    if ctx.uses_get_builtin_module {
+        native_provider_installs.push("js_nm_enable_install_all".to_string());
+        native_provider_installs.push("js_node_submod_enable_install_all".to_string());
+    }
 
     // Build a map of all exported enums from all modules (owned data, no borrows)
     // Key: (resolved_path, enum_name) -> Vec<(member_name, EnumValue)>
@@ -3109,6 +3183,10 @@ pub fn run_with_parse_cache(
     // and reading the `source` + `resolved_path`.
     let mut per_module_dyn_import_targets: HashMap<PathBuf, HashMap<String, String>> =
         HashMap::new();
+    // Every compiled worker entry under its absolute paths (the spelling the
+    // program used and the canonical one). The entry's `main` registers them
+    // with the runtime worker entry table.
+    let mut worker_entries: BTreeSet<(String, String)> = BTreeSet::new();
     for (path, hir_module) in &ctx.native_modules {
         let mut local_map: HashMap<String, String> = HashMap::new();
         let mut worker_paths = HashSet::new();
@@ -3176,11 +3254,13 @@ pub fn run_with_parse_cache(
                 };
                 if let Some(url) = file_url {
                     if let Ok(path) = url.to_file_path() {
-                        local_map
-                            .insert(path.to_string_lossy().into_owned(), target_prefix.clone());
+                        let path = path.to_string_lossy().into_owned();
+                        worker_entries.insert((path.clone(), target_prefix.clone()));
+                        local_map.insert(path, target_prefix.clone());
                     }
                     local_map.insert(url.to_string(), target_prefix.clone());
                 }
+                worker_entries.insert((rp.to_string_lossy().into_owned(), target_prefix.clone()));
             }
             local_map.insert(import.source.clone(), target_prefix);
         }
@@ -3188,6 +3268,7 @@ pub fn run_with_parse_cache(
             per_module_dyn_import_targets.insert(path.clone(), local_map);
         }
     }
+    perry_codegen::set_worker_entries(worker_entries.into_iter().collect());
 
     let total_codegen_modules = ctx.native_modules.len();
     let codegen_modules_started = AtomicUsize::new(0);
@@ -3285,6 +3366,11 @@ pub fn run_with_parse_cache(
         candidates.dedup_by(|a, b| a.class_id == b.class_id && a.target == b.target);
     }
     let short_spread_method_candidates = std::sync::Arc::new(short_spread_method_candidates);
+    // #10498: the accessor names every compiled class declares decide which
+    // sites carry a class-accessor arm.
+    let program_class_accessor_names = std::sync::Arc::new(
+        perry_codegen::ClassAccessorNames::collect(ctx.native_modules.values()),
+    );
     // #8775: a generic library module can receive an exported adapter object
     // through a parameter without importing its defining module. Publish the
     // producer's exact immutable object/method facts to every codegen job so a
@@ -3349,27 +3435,7 @@ pub fn run_with_parse_cache(
         // identifiers cannot start with a digit, so prefix with
         // `_` if the first character would be one (handles module
         // names like `05_fibonacci.ts`).
-        let sanitize_name = |s: &str| -> String {
-            let mut out: String = s
-                .chars()
-                .map(|c| {
-                    if c.is_ascii_alphanumeric() || c == '_' {
-                        c
-                    } else {
-                        '_'
-                    }
-                })
-                .collect();
-            if out
-                .chars()
-                .next()
-                .map(|c| c.is_ascii_digit())
-                .unwrap_or(false)
-            {
-                out.insert(0, '_');
-            }
-            out
-        };
+
         // CRITICAL: iterate `non_entry_module_names` (topologically
         // sorted above) rather than `ctx.native_modules` — the latter
         // is a `BTreeMap<PathBuf, _>` and iterates in alphabetical
@@ -3930,6 +3996,17 @@ pub fn run_with_parse_cache(
                         for (export_name, origin_path) in exports {
                             let origin_prefix =
                                 compute_module_prefix(origin_path, &ctx.project_root);
+                            // #10945: a namespace member enters the FLAT maps below only as a
+                            // best-effort fallback for a bare-name call (#5927). A bare name that is a
+                            // global intrinsic (`Array`, `Map`, `Request`, ...) never means the member in
+                            // an importer that did not import it by name, and an entry here makes the
+                            // importer's `new Array(n)` construct the member instead (`lower_new`'s
+                            // `user_owns_construction`) -- effect's `Array.ts` exports
+                            // `const Array = globalThis.Array`. Same rule #10356 applies to implicitly
+                            // registered classes. The per-namespace entries are kept, so `ns.Array`
+                            // still resolves.
+                            let flat =
+                                !perry_hir::analysis::is_global_intrinsic_value_name(export_name);
                             // Issue #5927: namespace members are a
                             // best-effort fallback in the flat
                             // `import_function_prefixes` map — the
@@ -3955,9 +4032,11 @@ pub fn run_with_parse_cache(
                             // remeda call) resolved against
                             // `Context.ts`'s prefix instead of
                             // remeda's chunk.
-                            import_function_prefixes
-                                .entry(export_name.clone())
-                                .or_insert_with(|| origin_prefix.clone());
+                            if flat {
+                                import_function_prefixes
+                                    .entry(export_name.clone())
+                                    .or_insert_with(|| origin_prefix.clone());
+                            }
                             // Issue #678: surface origin-name overrides
                             // for namespace-imported members too. A
                             // member reached via a re-export rename
@@ -3969,7 +4048,7 @@ pub fn run_with_parse_cache(
                                 .and_then(|m| m.get(export_name))
                                 .cloned();
                             if let Some(ref origin_name) = resolved_origin_name {
-                                if origin_name != export_name {
+                                if flat && origin_name != export_name {
                                     // Issue #5927: same `or_insert`
                                     // rationale as `import_function_prefixes`
                                     // above — never let a namespace
@@ -4012,15 +4091,21 @@ pub fn run_with_parse_cache(
                             let scoped_func_key =
                                 perry_codegen::namespace_member_func_key(local, export_name);
                             if let Some(&param_count) = exported_func_param_counts.get(&key) {
-                                imported_param_counts.insert(export_name.clone(), param_count);
+                                if flat {
+                                    imported_param_counts.insert(export_name.clone(), param_count);
+                                }
                                 imported_param_counts.insert(scoped_func_key.clone(), param_count);
                             }
                             if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
-                                imported_has_rest.insert(export_name.clone());
+                                if flat {
+                                    imported_has_rest.insert(export_name.clone());
+                                }
                                 imported_has_rest.insert(scoped_func_key.clone());
                             }
                             if exported_func_synthetic_arguments.contains(&key) {
-                                imported_synthetic_arguments.insert(export_name.clone());
+                                if flat {
+                                    imported_synthetic_arguments.insert(export_name.clone());
+                                }
                                 imported_synthetic_arguments.insert(scoped_func_key);
                             }
                             // Issue #636: namespace-imported vars must
@@ -4403,6 +4488,18 @@ pub fn run_with_parse_cache(
                             for (export_name, origin_path) in target_exports {
                                 let origin_prefix =
                                     compute_module_prefix(origin_path, &ctx.project_root);
+                                // #10945: a namespace member enters the FLAT maps below only as a
+                                // best-effort fallback for a bare-name call (#5927). A bare name that is a
+                                // global intrinsic (`Array`, `Map`, `Request`, ...) never means the member in
+                                // an importer that did not import it by name, and an entry here makes the
+                                // importer's `new Array(n)` construct the member instead (`lower_new`'s
+                                // `user_owns_construction`) -- effect's `Array.ts` exports
+                                // `const Array = globalThis.Array`. Same rule #10356 applies to implicitly
+                                // registered classes. The per-namespace entries are kept, so `ns.Array`
+                                // still resolves.
+                                let flat = !perry_hir::analysis::is_global_intrinsic_value_name(
+                                    export_name,
+                                );
                                 // Issue #5927: `or_insert` — see the
                                 // matching rationale on the
                                 // `namespace_like_local` branch above.
@@ -4412,9 +4509,11 @@ pub fn run_with_parse_cache(
                                 // has no other resolution path and
                                 // must always win, regardless of
                                 // import-statement order.
-                                import_function_prefixes
-                                    .entry(export_name.clone())
-                                    .or_insert_with(|| origin_prefix.clone());
+                                if flat {
+                                    import_function_prefixes
+                                        .entry(export_name.clone())
+                                        .or_insert_with(|| origin_prefix.clone());
+                                }
                                 // Issue #5922 (companion to #680): also
                                 // register under the per-namespace key so
                                 // `Context.foo` and `Option.foo` resolve to
@@ -4439,7 +4538,7 @@ pub fn run_with_parse_cache(
                                     .and_then(|m| m.get(export_name))
                                     .cloned();
                                 if let Some(ref origin_name) = resolved_origin_name {
-                                    if origin_name != export_name {
+                                    if flat && origin_name != export_name {
                                         // Issue #5927: `or_insert` — see
                                         // the matching rationale above.
                                         import_function_origin_names
@@ -4490,16 +4589,23 @@ pub fn run_with_parse_cache(
                                     export_name,
                                 );
                                 if let Some(&param_count) = exported_func_param_counts.get(&key) {
-                                    imported_param_counts.insert(export_name.clone(), param_count);
+                                    if flat {
+                                        imported_param_counts
+                                            .insert(export_name.clone(), param_count);
+                                    }
                                     imported_param_counts
                                         .insert(scoped_func_key.clone(), param_count);
                                 }
                                 if exported_func_has_rest.get(&key).copied().unwrap_or(false) {
-                                    imported_has_rest.insert(export_name.clone());
+                                    if flat {
+                                        imported_has_rest.insert(export_name.clone());
+                                    }
                                     imported_has_rest.insert(scoped_func_key.clone());
                                 }
                                 if exported_func_synthetic_arguments.contains(&key) {
-                                    imported_synthetic_arguments.insert(export_name.clone());
+                                    if flat {
+                                        imported_synthetic_arguments.insert(export_name.clone());
+                                    }
                                     imported_synthetic_arguments.insert(scoped_func_key);
                                 }
                                 // Issue #321: NamespaceReExport members
@@ -5522,6 +5628,7 @@ pub fn run_with_parse_cache(
             target: resolved_triple,
             is_entry_module: is_entry,
             non_entry_module_prefixes,
+            thread_literal_module_prefixes: thread_literal_module_prefixes.clone(),
             import_function_prefixes,
             import_function_ffi_aliases,
             import_function_origin_names,
@@ -5542,6 +5649,9 @@ pub fn run_with_parse_cache(
             static_shape_ids: Vec::new(),
             program_class_shape_ids: Default::default(),
             short_spread_method_candidates: std::sync::Arc::clone(&short_spread_method_candidates),
+            program_class_accessor_names: Some(std::sync::Arc::clone(
+                &program_class_accessor_names,
+            )),
             object_literal_method_candidates: std::sync::Arc::clone(
                 &object_literal_method_candidates,
             ),
@@ -5680,7 +5790,8 @@ pub fn run_with_parse_cache(
             ctx.native_modules
                 .par_iter()
                 .map(|(path, hir_module)| -> Result<_, String> {
-                    if hir_module.classes.is_empty()
+                    if std::env::var("PERRY_CONSTFN_SHAPE").as_deref() == Ok("0")
+                        && hir_module.classes.is_empty()
                         && prepare_module(path, hir_module, true)?
                             .imported_classes
                             .is_empty()
@@ -5705,6 +5816,21 @@ pub fn run_with_parse_cache(
             .iter()
             .flat_map(|(_, b)| b.iter().map(|m| &m.shape)),
     );
+    // Completed guard facts stay separate from class allocation suppliers.
+    // Include a foreign class's final content in an importer's cache inputs,
+    // so warm guards cannot retain an older body/rep/id assignment.
+    let mut class_final_shapes: BTreeMap<u32, Vec<(perry_codegen::BirthShape, u32)>> =
+        BTreeMap::new();
+    for (shape, &id) in &static_shape_ids {
+        if let perry_codegen::BirthProto::Class(cid) = shape.proto {
+            if shape.is_completed() {
+                class_final_shapes
+                    .entry(cid)
+                    .or_default()
+                    .push((shape.clone(), id));
+            }
+        }
+    }
     // Decision 16: each class's id as its DEFINING module assigns it. Every
     // module gets the slice it can name (its classes and stubs, plus the
     // producer classes of its short-spread candidates); the slice is in its
@@ -5786,11 +5912,19 @@ pub fn run_with_parse_cache(
             );
             if let Some((ids, class_ids)) = static_shape_ids_by_module.get(path) {
                 opts.static_shape_ids = ids.clone();
-                let foreign = opts
+                let foreign: BTreeSet<u32> = opts
                     .short_spread_method_candidates
                     .values()
                     .flatten()
-                    .map(|c| c.class_id);
+                    .map(|c| c.class_id)
+                    .collect();
+                for cid in class_ids.iter().chain(foreign.iter()) {
+                    if let Some(finals) = class_final_shapes.get(cid) {
+                        opts.static_shape_ids.extend(finals.iter().cloned());
+                    }
+                }
+                opts.static_shape_ids.sort();
+                opts.static_shape_ids.dedup();
                 opts.program_class_shape_ids = program_class_shape_ids
                     .restricted_to(class_ids.iter().copied().chain(foreign));
             }
@@ -6511,23 +6645,31 @@ pub fn run_with_parse_cache(
         .clone()
         .or_else(|| find_stdlib_library(target.as_deref()));
 
-    // perry-stdlib's optional features install through the installer this
-    // object registers (see `stdlib_installs.rs`): everything the archive was
-    // compiled with for an auto-optimized archive, only this program's
-    // features for the prebuilt full-feature one. Generated before the stub
-    // scan below so the scan sees its install references resolved by the
-    // stdlib archive.
-    if ctx.needs_stdlib && stdlib_lib_resolved.is_some() {
-        let install_symbols =
-            crate::commands::stdlib_installs::installer_callees(&optimized_libs.stdlib_installs);
+    // Optional runtime features — and perry-stdlib's, when the stdlib is
+    // linked — install through the installers this object registers (see
+    // `stdlib_installs.rs`): everything the archive was compiled with for an
+    // auto-optimized archive, only this program's features for a prebuilt
+    // full-feature one. Generated before the stub scan below so the scan sees
+    // its install references resolved by the runtime/stdlib archives.
+    {
+        let runtime_symbols = crate::commands::stdlib_installs::runtime_installer_callees(
+            &optimized_libs.runtime_installs,
+        );
+        let stdlib_symbols = (ctx.needs_stdlib && stdlib_lib_resolved.is_some()).then(|| {
+            crate::commands::stdlib_installs::installer_callees(&optimized_libs.stdlib_installs)
+        });
         if matches!(format, OutputFormat::Text) && verbose > 0 {
-            eprintln!("  stdlib installs: {}", install_symbols.join(", "));
+            eprintln!("  runtime installs: {}", runtime_symbols.join(", "));
+            if let Some(stdlib) = &stdlib_symbols {
+                eprintln!("  stdlib installs: {}", stdlib.join(", "));
+            }
         }
-        let installer_bytes = perry_codegen::stubs::generate_stdlib_installer_object(
-            &install_symbols,
+        let installer_bytes = perry_codegen::stubs::generate_feature_installer_object(
+            &runtime_symbols,
+            stdlib_symbols.as_deref(),
             target.as_deref(),
         )?;
-        let installer_path = object_output_dir.join("_perry_stdlib_installs.o");
+        let installer_path = object_output_dir.join("_perry_feature_installs.o");
         fs::write(&installer_path, &installer_bytes)?;
         obj_cleanup_paths.push(installer_path.clone());
         obj_paths.push(installer_path);

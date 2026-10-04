@@ -211,32 +211,29 @@ pub(crate) fn test_resolution_stack_enter_and_forget(owner: usize) -> bool {
 /// an object — the overwhelmingly common case.
 static OBJECT_PROTOTYPES_NONEMPTY: AtomicBool = AtomicBool::new(false);
 
-/// Latched true by the first `OBJECT_META_FLAG_USER_PROTO_OVERRIDE` a receiver
-/// is ever given — i.e. the first `Object.setPrototypeOf` / `util.inherits`
-/// that re-points a live object's `[[Prototype]]` away from its class default.
-///
-/// The flag lives on the receiver's meta record, so asking "does this object
-/// have one?" costs two dependent loads — but only after the caller has
-/// already found the object. `instanceof`'s `util.inherits` escape hatch has
-/// to look up TWO class declaration prototypes through the class registry
-/// before it can ask, and that pair of registry probes was the single largest
-/// cost of a `o instanceof C` MISS (~130 instructions each, on a path whose
-/// whole budget was 669). This latch answers for the entire process in one
-/// relaxed-acquire load.
-///
-/// Conservative by construction: it is set, never cleared, and it is stored
-/// BEFORE the flag it guards (same discipline as [`OBJECT_PROTOTYPES_NONEMPTY`]
-/// above), so any reader that could observe the flag already observes the
-/// latch. A false positive costs a probe pair; a false negative is impossible.
-static USER_PROTO_OVERRIDE_EVER: AtomicBool = AtomicBool::new(false);
+/// Latched true by the first user relink of a CLASS CHAIN link: a class
+/// declaration prototype (`Object.setPrototypeOf(C.prototype, X)`,
+/// `util.inherits`), a class constructor, or a function object. Those are the
+/// events that make a class's registered parent edges stop describing the
+/// live chain, which the class-id shortcuts (vtable, decl-proto and static
+/// walks) assume. Ordinary receivers re-pointed by `setPrototypeOf`,
+/// `__proto__` or `Object.create` do not set it: their prototype is a fact of
+/// their own shape. While it is clear, `class_decl_prototype_relinked` and the
+/// super/static relink probes answer `false` in one load; once set, they read
+/// the recorded `[[Prototype]]` of the link in question.
+static CLASS_CHAIN_RELINKED_EVER: AtomicBool = AtomicBool::new(false);
 
-/// Has any object in this process ever been given a user `[[Prototype]]`
-/// override? A `false` proves `object_has_user_prototype_override` would
-/// answer `false` for every receiver, so a caller may skip whatever work it
-/// would need to do to ask.
+/// Has any class chain link (see [`CLASS_CHAIN_RELINKED_EVER`]) ever been
+/// re-pointed by a user operation? `false` proves every class's registered
+/// parent edges still describe its live chain.
 #[inline]
-pub(crate) fn any_user_prototype_override() -> bool {
-    USER_PROTO_OVERRIDE_EVER.load(Ordering::Acquire)
+pub(crate) fn any_class_chain_relinked() -> bool {
+    CLASS_CHAIN_RELINKED_EVER.load(Ordering::Acquire)
+}
+
+/// Arm [`any_class_chain_relinked`] (`class_prototype_relinked`).
+pub(crate) fn note_class_chain_relinked() {
+    CLASS_CHAIN_RELINKED_EVER.store(true, Ordering::Release);
 }
 
 /// #10362: mark `obj_ptr`'s own header as an owner in the residual registry.
@@ -442,7 +439,6 @@ pub(crate) fn object_link_created_prototype(obj_ptr: usize, proto_bits: u64) {
 }
 
 fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: PrototypeLinkKind) {
-    let prototype_diverged = link_kind != PrototypeLinkKind::ClassDefault;
     let user_override = matches!(
         link_kind,
         PrototypeLinkKind::UserOverride | PrototypeLinkKind::FreshObject
@@ -530,64 +526,86 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
         // links cannot invalidate a proof about a previously allocated object.
         crate::array::invalidate_all_element_shapes();
     }
-    // #6759 Phase B: shaped objects store the recorded prototype in their
-    // own meta record; only non-object owners fall through to the residual
-    // registry.
+    // A shaped object's [[Prototype]] is a fact of its SHAPE: the receiver
+    // moves to the shape naming its new prototype, and that shape record's
+    // `prototype` word is what every reader returns (`shapes_prototype`).
+    // Only a receiver whose shape answers nothing about it
+    // (`PROTO_ID_PER_OBJECT`: a native-module namespace, an exotic-read
+    // receiver) records it in its meta record. Non-object owners fall through
+    // to the residual registry.
     unsafe {
         if let Some(obj) = meta_capable_object(obj_ptr) {
-            // `object_meta_ensure` allocates and may evacuate the owner. Keep
-            // both the caller's pointer and the prototype rooted, then reload
-            // them before the stores below.
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_raw_mut_ptr(obj);
             let proto_handle = scope.root_heap_word_u64(proto_bits);
-            let (meta, obj) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
-                crate::object::object_meta_ensure(obj)
-            });
-            let proto_bits = proto_handle.get_heap_word_u64();
-            (*meta).prototype = proto_bits;
-            if prototype_diverged {
-                (*meta).flags |= crate::object::OBJECT_META_FLAG_PROTO_DIVERGED;
+            // The identity reads the receiver's class and classification and
+            // the prototype's serial — never this receiver's meta word — so
+            // it is taken before anything allocates. A prototype with no
+            // serial (a function, array or typed array) gets an identity of
+            // its own. Same predecessor + same prototype reaches the same
+            // shape, so construction shares shapes as before; a class-default
+            // link is not exempt (`F.prototype = other` then `new F()` must
+            // not leave old and new instances on one shape over two chains).
+            let proto_id = match prototype_serial {
+                Some(_) => crate::object::shapes::object_proto_id_for(obj, proto_bits),
+                None => crate::object::shapes::fresh_unique_proto_id(),
+            };
+            // A receiver whose shape word cannot be written cannot move to a
+            // shape naming the prototype either: its meta record is the
+            // authority, as for a per-object identity.
+            let per_object = proto_id == crate::object::shapes::PROTO_ID_PER_OBJECT
+                || !crate::object::shapes::shape_word_is_writable(obj);
+            let mut obj = obj;
+            // The prototype is a fact of the receiver's shape
+            // (`shapes::object_prototype_word`), so a link allocates no meta
+            // record. A receiver that has one anyway, or whose PER_OBJECT
+            // identity answers nothing from its shape, keeps the same bits in
+            // it: the cheaper read, written here and nowhere else.
+            if per_object || !(*obj).meta.is_null() {
+                // `object_meta_ensure` allocates and may evacuate the owner.
+                let (meta, moved) = obj_handle.across_mut::<crate::object::ObjectHeader, _>(|| {
+                    crate::object::object_meta_ensure(obj)
+                });
+                obj = moved;
+                let word = proto_handle.get_heap_word_u64();
+                (*meta).prototype = word;
+                // GC_STORE_AUDIT(BARRIERED): meta-record prototype slot store —
+                // the record is an arena allocation, so the ordinary
+                // object-slot barrier applies (parent = the meta record).
+                crate::gc::runtime_write_barrier_slot(
+                    meta as usize,
+                    &(*meta).prototype as *const u64 as usize,
+                    word,
+                );
             }
             if user_override {
-                // Latch BEFORE the flag: a reader that observes the flag must
-                // already observe the latch (see `USER_PROTO_OVERRIDE_EVER`).
-                USER_PROTO_OVERRIDE_EVER.store(true, Ordering::Release);
-                (*meta).flags |= crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE;
+                // A user relink of a class declaration prototype retires the
+                // class's prototype-method fast guards and arms
+                // `any_class_chain_relinked`; so does one of a class object.
+                if crate::object::class_registry::is_class_object_ptr(obj.cast()) {
+                    note_class_chain_relinked();
+                }
+                crate::object::class_registry::class_prototype_relinked(obj);
             }
-            if link_kind == PrototypeLinkKind::ClassEvaluation {
-                (*meta).flags |= crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO;
-            }
-            // GC_STORE_AUDIT(BARRIERED): meta-record prototype slot store —
-            // the record is an arena allocation, so the ordinary object-slot
-            // barrier applies (parent = the meta record).
-            crate::gc::runtime_write_barrier_slot(
-                meta as usize,
-                &(*meta).prototype as *const u64 as usize,
-                proto_bits,
-            );
+            let proto_bits = proto_handle.get_heap_word_u64();
             #[cfg(feature = "shape-mint-diag")]
-            if prototype_diverged {
+            if link_kind != PrototypeLinkKind::ClassDefault {
                 crate::object::shape_mint_census::note_proto_divergence(
                     crate::object::shapes::object_shape_stamp(obj),
                     proto_bits,
                 );
             }
-            // The [[Prototype]] is a SHAPE fact, for every link kind: the
-            // receiver moves to the shape naming its new prototype. A class-
-            // default link is not exempt — `F.prototype = other` followed by
-            // `new F()` otherwise leaves old and new instances on one shape
-            // over two chains. Same predecessor + same prototype reaches the
-            // same shape, so construction shares shapes as before. A
-            // prototype with no serial (a function, array or typed array)
-            // gets an identity of its own.
-            let proto_id = match prototype_serial {
-                Some(_) => crate::object::shapes::object_proto_id(obj),
-                None => crate::object::shapes::fresh_unique_proto_id(),
-            };
-            crate::object::shapes::transition_object_shape_prototype(obj, proto_id);
+            crate::object::shapes::transition_object_shape_prototype(obj, proto_id, proto_bits);
+            // The receiver may already be traced by an incremental mark; its
+            // new edge lives in its shape record, outside the heap.
+            crate::gc::runtime_shade_external_edge(proto_bits);
             return;
         }
+    }
+    if user_override {
+        // A function object (a class constructor or a plain function whose
+        // `.prototype` other chains name) re-pointed by a user operation.
+        note_class_chain_relinked();
     }
     let mut slot_addr = 0usize;
     if let Ok(mut map) = get_object_prototypes().lock() {
@@ -625,20 +643,14 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_decoded_pointer(obj_ptr);
     }
-    // #6759 Phase B: a shaped object answers from its own meta record — two
-    // dependent loads, no global latch, no mutex — and NEVER has a residual
-    // registry entry (the write path classifies identically), so a meta
-    // miss for a shaped object is authoritative.
+    // A shaped object answers from its shape record (or, for a per-object
+    // identity, its meta record) — no global latch, no mutex — and NEVER has
+    // a residual registry entry (the write path classifies identically), so
+    // a miss for a shaped object is authoritative.
     unsafe {
         if let Some(obj) = meta_capable_object(obj_ptr) {
-            let meta = (*obj).meta;
-            if !meta.is_null() {
-                let bits = (*meta).prototype;
-                if bits != 0 {
-                    return Some(bits);
-                }
-            }
-            return None;
+            let bits = crate::object::shapes::object_prototype_word(obj);
+            return (bits != 0).then_some(bits);
         }
     }
     if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
@@ -684,17 +696,6 @@ pub(crate) fn object_static_prototype_known_non_meta(obj_ptr: usize) -> Option<u
     recorded
 }
 
-#[inline]
-fn object_has_prototype_flag(obj_ptr: usize, flag: u64) -> bool {
-    unsafe {
-        let Some(obj) = meta_capable_object(obj_ptr) else {
-            return false;
-        };
-        let meta = (*obj).meta;
-        !meta.is_null() && (*meta).flags & flag != 0
-    }
-}
-
 /// True when this receiver's recorded prototype diverges from its class
 /// default, regardless of whether runtime wiring or a user-facing operation
 /// selected it. Cache guards use this conservative signal.
@@ -721,15 +722,36 @@ fn object_has_prototype_flag(obj_ptr: usize, flag: u64) -> bool {
 /// ordinary receiver answers `false` from one absent meta record plus one
 /// header bit.
 pub(crate) fn prototype_chain_ends_in_explicit_null(obj_ptr: usize) -> bool {
+    chain_ends_in_explicit_null_before(obj_ptr, 0)
+}
+
+/// `x instanceof Object` for a shaped receiver: OrdinaryHasInstance finds
+/// `Object.prototype` on the chain unless the chain ends in an explicit null
+/// first (`Object.create(null)`, `__proto__: null`, a hop re-prototyped to
+/// null).
+pub(crate) fn prototype_chain_ends_in_null_before_object_prototype(obj_ptr: usize) -> bool {
+    let object_prototype = default_object_prototype_bits()
+        .map(|bits| crate::value::JSValue::from_bits(bits))
+        .filter(|value| value.is_pointer())
+        .map_or(0, |value| value.as_pointer::<u8>() as usize);
+    chain_ends_in_explicit_null_before(obj_ptr, object_prototype)
+}
+
+/// [`prototype_chain_ends_in_explicit_null`], answering `false` as soon as
+/// the walk reaches `stop` (0 = never).
+fn chain_ends_in_explicit_null_before(obj_ptr: usize, stop: usize) -> bool {
     let mut current = obj_ptr;
     // The same bound the generic chain walk uses. A cycle cannot be built
     // through `setPrototypeOf` (it refuses one), but a bound is cheaper than
     // trusting that from here.
     for _ in 0..32 {
-        if unsafe { cell_is_born_null_proto(current) } {
-            return true;
+        if stop != 0 && current == stop {
+            return false;
         }
         match object_static_prototype(current) {
+            // A cell born with no prototype ends the chain unless a later
+            // link recorded one (the born-null header bit is sticky).
+            None if unsafe { cell_is_born_null_proto(current) } => return true,
             // No per-instance record on this hop. The chain does not stop
             // here: it continues through the hop's CLASS, which is where a
             // `class K {}` instance keeps `K.prototype`. Following it is what
@@ -815,28 +837,70 @@ unsafe fn cell_is_born_null_proto(obj_ptr: usize) -> bool {
         && header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
 }
 
-pub(crate) fn object_has_prototype_divergence(obj_ptr: usize) -> bool {
-    object_has_prototype_flag(obj_ptr, crate::object::OBJECT_META_FLAG_PROTO_DIVERGED)
-}
-
-/// True only when a user-facing operation selected this receiver's prototype.
-/// Runtime wiring can use the same metadata record and loud invalidations, but
-/// it deliberately leaves this distinct bit clear.
-#[inline]
-pub(crate) fn object_has_user_prototype_override(obj_ptr: usize) -> bool {
-    object_has_prototype_flag(obj_ptr, crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE)
-}
-
 /// Whether ordinary property lookup must consult the receiver's own chain
-/// before the shared class vtable: user overrides and evaluated classes both
-/// have this requirement; unrelated runtime prototype wiring does not.
+/// before its class's shared surface (vtable, declaration prototype): its
+/// shape's prototype identity is not the one its class implies — a user
+/// `setPrototypeOf`/`__proto__`, an evaluated class's prototype, runtime
+/// wiring to anything but the class's own declaration prototype. A shape
+/// read (`shapes::object_shape_identity`), not a flag. A receiver with no
+/// class surface (class id 0, a synthetic class) never needs this.
 #[inline]
 pub(crate) fn object_has_individual_class_prototype(obj_ptr: usize) -> bool {
-    object_has_prototype_flag(
-        obj_ptr,
-        crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE
-            | crate::object::OBJECT_META_FLAG_CLASS_EVALUATION_PROTO,
-    )
+    unsafe {
+        let Some(obj) = meta_capable_object(obj_ptr) else {
+            return false;
+        };
+        // An unlinked identity (the ShapeId says so) is the default, a
+        // class's or a per-object one: never another class's link, since a
+        // link of a class instance to anything but its own class's
+        // declaration prototype is a linked identity.
+        if !crate::object::shapes::shape_word_may_be_linked((*obj).parent_class_id) {
+            return false;
+        }
+        let implied = crate::object::shapes::class_proto_id((*obj).class_id);
+        if implied == crate::object::shapes::PROTO_ID_DEFAULT {
+            return false;
+        }
+        let pid = crate::object::shapes::object_shape_identity(obj);
+        pid != implied && pid != crate::object::shapes::PROTO_ID_PER_OBJECT
+    }
+}
+
+/// Does this receiver stand on a prototype from OUTSIDE its own class — not
+/// its class's declaration prototype, nor an evaluation prototype of its own
+/// (template) class? A user `setPrototypeOf`/`__proto__`, `Object.create`,
+/// or a `null` link. A fact of what the receiver's shape names (its recorded
+/// prototype's identity), not of how it was linked: re-pointing it back to
+/// its class's prototype makes it false again. Then the declared class ids
+/// do not describe the receiver's chain at all.
+pub(crate) fn object_prototype_is_foreign(obj_ptr: usize) -> bool {
+    unsafe {
+        let Some(obj) = meta_capable_object(obj_ptr) else {
+            return false;
+        };
+        let recorded = crate::object::shapes::object_prototype_word(obj);
+        if recorded == 0 {
+            return false;
+        }
+        // A class object's [[Prototype]] is its heritage (the parent
+        // constructor): its declared static chain. A user relink of one arms
+        // `any_class_chain_relinked`, which the static walks consult.
+        if crate::object::class_registry::is_class_object_ptr(obj.cast()) {
+            return false;
+        }
+        let value = crate::value::JSValue::from_bits(recorded);
+        if !value.is_pointer() {
+            return true;
+        }
+        let proto = value.as_pointer::<crate::ObjectHeader>();
+        let Some(header) = crate::value::addr_class::try_read_gc_header(proto as usize) else {
+            return true;
+        };
+        let class_id = (*obj).class_id;
+        !(header.obj_type == crate::gc::GC_TYPE_OBJECT
+            && class_id != 0
+            && (*proto).class_id == class_id)
+    }
 }
 
 /// #11391: `new F()` records F's `.prototype` of that moment as the instance's
@@ -1202,37 +1266,32 @@ mod tests {
 
         let runtime_wired = crate::object::js_object_alloc(0, 0);
         object_set_static_prototype(runtime_wired as usize, crate::value::TAG_NULL);
-        let runtime_meta = unsafe { (*runtime_wired).meta };
-        assert!(!runtime_meta.is_null());
-        assert_ne!(
-            unsafe { (*runtime_meta).flags } & crate::object::OBJECT_META_FLAG_PROTO_DIVERGED,
-            0,
-            "the loud runtime setter must retain its conservative divergence signal"
-        );
-        assert!(object_has_prototype_divergence(runtime_wired as usize));
-        assert!(
-            !object_has_user_prototype_override(runtime_wired as usize),
-            "runtime prototype wiring must not masquerade as a user override"
+        // A diverged prototype is a different shape, not a flag.
+        assert_eq!(
+            object_static_prototype(runtime_wired as usize),
+            Some(crate::value::TAG_NULL)
         );
 
         let class_default = crate::object::js_object_alloc(0, 0);
         object_link_class_default_prototype(class_default as usize, crate::value::TAG_NULL);
-        let class_default_meta = unsafe { (*class_default).meta };
-        assert!(!class_default_meta.is_null());
+        // The prototype is a shape fact, and a link records no flag: the
+        // receiver needs no meta record at all.
+        assert!(unsafe { (*class_default).meta }.is_null());
         assert_eq!(
-            unsafe { (*class_default_meta).flags }
-                & (crate::object::OBJECT_META_FLAG_PROTO_DIVERGED
-                    | crate::object::OBJECT_META_FLAG_USER_PROTO_OVERRIDE),
-            0,
-            "class-default links must publish neither divergence signal"
+            object_static_prototype(class_default as usize),
+            Some(crate::value::TAG_NULL)
         );
-        assert!(!object_has_prototype_divergence(class_default as usize));
 
-        let evaluated = crate::object::js_object_alloc(0, 0);
+        // "Individual" is read from the shape: a compiled class's instance
+        // whose identity names anything but its class's prototype. Receivers
+        // with no class surface (class id 0) never are.
+        const CLASS: u32 = 0x7A;
+        let fresh = crate::object::js_object_alloc(CLASS, 0);
+        assert!(!object_has_individual_class_prototype(fresh as usize));
+        let evaluated = crate::object::js_object_alloc(CLASS, 0);
         object_link_class_evaluation_prototype(evaluated as usize, crate::value::TAG_NULL);
-        assert!(object_has_prototype_divergence(evaluated as usize));
         assert!(object_has_individual_class_prototype(evaluated as usize));
-        assert!(!object_has_user_prototype_override(evaluated as usize));
+        assert!(unsafe { (*evaluated).meta }.is_null(), "no flag, no record");
         assert!(!object_has_individual_class_prototype(
             class_default as usize
         ));
@@ -1240,16 +1299,15 @@ mod tests {
             runtime_wired as usize
         ));
 
-        let user_overridden = crate::object::js_object_alloc(0, 0);
+        let user_overridden = crate::object::js_object_alloc(CLASS, 0);
         object_set_user_prototype(user_overridden as usize, crate::value::TAG_NULL);
-        let user_meta = unsafe { (*user_overridden).meta };
-        assert!(!user_meta.is_null());
-        assert_ne!(
-            unsafe { (*user_meta).flags } & crate::object::OBJECT_META_FLAG_PROTO_DIVERGED,
-            0
+        assert!(object_has_individual_class_prototype(
+            user_overridden as usize
+        ));
+        assert!(
+            unsafe { (*user_overridden).meta }.is_null(),
+            "no flag, no record"
         );
-        assert!(object_has_prototype_divergence(user_overridden as usize));
-        assert!(object_has_user_prototype_override(user_overridden as usize));
     }
 
     /// #10827. Every one of these is a case where the READ used to disagree

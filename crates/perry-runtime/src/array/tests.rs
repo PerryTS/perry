@@ -101,6 +101,75 @@ fn flattenable_array_ptr_accepts_only_arrays_and_array_proxies() {
     assert_eq!(flattenable_array_ptr(nested_proxy), array);
 }
 
+/// #11875: a Proxy over an array, held in a `T[]`-annotated binding, reaches
+/// the element-read helpers as a proxy id (masked by the typed callers, boxed
+/// by the fallback). Each must answer through the proxy's `[[Get]]`; the masked
+/// id used to be read as a heap header (SIGSEGV) and the boxed one answered
+/// `undefined`.
+#[test]
+fn proxied_array_element_reads_answer_through_the_proxy() {
+    let array = js_array_alloc(0);
+    js_array_push_f64(array, 7.0);
+    js_array_push_f64(array, 8.0);
+    let array_value = boxed_pointer(array as *mut u8);
+    let handler = crate::object::js_object_alloc(0, 0);
+    let proxy = crate::proxy::js_proxy_new(array_value, boxed_pointer(handler as *mut u8));
+    let boxed_id = proxy.to_bits();
+    let masked_id = boxed_id & crate::value::POINTER_MASK;
+    assert!(
+        crate::value::addr_class::is_proxy_id_band(masked_id as usize),
+        "premise: the proxy is a handle-band id"
+    );
+    for (index, want) in [(0u32, 7.0), (1u32, 8.0)] {
+        assert_eq!(
+            js_array_get_f64(masked_id as *const ArrayHeader, index),
+            want,
+            "masked proxy id, index {index}"
+        );
+        assert_eq!(
+            js_array_get_f64(boxed_id as *const ArrayHeader, index),
+            want,
+            "boxed proxy id, index {index}"
+        );
+        assert_eq!(
+            crate::typed_feedback::js_typed_feedback_array_index_get_fallback_boxed(
+                0,
+                proxy,
+                index as f64
+            ),
+            want,
+            "fallback read, index {index}"
+        );
+    }
+}
+
+/// #11891: every array element-store funnel may receive either the masked or
+/// boxed id of a Proxy bound to a `T[]` parameter. They must invoke [[Set]];
+/// an empty handler forwards each write to the array target.
+#[test]
+fn proxied_array_element_writes_answer_through_the_proxy() {
+    let array = js_array_alloc(0);
+    js_array_push_f64(array, 7.0);
+    js_array_push_f64(array, 8.0);
+    let array_value = boxed_pointer(array as *mut u8);
+    let handler = crate::object::js_object_alloc(0, 0);
+    let proxy = crate::proxy::js_proxy_new(array_value, boxed_pointer(handler as *mut u8));
+    let boxed_id = proxy.to_bits();
+    let masked_id = boxed_id & crate::value::POINTER_MASK;
+
+    js_array_set_f64_extend(masked_id as *mut ArrayHeader, 0, 10.0);
+    assert_eq!(js_array_get_f64(array, 0), 10.0);
+
+    js_array_set_f64_extend_strict(boxed_id as *mut ArrayHeader, 1, 20.0);
+    assert_eq!(js_array_get_f64(array, 1), 20.0);
+
+    js_array_set_index_or_string_with_strictness(masked_id as *mut ArrayHeader, 0.0, 30.0, true);
+    assert_eq!(js_array_get_f64(array, 0), 30.0);
+
+    crate::typed_feedback::js_typed_feedback_array_index_set_fallback_boxed(0, proxy, 1.0, 40.0, 1);
+    assert_eq!(js_array_get_f64(array, 1), 40.0);
+}
+
 #[test]
 fn array_proxy_values_iterator_uses_live_trapped_reads() {
     let array = js_array_alloc(4);

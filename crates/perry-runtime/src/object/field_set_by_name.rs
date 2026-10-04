@@ -29,7 +29,7 @@ pub use fast_paths::js_object_set_field_by_name_transition_fast;
 pub(crate) use fast_paths::{
     object_set_field_by_name_transition_chain_proven_value,
     object_set_field_by_name_transition_only_fast_value, try_existing_own_data_overwrite,
-    try_readd_stable_tombstone,
+    try_existing_own_data_overwrite_by_content, try_readd_stable_tombstone,
 };
 #[cfg(test)]
 pub(crate) use fast_paths::{test_reset_transition_fast_hits, test_transition_fast_hits};
@@ -204,7 +204,6 @@ pub extern "C" fn js_object_set_field_by_name(
                         // a cached edge here could hand it a foreign slot
                         // index below the floor.
                         && crate::object::reserved_slot_floor_for_class_id(class_id) == 0
-                        && !super::prototype_chain::object_has_prototype_divergence(raw)
                         && super::prop_plan::store_plan_check(
                             class_id,
                             key as usize,
@@ -213,13 +212,21 @@ pub extern "C" fn js_object_set_field_by_name(
                     {
                         let prev_shape_id = super::shapes::object_shape_stamp(o);
                         if prev_shape_id != 0 {
-                            if let Some((next_keys, slot_idx, target_shape_id)) =
-                                transition_cache_lookup_for_value(
-                                    prev_shape_id,
-                                    key,
-                                    Some(value.to_bits()),
-                                )
+                            if let Some(edge) = transition_cache_lookup(prev_shape_id, key)
+                                .and_then(|hit| {
+                                    super::constfn_key_add::admit_or_store(
+                                        o,
+                                        prev_shape_id,
+                                        hit,
+                                        value.to_bits(),
+                                    )
+                                })
                             {
+                                let Some((next_keys, slot_idx, target_shape_id)) =
+                                    edge.transition()
+                                else {
+                                    return;
+                                };
                                 // Same store semantics as the in-body fast
                                 // path: strip a raw-null POINTER_TAG value,
                                 // transition the keys array, note the dynamic
@@ -319,7 +326,7 @@ pub extern "C" fn js_object_set_field_by_name(
         // it over-approximates, and the only cost of that is the guard's slow
         // side. Named keys only: an index write is not a method shadow.
         if !key.is_null() {
-            crate::object::own_override::note_exotic_named_prop_install();
+            crate::object::own_override::note_exotic_named_prop_install(obj as usize);
         }
         // A Buffer is an ordinary object in Node (a Uint8Array), so `buf.foo = v`
         // stores an own property — and an own key SHADOWS the same-named prototype

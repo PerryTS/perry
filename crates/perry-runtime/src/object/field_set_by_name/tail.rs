@@ -290,8 +290,10 @@ pub(crate) fn set_field_by_name_object_tail(
                 || crate::object::own_descriptors_skip_key(
                     obj as usize,
                     f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
-                ))
-            && !super::prototype_chain::object_has_prototype_divergence(obj as usize);
+                ));
+        // No per-receiver prototype gate: the plan key carries the receiver's
+        // prototype (`receiver_proto_bits`, a fact of its shape), so a
+        // receiver on another chain can only meet another plan.
         let plan_fast = plan_eligible
             && super::prop_plan::store_plan_check(
                 obj_class_id,
@@ -560,8 +562,7 @@ pub(crate) fn set_field_by_name_object_tail(
                 && obj_flags & PLAN_BLOCKING_FLAGS == 0
                 // `desc_gate_ok` above already proved this key is uncovered on
                 // this receiver, which is the per-key half of the old flag.
-                && desc_gate_ok
-                && !super::prototype_chain::object_has_prototype_divergence(obj as usize);
+                && desc_gate_ok;
             if !plan_fast && record_plan_eligible {
                 super::prop_plan::store_plan_record(
                     obj_class_id,
@@ -569,12 +570,14 @@ pub(crate) fn set_field_by_name_object_tail(
                     super::prop_plan::receiver_proto_bits(obj),
                 );
             }
-            let lane_probe = transition_cache_lookup_for_value(
-                prev_shape_id,
-                interned_key,
-                Some(value.to_bits()),
-            );
-            if let Some((next_keys, slot_idx, target_shape_id)) = lane_probe {
+            let lane_probe = transition_cache_lookup(prev_shape_id, interned_key).and_then(|hit| {
+                super::constfn_key_add::admit_or_store(obj, prev_shape_id, hit, value.to_bits())
+            });
+            if let Some(edge) = lane_probe {
+                let Some((next_keys, slot_idx, target_shape_id)) = edge.transition() else {
+                    mirror_class_object_static_write(obj, key, value);
+                    return;
+                };
                 // Defensive: strip a raw-null POINTER_TAG value the same
                 // way the slow overflow path below does, so a bogus
                 // 0x7FFD_0000_0000_0000 store doesn't leak into an
@@ -715,7 +718,13 @@ pub(crate) fn set_field_by_name_object_tail(
             // any other receiver.
             // #10868 step 2.5 stage 1: same un-latch hazard as the read
             // path's field-cache stamp — this publishes an explicit keys edge.
-            if !crate::object::dictionary::is_dictionary(obj) {
+            if !crate::object::dictionary::is_dictionary(obj)
+                && !super::shapes::shape_descriptor_by_id(super::shapes::object_shape_stamp(obj))
+                    .is_some_and(|d| d.special_constfn_mask != 0)
+            {
+                // `publish_key_add_edge` already minted the exact ConstFn
+                // successor after writing the closure. The legacy redundant
+                // birth stamp would conservatively erase that body fact.
                 super::shapes::stamp_object_shape(obj, new_keys.arr(), 1, 1);
             }
             return;
@@ -808,7 +817,7 @@ pub(crate) fn set_field_by_name_object_tail(
                 let i = i as usize;
                 if is_frozen {
                     let key_str = key_to_str_for_diag(key);
-                    crate::error::throw_immutable_write(0, &key_str);
+                    crate::error::throw_frozen_write(obj, &key_str);
                 }
                 if i < alloc_limit {
                     js_object_set_field(obj, i as u32, JSValue::from_bits(value.to_bits()));
@@ -1002,7 +1011,7 @@ pub(crate) fn set_field_by_name_object_tail(
                 // throws on the write (issue #615 — strict-mode default for TS).
                 if is_frozen {
                     let key_str = key_to_str_for_diag(key);
-                    crate::error::throw_immutable_write(0, &key_str);
+                    crate::error::throw_frozen_write(obj, &key_str);
                 }
                 // Per-property writable check (set by Object.defineProperty / freeze).
                 // Issue #615 — strict-mode throw on read-only assign.

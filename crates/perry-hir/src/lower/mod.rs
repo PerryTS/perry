@@ -66,8 +66,8 @@ mod for_of_guard;
 pub(crate) use for_of_guard::lower_stmt_for_of;
 mod stmt_loops;
 pub(crate) use stmt_loops::{
-    insert_iterator_close_on_abrupt, lazy_iter_for_stmt, lazy_or_index_elem, lower_stmt_for_in,
-    wrap_lazy_for_of_body_close_on_throw,
+    async_iterator_close_driver, lazy_iter_for_stmt, lazy_or_index_elem, lower_stmt_for_in,
+    record_iterator_loop_label, wrap_lazy_for_of_body_close_on_throw,
 };
 mod module_decl;
 pub(crate) use module_decl::*;
@@ -83,6 +83,7 @@ mod global_eval_hoist;
 mod run_once;
 mod shared_mutable_capture;
 pub(crate) mod type_widening;
+pub(crate) mod unrebound_params;
 pub(crate) use closure_analysis::*;
 mod decorators;
 pub(crate) use decorators::*;
@@ -115,6 +116,7 @@ pub(crate) use array_fold::{
 };
 
 mod lower_module_fn;
+mod module_tdz;
 pub use lower_module_fn::{
     lower_module, lower_module_full, lower_module_full_with_platform_globals,
     lower_module_with_class_id, lower_module_with_class_id_and_types,

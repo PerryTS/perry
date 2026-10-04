@@ -1,12 +1,14 @@
 //! Perry's public RegExp execution boundary. JS throws are caught below native
 //! owners and rethrown only after those owners have been released normally.
 use super::perex_memory::{MemoryBudget, StorageError};
-use super::perex_owner::{BuildError, GcProgram, HeapSubject};
-use super::perex_runtime::{self as host, CaptureMode, EngineError};
+use super::perex_owner::{BuildError, GcProgram, HeapSubject, OwnerError};
+use super::perex_runtime::{self as host, CaptureMode, EngineError, Match};
 use super::RegExpHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::string::StringHeader;
-use perex::binding::{BoundProgram, BoundSubject};
+use perex::binding::{
+    BoundProgram, BoundSubject, ImmutableProgram, ImmutableSubject, ProgramWitness,
+};
 use perex::compiler::CompileError;
 use perex::executor::ExecError;
 use perex::input::Position;
@@ -116,18 +118,32 @@ pub(crate) fn bind_program<'s>(
     budget: &mut Budget,
 ) -> Result<BoundProgram<GcProgram<'s>>, EngineError> {
     let root = owner.root();
-    let owner = match owner.witness() {
-        Some(witness) => match BoundProgram::new_witnessed(owner, witness) {
+    let witness = owner.witness();
+    bind_witnessed(owner, witness, budget, |witness| {
+        GcProgram::record_witness(&root, witness)
+    })
+}
+
+/// [`bind_program`] for any view of a program cell: `witness` is the one the
+/// cell holds, and `record` stores a fresh one in the same cell.
+pub(crate) fn bind_witnessed<P: ImmutableProgram<Error = OwnerError>>(
+    storage: P,
+    witness: Option<ProgramWitness>,
+    budget: &mut Budget,
+    record: impl FnOnce(ProgramWitness),
+) -> Result<BoundProgram<P>, EngineError> {
+    let storage = match witness {
+        Some(witness) => match BoundProgram::new_witnessed(storage, witness) {
             Ok(bound) => return Ok(bound),
             Err(failed) => failed.storage,
         },
-        None => owner,
+        None => storage,
     };
-    let bound = BoundProgram::new(owner, budget).map_err(|e| EngineError::Program(e.error))?;
+    let bound = BoundProgram::new(storage, budget).map_err(|e| EngineError::Program(e.error))?;
     if crate::hot_diag::regex_on() {
         crate::hot_diag::regex_with(|d| d.perex_validations += 1);
     }
-    GcProgram::record_witness(&root, bound.witness());
+    record(bound.witness());
     Ok(bound)
 }
 
@@ -168,26 +184,43 @@ pub(crate) fn bind_heap_subject_observed(
     });
     let owner = unsafe { HeapSubject::new(input) }
         .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?;
-    let owner = if validated {
-        match BoundSubject::new_counted(owner, utf16_len) {
-            Ok(bound) => return Ok((bound, identity)),
+    // `HeapSubject::new` already wrote this header's refcount, so it is writable.
+    let bound = bind_counted(owner, utf16_len, validated, || {
+        input.with_const_ptr::<StringHeader, _>(|s| unsafe {
+            (*(s as *mut StringHeader)).flags |= STRING_FLAG_WTF8_VALIDATED;
+        })
+    })?;
+    Ok((bound, identity))
+}
+
+/// Bind a whole string's storage of `utf16_len` units: in constant work when
+/// the header carries `STRING_FLAG_WTF8_VALIDATED` (`validated`), otherwise by
+/// decoding it, after which `mark` sets the flag if the decode found exactly
+/// `utf16_len` units. `mark` runs with no collecting action since the storage
+/// was read, so it may write through the same header.
+pub(crate) fn bind_counted<S: ImmutableSubject<Error = OwnerError>>(
+    storage: S,
+    utf16_len: usize,
+    validated: bool,
+    mark: impl FnOnce(),
+) -> Result<BoundSubject<S>, EngineError> {
+    let storage = if validated {
+        match BoundSubject::new_counted(storage, utf16_len) {
+            Ok(bound) => return Ok(bound),
             Err(failed) => failed.storage,
         }
     } else {
-        owner
+        storage
     };
-    let bound = BoundSubject::new(owner).map_err(|e| EngineError::Subject(e.error))?;
+    let bound = BoundSubject::new(storage).map_err(|e| EngineError::Subject(e.error))?;
     let decoded = bound
         .with_view(|view| view.len_utf16())
         .map_err(EngineError::Subject)?;
-    // An empty string has nothing to decode. `HeapSubject::new` already wrote
-    // this header's refcount, so it is writable.
+    // An empty string has nothing to decode.
     if decoded == utf16_len && utf16_len > 0 {
-        input.with_const_ptr::<StringHeader, _>(|s| unsafe {
-            (*(s as *mut StringHeader)).flags |= STRING_FLAG_WTF8_VALIDATED;
-        });
+        mark();
     }
-    Ok((bound, identity))
+    Ok(bound)
 }
 
 /// Bindings one compound operation reuses across its searches (#10165).
@@ -283,9 +316,8 @@ impl<'b, 's> Reuse<'b, 's> {
             .flatten()
     }
 
-    fn program_for(&self, receiver: &RuntimeHandle<'_>) -> Option<&BoundProgram<GcProgram<'s>>> {
+    fn program_for(&self, current: *const RegExpHeader) -> Option<&BoundProgram<GcProgram<'s>>> {
         let reused = self.program.as_ref()?;
-        let current = receiver.with_const_ptr::<RegExpHeader, _>(|p| p);
         let bound = reused.receiver.with_const_ptr::<RegExpHeader, _>(|p| p);
         let cell = reused.cell.with_const_ptr::<u8, _>(|p| p);
         (current == bound && unsafe { (*current).perex_program } == cell).then_some(&reused.bound)
@@ -428,111 +460,167 @@ pub(crate) fn execute_output(
     reuse: Option<&Reuse<'_, '_>>,
 ) -> Result<Option<ExecMatch>, EngineError> {
     let scope = RuntimeHandleScope::new();
-    let receiver = scope.root_raw_mut_ptr(receiver);
+    let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver as i64));
     let input = scope.root_string_ptr(input);
-    let stored = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
-        crate::value::JSValue::from_bits((*r).last_index)
-    });
-    let last_index = if stored.is_number() {
-        stored
-            .as_number()
-            .max(0.0)
-            .floor()
-            .min(9_007_199_254_740_991.0) as usize
-    } else {
-        caught(|| receiver.with_const_ptr(|p| super::regex_last_index_offset(p)))?
+    execute_rooted(&receiver, &input, output, budget, memory, poll, reuse)
+}
+
+/// The RegExp a NaN-boxed receiver handle holds now. Read it again after any
+/// collecting action.
+#[inline]
+pub(crate) fn regexp(receiver: &RuntimeHandle<'_>) -> *mut RegExpHeader {
+    // A RegExp is an object: its NaN-box always carries the pointer tag, so
+    // the address is the payload (debug builds check the tag).
+    crate::value::JSValue::from_bits(receiver.get_nanbox_u64())
+        .as_pointer::<RegExpHeader>()
+        .cast_mut()
+}
+
+/// RegExpBuiltinExec on a RegExp and a string the caller has rooted: the
+/// receiver NaN-boxed (`root_nanbox_f64`, as RegExpExec roots it), the string
+/// with `root_string_ptr`. The receiver must be a valid RegExp.
+///
+/// The search reads the program cell and the string in place
+/// (`host::find_in_place`) unless `reuse` holds bindings of both. Nothing here
+/// sets a JS trap unless user code can run: only a `lastIndex` that is not a
+/// Number (ToLength may call `valueOf`) and the materialisation of an exec
+/// result run under one. A non-writable `lastIndex` is returned as a
+/// TypeError rather than thrown, so the owners above unwind normally.
+pub(crate) fn execute_rooted(
+    receiver: &RuntimeHandle<'_>,
+    input: &RuntimeHandle<'_>,
+    output: ExecOutput<'_>,
+    budget: &mut Budget,
+    memory: &MemoryBudget,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+    reuse: Option<&Reuse<'_, '_>>,
+) -> Result<Option<ExecMatch>, EngineError> {
+    let (stored, stateful, has_indices) = unsafe {
+        let r = regexp(receiver);
+        (
+            crate::value::JSValue::from_bits((*r).last_index),
+            (*r).global || (*r).sticky,
+            (*r).has_indices,
+        )
     };
-    let (stateful, has_indices) = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
-        ((*r).global || (*r).sticky, (*r).has_indices)
-    });
-    let start = if stateful { last_index } else { 0 };
+    // ToLength(Get(R, "lastIndex")) is observable only when it is not a
+    // Number (it may call `valueOf`); a Number matters only to g/y.
+    let start = if stored.is_number() {
+        if stateful {
+            stored
+                .as_number()
+                .max(0.0)
+                .floor()
+                .min(9_007_199_254_740_991.0) as usize
+        } else {
+            0
+        }
+    } else {
+        let last_index = caught(|| super::regex_last_index_offset(regexp(receiver)))?;
+        if stateful {
+            last_index
+        } else {
+            0
+        }
+    };
     let length = input.with_const_ptr::<StringHeader, _>(|s| unsafe { (*s).utf16_len as usize });
     if start > length {
         if stateful {
-            caught(|| {
-                receiver.with_mut_ptr::<RegExpHeader, _>(|re| super::set_last_index_throwing(re, 0))
-            })?;
+            store_last_index(receiver, 0)?;
         }
         return Ok(None);
     }
-    let fresh_program;
-    let program = match reuse.and_then(|reuse| reuse.program_for(&receiver)) {
-        Some(program) => program,
-        None => {
-            fresh_program = program(&scope, &receiver, budget, memory, poll)?;
-            &fresh_program
-        }
+    let mode = if matches!(output, ExecOutput::Test) {
+        CaptureMode::Full
+    } else {
+        CaptureMode::All
     };
-    let fresh_subject;
-    let reused_subject = reuse.and_then(|reuse| reuse.subject_for(&input));
-    // A position from this operation's own binding, or else from the previous
-    // call's search on this same, unchanged string (#10164). Only a non-ASCII
-    // string has an identity; its lengths cannot change during the search.
-    let mut cross_call = None;
-    let subject = match reused_subject {
-        Some(subject) => subject,
-        None => {
-            let (bound, identity) = bind_heap_subject_observed(input)?;
-            fresh_subject = bound;
-            cross_call = identity;
-            &fresh_subject
+    let mut captures = None;
+    // Bindings this operation already holds for this receiver's current
+    // program and this same string, if any.
+    let reused = reuse.and_then(|reuse| {
+        Some((
+            reuse,
+            reuse.program_for(regexp(receiver))?,
+            reuse.subject_for(input)?,
+        ))
+    });
+    let (found, position) = match reused {
+        Some((reuse, program, subject)) => {
+            let found = host::find_near_into(
+                program,
+                subject,
+                start,
+                reuse.near(),
+                mode,
+                budget,
+                memory,
+                QUANTUM,
+                &mut captures,
+                poll,
+            )?;
+            reuse.near.set(Some(found.1));
+            found
         }
+        None => host::find_in_place(
+            receiver,
+            input,
+            start,
+            // Only g/y searches can start away from zero. A non-stateful
+            // call gains nothing from finding or recording a position.
+            stateful,
+            mode,
+            budget,
+            memory,
+            QUANTUM,
+            &mut captures,
+            poll,
+        )?,
     };
-    let near = match reused_subject {
-        Some(_) => reuse.and_then(|reuse| reuse.near()),
-        None => cross_call.and_then(super::perex_position_hint::lookup),
-    };
-    let (found, position) = host::find_near(
-        program,
-        subject,
-        start,
-        near,
-        if matches!(output, ExecOutput::Test) {
-            CaptureMode::Full
-        } else {
-            CaptureMode::All
-        },
-        budget,
-        memory,
-        QUANTUM,
-        poll,
-    )?;
-    if let (Some(reuse), Some(_)) = (reuse, reused_subject) {
-        reuse.near.set(Some(position));
-    } else if cross_call.is_some() {
-        // Re-read after the search: a collection during it may have moved the
-        // string, and the identity must be the one the next call will see.
-        if let Some(identity) = super::perex_position_hint::identity_of(&input) {
-            super::perex_position_hint::record(identity, position);
-        }
-    }
     if stateful {
-        let next = found.as_ref().map_or(0, |m| m.full.end());
-        caught(|| {
-            receiver.with_mut_ptr::<RegExpHeader, _>(|re| super::set_last_index_throwing(re, next))
-        })?;
+        store_last_index(receiver, found.map_or(0, |full| full.end()))?;
     }
-    let Some(found) = found else {
+    let Some(full) = found else {
         return Ok(None);
     };
     let (array, groups) = match output {
-        // Captures and all native owners remain ABOVE the JS trap. A thrown
-        // allocation/property operation returns here before they are dropped.
-        ExecOutput::Object => caught(|| {
-            super::perex_results::materialize(
-                &input,
-                subject,
-                program,
-                &found,
-                // From the search that just ran over this same binding.
-                Some(position),
-                has_indices,
-                budget,
-                poll,
-            )
-        })??,
+        ExecOutput::Object => {
+            let found = Match { full, captures };
+            let scope = RuntimeHandleScope::new();
+            let fresh;
+            let (bound_subject, bound_program) = match reused {
+                Some((_, program, subject)) => (subject, program),
+                None => {
+                    // The search read the string in place; materialisation
+                    // allocates, so it reads through rooted owners. The
+                    // position stays valid: these bind the same, unchanged
+                    // string, and nothing has run since the search.
+                    let owner = unsafe { GcProgram::from_regexp(&scope, regexp(receiver)) }
+                        .map_err(|e| {
+                            EngineError::Subject(perex::binding::SubjectError::Resource(e))
+                        })?;
+                    fresh = (bind_heap_subject(*input)?, bind_program(owner, budget)?);
+                    (&fresh.0, &fresh.1)
+                }
+            };
+            // Captures and all native owners remain ABOVE the JS trap. A
+            // thrown allocation/property operation returns here before they
+            // are dropped.
+            caught(|| {
+                super::perex_results::materialize(
+                    input,
+                    bound_subject,
+                    bound_program,
+                    &found,
+                    Some(position),
+                    has_indices,
+                    budget,
+                    poll,
+                )
+            })??
+        }
         ExecOutput::Spans(spans) => {
-            let captures = found.captures.as_ref().ok_or(EngineError::InvalidSpan)?;
+            let captures = captures.as_ref().ok_or(EngineError::InvalidSpan)?;
             spans
                 .try_reserve(captures.len() * 2)
                 .map_err(|_| StorageError::Allocation)?;
@@ -552,8 +640,21 @@ pub(crate) fn execute_output(
         ExecOutput::Test => (std::ptr::null_mut(), std::ptr::null_mut()),
     };
     Ok(Some(ExecMatch {
-        full: found.full,
+        full,
         array,
         groups,
     }))
+}
+
+/// Spec `Set(R, "lastIndex", n, true)` (RegExpBuiltinExec steps 14/18), with
+/// the TypeError for a non-writable `lastIndex` returned instead of thrown.
+/// Neither branch runs user code.
+fn store_last_index(receiver: &RuntimeHandle<'_>, n: usize) -> Result<(), EngineError> {
+    let re = regexp(receiver);
+    if super::last_index_writable(re) {
+        super::store_last_index_number(re, n);
+        Ok(())
+    } else {
+        Err(EngineError::Type(super::LAST_INDEX_READ_ONLY))
+    }
 }

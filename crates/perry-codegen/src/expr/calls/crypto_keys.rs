@@ -59,39 +59,41 @@ pub(crate) fn arm_crypto_diffie_hellman_ctor(
     } else {
         unreachable!()
     };
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
     if property == "getDiffieHellman"
         || property == "createDiffieHellmanGroup"
         || property == "DiffieHellmanGroup"
     {
-        let group = if let Some(arg) = args.first() {
-            lower_expr(ctx, arg)?
-        } else {
-            double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-        };
+        let group = arg_values
+            .first()
+            .cloned()
+            .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
         let blk = ctx.block();
-        return Ok(blk.call(DOUBLE, "js_crypto_get_diffie_hellman", &[(DOUBLE, &group)]));
+        let result = blk.call(DOUBLE, "js_crypto_get_diffie_hellman", &[(DOUBLE, &group)]);
+        arg_group.release(ctx);
+        return Ok(result);
     }
-    let first = if let Some(arg) = args.first() {
-        lower_expr(ctx, arg)?
-    } else {
-        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-    };
-    let second = if let Some(arg) = args.get(1) {
-        lower_expr(ctx, arg)?
-    } else {
-        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-    };
-    let third = if let Some(arg) = args.get(2) {
-        lower_expr(ctx, arg)?
-    } else {
-        double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-    };
+    let first = arg_values
+        .first()
+        .cloned()
+        .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+    let second = arg_values
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
+    let third = arg_values
+        .get(2)
+        .cloned()
+        .unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
     let blk = ctx.block();
-    Ok(blk.call(
+    let result = blk.call(
         DOUBLE,
         "js_crypto_create_diffie_hellman",
         &[(DOUBLE, &first), (DOUBLE, &second), (DOUBLE, &third)],
-    ))
+    );
+    arg_group.release(ctx);
+    Ok(result)
 }
 
 /// `createPrivateKey(pem)` / `createPublicKey(pem)` PEM surrogate path.
@@ -125,16 +127,20 @@ pub(crate) fn arm_crypto_generate_key_pair_async(
     _callee: &Expr,
     args: &[Expr],
 ) -> Result<String> {
-    let alg_box = lower_expr(ctx, &args[0])?;
-    let options = lower_expr(ctx, &args[1])?;
-    let callback = lower_expr(ctx, &args[2])?;
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
+    let alg_box = arg_values[0].clone();
+    let options = arg_values[1].clone();
+    let callback = arg_values[2].clone();
     let blk = ctx.block();
     let alg_handle = unbox_ffi_str_arg(blk, &alg_box);
-    Ok(blk.call(
+    let result = blk.call(
         DOUBLE,
         "js_crypto_generate_key_pair_async",
         &[(I64, &alg_handle), (DOUBLE, &options), (DOUBLE, &callback)],
-    ))
+    );
+    arg_group.release(ctx);
+    Ok(result)
 }
 
 /// `crypto.generateKeyPairSync("rsa"|"ec"|"ed25519"|"x25519", options)` —
@@ -184,20 +190,24 @@ pub(crate) fn arm_crypto_encapsulate(
     if args.is_empty() {
         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
     }
-    let key = lower_expr(ctx, &args[0])?;
-    if let Some(callback) = args.get(1) {
-        let callback = lower_expr(ctx, callback)?;
+    // #11789 sweep: the key is held across the callback's evaluation.
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+    let key = arg_values[0].clone();
+    let result = if let Some(callback) = arg_values.get(1) {
         let blk = ctx.block();
-        Ok(blk.call(
+        blk.call(
             DOUBLE,
             "js_crypto_encapsulate_async",
-            &[(DOUBLE, &key), (DOUBLE, &callback)],
-        ))
+            &[(DOUBLE, &key), (DOUBLE, callback)],
+        )
     } else {
         let blk = ctx.block();
         let result = blk.call(I64, "js_crypto_encapsulate", &[(DOUBLE, &key)]);
-        Ok(nanbox_pointer_inline(blk, &result))
-    }
+        nanbox_pointer_inline(blk, &result)
+    };
+    arg_group.release(ctx);
+    Ok(result)
 }
 
 /// `crypto.decapsulate(privateKey, ciphertext[, callback])` — X25519.
@@ -209,16 +219,18 @@ pub(crate) fn arm_crypto_decapsulate(
     if args.len() < 2 {
         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
     }
-    let key = lower_expr(ctx, &args[0])?;
-    let ciphertext = lower_expr(ctx, &args[1])?;
-    if let Some(callback) = args.get(2) {
-        let callback = lower_expr(ctx, callback)?;
+    // #11789 sweep: each argument is held across the ones after it.
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
+    let key = arg_values[0].clone();
+    let ciphertext = arg_values[1].clone();
+    let result = if let Some(callback) = arg_values.get(2) {
         let blk = ctx.block();
-        Ok(blk.call(
+        blk.call(
             DOUBLE,
             "js_crypto_decapsulate_async",
-            &[(DOUBLE, &key), (DOUBLE, &ciphertext), (DOUBLE, &callback)],
-        ))
+            &[(DOUBLE, &key), (DOUBLE, &ciphertext), (DOUBLE, callback)],
+        )
     } else {
         let blk = ctx.block();
         let shared = blk.call(
@@ -226,6 +238,8 @@ pub(crate) fn arm_crypto_decapsulate(
             "js_crypto_decapsulate",
             &[(DOUBLE, &key), (DOUBLE, &ciphertext)],
         );
-        Ok(nanbox_pointer_inline(blk, &shared))
-    }
+        nanbox_pointer_inline(blk, &shared)
+    };
+    arg_group.release(ctx);
+    Ok(result)
 }

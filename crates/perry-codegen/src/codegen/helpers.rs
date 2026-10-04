@@ -502,8 +502,9 @@ pub(crate) fn inline_hot_small_max_call_sites() -> u32 {
     })
 }
 
-/// #8583: statepoint relocation estimate above which a function keeps its GC
-/// roots in a shadow frame instead of native statepoints.
+/// Statepoint relocation estimate above which a function keeps its GC roots
+/// in a stable shadow-frame home instead of native statepoints (#8583,
+/// #11926).
 ///
 /// `rewrite-statepoints-for-gc` adds one relocation per GC value live across
 /// each safepoint, so the optimizer's post-rewrite cost scales with
@@ -514,9 +515,10 @@ pub(crate) fn inline_hot_small_max_call_sites() -> u32 {
 /// optimized at `-Os` in ~5s). Real functions sit orders of magnitude below
 /// this: hundreds of call sites times tens of slots is ~1e4–1e5.
 ///
-/// The default (#8620) is measured, not guessed. Synthetic entry functions with
-/// a controlled `slots × safepoints` estimate were compiled at `-Os` with
-/// spilling OFF (pure RS4GC fan-out) and the `@main` codegen unit timed:
+/// The old default (#8620) protected only against the compile-time cliff.
+/// Synthetic entry functions with a controlled `slots × safepoints` estimate
+/// were compiled at `-Os` with spilling OFF (pure RS4GC fan-out) and the
+/// `@main` codegen unit timed:
 ///
 /// | estimate | fan-out finish |
 /// |---------:|---------------:|
@@ -526,26 +528,51 @@ pub(crate) fn inline_hot_small_max_call_sites() -> u32 {
 /// |    40.0M |  did not finish in 20 min |
 /// |    48.0M |  did not finish in 20 min |
 ///
-/// The fan-out cliff sits between 32M and 40M, so the default is the largest
-/// estimate whose fan-out still finished in bounded time. Below it fan-out is
-/// the cheaper lowering — spilling a moderate function costs more than the
-/// fan-out it avoids (an ~8M function spilled in 303 s vs 180 s fanned out,
-/// #8620) — and above it fan-out risks not finishing and the shadow frame wins.
-/// The former 4M default fired on ~8M functions that fan out fine in minutes.
-/// The post-RS4GC instruction budget (#8586/#8679, inprocess.rs) backstops any
-/// function this estimate misses: it re-lowers that function onto a precise
-/// shadow frame and retries before LLVM's optimizer can hang, so raising the
-/// estimate threshold is safe.
+/// #11926 found a much earlier machine-code crossover. A function with 102
+/// conservatively estimated live roots and 25 source safepoints (estimate
+/// 2,550) emitted 38,743 bytes through RS4GC and 29,766 bytes through the
+/// stable-home lowering. At 200 values/calls the two forms were 1,832,708 and
+/// 248,858 bytes respectively: RS4GC grew quadratically because every live SSA
+/// GC value was relocated at every statepoint, while the shadow-frame slots
+/// stayed put. On arm64 that 235,808-instruction body also crosses the 100k
+/// fast-emission ceiling and falls to LLVM's much larger O0 machine pipeline.
+///
+/// The low crossover applies only inside the measured domain: at least 25
+/// safepoints, with named root slots outnumbering safepoints by more than 2:1.
+/// That distinguishes the issue's many-live-locals shape from call-heavy
+/// functions, where adding one hypothetical live temporary per call is a
+/// deliberately loose compile-time overestimate. 2,048 is immediately below
+/// the smallest measured witness (2,550). The old 32M hard ceiling remains for
+/// every shape, and the post-RS4GC instruction budget (#8586/#8679,
+/// inprocess.rs) still backstops anything the source estimate misses.
 ///
 /// `PERRY_ROOT_SPILL_RELOCATIONS=<n>` overrides it; `0` disables spilling
 /// (every function stays on native statepoints, the pre-#8583 behavior).
 const DEFAULT_ROOT_SPILL_RELOCATIONS: usize = 32_000_000;
+const DEFAULT_ROOT_HOME_RELOCATIONS: usize = 2_048;
+const ROOT_HOME_MIN_SAFEPOINTS: usize = 25;
 
 pub(crate) fn root_spill_relocation_threshold() -> usize {
     std::env::var("PERRY_ROOT_SPILL_RELOCATIONS")
         .ok()
         .and_then(|v| v.trim().parse::<usize>().ok())
         .unwrap_or(DEFAULT_ROOT_SPILL_RELOCATIONS)
+}
+
+/// The lower, code-size-driven threshold shares the existing override. An
+/// explicit value keeps its historical meaning as the one selector ceiling;
+/// in particular `0` still disables every shadow-frame spill.
+fn root_home_relocation_threshold() -> usize {
+    std::env::var("PERRY_ROOT_SPILL_RELOCATIONS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .unwrap_or(DEFAULT_ROOT_HOME_RELOCATIONS)
+}
+
+fn root_home_size_candidate(slot_count: usize, sites: usize, estimate: usize) -> bool {
+    sites >= ROOT_HOME_MIN_SAFEPOINTS
+        && slot_count > sites.saturating_mul(2)
+        && estimate > root_home_relocation_threshold()
 }
 
 /// The relocation estimate for a function with `slot_count` GC-root slots and
@@ -566,7 +593,10 @@ pub(crate) fn root_relocation_estimate(slot_count: usize, safepoint_sites: usize
 
 #[cfg(test)]
 mod root_spill_default_tests {
-    use super::{root_relocation_estimate, spill_live_root_count, DEFAULT_ROOT_SPILL_RELOCATIONS};
+    use super::{
+        root_home_size_candidate, root_relocation_estimate, spill_live_root_count,
+        DEFAULT_ROOT_HOME_RELOCATIONS, DEFAULT_ROOT_SPILL_RELOCATIONS,
+    };
 
     /// Exactly what `maybe_spill_roots_to_shadow_frame` computes, so these
     /// endpoint tests track the production formula instead of a stale copy of
@@ -576,26 +606,38 @@ mod root_spill_default_tests {
         root_relocation_estimate(spill_live_root_count(slot_count, sites), sites)
     }
 
-    /// #8620: the default is pinned to the measured RS4GC fan-out cliff — the
-    /// largest estimate whose fan-out finished in bounded time (32M finished in
-    /// ~8.5 min; 40M/48M did not finish in 20 min). Change it only with fresh
-    /// measurement.
+    /// #8620's catastrophic ceiling and #11926's measured code-size crossover
+    /// are independent defaults. Change either only with a fresh size/runtime
+    /// A/B and a compile-time fan-out measurement respectively.
     #[test]
-    fn default_sits_at_the_measured_fan_out_cliff() {
+    fn defaults_cover_code_size_and_catastrophic_fanout() {
+        assert_eq!(DEFAULT_ROOT_HOME_RELOCATIONS, 2_048);
         assert_eq!(DEFAULT_ROOT_SPILL_RELOCATIONS, 32_000_000);
     }
 
-    /// The moderate case the old 4M default wrongly spilled (#8620): ~8M
-    /// relocations (4000 root slots × ~2001 safepoints) fans out in minutes, so
-    /// under the new default it stays on native statepoints.
+    /// #11926's q25 witness is the smallest measured point: 77 named/temp
+    /// slots plus 25 call-result temporaries gives 102 live roots. It must use
+    /// stable frame homes; leaving it on RS4GC is the quadratic-code bug.
     #[test]
-    fn moderate_fan_out_stays_on_statepoints() {
-        let est = production_estimate(4000, 2001);
-        assert_eq!(est, 12_008_001);
+    fn quadratic_code_witness_uses_stable_frame_homes() {
+        let est = production_estimate(77, 25);
+        assert_eq!(est, 2_550);
         assert!(
-            est <= DEFAULT_ROOT_SPILL_RELOCATIONS,
-            "moderate estimate {est} must not exceed the default (would spill)",
+            root_home_size_candidate(77, 25, est),
+            "q25 estimate {est} must select stable homes",
         );
+    }
+
+    /// Call-heavy functions are outside the low crossover: adding one
+    /// hypothetical root per call is intentionally conservative for the 32M
+    /// compile-time backstop, but is not code-size evidence. These are the
+    /// real Zod shapes that exposed the distinction while validating #11926.
+    #[test]
+    fn call_heavy_functions_stay_on_native_statepoints_below_the_hard_cap() {
+        assert!(!root_home_size_candidate(105, 108, 23_004));
+        assert!(!root_home_size_candidate(22, 114, 15_504));
+        assert!(!root_home_size_candidate(48, 54, 5_508));
+        assert!(!root_home_size_candidate(79, 21, 2_100));
     }
 
     /// The genuinely-catastrophic case (Claude Code `cli.js` `@main`,
@@ -626,8 +668,8 @@ pub(super) fn maybe_spill_roots_to_shadow_frame(
     if !native_stack_roots_enabled() {
         return;
     }
-    let threshold = root_spill_relocation_threshold();
-    if threshold == 0 {
+    let hard_threshold = root_spill_relocation_threshold();
+    if hard_threshold == 0 {
         return;
     }
     let sites = crate::collectors::count_safepoint_sites(body);
@@ -648,18 +690,32 @@ pub(super) fn maybe_spill_roots_to_shadow_frame(
     // false-positive shadow frame is cheap; a missed fan-out is not).
     let live_roots = spill_live_root_count(slot_count, sites);
     let estimate = root_relocation_estimate(live_roots, sites);
-    if estimate <= threshold {
+    let hard_limit = estimate > hard_threshold;
+    let size_crossover = root_home_size_candidate(slot_count, sites, estimate);
+    if !hard_limit && !size_crossover {
         return;
     }
     func.request_shadow_frame_spill();
-    eprintln!(
-        "perry: `{fn_name}` keeps its {live_roots} GC roots (incl. call-result temporaries) in a \
-         shadow frame instead of statepoints: an estimated {estimate} relocations ({live_roots} \
-         roots × {sites} safepoints) would make rewrite-statepoints-for-gc fan-out super-linear in \
-         the optimizer (> {threshold}). The function is still compiled at the requested \
-         optimization level; only its GC-root representation changes, and its roots stay \
-         precise (#8583). Override with PERRY_ROOT_SPILL_RELOCATIONS."
-    );
+    if hard_limit {
+        eprintln!(
+            "perry: `{fn_name}` keeps its {live_roots} GC roots (incl. call-result temporaries) in a \
+             shadow frame instead of statepoints: an estimated {estimate} relocations ({live_roots} \
+             roots × {sites} safepoints) would make rewrite-statepoints-for-gc fan-out super-linear in \
+             the optimizer (> {hard_threshold}). The function is still compiled at the requested \
+             optimization level; only its GC-root representation changes, and its roots stay \
+             precise (#8583). Override with PERRY_ROOT_SPILL_RELOCATIONS."
+        );
+    } else {
+        let size_threshold = root_home_relocation_threshold();
+        eprintln!(
+            "perry: `{fn_name}` keeps its {slot_count} named GC roots in stable shadow-frame \
+             homes: an estimated {estimate} relocations ({live_roots} roots incl. call-result \
+             temporaries × {sites} safepoints) would grow statepoint spill/reload code \
+             super-linearly (> {size_threshold}). The function is still compiled at the \
+             requested optimization level; only its GC-root representation changes, and its \
+             roots stay precise (#11926). Override with PERRY_ROOT_SPILL_RELOCATIONS."
+        );
+    }
 }
 
 /// #10663: a function body with at least this many property stores outside
@@ -767,6 +823,37 @@ pub fn set_program_has_worker(value: bool) {
 /// See [`set_program_has_worker`].
 pub fn program_has_worker() -> bool {
     PROGRAM_HAS_WORKER.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Every worker entry compiled into the program, as `(absolute path, module
+/// prefix)`. The entry module's `main` registers each with the runtime's
+/// worker entry table, which any Worker construction the compiler could not
+/// resolve at its call site consults. Set by the driver before module codegen.
+static WORKER_ENTRIES: std::sync::Mutex<Vec<(String, String)>> = std::sync::Mutex::new(Vec::new());
+
+/// Record the program's worker entries. See [`worker_entries`].
+pub fn set_worker_entries(entries: Vec<(String, String)>) {
+    *WORKER_ENTRIES.lock().unwrap() = entries;
+}
+
+/// See [`set_worker_entries`].
+pub fn worker_entries() -> Vec<(String, String)> {
+    WORKER_ENTRIES.lock().unwrap().clone()
+}
+
+/// Whether any module of this program launches a perry/thread agent
+/// (`spawn`, `parallelMap`, `parallelFilter`). Separate from Worker
+/// module evaluation: perry/thread agents share user-module globals but each
+/// agent owns a separate moving heap. The driver sets it before module codegen.
+static PROGRAM_HAS_THREAD_AGENTS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_program_has_thread_agents(value: bool) {
+    PROGRAM_HAS_THREAD_AGENTS.store(value, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn program_has_thread_agents() -> bool {
+    PROGRAM_HAS_THREAD_AGENTS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 pub(crate) fn write_barriers_enabled() -> bool {
@@ -1937,8 +2024,7 @@ pub(super) fn emit_callee_binding_resolutions(
                 ctx.block().bitcast_i64_to_double(&bits)
             }
         } else if let Some(global_name) = ctx.module_globals.get(&id).cloned() {
-            let g_ref = format!("@{global_name}");
-            ctx.block().load(DOUBLE, &g_ref)
+            crate::codegen::global_transfer::load_module_global(ctx, id, &global_name)
         } else if let Some(slot) = ctx.locals.get(&id).cloned() {
             if ctx.boxed_vars.contains(&id) {
                 continue;

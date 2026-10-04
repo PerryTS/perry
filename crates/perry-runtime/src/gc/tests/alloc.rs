@@ -514,7 +514,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             pointer_free: false,
             move_hook_kind: GcMoveHookKind::None,
             rewrite_hook_kind: GcRewriteHookKind::None,
-            finalize_hook_kind: GcFinalizeHookKind::None,
+            finalize_hook_kind: GcFinalizeHookKind::BufferSideTables,
         },
         GcTypeInfo {
             type_id: GC_TYPE_TYPED_ARRAY,
@@ -529,7 +529,7 @@ fn test_gc_type_metadata_covers_all_declared_types() {
             pointer_free: true,
             move_hook_kind: GcMoveHookKind::None,
             rewrite_hook_kind: GcRewriteHookKind::None,
-            finalize_hook_kind: GcFinalizeHookKind::TypedArrayViewMeta,
+            finalize_hook_kind: GcFinalizeHookKind::TypedArraySideTables,
         },
         GcTypeInfo {
             type_id: GC_TYPE_SET,
@@ -1172,8 +1172,8 @@ fn malloc_state_capacity_grows_once_for_heavy_threads() {
             "objects Vec must not start at the heavy pre-size (got {initial_objects_cap})"
         );
         assert!(
-            initial_set_cap < MALLOC_STATE_HEAVY_CAPACITY,
-            "pointer set must not start at the heavy pre-size (got {initial_set_cap})"
+            initial_set_cap == 0,
+            "inactive pointer set must not allocate (got {initial_set_cap})"
         );
 
         // Cross the heavy threshold; the one-shot reserve must trip.
@@ -1191,8 +1191,54 @@ fn malloc_state_capacity_grows_once_for_heavy_threads() {
                 "objects Vec must reserve the heavy capacity (got {})",
                 s.objects.capacity()
             );
+            assert_eq!(
+                s.set.capacity(),
+                0,
+                "heavy but inactive registry must stay allocation-free"
+            );
+        });
+
+        // Late activation must recover every existing allocation, reserve
+        // heavy growth headroom, and keep tracking subsequent allocations.
+        let first = MALLOC_STATE.with(|s| s.borrow().objects[0]);
+        assert!(super::super::malloc::gc_malloc_header_is_tracked(first));
+        MALLOC_STATE.with(|s| {
+            let s = s.borrow();
+            assert!(s.set.capacity() >= MALLOC_STATE_HEAVY_CAPACITY);
+            assert_eq!(s.set.len(), s.objects.len());
+            assert!(s.objects.iter().all(|p| s.set.contains(&(*p as usize))));
+        });
+        let next = gc_malloc(16, GC_TYPE_STRING);
+        MALLOC_STATE.with(|s| {
+            let s = s.borrow();
+            assert!(s
+                .set
+                .contains(&(unsafe { next.sub(GC_HEADER_SIZE) } as usize)));
+            assert_eq!(s.set.len(), s.objects.len());
         });
     })
     .join()
     .expect("malloc capacity growth test panicked");
+}
+
+#[test]
+fn malloc_active_registry_keeps_heavy_growth_headroom() {
+    std::thread::spawn(|| {
+        let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let first = gc_malloc(16, GC_TYPE_STRING);
+        assert!(super::super::malloc::gc_malloc_header_is_tracked(unsafe {
+            first.sub(GC_HEADER_SIZE) as *const GcHeader
+        }));
+        while MALLOC_STATE.with(|s| s.borrow().objects.len()) < MALLOC_STATE_HEAVY_LEN_THRESHOLD {
+            let _ = gc_malloc(16, GC_TYPE_STRING);
+        }
+        MALLOC_STATE.with(|s| {
+            let s = s.borrow();
+            assert!(s.set.capacity() >= MALLOC_STATE_HEAVY_CAPACITY);
+            assert_eq!(s.set.len(), s.objects.len());
+            assert!(s.objects.iter().all(|p| s.set.contains(&(*p as usize))));
+        });
+    })
+    .join()
+    .expect("active malloc registry growth test panicked");
 }

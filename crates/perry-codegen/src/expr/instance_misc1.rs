@@ -104,6 +104,8 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         "DataView" => 0xFFFF002B,
         "WeakMap" => 0xFFFF002C,
         "WeakSet" => 0xFFFF002D,
+        "WeakRef" => 0xFFFF0064,
+        "FinalizationRegistry" => 0xFFFF0065,
         "Promise" => 0xFFFF0027,
         "Number" => 0xFFFF00D0,
         "String" => 0xFFFF00D1,
@@ -498,7 +500,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "Uint8Array" => 0xFFFF0004u32,
                 "Buffer" => 0xFFFF000Cu32,
                 // Other %TypedArray% kinds (#3148). The runtime resolves the
-                // actual kind via TYPED_ARRAY_REGISTRY + class_id_for_kind in
+                // actual kind from the typed array's header + class_id_for_kind in
                 // instanceof.rs; these reserved ids must match the
                 // CLASS_ID_* constants in perry-runtime/src/typedarray.rs.
                 "Int8Array" => 0xFFFF0030u32,
@@ -540,6 +542,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "DataView" => 0xFFFF002Bu32,
                 "WeakMap" => 0xFFFF002Cu32,
                 "WeakSet" => 0xFFFF002Du32,
+                // WeakRef / FinalizationRegistry instances carry these ids on
+                // their header (CLASS_ID_WEAKREF / CLASS_ID_FINALIZATION_REGISTRY
+                // in perry-runtime/src/weakref.rs), so the class-id match needs
+                // no probe. They must stay distinct from every probe id above:
+                // they once shared 0x29/0x2A with `Request`/`Headers`.
+                "WeakRef" => 0xFFFF0064u32,
+                "FinalizationRegistry" => 0xFFFF0065u32,
                 // `Blob` — stream consumers allocate a scoped Blob-shaped
                 // ObjectHeader tagged with this reserved class id.
                 "Blob" => 0xFFFF0026u32,
@@ -933,11 +942,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Materialize cooked array — go through lower_array_literal so
             // SSO + GC + length-init logic stays in one place.
             let cooked_box = lower_array_literal(ctx, cooked)?;
+            // #11789 sweep: the cooked array is held across the raw array's
+            // allocation below.
+            let mut template_group = crate::rooting::open_rooted_group(1);
+            let cooked_root =
+                template_group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &cooked_box, true);
             // Materialize raw array — same path, but all elements are
             // String literals (built at HIR lowering from each quasi's
             // `.raw` text), so build a Vec<Expr::String> on the fly.
             let raw_exprs: Vec<Expr> = raw.iter().map(|s| Expr::String(s.clone())).collect();
             let raw_box = lower_array_literal(ctx, &raw_exprs)?;
+            let cooked_box = template_group.reread_emitted(ctx, cooked_root);
             let blk = ctx.block();
             let cooked_handle = unbox_to_i64(blk, &cooked_box);
             let raw_handle = unbox_to_i64(blk, &raw_box);
@@ -947,7 +962,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_tagged_template_get_or_init",
                 &[(I64, &site_id), (I64, &cooked_handle), (I64, &raw_handle)],
             );
-            Ok(nanbox_pointer_inline(blk, &registered))
+            let boxed = nanbox_pointer_inline(blk, &registered);
+            template_group.release(ctx);
+            Ok(boxed)
         }
 
         // `strings.raw` — look up the registered raw-strings array for a

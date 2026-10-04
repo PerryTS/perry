@@ -1,0 +1,23 @@
+diff --git a/crates/perry-runtime/src/gc/mod.rs b/crates/perry-runtime/src/gc/mod.rs
+index d8feb3e9f4..cd43e68ed1 100644
+--- a/crates/perry-runtime/src/gc/mod.rs
++++ b/crates/perry-runtime/src/gc/mod.rs
+@@ -439,6 +439,8 @@ fn gc_collect_minor_with_trigger_inner(
+     let start = Instant::now();
+     crate::arena::old_pages_begin_gc_cycle();
+     let previous_pause_us = gc_last_pause_us();
++    // Negative control: restore the original unconditional RSS query.
++    let current_rss_bytes = minor_fallback_rss_bytes();
+     // Not budgeted, so the low-pause veto does not apply and the policy is
+     // always allowed to run here (#7611 deleted the env veto that used to sit
+     // in this slot). The variable stays rather than being folded away: it is
+@@ -488,9 +490,6 @@ fn gc_collect_minor_with_trigger_inner(
+             trace,
+         };
+     }
+-    // Only fallback evacuation consumes RSS. Successful copying minors avoid
+-    // the OS query; a declined or rolled-back attempt samples before marking.
+-    let current_rss_bytes = minor_fallback_rss_bytes();
+     clear_mark_seeds();
+     // Old-page defrag belongs to the non-copying fallback below. Snapshotting
+     // and sorting all old-page metadata before trying the copying fast path

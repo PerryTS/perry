@@ -482,19 +482,41 @@ fn store_ic_hit_reads_no_per_object_receiver_fact() {
         !kind.contains("load i32") && !kind.contains(", 128") && !kind.contains(", 768"),
         "the hit reads no class id and tests no proof / ordinary-mark bit:\n{kind}"
     );
-    // The store check (DESIGN §3.2): a word whose sign bit is set (an `F64`
-    // lane) refuses a value whose exponent is all ones to the miss; every
-    // other store goes on to the store block.
+    // The store check (DESIGN §3.2): a word with neither flag set (bits 63
+    // and 62 clear) stores at once. A word whose sign bit is set (an `F64`
+    // lane) refuses a value whose exponent is all ones to the miss; a word
+    // with bit 62 set (a ConstFn lane) admits only a closure of the site body.
     let rep = block(&ir, HIT_REP).unwrap_or_else(|| panic!("rep block:\n{ir}"));
     assert!(
-        rep.contains("icmp slt i64") && rep.contains("9218868437227405312"),
-        "the rep block must test the word's F64 flag and the value's exponent:\n{rep}"
+        rep.contains("lshr i64") && rep.contains(", 62"),
+        "the rep block must read the word flag bits (63, 62):\n{rep}"
     );
     let (_, r_true, r_false) = branch_targets(rep.lines().last().unwrap_or("").trim());
     assert!(
-        label_is(&r_true, "put.pic.miss") && label_is(&r_false, HIT_STORE),
-        "a refused value misses, anything else stores:\n{rep}"
+        label_is(&r_true, HIT_STORE) && label_is(&r_false, "put.pic.hit.lane"),
+        "a plain word stores, a flagged word goes on to its lane check:\n{rep}"
     );
+    let lane = block(&ir, "put.pic.hit.lane").unwrap_or_else(|| panic!("lane block:\n{ir}"));
+    assert!(
+        lane.contains("icmp slt i64"),
+        "the lane block must test the word's F64 flag:\n{lane}"
+    );
+    let (_, l_true, l_false) = branch_targets(lane.lines().last().unwrap_or("").trim());
+    assert!(
+        label_is(&l_true, "put.pic.hit.f64") && label_is(&l_false, "put.pic.hit.constfn"),
+        "the F64 flag picks the exponent test, otherwise the ConstFn check:\n{lane}"
+    );
+    let f64_lane = block(&ir, "put.pic.hit.f64").unwrap_or_else(|| panic!("f64 block:\n{ir}"));
+    assert!(
+        f64_lane.contains("9218868437227405312"),
+        "the F64 lane must test the value's exponent:\n{f64_lane}"
+    );
+    let (_, f_true, f_false) = branch_targets(f64_lane.lines().last().unwrap_or("").trim());
+    assert!(
+        label_is(&f_true, "put.pic.miss") && label_is(&f_false, HIT_STORE),
+        "a refused value misses, anything else stores:\n{f64_lane}"
+    );
+    assert_constfn_body_compare(&ir);
 
     // No other edge reaches the store.
     let into_store = ir
@@ -508,8 +530,53 @@ fn store_ic_hit_reads_no_per_object_receiver_fact() {
         })
         .count();
     assert_eq!(
-        into_store, 1,
-        "only the store check may enter the store:\n{ir}"
+        into_store, 3,
+        "only the plain word, the F64 lane and the ConstFn check may enter the store:\n{ir}"
+    );
+}
+
+/// The ConstFn value check admits a closure only when the closure's
+/// `ClosureHeader::info` equals the site's body word (word 4 of the packed
+/// record, loaded atomically). A compare of a value with itself, or one that
+/// never reads the site word, admits a closure of ANY body. Sabotage:
+/// comparing the body word with itself turns this red.
+fn assert_constfn_body_compare(ir: &str) {
+    let header = block(ir, "put.pic.constfn.header")
+        .unwrap_or_else(|| panic!("the ConstFn value check block:\n{ir}"));
+    let body_load = header
+        .lines()
+        .find(|l| l.contains("load atomic i64") && l.contains("monotonic"))
+        .unwrap_or_else(|| panic!("the site body word is loaded atomically:\n{header}"));
+    let body_reg = body_load
+        .trim()
+        .split(" = ")
+        .next()
+        .unwrap_or("")
+        .to_string();
+    let site_gep = header.lines().any(|l| {
+        l.contains("getelementptr")
+            && l.contains("_packed_set")
+            && l.trim_end().ends_with(", i64 4")
+    });
+    assert!(
+        site_gep,
+        "the body word is word 4 of the site record:\n{header}"
+    );
+    let cmp = header
+        .lines()
+        .find(|l| l.contains("icmp eq i64") && l.contains(&body_reg))
+        .unwrap_or_else(|| panic!("the body word must be compared:\n{header}"));
+    let ops: Vec<&str> = cmp
+        .trim()
+        .split("icmp eq i64")
+        .nth(1)
+        .unwrap_or("")
+        .split(',')
+        .map(str::trim)
+        .collect();
+    assert!(
+        ops.len() == 2 && ops[0] != ops[1],
+        "the closure's info must be compared with the site body word, not with itself:\n{cmp}"
     );
 }
 
@@ -669,4 +736,48 @@ fn dyn_ic_inline_store_keeps_its_semantic_fallback_for_reference_values() {
         entry.contains("call double @js_put_value_set_dyn_ic(") || ir.contains("%put.dynic.slow"),
         "the receiver guard must still fall through to the outlined helper:\n{ir}"
     );
+}
+
+/// A stored value that can never be a closure (a literal, an operator's
+/// primitive result) has nothing a ConstFn lane could admit, so the site emits
+/// no ConstFn admission: a flagged lane takes the miss, as a failed admission
+/// would. A value that may be a closure keeps it.
+#[test]
+fn store_ic_emits_no_constfn_admission_for_a_value_that_cannot_be_a_closure() {
+    let constfn_blocks = [
+        "put.pic.hit.constfn",
+        "put.add.constfn",
+        "put.pic.constfn.header",
+    ];
+    for (name, value) in [
+        ("store_ic_constfn_number", Expr::Number(1.0)),
+        ("store_ic_constfn_string", Expr::String("s".to_string())),
+        (
+            "store_ic_constfn_sum",
+            Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(VALUE)),
+                right: Box::new(Expr::Number(1.0)),
+            },
+        ),
+    ] {
+        let ir = write_pic_ir(name, value);
+        for stem in constfn_blocks {
+            assert!(
+                block(&ir, stem).is_none(),
+                "{name}: `{stem}` must not be emitted for a value that is never a closure:\n{ir}"
+            );
+        }
+        assert!(
+            block(&ir, "put.pic.hit.f64").is_some(),
+            "{name}: the F64 lane check stays:\n{ir}"
+        );
+    }
+    let ir = write_pic_ir("store_ic_constfn_any", Expr::LocalGet(VALUE));
+    for stem in constfn_blocks {
+        assert!(
+            block(&ir, stem).is_some(),
+            "a value that may be a closure keeps `{stem}`:\n{ir}"
+        );
+    }
 }

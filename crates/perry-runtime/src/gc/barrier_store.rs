@@ -107,10 +107,12 @@ fn slot_holds_raw_f64(parent_user: usize, slot_index: usize) -> bool {
             if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
                 return false;
             }
-            return crate::object::field_rep_store::object_slot_rep(
+            let rep = crate::object::field_rep_store::object_slot_rep(
                 parent_user as *const crate::object::ObjectHeader,
                 slot_index,
-            ) != crate::object::field_rep::REP_ANY;
+            );
+            return rep == crate::object::field_rep::REP_F64
+                || rep == crate::object::field_rep::REP_F64_DEPRECATED;
         }
     }
     false
@@ -187,6 +189,18 @@ pub(crate) fn runtime_store_jsvalue_slot(
     }
     layout_note_slot(parent_user, slot_index, value_bits);
     runtime_write_barrier_slot(parent_user, slot_addr, value_bits);
+}
+
+/// Shade `value_bits` for an in-progress incremental mark: an edge that now
+/// lives outside the heap on behalf of an owner the mark may already have
+/// traced (a shape record's [[Prototype]] word, `object::shapes_prototype`).
+/// The minor-collection half of such an edge is the shape table's
+/// old-carrier gate, so no remembered-set entry is recorded.
+pub(crate) fn runtime_shade_external_edge(value_bits: u64) {
+    if barrier_scalar_child_skips(value_bits) {
+        return;
+    }
+    let _ = incremental_mark_barrier_value(value_bits);
 }
 
 pub(crate) fn runtime_write_barrier_external_slot(

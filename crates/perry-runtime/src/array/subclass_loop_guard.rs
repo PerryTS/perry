@@ -479,9 +479,8 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
     }
     let object = raw.cast::<ObjectHeader>();
     let current_receiver_word = unsafe { ptr::read_unaligned(raw.cast::<u64>()) };
-    if current_receiver_word != receiver_word
-        || crate::object::prototype_chain::object_has_prototype_divergence(raw as usize)
-    {
+    // The receiver word carries the ShapeId, which pins the prototype.
+    if current_receiver_word != receiver_word {
         return 0;
     }
     let dense_prefix_len = packed_bounds as u32;
@@ -622,12 +621,6 @@ fn revalidate_admitted_subclass_live(
     };
     if admitted_bound > 16_000_000
         || unsafe { ptr::read_unaligned(raw.cast::<u64>()) } != receiver_word
-    {
-        return 0;
-    }
-    let meta = unsafe { (*object).meta };
-    if !meta.is_null()
-        && unsafe { (*meta).flags } & crate::object::OBJECT_META_FLAG_PROTO_DIVERGED != 0
     {
         return 0;
     }

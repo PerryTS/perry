@@ -86,8 +86,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // and NaN-boxes the returned promise pointer with POINTER_TAG.
         // Both args are unboxed to raw `*const StringHeader`.
         Expr::FetchGetWithAuth { url, auth_header } => {
-            let url_box = lower_expr(ctx, url)?;
-            let auth_box = lower_expr(ctx, auth_header)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [url, auth_header];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let url_box = rooted_values[0].clone();
+            let auth_box = rooted_values[1].clone();
             let blk = ctx.block();
             let url_ptr = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &url_box)]);
             let auth_ptr = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &auth_box)]);
@@ -96,7 +99,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_fetch_get_with_auth",
                 &[(I64, &url_ptr), (I64, &auth_ptr)],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         // #600: `fetchPostWithAuth(url, "Bearer ...", body)` — three-arg
         // POST form. Body is pre-stringified by the caller (matches the
@@ -106,9 +111,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             auth_header,
             body,
         } => {
-            let url_box = lower_expr(ctx, url)?;
-            let auth_box = lower_expr(ctx, auth_header)?;
-            let body_box = lower_expr(ctx, body)?;
+            let rooted_operands: [&perry_hir::Expr; 3] = [url, auth_header, body];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let url_box = rooted_values[0].clone();
+            let auth_box = rooted_values[1].clone();
+            let body_box = rooted_values[2].clone();
             let blk = ctx.block();
             let url_ptr = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &url_box)]);
             let auth_ptr = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &auth_box)]);
@@ -118,7 +126,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_fetch_post_with_auth",
                 &[(I64, &url_ptr), (I64, &auth_ptr), (I64, &body_ptr)],
             );
-            Ok(nanbox_pointer_inline(blk, &promise))
+            let rooted_result = nanbox_pointer_inline(blk, &promise);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // Issue #1123 — `net.createServer(handler?)` / `net.createServer(opts,
@@ -276,8 +286,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             byte_offset,
             length,
         } => {
-            let data_box = lower_expr(ctx, data)?;
-            let offset_box = lower_expr(ctx, byte_offset)?;
+            let rooted_operands: [&perry_hir::Expr; 2] = [data, byte_offset];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let data_box = rooted_values[0].clone();
+            let offset_box = rooted_values[1].clone();
             let len_i32 = if let Some(len_expr) = length {
                 let len_box = lower_expr(ctx, len_expr)?;
                 ctx.block().fptosi(DOUBLE, &len_box, I32)
@@ -292,7 +305,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 "js_buffer_from_arraybuffer_slice",
                 &[(I64, &data_i64), (I32, &offset_i32), (I32, &len_i32)],
             );
-            Ok(nanbox_pointer_inline(blk, &buf_handle))
+            let rooted_result = nanbox_pointer_inline(blk, &buf_handle);
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
         // Issue #630: `Buffer.allocUnsafe(size)` — fast-path allocator
         // (no zero-fill). The runtime helper returns a raw `*mut
@@ -396,13 +411,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- structuredClone(v[, options]) — real deep copy --------
         Expr::StructuredClone { value, options } => {
-            let v = lower_expr(ctx, value)?;
-            let opts = lower_expr(ctx, options)?;
-            Ok(ctx.block().call(
+            let rooted_operands: [&perry_hir::Expr; 2] = [value, options];
+            let (rooted_values, rooted_group) =
+                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+            let v = rooted_values[0].clone();
+            let opts = rooted_values[1].clone();
+            let rooted_result = ctx.block().call(
                 DOUBLE,
                 "js_structured_clone_with_options",
                 &[(DOUBLE, &v), (DOUBLE, &opts)],
-            ))
+            );
+            rooted_group.release(ctx);
+            Ok(rooted_result)
         }
 
         // -------- `new WeakRef(target)` — allocate a wrapper object --------

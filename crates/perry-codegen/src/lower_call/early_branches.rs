@@ -254,16 +254,16 @@ pub fn try_lower_index_get_call(
         if crate::type_analysis::receiver_class_name(ctx, object).as_deref() == Some("Server")
             && is_async_dispose_symbol_index(index)
         {
-            let recv_box = lower_expr(ctx, object)?;
-            for arg in args {
-                let _ = lower_expr(ctx, arg)?;
-            }
+            // #11789 sweep: the server is held across the (ignored) arguments.
+            let (recv_box, _discarded, group) = super::lower_operands_rooted(ctx, object, args)?;
             let blk = ctx.block();
             let handle = unbox_to_i64(blk, &recv_box);
             blk.call_void("js_net_server_close", &[(I64, &handle), (I64, "0")]);
             let undef = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             let promise_handle = blk.call(I64, "js_promise_resolved", &[(DOUBLE, &undef)]);
-            return Ok(Some(nanbox_pointer_inline(blk, &promise_handle)));
+            let boxed = nanbox_pointer_inline(blk, &promise_handle);
+            group.release(ctx);
+            return Ok(Some(boxed));
         }
         let is_static_string = matches!(index.as_ref(), Expr::String(_))
             || crate::type_analysis::is_string_expr(ctx, index)
@@ -299,14 +299,16 @@ pub fn try_lower_index_get_call(
                 };
                 let recv_box = group.reread(ctx, recv_idx)?;
                 let (args_ptr, args_len) = build_dispatch_args_buffer(ctx, group, &arg_idxs)?;
+                let memo_slot = super::direct_method_guard::emit_chain_memo_slot(ctx);
                 return Ok(Some(ctx.block().call(
                     DOUBLE,
-                    "js_native_call_method_str_key",
+                    "js_native_call_method_str_key_memo",
                     &[
                         (DOUBLE, &recv_box),
                         (I64, &name_handle),
                         (crate::types::PTR, &args_ptr),
                         (I64, &args_len),
+                        (crate::types::PTR, &memo_slot),
                     ],
                 )));
             }
@@ -320,14 +322,16 @@ pub fn try_lower_index_get_call(
             let recv_box = group.reread(ctx, recv_idx)?;
             let key_box = group.reread(ctx, key_idx)?;
             let (args_ptr, args_len) = build_dispatch_args_buffer(ctx, group, &arg_idxs)?;
+            let memo_slot = super::direct_method_guard::emit_chain_memo_slot(ctx);
             Ok(Some(ctx.block().call(
                 DOUBLE,
-                "js_native_call_method_value",
+                "js_native_call_method_value_memo",
                 &[
                     (DOUBLE, &recv_box),
                     (DOUBLE, &key_box),
                     (crate::types::PTR, &args_ptr),
                     (I64, &args_len),
+                    (crate::types::PTR, &memo_slot),
                 ],
             )))
         });
@@ -346,17 +350,14 @@ pub fn try_lower_current_step_closure_call(
     // local to refer to anymore, so the callee is read out of TLS.
     // Dispatches through the same `js_closure_call<N>` family.
     if matches!(callee, Expr::CurrentStepClosure) {
-        let recv_box = lower_expr(ctx, callee)?;
-        let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-        for a in args {
-            lowered_args.push(lower_expr(ctx, a)?);
-        }
+        // #11789 sweep: the callee is read from TLS before the arguments and
+        // each argument is held across the ones after it, so they share one
+        // group, as the closure-typed local call below does.
+        let (recv_box, lowered_args, group) = super::lower_operands_rooted(ctx, callee, args)?;
         let closure_handle = unbox_to_i64(ctx.block(), &recv_box);
-        return Ok(Some(super::emit_closure_handle_call(
-            ctx,
-            &closure_handle,
-            &lowered_args,
-        )));
+        let result = super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args);
+        group.release(ctx);
+        return Ok(Some(result));
     }
     Ok(None)
 }
@@ -415,13 +416,23 @@ pub fn try_lower_closure_typed_local_call(
             // truthfully puts `stage(rec)` — `pipeline`'s inner loop, three of
             // these per record — back on the IR it had before #8084, while
             // `stage(mk())` still roots.
-            let mut callee_group = crate::rooting::open_rooted_group(1);
+            //
+            // #11789: the ARGUMENTS outlive each other the same way. They are
+            // evaluated left to right, and each one is held while the ones
+            // after it are lowered, so `show(String(x), work(3))` kept
+            // `String(x)`'s string in a bare register across `work`'s loop
+            // polls and handed the closure its retired from-space address.
+            // Every argument joins the callee's group, rooted across exactly
+            // the arguments that follow it: `lower_call_args_rooted`'s window,
+            // which a call to a `function` declaration already had.
+            let mut callee_group = crate::rooting::open_rooted_group(1 + args.len());
             let recv_box = lower_expr(ctx, callee)?;
             let collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
             let callee_root = callee_group.adopt(ctx, callee, &recv_box, collects);
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for a in args {
-                lowered_args.push(lower_expr(ctx, a)?);
+            let mut arg_roots: Vec<usize> = Vec::with_capacity(args.len());
+            for (i, a) in args.iter().enumerate() {
+                let collects = crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+                arg_roots.push(callee_group.lower(ctx, a, collects)?);
             }
 
             // Issue #493: rest-bundling is handled inside js_closure_callN from
@@ -443,6 +454,10 @@ pub fn try_lower_closure_typed_local_call(
             // Re-read below the argument lowering, THEN unmask: the unmask
             // must consume the post-relocation address.
             let recv_box = callee_group.reread(ctx, callee_root)?;
+            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
+            for &root in &arg_roots {
+                lowered_args.push(callee_group.reread(ctx, root)?);
+            }
             let closure_handle = {
                 let blk = ctx.block();
                 unbox_to_i64(blk, &recv_box)

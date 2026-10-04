@@ -3,15 +3,15 @@
 
 use super::flags::CanonicalFlags;
 use super::perex_memory::{Buffer, Charge, MemoryBudget, StorageError};
-use super::perex_owner::{BuildError, GcProgram, OwnerError};
-use crate::gc::RuntimeHandleScope;
+use super::perex_owner::{BuildError, GcProgram, InPlace, OwnerError};
+use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use perex::binding::{
     BoundProgram, BoundProgramError, BoundResources, BoundSubject, ImmutableSubject, PairError,
     SubjectError,
 };
 use perex::compiler::{self, CompileError, Node, Range};
 use perex::executor::{
-    ExecError, Frame, Progress, Run, Scratch, ScratchOwner, ScratchRequirements, Search,
+    ExecError, Frame, Progress, Resources, Run, Scratch, ScratchOwner, ScratchRequirements, Search,
     SearchError, Undo,
 };
 use perex::input::Position;
@@ -343,8 +343,10 @@ fn poll_on_stride(poll: &mut impl FnMut() -> Result<(), EngineError>) -> Result<
 }
 
 /// What a lent attempt produced: an answer, or a reason to run the owned path.
-enum Lent<'mem> {
-    Done(Option<Match<'mem>>, Position),
+/// Captures, when asked for, went to the caller's slot; nothing large is
+/// carried here, so a decided search moves two words, not its capture slots.
+enum Lent {
+    Done(Option<Span>, Position),
     /// The cell was already borrowed, or the search asked for more frames or
     /// undo entries than it holds. The cell has been grown to the requested
     /// size, so the next call starts big enough; this call runs the owned path
@@ -359,10 +361,14 @@ pub(crate) enum CaptureMode {
     All,
 }
 
+/// Capture slots of one match: None under Full. All retains unset groups and
+/// includes group zero.
+pub(crate) type Captures<'a> = Slots<'a, Option<Span>, INLINE_CAPTURES>;
+
 pub(crate) struct Match<'a> {
     pub(crate) full: Span,
     /// None under Full. All retains unset groups and includes group zero.
-    pub(crate) captures: Option<Slots<'a, Option<Span>, INLINE_CAPTURES>>,
+    pub(crate) captures: Option<Captures<'a>>,
 }
 
 fn search_error(error: SearchError<PairError<OwnerError, OwnerError>>) -> EngineError {
@@ -371,6 +377,46 @@ fn search_error(error: SearchError<PairError<OwnerError, OwnerError>>) -> Engine
         SearchError::Resource(PairError::Program(error)) => EngineError::Program(error),
         SearchError::Resource(PairError::Subject(error)) => EngineError::Subject(error),
     }
+}
+
+/// What a search's polls do to the resources it reads.
+///
+/// A poll may collect, and a collection may move the program cell and the
+/// subject string. Owner-based bindings (`GcProgram`, `HeapSubject`) re-read
+/// their base from a registered root on every view and need nothing here
+/// (`()`). Resources read in place (`perex_owner::InPlace`) start unrooted:
+/// `before_poll` gives them roots, and every view after it reads its base
+/// through them. Every poll a search runs goes through [`poll_with`], so none
+/// runs before the hook.
+pub(crate) trait PollRoots {
+    fn before_poll(&self) {}
+}
+
+impl PollRoots for () {}
+
+/// The one way a search polls: after the resources' [`PollRoots`] hook.
+#[inline]
+fn poll_with<H: PollRoots>(
+    hooks: &H,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<(), EngineError> {
+    hooks.before_poll();
+    poll()
+}
+
+/// Copy a decided match's captures into the caller's slot under `All`.
+fn take_captures<'mem>(
+    mode: CaptureMode,
+    count: usize,
+    memory: &'mem MemoryBudget,
+    captures: &mut Option<Captures<'mem>>,
+    copy: impl FnOnce(&mut [Option<Span>]) -> Result<(), ExecError>,
+) -> Result<(), EngineError> {
+    if let CaptureMode::All = mode {
+        let output = captures.insert(Slots::new(memory, count)?);
+        copy(output).map_err(EngineError::Execution)?;
+    }
+    Ok(())
 }
 
 /// Find from an absolute UTF-16 position in the complete original string.
@@ -399,12 +445,9 @@ pub(crate) fn find<'mem, S: ImmutableSubject<Error = OwnerError>>(
 /// `near` must come from a search or reader over this same binding. Another
 /// string with an identical layout cannot be detected and would give wrong
 /// answers, so callers keep a position only as long as the binding it came from.
-/// One search over lent scratch. Returns `Fallback` without an answer when the
-/// scratch cannot serve this search; the caller then runs the owned path.
-#[allow(clippy::too_many_arguments)]
-fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
-    resources: &BoundResources<'_, GcProgram<'_>, S>,
-    registers: usize,
+pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
+    program: &BoundProgram<GcProgram<'_>>,
+    subject: &BoundSubject<S>,
     start: usize,
     near: Option<Position>,
     mode: CaptureMode,
@@ -412,14 +455,192 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
     memory: &'mem MemoryBudget,
     quantum: usize,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
-) -> Result<Lent<'mem>, EngineError> {
+) -> Result<(Option<Match<'mem>>, Position), EngineError> {
+    let mut captures = None;
+    let (full, position) = find_near_into(
+        program,
+        subject,
+        start,
+        near,
+        mode,
+        budget,
+        memory,
+        quantum,
+        &mut captures,
+        poll,
+    )?;
+    Ok((full.map(|full| Match { full, captures }), position))
+}
+
+/// [`find_near`] answering the full match and position, with the captures (under
+/// `All`, on a match) written to the caller's slot instead of moved out.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn find_near_into<'mem, S: ImmutableSubject<Error = OwnerError>>(
+    program: &BoundProgram<GcProgram<'_>>,
+    subject: &BoundSubject<S>,
+    start: usize,
+    near: Option<Position>,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    quantum: usize,
+    captures: &mut Option<Captures<'mem>>,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<(Option<Span>, Position), EngineError> {
+    begin(quantum, poll)?;
+    let registers = program
+        .with_view(|program| program.register_count())
+        .map_err(EngineError::Program)?;
+    search(
+        &BoundResources { program, subject },
+        &(),
+        registers,
+        start,
+        near,
+        mode,
+        budget,
+        memory,
+        quantum,
+        captures,
+        poll,
+    )
+}
+
+/// One builtin search over the program cell of the RegExp `receiver` holds
+/// (NaN-boxed, as `perex_api::execute_rooted` takes it) and `input`'s own bytes
+/// (S6): the bound program is the cell, whose witness makes binding it a
+/// header compare, and the subject is the string's storage, bound in constant
+/// work once it carries `STRING_FLAG_WTF8_VALIDATED`. Nothing is rooted,
+/// copied or marked unless the search polls; see `perex_owner::InPlace` for
+/// why every poll is safe. `hint` asks for the cross-call position hint of a
+/// non-ASCII subject (#10164), which only g/y searches can use.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn find_in_place<'mem>(
+    receiver: &RuntimeHandle<'_>,
+    input: &RuntimeHandle<'_>,
+    start: usize,
+    hint: bool,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    quantum: usize,
+    captures: &mut Option<Captures<'mem>>,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<(Option<Span>, Position), EngineError> {
+    // The pre-search poll runs before either base is read.
+    begin(quantum, poll)?;
+    let scope = RuntimeHandleScope::new();
+    // No collecting action from here on except the search's own polls, each
+    // of which roots the in-place resources first.
+    let re = super::perex_api::regexp(receiver);
+    let place = unsafe { InPlace::new(&scope, re, input) }
+        .map_err(|e| EngineError::Subject(SubjectError::Resource(e)))?;
+    let program =
+        super::perex_api::bind_witnessed(place.words(), place.witness(), budget, |witness| {
+            place.record_witness(witness)
+        })?;
+    // Binding the subject neither allocates nor collects, so the header
+    // `with_string_mut` passes stays current through it, and marking it
+    // validated is a flag store into that same header.
+    let (subject, identity) = place.with_string_mut(|s| unsafe {
+        if s.is_null() {
+            return Err(EngineError::Subject(SubjectError::Resource(
+                OwnerError::Missing,
+            )));
+        }
+        let identity = if hint {
+            super::perex_position_hint::identity_of_header(s)
+        } else {
+            None
+        };
+        let subject = super::perex_api::bind_counted(
+            place.bytes(),
+            (*s).utf16_len as usize,
+            (*s).flags & crate::string::STRING_FLAG_WTF8_VALIDATED != 0,
+            || (*s).flags |= crate::string::STRING_FLAG_WTF8_VALIDATED,
+        )?;
+        Ok((subject, identity))
+    })?;
+    let near = identity.and_then(super::perex_position_hint::lookup);
+    let registers = match place.registers() {
+        Some(registers) => registers,
+        None => {
+            let registers = program
+                .with_view(|program| program.register_count())
+                .map_err(EngineError::Program)?;
+            place.record_registers(registers);
+            registers
+        }
+    };
+    let (full, position) = search(
+        &BoundResources {
+            program: &program,
+            subject: &subject,
+        },
+        &place,
+        registers,
+        start,
+        near,
+        mode,
+        budget,
+        memory,
+        quantum,
+        captures,
+        poll,
+    )?;
+    if identity.is_some() {
+        // Re-read after the search: a collection during it may have moved the
+        // string, and the identity must be the one the next call will see.
+        if let Some(identity) = super::perex_position_hint::identity_of(input) {
+            super::perex_position_hint::record(identity, position);
+        }
+    }
+    Ok((full, position))
+}
+
+/// The per-search preamble: count it, check the quantum, and run the strided
+/// pre-search poll while no search state or view exists yet.
+#[inline]
+fn begin(
+    quantum: usize,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<(), EngineError> {
+    if crate::hot_diag::regex_on() {
+        crate::hot_diag::regex_with(|d| d.perex_searches += 1);
+    }
+    if quantum == 0 {
+        return Err(EngineError::InvalidQuantum);
+    }
+    poll_on_stride(poll)
+}
+
+/// One search over lent scratch. Returns `Fallback` without an answer when the
+/// scratch cannot serve this search; the caller then runs the owned path.
+#[allow(clippy::too_many_arguments)]
+fn find_near_lent<'mem, R, H>(
+    resources: &R,
+    hooks: &H,
+    registers: usize,
+    start: usize,
+    near: Option<Position>,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    quantum: usize,
+    captures: &mut Option<Captures<'mem>>,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<Lent, EngineError>
+where
+    R: Resources<Error = PairError<OwnerError, OwnerError>>,
+    H: PollRoots,
+{
     LENT_SCRATCH.with(|cell| {
         let Ok(mut cell) = cell.try_borrow_mut() else {
             return Ok(Lent::Fallback);
         };
         let cell = &mut *cell;
         if cell.registers.len() < registers {
-            // Once per thread per new high-water mark; `find_near` has already
+            // Once per thread per new high-water mark; `search` has already
             // checked `registers <= LENT_REGISTERS`. A search initializes the
             // registers it reads, so the fill value is never observed.
             if cell
@@ -451,7 +672,6 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
             frames: &mut cell.frames[..],
             undo: &mut cell.undo[..],
         };
-        poll_on_stride(poll)?;
         // Both views are acquired once for the quantum that decides nearly
         // every per-call search; a `Search` is built and moved only if this
         // one pauses or asks for more scratch.
@@ -473,18 +693,14 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
                     .capture(0)
                     .map_err(EngineError::Execution)?
                     .ok_or(EngineError::Execution(ExecError::InvalidProgram))?;
-                let captures = match mode {
-                    CaptureMode::Full => None,
-                    CaptureMode::All => {
-                        poll()?;
-                        let mut output = Slots::new(memory, finished.capture_count())?;
-                        finished
-                            .copy_captures(&mut output)
-                            .map_err(EngineError::Execution)?;
-                        Some(output)
-                    }
-                };
-                return Ok(Lent::Done(Some(Match { full, captures }), position));
+                if let CaptureMode::All = mode {
+                    poll_with(hooks, poll)?;
+                }
+                let count = finished.capture_count();
+                take_captures(mode, count, memory, captures, |output| {
+                    finished.copy_captures(output)
+                })?;
+                return Ok(Lent::Done(Some(full), position));
             }
             Run::Paused(search) => search,
         };
@@ -498,21 +714,16 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
                         .capture(0)
                         .map_err(EngineError::Execution)?
                         .ok_or(EngineError::Execution(ExecError::InvalidProgram))?;
-                    let captures = match mode {
-                        CaptureMode::Full => None,
-                        CaptureMode::All => {
-                            poll()?;
-                            let mut output = Slots::new(memory, search.capture_count())?;
-                            search
-                                .copy_captures(&mut output)
-                                .map_err(EngineError::Execution)?;
-                            Some(output)
-                        }
-                    };
-                    let position = search.position();
-                    return Ok(Lent::Done(Some(Match { full, captures }), position));
+                    if let CaptureMode::All = mode {
+                        poll_with(hooks, poll)?;
+                    }
+                    let count = search.capture_count();
+                    take_captures(mode, count, memory, captures, |output| {
+                        search.copy_captures(output)
+                    })?;
+                    return Ok(Lent::Done(Some(full), search.position()));
                 }
-                Ok(Progress::Pending) => poll()?,
+                Ok(Progress::Pending) => poll_with(hooks, poll)?,
                 Err(SearchError::Execution(ExecError::Frames | ExecError::Undo)) => {
                     // Grow the cell for the next call and let this one run the
                     // owned path, which charges the whole search once from the
@@ -542,27 +753,27 @@ fn find_near_lent<'mem, S: ImmutableSubject<Error = OwnerError>>(
     })
 }
 
-pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
-    program: &BoundProgram<GcProgram<'_>>,
-    subject: &BoundSubject<S>,
+/// The search every entry above runs once its resources are bound: lent
+/// scratch first, owned buffers when the lent cell cannot serve it. Every poll
+/// it runs goes through `hooks` ([`PollRoots`]).
+#[allow(clippy::too_many_arguments)]
+fn search<'mem, R, H>(
+    resources: &R,
+    hooks: &H,
+    registers: usize,
     start: usize,
     near: Option<Position>,
     mode: CaptureMode,
     budget: &mut Budget,
     memory: &'mem MemoryBudget,
     quantum: usize,
+    captures: &mut Option<Captures<'mem>>,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
-) -> Result<(Option<Match<'mem>>, Position), EngineError> {
-    if crate::hot_diag::regex_on() {
-        crate::hot_diag::regex_with(|d| d.perex_searches += 1);
-    }
-    if quantum == 0 {
-        return Err(EngineError::InvalidQuantum);
-    }
-    let registers = program
-        .with_view(|program| program.register_count())
-        .map_err(EngineError::Program)?;
-    let resources = BoundResources { program, subject };
+) -> Result<(Option<Span>, Position), EngineError>
+where
+    R: Resources<Error = PairError<OwnerError, OwnerError>>,
+    H: PollRoots,
+{
     let mut size = ScratchRequirements {
         registers,
         frames: 0,
@@ -574,7 +785,7 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
     if registers <= LENT_REGISTERS {
         let entry = *budget;
         match find_near_lent(
-            &resources, registers, start, near, mode, budget, memory, quantum, poll,
+            resources, hooks, registers, start, near, mode, budget, memory, quantum, captures, poll,
         )? {
             Lent::Done(found, position) => return Ok((found, position)),
             Lent::Fallback => *budget = entry,
@@ -583,15 +794,14 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
 
     #[cfg(test)]
     OWNED_SEARCHES.with(|n| n.set(n.get() + 1));
-    poll()?;
+    poll_with(hooks, poll)?;
     let buffers = MatchBuffers::new(memory, size)?;
     // A failed run reports the work it left (perex 0.1.10), so the budget
     // records what the failed call spent, as a failed search did.
-    let run =
-        Search::run(&resources, start, near, buffers, *budget, quantum).map_err(|failed| {
-            *budget = Budget::new(failed.remaining_work);
-            search_error(failed.error)
-        })?;
+    let run = Search::run(resources, start, near, buffers, *budget, quantum).map_err(|failed| {
+        *budget = Budget::new(failed.remaining_work);
+        search_error(failed.error)
+    })?;
     let mut search = match run {
         Run::Finished(mut finished) => {
             *budget = Budget::new(finished.remaining_work());
@@ -603,18 +813,14 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
                 .capture(0)
                 .map_err(EngineError::Execution)?
                 .ok_or(EngineError::Execution(ExecError::InvalidProgram))?;
-            let captures = match mode {
-                CaptureMode::Full => None,
-                CaptureMode::All => {
-                    poll()?;
-                    let mut output = Slots::new(memory, finished.capture_count())?;
-                    finished
-                        .copy_captures(&mut output)
-                        .map_err(EngineError::Execution)?;
-                    Some(output)
-                }
-            };
-            return Ok((Some(Match { full, captures }), position));
+            if let CaptureMode::All = mode {
+                poll_with(hooks, poll)?;
+            }
+            let count = finished.capture_count();
+            take_captures(mode, count, memory, captures, |output| {
+                finished.copy_captures(output)
+            })?;
+            return Ok((Some(full), position));
         }
         Run::Paused(search) => search,
     };
@@ -630,20 +836,16 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
                     .capture(0)
                     .map_err(EngineError::Execution)?
                     .ok_or(EngineError::Execution(ExecError::InvalidProgram))?;
-                let captures = match mode {
-                    CaptureMode::Full => None,
-                    CaptureMode::All => {
-                        poll()?;
-                        let mut output = Slots::new(memory, search.capture_count())?;
-                        search
-                            .copy_captures(&mut output)
-                            .map_err(EngineError::Execution)?;
-                        Some(output)
-                    }
-                };
-                return Ok((Some(Match { full, captures }), search.position()));
+                if let CaptureMode::All = mode {
+                    poll_with(hooks, poll)?;
+                }
+                let count = search.capture_count();
+                take_captures(mode, count, memory, captures, |output| {
+                    search.copy_captures(output)
+                })?;
+                return Ok((Some(full), search.position()));
             }
-            Ok(Progress::Pending) => poll()?,
+            Ok(Progress::Pending) => poll_with(hooks, poll)?,
             Err(SearchError::Execution(ExecError::Frames | ExecError::Undo)) => {
                 if crate::hot_diag::regex_on() {
                     crate::hot_diag::regex_with(|d| d.perex_scratch_grows += 1);
@@ -661,7 +863,7 @@ pub(crate) fn find_near<'mem, S: ImmutableSubject<Error = OwnerError>>(
                         .max(size.undo.checked_mul(2).ok_or(StorageError::Limit)?)
                         .max(16);
                 }
-                poll()?;
+                poll_with(hooks, poll)?;
                 let replacement = MatchBuffers::new(memory, size)?;
                 search = search
                     .rebuffer(replacement)

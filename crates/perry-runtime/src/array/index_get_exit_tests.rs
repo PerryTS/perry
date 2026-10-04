@@ -14,7 +14,7 @@
 //!
 //! The typed-array cases matter even though the emitted site now serves an
 //! in-bounds, inline-storage, non-BigInt read from its own `tav.w1/w2/w4/w8`
-//! arm: every case that arm's guard rejects — a raised `PERRY_TA_VIEW_GUARD`,
+//! arm: every case that arm's guard rejects — external storage (a view),
 //! a BigInt or Float16 lane, an out-of-range or fractional index — routes the
 //! same read to this exit, so the two must produce the same element.
 
@@ -216,15 +216,17 @@ fn a_live_view_changes_the_route_and_not_the_element() {
     assert_eq!(direct, 2.5, "the exit must serve this receiver");
 
     // The site's inline arm computes the data pointer as `header + 16`, and
-    // its whole licence to do that is the cleared process-wide view guard. A
-    // raised guard sends the read here instead, and it must still answer 2.5 —
-    // through the dispatcher, whose `data_ptr` consults the view registries.
-    crate::typedarray::PERRY_TA_VIEW_GUARD.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // its whole licence to do that is the receiver's inline storage byte
+    // (#10516). External storage sends the read here instead, and it must
+    // still answer 2.5 — through the dispatcher, whose `data_ptr` consults the
+    // view registries (none hold this array, so it reads the header's own
+    // elements).
+    unsafe { (*ta).storage = crate::typedarray::TA_STORAGE_EXTERNAL };
     let guarded = js_packed_arraylike_index_get(receiver, 1.0, std::ptr::null_mut());
-    crate::typedarray::PERRY_TA_VIEW_GUARD.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    unsafe { (*ta).storage = crate::typedarray::TA_STORAGE_INLINE };
     assert_eq!(
         guarded, 2.5,
-        "a raised view guard must change the ROUTE, never the element"
+        "external storage must change the ROUTE, never the element"
     );
 }
 

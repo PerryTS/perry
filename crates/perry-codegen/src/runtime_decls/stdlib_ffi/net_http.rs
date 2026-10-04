@@ -2,7 +2,7 @@
 //! stdlib FFI declarations (extracted from stdlib_ffi.rs).
 
 use crate::module::LlModule;
-use crate::types::{DOUBLE, I1, I32, I64, VOID};
+use crate::types::{DOUBLE, I1, I32, I64, PTR, VOID};
 
 pub(crate) fn declare_net_http(module: &mut LlModule) {
     // ========== node:vm ==========
@@ -18,6 +18,12 @@ pub(crate) fn declare_net_http(module: &mut LlModule) {
 
     // ========== worker_threads ==========
     module.declare_function("js_worker_threads_worker_new", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function(
+        "js_worker_threads_worker_new_by_spec",
+        DOUBLE,
+        &[DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_worker_threads_register_entry", VOID, &[PTR, I64, I64]);
     module.declare_function(
         "js_worker_threads_worker_post_message",
         DOUBLE,

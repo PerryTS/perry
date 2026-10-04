@@ -49,7 +49,6 @@ mod host_safepoints;
 mod idle_compact;
 mod idle_reclaim;
 mod incremental_sweep_reclaim;
-mod inherited_read_cache_roots;
 mod inline_generation_gate_contract;
 mod inline_pointer_bearing_contract;
 mod json_parse_scalar;
@@ -99,6 +98,7 @@ mod sweep_described_runs;
 mod sweep_hole_rebuild;
 mod sweep_page_tally;
 mod sweep_whole_block;
+mod sweep_window_births;
 mod teardown;
 mod telemetry_verifier;
 mod temp_roots;
@@ -121,3 +121,6 @@ mod private_evaluation_storage;
 
 mod event_internal_slots;
 mod external_buffer;
+
+#[cfg(target_os = "linux")]
+mod eden_entry_residency;

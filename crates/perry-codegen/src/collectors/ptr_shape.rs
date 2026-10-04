@@ -235,6 +235,30 @@ pub(crate) use entry::{
     collect_shape_proven_ptr_locals_and_element_fields, expr_is_shape_barrier,
 };
 
+/// What one region's `Ptr<Shape>` proof established.
+#[derive(Default)]
+pub(crate) struct ShapeProof {
+    /// Locals holding exactly one object of a known class object, with a
+    /// statically immutable shape: field accesses lower to bare fixed-offset
+    /// loads and method calls to direct calls.
+    pub exact: HashMap<u32, PtrShapeLocal>,
+    /// Group-wide numeric layouts of proven element arrays.
+    pub element_fields: HashMap<u32, HashSet<String>>,
+    /// #11759 (c′): locals bound to the guarded `new` of a repeatable class
+    /// declaration, proven by every rule above except that the class OBJECT
+    /// is not fixed: the instance belongs to whichever evaluation the binding
+    /// holds. Every evaluation of one template runs the same constructor
+    /// chain, field initializers and methods on the same arguments, and a
+    /// later evaluation's captures are values of the same locals the first
+    /// evaluation's are, so which fields hold a Number on every reachable
+    /// store is a fact of the template (`numeric_fields`). The slot layout
+    /// and the method table are not proven for a later evaluation's
+    /// instance, so these locals never take the bare-load or direct-call
+    /// forms: the facts feed only the Number-by-construction proof of values
+    /// read from them.
+    pub lineage: HashMap<u32, PtrShapeLocal>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CollectionPurpose {
     UnguardedRepresentation,
@@ -252,7 +276,7 @@ fn collect_shape_proven_ptr_locals_impl(
     element_facts: &ElementShapeFacts,
     numeric_param_seeds: &HashSet<u32>,
     purpose: CollectionPurpose,
-) -> (HashMap<u32, PtrShapeLocal>, HashMap<u32, HashSet<String>>) {
+) -> ShapeProof {
     // #7152: Perry's own `cjs_wrap` preamble, recognised once for this region.
     // One scan of the top-level statement list on anything else, then a
     // `Default` that suppresses nothing. See `cjs_scaffolding.rs`.
@@ -268,7 +292,7 @@ fn collect_shape_proven_ptr_locals_impl(
     };
     if let Some(denial) = bail {
         report::early_bail(stmts, boxed_vars, module_globals, &preamble, denial);
-        return (HashMap::new(), HashMap::new());
+        return ShapeProof::default();
     }
     // `--opt-report` (#6952): binding names and loop depths for the values
     // this pass is about to accept or deny. Both walks are skipped entirely
@@ -322,7 +346,7 @@ fn collect_shape_proven_ptr_locals_impl(
         callback_seeded.insert(id);
     }
     if candidates.is_empty() && element_facts.is_empty() {
-        return (HashMap::new(), HashMap::new());
+        return ShapeProof::default();
     }
     // Class-level admission BEFORE the use walk so the walk's chain-field
     // membership tests are meaningful.
@@ -336,7 +360,7 @@ fn collect_shape_proven_ptr_locals_impl(
         }
     });
     if candidates.is_empty() && element_facts.is_empty() {
-        return (HashMap::new(), HashMap::new());
+        return ShapeProof::default();
     }
 
     // Alias pre-pass: `const alias = candidate` (the exact-receiver inliner
@@ -377,6 +401,7 @@ fn collect_shape_proven_ptr_locals_impl(
         module_dispatch,
         disqualified: HashSet::new(),
         let_counts: HashMap::new(),
+        lineage_seeded: HashSet::new(),
         field_stores: HashMap::new(),
         method_calls: HashMap::new(),
         new_args: HashMap::new(),
@@ -402,6 +427,7 @@ fn collect_shape_proven_ptr_locals_impl(
         const_local_inits,
         disq_reasons,
         field_reads,
+        lineage_seeded,
         ..
     } = walk;
     // #7770: locals whose every write is number-producing by construction —
@@ -450,6 +476,7 @@ fn collect_shape_proven_ptr_locals_impl(
         &numeric_locals,
     );
     let mut out = HashMap::new();
+    let mut lineage = HashMap::new();
     // `--opt-report`: one closure so every `continue` below has a matching
     // one-line recording. Behaviour is unchanged — `deny` is a no-op when
     // the report is off.
@@ -551,6 +578,21 @@ fn collect_shape_proven_ptr_locals_impl(
                 &numeric_locals,
             )
         };
+        if lineage_seeded.contains(id) {
+            // A field-representation fact of the template, never a layout or
+            // dispatch fact of one class object: see [`ShapeProof::lineage`].
+            let fact = PtrShapeLocal {
+                class_name: class_name.clone(),
+                numeric_fields,
+                report_name: None,
+            };
+            for (member, root) in &roots {
+                if root == id {
+                    lineage.insert(*member, fact.clone());
+                }
+            }
+            continue;
+        }
         let fact = PtrShapeLocal {
             class_name: class_name.clone(),
             numeric_fields,
@@ -662,7 +704,11 @@ fn collect_shape_proven_ptr_locals_impl(
             .is_some_and(|members| members.iter().all(|member| out.contains_key(member)))
     });
     let element_fields = element_facts.proven_array_numeric_fields(&group_numeric);
-    (out, element_fields)
+    ShapeProof {
+        exact: out,
+        element_fields,
+        lineage,
+    }
 }
 
 #[path = "ptr_shape_aliases.rs"]
@@ -819,6 +865,11 @@ struct UseWalk<'a> {
     /// read. Their `Let` init is an `Expr::IndexGet`, which rule 1 would
     /// otherwise reject as `LET_INIT_NOT_NEW`.
     element_seeded: &'a HashSet<u32>,
+    /// #11759 (c′): candidates whose provenance is a class declaration's
+    /// guarded `new` (`ClassIsFirstEvaluation ? new C(..) : new <binding>(..)`).
+    /// The object is an instance of SOME evaluation of `C`'s template, not
+    /// necessarily of the shared class: see [`ShapeProof::lineage`].
+    lineage_seeded: HashSet<u32>,
     /// #7034 §3: the element-shape-proven arrays of this region. Consulted to
     /// decide whether a `push` is a contained element position.
     element_facts: &'a ElementShapeFacts,
@@ -902,6 +953,30 @@ impl<'a> UseWalk<'a> {
                             self.walk_expr(a);
                         }
                         return;
+                    }
+                    // #11759 (c′): `new C(..)` through a repeatable class
+                    // declaration's binding. Both arms construct with the same
+                    // arguments through the same template constructor; the
+                    // later-evaluation arm's arguments are the same
+                    // expressions, so walking that arm alone covers them.
+                    if let Some(Expr::Conditional {
+                        condition,
+                        then_expr,
+                        else_expr,
+                    }) = init.as_ref()
+                    {
+                        if let (
+                            Expr::ClassIsFirstEvaluation { .. },
+                            Expr::New { args, .. },
+                            Expr::NewDynamic { .. },
+                        ) = (condition.as_ref(), then_expr.as_ref(), else_expr.as_ref())
+                        {
+                            self.lineage_seeded.insert(*id);
+                            self.new_args.insert(*id, args.as_slice());
+                            self.walk_expr(condition);
+                            self.walk_expr(else_expr);
+                            return;
+                        }
                     }
                     // #7034 §4: a return-shape-seeded candidate's provenance
                     // is the CALL. It records no `new_args` — the constructor
@@ -1370,593 +1445,11 @@ impl<'a> UseWalk<'a> {
     }
 }
 
-// ── Pass 3: `this`-flow safety of constructors and called methods ──────────
-
-/// A `this.field = value` store observed inside a constructor, a field
-/// initializer, or a method body, with the owning function's parameter ids so
-/// parameter-mediated values can be resolved through call-site arguments.
-struct ThisStoreRecord<'a> {
-    field: String,
-    /// `None` = `++`/`--` update (numeric); `Some` = the stored expression.
-    value: Option<&'a Expr>,
-    /// Owning context: `None` for field initializers; `Some((owner_class,
-    /// method_name, param_ids))` for constructor ("constructor") and methods.
-    context: Option<(String, String, Vec<u32>)>,
-}
-
-/// Pass-3 safety verdict for one class chain plus the methods invoked on the
-/// value: `this`-flow containment of the constructor chain, prototype
-/// stability when any method is called, field/method name-ambiguity, and
-/// per-method `this`-flow safety. Returns the analysis (holding the store
-/// records, `super(...)` argument lists, and internally-invoked set the
-/// numeric proof consumes) or the FIRST failed obligation.
-///
-/// This is the single implementation behind both the per-candidate `'cand`
-/// loop and the group-scope numeric proof (#7770,
-/// `ptr_shape_numeric.rs::prove_group_numeric_fields`). The verdict licenses
-/// a bare unchecked `load double`; keeping the two callers on one function
-/// is what makes "tighten an obligation" a one-place change.
-fn chain_this_flow_verdict<'a, 'b>(
-    classes: &HashMap<String, &'a Class>,
-    module_dispatch: &ModuleDispatchFacts,
-    class_name: &str,
-    chain: &'b [&'a Class],
-    fields: &'b HashSet<String>,
-    methods: &'b HashMap<String, (String, &'a perry_hir::Function)>,
-    called: Option<&HashMap<String, Vec<&'a [Expr]>>>,
-) -> Result<ThisFlowAnalysis<'a, 'b>, ShapeDenial> {
-    let mut analysis = ThisFlowAnalysis {
-        chain,
-        fields,
-        methods,
-        visited: HashSet::new(),
-        store_records: Vec::new(),
-        super_call_args: HashMap::new(),
-        internally_invoked: HashSet::new(),
-        allow_this_in_store_values: false,
-    };
-    if !analysis.ctor_chain_safe() {
-        return Err(report::THIS_ESCAPE);
-    }
-    if let Some(called) = called {
-        if !called.is_empty() && !module_dispatch.prototype_is_stable(classes, class_name) {
-            return Err(report::UNSTABLE_PROTOTYPE);
-        }
-        for m in called.keys() {
-            if fields.contains(m.as_str()) {
-                // A name that is both a field and a method is ambiguous
-                // under own-property shadowing — bail.
-                return Err(report::FIELD_METHOD_AMBIGUITY);
-            }
-            let Some((owner, func)) = methods.get(m.as_str()) else {
-                return Err(report::ESC_UNRESOLVED_METHOD);
-            };
-            if !analysis.method_safe(owner, func) {
-                return Err(report::METHOD_THIS_ESCAPE);
-            }
-        }
-    }
-    Ok(analysis)
-}
-
-pub(super) struct ThisFlowAnalysis<'a, 'b> {
-    chain: &'b [&'a Class],
-    fields: &'b HashSet<String>,
-    methods: &'b HashMap<String, (String, &'a perry_hir::Function)>,
-    visited: HashSet<(String, String, bool)>,
-    store_records: Vec<ThisStoreRecord<'a>>,
-    /// `super(...)` argument lists observed in chain constructors, keyed by
-    /// the PARENT (callee) class name. Feeds the parent-ctor parameter
-    /// resolution of the numeric-field proof.
-    super_call_args: HashMap<String, Vec<&'a [Expr]>>,
-    /// Method names invoked INTERNALLY — `this.m(...)` from a constructor or
-    /// another method, and `super.m(...)`. Their argument expressions live in
-    /// the CALLING method's scope, which the numeric-field proof's
-    /// `ParamEnv::Sites` (function-scope call-site args) cannot resolve —
-    /// so parameters of internally-invoked methods must stay unproven even
-    /// when every EXTERNAL call site passes numeric arguments.
-    internally_invoked: HashSet<String>,
-    /// Phase 5a only: permit a `this.f = <expr mentioning this>` store.
-    ///
-    /// Phase 3b rejects those because its numeric-field proof resolves store
-    /// VALUES through constructor/method call-site arguments, and a
-    /// `this`-dependent value cannot be resolved that way — so the store must
-    /// not be recorded as provably-numeric. Phase 5a claims no numeric fields
-    /// at all (`collectors/proven_this.rs`), so the restriction buys it
-    /// nothing while excluding the single most common method shape there is:
-    /// `this.value = this.value + 1`. Safety is unaffected — the value
-    /// expression still goes through `expr_this_safe`, which rejects `this`
-    /// in value position and admits only declared-chain `this.field` reads.
-    allow_this_in_store_values: bool,
-}
-
-impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
-    /// A fresh analysis over one class chain. Phase 5a
-    /// (`collectors/proven_this.rs`) reuses the walk for a method's `this`
-    /// without the constructor-chain obligations: the receiver of a proven
-    /// `this` already exists, and its shape is established by the CALL SITE
-    /// guard (class id + keys token) rather than by in-function provenance.
-    pub(super) fn new(
-        chain: &'b [&'a Class],
-        fields: &'b HashSet<String>,
-        methods: &'b HashMap<String, (String, &'a perry_hir::Function)>,
-    ) -> Self {
-        Self {
-            chain,
-            fields,
-            methods,
-            visited: HashSet::new(),
-            store_records: Vec::new(),
-            super_call_args: HashMap::new(),
-            internally_invoked: HashSet::new(),
-            allow_this_in_store_values: true,
-        }
-    }
-
-    /// Did the vetted walk observe any `this.<field> = …` store (in this
-    /// method or anything it transitively invokes on the same `this`)?
-    /// Phase 5a gates the freeze-family kill on this.
-    pub(super) fn has_this_store_records(&self) -> bool {
-        self.store_records.iter().any(|r| r.context.is_some())
-    }
-
-    /// Walk the constructor chain (self-first `super(...)` order) and every
-    /// chain field initializer under the strict `this` discipline.
-    fn ctor_chain_safe(&mut self) -> bool {
-        for class in self.chain {
-            for field in &class.fields {
-                if let Some(init) = &field.init {
-                    if expr_mentions_this(init) {
-                        return false;
-                    }
-                    self.store_records.push(ThisStoreRecord {
-                        field: field.name.clone(),
-                        value: Some(init),
-                        context: None,
-                    });
-                }
-            }
-        }
-        for class in self.chain {
-            if let Some(ctor) = &class.constructor {
-                if !self.function_this_safe(&class.name, "constructor", ctor, false) {
-                    return false;
-                }
-            }
-        }
-        true
-    }
-
-    pub(super) fn method_safe(&mut self, owner: &str, func: &'a perry_hir::Function) -> bool {
-        self.function_this_safe(owner, &func.name, func, false)
-    }
-
-    /// Phase 5a root-method variant: `return this` is safe only as the final
-    /// statement of the method whose receiver was already guarded. It creates
-    /// no alias until every specialized field access has completed. Nested
-    /// methods continue through [`Self::method_safe`] and may not return the
-    /// receiver, preserving Phase 3b's no-escape contract.
-    pub(super) fn method_safe_with_terminal_this_return(
-        &mut self,
-        owner: &str,
-        func: &'a perry_hir::Function,
-    ) -> bool {
-        self.function_this_safe(owner, &func.name, func, true)
-    }
-
-    fn function_this_safe(
-        &mut self,
-        owner: &str,
-        name: &str,
-        func: &'a perry_hir::Function,
-        allow_terminal_this_return: bool,
-    ) -> bool {
-        // Keyed by the terminal-`this`-return allowance too: the strict
-        // (`false`) vetting of a nested `this.m()` / `super.m()` edge must not
-        // be satisfied by an earlier lenient (`true`) visit of the same method.
-        let key = (
-            owner.to_string(),
-            name.to_string(),
-            allow_terminal_this_return,
-        );
-        if !self.visited.insert(key) {
-            return true; // already vetted (or in-progress higher up the stack)
-        }
-        if self.visited.len() > 64 {
-            return false;
-        }
-        if func.is_async || func.is_generator || func.was_plain_async {
-            return false;
-        }
-        let param_ids: Vec<u32> = func.params.iter().map(|p| p.id).collect();
-        let ctx = (owner.to_string(), name.to_string(), param_ids);
-        let mut safe = true;
-        for (index, s) in func.body.iter().enumerate() {
-            if !safe {
-                break;
-            }
-            let terminal_this_return = allow_terminal_this_return
-                && index + 1 == func.body.len()
-                && matches!(s, Stmt::Return(Some(Expr::This)));
-            safe &= terminal_this_return || self.stmt_this_safe(s, &ctx);
-        }
-        safe
-    }
-
-    fn stmt_this_safe(&mut self, s: &'a Stmt, ctx: &(String, String, Vec<u32>)) -> bool {
-        match s {
-            Stmt::Let { init, .. } => init
-                .as_ref()
-                .map(|e| self.expr_this_safe(e, ctx))
-                .unwrap_or(true),
-            Stmt::Expr(e) | Stmt::Throw(e) => self.expr_this_safe(e, ctx),
-            Stmt::Return(opt) => {
-                // A constructor `return <expr>` can OVERRIDE the `new` result
-                // (`js_ctor_return_override`): the provenance proof "the local
-                // holds exactly a C instance" would be wrong. Disqualify any
-                // value-returning chain constructor (conservative — even
-                // primitive returns, which JS ignores).
-                if ctx.1 == "constructor" && opt.is_some() {
-                    return false;
-                }
-                opt.as_ref()
-                    .map(|e| self.expr_this_safe(e, ctx))
-                    .unwrap_or(true)
-            }
-            Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                self.expr_this_safe(condition, ctx)
-                    && then_branch.iter().all(|s| self.stmt_this_safe(s, ctx))
-                    && else_branch
-                        .as_ref()
-                        .map(|b| b.iter().all(|s| self.stmt_this_safe(s, ctx)))
-                        .unwrap_or(true)
-            }
-            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-                self.expr_this_safe(condition, ctx)
-                    && body.iter().all(|s| self.stmt_this_safe(s, ctx))
-            }
-            Stmt::For {
-                init,
-                condition,
-                update,
-                body,
-            } => {
-                init.as_ref()
-                    .map(|s| self.stmt_this_safe(s, ctx))
-                    .unwrap_or(true)
-                    && condition
-                        .as_ref()
-                        .map(|e| self.expr_this_safe(e, ctx))
-                        .unwrap_or(true)
-                    && update
-                        .as_ref()
-                        .map(|e| self.expr_this_safe(e, ctx))
-                        .unwrap_or(true)
-                    && body.iter().all(|s| self.stmt_this_safe(s, ctx))
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                body.iter().all(|s| self.stmt_this_safe(s, ctx))
-                    && catch
-                        .as_ref()
-                        .map(|c| c.body.iter().all(|s| self.stmt_this_safe(s, ctx)))
-                        .unwrap_or(true)
-                    && finally
-                        .as_ref()
-                        .map(|f| f.iter().all(|s| self.stmt_this_safe(s, ctx)))
-                        .unwrap_or(true)
-            }
-            Stmt::Switch {
-                discriminant,
-                cases,
-            } => {
-                self.expr_this_safe(discriminant, ctx)
-                    && cases.iter().all(|case| {
-                        case.test
-                            .as_ref()
-                            .map(|t| self.expr_this_safe(t, ctx))
-                            .unwrap_or(true)
-                            && case.body.iter().all(|s| self.stmt_this_safe(s, ctx))
-                    })
-            }
-            Stmt::Labeled { body, .. } => self.stmt_this_safe(body.as_ref(), ctx),
-            Stmt::Break
-            | Stmt::Continue
-            | Stmt::LabeledBreak(_)
-            | Stmt::LabeledContinue(_)
-            | Stmt::PreallocateBoxes(_)
-            | Stmt::PreallocateTdzBoxes(_)
-            | Stmt::ReleaseBoxes(_) => true,
-        }
-    }
-
-    fn expr_this_safe(&mut self, e: &'a Expr, ctx: &(String, String, Vec<u32>)) -> bool {
-        match e {
-            Expr::PropertyGet {
-                object, property, ..
-            } if matches!(object.as_ref(), Expr::This) => self.fields.contains(property),
-            Expr::PropertySet {
-                object,
-                property,
-                value,
-            } if matches!(object.as_ref(), Expr::This) => {
-                if !self.fields.contains(property)
-                    || (!self.allow_this_in_store_values && expr_mentions_this(value))
-                {
-                    return false;
-                }
-                self.store_records.push(ThisStoreRecord {
-                    field: property.clone(),
-                    value: Some(value),
-                    context: Some(ctx.clone()),
-                });
-                self.expr_this_safe(value, ctx)
-            }
-            Expr::PropertyUpdate {
-                object, property, ..
-            } if matches!(object.as_ref(), Expr::This) => {
-                if !self.fields.contains(property) {
-                    return false;
-                }
-                self.store_records.push(ThisStoreRecord {
-                    field: property.clone(),
-                    value: None,
-                    context: Some(ctx.clone()),
-                });
-                true
-            }
-            Expr::PutValueSet {
-                target,
-                key,
-                value,
-                receiver,
-                ..
-            } if matches!(target.as_ref(), Expr::This)
-                && matches!(receiver.as_ref(), Expr::This) =>
-            {
-                let Expr::String(property) = key.as_ref() else {
-                    return false;
-                };
-                if !self.fields.contains(property)
-                    || (!self.allow_this_in_store_values && expr_mentions_this(value))
-                {
-                    return false;
-                }
-                self.store_records.push(ThisStoreRecord {
-                    field: property.clone(),
-                    value: Some(value),
-                    context: Some(ctx.clone()),
-                });
-                self.expr_this_safe(value, ctx)
-            }
-            // `this.m(args)` — vet the callee method transitively.
-            Expr::Call { callee, args, .. }
-                if matches!(
-                    callee.as_ref(),
-                    Expr::PropertyGet { object, .. } if matches!(object.as_ref(), Expr::This)
-                ) =>
-            {
-                let Expr::PropertyGet { property, .. } = callee.as_ref() else {
-                    unreachable!()
-                };
-                if self.fields.contains(property) {
-                    return false; // calling a field-held closure: dynamic
-                }
-                let Some((owner, func)) = self.methods.get(property).cloned() else {
-                    return false;
-                };
-                self.internally_invoked.insert(property.clone());
-                if !self.function_this_safe(&owner, property, func, false) {
-                    return false;
-                }
-                // Arguments are vetted as ordinary expressions: a bare `this`
-                // in value position, a `this`-capturing closure and a
-                // non-field `this.x` read all reject there already. A declared
-                // field READ passed along (`this.m(this.ents[id])`) hands the
-                // callee a field's value, never the receiver, and must not
-                // disqualify the caller — wolf-ecs `addComponent` /
-                // `removeComponent` / `createEntity` each call a sibling
-                // method with such an argument.
-                args.iter().all(|a| self.expr_this_safe(a, ctx))
-            }
-            // `super(...)`: the parent constructor body was already vetted by
-            // `ctor_chain_safe` (whole chain). Args must not leak `this`; in
-            // constructor context, record them for parent-ctor parameter
-            // resolution in the numeric-field proof.
-            Expr::SuperCall(args) => {
-                if ctx.1 == "constructor" {
-                    if let Some(pos) = self.chain.iter().position(|c| c.name == ctx.0) {
-                        if let Some(parent) = self.chain.get(pos + 1) {
-                            self.super_call_args
-                                .entry(parent.name.clone())
-                                .or_default()
-                                .push(args.as_slice());
-                        }
-                    }
-                }
-                args.iter()
-                    .all(|a| !expr_mentions_this(a) && self.expr_this_safe(a, ctx))
-            }
-            // `super.m(...)` resolves on the parent chain with the same `this`.
-            Expr::SuperMethodCall { method, args, .. } => {
-                let Some((owner, func)) = self.methods.get(method).cloned() else {
-                    return false;
-                };
-                self.internally_invoked.insert(method.clone());
-                if !self.function_this_safe(&owner, method, func, false) {
-                    return false;
-                }
-                args.iter().all(|a| self.expr_this_safe(a, ctx))
-            }
-            // Shape barriers on `this` inside a method body (the module-wide
-            // kill already covers these; kept as defense in depth).
-            Expr::Delete(inner)
-                if matches!(
-                    inner.as_ref(),
-                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
-                        if matches!(object.as_ref(), Expr::This)
-                ) =>
-            {
-                false
-            }
-            // Any other appearance of `this` — including inside closures —
-            // is a potential leak.
-            Expr::This => false,
-            Expr::Closure { body, .. } => {
-                // A closure that touches `this` (captures_this or body use)
-                // leaks it; a `this`-free closure is fine but its body may
-                // reference nothing we track here (locals are the outer
-                // function's problem — the use walk already handled the
-                // candidate local itself).
-                if expr_mentions_this(e) {
-                    return false;
-                }
-                let _ = body;
-                true
-            }
-            _ => {
-                let mut ok = true;
-                perry_hir::walker::walk_expr_children(e, &mut |c| {
-                    if ok {
-                        ok = self.expr_this_safe(c, ctx);
-                    }
-                });
-                ok
-            }
-        }
-    }
-}
-
-/// Does the expression mention `this` anywhere (including closure bodies and
-/// `captures_this`)?
-fn expr_mentions_this(e: &Expr) -> bool {
-    let mut found = false;
-    fn visit(e: &Expr, found: &mut bool) {
-        if *found {
-            return;
-        }
-        match e {
-            Expr::This => {
-                *found = true;
-            }
-            Expr::Closure {
-                body,
-                captures_this,
-                ..
-            } => {
-                if *captures_this {
-                    *found = true;
-                    return;
-                }
-                for s in body {
-                    stmt_visit(s, found);
-                }
-            }
-            _ => {}
-        }
-        if *found {
-            return;
-        }
-        perry_hir::walker::walk_expr_children(e, &mut |c| visit(c, found));
-    }
-    fn stmt_visit(s: &Stmt, found: &mut bool) {
-        if *found {
-            return;
-        }
-        match s {
-            Stmt::Let { init, .. } => {
-                if let Some(e) = init {
-                    visit(e, found);
-                }
-            }
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => visit(e, found),
-            Stmt::If {
-                condition,
-                then_branch,
-                else_branch,
-            } => {
-                visit(condition, found);
-                for s in then_branch {
-                    stmt_visit(s, found);
-                }
-                if let Some(eb) = else_branch {
-                    for s in eb {
-                        stmt_visit(s, found);
-                    }
-                }
-            }
-            Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-                visit(condition, found);
-                for s in body {
-                    stmt_visit(s, found);
-                }
-            }
-            Stmt::For {
-                init,
-                condition,
-                update,
-                body,
-            } => {
-                if let Some(i) = init {
-                    stmt_visit(i, found);
-                }
-                if let Some(c) = condition {
-                    visit(c, found);
-                }
-                if let Some(u) = update {
-                    visit(u, found);
-                }
-                for s in body {
-                    stmt_visit(s, found);
-                }
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                for s in body {
-                    stmt_visit(s, found);
-                }
-                if let Some(c) = catch {
-                    for s in &c.body {
-                        stmt_visit(s, found);
-                    }
-                }
-                if let Some(f) = finally {
-                    for s in f {
-                        stmt_visit(s, found);
-                    }
-                }
-            }
-            Stmt::Switch {
-                discriminant,
-                cases,
-            } => {
-                visit(discriminant, found);
-                for case in cases {
-                    if let Some(t) = &case.test {
-                        visit(t, found);
-                    }
-                    for s in &case.body {
-                        stmt_visit(s, found);
-                    }
-                }
-            }
-            Stmt::Labeled { body, .. } => stmt_visit(body.as_ref(), found),
-            _ => {}
-        }
-    }
-    visit(e, &mut found);
-    found
-}
+#[path = "ptr_shape_this_flow.rs"]
+mod this_flow;
+use this_flow::chain_this_flow_verdict;
+pub(super) use this_flow::ThisFlowAnalysis;
+use this_flow::ThisStoreRecord;
 
 /// Pass 4 — the numeric-field machinery: the number-by-construction expression
 /// proof, the per-candidate and per-element-group (#7770) reachable-store
@@ -1967,6 +1460,10 @@ fn expr_mentions_this(e: &Expr) -> bool {
 mod numeric;
 use numeric::{
     collect_numeric_by_construction_locals, prove_group_numeric_fields, prove_numeric_fields,
+};
+pub(crate) use numeric::{
+    collect_numeric_by_construction_locals_in_region, region_number_flow_reads,
+    region_store_value_is_number, RegionNumberAssumptions,
 };
 // #8105: the same locals fixpoint, consumed outside the `Ptr<Shape>` pass by
 // `collectors/number_by_construction.rs`.

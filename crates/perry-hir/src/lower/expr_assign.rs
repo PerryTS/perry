@@ -186,6 +186,12 @@ fn register_assignment_native_instance(
 }
 
 pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) -> Result<Expr> {
+    // #11797: a compound / logical member assignment used as a value
+    // (`(levels[depth++] ??= new Set()).add(x)`) reaches here, not the
+    // statement-level hoist below, and lowered its target twice.
+    if let Some(expr) = compound_member_assign_once(ctx, assign)? {
+        return Ok(expr);
+    }
     // Detect assignments from native module calls and register for cross-function tracking.
     // e.g., `mongoClient = await MongoClient.connect(uri)` registers mongoClient as a mongodb instance.
     if assign.op == ast::AssignOp::Assign {
@@ -827,6 +833,16 @@ fn lower_assignment_target(
                             let inner_obj = unwrap_ts(inner.obj.as_ref());
                             if let ast::Expr::Ident(cls_ident) = inner_obj {
                                 let cls_name = cls_ident.sym.to_string();
+                                // The class this binding names in THIS scope. A
+                                // block-scoped `class X` that shadows (or follows) a
+                                // same-named class registers under a scope-local
+                                // key (`class_renames`, #9466); keying the write by
+                                // the raw source name registered it on the OTHER
+                                // class, so `X.prototype.m = v` patched a class this
+                                // scope cannot even see. Every class-keyed check
+                                // below uses the resolved key; the local-binding
+                                // checks keep the source name they are about.
+                                let class_key = ctx.resolve_class_name(&cls_name);
                                 // Built-in Date has a real runtime prototype object;
                                 // Date.prototype writes must remain ordinary property sets.
                                 if cls_name == "Date"
@@ -858,8 +874,8 @@ fn lower_assignment_target(
                                     } else {
                                         None
                                     }
-                                } else if ctx.lookup_class(&cls_name).is_some()
-                                    && class_has_accessor(ctx, &cls_name, &method_name)
+                                } else if ctx.lookup_class(&class_key).is_some()
+                                    && class_has_accessor(ctx, &class_key, &method_name)
                                 {
                                     // `C.prototype.<accessor> = v` where `<accessor>`
                                     // is a `set`/`get` declared on the class is an
@@ -869,8 +885,8 @@ fn lower_assignment_target(
                                     // runtime prototype-ref setter dispatch). Test262
                                     // accessor-name-inst setters.
                                     None
-                                } else if ctx.lookup_class(&cls_name).is_some() {
-                                    Some(ProtoOwner::Class(cls_name))
+                                } else if ctx.lookup_class(&class_key).is_some() {
+                                    Some(ProtoOwner::Class(class_key))
                                 } else if let Some(local_id) = ctx.lookup_local(&cls_name) {
                                     if ctx.function_valued_locals.contains(&local_id) {
                                         // dayjs minified shape (inside IIFE):
@@ -1381,6 +1397,130 @@ fn compound_binary_op(op: ast::AssignOp) -> Option<BinaryOp> {
     })
 }
 
+/// Whether evaluating `e` twice could be observed: anything but a name, a
+/// literal, `this`, or reads and arithmetic over those. Conservative: a shape
+/// not listed counts as side-effecting.
+fn may_have_side_effects(e: &ast::Expr) -> bool {
+    match e {
+        ast::Expr::Ident(_) | ast::Expr::This(_) | ast::Expr::Lit(_) => false,
+        ast::Expr::Paren(p) => may_have_side_effects(&p.expr),
+        ast::Expr::TsAs(t) => may_have_side_effects(&t.expr),
+        ast::Expr::TsNonNull(t) => may_have_side_effects(&t.expr),
+        ast::Expr::TsSatisfies(t) => may_have_side_effects(&t.expr),
+        ast::Expr::TsTypeAssertion(t) => may_have_side_effects(&t.expr),
+        ast::Expr::Member(m) => {
+            may_have_side_effects(&m.obj)
+                || matches!(&m.prop, ast::MemberProp::Computed(c) if may_have_side_effects(&c.expr))
+        }
+        ast::Expr::Bin(b) => may_have_side_effects(&b.left) || may_have_side_effects(&b.right),
+        ast::Expr::Unary(u) => u.op == ast::UnaryOp::Delete || may_have_side_effects(&u.arg),
+        ast::Expr::Cond(c) => {
+            may_have_side_effects(&c.test)
+                || may_have_side_effects(&c.cons)
+                || may_have_side_effects(&c.alt)
+        }
+        _ => true,
+    }
+}
+
+/// #11797: the expression form of `hoist_compound_member_assign`. The base and
+/// a computed key are each evaluated once into a `ScopedTemp`, then the read
+/// and the write use the temps; the value is the write's (or, for a logical
+/// assignment, the short-circuit's) result. Only taken when the base or key
+/// has side effects, so plain `obj.n += 1` / `a[i] += x` keep their lowering.
+fn compound_member_assign_once(
+    ctx: &mut LoweringContext,
+    assign: &ast::AssignExpr,
+) -> Result<Option<Expr>> {
+    let bin_op = compound_binary_op(assign.op);
+    let logical_op = logical_assignment_op(assign.op);
+    if bin_op.is_none() && logical_op.is_none() {
+        return Ok(None);
+    }
+    let ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) = &assign.left else {
+        return Ok(None);
+    };
+    if matches!(member.prop, ast::MemberProp::PrivateName(_)) {
+        return Ok(None);
+    }
+    if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
+        let n = obj_ident.sym.as_ref();
+        if ctx.is_proxy_local(n) || !ctx.active_with_envs_for_ident(n).is_empty() {
+            return Ok(None);
+        }
+    }
+    let key_has_effects =
+        matches!(&member.prop, ast::MemberProp::Computed(c) if may_have_side_effects(&c.expr));
+    if !may_have_side_effects(&member.obj) && !key_has_effects {
+        return Ok(None);
+    }
+
+    let base = lower_expr(ctx, &member.obj)?;
+    let base_id = ctx.fresh_local();
+    let (prop, key) = match &member.prop {
+        ast::MemberProp::Ident(i) => (Some(i.sym.to_string()), None),
+        ast::MemberProp::Computed(c) => {
+            (None, Some((ctx.fresh_local(), lower_expr(ctx, &c.expr)?)))
+        }
+        ast::MemberProp::PrivateName(_) => unreachable!("guarded above"),
+    };
+    let key_id = key.as_ref().map(|(id, _)| *id);
+    let read = match (&prop, key_id) {
+        (Some(p), _) => Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(Expr::LocalGet(base_id)),
+            property: p.clone(),
+        },
+        (None, Some(k)) => Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(base_id)),
+            index: Box::new(Expr::LocalGet(k)),
+        },
+        _ => unreachable!(),
+    };
+    let write_of = |value: Expr| -> Expr {
+        match (&prop, key_id) {
+            (Some(p), _) => Expr::PropertySet {
+                object: Box::new(Expr::LocalGet(base_id)),
+                property: p.clone(),
+                value: Box::new(value),
+            },
+            (None, Some(k)) => Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(base_id)),
+                index: Box::new(Expr::LocalGet(k)),
+                value: Box::new(value),
+            },
+            _ => unreachable!(),
+        }
+    };
+    // RHS once, after the read; a logical assignment writes only on the
+    // branch that needs it (`read OP (target = rhs)`).
+    let rhs = lower_expr(ctx, &assign.right)?;
+    let mut body = match bin_op {
+        Some(op) => write_of(Expr::Binary {
+            op,
+            left: Box::new(read),
+            right: Box::new(rhs),
+        }),
+        None => Expr::Logical {
+            op: logical_op.unwrap(),
+            left: Box::new(read),
+            right: Box::new(write_of(rhs)),
+        },
+    };
+    if let Some((id, value)) = key {
+        body = Expr::ScopedTemp {
+            id,
+            value: Box::new(value),
+            body: Box::new(body),
+        };
+    }
+    Ok(Some(Expr::ScopedTemp {
+        id: base_id,
+        value: Box::new(base),
+        body: Box::new(body),
+    }))
+}
+
 /// #6071: statement-level compound assignment to a member/index target
 /// (`a.b op= v;`, `a[k] op= v;`). Spill the base and (computed) key into
 /// `Stmt::Let` temps so each is evaluated EXACTLY ONCE, then build the read and
@@ -1455,24 +1595,70 @@ pub(crate) fn hoist_compound_member_assign(
             id
         };
 
-    // Base — always spilled (evaluated once).
+    // Base and computed key, each evaluated once.
+    //
+    // A read of an immutable binding (`const`, a `const` for-of/for-in head)
+    // already IS evaluated once: nothing can assign the binding between the
+    // spill and the write, so the read and the write may name the binding
+    // itself. Spilling it anyway is not free. The copy is a second
+    // pointer-typed local, so every `bi.vx -= e` paid a string-addref test,
+    // a shadow-slot bind and an incremental-mark root-shading gate for a value
+    // that was already rooted in `bi`'s own slot, and the receiver reached
+    // codegen as a fresh temp instead of the binding the shape facts are
+    // keyed on.
+    //
+    // A mutable binding keeps its temp: the RHS may assign it
+    // (`o.x += (o = p, 1)` must write the old `o`). So does a `const` base
+    // whose computed key is spilled: the base read then has to stay ahead of
+    // the key's side effects, because reading a `const` in its TDZ throws.
+    //
+    // An unrebound parameter (`lower::unrebound_params`: never assigned,
+    // re-declared or reachable through `arguments` or `eval` anywhere in its
+    // function) is read once for the same reason as a `const`, and it has no
+    // TDZ in the body, so it needs no temp even when the key is spilled:
+    // reading it after the key yields the value read before it, and the read
+    // itself has no effect to reorder.
+    let immutable_binding = |ctx: &LoweringContext, e: &Expr| match e {
+        Expr::LocalGet(id) if ctx.is_local_immutable(*id) => Some(*id),
+        _ => None,
+    };
+    let unrebound_param = |ctx: &LoweringContext, e: &Expr| match e {
+        Expr::LocalGet(id) if ctx.unrebound_params.contains(id) => Some(*id),
+        _ => None,
+    };
     let base = lower_expr(ctx, &member.obj)?;
-    let base_id = spill(ctx, &mut stmts, "base", base);
+    let key = match &member.prop {
+        ast::MemberProp::Computed(c) => Some(lower_expr(ctx, &c.expr)?),
+        _ => None,
+    };
+    let key_binding = key
+        .as_ref()
+        .and_then(|k| immutable_binding(ctx, k).or_else(|| unrebound_param(ctx, k)));
+    let base_binding = immutable_binding(ctx, &base)
+        .filter(|_| key.is_none() || key_binding.is_some())
+        .or_else(|| unrebound_param(ctx, &base));
+    let base_id = match base_binding {
+        Some(id) => id,
+        None => spill(ctx, &mut stmts, "base", base),
+    };
 
     // Property name (static) or computed key spilled to its own temp.
     let prop: Option<String>;
     let key_id: Option<LocalId>;
-    match &member.prop {
-        ast::MemberProp::Ident(i) => {
+    match (&member.prop, key) {
+        (ast::MemberProp::Ident(i), _) => {
             prop = Some(i.sym.to_string());
             key_id = None;
         }
-        ast::MemberProp::Computed(c) => {
-            let key = lower_expr(ctx, &c.expr)?;
-            key_id = Some(spill(ctx, &mut stmts, "key", key));
+        (ast::MemberProp::Computed(_), Some(key)) => {
+            key_id = Some(match key_binding {
+                Some(id) => id,
+                None => spill(ctx, &mut stmts, "key", key),
+            });
             prop = None;
         }
-        ast::MemberProp::PrivateName(_) => unreachable!("guarded above"),
+        (ast::MemberProp::Computed(_), None) => unreachable!("computed key lowered above"),
+        (ast::MemberProp::PrivateName(_), _) => unreachable!("guarded above"),
     }
 
     let read = match (&prop, key_id) {

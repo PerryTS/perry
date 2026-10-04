@@ -1,0 +1,13 @@
+{
+  "private_head": "d1a45c55d76db104a0e39d7909b16763b661a26e",
+  "parent": "98073d825ab086409ec561e00638499b0ef7c6c0",
+  "production_runtime": "6c761801fa4c76ad79b67bbc4338bee7739093b7",
+  "base": "2026ecfe6dd9df1a0a8616e3bc5c5561e8e0cf63",
+  "paths": [
+    "crates/perry-runtime/src/arena/block.rs",
+    "crates/perry-runtime/src/arena/mod.rs",
+    "crates/perry-runtime/src/gc/cycle.rs",
+    "crates/perry-runtime/src/gc/old_free.rs"
+  ],
+  "overlay_sha256": "146f9443ba5062012980c2556f837d2f7c24f179c8e930be917cb6f33544a47c"
+}

@@ -892,6 +892,12 @@ fn create_poll_refreshed_receiver_cache(
     let source_ref = if let Some(slot) = ctx.locals.get(&arr_id) {
         slot.clone()
     } else {
+        // The descriptor re-reads `source_ref` after polls. An immutable-leaf
+        // transfer binding has no single agent-correct address to re-read, so
+        // it keeps the ordinary (unhoisted) route.
+        if ctx.module_global_transfers.contains_key(&arr_id) {
+            return None;
+        }
         format!("@{}", ctx.module_globals.get(&arr_id)?)
     };
     let current = ctx.block().load(DOUBLE, &source_ref);
@@ -1792,8 +1798,33 @@ fn match_packed_f64_range_loop(
             &mut accesses,
             &mut pending_accumulators,
         ) {
-            return range_loop_reject("body_not_admissible");
+            // #10718: `a[i] += x; s += a[i]` reaches here as alias `Let`s
+            // followed by the store, so the store's receiver is the alias,
+            // not a tracked array. Fold every compound-assign alias run into
+            // the statement it was minted for (the same fold the classic
+            // walk retries with, generalised to several statements) and
+            // retry the dense walk on the folded body. The folded body is
+            // what the guarded clones lower; the slow clone keeps the
+            // statements as written.
+            accesses.clear();
+            pending_accumulators.clear();
+            let folded = packed_f64_range_loop_compound_alias_fold_all(body).filter(|folded| {
+                packed_f64_range_loop_dense_body_collect(
+                    ctx,
+                    folded,
+                    counter_id,
+                    bound_local,
+                    &mut accesses,
+                    &mut pending_accumulators,
+                )
+            });
+            let Some(folded) = folded else {
+                return range_loop_reject("body_not_admissible");
+            };
+            range_loop_trace("dense_compound_assign_alias_fold");
+            fast_body = Some(folded);
         }
+        let collected_body: &[Stmt] = fast_body.as_deref().unwrap_or(body);
         if !pending_accumulators.is_empty() {
             // The peel above assumed each pending local numeric; that holds
             // only if the lowering will actually admit it (entry tag check +
@@ -1801,18 +1832,24 @@ fn match_packed_f64_range_loop(
             // the SAME array selection `emit_range_loop_accumulator_admission`
             // uses -- if the two disagree, the clone would contain a dynamic
             // `+` (a collecting call) under facts that forbid one.
-            if accesses.len() != 1 {
-                return range_loop_reject("accumulator_needs_single_array");
-            }
-            let array_id = *accesses.keys().next().expect("len checked");
+            //
+            // #10718: the verification passes exactly the arguments the
+            // lowering's `emit_range_loop_accumulator_admission` derives —
+            // the whole guarded array set and the same masked/affine flags —
+            // so the two cannot disagree. (It used to demand a single array,
+            // a leftover from before the accumulator walk took the set, which
+            // kept `a[i] = a[i] + b[i]; s += a[i]` off the tier.)
+            let array_ids: std::collections::BTreeSet<u32> = accesses.keys().copied().collect();
+            let masked_reads_validated = accesses.values().any(|a| a.stat.is_some());
+            let affine_reads = accesses.values().any(|a| a.affine);
             let admitted = super::stable_packed_accumulator::collect_numeric_accumulators(
                 ctx,
-                body,
-                &std::collections::BTreeSet::from([array_id]),
+                collected_body,
+                &array_ids,
                 counter_id,
                 true,
-                true,
-                false,
+                masked_reads_validated,
+                affine_reads,
             );
             if !pending_accumulators.iter().all(|id| admitted.contains(id)) {
                 return range_loop_reject("accumulator_not_provable");
@@ -2075,6 +2112,89 @@ pub(super) fn packed_f64_range_loop_compound_alias_fold(body: &[Stmt]) -> Option
 /// for the read index, once for the store index — where the original
 /// evaluated it once. And its value cannot change between those two
 /// evaluations, because the admitted statement writes no local at all.
+/// #10718: [`packed_f64_range_loop_compound_alias_fold`] over a whole
+/// statement list, for the DENSE walk. Every run of compiler-minted
+/// `__cmpd_*` alias `Let`s is folded into the one statement that follows it;
+/// every other statement is kept as written. `None` when nothing was folded,
+/// when a run cannot be folded, or when an alias is still mentioned anywhere
+/// in the result.
+///
+/// The single-statement fold's argument carries over per run: the aliases
+/// are bound immediately before their statement, nothing runs between the
+/// binding and the statement, and the statement itself is a whitelisted
+/// walk that writes no local. The last check makes the "read only by the
+/// statement they were minted for" property structural rather than assumed:
+/// a later statement that read an alias would read a slot the fast clone
+/// never writes, so it rejects the fold instead.
+pub(super) fn packed_f64_range_loop_compound_alias_fold_all(body: &[Stmt]) -> Option<Vec<Stmt>> {
+    fn is_alias_let(stmt: &Stmt) -> Option<u32> {
+        match stmt {
+            Stmt::Let {
+                id,
+                name,
+                mutable: false,
+                init: Some(_),
+                ..
+            } if name.starts_with("__cmpd_") => Some(*id),
+            _ => None,
+        }
+    }
+    fn stmts_touch_local(stmts: &[Stmt], id: u32) -> bool {
+        stmts.iter().any(|stmt| match stmt {
+            Stmt::Let { init: None, .. } => false,
+            Stmt::Let {
+                id: bound,
+                init: Some(init),
+                ..
+            } => *bound == id || packed_f64_range_loop_expr_touches_local(init, id),
+            Stmt::Expr(expr) => packed_f64_range_loop_expr_touches_local(expr, id),
+            Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                packed_f64_range_loop_expr_touches_local(condition, id)
+                    || stmts_touch_local(then_branch, id)
+                    || else_branch
+                        .as_deref()
+                        .is_some_and(|branch| stmts_touch_local(branch, id))
+            }
+            // Any other statement is outside the dense grammar; answer
+            // conservatively so the fold is refused rather than trusted.
+            _ => true,
+        })
+    }
+    let mut out = Vec::with_capacity(body.len());
+    let mut aliases = Vec::new();
+    let mut index = 0;
+    while index < body.len() {
+        if is_alias_let(&body[index]).is_none() {
+            out.push(body[index].clone());
+            index += 1;
+            continue;
+        }
+        let start = index;
+        while index < body.len() {
+            match is_alias_let(&body[index]) {
+                Some(id) => aliases.push(id),
+                None => break,
+            }
+            index += 1;
+        }
+        if index == body.len() {
+            return None;
+        }
+        out.extend(packed_f64_range_loop_compound_alias_fold(
+            &body[start..=index],
+        )?);
+        index += 1;
+    }
+    if aliases.is_empty() || aliases.iter().any(|id| stmts_touch_local(&out, *id)) {
+        return None;
+    }
+    Some(out)
+}
+
 fn packed_f64_range_loop_alias_init_is_stable(init: &perry_hir::Expr) -> bool {
     use perry_hir::{BinaryOp, Expr};
     match init {
@@ -2553,6 +2673,31 @@ fn packed_f64_range_loop_dense_stmts_collect(
                     let perry_hir::Expr::LocalGet(arr_id) = object else {
                         return false;
                     };
+                    // #10718: a COUNTER-offset store (`a[i] = a[i] + 1`,
+                    // `a[i + 1] = …`) takes the same rule as a masked one.
+                    // The dense guard validates the counter window
+                    // `[start + min, bound + max)` exactly as it validates a
+                    // static window — in bounds, hole-free, raw-f64, plain,
+                    // integrity-clean — and the RHS must be a statically
+                    // genuine double, so the store has no value check and no
+                    // side exit. That is what makes a store legal in a
+                    // multi-statement dense body: an iteration still runs
+                    // entirely in one copy, so a store that already ran can
+                    // never be replayed by the slow copy.
+                    if let Some(offset) = packed_f64_range_loop_index_offset(index, counter_id) {
+                        if !masked_window_expression_is_non_collecting(ctx, value)
+                            || !dense_masked_store_rhs_is_admissible(
+                                ctx, value, counter_id, accesses,
+                            )
+                            || !packed_f64_range_loop_pure_expr_collect(
+                                value, counter_id, true, accesses, None,
+                            )
+                        {
+                            return false;
+                        }
+                        record_packed_f64_range_access(accesses, *arr_id, offset, true);
+                        continue;
+                    }
                     if !masked_window_expression_is_non_collecting(ctx, index)
                         || !masked_window_expression_is_non_collecting(ctx, value)
                         || !dense_masked_store_rhs_is_admissible(ctx, value, counter_id, accesses)
@@ -2666,10 +2811,15 @@ fn dense_masked_store_rhs_is_admissible(
     match expr {
         Expr::Number(_) | Expr::Integer(_) => true,
         Expr::LocalGet(id) => *id == counter_id || ctx.i32_counter_slots.contains_key(id),
+        // A counter-offset read (`a[i]`, `a[i ± c]`) is admitted too: the
+        // pure walk records its window for the same dense guard, and the
+        // lowering serves it from the clone's `PackedF64LoopFact` as a raw
+        // load of a slot that guard proved holds a raw-f64 number (#10718).
         Expr::IndexGet { object, index } => {
             matches!(object.as_ref(), Expr::LocalGet(_))
-                && crate::collectors::static_index_window(index)
-                    .is_some_and(|(lo, hi)| lo >= 0 && hi < i64::from(i32::MAX))
+                && (packed_f64_range_loop_index_offset(index, counter_id).is_some()
+                    || crate::collectors::static_index_window(index)
+                        .is_some_and(|(lo, hi)| lo >= 0 && hi < i64::from(i32::MAX)))
         }
         // Float arithmetic over admitted operands — see the lowering-side
         // twin (`masked_store_rhs_is_genuine_f64`) for the argument. `%`/`**`
@@ -3501,7 +3651,6 @@ fn lower_packed_f64_range_versioned_for(
             continue;
         };
         let slot = ctx.func.alloca_entry(DOUBLE);
-        let g_ref = format!("@{global_name}");
         // #11590: the cache is a COPY of a GC root, so it must be a root too.
         // Both clones' entry guards are runtime calls, and the SLOW clone
         // polls on its back-edge and reaches `js_dyn_index_set_strict` (which
@@ -3522,7 +3671,7 @@ fn lower_packed_f64_range_versioned_for(
                 crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             ctx.func.entry_allocas_push_store(DOUBLE, &undefined, &slot);
         }
-        let val = ctx.block().load(DOUBLE, &g_ref);
+        let val = crate::codegen::global_transfer::load_module_global(ctx, gid, &global_name);
         ctx.block().store(DOUBLE, &val, &slot);
         if may_hold_pointer {
             crate::expr::root_entry_alloca(ctx, &slot);
@@ -3918,12 +4067,12 @@ fn lower_packed_f64_range_versioned_for(
     Ok(true)
 }
 
-/// #5093: property names with dedicated branches in the property-get/set
+/// Element-shape field access restrictions: property names with dedicated branches in the property-get/set
 /// lowering dispatch ahead of the class-field diamond (`length` header loads,
 /// `errors` runtime call, accessor-ish names, …). A tracked field must not
 /// collide or the fast clone's access would lower through a different —
 /// possibly calling — path, breaking the call-free guarantee.
-pub(super) const CLASS_FIELD_LOOP_PROP_DENYLIST: &[&str] = &[
+pub(super) const ELEMENT_SHAPE_PROP_DENYLIST: &[&str] = &[
     "length",
     "errors",
     "size",
@@ -3939,10 +4088,10 @@ pub(super) const CLASS_FIELD_LOOP_PROP_DENYLIST: &[&str] = &[
     "valueOf",
 ];
 
-/// #5093: class names with dedicated (builtin-flavored) branches in the
+/// Element-shape field access restrictions: class names with dedicated (builtin-flavored) branches in the
 /// property lowering dispatch; a user class sharing one of these names could
 /// be intercepted before the class-field diamond.
-pub(super) const CLASS_FIELD_LOOP_CLASS_DENYLIST: &[&str] = &[
+pub(super) const ELEMENT_SHAPE_CLASS_DENYLIST: &[&str] = &[
     "Headers",
     "URLPattern",
     "ClientRequest",
@@ -5433,511 +5582,6 @@ fn lower_object_array_write_versioned_for(
     Ok(true)
 }
 
-#[derive(Clone, Copy)]
-enum ClassFieldLoopBound {
-    /// `i < <integer literal>`.
-    Constant(i64),
-    /// `i < b` where `b` is a loop-invariant plain local or module global.
-    Local(u32),
-}
-
-struct ClassFieldVersionedLoop {
-    counter_id: u32,
-    bound: ClassFieldLoopBound,
-    recv_id: u32,
-    class_name: String,
-    expected_class_id: u32,
-    keys_global_name: String,
-    /// property -> (packed slot index, written). All raw-f64 candidates.
-    fields: std::collections::BTreeMap<String, (u32, bool)>,
-}
-
-/// #5093: effect-free expression walk for the class-field versioned loop.
-/// Tracked `recv.prop` reads, numeric locals, numeric literals and pure
-/// arithmetic/Math only — the same shapes `packed_f64_range_loop_pure_expr_
-/// collect` admits, minus array accesses, plus class-field reads. Everything
-/// here must lower without emitting a call that can allocate (libm intrinsic
-/// calls are fine: they cannot trigger a GC).
-fn class_field_loop_pure_expr_collect(
-    ctx: &FnCtx<'_>,
-    expr: &perry_hir::Expr,
-    counter_id: u32,
-    recv: &mut Option<u32>,
-    props: &mut std::collections::BTreeMap<String, bool>,
-) -> bool {
-    use perry_hir::Expr;
-    match expr {
-        Expr::PropertyGet {
-            object, property, ..
-        } => {
-            let Expr::LocalGet(obj_id) = object.as_ref() else {
-                return false;
-            };
-            if *obj_id == counter_id {
-                return false;
-            }
-            match recv {
-                Some(r) if *r == *obj_id => {}
-                Some(_) => return false, // single receiver per loop
-                None => *recv = Some(*obj_id),
-            }
-            props.entry(property.clone()).or_insert(false);
-            true
-        }
-        // Reading the receiver as a VALUE (outside a tracked field access)
-        // could flow it into arbitrary lowering; only allow scalar reads the
-        // type analysis proves numeric.
-        Expr::LocalGet(id) => {
-            recv.map_or(true, |r| r != *id) && crate::type_analysis::is_numeric_expr(ctx, expr)
-        }
-        Expr::Number(_) | Expr::Integer(_) => true,
-        Expr::Binary { left, right, .. } => {
-            crate::type_analysis::is_numeric_expr(ctx, expr)
-                && class_field_loop_pure_expr_collect(ctx, left, counter_id, recv, props)
-                && class_field_loop_pure_expr_collect(ctx, right, counter_id, recv, props)
-        }
-        Expr::NumberCoerce(operand) => {
-            class_field_loop_pure_expr_collect(ctx, operand, counter_id, recv, props)
-        }
-        Expr::MathImul(left, right) | Expr::MathPow(left, right) => {
-            class_field_loop_pure_expr_collect(ctx, left, counter_id, recv, props)
-                && class_field_loop_pure_expr_collect(ctx, right, counter_id, recv, props)
-        }
-        Expr::MathMin(values) | Expr::MathMax(values) => values
-            .iter()
-            .all(|expr| class_field_loop_pure_expr_collect(ctx, expr, counter_id, recv, props)),
-        Expr::MathAbs(value)
-        | Expr::MathSqrt(value)
-        | Expr::MathFloor(value)
-        | Expr::MathCeil(value)
-        | Expr::MathRound(value)
-        | Expr::MathTrunc(value)
-        | Expr::MathSign(value)
-        | Expr::MathF16round(value) => {
-            class_field_loop_pure_expr_collect(ctx, value, counter_id, recv, props)
-        }
-        _ => false,
-    }
-}
-
-/// #5093: class-field versioned loop — the "collapse" this issue tracks.
-///
-/// Matches `for (let i = k0; i < B; i++) <single statement>` where `B` is an
-/// integer literal or a loop-invariant local/module-global and the statement's
-/// only side effect is a raw-f64 class-field store on a loop-invariant
-/// receiver of statically known class (or a scalar `LocalSet` accumulator),
-/// with every other subexpression pure per the walker above.
-///
-/// The single-statement / effect-last restriction is the side-exit protocol
-/// (same as the #6011 range loop): the fast clone's only mid-loop bail is the
-/// store's inline plain-finite value check, which fires BEFORE the store — so
-/// jumping to the slow clone's preheader re-executes the current iteration
-/// without duplicating any effect.
-fn match_class_field_versioned_loop(
-    ctx: &FnCtx<'_>,
-    init: Option<&Stmt>,
-    condition: Option<&perry_hir::Expr>,
-    update: Option<&perry_hir::Expr>,
-    body: &[Stmt],
-) -> Option<ClassFieldVersionedLoop> {
-    use perry_hir::{CompareOp, Expr, UpdateOp};
-    // Oversized modules full-outline the class-field diamonds for code size;
-    // keep the versioned clone (which would re-inline them) off there.
-    if crate::codegen::full_outline_ic_enabled() {
-        return None;
-    }
-    if !ctx.pending_labels.is_empty() {
-        return None;
-    }
-    let (counter_id, start) = match init? {
-        Stmt::Let {
-            id,
-            init: Some(init_expr),
-            ..
-        } => {
-            let start = match init_expr {
-                Expr::Integer(n) => *n,
-                Expr::Number(n) if n.is_finite() && n.fract() == 0.0 => *n as i64,
-                _ => return None,
-            };
-            (*id, start)
-        }
-        _ => return None,
-    };
-    if !(0..=i64::from(i32::MAX)).contains(&start) {
-        return None;
-    }
-    let (op, left, right) = match condition? {
-        Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
-        _ => return None,
-    };
-    if !matches!(op, CompareOp::Lt) || !matches!(left, Expr::LocalGet(id) if *id == counter_id) {
-        return None;
-    }
-    let bound = match right {
-        Expr::Integer(k) if (0..=i64::from(i32::MAX)).contains(k) => {
-            ClassFieldLoopBound::Constant(*k)
-        }
-        Expr::LocalGet(bound_id) if *bound_id != counter_id => {
-            if ctx.boxed_vars.contains(bound_id) {
-                return None;
-            }
-            if !local_has_readable_slot(ctx, *bound_id)
-                && !ctx.module_globals.contains_key(bound_id)
-            {
-                return None;
-            }
-            if !local_bound_is_loop_invariant(condition?, update, body, *bound_id) {
-                return None;
-            }
-            ClassFieldLoopBound::Local(*bound_id)
-        }
-        _ => return None,
-    };
-    if !matches!(
-        update?,
-        Expr::Update {
-            id,
-            op: UpdateOp::Increment,
-            ..
-        } if *id == counter_id
-    ) {
-        return None;
-    }
-    if !local_has_readable_slot(ctx, counter_id)
-        || ctx.boxed_vars.contains(&counter_id)
-        || !ctx.integer_locals.contains(&counter_id)
-        || !loop_counter_bounds_are_safe(ctx, counter_id, update, body)
-        || !loop_counter_entry_i32_range_is_safe(init, counter_id)
-    {
-        return None;
-    }
-
-    // Single-statement body whose only side effect commits after every
-    // potential side exit.
-    let [Stmt::Expr(effect)] = body else {
-        return None;
-    };
-    let mut recv: Option<u32> = None;
-    let mut props: std::collections::BTreeMap<String, bool> = std::collections::BTreeMap::new();
-    match effect {
-        // `recv.prop = <pure numeric>` — the benchmark shape. Lowering
-        // rewrites the static-key PutValueSet through the PropertySet
-        // class-field diamond (`put_value_static_property_fast_path`).
-        Expr::PutValueSet {
-            target,
-            key,
-            value,
-            receiver,
-            ..
-        } => {
-            let (Expr::LocalGet(t), Expr::LocalGet(r)) = (target.as_ref(), receiver.as_ref())
-            else {
-                return None;
-            };
-            if t != r {
-                return None;
-            }
-            // Keep this class-field clone's existing string-only contract;
-            // integer keys are handled by the general object-write matcher.
-            let prop = crate::expr::proxy_reflect::static_string_write_key(ctx, key.as_ref())?;
-            recv = Some(*t);
-            if !class_field_loop_pure_expr_collect(ctx, value, counter_id, &mut recv, &mut props) {
-                return None;
-            }
-            props
-                .entry(prop)
-                .and_modify(|written| *written = true)
-                .or_insert(true);
-        }
-        Expr::PropertySet {
-            object,
-            property,
-            value,
-        } => {
-            let Expr::LocalGet(obj_id) = object.as_ref() else {
-                return None;
-            };
-            recv = Some(*obj_id);
-            if !class_field_loop_pure_expr_collect(ctx, value, counter_id, &mut recv, &mut props) {
-                return None;
-            }
-            props
-                .entry(property.clone())
-                .and_modify(|written| *written = true)
-                .or_insert(true);
-        }
-        // Scalar accumulator: `acc = <pure numeric over tracked reads>`. No
-        // store side exit exists, so re-execution can never happen; the
-        // LocalSet itself must still target a plain numeric non-shadow local.
-        Expr::LocalSet(id, value) => {
-            if *id == counter_id
-                || !ctx.locals.contains_key(id)
-                || ctx.boxed_vars.contains(id)
-                || ctx.module_globals.contains_key(id)
-                || ctx.shadow_slot_map.contains_key(id)
-                || !crate::type_analysis::is_numeric_expr(ctx, &Expr::LocalGet(*id))
-            {
-                return None;
-            }
-            if !class_field_loop_pure_expr_collect(ctx, value, counter_id, &mut recv, &mut props) {
-                return None;
-            }
-            if recv == Some(*id) {
-                return None;
-            }
-            if let ClassFieldLoopBound::Local(bound_id) = bound {
-                if bound_id == *id {
-                    return None;
-                }
-            }
-        }
-        _ => return None,
-    }
-    let recv_id = recv?;
-    if props.is_empty() || recv_id == counter_id {
-        return None;
-    }
-    if let ClassFieldLoopBound::Local(bound_id) = bound {
-        if bound_id == recv_id {
-            return None;
-        }
-    }
-
-    // Receiver: loop-invariant, directly addressable, not aliased by another
-    // representation (POD / scalar replacement take different lowering paths).
-    if ctx.boxed_vars.contains(&recv_id)
-        || ctx.pod_records.contains_key(&recv_id)
-        || ctx.scalar_replaced.contains_key(&recv_id)
-    {
-        return None;
-    }
-    if !ctx.locals.contains_key(&recv_id) && !ctx.module_globals.contains_key(&recv_id) {
-        return None;
-    }
-    if !local_bound_is_loop_invariant(condition?, update, body, recv_id) {
-        return None;
-    }
-    let class_name =
-        crate::type_analysis::receiver_class_name(ctx, &perry_hir::Expr::LocalGet(recv_id))?;
-    if CLASS_FIELD_LOOP_CLASS_DENYLIST.contains(&class_name.as_str()) {
-        return None;
-    }
-    let class = ctx.classes.get(&class_name)?;
-    if !class.computed_members.is_empty() {
-        return None;
-    }
-    let expected_class_id = *ctx.class_ids.get(&class_name)?;
-    let keys_global_name = ctx.class_keys_globals.get(&class_name)?.clone();
-
-    let mut fields = std::collections::BTreeMap::new();
-    for (prop, written) in props {
-        if CLASS_FIELD_LOOP_PROP_DENYLIST.contains(&prop.as_str()) {
-            return None;
-        }
-        // Accessors route through synthesized __get_/__set_ methods before
-        // the class-field diamond; `class_field_global_index` also rejects
-        // accessor-shadowed names, but mirror the dispatch gate exactly.
-        if ctx
-            .methods
-            .contains_key(&(class_name.clone(), format!("__get_{prop}")))
-            || ctx
-                .methods
-                .contains_key(&(class_name.clone(), format!("__set_{prop}")))
-        {
-            return None;
-        }
-        let field_index = crate::type_analysis::class_field_global_index(ctx, &class_name, &prop)?;
-        let raw_f64 = crate::expr::class_field_inline_guard::class_field_site_raw_f64(
-            ctx,
-            &class_name,
-            &prop,
-            field_index,
-        );
-        if !raw_f64 {
-            return None;
-        }
-        fields.insert(prop, (field_index, written));
-    }
-
-    Some(ClassFieldVersionedLoop {
-        counter_id,
-        bound,
-        recv_id,
-        class_name,
-        expected_class_id,
-        keys_global_name,
-        fields,
-    })
-}
-
-/// #5093: lowering for [`match_class_field_versioned_loop`], modeled on
-/// [`lower_packed_f64_range_versioned_for`]. The bound is materialized to i32
-/// once (with a finite-integral check for local/global bounds), the inline
-/// class-field shape check runs once in the preheader, and the fast clone
-/// lowers with a scoped [`crate::expr::ClassFieldLoopFact`] so every tracked
-/// field access is a bare GEP load/store on the preheader-cached object
-/// pointer. Store side exits resume at the current `i` in the slow clone.
-///
-/// SAFETY (memory-corruption class — see #5093): between the preheader's
-/// receiver load and the end of the fast clone, NO call may be emitted. The
-/// matcher enforces this by shape (single pure-arithmetic statement, all
-/// field accesses tracked, counter/bound machinery call-free); the preheader
-/// itself emits only bit ops, loads, and the finite-integral bound checks.
-/// Call-free ⇒ allocation-free ⇒ no GC ⇒ the object cannot move and none of
-/// the checked shape facts can change while the fast clone runs.
-fn lower_class_field_versioned_for(
-    ctx: &mut FnCtx<'_>,
-    init: Option<&Stmt>,
-    condition: Option<&perry_hir::Expr>,
-    update: Option<&perry_hir::Expr>,
-    body: &[Stmt],
-) -> Result<bool> {
-    let Some(matched) = match_class_field_versioned_loop(ctx, init, condition, update, body) else {
-        return Ok(false);
-    };
-    // The fast clone's cond reads the counter through its i32 slot; without
-    // one the versioned copy would win nothing.
-    if !ctx.i32_counter_slots.contains_key(&matched.counter_id) {
-        return Ok(false);
-    }
-
-    let fast_pre_idx = ctx.new_block("class_field.loop.fast.preheader");
-    let slow_pre_idx = ctx.new_block("class_field.loop.slow.preheader");
-    let merge_idx = ctx.new_block("class_field.loop.merge");
-    let fast_pre_label = ctx.block_label(fast_pre_idx);
-    let slow_pre_label = ctx.block_label(slow_pre_idx);
-    let merge_label = ctx.block_label(merge_idx);
-
-    // One-time i32 materialization of the bound (mirrors the #6011 range
-    // loop): non-number / NaN / fractional / out-of-range bounds keep full JS
-    // trip-count semantics in the slow clone.
-    let bound_i32: String = match matched.bound {
-        ClassFieldLoopBound::Constant(k) => k.to_string(),
-        ClassFieldLoopBound::Local(bound_id) => {
-            let bound_d = lower_expr(ctx, &perry_hir::Expr::LocalGet(bound_id))?;
-            let is_number = emit_js_value_is_number(ctx, &bound_d);
-            let range_idx = ctx.new_block("class_field.loop.bound.range");
-            let convert_idx = ctx.new_block("class_field.loop.bound.convert");
-            let check_idx = ctx.new_block("class_field.loop.shape_check");
-            let range_label = ctx.block_label(range_idx);
-            let convert_label = ctx.block_label(convert_idx);
-            let check_label = ctx.block_label(check_idx);
-            ctx.block()
-                .cond_br(&is_number, &range_label, &slow_pre_label);
-
-            ctx.current_block = range_idx;
-            let ge_zero = ctx.block().fcmp("oge", &bound_d, "0.0");
-            let le_max = {
-                let max_literal = format!("{:.1}", i32::MAX as f64);
-                ctx.block().fcmp("ole", &bound_d, &max_literal)
-            };
-            let in_range = ctx.block().and(I1, &ge_zero, &le_max);
-            ctx.block()
-                .cond_br(&in_range, &convert_label, &slow_pre_label);
-
-            ctx.current_block = convert_idx;
-            let bound_i32 = ctx.block().fptosi(DOUBLE, &bound_d, I32);
-            let roundtrip = ctx.block().sitofp(I32, &bound_i32, DOUBLE);
-            let is_integral = ctx.block().fcmp("oeq", &roundtrip, &bound_d);
-            ctx.block()
-                .cond_br(&is_integral, &check_label, &slow_pre_label);
-
-            ctx.current_block = check_idx;
-            bound_i32
-        }
-    };
-
-    // Receiver load + hoisted shape check. From here to loop entry the
-    // emitted IR is call-free, so the pointer the check validates is the
-    // pointer the fast clone uses.
-    let recv_box = lower_expr(ctx, &perry_hir::Expr::LocalGet(matched.recv_id))?;
-    let expected_shape_id = crate::typed_shape::class_shape_id_operand(
-        ctx,
-        &matched.class_name,
-        &matched.keys_global_name,
-    );
-    let (obj_bits, obj_handle) = {
-        let blk = ctx.block();
-        let obj_bits = blk.bitcast_double_to_i64(&recv_box);
-        let obj_handle = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
-        (obj_bits, obj_handle)
-    };
-    let has_store = matched.fields.values().any(|(_, written)| *written);
-    let expected_class_id_str = matched.expected_class_id.to_string();
-    let (obj_ptr, shape_ok) =
-        crate::expr::class_field_inline_guard::emit_class_field_loop_preheader_check(
-            ctx,
-            &obj_bits,
-            &obj_handle,
-            &expected_class_id_str,
-            &expected_shape_id,
-            has_store,
-            &slow_pre_label,
-        );
-    // The deref block is left unterminated on purpose: it branches into the
-    // fast clone only after the clone is PROVEN call-free below.
-    let deref_idx = ctx.current_block;
-
-    let scope_id = ctx.next_loop_proof_scope_id();
-    let fast_scan_start = ctx.func.num_blocks();
-    ctx.current_block = fast_pre_idx;
-    ctx.class_field_loop_facts
-        .push(crate::expr::ClassFieldLoopFact {
-            recv_local_id: matched.recv_id,
-            scope_id,
-            class_name: matched.class_name.clone(),
-            obj_ptr,
-            side_exit_label: slow_pre_label.clone(),
-            fields: matched
-                .fields
-                .iter()
-                .map(|(prop, (field_index, _))| (prop.clone(), *field_index))
-                .collect(),
-        });
-    lower_for_after_init_with_i32_bound(
-        ctx,
-        init,
-        condition,
-        update,
-        body,
-        "for.class_field_fast",
-        Some((matched.counter_id, bound_i32)),
-    )?;
-    ctx.class_field_loop_facts
-        .retain(|fact| fact.scope_id != scope_id);
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_label);
-    }
-    let fast_scan_end = ctx.func.num_blocks();
-
-    // Compile-time verification of the safety invariant: the fast clone must
-    // be call-free (no runtime call ⇒ no allocation ⇒ no GC ⇒ the cached
-    // `obj_ptr` cannot move and the hoisted shape check stays true). The
-    // matcher makes this true by construction; if some unpredicted lowering
-    // path emitted a call anyway, never enter the fast clone — run the slow
-    // clone unconditionally and leave the fast blocks as unreachable code.
-    let fast_clone_call_free = !ctx.func.blocks()[fast_pre_idx].contains_gc_unsafe_call()
-        && (fast_scan_start..fast_scan_end)
-            .all(|idx| !ctx.func.blocks()[idx].contains_gc_unsafe_call());
-    ctx.current_block = deref_idx;
-    if fast_clone_call_free {
-        ctx.block()
-            .cond_br(&shape_ok, &fast_pre_label, &slow_pre_label);
-    } else {
-        ctx.block().br(&slow_pre_label);
-    }
-
-    ctx.current_block = slow_pre_idx;
-    lower_for_after_init(ctx, init, condition, update, body, "for.class_field_slow")?;
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_label);
-    }
-
-    ctx.current_block = merge_idx;
-    Ok(true)
-}
-
 fn record_packed_f64_loop_guard_artifacts(
     ctx: &mut FnCtx<'_>,
     arr_id: u32,
@@ -7241,13 +6885,38 @@ pub(crate) fn lower_for(
         return Ok(());
     }
 
-    // #5093: monomorphic class-field hot loops (`counter.value = counter.value
-    // + 1` after method inlining). Shape check hoisted to a preheader; fast
-    // clone is call-free raw slot access.
-    if lower_class_field_versioned_for(ctx, init, condition, update, body)? {
-        return Ok(());
+    // Element receivers (`const o = xs[i]` read and written by static key):
+    // a region proves `o`'s shape at its load and splits the body, which the
+    // call-free clones below cannot do. When it forms, its plain copy (a
+    // failed guard) is the rest of this chain.
+    // Planning sees the context the region path plans in (as below).
+    let saved_ptr_shape_context = ctx.repsel_context_allows_ptr_shape;
+    ctx.repsel_context_allows_ptr_shape = false;
+    let element_region = super::region_loop::begin_for_elements(ctx, condition, body, update);
+    ctx.repsel_context_allows_ptr_shape = saved_ptr_shape_context;
+    if let Some(region) = element_region? {
+        return lower_for_in_region(
+            ctx,
+            Some(region),
+            init,
+            condition,
+            update,
+            body,
+            &mut |ctx| lower_for_after_element_region(ctx, init, condition, update, body),
+        );
     }
+    lower_for_after_element_region(ctx, init, condition, update, body)
+}
 
+/// `lower_for` from the element-shape tier on: today's chain for a loop the
+/// element region did not take, and the plain copy of one it did.
+fn lower_for_after_element_region(
+    ctx: &mut FnCtx<'_>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+) -> Result<()> {
     // repsel #7480 / #5093: `sum += arr[i].field` over an array carrying the
     // homogeneous element-shape invariant. Tried last, so every array-shaped
     // matcher above keeps precedence on the loops it already owns.
@@ -7258,25 +6927,93 @@ pub(crate) fn lower_for(
     }
 
     // #8690 owns only loops left over after the established packed-number,
-    // indexed-method, class-field, and homogeneous element-shape clones have
+    // indexed-method, and homogeneous element-shape clones have
     // had first refusal. Its runtime admission is deliberately broader, so
     // trying it earlier would steal those specialized access shapes.
     if super::stable_packed_loop::lower(ctx, init, condition, update, body)? {
         return Ok(());
     }
 
+    // #10511: a receiver-free loop whose bitwise operators read locals the
+    // function scope cannot prove Number runs in a clone versioned on one
+    // entry test per local (the 5L rule over the loop's own writes). It
+    // touches no receiver, so the region tier below has nothing to plan.
+    if super::number_local_loop::lower(ctx, init, condition, update, body)? {
+        return Ok(());
+    }
+
     // Step 4b (#10884): every specialised tier above declined; a loop (or
     // body) region guards its receivers once here, in the preheader, and
     // splits the body when the tier below lowers it (`stmt::region_loop`).
-    let region = super::region_loop::begin(ctx, condition, body, update)?;
-    let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+    // Named class-field loops use the same fresh shape/representation proof
+    // as other receiver loops. Straight-line Ptr<Shape> facts stay recorded,
+    // but must not bypass the region's exact R/store admission. All specialized
+    // array/storage tiers above retain first refusal (element receivers
+    // excepted, see `lower_for`).
+    let saved_ptr_shape_context = ctx.repsel_context_allows_ptr_shape;
+    ctx.repsel_context_allows_ptr_shape = false;
+    let region = match super::region_loop::begin(ctx, condition, body, update) {
+        Ok(r) => r,
+        Err(e) => {
+            ctx.repsel_context_allows_ptr_shape = saved_ptr_shape_context;
+            return Err(e);
+        }
+    };
+    ctx.repsel_context_allows_ptr_shape = saved_ptr_shape_context;
+    lower_for_in_region(ctx, region, init, condition, update, body, &mut |ctx| {
         if i32_counter::lower(ctx, init, condition, update, body)? {
             Ok(())
         } else {
             lower_for_after_init(ctx, init, condition, update, body, "for")
         }
-    });
-    super::region_loop::end(ctx, region);
+    })
+}
+
+/// Lower a `for` (after its init) under the region `region` from
+/// `region_loop::begin*`: its split copy is the counter tier / plain loop
+/// with the body split, its plain copy (a failed guard) is `plain`. With no
+/// region, `plain` alone. Restores the Ptr<Shape> context both when
+/// lowering succeeds and when it fails.
+fn lower_for_in_region(
+    ctx: &mut FnCtx<'_>,
+    region: Option<u64>,
+    init: Option<&Stmt>,
+    condition: Option<&perry_hir::Expr>,
+    update: Option<&perry_hir::Expr>,
+    body: &[Stmt],
+    plain: &mut dyn FnMut(&mut FnCtx<'_>) -> Result<()>,
+) -> Result<()> {
+    let saved_ptr_shape_context = ctx.repsel_context_allows_ptr_shape;
+    let saved_ptr_shape_denial = ctx.repsel_ptr_shape_context_denial;
+    let lowered = (|| -> Result<()> {
+        // With no region there is no F/G extent: ordinary loop lowering can
+        // consume its pre-existing straight-line receiver facts as before.
+        if region.is_some() {
+            ctx.repsel_context_allows_ptr_shape = false;
+            if saved_ptr_shape_context {
+                // Planning alone is not a refusal. Only an admitted region
+                // owns the accesses lowered below, and its handoff must be
+                // visible.
+                ctx.repsel_ptr_shape_context_denial = Some(crate::expr::PTR_SHAPE_REGION_AUTHORITY);
+            }
+        }
+        let lowered = super::region_loop::lower_loop(ctx, region, &mut |ctx| {
+            // The split copy: the region is registered while it lowers.
+            if region.is_some_and(|t| super::region_loop::is_registered(ctx, t)) {
+                if i32_counter::lower(ctx, init, condition, update, body)? {
+                    Ok(())
+                } else {
+                    lower_for_after_init(ctx, init, condition, update, body, "for")
+                }
+            } else {
+                plain(ctx)
+            }
+        });
+        super::region_loop::end(ctx, region);
+        lowered
+    })();
+    ctx.repsel_context_allows_ptr_shape = saved_ptr_shape_context;
+    ctx.repsel_ptr_shape_context_denial = saved_ptr_shape_denial;
     lowered
 }
 
@@ -7397,7 +7134,7 @@ fn lower_for_after_init_impl(
     // repsel Phase 1 having done so). Only the inserter removes at loop exit.
     let mut hoist_counter_i32_was_fresh = false;
     // #7480 step 4: inside a call-free-by-construction fast clone
-    // (`lower_element_shape_versioned_for`, `lower_class_field_versioned_for`)
+    // (`lower_element_shape_versioned_for`)
     // the caller has ALREADY materialized the trip count and passed it in
     // `precomputed_i32_bound`, so the cond block never reads this slot. The
     // hoist would emit a `js_value_length_f64` call whose result nothing
@@ -7413,7 +7150,6 @@ fn lower_for_after_init_impl(
     // clone's other lowering may depend on them; suppressing those too would
     // trade one silent loss for another.
     let in_call_free_clone = !ctx.element_shape_loop_facts.is_empty()
-        || !ctx.class_field_loop_facts.is_empty()
         || !ctx.stable_packed_loop_facts.is_empty()
         || precomputed_i32_bound.is_some();
     let hoisted_length_slot: Option<String> = if let Some(hoist) = hoist_classification {
@@ -8023,7 +7759,7 @@ pub(crate) fn emit_gc_loop_safepoint(
     }
     // #7480 step 4: never inside a call-free-by-construction fast clone.
     //
-    // `lower_class_field_versioned_for`, `lower_element_shape_versioned_for`,
+    // `lower_element_shape_versioned_for`
     // and the stable-packed loop tier hoist a guard into a preheader and clone
     // the body against it. All rest on the SAME safety argument: the clone makes no call, therefore
     // allocates nothing, therefore cannot collect, therefore the pointer the
@@ -8042,14 +7778,6 @@ pub(crate) fn emit_gc_loop_safepoint(
     // `stmt/element_shape_loop.rs`'s module docs predicted in as many words,
     // and `assert_fast_clone_is_entered` is the assertion that now catches it.
     //
-    // The class-field clone is NOT affected today, and that was checked rather
-    // than assumed: removing this suppression leaves its three IR tests green,
-    // because `loop_may_allocate` already proves an `obj.field`-only body inert
-    // and emits no poll for it. It is covered here anyway — the two clones rest
-    // on the identical argument, and the next body shape admitted to the
-    // class-field matcher that is not provably inert would delete that clone
-    // the same way. Its tests gained the same liveness assertion.
-    //
     // Skipping the poll here is not a new licence — it is the rule the line
     // below already applies. A poll exists so that an ALLOCATING loop can defer
     // a collection to a safe point; a body that cannot allocate does not need
@@ -8060,7 +7788,6 @@ pub(crate) fn emit_gc_loop_safepoint(
     // call-free or it is not entered, and the slow clone — lowered after the
     // scope is popped — keeps its poll either way.
     if !ctx.element_shape_loop_facts.is_empty()
-        || !ctx.class_field_loop_facts.is_empty()
         || !ctx.stable_packed_loop_facts.is_empty()
         // #9379: the packed-f64 loop clone is the next body the paragraph above
         // predicted — "the next body shape admitted to the matcher that is not

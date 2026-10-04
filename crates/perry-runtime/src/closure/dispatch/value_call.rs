@@ -119,9 +119,9 @@ unsafe fn native_call_value_this_impl(
     // the direct `class X extends EventEmitter` form (#5137) — never fires, and
     // `js_register_class_parent_dynamic` early-returns for bound native parents.
     // The dynamic super lowering (expr/this_super_call.rs) dispatches the parent
-    // VALUE here with `this` = the fresh subclass instance. Install
-    // the EventEmitter listener/emit methods onto that instance, exactly as the
-    // direct form does, so `this.setMaxListeners(…)`/`.on`/`.emit` resolve.
+    // VALUE here with `this` = the fresh subclass instance. Run node's
+    // `EventEmitter.init` on that instance, exactly as the direct form does;
+    // `this.setMaxListeners(…)`/`.on`/`.emit` resolve on the shared prototype.
     // Routed through the armed ops table (see `nm_namespace_hooks`): the
     // probe can only match a bound native callable, which exists only once
     // `callable_exports` minted one (arming the table).
@@ -206,6 +206,57 @@ unsafe fn native_call_value_this_impl(
         }
         return crate::object::js_new_function_construct(func_value, args_ptr, args_len);
     }
+    call_closure_body(closure, info, func_ptr, this, args_ptr, args_len)
+}
+
+/// Call `closure` — a compiled ordinary function body (`FN_COMPILED_BODY`),
+/// which none of the exotic callees [`js_native_call_value`] tests first
+/// (class refs, proxies, bound native exports, no-op-backed built-ins,
+/// class objects) can carry — with receiver `this` (#10507).
+///
+/// # Safety
+/// `closure` is a live closure whose info carries `FN_COMPILED_BODY`;
+/// `args_ptr` holds `args_len` values.
+pub(crate) unsafe fn call_compiled_closure_this(
+    closure: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let info = crate::closure::closure_info(closure);
+    let func_ptr = info.map_or(std::ptr::null(), |info| info.code);
+    call_closure_body(closure, info, func_ptr, this, args_ptr, args_len)
+}
+
+/// [`call_compiled_closure_this`] for a caller that already holds the
+/// closure's body `info` (a shape's ConstFn lane names it): no info read or
+/// validation of the closure cell.
+///
+/// # Safety
+/// `closure` is a live closure of `info`, a compiled body (`FN_COMPILED_BODY`);
+/// `args_ptr` holds `args_len` values.
+#[inline]
+pub(crate) unsafe fn call_compiled_body_this(
+    closure: *const ClosureHeader,
+    info: &'static crate::closure::JsFunctionInfo,
+    this: crate::closure::JsThis,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    call_closure_body(closure, Some(info), info.code, this, args_ptr, args_len)
+}
+
+/// The arity-padding / rest-bundling tail of a value call, once the callee is
+/// known to be a closure with a body.
+#[inline(always)]
+unsafe fn call_closure_body(
+    closure: *const ClosureHeader,
+    info: Option<&crate::closure::JsFunctionInfo>,
+    func_ptr: *const u8,
+    this: crate::closure::JsThis,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
     let dispatch_args_len = match info {
         Some(info) if crate::closure::info_rest(info).is_none() => {
             args_len.max(usize::from(info.params))

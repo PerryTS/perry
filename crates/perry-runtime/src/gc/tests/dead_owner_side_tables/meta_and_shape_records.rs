@@ -139,10 +139,6 @@ fn test_object_meta_prototype_survives_copied_minor_move() {
         Some(ptr_bits(old_proto)),
         "test premise: the meta-resident prototype reads back before the GC"
     );
-    assert!(
-        crate::object::prototype_chain::object_has_user_prototype_override(old_owner),
-        "test premise: the per-instance override bit lives in the meta record"
-    );
     js_shadow_slot_set(0, ptr_bits(old_owner));
     js_shadow_slot_set(1, ptr_bits(old_proto));
 
@@ -159,13 +155,67 @@ fn test_object_meta_prototype_survives_copied_minor_move() {
         new_proto,
         "the meta record's prototype slot must be rewritten to the moved proto"
     );
-    assert!(
-        crate::object::prototype_chain::object_has_user_prototype_override(new_owner),
-        "the non-pointer meta flags must travel with the copied record"
-    );
 
     js_shadow_slot_set(0, 0);
     js_shadow_slot_set(1, 0);
+}
+
+/// The shape names the prototype (`object::shapes_prototype`): a receiver
+/// linked by a class-default link (`new F()`) has no meta record, and its
+/// prototype is reachable ONLY through its shape record's `prototype` word.
+/// A copied minor must keep that prototype alive through the carrier's edge
+/// and rewrite the shared word to the moved prototype.
+#[test]
+fn test_shape_prototype_word_survives_copied_minor_move_through_its_carrier() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+
+    let (owner, _) = unsafe { alloc_nursery_test_object(0) };
+    // A function constructor's instance (synthetic class id): the one
+    // receiver a class-default link leaves without a meta record.
+    unsafe {
+        (*owner).class_id = crate::object::shapes::SYNTHETIC_CLASS_ID_BASE + 0x52;
+    }
+    let (proto, proto_fields) = unsafe { alloc_nursery_test_object(1) };
+    unsafe { *proto_fields = 42.0f64.to_bits() };
+    let old_owner = owner as usize;
+    let old_proto = proto as usize;
+    crate::object::prototype_chain::object_link_class_default_prototype(
+        old_owner,
+        ptr_bits(old_proto),
+    );
+    assert!(
+        unsafe { (*owner).meta }.is_null(),
+        "test premise: a class-default link allocates no meta record"
+    );
+    let stamp = unsafe { crate::object::shapes::object_shape_stamp(owner) };
+    assert_eq!(
+        crate::object::shapes::shape_prototype_word(stamp),
+        ptr_bits(old_proto),
+        "test premise: the shape record holds the prototype"
+    );
+    // Only the owner is rooted: the prototype lives through the shape edge.
+    js_shadow_slot_set(0, ptr_bits(old_owner));
+
+    let _ = gc_collect_minor();
+
+    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_ne!(new_owner, old_owner, "test premise: the owner must move");
+    let recorded = crate::object::prototype_chain::object_static_prototype(new_owner)
+        .expect("the moved owner must still resolve its prototype through its shape");
+    let new_proto = (recorded & POINTER_MASK) as usize;
+    assert_ne!(
+        new_proto, old_proto,
+        "the prototype must be evacuated and the shape's word rewritten"
+    );
+    assert_eq!(
+        unsafe {
+            *((new_proto + std::mem::size_of::<crate::object::ObjectHeader>()) as *const u64)
+        },
+        42.0f64.to_bits(),
+        "the rewritten word names the live, moved prototype"
+    );
+
+    js_shadow_slot_set(0, 0);
 }
 
 /// A class-evaluation object may be reachable only through an instance's
@@ -661,6 +711,10 @@ fn test_deferred_shape_slot_enumeration_survives_descriptor_table_reallocation()
 #[test]
 fn test_object_meta_null_prototype_survives_full_gc_on_live_owner() {
     let _guard = GcTestIsolationGuard::new();
+    // The owner is rooted through a shadow frame of its own: without one the
+    // slot store roots nothing, the owner dies, and the read below would
+    // examine freed memory and pass for the wrong reason.
+    let frame = js_shadow_frame_push(1);
 
     let (owner, _) = unsafe { alloc_nursery_test_object(0) };
     let addr = owner as usize;
@@ -669,11 +723,14 @@ fn test_object_meta_null_prototype_survives_full_gc_on_live_owner() {
 
     full_gc();
 
+    let live = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    assert_eq!(live, addr, "test premise: a full mark-sweep does not move");
     assert_eq!(
-        crate::object::prototype_chain::object_static_prototype(addr),
+        crate::object::prototype_chain::object_static_prototype(live),
         Some(crate::value::TAG_NULL),
-        "a live (rooted) owner's meta record — and its explicit-null \
-         prototype — must survive a full collection"
+        "a live (rooted) owner's explicit-null prototype (a fact of its \
+         shape) must survive a full collection"
     );
     js_shadow_slot_set(0, 0);
+    js_shadow_frame_pop(frame);
 }

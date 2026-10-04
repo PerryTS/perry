@@ -283,11 +283,9 @@ fn numeric_fd_value(value: f64) -> Option<i32> {
         }
         unsafe {
             let bits = value.to_bits();
-            let addr = if (bits >> 48) >= 0x7FF8 {
-                (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-            } else {
-                bits as usize
-            };
+            // #10694: the brand probes read the cell's header, so only a
+            // POINTER payload or an allocator-owned raw word is an address.
+            let addr = crate::value::addr_class::object_ref_addr(value);
             if crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1
                 || crate::value::JSValue::from_bits(bits).is_any_string()
             {
@@ -1521,7 +1519,16 @@ fn realpath_bytes_result(path_value: f64, syscall: &'static str) -> Result<Vec<u
             None => validate::throw_invalid_path_arg("path", path_value),
         };
         match fs::canonicalize(&path_str) {
-            Ok(p) => Ok(p.to_string_lossy().as_bytes().to_vec()),
+            Ok(p) => {
+                let path = p.to_string_lossy();
+                #[cfg(windows)]
+                let path = if let Some(unc) = path.strip_prefix(r"\\?\UNC\") {
+                    format!(r"\\{}", unc)
+                } else {
+                    path.strip_prefix(r"\\?\").unwrap_or(&path).to_string()
+                };
+                Ok(path.as_bytes().to_vec())
+            }
             Err(err) => Err(build_fs_error_value(&err, syscall, &path_str)),
         }
     }

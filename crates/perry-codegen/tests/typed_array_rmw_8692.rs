@@ -200,9 +200,10 @@ fn specialized_uint32_dynamic_index_rmw_has_a_call_free_fast_arm_and_fallback() 
     let fallback = block_containing(specialized, "ta.rmw.full_fallback");
 
     assert!(
-        specialized.contains("@PERRY_TA_VIEW_GUARD")
-            && specialized.contains("@PERRY_TA_KIND_CACHE"),
-        "the selected RMW must retain explicit inline-storage and kind guards:\n{specialized}"
+        specialized.contains("@PERRY_TA_KIND_CACHE")
+            && !specialized.contains("@PERRY_TA_VIEW_GUARD"),
+        "the selected RMW must retain its kind-cache guard, whose tag also carries \
+         inline storage (#10516), and no process-wide view guard:\n{specialized}"
     );
     assert!(
         load.contains("load i32") && load.contains("uitofp i32") && load.contains("fadd"),

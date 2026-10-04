@@ -126,9 +126,31 @@ fn refresh(proto: *mut ObjectHeader, shape: u32) -> Proof {
     }
 }
 
+/// Count one proof outcome. `regex_on()` is a constant `false` without the
+/// `hot-diag` feature and one relaxed load with it, so an unset
+/// `PERRY_REGEX_DIAG` costs nothing here. Counters never feed a decision.
+#[inline]
+fn note(count: impl FnOnce(&mut crate::hot_diag::RegexDiag)) {
+    if crate::hot_diag::regex_on() {
+        crate::hot_diag::regex_counters(count);
+    }
+}
+
 /// Only an untouched RegExp receiver is admitted. Metadata would permit own
 /// overrides, descriptors or a custom prototype and takes the generic path.
 pub(crate) fn exec(value: f64) -> bool {
+    let hit = exec_proof(value);
+    note(|d| {
+        if hit {
+            d.proof_exec_hit += 1;
+        } else {
+            d.proof_exec_miss += 1;
+        }
+    });
+    hit
+}
+
+fn exec_proof(value: f64) -> bool {
     let receiver = JSValue::from_bits(value.to_bits());
     if !receiver.is_pointer() {
         return false;
@@ -156,6 +178,7 @@ pub(crate) fn exec(value: f64) -> bool {
         if proof.shape != shape {
             proof = refresh(proto, shape);
             cell.set(proof);
+            note(|d| d.proof_exec_refresh += 1);
         }
         proof.exec_index.is_some_and(|index| {
             native(
@@ -204,7 +227,19 @@ fn with_symbol_facts<R>(f: impl FnOnce(&mut Proof) -> R) -> R {
 /// Requires the whole `exec` proof and the flag accessors too: every caller
 /// goes on to consult `flags` and `exec`, which it may then skip as well.
 pub(crate) fn method(value: f64, method: Method) -> bool {
-    if !exec(value) {
+    let hit = method_proof(value, method);
+    note(|d| {
+        if hit {
+            d.proof_method_hit += 1;
+        } else {
+            d.proof_method_miss += 1;
+        }
+    });
+    hit
+}
+
+fn method_proof(value: f64, method: Method) -> bool {
+    if !exec_proof(value) {
         return false;
     }
     let symbol = crate::symbol::well_known_symbol_if_cached(method.symbol());
@@ -228,7 +263,19 @@ pub(crate) fn replace(value: f64) -> bool {
 /// prototype's data property holding the intrinsic `RegExp`, whose own
 /// `@@species` is still the builtin accessor returning `this`.
 pub(crate) fn split(value: f64) -> bool {
-    if !method(value, Method::Split) {
+    let hit = split_proof(value);
+    note(|d| {
+        if hit {
+            d.proof_split_hit += 1;
+        } else {
+            d.proof_split_miss += 1;
+        }
+    });
+    hit
+}
+
+fn split_proof(value: f64) -> bool {
+    if !method_proof(value, Method::Split) {
         return false;
     }
     // `method` just refreshed the proof for the current prototype shape.

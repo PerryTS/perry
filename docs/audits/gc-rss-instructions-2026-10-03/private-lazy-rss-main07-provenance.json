@@ -1,0 +1,10 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "private_commit": "d4f491673b1d5930eaaffdd1f03c939754091eb5",
+  "private_paths": [
+    "crates/perry-runtime/src/gc/mod.rs",
+    "crates/perry-runtime/src/gc/tests/mod.rs",
+    "crates/perry-runtime/src/gc/tests/minor_lazy_rss.rs"
+  ],
+  "overlay_sha256": "e173dbbf1f032f0fdf0be8eef8089207ead03f8b1e26b4ca763e9597804b1181"
+}

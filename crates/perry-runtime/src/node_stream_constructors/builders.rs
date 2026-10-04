@@ -66,10 +66,10 @@ pub extern "C" fn js_node_stream_readable_subclass_init(this: f64, opts: f64) ->
 }
 
 /// #5137: `super()` for a source-compiled `class X extends EventEmitter`
-/// (from `node:events`). Installs the bare EventEmitter listener/emit
-/// methods directly onto `this` — the same generic `ns_*` closures the
-/// stream subclasses use — so `.on`/`.emit`/`.once`/… resolve as the
-/// instance's own bound methods. This is the EventEmitter analog of
+/// (from `node:events`), and `EventEmitter.call(this)`. Gives `this` node's
+/// instance state; `.on`/`.emit`/`.once`/… are inherited from the shared
+/// `EventEmitter.prototype` (`install_event_emitter_prototype`), as in node.
+/// This is the EventEmitter analog of
 /// `js_node_stream_readable_subclass_init`; commander's `Command extends
 /// EventEmitter` reaches it when its real npm source is compiled (the
 /// package is in `perry.compilePackages`, so the `new Command()` → native
@@ -77,7 +77,7 @@ pub extern "C" fn js_node_stream_readable_subclass_init(this: f64, opts: f64) ->
 /// inits there is no option-driven state to seed — a plain EventEmitter
 /// has no `_read`/`highWaterMark`/etc.
 #[no_mangle]
-pub extern "C" fn js_event_emitter_subclass_init(this: f64) -> f64 {
+pub extern "C" fn js_event_emitter_subclass_init(this: f64, options: f64) -> f64 {
     let raw = raw_ptr_from_value(this);
     if raw == 0 {
         return this;
@@ -85,10 +85,17 @@ pub extern "C" fn js_event_emitter_subclass_init(this: f64) -> f64 {
     if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
         return this;
     }
-    let obj = raw as *mut ObjectHeader;
-    let methods = emitter_methods();
-    install_methods_on_existing_object(obj, this, &methods, &[]);
-    this
+    // node's `EventEmitter.init`: own `_events`/`_eventsCount`/`_maxListeners`
+    // only. The methods are inherited from the shared `EventEmitter.prototype`
+    // (a subclass override on its own prototype shadows them there, and
+    // `super.m()` finds the base through the chain), so nothing is installed
+    // per instance (#10508).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let options = scope.root_nanbox_f64(options);
+    init_event_emitter_state(this.get_nanbox_f64());
+    init_event_emitter_capture(this.get_nanbox_f64(), options.get_nanbox_f64());
+    this.get_nanbox_f64()
 }
 
 /// #10798: install the legacy `node:stream` `Stream` base surface onto
@@ -132,7 +139,14 @@ pub extern "C" fn js_event_emitter_async_resource_subclass_init(this: f64, optio
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_handle = scope.root_nanbox_f64(this);
     let options_handle = scope.root_nanbox_f64(options);
-    js_event_emitter_subclass_init(this_handle.get_nanbox_f64());
+    // A string `options` is the resource name; only an options object carries
+    // `captureRejections` for the EventEmitter half.
+    let emitter_options = if JSValue::from_bits(options.to_bits()).is_any_string() {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        options_handle.get_nanbox_f64()
+    };
+    js_event_emitter_subclass_init(this_handle.get_nanbox_f64(), emitter_options);
 
     let this = this_handle.get_nanbox_f64();
     let raw = raw_ptr_from_value(this);
@@ -605,31 +619,44 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
     if is_invalid_readable_from_input(iterable) {
         throw_readable_from_invalid_iterable(iterable);
     }
-    let readable = js_node_stream_readable_new(readable_from_options(opts));
-    let raw = raw_ptr_from_value(readable);
-    if raw >= 0x10000 {
+    // Normalizing can run the iterable's own code, so hold everything across
+    // it in handles (#11828).
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iterable = scope.root_nanbox_f64(iterable);
+    let options = readable_from_options(opts);
+    let readable = scope.root_nanbox_f64(js_node_stream_readable_new(options));
+    if raw_ptr_from_value(readable.get_nanbox_f64()) >= 0x10000 {
         // Armed in a C trampoline frame (#9305); both continuations run
         // after the trap is popped, as before.
-        match crate::exception::catch_js_throw(|| normalize_readable_from_input(iterable)) {
+        match crate::exception::catch_js_throw(|| {
+            normalize_readable_from_input(iterable.get_nanbox_f64())
+        }) {
             Ok(normalized) => {
-                js_object_set_field_by_name(
-                    raw as *mut ObjectHeader,
+                let chunks = scope.root_nanbox_f64(normalized.chunks);
+                let source_iterator = normalized
+                    .source_iterator
+                    .map(|source_iterator| scope.root_nanbox_f64(source_iterator));
+                set_hidden_value(
+                    readable.get_nanbox_f64(),
                     hidden_chunks_key(),
-                    normalized.chunks,
+                    chunks.get_nanbox_f64(),
                 );
-                initialize_readable_from_buffered_length(readable, normalized.chunks);
-                if let Some(source_iterator) = normalized.source_iterator {
-                    js_object_set_field_by_name(
-                        raw as *mut ObjectHeader,
+                initialize_readable_from_buffered_length(
+                    readable.get_nanbox_f64(),
+                    chunks.get_nanbox_f64(),
+                );
+                if let Some(source_iterator) = source_iterator {
+                    set_hidden_value(
+                        readable.get_nanbox_f64(),
                         hidden_key(READABLE_SOURCE_ITERATOR_KEY),
-                        source_iterator,
+                        source_iterator.get_nanbox_f64(),
                     );
                 }
             }
             Err(err) => {
-                destroy_stream(readable, err);
+                destroy_stream(readable.get_nanbox_f64(), err);
             }
         }
     }
-    readable
+    readable.get_nanbox_f64()
 }

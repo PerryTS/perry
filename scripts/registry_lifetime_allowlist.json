@@ -264,12 +264,6 @@
       "why": "Attribute census counters, compiled only with the attr-census feature and armed by PERRY_ATTR_DIAG"
     },
     {
-      "file": "crates/perry-runtime/src/object/class_constructors.rs",
-      "name": "CLASS_CAPTURE_VALUES",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by codegen class_id from js_class_register_capture_values at the declaration site; re-runs overwrite"
-    },
-    {
       "file": "crates/perry-runtime/src/object/class_env.rs",
       "name": "CLASS_ENVS",
       "verdict": "bounded_by_program",
@@ -553,6 +547,12 @@
       "name": "UNTRANSFERABLE_OBJECTS",
       "verdict": "open_leak",
       "why": "NaN-box bits of each object passed to markAsUntransferable: one per marked object, never unmarked"
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_readwrite.rs",
+      "name": "HIDDEN_KEYS",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by (address, length) of the &'static [u8] hidden-field name literals passed to hidden_key; at most one entry per literal in the compiled runtime, so growth stops once each has been used once per thread. The cached key strings are rooted (marked and rewritten) by the node_stream_hidden_keys mutable root scanner."
     }
   ]
 }

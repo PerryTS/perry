@@ -485,6 +485,11 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
     // SAFETY: live slab record, single-threaded agent; read then written
     // through the same pointer with nothing else holding a reference.
     let current = unsafe { *record };
+    // A method slot can become TAG_HOLE at this mutation. Keeping its id
+    // would let a ConstFn site call the old body after `delete`.
+    if current.special_constfn_mask() != 0 {
+        return None;
+    }
     // A stable id may never silently retarget its collector-owned keys edge.
     // Array growth that reallocates falls back to a fresh descriptor.
     if current.keys != keys as u64 || !current.object_kind().is_ordinary_layout() {
@@ -568,6 +573,9 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
         return None;
     }
     let record = &mut *live;
+    if record.special_constfn_mask() != 0 {
+        return None;
+    }
     if record.keys != current.keys
         || record.has(RECORD_FLAG_FACTS_INDEXED)
         || !record.object_kind().is_ordinary_layout()
@@ -609,7 +617,7 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
     if !super::is_shape_id(old_id) {
         return None;
     }
-    let new_id = super::alloc_shape_id().ok()?;
+    let new_id = super::alloc_shape_id(current.proto_id).ok()?;
     let generation = super::SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if generation == 0 {
         super::shape_id_exhausted_abort();
@@ -623,6 +631,9 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
     }
     // SAFETY: live slab record, read immediately.
     let live = unsafe { *live_ptr };
+    if live.special_constfn_mask() != 0 {
+        return None;
+    }
     if live.keys != current.keys
         || live.has(RECORD_FLAG_FACTS_INDEXED)
         || !live.object_kind().is_ordinary_layout()
@@ -721,7 +732,7 @@ pub(crate) unsafe fn publish_object_shape_holes(
         super::store_kind::mint_kind(current.object_kind, obj),
         hole_count,
         current.proto_id,
-        super::receiver_extra_summary(obj),
+        super::receiver_facts_of_current(obj, &current),
         None,
     ));
     // #9200 THE FIX: stamp through the carrier-note funnel. This publish is
@@ -1012,10 +1023,13 @@ fn rekey_predecessor_for_delete(
     };
     // SAFETY: live slab record, single-threaded agent, read immediately.
     let live = unsafe { *live_ptr };
-    if live.keys != keys || live.has(RECORD_FLAG_CACHE_CARRIER | RECORD_FLAG_EXTERNAL_CARRIER) {
+    if live.keys != keys
+        || live.special_constfn_mask() != 0
+        || live.has(RECORD_FLAG_CACHE_CARRIER | RECORD_FLAG_EXTERNAL_CARRIER)
+    {
         return 0;
     }
-    let Ok(id) = super::alloc_shape_id() else {
+    let Ok(id) = super::alloc_shape_id(live.proto_id) else {
         return 0;
     };
     let mut inner = table.inner.borrow_mut();
@@ -1074,7 +1088,7 @@ fn mint_detached_delete_successor(
     hole_count: u32,
     proto_id: u64,
 ) -> u32 {
-    let Ok(id) = super::alloc_shape_id() else {
+    let Ok(id) = super::alloc_shape_id(proto_id) else {
         return 0;
     };
     let mut record = ShapeRecord::new(
@@ -1131,9 +1145,43 @@ pub(super) fn install_external_shape_id(
     object_kind: super::ShapeObjectKind,
     rep: u64,
 ) -> bool {
+    install_external_shape_id_with_constfn(
+        id,
+        keys,
+        logical_key_count,
+        live_inline_slot_count,
+        proto_id,
+        object_kind,
+        rep,
+        &[],
+        0,
+    )
+}
+
+/// Body-aware worker replay. Extras belong to the receiving agent's record;
+/// source closure addresses and source extension storage never cross.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn install_external_shape_id_with_constfn(
+    id: u32,
+    keys: *const super::ArrayHeader,
+    logical_key_count: u32,
+    live_inline_slot_count: u32,
+    proto_id: u64,
+    object_kind: super::ShapeObjectKind,
+    rep: u64,
+    infos: &[super::shapes_store::ConstFnSlotInfo],
+    to_any: u32,
+) -> bool {
+    let Some(mask) = super::shapes_store::constfn_mask(infos) else {
+        return false;
+    };
     if !super::is_shape_id(id)
         || (keys.is_null() && logical_key_count != 0)
-        || !crate::object::field_rep::is_valid(rep)
+        || mask != crate::object::field_rep::special_lane_slots(rep)
+        || to_any & !mask != 0
+        || infos
+            .iter()
+            .any(|i| i.slot as u32 >= logical_key_count || i.slot as u32 >= live_inline_slot_count)
     {
         return false;
     }
@@ -1141,6 +1189,33 @@ pub(super) fn install_external_shape_id(
     let summary =
         unsafe { crate::object::key_attrs::keys_summary_checked(keys, logical_key_count) };
     let keys = keys as usize as u64;
+    let table = &crate::state::state().shapes;
+    let mut inner = table.inner.borrow_mut();
+    if let Some(existing) = table.slab().record_ptr(id) {
+        let matches = unsafe { &*existing }.facts_match_proto_with_special(
+            keys as usize as u64,
+            logical_key_count,
+            live_inline_slot_count,
+            0,
+            object_kind,
+            0,
+            proto_id,
+            summary,
+            rep,
+            infos,
+            // An externally named id is a birth or seed content: no brand.
+            &[],
+        );
+        if matches {
+            unsafe { (*existing).set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true) };
+            for slot in 0..32 {
+                if to_any & (1 << slot) != 0 {
+                    unsafe { &*existing }.deprecate_special_to_any(slot);
+                }
+            }
+        }
+        return matches;
+    }
     let mut record = ShapeRecord::new(
         keys,
         logical_key_count,
@@ -1151,28 +1226,12 @@ pub(super) fn install_external_shape_id(
     )
     .with_proto_id(proto_id)
     .with_summary(summary)
-    .with_rep(rep);
+    .with_special_facts(rep, infos, &[]);
     record.set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true);
-    let table = &crate::state::state().shapes;
-    let mut inner = table.inner.borrow_mut();
-    if let Some(existing) = table.slab().record_ptr(id) {
-        // SAFETY: live slab record, single-threaded agent.
-        let matches = unsafe { &*existing }.facts_match_proto(
-            keys,
-            logical_key_count,
-            live_inline_slot_count,
-            0,
-            object_kind,
-            0,
-            proto_id,
-            summary,
-            rep,
-        );
-        if matches {
-            // SAFETY: same record and agent discipline as above.
-            unsafe { (*existing).set(super::shapes_store::RECORD_FLAG_EXTERNAL_CARRIER, true) };
+    for slot in 0..32 {
+        if to_any & (1 << slot) != 0 {
+            record.deprecate_special_to_any(slot);
         }
-        return matches;
     }
     // A worker can have minted an equivalent local descriptor before module
     // initialization installs the process-global codegen id. Keep both id
@@ -1234,7 +1293,13 @@ pub(crate) fn shape_id_owns_keys_slot(shape_id: u32, slot: *mut u64) -> bool {
         .shapes
         .slab()
         .record_ptr(shape_id)
-        .is_some_and(|record| record as *mut u64 == slot)
+        .is_some_and(|record| {
+            // The keys word is the record's first field; the identity's
+            // [[Prototype]] word (`shapes_prototype`) is the same kind of
+            // shared edge.
+            record as *mut u64 == slot
+                || super::identity_word_slot(unsafe { (*record).proto_id }) == Some(slot)
+        })
 }
 
 #[cfg(test)]

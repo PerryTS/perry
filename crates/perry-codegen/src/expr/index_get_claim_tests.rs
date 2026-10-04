@@ -81,9 +81,8 @@ fn numeric_key_on_a_declared_array_keeps_the_guarded_array_tier() {
     );
 }
 
-#[test]
-fn numeric_layout_oob_array_read_returns_undefined_inline() {
-    let ir = ir_for(
+fn numeric_layout_oob_array_read_ir() -> String {
+    ir_for(
         "numeric_layout_oob_array_read",
         vec![
             Stmt::Let {
@@ -115,7 +114,12 @@ fn numeric_layout_oob_array_read_returns_undefined_inline() {
                 }),
             },
         ],
-    );
+    )
+}
+
+#[test]
+fn numeric_layout_oob_array_read_returns_undefined_inline() {
+    let ir = numeric_layout_oob_array_read_ir();
     assert!(
         ir.contains("arr.guard.oob") && ir.contains("9222246136947933185"),
         "a numeric-layout OOB read must inline the undefined tag:\n{ir}"
@@ -123,6 +127,58 @@ fn numeric_layout_oob_array_read_returns_undefined_inline() {
     assert!(
         ir.contains("arr.guard.numeric_in_bounds"),
         "only the in-bounds arm may require the numeric element-layout proof:\n{ir}"
+    );
+}
+
+#[test]
+fn instrumented_numeric_array_read_keeps_handle_phi_first() {
+    // Census enablement is cached process-wide. Use a fresh test process so
+    // this test also exercises the instrument when the suite defaults to OFF.
+    const CHILD: &str = "NUMERIC_PHI_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let current = std::thread::current();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([current.name().unwrap(), "--exact", "--test-threads=1"])
+            .env(CHILD, "1")
+            .env("PERRY_STORE_CENSUS", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "instrumented array read failed: {}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        return;
+    }
+    assert!(super::store_census::enabled());
+    let ir = numeric_layout_oob_array_read_ir();
+    let mut in_fast = false;
+    let mut instructions = Vec::new();
+    for line in ir.lines() {
+        if !line.starts_with(char::is_whitespace) && line.ends_with(':') {
+            if in_fast {
+                break;
+            }
+            in_fast = line.starts_with("arr.fast.");
+        } else if in_fast && !line.trim().is_empty() {
+            instructions.push(line.trim());
+        }
+    }
+    assert!(!instructions.is_empty(), "numeric fast route absent:\n{ir}");
+    assert!(
+        instructions[0].contains(" = phi i64 ")
+            && instructions[0].contains("%arr.guard.numeric_in_bounds.")
+            && instructions[0].contains("%arr.guard.cold."),
+        "the admitted inline/cold handles must merge before any ordinary instruction: {instructions:?}"
+    );
+    assert!(
+        instructions
+            .iter()
+            .skip(1)
+            .any(|line| line.contains("@PERRY_STORE_CENSUS")),
+        "the fast route's census must actually be emitted: {instructions:?}"
     );
 }
 
@@ -632,9 +688,14 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
     let ta_kind_guard = super::class_field_barrier_tests::block_body(&ir, "tav.kind_guard.")
         .expect("the typed-array kind/bounds guard exists");
     assert!(
-        ta_kind_guard.contains("@PERRY_TA_VIEW_GUARD") && ta_kind_guard.contains("arrlike.ic.miss"),
-        "inline storage, the element kind and the bounds check belong behind the \
-         tag, and their miss leaves through the single exit:\n{ta_kind_guard}"
+        ta_kind_guard
+            .lines()
+            .any(|l| l.contains("add i64") && l.trim_end().ends_with(", 10"))
+            && ta_kind_guard.matches("load i8").count() >= 2
+            && ta_kind_guard.contains("arrlike.ic.miss"),
+        "inline storage (the receiver's storage byte at header + 10, #10516), the \
+         element kind and the bounds check belong behind the tag, and their miss \
+         leaves through the single exit:\n{ta_kind_guard}"
     );
     let w4 = super::class_field_barrier_tests::block_body(&ir, "tav.w4.")
         .expect("the 4-byte width block exists");
@@ -758,16 +819,22 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
         "only GC_TYPE_OBJECT may reach the ObjectMeta.elements load; everything \
          else goes to the byte-view arm:\n{kind}"
     );
-    // #10515: the byte-view arm admits only a `GC_TYPE_BUFFER` whose address
-    // the admission cache holds; everything else leaves through the exit.
+    // #10515: the byte-view arm admits only a byte-view brand (#10694: a Node
+    // `Buffer`, `GC_TYPE_BUFFER`, or a `Uint8Array`, `GC_TYPE_BUFFER_UINT8ARRAY`)
+    // whose address the admission cache holds; everything else leaves through
+    // the exit.
     let u8_brand = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.brand.")
         .expect("the byte-view brand guard exists");
     assert!(
-        u8_brand.contains(", 10")
+        u8_brand.contains(&format!(", {}", crate::runtime_abi::GC_TYPE_BUFFER))
+            && u8_brand.contains(&format!(
+                ", {}",
+                crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY
+            ))
             && u8_brand.contains("@PERRY_U8_INLINE_CACHE")
             && u8_brand.contains("arrlike.ic.miss"),
-        "the byte-view arm must test GC_TYPE_BUFFER and the admission cache, \
-         and exit on a miss:\n{u8_brand}"
+        "the byte-view arm must test both byte-view brands and the admission \
+         cache, and exit on a miss:\n{u8_brand}"
     );
     // The elements-backed subclass probe, the lazy-JSON-array probe and the
     // dense-tail family token now live behind that exit rather than at every

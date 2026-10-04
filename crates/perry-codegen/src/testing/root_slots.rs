@@ -25,6 +25,7 @@
 //! |---|---|---|
 //! | [`SlotKind::Value`] | `alloca double` | a named local, or a scalar-replaced field/element slot (#6968) |
 //! | [`SlotKind::TempRoot`] | `alloca i64` null-initialised at entry | #7487's `TempRootPool` |
+//! | [`SlotKind::ClassKeys`] | `alloca i64` loaded from a registered class-keys global | an immutable function-local copy (#7876) |
 //!
 //! [`bound_slots`] **panics on a bound alloca it cannot classify** rather than
 //! defaulting it into either bucket. That is deliberate and is the property
@@ -50,6 +51,8 @@ pub enum SlotKind {
     /// the entry block, holding an expression temporary rather than any HIR
     /// local.
     TempRoot,
+    /// Immutable copy of a registered class-keys global, bound for rewrites.
+    ClassKeys,
 }
 
 /// `%reg` -> the text right of `=` on its defining line, within one function.
@@ -89,12 +92,26 @@ fn classify(fn_ir: &str, defs: &BTreeMap<&str, &str>, slot: &str) -> SlotKind {
     match defs.get(slot).copied().and_then(alloca_type) {
         Some("double") => SlotKind::Value,
         Some("i64") if fn_ir.contains(&format!("store i64 0, ptr {slot}\n")) => SlotKind::TempRoot,
+        Some("i64")
+            if fn_ir.lines().map(str::trim).any(|line| {
+                line.strip_prefix("store i64 ")
+                    .and_then(|rest| rest.split_once(", ptr "))
+                    .is_some_and(|(value, target)| {
+                        target.split(',').next().unwrap().trim() == slot
+                            && defs.get(value).is_some_and(|def| {
+                                def.starts_with("load i64, ptr @perry_class_keys_")
+                            })
+                    })
+            }) =>
+        {
+            SlotKind::ClassKeys
+        }
         other => panic!(
             "root slot {slot} is bound but its alloca ({other:?}) belongs to no \
              known slot family. Adding one is fine — classify it HERE, in \
              `testing::root_slots`, so every test that measures root traffic \
              sees it. Silently folding it into an existing total is how a \
-             whole-module bind count stopped measuring its subject (#7504)."
+             whole-module bind count stopped measuring its subject (#7504).\n{fn_ir}"
         ),
     }
 }

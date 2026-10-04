@@ -8,6 +8,9 @@ fn class(keys: &str, count: u32, cid: u32) -> BirthShape {
         proto: BirthProto::Class(cid),
         typed: None,
         rep: 0,
+        constfn: Vec::new(),
+        private: Vec::new(),
+        brands: Vec::new(),
     }
 }
 
@@ -277,6 +280,61 @@ fn an_f64_birth_rep_is_content_and_a_stub_never_adopts_it() {
     assert!(lit.is_seedable());
 }
 
+#[test]
+fn constfn_body_symbols_are_seedable_final_static_content() {
+    let body = |symbol: &str| BirthShape {
+        proto: BirthProto::Literal,
+        rep: 0b11,
+        constfn: vec![ConstFnBirth {
+            slot: 0,
+            symbol: symbol.to_string(),
+        }],
+        ..class("method\0", 1, 0)
+    };
+    let first = body("perry_closure_m__first$info");
+    let second = body("perry_closure_m__second$info");
+    assert_ne!(first.content_hash(), second.content_hash());
+    assert_ne!(first.structure(), second.structure());
+    assert!(
+        first.is_seedable(),
+        "final literal shapes have a body-aware seed"
+    );
+    let line = encode_static_seed(0x1000_0099, &first);
+    assert_eq!(decode_static_seed(&line), Some((0x1000_0099, first)));
+    assert_eq!(decode_static_seed("268435609 1 1 6d6574686f6400 0x3"), None);
+    assert_eq!(
+        decode_static_seed("268435609 1 1 6d6574686f6400 0x0 0@61"),
+        None
+    );
+    assert_eq!(
+        decode_static_seed("268435609 1 1 6d6574686f6400 0x3 0@61,0@62"),
+        None
+    );
+}
+
+#[test]
+fn constfn_birth_cannot_publish_a_static_guard_or_seed() {
+    let shape = BirthShape {
+        proto: BirthProto::Literal,
+        rep: 0b11,
+        constfn: vec![ConstFnBirth {
+            slot: 0,
+            symbol: "perry_closure_m__method$info".to_string(),
+        }],
+        ..class("method\0", 1, 0)
+    };
+    let key = "perry_class_keys_m__method";
+    MODULE_STATIC_IDS.with(|m| {
+        m.borrow_mut().insert(key.to_string(), (0x1000_0099, shape));
+    });
+    MODULE_SEEDS.with(|s| s.borrow_mut().clear());
+    assert_eq!(static_shape_id_for_keys_global(key), None);
+    assert_eq!(requested_shape_id_for_keys_global(key), None);
+    assert_eq!(static_region_slots(key, &["method".into()], 0), None);
+    assert!(take_module_static_seeds().is_empty());
+    MODULE_STATIC_IDS.with(|m| m.borrow_mut().clear());
+}
+
 /// The seed sidecar carries the birth rep: a warm link replays exactly the
 /// facts a cold one seeded. A line without the rep (another format) is
 /// malformed, never an all-`Any` seed of the same keys.
@@ -367,4 +425,359 @@ fn class_birth_names_anon_shapes_as_literals_and_skips_class_zero() {
     let o = class_birth(prefix, &orphan, &images, &HashMap::new(), &class_ids);
     assert_eq!(o.class_id, 0);
     assert!(o.shape.is_none());
+}
+
+#[test]
+fn compatible_final_guards_preserve_allocation_identity_and_refuse_special_writes() {
+    let ordinary = BirthShape {
+        rep: 1 << 2,
+        ..class("m\0x\0", 2, 71)
+    };
+    let completed = BirthShape {
+        rep: 3 | (1 << 2),
+        constfn: vec![ConstFnBirth {
+            slot: 0,
+            symbol: "guard_body$info".into(),
+        }],
+        ..ordinary.clone()
+    };
+    let wrong_number = BirthShape {
+        rep: 3,
+        ..completed.clone()
+    };
+    let key = "perry_class_keys_guard__C".to_string();
+    MODULE_STATIC_IDS.with(|m| {
+        *m.borrow_mut() = [(key.clone(), (SHAPE_ID_BASE + 4, ordinary.clone()))]
+            .into_iter()
+            .collect();
+    });
+    MODULE_FINAL_IDS.with(|m| {
+        *m.borrow_mut() = [
+            (completed, SHAPE_ID_BASE + 5),
+            (wrong_number, SHAPE_ID_BASE + 6),
+        ]
+        .into_iter()
+        .collect();
+    });
+    let (region_id, slots, r_mask) = static_region_slots(&key, &["x".into(), "m".into()], 0)
+        .expect("ordinary birth supplies exact numeric slots");
+    assert_eq!(region_id, SHAPE_ID_BASE + 4);
+    assert_eq!(slots, vec![1, 0]);
+    assert_eq!(r_mask, 1, "the method lane never supplies a Number fact");
+    assert!(static_region_slots(&key, &["x".into()], 1).is_none());
+    assert_eq!(
+        requested_shape_id_for_keys_global(&key),
+        Some(SHAPE_ID_BASE + 4),
+        "allocation supplier cannot request final id"
+    );
+    assert_eq!(
+        compatible_final_shape_ids(&(SHAPE_ID_BASE + 4).to_string(), &[]),
+        vec![SHAPE_ID_BASE + 5]
+    );
+    assert_eq!(
+        compatible_final_shape_ids(&(SHAPE_ID_BASE + 4).to_string(), &[1]),
+        vec![SHAPE_ID_BASE + 5],
+        "numeric stores preserve completed facts"
+    );
+    assert!(
+        compatible_final_shape_ids(&(SHAPE_ID_BASE + 4).to_string(), &[0]).is_empty(),
+        "CF stores require checked deprecation before writing"
+    );
+    assert!(slot_may_be_constfn(&key, 0));
+    assert!(!slot_may_be_constfn(&key, 1));
+    MODULE_STATIC_IDS.with(|m| m.borrow_mut().clear());
+    MODULE_FINAL_IDS.with(|m| m.borrow_mut().clear());
+    MODULE_SEEDS.with(|m| m.borrow_mut().clear());
+}
+
+#[test]
+fn region_static_r_is_the_exact_birth_shapes_f64_key_mask() {
+    let shape = BirthShape {
+        rep: 0b01 | (0b01 << 4),
+        ..class("ra\0rb\0rc\0", 3, 0x517)
+    };
+    let global = "p7_region_keys".to_string();
+    MODULE_STATIC_IDS.with(|m| {
+        m.borrow_mut()
+            .insert(global.clone(), (SHAPE_ID_BASE + 917, shape));
+    });
+    let keys = vec!["rc".to_string(), "rb".to_string(), "ra".to_string()];
+    let (_, slots, r) = static_region_slots(&global, &keys, 0).expect("birth keys are inline");
+    assert_eq!(slots, vec![2, 1, 0]);
+    assert_eq!(r, 0b101, "R follows key order, not birth slot order");
+    assert!(
+        static_region_slots(&global, &keys, 0b001).is_none(),
+        "a boxed store to an F64 birth lane is refused"
+    );
+    MODULE_STATIC_IDS.with(|m| {
+        m.borrow_mut().remove(&global);
+    });
+    take_module_static_seeds();
+}
+
+#[test]
+fn literal_key_cache_mints_require_a_seed_even_without_a_guard() {
+    let literal = BirthShape {
+        proto: BirthProto::Literal,
+        ..class("x\0m\0", 2, 7)
+    };
+    let declared = class("x\0m\0", 2, 8);
+    let assigned = assign_static_shape_ids([&literal, &declared]);
+    let entries = vec![
+        (
+            "perry_class_keys_probe____AnonShape_a".into(),
+            "x\0m\0".into(),
+            2,
+            vec![],
+            vec![],
+        ),
+        (
+            "perry_class_keys_probe__Declared".into(),
+            "x\0m\0".into(),
+            2,
+            vec![],
+            vec![],
+        ),
+    ];
+    let classes = HashMap::from([("__AnonShape_a".into(), 7), ("Declared".into(), 8)]);
+    set_module_static_ids(
+        "probe",
+        &entries,
+        &HashMap::new(),
+        &HashMap::new(),
+        &classes,
+        &assigned.clone().into_iter().collect::<Vec<_>>(),
+        &ProgramClassShapeIds::default(),
+    );
+    assert_eq!(
+        requested_shape_id_for_keys_global(&entries[0].0),
+        Some(assigned[&literal])
+    );
+    assert_eq!(
+        requested_shape_id_for_keys_global(&entries[1].0),
+        Some(assigned[&declared])
+    );
+    assert_eq!(
+        take_module_static_seeds(),
+        vec![(assigned[&literal], literal)]
+    );
+}
+
+/// A class with plain `this.f = f` fields, as `mint_anon_shape_class`
+/// synthesizes for an object literal (or as a declared class would look).
+fn field_class(
+    id: u32,
+    name: &str,
+    fields: &[&str],
+    ctor_id: u32,
+    param_base: u32,
+) -> perry_hir::Class {
+    use perry_hir::types::Type;
+    use perry_hir::{ClassField, Expr, Function, Param, Stmt};
+    let params: Vec<Param> = fields
+        .iter()
+        .enumerate()
+        .map(|(i, f)| Param {
+            id: param_base + i as u32,
+            name: (*f).to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        })
+        .collect();
+    let body = params
+        .iter()
+        .map(|p| {
+            Stmt::Expr(Expr::PropertySet {
+                object: Box::new(Expr::This),
+                property: p.name.clone(),
+                value: Box::new(Expr::LocalGet(p.id)),
+            })
+        })
+        .collect();
+    perry_hir::Class {
+        id,
+        name: name.to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: fields
+            .iter()
+            .map(|f| ClassField {
+                name: (*f).to_string(),
+                key_expr: None,
+                ty: Type::Any,
+                init: None,
+                is_private: false,
+                is_readonly: false,
+                decorators: Vec::new(),
+            })
+            .collect(),
+        constructor: Some(Function {
+            id: ctor_id,
+            name: "constructor".to_string(),
+            type_params: Vec::new(),
+            params,
+            return_type: Type::Void,
+            body,
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        }),
+        methods: Vec::new(),
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        computed_members: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+        is_nested: false,
+        alloc_width_hint: 0,
+        specialized_from: None,
+    }
+}
+
+/// `const o = { a: 1 }` (an `__AnonShape_*` birth) beside `new Point(2)`.
+fn literal_and_declared_module() -> perry_hir::Module {
+    use perry_hir::types::Type;
+    use perry_hir::{Expr, Stmt};
+    let mut hir = perry_hir::Module::new("literal_birth_mint_test");
+    hir.classes.push(field_class(
+        1,
+        "__AnonShape_000000000000a001",
+        &["a"],
+        90,
+        60,
+    ));
+    hir.classes.push(field_class(2, "Point", &["x"], 91, 70));
+    for (id, class, v) in [
+        (50, "__AnonShape_000000000000a001", 1.0),
+        (51, "Point", 2.0),
+    ] {
+        hir.init.push(Stmt::Let {
+            id,
+            name: format!("v{id}"),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(Expr::New {
+                class_name: class.to_string(),
+                args: vec![Expr::Number(v)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+        });
+    }
+    hir
+}
+
+/// The arguments of every `call ... @callee(...)` in `ir`, as their value text
+/// (call instructions only: the module's `declare` line names the callee too).
+fn mint_calls(ir: &str, callee: &str) -> Vec<Vec<String>> {
+    let needle = format!("@{callee}(");
+    ir.lines()
+        .filter(|line| line.contains(" call ") && !line.trim_start().starts_with("declare"))
+        .filter_map(|line| {
+            let start = line.find(&needle)? + needle.len();
+            let end = start + line[start..].find(')')?;
+            Some(
+                line[start..end]
+                    .split(", ")
+                    .map(|arg| arg.rsplit(' ').next().unwrap_or("").to_string())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_literal_birth_mints_its_shape_with_the_plain_prototype_on_both_routes() {
+    // Per-module class ids collide: an `__AnonShape_*` id can also be another
+    // module's DECLARED class. Passing it to the shape mint let the runtime
+    // derive that class's prototype for a plain literal, so two modules' equal
+    // literal contents -- ONE static id -- reached the mint with different
+    // facts and the second aborted ("the static ShapeId ... was refused by the
+    // shape mint"; OpenCode's TUI: ajv's and json5's `{ x }` literals). A
+    // literal birth names the plain prototype, as the startup literal seed
+    // (`js_shape_seed_plain`) does: class id 0.
+    let hir = literal_and_declared_module();
+
+    // Lazy route (no static id): `(keys, field_count, class_id, rep)`.
+    let lazy = String::from_utf8(
+        crate::compile_module(
+            &hir,
+            crate::CompileOptions {
+                emit_ir_only: true,
+                ..Default::default()
+            },
+        )
+        .expect("module compiles"),
+    )
+    .expect("UTF-8 IR");
+    let calls = mint_calls(&lazy, "js_object_shape_id_for_class_keys");
+    assert_eq!(calls.len(), 2, "one lazy mint per birth class:\n{lazy}");
+    let class_ids: Vec<&str> = calls.iter().map(|args| args[2].as_str()).collect();
+    assert!(
+        class_ids.contains(&"0"),
+        "the literal's mint must name class id 0: {calls:?}"
+    );
+    assert!(
+        class_ids.iter().any(|cid| *cid != "0"),
+        "a declared class keeps its own class id (its prototype is a shape fact): {calls:?}"
+    );
+
+    // Static route: the driver assigned the literal's content an id.
+    let content = BirthShape {
+        keys: b"a\0".to_vec(),
+        key_count: 1,
+        live: 1,
+        proto: BirthProto::Literal,
+        typed: None,
+        rep: 0,
+        constfn: Vec::new(),
+        private: Vec::new(),
+        brands: Vec::new(),
+    };
+    let requested = SHAPE_ID_BASE + 7;
+    let stat = String::from_utf8(
+        crate::compile_module(
+            &hir,
+            crate::CompileOptions {
+                emit_ir_only: true,
+                static_shape_ids: vec![(content, requested)],
+                ..Default::default()
+            },
+        )
+        .expect("module compiles"),
+    )
+    .expect("UTF-8 IR");
+    // `(keys, field_count, live, class_id, requested, rep)`
+    let calls = mint_calls(&stat, "js_object_shape_id_for_class_keys_static");
+    let literal: Vec<&Vec<String>> = calls
+        .iter()
+        .filter(|args| args[4] == requested.to_string())
+        .collect();
+    assert_eq!(
+        literal.len(),
+        1,
+        "the driver's id must reach the literal's static mint for this test to mean anything: {calls:?}\n{stat}"
+    );
+    assert_eq!(
+        literal[0][3], "0",
+        "the literal's static mint must name class id 0, as its seed does: {calls:?}"
+    );
 }

@@ -134,7 +134,7 @@ fn mint(kind: ShapeObjectKind, proto_id: u64) -> u32 {
         0,
         kind,
         proto_id,
-        function_shape_summary(kind),
+        shapes::ReceiverFacts::summary(function_shape_summary(kind)),
     ));
     // A keyless intrinsic shape: rooted for the agent's life, so the
     // post-full-trace prune can never retire an id live closures carry.
@@ -319,7 +319,11 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
                                 0,
                                 ShapeObjectKind::Function,
                                 proto_id,
-                                function_shape_summary(ShapeObjectKind::Function),
+                                // The bag's brands are the closure's (#11791).
+                                shapes::ReceiverFacts::of_descriptor(
+                                    &d,
+                                    function_shape_summary(ShapeObjectKind::Function),
+                                ),
                             ),
                         );
                         shapes::note_external_shape_carrier(shapes::shape_descriptor_by_id(id));
@@ -355,14 +359,48 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
         b"apply" => VERDICT_APPLY,
         _ => return keyed_shape_lacks_key(id, key),
     };
+    keyed_shape_verdict(id) & bit != 0
+}
+
+/// Is the keyed ShapeId `id` (not a base shape, not the FunctionDictionary
+/// shape) a Function shape whose prototype identity is Function.prototype's?
+/// A fact of the id alone, for every key: with the base Function shape, the
+/// receivers a `Function.prototype` intrinsic can be inherited by at all.
+#[inline]
+pub(crate) fn keyed_function_shape_has_function_prototype(id: u32) -> bool {
+    keyed_shape_verdict(id) & VERDICT_FUNCTION_PROTOTYPE != 0
+}
+
+/// This agent's base `Function` ShapeId and its FunctionDictionary ShapeId,
+/// in one read of the cell. An id not minted yet reads 0, which no function
+/// object carries.
+#[inline]
+pub(crate) fn function_base_and_dictionary_shapes() -> (u32, u32) {
+    // SAFETY: a plain `[u32; 5]` read through the agent's own cell; nothing
+    // else holds a reference into it.
+    BASE_SHAPES.with(|c| unsafe {
+        let ids = &*c.as_ptr();
+        (ids[FunctionProtoKind::Function as usize], ids[4])
+    })
+}
+
+/// The verdict mask of a keyed ShapeId: whether it is a Function shape over
+/// `Function.prototype`, and which of the three intrinsics it lacks as own
+/// keys. A fact of the (immutable) ShapeId, cached per agent.
+fn keyed_shape_verdict(id: u32) -> u8 {
     let slot = (id as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
     // Index in place: `Cell::get` would copy the whole 64-entry array.
     // SAFETY: this agent's own cell; no reference to it outlives the read.
     let cached = VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] });
-    let mask = if cached.0 == id {
-        cached.1
-    } else {
-        let mask = VERDICT_KNOWN
+    if cached.0 == id {
+        return cached.1;
+    }
+    let over_function_prototype = shapes::shape_descriptor_by_id(id).is_some_and(|d| {
+        d.object_kind == ShapeObjectKind::Function && d.proto_id == INTRINSIC_SERIAL_FUNCTION
+    });
+    let mask = if over_function_prototype {
+        VERDICT_KNOWN
+            | VERDICT_FUNCTION_PROTOTYPE
             | if keyed_shape_lacks_key(id, b"bind") {
                 VERDICT_BIND
             } else {
@@ -377,18 +415,20 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
                 VERDICT_APPLY
             } else {
                 0
-            };
-        // SAFETY: as above; a single-entry store in place.
-        VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] = (id, mask) });
-        mask
+            }
+    } else {
+        VERDICT_KNOWN
     };
-    mask & bit != 0
+    // SAFETY: as above; a single-entry store in place.
+    VERDICT_CACHE.with(|c| unsafe { (*c.as_ptr())[slot] = (id, mask) });
+    mask
 }
 
 const VERDICT_KNOWN: u8 = 1;
 const VERDICT_BIND: u8 = 2;
 const VERDICT_CALL: u8 = 4;
 const VERDICT_APPLY: u8 = 8;
+const VERDICT_FUNCTION_PROTOTYPE: u8 = 16;
 const VERDICT_CACHE_LEN: usize = 64;
 
 crate::perry_thread_local! {
@@ -420,6 +460,93 @@ fn keyed_shape_lacks_key(id: u32, key: &[u8]) -> bool {
             key,
         )
         .is_none()
+    }
+}
+
+/// The function's own `prototype` value, read through its ShapeId (#10507):
+/// `Some(Some(v))` the value, `Some(None)` no own `prototype` yet (a base
+/// shape: nothing materialized it), `None` the shape does not say (a
+/// FunctionDictionary or class function object, or a key outside the inline
+/// slots) and the caller asks the bag.
+///
+/// A keyed Function shape is minted from the bag's ordinary descriptor
+/// (`refresh_closure_shape`), so its key list and live inline bound are the
+/// bag's: the slot of `prototype` is a fact of the immutable id, cached per
+/// agent like the intrinsic verdicts above. `prototype` of a function is a
+/// non-configurable data property, so the slot always holds its value.
+///
+/// # Safety
+/// `closure` is a proven, live closure cell.
+#[inline]
+pub(crate) unsafe fn closure_own_prototype_by_shape(
+    closure: *const ClosureHeader,
+) -> Option<Option<f64>> {
+    let id = (*closure).shape_id;
+    let slot = (id as usize).wrapping_mul(0x9E37_79B9) >> 26 & (VERDICT_CACHE_LEN - 1);
+    // SAFETY: this agent's own cell; no reference to it outlives the read.
+    let cached = PROTOTYPE_SLOT_CACHE.with(|c| (*c.as_ptr())[slot]);
+    let index = if cached.0 == id && id != 0 {
+        cached.1
+    } else {
+        let index = prototype_slot_of_shape(closure, id);
+        PROTOTYPE_SLOT_CACHE.with(|c| (*c.as_ptr())[slot] = (id, index));
+        index
+    };
+    match index {
+        PROTOTYPE_SLOT_UNKNOWN => None,
+        PROTOTYPE_SLOT_ABSENT => Some(None),
+        index => {
+            let bag = (*closure).props;
+            debug_assert!(!bag.is_null(), "a keyed Function shape has a bag");
+            let fields = (bag as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>())
+                as *const u64;
+            Some(Some(f64::from_bits(*fields.add(index as usize))))
+        }
+    }
+}
+
+const PROTOTYPE_SLOT_UNKNOWN: u32 = u32::MAX;
+const PROTOTYPE_SLOT_ABSENT: u32 = u32::MAX - 1;
+
+crate::perry_thread_local! {
+    /// Per-agent cache of Function ShapeIds' inline slot of `prototype`
+    /// ([`closure_own_prototype_by_shape`]); ShapeIds are never reused, so an
+    /// entry can only go unused, never wrong.
+    static PROTOTYPE_SLOT_CACHE: std::cell::Cell<[(u32, u32); VERDICT_CACHE_LEN]> =
+        const { std::cell::Cell::new([(0, 0); VERDICT_CACHE_LEN]) };
+}
+
+/// The inline slot of `prototype` the Function ShapeId `id` describes, or
+/// one of the two markers.
+#[cold]
+#[inline(never)]
+unsafe fn prototype_slot_of_shape(closure: *const ClosureHeader, id: u32) -> u32 {
+    if id == function_dictionary_shape() || is_class_info((*closure).info) {
+        return PROTOTYPE_SLOT_UNKNOWN;
+    }
+    let Some(descriptor) = shapes::shape_descriptor_by_id(id) else {
+        return PROTOTYPE_SLOT_UNKNOWN;
+    };
+    if descriptor.object_kind != ShapeObjectKind::Function {
+        return PROTOTYPE_SLOT_UNKNOWN;
+    }
+    if descriptor.keys == 0 || descriptor.logical_key_count == 0 {
+        return PROTOTYPE_SLOT_ABSENT;
+    }
+    let keys = descriptor.keys as usize as *const crate::array::ArrayHeader;
+    match crate::object::keys_find_slot_by_bytes_resolved(
+        keys,
+        descriptor.logical_key_count,
+        b"prototype",
+    ) {
+        None => PROTOTYPE_SLOT_ABSENT,
+        Some(index)
+            if (index as u32) < descriptor.live_inline_slot_count
+                && !crate::object::key_attrs::key_is_accessor_at(keys, index as u32) =>
+        {
+            index as u32
+        }
+        Some(_) => PROTOTYPE_SLOT_UNKNOWN,
     }
 }
 

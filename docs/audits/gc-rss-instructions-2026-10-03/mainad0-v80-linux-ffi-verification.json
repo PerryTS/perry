@@ -1,0 +1,52 @@
+{
+  "test_binary_hashes": {
+    "/root/rss-header-20261002/primary-mainad0-v80-ffi-events/target/release/build/perry-ext-events/e284334735e7f460/out/perry_ext_events-e284334735e7f460": "a749cf3d76f4796789fa10906f71f72235d4ae88dd919495844a00b14a4122a7",
+    "/root/rss-header-20261002/primary-mainad0-v80-ffi-events/target/release/build/perry-ffi/521180fd37593975/out/perry_ffi-521180fd37593975": "8ebfeec549c1797964e007344f220aad26aed4cf8b47b08a5ae3dcd5bfc21e16"
+  },
+  "base": "ad0a2617bf0b9708032cf89c86575e9bd69fb074",
+  "production_runtime": "0aa483aa91ab901583002ec0174a50884b60ad81",
+  "source_count": 5014,
+  "suites": [
+    [
+      "15",
+      "0",
+      "0"
+    ],
+    [
+      "75",
+      "0",
+      "0"
+    ],
+    [
+      "0",
+      "0",
+      "0"
+    ],
+    [
+      "5",
+      "0",
+      "13"
+    ]
+  ],
+  "result": {
+    "base": "ad0a2617bf0b9708032cf89c86575e9bd69fb074",
+    "production_runtime": "0aa483aa91ab901583002ec0174a50884b60ad81",
+    "source_equivalent_to": "0aa483aa91ab901583002ec0174a50884b60ad81",
+    "command": [
+      "cargo",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "perry-ffi",
+      "-p",
+      "perry-ext-events"
+    ],
+    "rc": 0,
+    "pid": 2544887,
+    "elapsed_s": 257.94196871621534,
+    "log_sha256": "00044a0a15f76cc6d1c658a260a7329c158b1c33461622e29927bc917b5a640d",
+    "source_inputs_sha256": "dbf8185d8d490795d34c1353159dba79dca2f791b3bcce315fb7e8dd6a29baed"
+  },
+  "scope": "Pinned mainad0 integration Linux FFI/event and doc tests; complete raw log, source hashes and command independently verified."
+}

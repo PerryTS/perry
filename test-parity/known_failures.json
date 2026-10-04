@@ -160,16 +160,6 @@
     "category": "module-inventory",
     "reason": "node:http2 real transport (#10327). settings() applies immediately and fires its callback with no peer ACK and no third (duration) argument; no SETTINGS frame reaches the wire; no remoteSettings at connect; a peer SETTINGS frame mid-session is answered with GOAWAY(code=1) instead of an ACK. Re-measured on 8360231ec2, ubuntu-latest, run 35766723754: completes in ~8s with output mismatch only - the TIMEOUT recorded on 2026-09-16 (a run-phase kill at PERRY_RUN_TIMEOUT, which run_parity_tests.sh buckets as `crash` via perry_abnormal_exit) no longer reproduces. Retriaged crash -> parity_fail. Cause not bisected."
   },
-  "test_gap_json_lazy_defineproperty_index": {
-    "issue": "10097",
-    "added": "2026-09-12",
-    "category": "bug-open",
-    "reason": "Object.defineProperty on an index of a JSON.parse lazy array is installed and then ignored by indexed reads, in both the sparse and materialized states; PERRY_JSON_TAPE=0 (direct parse) matches Node. Found while adding the indexed-cache lazy tier: the assertion failed identically on the candidate and on main, so it is main's gap, not the change's. Filed as #10097.",
-    "platforms": [
-      "linux",
-      "macos"
-    ]
-  },
   "test_gap_perfhooks_3088_3008_3010_3011": {
     "issue": "3088",
     "added": "2026-07-04",
@@ -1033,5 +1023,11 @@
     "platforms": [
       "linux"
     ]
+  },
+  "test_gap_regexp_observe_known_wrong": {
+    "issue": "11881",
+    "added": "2026-10-04",
+    "category": "bug-open",
+    "reason": "RegExp one-shape S0: six spec-observability rows (typed patched test, flags getter, subclass instanceof, expando, setPrototypeOf, strict delete lastIndex) differ from node; fixed by slices S2/S3/S5 of the one-shape plan, delete this entry when the last row flips."
   }
 }

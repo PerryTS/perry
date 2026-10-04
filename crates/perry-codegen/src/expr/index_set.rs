@@ -44,7 +44,6 @@ use super::index_set_typed_array::lower_inline_dyn_typed_array_set;
 use super::{
     array_store_needs_layout_note, array_store_needs_write_barrier,
     attach_buffer_view_pointer_state_for_expr, buffer_access_materialization_reason,
-    emit_array_numeric_write_note_on_block, emit_jsvalue_slot_store_on_block,
     emit_root_nanbox_store_on_block, emit_typed_feedback_register_site, emit_write_barrier,
     expr_has_numeric_pointer_free_array_layout, int_range_expr, lower_buffer_store, lower_expr,
     lower_expr_native, lower_index_set_fast, lower_typed_array_store, materialize_js_value,
@@ -219,7 +218,12 @@ fn packed_f64_loop_fact_for_index(
 ) -> Option<(PackedF64LoopFact, u32, i32)> {
     let (idx_id, offset) = super::packed_f64_loop_index_parts(index)?;
     let fact = packed_f64_loop_fact(ctx, arr_id, idx_id)?;
-    if offset != 0 && !fact.allow_holes {
+    // A dense range guard validated the whole constant-offset window too
+    // (`window_validated` without `allow_holes`), so its offsets are proven
+    // exactly like the hole-tolerant guard's (#10718). Only the length-bound
+    // guard of the versioned matcher leaves an offset store unproven; an
+    // affine fact proves the receiver only.
+    if offset != 0 && !fact.allow_holes && (!fact.window_validated || fact.affine_indices) {
         return None;
     }
     Some((fact, idx_id, offset))
@@ -512,6 +516,14 @@ pub(crate) fn lower(
             index,
             value,
         } => {
+            // Step 4b / #10741: a planned-bare element store inside a loop
+            // region (a dense raw-f64 array, the index and value proven).
+            if let Some(result) = crate::stmt::region_loop::try_lower_bare_index_set(ctx, expr)? {
+                if value_discarded {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(result);
+            }
             if let Some(result) = super::typed_array_rmw::try_lower_guarded_uint32_add(
                 ctx,
                 object,
@@ -585,6 +597,21 @@ pub(crate) fn lower(
                 // literal / loop-counter index stays `is_numeric_expr`, so every
                 // proven element fast path below is preserved.
                 if !is_numeric_expr(ctx, index) {
+                    // A key that is a Number, BigInt or `undefined` on a
+                    // storage-proven view: one run-time index test, then a
+                    // bare store; a miss exits to the same runtime setter.
+                    if let Some(stored) = super::try_lower_proven_view_guarded_store(
+                        ctx,
+                        object,
+                        index,
+                        value,
+                        assignment_strict,
+                    )? {
+                        if value_discarded {
+                            return Ok(double_literal(0.0));
+                        }
+                        return Ok(stored);
+                    }
                     // #7640 section A: receiver AND key were both lowered
                     // before `value`, with no rooting decision at all. The
                     // typed-array object itself is old-arena/non-movable
@@ -597,15 +624,21 @@ pub(crate) fn lower(
                         ctx,
                         &[object, index, value],
                         |ctx, vals| {
-                            let (arr_box, idx_double, val_double) = (&vals[0], &vals[1], &vals[2]);
-                            let blk = ctx.block();
-                            let arr_bits = blk.bitcast_double_to_i64(arr_box);
-                            let arr_i64 = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                            Ok(blk.call(
-                                DOUBLE,
-                                "js_typed_array_index_set_dynamic",
-                                &[(I64, &arr_i64), (DOUBLE, idx_double), (DOUBLE, val_double)],
-                            ))
+                            // The guarded inline store the runtime-key arm below
+                            // takes, instead of an unconditional
+                            // `js_typed_array_index_set_dynamic` call. Its index
+                            // guard is an ordered `fcmp`, so a NaN-boxed Symbol,
+                            // string or `undefined` key always exits to
+                            // `js_dyn_index_set_strict`, which triages symbol
+                            // keys before any element store (#5735).
+                            lower_inline_dyn_typed_array_set(
+                                ctx,
+                                &vals[0],
+                                &vals[1],
+                                &vals[2],
+                                assignment_strict,
+                                None,
+                            )
                         },
                     );
                 }
@@ -633,6 +666,20 @@ pub(crate) fn lower(
                         stored,
                         MaterializationReason::FunctionAbi,
                     ));
+                }
+                // The same view with an index of unproven shape or a value
+                // that is not statically ToInt32-exact: run-time tests.
+                if let Some(stored) = super::try_lower_proven_view_guarded_store(
+                    ctx,
+                    object,
+                    index,
+                    value,
+                    assignment_strict,
+                )? {
+                    if value_discarded {
+                        return Ok(double_literal(0.0));
+                    }
+                    return Ok(stored);
                 }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
                     return rooting::with_operands_rooted(
@@ -1017,7 +1064,28 @@ pub(crate) fn lower(
                         // than abort codegen, let U32 facts fall through to the
                         // generic/bounded array-store path below (correct, just
                         // not the packed fast path).
-                        if !matches!(fact.array_kind, PackedNumericLoopKind::U32) {
+                        // A dense range copy has no side exit to take: an
+                        // iteration must run entirely in one copy, because a
+                        // multi-statement body may already have stored. The
+                        // matcher admits a store there only with a statically
+                        // genuine RHS (`dense_masked_store_rhs_is_admissible`,
+                        // this predicate's match-time twin); a store that
+                        // reaches here without that proof is matcher/lowering
+                        // drift and must not get a side-exiting store.
+                        let dense_copy =
+                            !fact.allow_holes && fact.window_validated && !fact.affine_indices;
+                        let side_exit_forbidden_but_needed = dense_copy
+                            && !super::masked_window::masked_store_rhs_is_genuine_f64(
+                                ctx,
+                                value.as_ref(),
+                            );
+                        debug_assert!(
+                            !side_exit_forbidden_but_needed,
+                            "dense range store without a genuine-f64 RHS proof"
+                        );
+                        if !matches!(fact.array_kind, PackedNumericLoopKind::U32)
+                            && !side_exit_forbidden_but_needed
+                        {
                             if let Some(i32_slot) = ctx.i32_counter_slots.get(&idx_id).cloned() {
                                 let idx_i32 = load_packed_loop_index_i32(ctx, &i32_slot, offset);
                                 return lower_packed_numeric_loop_index_set(
@@ -1238,35 +1306,52 @@ pub(crate) fn lower(
                                 ctx.current_block = merge_idx;
                                 return Ok(val_double);
                             }
-                            let blk = ctx.block();
-                            let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                            let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                            // ptr = arr_handle + 8 + idx*8
-                            let idx_i64 = blk.zext(I32, &idx_i32, I64);
-                            let byte_offset = blk.shl(I64, &idx_i64, "3");
-                            let elements_addr = blk.array_elements_addr(&arr_handle);
-                            let element_addr = blk.add(I64, &elements_addr, &byte_offset);
-                            let element_ptr = blk.inttoptr(I64, &element_addr);
-                            let value_bits = emit_jsvalue_slot_store_on_block(
-                                blk,
-                                &element_ptr,
-                                &val_double,
-                                &arr_handle,
-                                &idx_i32,
-                                layout_note_needed,
-                                &arr_handle,
-                                &element_addr,
-                                write_barrier_needed,
+                            // #11891: the bounded counter proves only
+                            // `i < receiver.length`; the declared `T[]` type
+                            // does not prove an ArrayHeader layout. Use the
+                            // ordinary guarded in-bounds store so a Proxy
+                            // handle (and every other non-array shape) reaches
+                            // the boxed [[Set]] fallback before any header or
+                            // element address is read.
+                            let feedback_site_id = emit_typed_feedback_register_site(
+                                ctx,
+                                TypedFeedbackKind::ArrayElement,
+                                "array[index]=",
+                                TypedFeedbackContract::array_set_index(),
                             );
-                            if !value_is_numeric {
-                                let value_bits = value_bits
-                                    .unwrap_or_else(|| blk.bitcast_double_to_i64(&val_double));
-                                emit_array_numeric_write_note_on_block(
-                                    blk,
-                                    &arr_handle,
-                                    &value_bits,
-                                );
-                            }
+                            let arr_box_c = arr_box.clone();
+                            let idx_double_c = idx_double.clone();
+                            let val_double_c = val_double.clone();
+                            let feedback_site_id_c = feedback_site_id.clone();
+                            let strict_flag = if assignment_strict { "1" } else { "0" };
+                            let local_slot = ctx.locals.get(arr_id).cloned();
+                            super::index_set_guarded::emit_guarded_inbounds_array_store(
+                                ctx,
+                                &arr_box,
+                                &idx_i32,
+                                &val_double,
+                                "idxset.bounded",
+                                layout_note_needed,
+                                write_barrier_needed,
+                                value_is_numeric,
+                                move |ctx| {
+                                    let fallback_box = ctx.block().call(
+                                        DOUBLE,
+                                        "js_typed_feedback_array_index_set_fallback_boxed",
+                                        &[
+                                            (I64, &feedback_site_id_c),
+                                            (DOUBLE, &arr_box_c),
+                                            (DOUBLE, &idx_double_c),
+                                            (DOUBLE, &val_double_c),
+                                            (I32, strict_flag),
+                                        ],
+                                    );
+                                    if let Some(slot) = &local_slot {
+                                        ctx.block().store(DOUBLE, &fallback_box, slot);
+                                    }
+                                    Ok(())
+                                },
+                            )?;
                             Ok(val_double)
                         });
                     }

@@ -328,18 +328,24 @@ pub unsafe extern "C" fn js_object_super_get(home: f64, key_value: f64, _receive
     js_object_get_property_key(proto, key_value)
 }
 
-/// `super.prop` GET for class methods: walk the parent class chain from
-/// `parent_class_id` for an accessor (getter) named `key` and invoke it with
-/// `receiver` as `this` (lookup starts at the super prototype, but the getter
-/// runs with the current `this`). If no getter is found, read a data property
-/// off the parent prototype object (`B.prototype.x = 42` then `super.x`).
-/// Refs class/super/in-{constructor,getter,methods,setter}.
+/// `super.prop` GET for class methods whose home object belongs to class
+/// `home_class_id`: `home.[[GetPrototypeOf]]().[[Get]](key, receiver)`.
+///
+/// Where the runtime models that chain end to end (see
+/// `class_super_base`), it reads it: a patched, deleted or accessor parent
+/// member and a relinked home all apply. Otherwise it walks the declared
+/// parent class chain for an accessor (getter) named `key` and invokes it
+/// with `receiver` as `this` (lookup starts at the super prototype, but the
+/// getter runs with the current `this`); if no getter is found, it reads a
+/// data property off the parent prototype object. Refs
+/// class/super/in-{constructor,getter,methods,setter}.
 #[no_mangle]
-pub unsafe extern "C" fn js_super_accessor_get(
-    parent_class_id: u32,
-    key: f64,
-    receiver: f64,
-) -> f64 {
+pub unsafe extern "C" fn js_super_accessor_get(home_class_id: u32, key: f64, receiver: f64) -> f64 {
+    let parent_class_id = if home_class_id == 0 {
+        0
+    } else {
+        crate::object::get_parent_class_id(home_class_id).unwrap_or(0)
+    };
     // #6935: `js_string_coerce` on an object key runs a user `toString` /
     // `valueOf` (and allocates even for primitive keys), so it can GC and
     // evacuate. `receiver` is dereferenced far below (`class_ref_id`, the
@@ -359,6 +365,29 @@ pub unsafe extern "C" fn js_super_accessor_get(
             .ok()
             .map(|s| s.to_string())
     };
+    let base = if super::prototype_chain::any_class_chain_relinked() {
+        super::class_super_chain::super_get_live_base(home_class_id, parent_class_id, receiver)
+    } else {
+        None
+    };
+    if let Some(base) = base {
+        let base_bits = crate::value::JSValue::from_bits(base.to_bits());
+        if base_bits.is_null() || base_bits.is_undefined() {
+            let name = key_name.as_deref().unwrap_or("").as_bytes();
+            crate::error::js_throw_type_error_property_access(
+                base_bits.is_null() as u32,
+                name.as_ptr(),
+                name.len(),
+            );
+        }
+        return crate::proxy::js_reflect_get(
+            base,
+            key_handle.get_nanbox_f64(),
+            f64::from_bits(receiver_handle.get_heap_word_u64()),
+        );
+    }
+    // `class_super_base` can allocate.
+    let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
     // Static-context super (`super.x` inside a `static` method/getter): the
     // receiver is the class constructor (a ClassRef), so resolve against the
     // PARENT's static side — a static getter, then a static data field —

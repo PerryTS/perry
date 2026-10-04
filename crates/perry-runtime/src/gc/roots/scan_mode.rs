@@ -32,7 +32,7 @@ pub(crate) enum ConservativeStackScanDecision {
 }
 
 impl ConservativeStackScanDecision {
-    #[cfg(feature = "diagnostics")]
+    #[cfg(perry_diagnostics)]
     #[inline]
     pub(crate) const fn as_str(self) -> &'static str {
         match self {

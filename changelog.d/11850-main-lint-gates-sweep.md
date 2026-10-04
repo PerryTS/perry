@@ -1,0 +1,1 @@
+Lint-gate data sweep: verdicts for five runtime TLS holders in `gc_runtime_root_holders.json`, `HIDDEN_KEYS` in the registry-lifetime allowlist, a stale addr-class baseline line removed, `GC_OBJECT_LEARNED_GUARD_MASK_I32` registered in `check_gc_header_constants.py`, and four E0521 lifetime errors fixed in runtime test code. No runtime behaviour change.

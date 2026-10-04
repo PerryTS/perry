@@ -491,3 +491,141 @@ fn guarded_number_array_rejects_stale_or_aliasable_reads() {
         5,
     ));
 }
+
+#[test]
+fn a_var_redeclared_parameter_is_demoted_like_a_reassigned_one() {
+    // #11802: `function f(n) { var n = b; ... }` binds the parameter's id with
+    // a `Stmt::Let`, not a `LocalSet`; the specialized entry's proofs about
+    // the Number `n` arrived as must not survive either form.
+    let param = |id: u32| perry_hir::Param {
+        id,
+        name: format!("p{id}"),
+        ty: Type::Number,
+        default: None,
+        decorators: vec![],
+        is_rest: false,
+        arguments_object: None,
+    };
+    let demoted = |body: Vec<Stmt>| {
+        let mut f = func(1, body);
+        f.params = vec![param(1), param(2)];
+        callee_demoted_params(&f)
+    };
+    assert_eq!(demoted(vec![]), [false, false]);
+    assert_eq!(
+        demoted(vec![Stmt::Expr(Expr::LocalSet(
+            1,
+            Box::new(Expr::LocalGet(99))
+        ))]),
+        [true, false],
+        "an assignment demotes its parameter"
+    );
+    assert_eq!(
+        demoted(vec![let_stmt(2, true, Expr::LocalGet(99))]),
+        [false, true],
+        "a `var` re-declaration demotes its parameter"
+    );
+    assert_eq!(
+        demoted(vec![let_stmt(3, true, Expr::LocalGet(1))]),
+        [false, false],
+        "binding a different local demotes nothing"
+    );
+}
+
+fn rows_length() -> Expr {
+    // `rows.length`, with `rows` (local 1) of unknown provenance.
+    Expr::PropertyGet {
+        object: Box::new(Expr::LocalGet(1)),
+        property: "length".to_string(),
+        byte_offset: 0,
+    }
+}
+
+fn times_seven(e: Expr) -> Expr {
+    Expr::Binary {
+        op: perry_hir::BinaryOp::Mul,
+        left: Box::new(e),
+        right: Box::new(Expr::Integer(7)),
+    }
+}
+
+#[test]
+fn computed_length_proves_the_length_form_without_a_constant() {
+    // #11810: `new Float64Array(rows.length * 7)`, directly and through an
+    // immutable local. A product is never an Object, so the construction is
+    // the length form whatever `rows` holds; its value is not constant.
+    let direct = module_with_init(vec![
+        let_stmt(1, false, Expr::Undefined),
+        let_stmt(
+            2,
+            false,
+            ta_new(TYPED_ARRAY_KIND_FLOAT64, Some(times_seven(rows_length()))),
+        ),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
+    ]);
+    let via_local = module_with_init(vec![
+        let_stmt(1, false, Expr::Undefined),
+        let_stmt(3, false, times_seven(rows_length())),
+        let_stmt(
+            2,
+            false,
+            ta_new(TYPED_ARRAY_KIND_FLOAT64, Some(Expr::LocalGet(3))),
+        ),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
+    ]);
+    for m in [direct, via_local] {
+        let facts = collect_spec_abi_facts(&m);
+        assert_eq!(
+            facts.ta_bindings.get(&2).map(|b| b.const_len),
+            Some(None),
+            "{:?}",
+            facts.ta_bindings
+        );
+        assert_eq!(
+            facts.call_sites.get(&7).unwrap()[0],
+            vec![SpecParamRep::TaPtr {
+                kind: TYPED_ARRAY_KIND_FLOAT64,
+                const_len: None
+            }]
+        );
+    }
+}
+
+#[test]
+fn a_property_read_or_mutable_computed_length_is_not_a_length_form() {
+    // `new Float64Array(rows.length)`: a property read may be an Object (an
+    // ArrayBuffer getter), so it is not judged. A MUTABLE local holding a
+    // product may be rebound to one before the construction.
+    let property = module_with_init(vec![
+        let_stmt(1, false, Expr::Undefined),
+        let_stmt(
+            2,
+            false,
+            ta_new(TYPED_ARRAY_KIND_FLOAT64, Some(rows_length())),
+        ),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
+    ]);
+    let mutable = module_with_init(vec![
+        let_stmt(1, false, Expr::Undefined),
+        let_stmt(3, true, times_seven(rows_length())),
+        Stmt::Expr(Expr::LocalSet(3, Box::new(Expr::LocalGet(1)))),
+        let_stmt(
+            2,
+            false,
+            ta_new(TYPED_ARRAY_KIND_FLOAT64, Some(Expr::LocalGet(3))),
+        ),
+        Stmt::Expr(call(7, vec![Expr::LocalGet(2)])),
+    ]);
+    for m in [property, mutable] {
+        let facts = collect_spec_abi_facts(&m);
+        assert!(
+            !facts.ta_bindings.contains_key(&2),
+            "{:?}",
+            facts.ta_bindings
+        );
+        assert_eq!(
+            facts.call_sites.get(&7).unwrap()[0],
+            vec![SpecParamRep::Boxed]
+        );
+    }
+}

@@ -47,6 +47,7 @@ fn ir_opts() -> CompileOptions {
         target: None,
         is_entry_module: true,
         non_entry_module_prefixes: Vec::new(),
+        thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
@@ -65,6 +66,7 @@ fn ir_opts() -> CompileOptions {
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
         short_spread_method_candidates: std::sync::Arc::default(),
+        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -695,5 +697,104 @@ fn a_field_push_writes_the_field_back_on_a_handle_bits_change_behind_a_plain_obj
     assert!(
         !plain_body.contains("apush.field.") && !plain_body.contains("class_field_set."),
         "a push with no write-back target must emit neither the field arm nor a field store"
+    );
+}
+
+#[test]
+fn class_field_push_checks_method_before_shared_argument_and_calls_builtin() {
+    let mut module = field_push_module(None);
+    let value = Expr::NativeMethodCall {
+        module: "process".into(),
+        class_name: None,
+        method: "memoryUsage".into(),
+        object: None,
+        args: vec![],
+    };
+    module.classes[0].methods[0].body[1] = Stmt::Expr(Expr::NativeMethodCall {
+        module: "array".into(),
+        class_name: None,
+        method: "push_field_single".into(),
+        object: Some(Box::new(Expr::LocalGet(40))),
+        args: vec![value],
+    });
+    let ir = ir_for(module);
+    let ir = function_body(&ir, "add");
+    assert!(
+        ir.contains("fieldpush.header"),
+        "must guard the actual receiver:\n{ir}"
+    );
+    assert!(
+        ir.contains("fieldpush.lookup"),
+        "must retain lookup-first fallback:\n{ir}"
+    );
+    assert!(
+        !ir.contains("apush.inbounds"),
+        "must not expand append machinery:\n{ir}"
+    );
+    assert!(
+        ir.contains("call i64 @js_array_push_f64_spec("),
+        "builtin was resolved before args:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i64 @js_array_push_f64_spec_or_own("),
+        "must not repeat method lookup after args:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_native_call_value("),
+        "call the captured method:\n{ir}"
+    );
+    assert_eq!(
+        ir.matches("call double @js_process_memory_usage(").count(),
+        1,
+        "emit the argument once"
+    );
+    let lookup = ir.find("\nfieldpush.lookup.").expect("lookup label");
+    let slow = &ir[lookup..];
+    let arg = slow
+        .find("call double @js_process_memory_usage(")
+        .expect("allocating argument");
+    assert!(
+        slow[..arg].contains("@js_object_get_field_ic"),
+        "method read must precede argument:\n{slow}"
+    );
+}
+
+#[test]
+fn private_module_init_field_receiver_does_not_repeat_lookup_after_argument() {
+    let mut module = Module::new("class_field_push_init.ts");
+    module.init = vec![
+        Stmt::Let {
+            id: 1,
+            name: "__field_push_receiver".into(),
+            ty: Type::Array(Box::new(Type::Number)),
+            mutable: true,
+            init: Some(Expr::Array(vec![])),
+        },
+        Stmt::Expr(Expr::NativeMethodCall {
+            module: "array".into(),
+            class_name: None,
+            method: "push_field_single".into(),
+            object: Some(Box::new(Expr::LocalGet(1))),
+            args: vec![Expr::NativeMethodCall {
+                module: "process".into(),
+                class_name: None,
+                method: "memoryUsage".into(),
+                object: None,
+                args: vec![],
+            }],
+        }),
+    ];
+    let ir = ir_for(module);
+    assert!(
+        ir.contains("call i64 @js_array_push_f64_spec("),
+        "a private init binding calls the resolved builtin:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call i64 @js_array_push_f64_spec_or_own("),
+        "the argument cannot change the resolved method:\n{ir}"
+    );
+    assert!(
+        !ir.contains("apush.spec.writeback"),
+        "a private binding cannot be rebound by user code:\n{ir}"
     );
 }

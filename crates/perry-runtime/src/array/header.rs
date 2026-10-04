@@ -68,6 +68,51 @@ pub(crate) unsafe fn array_object_flags_resolved(arr: *const ArrayHeader) -> u16
     (*gc_header)._reserved
 }
 
+/// Whether the resolved live head has the canonical ordinary-Array shape:
+/// `%Array.prototype%` and no own non-index keys or descriptors.
+///
+/// This is the runtime spelling of the one-word array admission guards emitted
+/// by codegen: the array's receiver-local shape facts live in `_reserved`, and
+/// both facts that leave the canonical shape are monotone for the allocation.
+/// `OBJ_FLAG_ARRAY_DESCRIPTORS` is armed by every own named/symbol key install;
+/// `GC_ARRAY_CUSTOM_PROTO` is armed when the receiver is re-parented. Keep the
+/// test as one masked load/compare so callers do not rediscover those facts in
+/// the side tables they guard.
+///
+/// # Safety
+///
+/// `arr` must satisfy [`array_object_flags_resolved`]'s contract.
+#[inline(always)]
+pub(crate) unsafe fn array_has_plain_shape_resolved(arr: *const ArrayHeader) -> bool {
+    const NON_PLAIN_SHAPE: u16 =
+        crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS | crate::gc::GC_ARRAY_CUSTOM_PROTO;
+    array_object_flags_resolved(arr) & NON_PLAIN_SHAPE == 0
+}
+
+/// Publish that `owner` gained an own non-index key, moving a real Array off
+/// its canonical shape. The descriptor bit is the existing array-shape fact
+/// used by generated element/method guards; no separate symbol registry fact
+/// is needed on their hit paths.
+///
+/// Arbitrary non-array owners are accepted and ignored. Symbol-property
+/// installation funnels call this before publishing their side-table entry.
+#[inline]
+pub(crate) fn note_array_own_non_index_key(owner: usize) {
+    let is_array = unsafe { crate::value::addr_class::try_read_gc_header(owner) }
+        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY);
+    if !is_array {
+        return;
+    }
+    let owner = clean_arr_ptr_mut(owner as *mut ArrayHeader);
+    if owner.is_null() {
+        return;
+    }
+    unsafe {
+        let header = (owner as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        (*header)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+    }
+}
+
 /// The `obj_type` and flag word of the `GcHeader` that precedes `arr`, read
 /// once, for a receiver [`clean_arr_ptr`] has already resolved. `(0, 0)` when
 /// `arr` is too low to carry a header — `0` is not a legal `obj_type`, so it
@@ -519,13 +564,11 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
         if obj_type != crate::gc::GC_TYPE_ARRAY {
             return std::ptr::null();
         }
-    } else if !crate::buffer::is_registered_buffer(addr)
-        && crate::typedarray::lookup_typed_array_kind(addr).is_none()
-    {
+    } else if !crate::shared_sab::is_shared_sab(addr) {
         // Handles, synthetic pointers, and unrelated allocations must be
-        // rejected before any GcHeader or ArrayHeader dereference. Registered
-        // Buffer/TypedArray receivers intentionally use the compatible
-        // length/capacity prefix and carry no GcHeader.
+        // rejected before any GcHeader or ArrayHeader dereference. Every
+        // Buffer/TypedArray is a tracked allocation (handled above); the one
+        // untracked buffer is a process-global SharedArrayBuffer block.
         return std::ptr::null();
     }
     // Length/capacity sanity: dense arrays have length <= capacity and
@@ -561,7 +604,7 @@ pub(crate) fn clean_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader {
             if sparse_array_shape {
                 return cleaned;
             }
-            if crate::buffer::is_registered_buffer(addr)
+            if crate::buffer::buffer_family_type_owned(addr).is_some()
                 || crate::typedarray::lookup_typed_array_kind(addr).is_some()
             {
                 return cleaned;

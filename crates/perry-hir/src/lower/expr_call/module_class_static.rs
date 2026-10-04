@@ -92,6 +92,15 @@ pub(super) fn try_module_class_static(
                                 | ("bun", "JSONL")
                                 | ("bun", "hash")
                                 | ("bun", "plugin")
+                                // `ns.Buffer.compare(a, b)` through a namespace
+                                // import: `Buffer` is the module's class VALUE and
+                                // its statics are dispatched by the Buffer lowering
+                                // (`Buffer.from` / `alloc` / ...) or by the runtime
+                                // static on the value. A NativeMethodCall with class
+                                // `Buffer` has no codegen entry, so every such call
+                                // evaluated to `undefined`.
+                                | ("buffer", "Buffer")
+                                | ("node:buffer", "Buffer")
                         ) || process_stream;
                         // Unimplemented-API gate (#463) for the chained
                         // `mod.X.Y()` case. The lower_member gate fires

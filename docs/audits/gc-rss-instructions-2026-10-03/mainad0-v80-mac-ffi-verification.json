@@ -1,0 +1,49 @@
+{
+  "source_count": 5014,
+  "result": {
+    "command": [
+      "cargo",
+      "+nightly-2026-08-20",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "perry-ffi",
+      "-p",
+      "perry-ext-events"
+    ],
+    "rc": 0,
+    "pid": 49551,
+    "elapsed_s": 162.5444555003196,
+    "source_manifest_sha256": "dbf8185d8d490795d34c1353159dba79dca2f791b3bcce315fb7e8dd6a29baed",
+    "raw_log_sha256": "62c0d064b77058dac5aca190a82ba520e0d171c06fe1f578b9f95d97b6270e3c",
+    "source_equivalent_to": "0aa483aa91ab901583002ec0174a50884b60ad81"
+  },
+  "suites": [
+    [
+      "15",
+      "0",
+      "0"
+    ],
+    [
+      "75",
+      "0",
+      "0"
+    ],
+    [
+      "0",
+      "0",
+      "0"
+    ],
+    [
+      "5",
+      "0",
+      "13"
+    ]
+  ],
+  "test_binary_hashes": {
+    "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/mainad0-once-v72-mac-target/release/build/perry-ext-events/b54e442494b77c31/out/perry_ext_events-b54e442494b77c31": "3991fc299a0aa74b9a23915b63ef18be3841e11cef16c37308e8c3fce517b5ee",
+    "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/mainad0-once-v72-mac-target/release/build/perry-ffi/3ccb3aeb9fbd1688/out/perry_ffi-3ccb3aeb9fbd1688": "f655128f6721ac159da2d427c71cf28b99172cd45668cef0780e3890a9eb6d4b"
+  },
+  "scope": "Pinned mainad0 integration: Mac FFI/events/doc tests pass; source, native Cargo result, raw suites and test binaries independently verified."
+}

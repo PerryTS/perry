@@ -49,7 +49,11 @@ fn is_genuine_node_stream_parent(ctx: &LoweringContext, name: &str) -> bool {
 
 mod class_heritage;
 mod decl_self_binding;
-pub(crate) use decl_self_binding::fresh_class_decl_self_binding;
+pub(crate) use decl_self_binding::{
+    declared_static_field_names, fresh_class_decl_self_binding,
+    guard_shared_first_capture_snapshot, guard_shared_first_new, guard_shared_first_static_call,
+    guard_shared_first_static_get, may_evaluate_repeatedly,
+};
 mod from_ast;
 mod member_helpers;
 mod member_registration;
@@ -176,10 +180,27 @@ pub fn lower_class_decl(
     // scope state the heritage routing below uses, before the body lowers any
     // new locals) so codegen can prefer the dynamic local over a NAME-keyed
     // built-in special case (Error/Request/Response/Event/CustomEvent/streams).
+    // #11759 (c′): `class D extends L` where `L` is a shared-first
+    // declaration of this body and D may itself evaluate more than once: D's
+    // template extends L's template (L's first evaluation), and each of D's
+    // evaluations other than its first pins the evaluated L its binding
+    // holds (`ClassExprFresh::evaluated_parent`).
+    let shared_first_parent = match class_decl.class.super_class.as_deref() {
+        Some(ast::Expr::Ident(ident))
+            if self_binding_wanted
+                && !decl_self_binding::class_body_has_private_names(&class_decl.class)
+                && !decl_self_binding::class_body_has_computed_keys(&class_decl.class)
+                && !ctx.class_definition_runs_once(class_decl.class.span) =>
+        {
+            ctx.lookup_local(ident.sym.as_ref())
+                .filter(|id| ctx.shared_first_class_bindings.contains_key(id))
+        }
+        _ => None,
+    };
     let heritage_lexically_shadowed = match class_decl.class.super_class.as_deref() {
         Some(ast::Expr::Ident(ident)) => {
             let n = ident.sym.to_string();
-            !ctx.class_renames.contains_key(&n) && ctx.locals.lookup(&n).is_some()
+            ctx.heritage_ident_is_lexical_local(&n) && shared_first_parent.is_none()
         }
         _ => false,
     };
@@ -287,9 +308,9 @@ pub fn lower_class_decl(
                 .require_destructured_native_locals
                 .get(&parent_name)
                 .is_some_and(|key| *key == canonical_parent_name);
-            let locally_shadowed = !ctx.class_renames.contains_key(&parent_name)
-                && ctx.locals.lookup(&parent_name).is_some()
-                && !require_native_reexport;
+            let locally_shadowed = ctx.heritage_ident_is_lexical_local(&parent_name)
+                && !require_native_reexport
+                && shared_first_parent.is_none();
             if native_parent.is_some() && !locally_shadowed {
                 // Keep `extends_name` populated alongside `native_extends`
                 // so SuperCall codegen + downstream chain walks still
@@ -459,12 +480,43 @@ pub fn lower_class_decl(
     };
 
     // #11157: a function-body declaration with a runtime heritage value or
-    // private elements is evaluated per evaluation (`ClassExprFresh`). Give
-    // its members the evaluated class, not the template, for its own name.
+    // private elements is evaluated per evaluation (`ClassExprFresh`), and so
+    // are the later evaluations of one that may run more than once (#11759).
+    // Give its members the evaluated class, not the template, for its own
+    // name.
+    // #11759 (c′): a declaration that may run more than once and owns no
+    // per-evaluation heritage, private brand or computed key: its later
+    // evaluations are
+    // fresh class objects. Its members then read their captures (the
+    // self-binding included) from a GUARDED class environment, the scheme a
+    // fresh class expression uses: the first evaluation's instances carry no
+    // capture fields and read the environment directly while the class has
+    // had one evaluation.
+    let later_evaluations_fresh = self_binding_wanted
+        && !decl_self_binding::class_body_has_private_names(&class_decl.class)
+        && !decl_self_binding::class_body_has_computed_keys(&class_decl.class)
+        && may_evaluate_repeatedly(
+            ctx,
+            class_decl.class.span,
+            extends_expr.is_some(),
+            native_extends.is_some(),
+        );
     let class_self_binding = (self_binding_wanted
         && (extends_expr.is_some()
-            || decl_self_binding::class_body_has_private_names(&class_decl.class)))
-    .then(|| decl_self_binding::push_decl_self_binding(ctx, class_decl.ident.sym.as_ref(), &name));
+            || decl_self_binding::class_body_has_private_names(&class_decl.class)
+            || later_evaluations_fresh))
+        .then(|| {
+            decl_self_binding::push_decl_self_binding(ctx, class_decl.ident.sym.as_ref(), &name)
+        });
+    if let Some(parent_binding) = shared_first_parent.filter(|_| extends.is_some()) {
+        ctx.evaluated_parent_bindings
+            .insert(name.clone(), parent_binding);
+    }
+    if let (Some(self_id), true) = (class_self_binding, later_evaluations_fresh) {
+        let statics = decl_self_binding::declared_static_field_names(&class_decl.class);
+        ctx.shared_first_class_bindings
+            .insert(self_id, (name.clone(), statics));
+    }
 
     // Issue #10486: the branches above deliberately leave `extends_name`
     // None when the heritage identifier resolves to a lexically-scoped
@@ -1271,7 +1323,7 @@ pub fn lower_class_decl(
         &static_accessor_fn_ids,
         crate::lower_decl::CaptureDefinition::classify(
             ctx.class_definition_runs_once(class_decl.class.span),
-            false,
+            later_evaluations_fresh,
         ),
     );
 

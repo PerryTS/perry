@@ -120,6 +120,71 @@ pub fn namespace_member_func_key(namespace: &str, member: &str) -> String {
     format!("\0perry_namespace_func\0{namespace}\0{member}")
 }
 
+/// The property names the program's compiled classes declare as accessors
+/// (`get k()` / `set k(v)`), across every module (#10498).
+///
+/// A read site's class-getter arm and a store site's class-setter arm can only
+/// ever take an entry for a name some compiled class declares as that kind of
+/// accessor: the runtime admits an entry only when the receiver's class chain
+/// declares the accessor (`class_chain_has_instance_accessor`). A site whose
+/// name no class declares therefore emits no arm; it misses to the runtime as
+/// before the arm existed, which still asks the same entry first.
+#[derive(Debug, Clone, Default)]
+pub struct ClassAccessorNames {
+    getters: std::collections::HashSet<String>,
+    setters: std::collections::HashSet<String>,
+}
+
+impl ClassAccessorNames {
+    /// The accessor names declared by the classes of `modules` (instance and
+    /// static alike: a superset only costs an arm).
+    pub fn collect<'m>(modules: impl IntoIterator<Item = &'m perry_hir::Module>) -> Self {
+        let mut names = Self::default();
+        for module in modules {
+            for class in &module.classes {
+                names
+                    .getters
+                    .extend(class.getters.iter().map(|(name, _)| name.clone()));
+                names
+                    .setters
+                    .extend(class.setters.iter().map(|(name, _)| name.clone()));
+            }
+        }
+        names
+    }
+
+    /// The names given, for a caller that already knows them.
+    pub fn from_names<G, S>(getters: G, setters: S) -> Self
+    where
+        G: IntoIterator<Item = String>,
+        S: IntoIterator<Item = String>,
+    {
+        Self {
+            getters: getters.into_iter().collect(),
+            setters: setters.into_iter().collect(),
+        }
+    }
+
+    /// May a compiled class declare a getter named `name`?
+    pub fn may_get(&self, name: &str) -> bool {
+        self.getters.contains(name)
+    }
+
+    /// May a compiled class declare a setter named `name`?
+    pub fn may_set(&self, name: &str) -> bool {
+        self.setters.contains(name)
+    }
+
+    /// A stable rendering for the object-cache key.
+    pub fn cache_key(&self) -> String {
+        let mut getters: Vec<&str> = self.getters.iter().map(String::as_str).collect();
+        let mut setters: Vec<&str> = self.setters.iter().map(String::as_str).collect();
+        getters.sort_unstable();
+        setters.sort_unstable();
+        format!("get:{}|set:{}", getters.join(","), setters.join(","))
+    }
+}
+
 /// Options controlling code generation for a single module.
 #[derive(Debug, Clone, Default)]
 pub struct CompileOptions {
@@ -136,6 +201,15 @@ pub struct CompileOptions {
     /// order matches Perry's existing topological sort (set up by the
     /// CLI driver in `crates/perry/src/commands/compile.rs`).
     pub non_entry_module_prefixes: Vec<String>,
+    /// Complete native module graph, supplied identically to every module when
+    /// perry/thread can launch agents. The first prefix owns the graph's single
+    /// preparation callback (the CLI chooses the actual entry module); remaining
+    /// prefixes are unique and sorted, excluding the owner. Owner order affects
+    /// symbols and object cache identity. Every compiled module must be included.
+    /// Empty permits a direct local launcher to prepare only its own pool.
+    /// String preparation has no module-evaluation effects; deferred bodies and
+    /// declared-class registration remain lazy.
+    pub thread_literal_module_prefixes: Vec<String>,
     /// For each imported function name in this module, the prefix of the
     /// source module that exports it. Used by `ExternFuncRef` lowering
     /// in `lower_call` to generate the correct cross-module call to
@@ -287,6 +361,11 @@ pub struct CompileOptions {
     /// reverse-flow metadata: the calling module need not import the producer.
     pub object_literal_method_candidates:
         std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
+    /// The whole program's class accessor names ([`ClassAccessorNames`]),
+    /// which decide where the class-accessor arms are emitted. `None` (a
+    /// standalone or test compile that did not collect them) emits the arms
+    /// at every site.
+    pub program_class_accessor_names: Option<std::sync::Arc<ClassAccessorNames>>,
     /// Imported enum member lists, keyed by the local name under which
     /// the enum is visible in this module.
     pub imported_enums: Vec<(String, Vec<(String, perry_hir::EnumValue)>)>,
@@ -850,6 +929,8 @@ pub(crate) struct CrossModuleCtx {
         std::sync::Arc<std::collections::HashMap<String, Vec<ShortSpreadMethodCandidate>>>,
     pub object_literal_method_candidates:
         std::sync::Arc<std::collections::HashMap<String, Vec<ObjectLiteralMethodCandidate>>>,
+    /// See `CompileOptions::program_class_accessor_names`.
+    pub program_class_accessor_names: Option<std::sync::Arc<ClassAccessorNames>>,
     /// FuncIds of locally-defined async functions in this module. Populated
     /// from `hir.functions.is_async`. Used by `is_promise_expr` to refine
     /// `let p = asyncFn();` to `Promise(_)` so subsequent `p.then(cb)`
@@ -873,6 +954,10 @@ pub(crate) struct CrossModuleCtx {
     /// invalidated by any module-wide write. Used by the worker-thread safety
     /// check; declared module types are intentionally excluded (#7846).
     pub module_global_proven_types: std::collections::HashMap<u32, perry_hir::types::Type>,
+    /// Immutable String/BigInt candidates read through per-agent replicas
+    /// (`codegen/global_transfer.rs`). Empty unless perry/thread agents exist.
+    pub module_global_transfers:
+        std::collections::HashMap<u32, super::global_transfer::GlobalTransfer>,
     /// FuncIds of locally-defined plain functions whose body reads the
     /// dynamic `this` binding (directly or via a this-capturing arrow).
     /// Bare `f()` call sites to these must reset the runtime IMPLICIT_THIS

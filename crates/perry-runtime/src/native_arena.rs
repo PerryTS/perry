@@ -29,7 +29,10 @@ pub struct NativeTypedViewHeader {
     pub capacity: u32,
     pub kind: u8,
     pub elem_size: u8,
-    pub _pad: [u8; 6],
+    /// Always `TA_STORAGE_EXTERNAL`: the elements live in the arena.
+    pub storage: u8,
+    pub flags: u8,
+    pub _pad: [u8; 4],
 
     pub owner: *mut NativeArenaOwnerHeader,
     pub data: *mut u8,
@@ -119,9 +122,6 @@ static NATIVE_VIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
 
 fn register_view(view: *mut NativeTypedViewHeader) {
     NATIVE_VIEW_COUNT.fetch_add(1, Ordering::Relaxed);
-    // #5525 follow-up: a native-arena view resolves its data pointer through the
-    // arena, not inline storage — bar the codegen inline element fast path.
-    typedarray::ta_view_guard_inc();
     VIEW_REGISTRY.with(|r| {
         r.borrow_mut().insert(view as usize);
     });
@@ -132,7 +132,6 @@ fn unregister_view(view: *mut NativeTypedViewHeader) {
     let removed = VIEW_REGISTRY.with(|r| r.borrow_mut().remove(&(view as usize)));
     if removed {
         NATIVE_VIEW_COUNT.fetch_sub(1, Ordering::Relaxed);
-        typedarray::ta_view_guard_dec();
     }
     typedarray::unregister_typed_array(view as *const TypedArrayHeader);
 }
@@ -339,7 +338,11 @@ pub extern "C" fn js_native_arena_view(
         (*view).capacity = length as u32;
         (*view).kind = kind;
         (*view).elem_size = elem_size as u8;
-        (*view)._pad = [0; 6];
+        // The elements live in the arena: the header's own storage byte
+        // keeps every inline element path off this view (#10516).
+        (*view).storage = typedarray::TA_STORAGE_EXTERNAL;
+        (*view).flags = 0;
+        (*view)._pad = [0; 4];
         (*view).owner = owner;
         (*view).data = if byte_length == 0 {
             (*owner).data
@@ -682,61 +685,6 @@ mod tests {
         assert!(catch_runtime_throw(|| {
             crate::typedarray::js_native_memory_copy(view as u64, view as u64);
         }));
-    }
-
-    #[test]
-    fn native_memory_copy_rejects_typed_array_registry_forged_to_old_buffer() {
-        let buf = crate::buffer::buffer_alloc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32);
-        assert!(crate::arena::pointer_in_old_gen(buf as usize));
-        typedarray::register_typed_array(buf as *const TypedArrayHeader, typedarray::KIND_UINT8);
-
-        assert!(catch_runtime_throw(|| {
-            crate::typedarray::js_native_memory_copy(buf as u64, buf as u64);
-        }));
-
-        typedarray::unregister_typed_array(buf as *const TypedArrayHeader);
-    }
-
-    #[test]
-    fn native_memory_fill_u32_rejects_typed_array_registry_forged_to_old_buffer() {
-        let buf = crate::buffer::buffer_alloc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32);
-        assert!(crate::arena::pointer_in_old_gen(buf as usize));
-        typedarray::register_typed_array(buf as *const TypedArrayHeader, typedarray::KIND_UINT32);
-
-        assert!(catch_runtime_throw(|| {
-            crate::typedarray::js_native_memory_fill_u32(buf as u64, 1.0);
-        }));
-
-        typedarray::unregister_typed_array(buf as *const TypedArrayHeader);
-    }
-
-    #[test]
-    fn native_memory_copy_rejects_buffer_registry_forged_to_old_non_buffer() {
-        let fake = crate::arena::arena_alloc_gc_old(
-            std::mem::size_of::<crate::buffer::BufferHeader>(),
-            8,
-            crate::gc::GC_TYPE_OBJECT,
-        ) as *mut crate::buffer::BufferHeader;
-        assert!(crate::arena::pointer_in_old_gen(fake as usize));
-        crate::buffer::register_buffer(fake as *const crate::buffer::BufferHeader);
-        crate::buffer::mark_as_uint8array(fake as usize);
-
-        assert!(catch_runtime_throw(|| {
-            crate::typedarray::js_native_memory_copy(fake as u64, fake as u64);
-        }));
-    }
-
-    #[test]
-    fn random_fill_sync_rejects_typed_array_registry_forged_to_old_buffer() {
-        let buf = crate::buffer::buffer_alloc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES as u32);
-        assert!(crate::arena::pointer_in_old_gen(buf as usize));
-        typedarray::register_typed_array(buf as *const TypedArrayHeader, typedarray::KIND_UINT8);
-
-        assert!(catch_runtime_throw(|| unsafe {
-            let _ = dispatch_random_fill_sync(buf);
-        }));
-
-        typedarray::unregister_typed_array(buf as *const TypedArrayHeader);
     }
 
     #[test]

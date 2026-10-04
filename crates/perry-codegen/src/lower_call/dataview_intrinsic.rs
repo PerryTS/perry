@@ -16,7 +16,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, FnCtx};
+use crate::expr::FnCtx;
 use crate::types::{DOUBLE, I32};
 
 /// Classify a DataView accessor method name: `Some((is_set, kind_code))` for
@@ -66,11 +66,9 @@ pub(super) fn try_emit_data_view_accessor(
     if args.len() < min_args || args.len() > max_args {
         return Ok(None);
     }
-    let recv = lower_expr(ctx, object)?;
-    let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-    for a in args {
-        lowered.push(lower_expr(ctx, a)?);
-    }
+    // #11789 sweep: the receiver is held across every argument and each
+    // argument across the ones after it.
+    let (recv, lowered, group) = super::lower_operands_rooted(ctx, object, args)?;
     // Absent littleEndian lowers to undefined — the runtime evaluates its
     // truthiness exactly like the generic path's `truthy(args[2])`.
     let undef = ctx
@@ -110,5 +108,6 @@ pub(super) fn try_emit_data_view_accessor(
             ],
         )
     };
+    group.release(ctx);
     Ok(Some(result))
 }

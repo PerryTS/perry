@@ -267,12 +267,9 @@ pub(crate) fn bytes_from_value(v: f64) -> Vec<u8> {
                 return std::slice::from_raw_parts(data, len).to_vec();
             }
         }
-        let bits = v.to_bits();
-        let addr = if (bits >> 48) >= 0x7FF8 {
-            (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-        } else {
-            bits as usize
-        };
+        // #10694: the brand probes read the cell's header, so only a POINTER
+        // payload or an allocator-owned raw word is an address here.
+        let addr = crate::value::addr_class::object_ref_addr(v);
         if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
             let ta = addr as *const crate::typedarray::TypedArrayHeader;
             if let Some(bytes) = crate::typedarray::typed_array_bytes(ta) {
@@ -296,12 +293,9 @@ fn is_direct_write_data(value: f64) -> bool {
     if js.is_any_string() || crate::buffer::js_buffer_is_buffer(value.to_bits() as i64) == 1 {
         return true;
     }
-    let bits = value.to_bits();
-    let addr = if (bits >> 48) >= 0x7FF8 {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
-        bits as usize
-    };
+    // #10694: the brand probes read the cell's header, so only a POINTER
+    // payload or an allocator-owned raw word is an address here.
+    let addr = crate::value::addr_class::object_ref_addr(value);
     crate::typedarray::lookup_typed_array_kind(addr).is_some()
 }
 

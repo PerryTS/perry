@@ -120,6 +120,8 @@ pub(crate) fn size_lto_fat() -> bool {
 pub(crate) const GC_INSTRUMENT_KNOBS: &[&str] = &[
     "PERRY_GC_CENSUS",
     "PERRY_GC_PROTECT_FROMSPACE",
+    "PERRY_GC_PROTECT_OLD_SWEEP",
+    "PERRY_GC_BUDGETED_OLD_RECLAIM",
     "PERRY_GC_SCHEDULE_SEED",
     "PERRY_GC_FROMSPACE_SCAN",
     "PERRY_GC_FROMSPACE_SCAN_ABORT",
@@ -153,7 +155,6 @@ pub(crate) const HOT_DIAG_KNOBS: &[&str] = &[
     "PERRY_IC_DIAG",
     "PERRY_LAYOUT_DIAG",
     "PERRY_ENUM_DIAG",
-    "PERRY_BUFFER_DIAG",
     "PERRY_RECEIVER_REPR_DIAG",
 ];
 

@@ -31,6 +31,8 @@ mod loop_bounded_i32;
 mod mutation;
 mod not_bigint_locals;
 mod number_by_construction;
+pub(crate) mod numeric_key_locals;
+mod object_create_proto;
 mod object_literal_exports;
 mod param_ranges;
 mod pointer_locals;
@@ -104,6 +106,7 @@ pub(crate) use mutation::{
     has_any_mutation,
 };
 pub(crate) use number_by_construction::collect_number_by_construction_locals;
+pub(crate) use object_create_proto::{object_create_protos, ObjectCreateProtos};
 pub(crate) use object_literal_exports::exported_object_literal_capabilities;
 pub(crate) use param_ranges::{collect_param_int_ranges, ParamIntRanges};
 pub(crate) use pointer_locals::collect_pointer_typed_locals;
@@ -117,6 +120,10 @@ pub(crate) use proven_this::{
     tower_route_profitable as pshape_tower_route_profitable,
 };
 pub(crate) use ptr_numarray::{NumArrayDensity, NumArrayLocal};
+pub(crate) use ptr_shape::{
+    collect_numeric_by_construction_locals_in_region, region_number_flow_reads,
+    region_store_value_is_number, RegionNumberAssumptions,
+};
 pub(crate) use ptr_shape::{ptr_shape_locals_enabled, PtrShapeLocal};
 pub(crate) use ptr_shape_callbacks::collect_array_callback_shapes;
 pub(crate) use ptr_shape_returns::collect_exported_return_shapes;
@@ -137,8 +144,8 @@ pub(crate) use shadow_slots::{
     collect_declared_shadow_slots_in_stmts, collect_shadow_slot_clear_points,
 };
 pub(crate) use spec_abi_sites::{
-    collect_spec_abi_facts, guarded_number_array_param_eligible, reassigned_locals,
-    reassigned_locals_in_module, rebound_locals, SpecParamRep, SpecTaBinding,
+    callee_demoted_params, collect_spec_abi_facts, guarded_number_array_param_eligible,
+    reassigned_locals, reassigned_locals_in_module, rebound_locals, SpecParamRep, SpecTaBinding,
 };
 pub(crate) use straight_line_stores::count_straight_line_store_sites;
 pub(crate) use this_as_value::{

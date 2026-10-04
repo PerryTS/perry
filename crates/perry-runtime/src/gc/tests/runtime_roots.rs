@@ -8,6 +8,7 @@ mod callback_scanners;
 mod fs_options_object;
 mod generator_attach_prototype;
 mod handle_stack;
+mod hidden_keys;
 mod hook_dispatch_handles;
 mod interned_string_caches;
 mod iter_result_keys;
@@ -28,6 +29,8 @@ mod perex_dispatch;
 mod perex_execution;
 #[cfg(feature = "regex-engine")]
 mod perex_glob;
+#[cfg(feature = "regex-engine")]
+mod perex_in_place;
 #[cfg(feature = "regex-engine")]
 mod perex_lifecycle;
 #[cfg(feature = "regex-engine")]

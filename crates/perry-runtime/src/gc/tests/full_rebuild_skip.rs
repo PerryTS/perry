@@ -211,3 +211,103 @@ fn sabotaged_skip_loses_an_unbarriered_malloc_edge() {
         );
     });
 }
+
+/// The production cursor and the former whole-heap cursor must retain the
+/// same edges. The large young population makes avoiding its walk observable;
+/// both an old arena owner and a malloc owner must contribute real entries.
+fn old_only_rebuild_matches_whole_heap(require_marked: bool) {
+    let (parent, fields) = rooted_old_parent();
+    let child = young_leaf();
+    raw_store(parent, fields, string_bits(child));
+    activate_malloc_registry_for_tests();
+    let shape = unsafe { (*(parent as *const crate::object::ObjectHeader)).parent_class_id };
+    let header_size = std::mem::size_of::<crate::object::ObjectHeader>();
+    let malloc_parent = gc_malloc(header_size + 16, GC_TYPE_OBJECT);
+    unsafe {
+        let object = malloc_parent.cast::<crate::object::ObjectHeader>();
+        (*object).class_id = 0;
+        crate::object::shapes::store_kind::premark_plain_ordinary(object);
+        (*object).parent_class_id = shape;
+        (*object).meta = std::ptr::null_mut();
+        let slots = malloc_parent.add(header_size).cast::<u64>();
+        *slots = string_bits(child);
+        *slots.add(1) = crate::value::TAG_UNDEFINED;
+        layout_note_slot(malloc_parent as usize, 0, string_bits(child));
+        if require_marked {
+            (*header_from_user_ptr(parent as *const u8)).gc_flags |= GC_FLAG_MARKED;
+            (*header_from_user_ptr(malloc_parent)).gc_flags |= GC_FLAG_MARKED;
+        }
+    }
+    assert!(malloc_user_ptr_tracked(malloc_parent));
+    for _ in 0..40_000 {
+        std::hint::black_box(young_leaf());
+    }
+    let mut fast = OldToYoungRememberedRebuildState::new(require_marked);
+    while !fast.step(1) {}
+    let fast_scanned = fast.objects_scanned();
+    let mut fast = fast.finish();
+    let mut reference = OldToYoungRememberedRebuildState::whole_heap_for_test(require_marked);
+    while !reference.step(1) {}
+    let reference_scanned = reference.objects_scanned();
+    let mut reference = reference.finish();
+    assert!(
+        reference_scanned >= fast_scanned + 40_000,
+        "the old-only walk must really omit young objects: {fast_scanned} vs {reference_scanned}"
+    );
+    assert!(
+        !fast.old_pages.is_empty(),
+        "the old arena edge must be exercised"
+    );
+    assert!(
+        !fast.external_pages.is_empty(),
+        "the malloc-owned edge must be exercised"
+    );
+    fast.external_pages.sort_unstable();
+    fast.external_pages.dedup();
+    reference.external_pages.sort_unstable();
+    reference.external_pages.dedup();
+    assert_eq!(fast.old_pages, reference.old_pages);
+    assert_eq!(fast.external_pages, reference.external_pages);
+}
+
+#[test]
+fn old_only_remembered_rebuild_preserves_marked_arena_and_malloc_edges() {
+    run_isolated(|| old_only_rebuild_matches_whole_heap(true));
+}
+
+#[test]
+fn old_only_remembered_rebuild_preserves_unfiltered_arena_and_malloc_edges() {
+    run_isolated(|| old_only_rebuild_matches_whole_heap(false));
+}
+
+/// The first remembered-set read can occur AFTER the copying minor retags
+/// Eden old but BEFORE it transfers those blocks into OLD_ARENA. A cursor
+/// that only snapshots OLD_ARENA would silently lose this old-to-malloc edge.
+#[test]
+fn remembered_rebuild_keeps_parents_during_in_place_promotion() {
+    run_isolated(|| {
+        let (parent, fields) = unsafe { alloc_nursery_test_object(1) };
+        let child = gc_malloc(16, GC_TYPE_STRING);
+        assert!(malloc_user_ptr_tracked(child));
+        raw_store(parent as usize, fields, string_bits(child as usize));
+        let promotion = crate::arena::retag_young_for_in_place_promotion(false);
+        assert!(matches!(
+            crate::arena::classify_heap_space(parent as usize),
+            crate::arena::HeapSpace::PromotedYoung
+        ));
+        let fast = OldToYoungRememberedRebuildState::new(false).finish_unbounded();
+        let reference =
+            OldToYoungRememberedRebuildState::whole_heap_for_test(false).finish_unbounded();
+        assert!(
+            !reference.old_pages.is_empty(),
+            "the promotion-window edge must be live"
+        );
+        assert_eq!(fast.old_pages, reference.old_pages);
+        assert_eq!(fast.external_pages, reference.external_pages);
+        let finished = crate::arena::finish_in_place_promotion(
+            promotion,
+            crate::arena::PromotionLiveness::AssumeAllLive,
+        );
+        assert!(finished.objects > 0);
+    });
+}

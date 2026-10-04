@@ -211,6 +211,7 @@ pub extern "C" fn js_object_delete_field(
                     let closure = obj as *const crate::closure::ClosureHeader;
                     if !crate::closure::closure_is_arrow(closure)
                         && !crate::closure::closure_is_bound_method(closure)
+                        && !crate::closure::closure_body_is_non_constructor(closure)
                     {
                         return 0;
                     }
@@ -311,11 +312,16 @@ pub extern "C" fn js_object_delete_field(
                     {
                         // The member's storage is this object's key (removed
                         // by the scan below) plus, for a runtime prototype
-                        // assignment, its dispatch entry: remove both.
-                        super::class_registry::class_prototype_method_root_remove(cid, name);
-                        super::class_registry::invalidate_class_string_member_order(
-                            cid, name, false,
-                        );
+                        // assignment, its dispatch entry: remove both. One
+                        // evaluation's prototype (`ClassExprFresh`) owns its
+                        // members alone: the template's records belong to
+                        // every evaluation, so they stay.
+                        if !super::field_get_set::is_evaluation_prototype_with_methods(obj, cid) {
+                            super::class_registry::class_prototype_method_root_remove(cid, name);
+                            super::class_registry::invalidate_class_string_member_order(
+                                cid, name, false,
+                            );
+                        }
                         super::class_registry::invalidate_class_prototype_fast_guards_for_method(
                             name,
                         );
@@ -876,6 +882,10 @@ pub extern "C" fn js_object_delete_field_value(
 #[no_mangle]
 pub extern "C" fn js_object_delete_dynamic_value(obj_value: f64, key: f64) -> i32 {
     if let Some(class_id) = super::class_prototype_ref_id(obj_value) {
+        if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
+            let proto = super::class_registry::class_decl_prototype_value(class_id);
+            return unsafe { crate::symbol::js_object_delete_symbol_property(proto, key) };
+        }
         return unsafe {
             super::native_module::metadata_key_to_string(key)
                 .map(|name| delete_class_prototype_key(class_id, &name))

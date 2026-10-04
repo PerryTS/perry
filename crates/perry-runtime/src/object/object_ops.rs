@@ -52,7 +52,7 @@ pub(crate) use descriptor_helpers::{
 pub(crate) use keys_array::{
     ensure_key_in_keys_array, ensure_key_in_keys_array_for_value,
     ensure_key_in_keys_array_with_entry, install_builtin_getter, own_key_present,
-    own_key_present_via_index,
+    own_key_present_via_index, own_property_present, own_property_present_via_index,
 };
 
 /// Helper: extract object pointer from NaN-boxed f64. Returns null on failure.

@@ -382,6 +382,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     // evaluated when control flow reaches them. Hoisting a `const x =
     // someCall()` above a conditional that should skip it would
     // eagerly invoke the call and break user code.
+    crate::lower::unrebound_params::note(ctx, &params, arrow.params.iter(), Some(&*arrow.body));
     let mut body = match &*arrow.body {
         ast::BlockStmtOrExpr::BlockStmt(block) => {
             crate::lower_decl::lower_fn_body_block_stmt(ctx, block)?
@@ -756,6 +757,13 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         destructuring_stmts.extend(stmts);
     }
     let destructuring_prologue_len = destructuring_stmts.len();
+
+    crate::lower::unrebound_params::note(
+        ctx,
+        &params,
+        fn_expr.function.params.iter().map(|p| &p.pat),
+        fn_expr.function.body.as_ref(),
+    );
 
     // Hoist function declarations: pre-register all function declarations in the body
     // so they can be referenced before their lexical position (JS hoisting semantics).
@@ -1293,10 +1301,14 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                         for s in body.iter_mut() {
                             crate::lower_decl::append_new_args_stmt(s, &cname, &cap_args, true);
                         }
-                        let re_reg = Stmt::Expr(Expr::RegisterClassCaptures {
-                            class_name: cname,
-                            captures,
-                        });
+                        let re_reg = crate::lower_decl::guard_shared_first_capture_snapshot(
+                            ctx,
+                            &cname,
+                            Stmt::Expr(Expr::RegisterClassCaptures {
+                                class_name: cname.clone(),
+                                captures,
+                            }),
+                        );
                         re_reg_capsets.push((re_reg.clone(), captured.iter().copied().collect()));
                         re_regs.push(re_reg);
                     }

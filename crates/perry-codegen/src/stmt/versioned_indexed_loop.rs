@@ -420,9 +420,14 @@ pub(super) fn emit_iteration_guard(ctx: &mut FnCtx<'_>) -> bool {
     let expected_class_shape =
         ctx.block()
             .or(I64, &expected_shape_high, &fact.method.expected_class_id);
-    let class_shape_ok = ctx
-        .block()
-        .icmp_eq(I64, &class_shape, &expected_class_shape);
+    let class_shape_ok = crate::typed_shape::emit_compatible_class_shape_eq(
+        ctx.block(),
+        &class_shape,
+        &fact.method.expected_class_id,
+        &fact.method.expected_shape_id,
+        &expected_class_shape,
+        &[],
+    );
     pass = ctx.block().and(I1, &pass, &all_methods_ok);
     pass = ctx.block().and(I1, &pass, &method_ok);
     pass = ctx.block().and(I1, &pass, &gc_ok);
@@ -581,6 +586,7 @@ pub(super) fn lower(
         &fast_pre_label,
         &slow_pre_label,
         true,
+        None,
     );
 
     let method_fact = VersionedIndexedMethodFact {

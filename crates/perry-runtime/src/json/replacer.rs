@@ -15,33 +15,7 @@ use std::fmt::Write as FmtWrite;
 // ─── JSON.stringify with replacer ────────────────────────────────────────────
 
 /// True when a keys-array slot holds a tombstone rather than a property key.
-///
-/// #9398. `delete obj.k` on a tombstone-eligible receiver is O(1): it writes
-/// `TAG_HOLE` over the KEY slot and leaves the array length alone, so a
-/// deleted-but-not-yet-squeezed key shows up as a hole while walking
-/// `0..keys.length`. Every walker in this file then derived the key pointer as
-///
-/// ```text
-/// if tag == STRING_TAG || tag == POINTER_TAG { bits & POINTER_MASK } else { bits }
-/// ```
-///
-/// — i.e. any *other* tag was used AS A RAW ADDRESS. `TAG_HOLE` is
-/// `0x7FFC_0000_0000_0010`, far above the low-address floor, so
-/// `str_from_header` read `byte_len` straight off `0x7FFC…0010` and the process
-/// died with SIGSEGV.
-///
-/// The plain (`stringify.rs`) walk already skipped holes; these three
-/// replacer/pretty walks did not, which is why `JSON.stringify(o)` survived a
-/// tombstoned object while `JSON.stringify(o, null, 2)` crashed. That is the
-/// `claude mcp remove` crash: claude-code rewrites `~/.claude.json` with a
-/// 2-space indent right after deleting the server entry, so the write faulted
-/// mid-way — the server stayed registered AND the `.claude.json.lock` the
-/// writer had taken was never released.
-///
-/// `TAG_UNDEFINED` is treated the same way: an unstable tombstone clears the
-/// slot to `undefined` instead of `TAG_HOLE`, `js_array_get` translates
-/// `TAG_HOLE` to `undefined` per OrdinaryGet (#323), and `undefined` is never a
-/// legal key either way — the same pairing `js_object_keys` uses.
+/// Deleted slots can contain either TAG_HOLE or undefined; neither is a key.
 #[inline]
 fn tombstoned_key_slot(key: f64) -> bool {
     let bits = key.to_bits();
@@ -126,6 +100,9 @@ fn ptr_derefable(ptr: usize) -> bool {
 }
 
 unsafe fn apply_to_json(value: f64) -> f64 {
+    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        return super::stringify_proxy::to_json(value).unwrap_or(value);
+    }
     let bits = value.to_bits();
     // A BigInt is a primitive, not a POINTER_TAG value — `extract_pointer`
     // below never matches it, so without this check `BigInt.prototype.toJSON`
@@ -186,7 +163,7 @@ unsafe fn apply_to_json(value: f64) -> f64 {
 /// value was a scalar handled here; `false` when it is a pointer the caller must
 /// recurse into. Shared by both the compact and pretty walks.
 #[inline]
-unsafe fn write_replaced_scalar(buf: &mut String, replaced: f64) -> bool {
+pub(super) unsafe fn write_replaced_scalar(buf: &mut String, replaced: f64) -> bool {
     let replaced_bits = replaced.to_bits();
     let replaced_tag = replaced_bits & 0xFFFF_0000_0000_0000;
     if replaced_tag == STRING_TAG {
@@ -230,7 +207,7 @@ unsafe fn write_replaced_scalar(buf: &mut String, replaced: f64) -> bool {
 /// Resolve `value.toJSON(key)` (spec `SerializeJSONProperty` step 2 — run
 /// BEFORE the replacer). `key_f64` is the property key passed to `toJSON`.
 #[inline]
-unsafe fn apply_to_json_keyed(value: f64, key_f64: f64) -> f64 {
+pub(super) unsafe fn apply_to_json_keyed(value: f64, key_f64: f64) -> f64 {
     // SerializeJSONProperty step 2.b.i passes the property key to `toJSON`
     // (#5909, test262 JSON/stringify/value-tojson-arguments). The replacer walk
     // already carries the key here (empty String at the root, own key for a
@@ -245,7 +222,7 @@ unsafe fn apply_to_json_keyed(value: f64, key_f64: f64) -> f64 {
 /// tag (robust object/array discrimination), with a structural fallback for
 /// untagged pointers.
 #[inline]
-unsafe fn dispatch_pointer_with_replacer(
+pub(super) unsafe fn dispatch_pointer_with_replacer(
     ptr: *const u8,
     replaced: f64,
     replacer: *const crate::ClosureHeader,
@@ -253,13 +230,17 @@ unsafe fn dispatch_pointer_with_replacer(
     indent: &str,
     depth: usize,
 ) {
-    // A POINTER_TAG / raw-pointer-shaped field can carry a small-handle-band id
-    // (revocable-Proxy id, fetch/zlib/stream handle), never a dereferenceable
-    // heap pointer. Next.js render reaches `JSON.stringify(value, replacer)`
-    // over an object holding such an id; deref'ing `id - 8` as a GcHeader (or
-    // its `keys_array` in `is_object_pointer`) segfaults. Classify by magnitude
-    // FIRST and emit "null" (the field is not a serializable object), matching
-    // the plain-stringify path's `is_handle_band` guards (#4904/#1843).
+    if super::stringify_proxy::try_stringify(
+        replaced,
+        buf,
+        indent,
+        depth,
+        super::stringify_proxy::Replacer::Function(replacer),
+        true,
+    ) {
+        return;
+    }
+    // Other native handles have no JSON property surface.
     if crate::value::addr_class::is_handle_band(ptr as usize) {
         buf.push_str("null");
         return;
@@ -446,6 +427,10 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0;
+    // An own key is hidden only on a class instance or a shape with a private
+    // entry (#11791); the shape answers once for the whole walk.
+    let hide_private =
+        crate::object::field_get_set::own_keys_may_hide(ptr as *const crate::ObjectHeader);
     buf.push('{');
     let mut first = true;
     for f in 0..actual_fields {
@@ -465,10 +450,12 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
         }
         // #11232: physical class capture/private slots are not JS properties.
         // Filter before reading the value or invoking getters/replacers.
-        if crate::object::instance_private_key_hidden(
-            obj,
-            JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
-        ) {
+        if hide_private
+            && crate::object::instance_private_key_hidden(
+                obj,
+                JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
+            )
+        {
             continue;
         }
         // Skip non-enumerable own keys before invoking the replacer.
@@ -849,6 +836,16 @@ pub(crate) unsafe fn stringify_value_pretty(
     }
 
     if let Some(ptr) = extract_pointer(bits) {
+        if super::stringify_proxy::try_stringify(
+            value,
+            buf,
+            indent,
+            depth,
+            super::stringify_proxy::Replacer::None,
+            false,
+        ) {
+            return;
+        }
         // A small-handle-band id (revocable-Proxy id, fetch/zlib/stream handle)
         // is never a serializable heap value. Reading its ArrayHeader/keys_array
         // below (the `(*arr).length` probe and `is_object_pointer`) would deref
@@ -1053,6 +1050,10 @@ pub(crate) unsafe fn stringify_object_pretty(
         || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0;
+    // An own key is hidden only on a class instance or a shape with a private
+    // entry (#11791); the shape answers once for the whole walk.
+    let hide_private =
+        crate::object::field_get_set::own_keys_may_hide(ptr as *const crate::ObjectHeader);
 
     // Collect non-undefined, non-closure fields
     let mut entries: Vec<(String, f64)> = Vec::new();
@@ -1066,10 +1067,12 @@ pub(crate) unsafe fn stringify_object_pretty(
         }
         // #11232: physical class capture/private slots are not JS properties.
         // Filter before reading the value or invoking getters/replacers.
-        if crate::object::instance_private_key_hidden(
-            obj,
-            JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
-        ) {
+        if hide_private
+            && crate::object::instance_private_key_hidden(
+                obj,
+                JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
+            )
+        {
             continue;
         }
         // Skip non-enumerable own keys (`Object.defineProperty(o, k,
@@ -1267,6 +1270,10 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0;
+    // An own key is hidden only on a class instance or a shape with a private
+    // entry (#11791); the shape answers once for the whole walk.
+    let hide_private =
+        crate::object::field_get_set::own_keys_may_hide(ptr as *const crate::ObjectHeader);
     let mut field_map: Vec<(String, f64)> = Vec::new();
     for f in 0..actual_fields {
         // #9398: tombstoned slot from an O(1) delete — not a key, not
@@ -1278,10 +1285,12 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
         }
         // #11232: physical class capture/private slots are not JS properties.
         // Filter before reading the value or invoking getters/replacers.
-        if crate::object::instance_private_key_hidden(
-            obj,
-            JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
-        ) {
+        if hide_private
+            && crate::object::instance_private_key_hidden(
+                obj,
+                JSValue::from_bits((*keys_elements.add(f as usize)).to_bits()),
+            )
+        {
             continue;
         }
         let mut field_val = if f < alloc_limit {
@@ -1382,6 +1391,16 @@ pub(crate) unsafe fn stringify_value_with_array_replacer(
 ) {
     let bits = val.to_bits();
     if let Some(ptr) = extract_pointer(bits) {
+        if super::stringify_proxy::try_stringify(
+            val,
+            buf,
+            indent,
+            depth,
+            super::stringify_proxy::Replacer::Keys(allowed_keys),
+            false,
+        ) {
+            return;
+        }
         if !crate::buffer::is_registered_buffer(ptr as usize)
             && crate::builtins::boxed_primitive_json_value(val).is_none()
         {
@@ -1895,6 +1914,7 @@ pub unsafe extern "C" fn js_json_stringify_full(
         let value_after_to_json = apply_to_json(value);
         let after_bits = value_after_to_json.to_bits();
         if after_bits == TAG_UNDEFINED
+            || crate::proxy::proxy_wraps_callable(value_after_to_json)
             || is_closure_value(after_bits)
             || is_symbol_value(after_bits)
         {

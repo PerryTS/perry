@@ -24,8 +24,8 @@
 //!   registry copies them. Every caller that is not codegen uses these.
 //! * [`js_register_function_name_static`] /
 //!   [`js_register_function_source_static`] require process lifetime and store
-//!   the borrowed slice. Codegen emits these, and only these, from
-//!   `__perry_init_strings_<prefix>`, where the bytes are `@.str.N`
+//!   the borrowed slice. Their plural batch forms are what executable codegen
+//!   emits from `__perry_init_strings_<prefix>`, where the bytes are `@.str.N`
 //!   `private unnamed_addr constant` globals in the image.
 //!
 //! All the volume is on the borrowing side, so the copy is gone from the path
@@ -62,6 +62,35 @@ fn eager_fn_metadata_validation() -> bool {
 fn decode_registered(slot: Option<&[u8]>) -> Option<String> {
     let bytes = slot?;
     std::str::from_utf8(bytes).ok().map(str::to_owned)
+}
+
+/// Link-time-relative descriptor emitted by codegen. Keeping offsets instead
+/// of pointers avoids dynamic relocations and dirty data pages at process
+/// startup. The static linker diagnoses an image whose symbols do not fit in
+/// the same signed 32-bit PC-relative range used by generated calls.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FunctionNameDescriptor {
+    function_offset: i32,
+    bytes_offset: i32,
+    byte_len: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct FunctionSourceDescriptor {
+    function_offset: i32,
+    bytes_offset: i32,
+    byte_len: u32,
+    is_non_strict_ordinary: i32,
+}
+
+fn descriptor_pointer<T>(base: *const u8, offset: i32) -> *const T {
+    // The target is normally in a DIFFERENT image allocation/section from the
+    // descriptor table, so pointer::offset would violate Rust provenance even
+    // though the link-time numeric difference is correct. Decode through the
+    // exposed integer address, as the runtime's DWARF/stack-map readers do.
+    (base as usize).wrapping_add_signed(offset as isize) as *const T
 }
 
 /// Sidecar registry mapping each user-defined function's compiled address
@@ -205,6 +234,44 @@ pub unsafe extern "C" fn js_register_function_name_static(
     }
     if let Ok(mut map) = function_name_registry().lock() {
         map.insert(func_ptr as usize, image);
+    }
+}
+
+/// Register a generated read-only table of function names while acquiring the
+/// image registry lock once. Descriptor offsets are relative to
+/// `descriptors`, so the table itself contains no absolute pointers.
+///
+/// # Safety
+///
+/// `descriptors` must address `count` valid [`FunctionNameDescriptor`] values.
+/// Each relative address must resolve within the current process image, and
+/// every name byte range must remain valid for the rest of the process.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_function_names_static(descriptors: *const u8, count: u32) {
+    if descriptors.is_null() || count == 0 {
+        return;
+    }
+    // SAFETY: required by this entry point's contract.
+    let entries = unsafe {
+        std::slice::from_raw_parts(descriptors.cast::<FunctionNameDescriptor>(), count as usize)
+    };
+    let Ok(mut map) = function_name_registry().lock() else {
+        return;
+    };
+    for entry in entries {
+        if entry.byte_len == 0 {
+            continue;
+        }
+        // SAFETY: both relative targets and the name range are guaranteed by
+        // this entry point's contract.
+        let function = descriptor_pointer::<u8>(descriptors, entry.function_offset);
+        let name = descriptor_pointer::<u8>(descriptors, entry.bytes_offset);
+        let image: &'static [u8] =
+            unsafe { std::slice::from_raw_parts(name, entry.byte_len as usize) };
+        if eager_fn_metadata_validation() && std::str::from_utf8(image).is_err() {
+            continue;
+        }
+        map.insert(function as usize, image);
     }
 }
 
@@ -449,6 +516,52 @@ pub unsafe extern "C" fn js_register_function_source_static(
     }
 }
 
+/// Batch form of [`js_register_function_source_static`], using relative
+/// descriptors and one registry lock acquisition.
+///
+/// # Safety
+///
+/// `descriptors` must address `count` valid [`FunctionSourceDescriptor`]
+/// values. Relative function/source targets must be in the current image, and
+/// source byte ranges must remain valid for the rest of the process.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_function_sources_static(descriptors: *const u8, count: u32) {
+    if descriptors.is_null() || count == 0 {
+        return;
+    }
+    // SAFETY: required by this entry point's contract.
+    let entries = unsafe {
+        std::slice::from_raw_parts(
+            descriptors.cast::<FunctionSourceDescriptor>(),
+            count as usize,
+        )
+    };
+    let Ok(mut map) = function_source_registry().lock() else {
+        return;
+    };
+    for entry in entries {
+        if entry.byte_len == 0 {
+            continue;
+        }
+        // SAFETY: relative targets and the byte range are guaranteed by this
+        // entry point's contract.
+        let function = descriptor_pointer::<u8>(descriptors, entry.function_offset);
+        let source = descriptor_pointer::<u8>(descriptors, entry.bytes_offset);
+        let image: &'static [u8] =
+            unsafe { std::slice::from_raw_parts(source, entry.byte_len as usize) };
+        if eager_fn_metadata_validation() && std::str::from_utf8(image).is_err() {
+            continue;
+        }
+        map.insert(
+            function as usize,
+            RegisteredFunctionSource {
+                bytes: image,
+                is_non_strict_ordinary: entry.is_non_strict_ordinary != 0,
+            },
+        );
+    }
+}
+
 /// Whether codegen registered this address as an ordinary non-strict
 /// function declaration/expression. This is function-kind metadata rather
 /// than an inference from source spelling, so methods and other callable
@@ -641,6 +754,83 @@ mod tests {
             function_source_for_func_ptr(KEY_SOURCE_STATIC as usize),
             "function h() {}"
         );
+    }
+
+    #[repr(C)]
+    struct BatchImage {
+        names: [FunctionNameDescriptor; 2],
+        sources: [FunctionSourceDescriptor; 1],
+        storage: [u8; 96],
+    }
+
+    fn relative_offset(base: *const u8, target: *const u8) -> i32 {
+        let difference = (target as isize) - (base as isize);
+        i32::try_from(difference).expect("test image is one small allocation")
+    }
+
+    #[test]
+    fn generated_descriptor_layout_matches_codegen() {
+        assert_eq!(std::mem::size_of::<FunctionNameDescriptor>(), 12);
+        assert_eq!(std::mem::align_of::<FunctionNameDescriptor>(), 4);
+        assert_eq!(std::mem::size_of::<FunctionSourceDescriptor>(), 16);
+        assert_eq!(std::mem::align_of::<FunctionSourceDescriptor>(), 4);
+    }
+
+    /// The generated descriptor ABI is relative to each table base, preserves
+    /// registration order for duplicate keys, and carries the source kind bit.
+    #[test]
+    fn static_batch_descriptors_round_trip_and_last_write_wins() {
+        let image = Box::leak(Box::new(BatchImage {
+            names: [FunctionNameDescriptor {
+                function_offset: 0,
+                bytes_offset: 0,
+                byte_len: 0,
+            }; 2],
+            sources: [FunctionSourceDescriptor {
+                function_offset: 0,
+                bytes_offset: 0,
+                byte_len: 0,
+                is_non_strict_ordinary: 0,
+            }],
+            storage: [0; 96],
+        }));
+        image.storage[0..5].copy_from_slice(b"first");
+        image.storage[8..14].copy_from_slice(b"second");
+        image.storage[16..31].copy_from_slice(b"function b() {}");
+
+        let name_base = image.names.as_ptr().cast::<u8>();
+        let source_base = image.sources.as_ptr().cast::<u8>();
+        let key = image.storage[80..].as_ptr();
+        image.names[0] = FunctionNameDescriptor {
+            function_offset: relative_offset(name_base, key),
+            bytes_offset: relative_offset(name_base, image.storage.as_ptr()),
+            byte_len: 5,
+        };
+        image.names[1] = FunctionNameDescriptor {
+            function_offset: relative_offset(name_base, key),
+            bytes_offset: relative_offset(name_base, image.storage[8..].as_ptr()),
+            byte_len: 6,
+        };
+        image.sources[0] = FunctionSourceDescriptor {
+            function_offset: relative_offset(source_base, key),
+            bytes_offset: relative_offset(source_base, image.storage[16..].as_ptr()),
+            byte_len: 15,
+            is_non_strict_ordinary: 1,
+        };
+
+        unsafe {
+            js_register_function_names_static(name_base, image.names.len() as u32);
+            js_register_function_sources_static(source_base, image.sources.len() as u32);
+        }
+        assert_eq!(
+            function_name_for_ptr(key as usize).as_deref(),
+            Some("second")
+        );
+        assert_eq!(
+            function_source_for_ptr(key as usize).as_deref(),
+            Some("function b() {}")
+        );
+        assert!(function_is_non_strict_ordinary_for_ptr(key as usize));
     }
 
     /// Borrowed and owned names live in different maps, so a reader has to

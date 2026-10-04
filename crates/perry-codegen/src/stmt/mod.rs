@@ -22,6 +22,7 @@ mod boxed_slot_no_root_tests;
 mod cached_field_index_return;
 #[cfg(test)]
 mod class_field_loop_tests;
+mod class_first_loop;
 #[cfg(test)]
 mod compound_alias_fold_tests;
 mod counter_range;
@@ -40,12 +41,17 @@ mod let_stmt_facts;
 mod let_stmt_var_redeclare_tests;
 mod loops;
 mod masked_window_region;
+mod number_local_loop;
+#[cfg(test)]
+mod number_local_loop_tests;
 #[cfg(test)]
 mod packed_range_global_cache_rooting_tests;
 #[cfg(test)]
 mod prealloc_module_global_tests;
 #[cfg(test)]
 mod prealloc_tdz_path_tests;
+#[cfg(test)]
+mod range_loop_dense_store_tests;
 pub(crate) mod region_loop;
 mod region_read_stmts;
 pub(crate) mod stable_packed_accumulator;
@@ -168,9 +174,37 @@ fn lower_async_rejecting_stmts_inner(
     Ok(())
 }
 
+/// #11759 (c′): one copy of a function body's versioned tail
+/// (`class_first_loop::try_lower_versioned_tail`). It never versions again on
+/// its own first statement.
+fn lower_stmts_versioned_tail(
+    ctx: &mut FnCtx<'_>,
+    stmts: &[Stmt],
+    emit_shadow_clears: bool,
+) -> Result<()> {
+    lower_stmts_from(ctx, stmts, emit_shadow_clears, false)
+}
+
 fn lower_stmts_inner(ctx: &mut FnCtx<'_>, stmts: &[Stmt], emit_shadow_clears: bool) -> Result<()> {
+    lower_stmts_from(ctx, stmts, emit_shadow_clears, emit_shadow_clears)
+}
+
+fn lower_stmts_from(
+    ctx: &mut FnCtx<'_>,
+    stmts: &[Stmt],
+    emit_shadow_clears: bool,
+    version_tails: bool,
+) -> Result<()> {
     let mut i = 0;
     while i < stmts.len() {
+        // #11759 (c′): the rest of a function body after `let c = new C()`
+        // through a repeatable class declaration's binding tests the
+        // declaration's first evaluation once (`class_first_loop`).
+        if version_tails
+            && class_first_loop::try_lower_versioned_tail(ctx, &stmts[i..], i, emit_shadow_clears)?
+        {
+            return Ok(());
+        }
         // A common memo-table method shape is
         // `if (!owner.table[i]) { ...fill... } return owner.table[i]`.
         // Before lowering the untouched statements, add a guarded direct
@@ -266,6 +300,7 @@ fn lower_stmts_inner(ctx: &mut FnCtx<'_>, stmts: &[Stmt], emit_shadow_clears: bo
             continue;
         }
         lower_stmt(ctx, &stmts[i])?;
+        region_loop::after_stmt(ctx, &stmts[i]);
         // Representation-selection Phase 2: a TOP-LEVEL `Stmt::Let` of a
         // pre-pass-proven typed-array binding makes the binding "ready" — the
         // dominance mirror of the collector's sequential judgment. Later call
@@ -322,6 +357,15 @@ fn lower_return_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<Stri
 }
 
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
+    // #11759 (c′): a loop holding first-evaluation guards on a binding it
+    // cannot rebind tests once, before the loop.
+    if matches!(
+        stmt,
+        Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. }
+    ) && class_first_loop::try_lower_versioned_loop(ctx, stmt)?
+    {
+        return Ok(());
+    }
     match stmt {
         Stmt::Expr(e) => {
             // #10185: the element-shape fast clone's carried-index statements
@@ -453,6 +497,7 @@ pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             ..
         } => {
             lower_let(ctx, *id, name, init.as_ref(), ty, *mutable)?;
+            crate::codegen::global_transfer::emit_publish(ctx, *id);
             if ctx.suffix_cursor_locals.contains(id) {
                 crate::expr::suffix_cursor::initialize(ctx, *id);
             }

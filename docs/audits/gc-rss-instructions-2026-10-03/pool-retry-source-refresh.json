@@ -1,0 +1,31 @@
+{
+  "root": "/root/rss-header-20261002/perry-gc-runtime-main",
+  "archive_sha256": "c4514b484d401e61538b471173746f5fce9ec3b8786a4cd4898c0a821e9b316b",
+  "manifest_sha256": "6e93b6e518ca58796609fd8751e7f33fb2e6f542a1d8bab210290894b3bf8e91",
+  "refreshed_inputs": 1494,
+  "refreshed_mtime_ns": 1791020209486400393,
+  "source_hashes_verified": true,
+  "invalidated_auto_runtime_stamps": [
+    {
+      "original": "/root/rss-header-20261002/perry-gc-runtime-main/target/perry-auto-281410b3841e3fa1/.perry-auto-build.stamp",
+      "retained_backup": "/root/rss-header-20261002/perry-gc-runtime-main/target/perry-auto-281410b3841e3fa1/.perry-auto-build.stamp.superseded-1791020209486400393",
+      "sha256": "6ab7083a85d52a5924010f66e8af02b9abad6f934a152c9e439427387d516dc6"
+    },
+    {
+      "original": "/root/rss-header-20261002/perry-gc-runtime-main/target/perry-auto-2ab62a7097be71c1/.perry-auto-build.stamp",
+      "retained_backup": "/root/rss-header-20261002/perry-gc-runtime-main/target/perry-auto-2ab62a7097be71c1/.perry-auto-build.stamp.superseded-1791020209486400393",
+      "sha256": "ed093cf3ad318c3a97446145b43b5588febdf94702bc3a8d2e3c1bc7ff098f38"
+    },
+    {
+      "original": "/root/rss-header-20261002/perry-gc-runtime-main/target/perry-auto-7780ff4430753bae/.perry-auto-build.stamp",
+      "retained_backup": "/root/rss-header-20261002/perry-gc-runtime-main/target/perry-auto-7780ff4430753bae/.perry-auto-build.stamp.superseded-1791020209486400393",
+      "sha256": "203bd7fc083562be71016269fb6afdf97c249f48621be1190ccbe833b0f8a3c6"
+    },
+    {
+      "original": "/root/rss-header-20261002/perry-gc-runtime-main/target/perry-auto-c54e8ddf04cb004d/.perry-auto-build.stamp",
+      "retained_backup": "/root/rss-header-20261002/perry-gc-runtime-main/target/perry-auto-c54e8ddf04cb004d/.perry-auto-build.stamp.superseded-1791020209486400393",
+      "sha256": "28fd9d47a5ae8570796e23466ec629c15474f36e71437f6eb166170ab29f39f9"
+    }
+  ],
+  "full_receipt_sha256": "2014015ae446232a6c0f51eb64f071caac21db9a76f48bdeab037fafde0b8fa9"
+}

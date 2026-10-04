@@ -90,6 +90,26 @@ pub(crate) fn buffer_view_lowered_value(
 
 pub(crate) fn downgrade_buffer_alias(ctx: &mut FnCtx<'_>, id: u32, reason: MaterializationReason) {
     let mut effective_reason = reason.clone();
+    // A same-storage alias shares its source's `data_slot`
+    // (`alias_buffer_view_slot`): both names denote one storage, so a hazard
+    // seen through either name demotes both.
+    let shared_slot = ctx
+        .receiver_descriptors
+        .buffer_view(id)
+        .map(|view| view.data_slot.clone());
+    if let Some(slot) = shared_slot {
+        let mut sharers = Vec::new();
+        for (other, view) in ctx.receiver_descriptors.buffer_views_mut() {
+            if other != id && view.data_slot == slot && view.native_owned.is_none() {
+                view.alias = AliasState::MayAlias;
+                view.scope_idx = None;
+                sharers.push(other);
+            }
+        }
+        for other in sharers {
+            ctx.buffer_hazard_reasons.insert(other, reason.clone());
+        }
+    }
     if let Some(view) = ctx.receiver_descriptors.buffer_view_mut(id) {
         if view.native_owned.is_some() && matches!(reason, MaterializationReason::UnknownCallEscape)
         {
@@ -232,6 +252,44 @@ fn invalidate_native_owned_view(view: &mut BufferViewSlot, reason: &Materializat
     }
 }
 
+/// `true` when `view` names one fixed object's inline element storage for
+/// the binding's whole life: a stable cached data pointer, inline storage, an
+/// element-indexed typed-array view, and a live alias scope. These are the
+/// receiver gates of the proven-view tiers (`proven_view_receiver`), minus the
+/// per-binding closure gate, which each use site re-checks for its own id.
+fn view_names_fixed_inline_storage(view: &BufferViewSlot) -> bool {
+    view.pointer_state.is_stable()
+        && view.storage_inline_proven
+        && view.native_owned.is_none()
+        && view.index_unit == BufferIndexUnit::Element
+        && view.alias.allows_noalias()
+        && view.scope_idx.is_some()
+}
+
+/// `let alias = source` where `source` carries a buffer view.
+///
+/// #11810: when the source view names one fixed object's inline storage, the
+/// alias is a second NAME for that storage, not a second storage. It shares
+/// the source's view unchanged: the same `data_slot`, the same alias scope (so
+/// no access through one name is declared `noalias` against the other), and
+/// the same proof. The shared slot is what ties the names together afterwards:
+/// a hazard seen through either name (`.buffer` exposure, an escape, a
+/// closure capture) demotes or invalidates every view on that slot, see
+/// [`downgrade_buffer_alias`] and [`invalidate_buffer_view_pointer`]. Neither name loses its
+/// proven tier. Before this, every alias demoted BOTH names to `MayAlias`,
+/// which the per-site guarded reads also refuse (a tracked view "owns" its
+/// receiver), so every later access fell to the `js_typed_array_get` helper.
+/// HIR's compound-assignment spill (`__cmpd_base = a` for `a[k] -= v`) is
+/// such an alias, so one `a[i + 3] -= d` made the rest of the function slower
+/// than the same code over an array with no proof at all.
+///
+/// The shared slot is written again only by a reassignment refresh, and
+/// [`update_buffer_view_for_assignment`] gives the reassigned name a fresh
+/// slot whenever another view still reads the old one, so reassigning either
+/// name cannot redirect the other.
+///
+/// Other sources (native-owned arena views, byte-indexed buffers, views
+/// already demoted, non-inline storage) keep the conservative demotion below.
 pub(crate) fn alias_buffer_view_slot(
     ctx: &mut FnCtx<'_>,
     alias_id: u32,
@@ -241,6 +299,11 @@ pub(crate) fn alias_buffer_view_slot(
     let Some(mut view) = ctx.receiver_descriptors.buffer_view(source_id).cloned() else {
         return;
     };
+    if view_names_fixed_inline_storage(&view) {
+        ctx.receiver_descriptors
+            .materialize_buffer_view(alias_id, view);
+        return;
+    }
     let reason = if view.native_owned.is_some() {
         MaterializationReason::MutableAlias
     } else {
@@ -311,11 +374,19 @@ pub(crate) fn update_buffer_view_for_assignment(
         let handle = unbox_to_i64(blk, lowered_value);
         let handle_ptr = blk.inttoptr(I64, &handle);
         let data_ptr = blk.gep(I8, &handle_ptr, &[(I32, "8")]);
-        let data_slot = ctx
+        // Reuse the binding's own slot only when no OTHER view reads it: a
+        // same-storage alias (`alias_buffer_view_slot`) shares the slot, and
+        // overwriting it would point that alias at this new buffer.
+        let own_slot = ctx
             .receiver_descriptors
             .buffer_view(id)
             .map(|view| view.data_slot.clone())
-            .unwrap_or_else(|| ctx.func.alloca_entry(PTR));
+            .filter(|slot| {
+                !ctx.receiver_descriptors
+                    .buffer_views()
+                    .any(|(other, view)| other != id && view.data_slot == *slot)
+            });
+        let data_slot = own_slot.unwrap_or_else(|| ctx.func.alloca_entry(PTR));
         ctx.block().store(PTR, &data_ptr, &data_slot);
         ctx.receiver_descriptors.materialize_buffer_view(
             id,

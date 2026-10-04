@@ -15,6 +15,7 @@
 //! | [`ENTRY_NON_CONFIGURABLE`] | `[[Configurable]]` false |
 //! | [`ENTRY_ACCESSOR`] | an accessor property |
 //! | [`ENTRY_HAS_GET`] / [`ENTRY_HAS_SET`] | which accessor halves exist |
+//! | [`ENTRY_PRIVATE`] | a private field (#11791), never a property |
 //!
 //! A keys array that carries any non-default entry owns an *attributes
 //! array*: a pointer-free `GC_TYPE_ARRAY` with one element per key position,
@@ -72,6 +73,16 @@ pub(crate) const ENTRY_ACCESSOR: u8 = 0x08;
 pub(crate) const ENTRY_HAS_GET: u8 = 0x10;
 /// The accessor has a setter.
 pub(crate) const ENTRY_HAS_SET: u8 = 0x20;
+/// The key is a class's private field (#11791), named by its qualified
+/// private name: an element of the receiver, not a property. A private field
+/// is never deleted, so the entry being in the shape's list IS the field being
+/// initialized. Always written as [`PRIVATE_FIELD_ENTRY`].
+pub(crate) const ENTRY_PRIVATE: u8 = 0x40;
+/// A private field's entry: also non-enumerable, so every enumerable-only
+/// reader (`Object.keys`, `for…in`, `JSON.stringify`, spread, `assign`)
+/// skips it by the attribute it already honors. Readers that list or probe
+/// non-enumerable keys ask [`entry_is_private`].
+pub(crate) const PRIVATE_FIELD_ENTRY: u8 = ENTRY_PRIVATE | ENTRY_NON_ENUMERABLE;
 /// The three `PropertyAttrs` bits, inverted.
 pub(crate) const ENTRY_ATTR_MASK: u8 =
     ENTRY_NON_WRITABLE | ENTRY_NON_ENUMERABLE | ENTRY_NON_CONFIGURABLE;
@@ -88,9 +99,14 @@ pub(crate) const SUMMARY_NON_WRITABLE: u8 = 0x02;
 pub(crate) const SUMMARY_NON_ENUMERABLE: u8 = 0x04;
 /// Some key is not configurable.
 pub(crate) const SUMMARY_NON_CONFIGURABLE: u8 = 0x08;
+/// Some key is a private field ([`ENTRY_PRIVATE`]).
+pub(crate) const SUMMARY_PRIVATE: u8 = 0x10;
 /// Every per-key summary bit: a list with none of them is all default.
-pub(crate) const SUMMARY_KEY_BITS: u8 =
-    SUMMARY_ACCESSOR | SUMMARY_NON_WRITABLE | SUMMARY_NON_ENUMERABLE | SUMMARY_NON_CONFIGURABLE;
+pub(crate) const SUMMARY_KEY_BITS: u8 = SUMMARY_ACCESSOR
+    | SUMMARY_NON_WRITABLE
+    | SUMMARY_NON_ENUMERABLE
+    | SUMMARY_NON_CONFIGURABLE
+    | SUMMARY_PRIVATE;
 /// Bits a plain data store must see clear on every hop of a prototype chain.
 pub(crate) const SUMMARY_BLOCKS_STORE: u8 = SUMMARY_ACCESSOR | SUMMARY_NON_WRITABLE;
 
@@ -115,7 +131,16 @@ pub(crate) const fn entry_summary(entry: u8) -> u8 {
     if entry & ENTRY_NON_CONFIGURABLE != 0 {
         s |= SUMMARY_NON_CONFIGURABLE;
     }
+    if entry & ENTRY_PRIVATE != 0 {
+        s |= SUMMARY_PRIVATE;
+    }
     s
+}
+
+/// Is a key with this entry a private field rather than a property?
+#[inline]
+pub(crate) const fn entry_is_private(entry: u8) -> bool {
+    entry & ENTRY_PRIVATE != 0
 }
 
 /// The entry's data-attribute half from `PropertyAttrs` bits (W=1, E=2, C=4).
@@ -178,7 +203,7 @@ impl Word {
     }
 
     /// This position's word: `entry` for `key`, after the cumulative `prev`.
-    #[inline]
+    #[inline(always)]
     unsafe fn after(prev: Word, entry: u8, key: crate::JSValue) -> Word {
         let mut w = Word { entry, ..prev };
         if entry != 0 {
@@ -642,6 +667,22 @@ pub(crate) unsafe fn object_summary(obj: *const crate::object::ObjectHeader) -> 
         .unwrap_or(0)
 }
 
+/// Is `obj`'s own key `key` a private field ([`ENTRY_PRIVATE`])? The shape's
+/// summary answers every receiver with no private field in one load.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline]
+pub(crate) unsafe fn object_key_is_private(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+) -> bool {
+    if object_summary(obj) & SUMMARY_PRIVATE == 0 {
+        return false;
+    }
+    entry_is_private(object_key_entry_filtered(obj, key, false))
+}
+
 /// The entry `obj`'s own key `key` carries: 0 when the key is default or
 /// absent. Three filters answer most keys without a lookup: the shape's
 /// summary (an all-default receiver), then the key-list prefix's Bloom filter
@@ -790,6 +831,8 @@ pub(crate) enum AttrsEdit<'a> {
     Integrity { freeze: bool },
     /// Every key returns to the default.
     ClearAll,
+    /// `key` is claimed as a private field ([`PRIVATE_FIELD_ENTRY`]).
+    Private(&'a [u8]),
 }
 
 impl AttrsEdit<'_> {
@@ -800,15 +843,21 @@ impl AttrsEdit<'_> {
             AttrsEdit::Data(k, _)
             | AttrsEdit::ClearData(k)
             | AttrsEdit::Accessor(k, _, _)
-            | AttrsEdit::ClearAccessor(k) => Some(k),
+            | AttrsEdit::ClearAccessor(k)
+            | AttrsEdit::Private(k) => Some(k),
             AttrsEdit::Integrity { .. } | AttrsEdit::ClearAll => None,
         }
     }
 
-    /// This edit applied to an entry.
+    /// This edit applied to an entry. A private field is not a property, so
+    /// no property edit (a define, `freeze`, `seal`) changes its entry.
     #[inline]
     pub(crate) fn apply(self, old: u8) -> u8 {
+        if entry_is_private(old) {
+            return old;
+        }
         match self {
+            AttrsEdit::Private(_) => PRIVATE_FIELD_ENTRY,
             AttrsEdit::Data(_, bits) => (old & ENTRY_ACCESSOR_MASK) | attr_bits_to_entry(bits),
             AttrsEdit::ClearData(_) => old & ENTRY_ACCESSOR_MASK,
             AttrsEdit::Accessor(_, get, set) => {

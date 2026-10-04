@@ -1,0 +1,15 @@
+{
+  "private_head": "6e311851fa6a6e0c981b7e2f2c34d3bdc5d3d2f9",
+  "parent": "4b1d5727052843b307d52f1c3da9b16b00027e2f",
+  "production_runtime": "6c761801fa4c76ad79b67bbc4338bee7739093b7",
+  "base": "2026ecfe6dd9df1a0a8616e3bc5c5561e8e0cf63",
+  "paths": [
+    "crates/perry-runtime/src/arena/block.rs",
+    "crates/perry-runtime/src/arena/block/reuse_window_tests.rs",
+    "crates/perry-runtime/src/arena/mod.rs",
+    "crates/perry-runtime/src/arena/reset.rs",
+    "crates/perry-runtime/src/gc/cycle.rs",
+    "crates/perry-runtime/src/gc/mod.rs"
+  ],
+  "overlay_sha256": "904089c3b74dbf3cf1dee66dbe9d05a6eac71457ed2ea04c3bf22eeeebd559f3"
+}

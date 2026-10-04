@@ -20,7 +20,7 @@
 //! The giant `lower_native_method_call` dispatcher itself stays here.
 
 use anyhow::{bail, Result};
-use perry_dispatch::{ArgKind as UiArgKind, ReturnKind as UiReturnKind};
+use perry_dispatch::ReturnKind as UiReturnKind;
 use perry_hir::types::Type as HirType;
 use perry_hir::Expr;
 
@@ -79,6 +79,12 @@ pub(crate) fn lower_native_method_call(
     object: Option<&Expr>,
     args: &[Expr],
 ) -> Result<String> {
+    if module == "array" && method == "push_field_single" {
+        let (Some(receiver), [value]) = (object, args) else {
+            bail!("push_field_single requires one receiver and argument");
+        };
+        return crate::expr::class_field_push::lower(ctx, receiver, value);
+    }
     include!("native_runtime_branch.rs");
     include!("native_tui_layout_branch.rs");
     include!("native_ui_widgets_branch.rs");
@@ -126,10 +132,9 @@ pub(crate) fn lower_native_method_call(
     // ABI. Node uses omission to select the original property value while
     // explicit `undefined` is a real replacement value.
     if matches!(module, "test" | "node:test") && object.is_none() && method == "property" {
-        let mut lowered = Vec::with_capacity(args.len());
-        for arg in args {
-            lowered.push(lower_expr(ctx, arg)?);
-        }
+        // #11789 sweep: target, property and value are each held across the
+        // ones after them.
+        let (lowered, args_group) = super::lower_call_args_rooted(ctx, args)?;
         let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         let target = lowered.first().unwrap_or(&undefined);
         let property = lowered.get(1).unwrap_or(&undefined);
@@ -140,7 +145,7 @@ pub(crate) fn lower_native_method_call(
             DOUBLE,
             vec![DOUBLE, DOUBLE, DOUBLE, I32],
         ));
-        return Ok(ctx.block().call(
+        let result = ctx.block().call(
             DOUBLE,
             "js_node_test_mock_property_with_presence",
             &[
@@ -149,7 +154,9 @@ pub(crate) fn lower_native_method_call(
                 (DOUBLE, value),
                 (I32, value_present),
             ],
-        ));
+        );
+        args_group.release(ctx);
+        return Ok(result);
     }
 
     // Generic native module dispatch (receiver-less): fastify, mysql2,
@@ -325,28 +332,35 @@ pub(crate) fn lower_native_method_call(
     // inspect options around `%O` / `%o`.
     if module == "util" && object.is_none() && (method == "format" || method == "formatWithOptions")
     {
-        let options_value = if method == "formatWithOptions" {
-            if let Some(options_arg) = args.first() {
-                Some(lower_expr(ctx, options_arg)?)
-            } else {
-                Some(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
-            }
-        } else {
-            None
-        };
+        // #11789 sweep: the options value is held across the array allocation
+        // and every payload element's evaluation, and the half-built array
+        // across the elements still to be lowered. Both live in one group,
+        // exactly as `console.log(a, b)`'s accumulator does.
         let skip = usize::from(method == "formatWithOptions");
         let payload: Vec<&Expr> = args.iter().skip(skip).collect();
         let cap = (payload.len() as u32).to_string();
-        let mut current_arr = ctx.block().call(I64, "js_array_alloc", &[(I32, &cap)]);
+        let mut group = crate::rooting::open_rooted_group(1);
+        let options_root = if method == "formatWithOptions" {
+            args.first()
+                .map(|options_arg| group.lower(ctx, options_arg, true))
+                .transpose()?
+        } else {
+            None
+        };
+        let acc = group.begin_array(ctx, &cap);
         for arg in &payload {
             let v = lower_expr(ctx, arg)?;
-            let blk = ctx.block();
-            current_arr = blk.call(
-                I64,
-                "js_array_push_f64",
-                &[(I64, &current_arr), (DOUBLE, &v)],
-            );
+            group.push_array(ctx, acc, &v);
         }
+        let current_arr = group.read_array(ctx, acc);
+        let options_value = if method == "formatWithOptions" {
+            Some(match options_root {
+                Some(root) => group.reread(ctx, root)?,
+                None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+            })
+        } else {
+            None
+        };
         let blk = ctx.block();
         let result = if let Some(options_value) = options_value {
             blk.call(
@@ -357,6 +371,7 @@ pub(crate) fn lower_native_method_call(
         } else {
             blk.call(DOUBLE, "js_util_format", &[(I64, &current_arr)])
         };
+        group.release(ctx);
         return Ok(result);
     }
 
@@ -367,11 +382,10 @@ pub(crate) fn lower_native_method_call(
     // counters are used instead of the process-global console helpers.
     if module == "console" && class_name == Some("Console") {
         if let Some(recv) = object {
-            let recv_box = lower_expr(ctx, recv)?;
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for arg in args {
-                lowered_args.push(lower_expr(ctx, arg)?);
-            }
+            // #11789 sweep: the receiver is held across every argument, each
+            // of which is held across the ones after it.
+            let (recv_box, lowered_args, call_group) =
+                super::lower_operands_rooted(ctx, recv, args)?;
 
             let (args_ptr, args_len) = if lowered_args.is_empty() {
                 ("null".to_string(), "0".to_string())
@@ -392,7 +406,7 @@ pub(crate) fn lower_native_method_call(
             let entry = ctx.strings.entry(method_idx);
             let bytes_global = format!("@{}", entry.bytes_global);
             let name_len = entry.byte_len.to_string();
-            return Ok(ctx.block().call(
+            let result = ctx.block().call(
                 DOUBLE,
                 "js_native_call_method",
                 &[
@@ -402,7 +416,9 @@ pub(crate) fn lower_native_method_call(
                     (PTR, &args_ptr),
                     (I64, &args_len),
                 ],
-            ));
+            );
+            call_group.release(ctx);
+            return Ok(result);
         }
     }
 
@@ -421,11 +437,10 @@ pub(crate) fn lower_native_method_call(
     // like the Console instance arm above.
     if module == "crypto" && class_name == Some("X509Certificate") {
         if let Some(recv) = object {
-            let recv_box = lower_expr(ctx, recv)?;
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for arg in args {
-                lowered_args.push(lower_expr(ctx, arg)?);
-            }
+            // #11789 sweep: the receiver is held across every argument, each
+            // of which is held across the ones after it.
+            let (recv_box, lowered_args, call_group) =
+                super::lower_operands_rooted(ctx, recv, args)?;
 
             let (args_ptr, args_len) = if lowered_args.is_empty() {
                 ("null".to_string(), "0".to_string())
@@ -446,7 +461,7 @@ pub(crate) fn lower_native_method_call(
             let entry = ctx.strings.entry(method_idx);
             let bytes_global = format!("@{}", entry.bytes_global);
             let name_len = entry.byte_len.to_string();
-            return Ok(ctx.block().call(
+            let result = ctx.block().call(
                 DOUBLE,
                 "js_native_call_method",
                 &[
@@ -456,7 +471,9 @@ pub(crate) fn lower_native_method_call(
                     (PTR, &args_ptr),
                     (I64, &args_len),
                 ],
-            ));
+            );
+            call_group.release(ctx);
+            return Ok(result);
         }
     }
 
@@ -491,10 +508,10 @@ pub(crate) fn lower_native_method_call(
                     &[(PTR, &submod_label), (I32, &submod_key.len().to_string())],
                 )
             };
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for arg in args {
-                lowered_args.push(lower_expr(ctx, arg)?);
-            }
+            // #11789 sweep: the namespace object is held across every
+            // argument, each of which is held across the ones after it.
+            let (recv_box, lowered_args, call_group) =
+                super::lower_args_after_emitted_rooted(ctx, &recv_box, args)?;
             let (args_ptr, args_len) = if lowered_args.is_empty() {
                 ("null".to_string(), "0".to_string())
             } else {
@@ -513,7 +530,7 @@ pub(crate) fn lower_native_method_call(
             let entry = ctx.strings.entry(method_idx);
             let bytes_global = format!("@{}", entry.bytes_global);
             let name_len = entry.byte_len.to_string();
-            return Ok(ctx.block().call(
+            let result = ctx.block().call(
                 DOUBLE,
                 "js_native_call_method",
                 &[
@@ -523,7 +540,9 @@ pub(crate) fn lower_native_method_call(
                     (PTR, &args_ptr),
                     (I64, &args_len),
                 ],
-            ));
+            );
+            call_group.release(ctx);
+            return Ok(result);
         }
         // Named/value-form imports of node-core native-module functions
         // (`import { realpathSync } from "fs"; realpathSync(p)`) reach here
@@ -541,12 +560,11 @@ pub(crate) fn lower_native_method_call(
         // the historical undefined fall-through and never mis-dispatch.
         // Fixes the realpathSync class (fs/os/path/url/... named-import fns).
         if crate::nm_install::nm_install_symbol(module).is_some() {
-            let recv_box =
-                crate::expr::lower_expr(ctx, &Expr::NativeModuleRef(module.to_string()))?;
-            let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-            for arg in args {
-                lowered_args.push(lower_expr(ctx, arg)?);
-            }
+            let recv_expr = Expr::NativeModuleRef(module.to_string());
+            // #11789 sweep: the module namespace is held across every
+            // argument, each of which is held across the ones after it.
+            let (recv_box, lowered_args, call_group) =
+                super::lower_operands_rooted(ctx, &recv_expr, args)?;
             let (args_ptr, args_len) = if lowered_args.is_empty() {
                 ("null".to_string(), "0".to_string())
             } else {
@@ -565,7 +583,7 @@ pub(crate) fn lower_native_method_call(
             let entry = ctx.strings.entry(method_idx);
             let bytes_global = format!("@{}", entry.bytes_global);
             let name_len = entry.byte_len.to_string();
-            return Ok(ctx.block().call(
+            let result = ctx.block().call(
                 DOUBLE,
                 "js_native_call_method",
                 &[
@@ -575,7 +593,9 @@ pub(crate) fn lower_native_method_call(
                     (PTR, &args_ptr),
                     (I64, &args_len),
                 ],
-            ));
+            );
+            call_group.release(ctx);
+            return Ok(result);
         }
         for a in args {
             let _ = lower_expr(ctx, a)?;

@@ -24,7 +24,7 @@
 
 // Without `hot-diag` the probes below have no armed caller. `allow` rather
 // than a cascade of cfgs keeps them compiled, so they cannot rot unbuilt.
-#![cfg_attr(not(feature = "hot-diag"), allow(dead_code, unused_imports))]
+#![cfg_attr(not(perry_hot_diag), allow(dead_code, unused_imports))]
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -53,19 +53,18 @@ pub(crate) fn sink_from_env(name: &str) -> Option<Sink> {
 /// `HOT_DIAG_KNOBS` in the compiler's `optimized_libs/freshness.rs` (pinned by
 /// `hot_diag_knobs_match_the_runtime`).
 // Read only by the feature-off startup check below.
-#[cfg_attr(feature = "hot-diag", allow(dead_code))]
+#[cfg_attr(perry_hot_diag, allow(dead_code))]
 pub(crate) const HOT_DIAG_KNOBS: &[&str] = &[
     "PERRY_REGEX_DIAG",
     "PERRY_IC_DIAG",
     "PERRY_LAYOUT_DIAG",
     "PERRY_ENUM_DIAG",
-    "PERRY_BUFFER_DIAG",
     "PERRY_RECEIVER_REPR_DIAG",
 ];
 
 /// Startup check for binaries built without the instruments: a knob that
 /// would arm one (same spelling rules as [`sink_from_env`]) aborts.
-#[cfg(not(feature = "hot-diag"))]
+#[cfg(not(perry_hot_diag))]
 pub(crate) fn refuse_knobs_without_hot_diag() {
     if let Some(knob) = HOT_DIAG_KNOBS
         .iter()
@@ -76,7 +75,7 @@ pub(crate) fn refuse_knobs_without_hot_diag() {
     }
 }
 
-#[cfg(not(feature = "hot-diag"))]
+#[cfg(not(perry_hot_diag))]
 #[cold]
 #[inline(never)]
 fn hot_diag_unavailable(knob: &str) -> ! {
@@ -147,9 +146,9 @@ fn regex_sink() -> &'static Option<Sink> {
 /// Is the regex instrument armed? One relaxed load once initialised.
 #[inline]
 pub fn regex_on() -> bool {
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     return false;
-    #[cfg(feature = "hot-diag")]
+    #[cfg(perry_hot_diag)]
     {
         if REGEX_SINK.get().is_none() {
             regex_sink();
@@ -278,6 +277,26 @@ pub struct RegexDiag {
     pub site_test_declined_patched_prototype: u64,
     pub site_test_declined_callee_mismatch: u64,
     pub site_test_declined_non_literal: u64,
+    /// `regex_canonical` shape proof (`exec`, then `method`/`split` on top of
+    /// it): admitted vs declined, and how often the proof was recomputed
+    /// because `RegExp.prototype`'s shape stamp moved.
+    pub proof_exec_hit: u64,
+    pub proof_exec_miss: u64,
+    pub proof_exec_refresh: u64,
+    pub proof_method_hit: u64,
+    pub proof_method_miss: u64,
+    pub proof_split_hit: u64,
+    pub proof_split_miss: u64,
+    /// `regexp_prototype_test_is_canonical` (the recorded
+    /// `REGEXP_PROTOTYPE_TEST_SITE` slot compare): admitted vs declined.
+    pub proto_test_hit: u64,
+    pub proto_test_miss: u64,
+    /// `flag_accessors_canonical`: answered from the epoch-keyed cache, or
+    /// recomputed (nine descriptor lookups), and the verdicts of both.
+    pub flag_accessors_cached: u64,
+    pub flag_accessors_recomputed: u64,
+    pub flag_accessors_canonical_true: u64,
+    pub flag_accessors_canonical_false: u64,
     per_pattern: HashMap<usize, PatStat>,
 }
 
@@ -420,6 +439,24 @@ impl RegexDiag {
             self.perex_compiles, self.perex_validations, self.program_identity_hits, self.program_content_hits, self.program_hash_bytes);
         let _ = writeln!(out, "[regex-perex] canonical_execs={} removes={} searches={} scratch_allocs={} scratch_grows={}",
             self.perex_canonical_execs, self.perex_removes, self.perex_searches, self.perex_scratch_allocs, self.perex_scratch_grows);
+        let _ = writeln!(
+            out,
+            "[regex-proofs] exec hit={} miss={} refresh={} method hit={} miss={} split hit={} miss={} \
+             proto_test hit={} miss={} flag_accessors cached={} recomputed={} canonical={} not_canonical={}",
+            self.proof_exec_hit,
+            self.proof_exec_miss,
+            self.proof_exec_refresh,
+            self.proof_method_hit,
+            self.proof_method_miss,
+            self.proof_split_hit,
+            self.proof_split_miss,
+            self.proto_test_hit,
+            self.proto_test_miss,
+            self.flag_accessors_cached,
+            self.flag_accessors_recomputed,
+            self.flag_accessors_canonical_true,
+            self.flag_accessors_canonical_false,
+        );
         let _ = writeln!(
             out,
             "[regex-diag] t={secs:.1}s new={} validated_hit={} site_hit={} pattern_bytes={} \
@@ -566,9 +603,9 @@ pub fn layout_on() -> bool {
     if let Some(armed) = LAYOUT_TEST_ARMED.with(std::cell::Cell::get) {
         return armed;
     }
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     return false;
-    #[cfg(feature = "hot-diag")]
+    #[cfg(perry_hot_diag)]
     {
         if LAYOUT_SINK.get().is_none() {
             layout_sink();
@@ -813,9 +850,9 @@ impl Drop for LayoutDiagTestGuard {
 /// Is the IC-miss instrument armed? One relaxed load once initialised.
 #[inline]
 pub fn ic_on() -> bool {
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     return false;
-    #[cfg(feature = "hot-diag")]
+    #[cfg(perry_hot_diag)]
     {
         if IC_SINK.get().is_none() {
             ic_sink();
@@ -871,25 +908,48 @@ pub enum IcMissReason {
 
 pub const IC_MISS_REASONS: usize = 17;
 
-const IC_REASON_NAMES: [&str; IC_MISS_REASONS] = [
-    "sso_receiver",
-    "null_args",
-    "proxy",
-    "async_resource",
-    "subclass_elements",
-    "array_length",
-    "closure_prop",
-    "buffer",
-    "typed_array",
-    "small_handle",
-    "non_object_gc_type",
-    "object_irregular",
-    "object_no_keys",
-    "own_inline_primed",
-    "own_overflow_primed",
-    "own_descriptor_fallthrough",
-    "not_own",
-];
+/// Word `i` of a diagnostic's space-separated name list (`"?"` past the end).
+///
+/// The diagnostics keep their report names in one string rather than a
+/// `[&str; N]` (or a string `match`, which LLVM lowers to one): each entry of
+/// a string-slice table is an absolute pointer, a load-time relocation in
+/// every program that links the diagnostic, armed or not. Shared and out of
+/// line so the split is compiled once; only report printing calls it.
+#[cold]
+#[inline(never)]
+pub(crate) fn report_name(names: &'static str, i: usize) -> &'static str {
+    names.split(' ').nth(i).unwrap_or("?")
+}
+
+impl IcMissReason {
+    /// Every reason, in `by_reason` index order.
+    const ALL: [Self; IC_MISS_REASONS] = [
+        Self::SsoReceiver,
+        Self::NullArgs,
+        Self::Proxy,
+        Self::AsyncResource,
+        Self::SubclassElements,
+        Self::ArrayLength,
+        Self::ClosureProp,
+        Self::Buffer,
+        Self::TypedArray,
+        Self::SmallHandle,
+        Self::NonObjectGcType,
+        Self::ObjectIrregular,
+        Self::ObjectNoKeys,
+        Self::OwnInlinePrimed,
+        Self::OwnOverflowPrimed,
+        Self::OwnDescriptorFallthrough,
+        Self::NotOwn,
+    ];
+
+    /// The reason's report name. One string, see
+    /// [`crate::hot_diag::report_name`].
+    fn name(self) -> &'static str {
+        const NAMES: &str = "sso_receiver null_args proxy async_resource subclass_elements array_length closure_prop buffer typed_array small_handle non_object_gc_type object_irregular object_no_keys own_inline_primed own_overflow_primed own_descriptor_fallthrough not_own";
+        report_name(NAMES, self as usize)
+    }
+}
 
 #[derive(Default)]
 struct SiteStat {
@@ -1140,9 +1200,10 @@ impl IcDiag {
             self.hits_in_ways,
             self.sites.len()
         );
-        for (i, name) in IC_REASON_NAMES.iter().enumerate() {
+        for reason in IcMissReason::ALL {
+            let i = reason as usize;
             if self.by_reason[i] != 0 {
-                let _ = write!(out, " {name}={}", self.by_reason[i]);
+                let _ = write!(out, " {}={}", reason.name(), self.by_reason[i]);
             }
         }
         out.push('\n');
@@ -1169,22 +1230,6 @@ impl IcDiag {
                 self.prime_way_encoded_slot
             );
         }
-        // Lane 3's inherited-read cache, on the SAME arming rather than an
-        // env var of its own. A cache that primes and then declines every
-        // lookup returns exactly the values the chain walk would and is
-        // invisible in a program's output; this row is what tells a real
-        // program's run apart from that.
-        let inh_hits = crate::object::inherited_read_cache::inherited_read_cache_hits();
-        let inh_primes = crate::object::inherited_read_cache::inherited_read_cache_primes();
-        let inh_declines = crate::object::inherited_read_cache::inherited_read_cache_declines();
-        let inh_neg = crate::object::inherited_read_cache::inherited_read_cache_neg_served();
-        if (inh_hits | inh_primes | inh_declines | inh_neg) != 0 {
-            let _ = writeln!(
-                out,
-                "  inherited: hits={inh_hits} primes={inh_primes} \
-                 declines={inh_declines} declines_cached={inh_neg}"
-            );
-        }
         let mut rows: Vec<&SiteStat> = self.sites.values().collect();
         crate::cold_sort::sort_by_key(&mut rows, |s| std::cmp::Reverse(s.misses));
         let _ = writeln!(
@@ -1198,7 +1243,12 @@ impl IcDiag {
                 .collect();
             crate::cold_sort::sort_by(&mut idx, |a, b| s.by_reason[*b].cmp(&s.by_reason[*a]));
             for i in idx.iter().take(3) {
-                let _ = write!(reasons, " {}={}", IC_REASON_NAMES[*i], s.by_reason[*i]);
+                let _ = write!(
+                    reasons,
+                    " {}={}",
+                    IcMissReason::ALL[*i].name(),
+                    s.by_reason[*i]
+                );
             }
             let _ = writeln!(
                 out,
@@ -1236,9 +1286,9 @@ fn enum_sink() -> &'static Option<Sink> {
 /// Is the enumeration/concat execution counter armed?
 #[inline]
 pub fn enum_on() -> bool {
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     return false;
-    #[cfg(feature = "hot-diag")]
+    #[cfg(perry_hot_diag)]
     {
         if ENUM_SINK.get().is_none() {
             enum_sink();
@@ -1388,159 +1438,9 @@ impl EnumDiag {
     }
 }
 
-// ---------------------------------------------------------------------------
-// `is_registered_buffer`: is the min/max window still rejecting?
-// ---------------------------------------------------------------------------
-
-use std::sync::atomic::{AtomicU64, AtomicUsize};
-
-static BUFFER_SINK: OnceLock<Option<Sink>> = OnceLock::new();
-static BUFFER_ON: AtomicBool = AtomicBool::new(false);
-
-fn buffer_sink() -> &'static Option<Sink> {
-    crate::once_init::get_or_init(&BUFFER_SINK, || {
-        let sink = sink_from_env("PERRY_BUFFER_DIAG");
-        BUFFER_ON.store(sink.is_some(), Ordering::Relaxed);
-        sink
-    })
-}
-
-/// Is the buffer-probe instrument armed? One relaxed load once initialised.
-#[inline]
-pub fn buffer_on() -> bool {
-    #[cfg(not(feature = "hot-diag"))]
-    return false;
-    #[cfg(feature = "hot-diag")]
-    {
-        if BUFFER_SINK.get().is_none() {
-            buffer_sink();
-        }
-        BUFFER_ON.load(Ordering::Relaxed)
-    }
-}
-
-// Plain relaxed atomics rather than the thread-local `RefCell` the other
-// instruments use: this probe runs millions of times per turn, and a borrow
-// per probe would dominate the thing being measured.
-static BUF_PROBES: AtomicU64 = AtomicU64::new(0);
-static BUF_ADMITS: AtomicU64 = AtomicU64::new(0);
-static BUF_TRUE_POS: AtomicU64 = AtomicU64::new(0);
-static BUF_ADDR_MIN: AtomicUsize = AtomicUsize::new(usize::MAX);
-static BUF_ADDR_MAX: AtomicUsize = AtomicUsize::new(0);
-static BUF_WIN_LO: AtomicUsize = AtomicUsize::new(usize::MAX);
-static BUF_WIN_HI: AtomicUsize = AtomicUsize::new(0);
-static BUF_REGS: AtomicU64 = AtomicU64::new(0);
-static BUF_UNREGS: AtomicU64 = AtomicU64::new(0);
-static BUF_LIVE_MAX: AtomicUsize = AtomicUsize::new(0);
-
-/// One `is_registered_buffer` probe that got past the "ever registered" latch.
-/// `admitted` is what the inline min/max window answered — the whole question,
-/// because only an admitted address pays the out-of-line call.
-#[inline]
-pub fn buffer_note_probe(addr: usize, admitted: bool, window: Option<(usize, usize)>) {
-    let n = BUF_PROBES.fetch_add(1, Ordering::Relaxed);
-    if admitted {
-        BUF_ADMITS.fetch_add(1, Ordering::Relaxed);
-    }
-    BUF_ADDR_MIN.fetch_min(addr, Ordering::Relaxed);
-    BUF_ADDR_MAX.fetch_max(addr, Ordering::Relaxed);
-    if let Some((lo, hi)) = window {
-        BUF_WIN_LO.store(lo, Ordering::Relaxed);
-        BUF_WIN_HI.store(hi, Ordering::Relaxed);
-    }
-    // Dump roughly every million probes; the rig SIGKILLs, so an exit hook
-    // would never fire.
-    if n & 0xF_FFFF == 0 {
-        buffer_dump();
-    }
-}
-
-/// The slow path found a real registered buffer.
-#[inline]
-pub fn buffer_note_true_positive() {
-    BUF_TRUE_POS.fetch_add(1, Ordering::Relaxed);
-}
-
-/// One buffer registration, with the registry's size after it. Registrations
-/// are what a Bloom filter would have to hold, and `RegistryAddrFilter` accrues
-/// bits **per admission, not per live entry** — so for a high-churn set the
-/// number that decides whether that structure can work is the CUMULATIVE
-/// count, not the live one. Both are recorded.
-pub fn buffer_note_registration(live_now: usize) {
-    BUF_REGS.fetch_add(1, Ordering::Relaxed);
-    BUF_LIVE_MAX.fetch_max(live_now, Ordering::Relaxed);
-}
-
-/// One buffer leaving the registry.
-pub fn buffer_note_unregistration() {
-    BUF_UNREGS.fetch_add(1, Ordering::Relaxed);
-}
-
-#[cold]
-fn buffer_dump() {
-    let probes = BUF_PROBES.load(Ordering::Relaxed);
-    let admits = BUF_ADMITS.load(Ordering::Relaxed);
-    let tp = BUF_TRUE_POS.load(Ordering::Relaxed);
-    let amin = BUF_ADDR_MIN.load(Ordering::Relaxed);
-    let amax = BUF_ADDR_MAX.load(Ordering::Relaxed);
-    let wlo = BUF_WIN_LO.load(Ordering::Relaxed);
-    let whi = BUF_WIN_HI.load(Ordering::Relaxed);
-    let pct = |a: u64, b: u64| {
-        if b == 0 {
-            0.0
-        } else {
-            100.0 * a as f64 / b as f64
-        }
-    };
-    let mb = |n: usize| n as f64 / (1024.0 * 1024.0);
-    let win_span = whi.saturating_sub(wlo);
-    let probe_span = amax.saturating_sub(amin);
-    let mut out = String::with_capacity(768);
-    use std::fmt::Write as _;
-    let _ = writeln!(
-        out,
-        "[buffer-diag] probes={probes} admits={admits} ({:.2} %) rejected={} ({:.2} %) \
-         true_positives={tp} ({:.6} % of admits)",
-        pct(admits, probes),
-        probes - admits,
-        pct(probes - admits, probes),
-        pct(tp, admits)
-    );
-    let _ = writeln!(
-        out,
-        "  window   [{wlo:#x}, {whi:#x}] span {:.1} MB",
-        mb(win_span)
-    );
-    let _ = writeln!(
-        out,
-        "  probed   [{amin:#x}, {amax:#x}] span {:.1} MB  -- window covers {:.1} % of the probed range",
-        mb(probe_span),
-        if probe_span == 0 { 0.0 } else { 100.0 * win_span as f64 / probe_span as f64 }
-    );
-    let regs = BUF_REGS.load(Ordering::Relaxed);
-    let unregs = BUF_UNREGS.load(Ordering::Relaxed);
-    let live_max = BUF_LIVE_MAX.load(Ordering::Relaxed);
-    // A 1,024-bit, 3-hash Bloom filter (`RegistryAddrFilter`) accrues bits per
-    // ADMISSION and never clears them, so `regs` — not `live_max` — is what it
-    // would have to hold. (1 - e^(-3n/1024))^3 at that n:
-    let fp = |n: f64| {
-        let x = 1.0 - (-3.0 * n / 1024.0).exp();
-        100.0 * x * x * x
-    };
-    let _ = writeln!(
-        out,
-        "  registrations={regs} unregistrations={unregs} live_max={live_max}           => a 1024-bit/3-hash Bloom holding all admissions would be {:.1} % false-positive          (and {:.1} % if it could hold only the live set)",
-        fp(regs as f64),
-        fp(live_max as f64)
-    );
-    if let Some(sink) = buffer_sink() {
-        write_sink(sink, &out);
-    }
-}
-
 /// Receiver-route admission census names, indexed by the route number the
 /// emitted call passes. **Must match `receiver_range::Route` in perry-codegen.**
-const RECV_ROUTE_NAMES: [&str; 33] = [
+const RECV_ROUTE_NAMES: [&str; 35] = [
     "generic",
     "generic_mru_hit",
     "generic_way_hit",
@@ -1582,17 +1482,22 @@ const RECV_ROUTE_NAMES: [&str; 33] = [
     // supplier matched (`Route::RloopStatic`).
     "rloop_static",
     // Runtime-counted: a class-field read whose inline guard missed, answered
-    // from the receiver's shape (the site's word or the inherited cache)...
+    // from the receiver's shape (the site's word or holder fact)...
     "rt_class_miss_shape",
-    // ...or by the generic read ladder behind it (own miss, inherited cache,
-    // priming), where it used to take the site-less by-name walk.
+    // ...or by the generic read ladder behind it, where it used to take the
+    // site-less by-name walk.
     "rt_class_miss_ladder",
     // Runtime-counted: a by-name overwrite of a live inline slot on an object
-    // holding a typed layout, which keeps it (it used to declare it unknown).
+    // whose ShapeId carries an `F64` lane, which keeps that ShapeId (it used
+    // to declare the object's layout unknown).
     "rt_overwrite_kept_typed",
     // Runtime-counted by `js_region_loop_prime`: refused because a key a bare
     // store may write a non-double into is not an `Any` lane (charter step 5).
     "rt_rloop_refuse_f64_stored",
+    "rt_rloop_refuse_rep",
+    // Emitted only in a route-census build: F ran with at least one R bit
+    // backed by its chosen static or learned supplier.
+    "rloop_f_rep",
 ];
 
 /// The runtime-counted routes: see [`RECV_ROUTE_NAMES`].
@@ -1600,6 +1505,7 @@ pub(crate) const RT_ROUTE_MEGA_SPILL: u32 = 9;
 pub(crate) const RT_ROUTE_SPILL_MISS: u32 = 10;
 pub(crate) const RT_ROUTE_CLASS_MISS_SHAPE: u32 = 29;
 pub(crate) const RT_ROUTE_CLASS_MISS_LADDER: u32 = 30;
+pub(crate) const RT_ROUTE_OVERWRITE_KEPT_TYPED: u32 = 31;
 pub(crate) const RT_ROUTE_RLOOP_PRIME_OK: u32 = 19;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_BAND: u32 = 20;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_SUMMARY: u32 = 21;
@@ -1610,14 +1516,22 @@ pub(crate) const RT_ROUTE_RLOOP_REFUSE_SPILL_UNSERVABLE: u32 = 25;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_RANGE: u32 = 26;
 pub(crate) const RT_ROUTE_RLOOP_RETIRE: u32 = 27;
 pub(crate) const RT_ROUTE_RLOOP_REFUSE_F64_STORED: u32 = 32;
+pub(crate) const RT_ROUTE_RLOOP_REFUSE_REP: u32 = 33;
 
-static RECV_ROUTES: [std::sync::atomic::AtomicU64; 33] =
-    [const { std::sync::atomic::AtomicU64::new(0) }; 33];
+static RECV_ROUTES: [std::sync::atomic::AtomicU64; 35] =
+    [const { std::sync::atomic::AtomicU64::new(0) }; 35];
 static RECV_ROUTES_REPORT: std::sync::Once = std::sync::Once::new();
 /// Set by the first emitted `js_recv_route_note`, i.e. only in a binary
 /// compiled with `PERRY_RECV_ROUTE_COUNT=1`; the runtime-counted routes are a
 /// relaxed load and a not-taken branch everywhere else.
 static RECV_ROUTES_ARMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Is this a census build (see [`RECV_ROUTES_ARMED`])? For a runtime route
+/// whose classification costs more than the count.
+#[inline]
+pub(crate) fn recv_routes_armed() -> bool {
+    RECV_ROUTES_ARMED.load(Ordering::Relaxed)
+}
 
 /// Count a runtime-side route in a census build (see
 /// [`RECV_ROUTES_ARMED`]); nothing otherwise.
@@ -1661,3 +1575,22 @@ extern "C" fn recv_route_report() {
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_RECV_ROUTE_NOTE: extern "C" fn(u32) = js_recv_route_note;
+
+#[cfg(test)]
+mod report_names_line_up {
+    use super::*;
+
+    #[test]
+    fn ic_miss_reason_names_follow_the_variants() {
+        let names: Vec<&str> = IcMissReason::ALL.iter().map(|r| r.name()).collect();
+        assert_eq!(names.len(), IC_MISS_REASONS);
+        assert_eq!(IcMissReason::SsoReceiver.name(), "sso_receiver");
+        assert_eq!(IcMissReason::ObjectIrregular.name(), "object_irregular");
+        assert_eq!(IcMissReason::NotOwn.name(), "not_own");
+        for (i, r) in IcMissReason::ALL.iter().enumerate() {
+            assert_eq!(*r as usize, i);
+            assert!(!names[i].is_empty() && names[i] != "?");
+            assert!(!names[..i].contains(&names[i]), "{} twice", names[i]);
+        }
+    }
+}

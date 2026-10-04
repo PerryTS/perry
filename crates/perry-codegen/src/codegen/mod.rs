@@ -204,8 +204,10 @@ mod emission_order_tests;
 mod entry;
 pub mod entry_outline;
 mod export_value_wrappers;
+pub(crate) mod fresh_class_templates;
 pub(crate) mod func_registry;
 mod function;
+mod function_metadata_descriptors;
 mod function_source_header;
 #[cfg(test)]
 mod guarded_falsy_default_method_tests;
@@ -226,7 +228,11 @@ mod tdz_names;
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
 pub(crate) mod helpers;
 // #10399: the driver sets this before any module codegen runs.
-pub use helpers::{program_has_worker, set_program_has_worker};
+pub use helpers::{
+    program_has_thread_agents, program_has_worker, set_program_has_thread_agents,
+    set_program_has_worker, set_worker_entries, worker_entries,
+};
+pub(crate) mod global_transfer;
 mod literal_constructor;
 mod method;
 mod method_registry;
@@ -247,15 +253,19 @@ mod spec_preserve_none_tests;
 mod spec_return_proof;
 #[cfg(test)]
 mod spec_self_recursion_tests;
+pub(crate) mod static_constfn;
+pub(crate) mod static_constfn_class;
 pub(crate) mod static_fields;
+pub(crate) mod static_private_class;
 mod static_shape_ids;
 pub use static_shape_ids::{
     assign_static_shape_ids, decode_static_seed, encode_static_seed, take_module_static_seeds,
-    BirthProto, BirthShape, DefinedClassShape, ModuleBirth, ProgramClassShapeIds, TypedMasks,
-    STATIC_SEED_FORMAT,
+    BirthProto, BirthShape, ConstFnBirth, DefinedClassShape, ModuleBirth, ProgramClassShapeIds,
+    TypedMasks, STATIC_SEED_FORMAT,
 };
 pub(crate) use static_shape_ids::{
-    static_region_slots, static_shape_id_for_foreign_global, static_shape_id_for_keys_global,
+    compatible_final_shape_ids, compatible_final_shapes, slot_may_be_constfn, static_region_slots,
+    static_shape_id_for_foreign_global, static_shape_id_for_keys_global,
 };
 mod string_pool;
 #[cfg(test)]
@@ -278,9 +288,9 @@ pub(crate) use helpers::{
 };
 pub use opts::{
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key, AppMetadata,
-    CompileOptions, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
-    ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry, NamespaceEntryKind,
-    ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
+    ClassAccessorNames, CompileOptions, ExportedObjectLiteralCapability, FpContractMode,
+    ImportedClass, ImportedObjectLiteral, ImportedObjectLiteralMethod, NamespaceEntry,
+    NamespaceEntryKind, ObjectLiteralMethodCandidate, ShortSpreadMethodCandidate,
 };
 pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 pub(crate) use param_guard::scalar_descriptor_rep;
@@ -464,6 +474,25 @@ fn compile_module_impl(
     let collect_births = births.is_some();
     let (live_cjs_hir, cjs_property_exports) = cjs_exports::prepare(hir);
     let hir = live_cjs_hir.as_ref();
+    // The driver sets the whole-program perry/thread flag before any module
+    // codegen. A direct compile_module caller without callback prefixes also
+    // needs local launch detection for its string-preparation callback, even
+    // when the process flag is already set. Do not change shared compiler state.
+    let mut local_thread_use = false;
+    if opts.thread_literal_module_prefixes.is_empty() {
+        perry_hir::for_each_module_expr(hir, &mut |expr| {
+            if matches!(expr, perry_hir::Expr::NativeMethodCall { module, method, .. }
+                if module == "perry/thread"
+                    && matches!(method.as_str(), "spawn" | "parallelMap" | "parallelFilter"))
+            {
+                local_thread_use = true;
+            }
+        });
+    }
+    let thread_agents = program_has_thread_agents()
+        || !opts.thread_literal_module_prefixes.is_empty()
+        || local_thread_use;
+    let agent_strings_tls = program_has_worker() || thread_agents;
     let progress = CompileProgress::new(&hir.name, module_callable_count(hir));
     let triple = opts.target.clone().unwrap_or_else(default_target_triple);
     if let Some(refusal) = crate::target_layout::ilp32_codegen_refusal(&triple) {
@@ -558,7 +587,12 @@ fn compile_module_impl(
     // checker — the pool lives outside LlModule. The module prefix
     // becomes part of every emitted global so multi-module programs
     // don't collide on `.str.0.handle`.
+    let thread_literal_callback_prefix = opts
+        .thread_literal_module_prefixes
+        .first()
+        .unwrap_or(&module_prefix);
     let mut strings = StringPool::with_prefix(module_prefix.clone());
+    strings.set_thread_literal_callback_prefix(thread_literal_callback_prefix.clone());
     strings.tdz_binding_names = tdz_names::collect(hir);
     // #5247: install per-module source-location context for the dynamic
     // call-dispatch throw path, but only under `--debug-symbols` (which sets
@@ -2387,13 +2421,15 @@ fn compile_module_impl(
             // `lower_call::new_alloc::constructor_added_key_count`): such a
             // class is born with a live bound of keys + slack, minted beside
             // this image by the string pool (`birth_live`, 0 = the key count).
+            // The private fields' entries are key-adds of construction too
+            // (#11791): reserve their inline slots the same way.
             let slack = if imported_stub_names.contains(class_name.as_str()) {
                 0
             } else {
                 class_table.get(class_name).map_or(0, |class| {
-                    crate::lower_call::new_alloc::constructor_added_key_count_in(class, &|name| {
-                        class_table.get(name).copied()
-                    })
+                    let lookup = |name: &str| class_table.get(name).copied();
+                    crate::lower_call::new_alloc::constructor_added_key_count_in(class, &lookup)
+                        + crate::lower_call::new_alloc::private_field_slot_count_in(class, &lookup)
                 })
             };
             let birth_live = if slack > 0 { key_count + slack } else { 0 };
@@ -2447,6 +2483,10 @@ fn compile_module_impl(
         }
         reps
     };
+    // Step 5C: a literal's method slot holding a module function's value is a
+    // ConstFn lane too; births and lowering read the same admitted set.
+    static_constfn::set_module_function_values(hir, &module_prefix);
+    static_constfn::set_module_object_create_protos(hir);
     if let Some(births) = births {
         *births = static_shape_ids::module_births(
             &module_prefix,
@@ -2456,6 +2496,39 @@ fn compile_module_impl(
             &class_birth_reps_map,
             &class_ids,
         );
+        if static_constfn::enabled(&opts.output_type) {
+            let reps = class_keys_globals_map
+                .iter()
+                .filter_map(|(name, keys)| {
+                    class_birth_reps_map
+                        .get(keys)
+                        .map(|rep| (name.clone(), *rep))
+                })
+                .collect();
+            let class_finals = static_constfn_class::module_class_finals(
+                hir,
+                &module_prefix,
+                births,
+                &class_keys_globals_map,
+                &class_ids,
+            );
+            births.extend(class_finals);
+            births.extend(static_constfn::module_literal_finals(
+                hir,
+                &module_prefix,
+                &reps,
+            ));
+        }
+        if opts.output_type == "executable" {
+            let private_finals = static_private_class::module_private_finals(
+                hir,
+                &module_prefix,
+                births,
+                &class_keys_globals_map,
+                &class_ids,
+            );
+            births.extend(private_finals);
+        }
         return Ok(Vec::new());
     }
     static_shape_ids::set_module_static_ids(
@@ -2467,6 +2540,9 @@ fn compile_module_impl(
         &opts.static_shape_ids,
         &opts.program_class_shape_ids,
     );
+    if !static_constfn::enabled(&opts.output_type) {
+        static_shape_ids::disable_static_final_shapes();
+    }
     let class_header_images_map: std::collections::HashMap<String, (String, u64, u32)> =
         class_keys_globals_map
             .iter()
@@ -2547,11 +2623,13 @@ fn compile_module_impl(
         namespace_member_origin_names: opts.namespace_member_origin_names,
         imported_async_funcs: opts.imported_async_funcs,
         short_spread_method_candidates: Arc::clone(&opts.short_spread_method_candidates),
+        program_class_accessor_names: opts.program_class_accessor_names.clone(),
         object_literal_method_candidates: Arc::clone(&opts.object_literal_method_candidates),
         local_async_funcs,
         local_generator_funcs,
         async_step_closures: hir.async_step_closures.iter().copied().collect(),
         module_global_proven_types: std::collections::HashMap::new(),
+        module_global_transfers: std::collections::HashMap::new(),
         funcs_reading_dynamic_this,
         literal_method_home_classes: crate::collectors::literal_method_home_classes(hir),
         type_aliases: opts.type_aliases,
@@ -2857,6 +2935,7 @@ fn compile_module_impl(
         module_global_types,
         module_global_proven_types,
         static_field_globals,
+        module_global_transfers,
     } = module_globals_emit::emit_module_globals(
         &mut llmod,
         hir,
@@ -2864,8 +2943,10 @@ fn compile_module_impl(
         &cross_module.compile_time_constants,
         &module_prefix,
         &cjs_property_exports,
+        global_transfer::enabled(thread_agents),
     );
     cross_module.module_global_proven_types = module_global_proven_types;
+    cross_module.module_global_transfers = module_global_transfers;
 
     // Method registry + cross-module method/getter/setter/ctor/static
     // extern declares. See `method_registry::build_method_names`.
@@ -2997,6 +3078,9 @@ fn compile_module_impl(
         closure_lengths,
         closure_arrow_functions,
     } = closure_collect::collect_module_closures(hir);
+    // Step 5C: a method site whose static lane names one of these bodies
+    // calls it directly, so it needs each body's exact parameter count.
+    static_constfn::set_module_body_arities(&module_prefix, &closure_arities);
 
     // #8103: closure bodies are emitted before their enclosing regions. Prove
     // inline array-callback element shapes module-wide now, while both sides
@@ -3288,13 +3372,7 @@ fn compile_module_impl(
             // Callee-side demotion: params the raw ABI cannot accept keep the
             // boxed protocol (reassigned params would stale the entry-bound
             // proofs; closure-referenced params feed the capture machinery).
-            let closure_refs = crate::expr::collect_closure_referenced_locals(&f.body);
-            let reassigned = crate::collectors::reassigned_locals(&f.body);
-            let demoted: Vec<bool> = f
-                .params
-                .iter()
-                .map(|p| reassigned.contains(&p.id) || closure_refs.contains(&p.id))
-                .collect();
+            let demoted = crate::collectors::callee_demoted_params(f);
             // (#8094) A descriptor proof describes a heap object and is
             // established once, at entry. Any call in this body can run code
             // that reaches that same object — not only through an argument we
@@ -3774,50 +3852,109 @@ fn compile_module_impl(
     // entry-fn emission, string-pool init) lives in
     // `artifacts::emit_module_artifacts`. Behavior is unchanged —
     // see the doc on that fn for the split rationale.
-    emit_module_artifacts(ModuleArtifactsCtx {
-        progress: &progress,
-        llmod: &mut llmod,
-        target_triple: &triple,
-        strings: &mut strings,
-        hir,
-        import_function_prefixes: &opts.import_function_prefixes,
-        imported_classes: &opts.imported_classes,
-        constructor_param_counts: &opts.constructor_param_counts,
-        is_entry_module: opts.is_entry_module,
-        non_entry_module_prefixes: &opts.non_entry_module_prefixes,
-        output_type: &opts.output_type,
-        module_prefix: &module_prefix,
-        class_table: &class_table,
-        class_ids: &class_ids,
-        enum_table: &enum_table,
-        module_globals: &module_globals,
-        module_global_types: &module_global_types,
-        static_field_globals: &static_field_globals,
-        method_names: &method_names,
-        func_names: &func_names,
-        func_signatures: &func_signatures,
-        func_synthetic_arguments: &func_synthetic_arguments,
-        module_boxed_vars: &module_boxed_vars,
-        module_local_types: &module_local_types,
-        module_receiver_types: &module_receiver_types,
-        closure_rest_params: &closure_rest_params,
-        closure_synthetic_arguments: &closure_synthetic_arguments,
-        closure_rest_and_arguments: &closure_rest_and_arguments,
-        closure_arities: &closure_arities,
-        closure_lengths: &closure_lengths,
-        closure_arrow_functions: &closure_arrow_functions,
-        trusted_box_closures: &trusted_box_closures,
-        versioned_loop_callbacks: &versioned_loop_callbacks,
-        closures: &closures,
-        class_keys_init_data: &class_keys_init_data,
-        class_header_image_inits: &class_header_image_inits,
-        imported_class_stubs: &imported_class_stubs,
-        cross_module: &cross_module,
-    })?;
+    emit_module_artifacts(
+        ModuleArtifactsCtx {
+            progress: &progress,
+            llmod: &mut llmod,
+            target_triple: &triple,
+            strings: &mut strings,
+            hir,
+            import_function_prefixes: &opts.import_function_prefixes,
+            imported_classes: &opts.imported_classes,
+            constructor_param_counts: &opts.constructor_param_counts,
+            is_entry_module: opts.is_entry_module,
+            non_entry_module_prefixes: &opts.non_entry_module_prefixes,
+            output_type: &opts.output_type,
+            module_prefix: &module_prefix,
+            class_table: &class_table,
+            class_ids: &class_ids,
+            enum_table: &enum_table,
+            module_globals: &module_globals,
+            module_global_types: &module_global_types,
+            static_field_globals: &static_field_globals,
+            method_names: &method_names,
+            func_names: &func_names,
+            func_signatures: &func_signatures,
+            func_synthetic_arguments: &func_synthetic_arguments,
+            module_boxed_vars: &module_boxed_vars,
+            module_local_types: &module_local_types,
+            module_receiver_types: &module_receiver_types,
+            closure_rest_params: &closure_rest_params,
+            closure_synthetic_arguments: &closure_synthetic_arguments,
+            closure_rest_and_arguments: &closure_rest_and_arguments,
+            closure_arities: &closure_arities,
+            closure_lengths: &closure_lengths,
+            closure_arrow_functions: &closure_arrow_functions,
+            trusted_box_closures: &trusted_box_closures,
+            versioned_loop_callbacks: &versioned_loop_callbacks,
+            closures: &closures,
+            class_keys_init_data: &class_keys_init_data,
+            class_header_image_inits: &class_header_image_inits,
+            imported_class_stubs: &imported_class_stubs,
+            cross_module: &cross_module,
+        },
+        agent_strings_tls,
+    )?;
+
+    // The graph's first prefix owns its only preparation callback. All launch
+    // sites reference that symbol, including launches in other modules. With
+    // no graph, only a local launcher emits a local-only callback. Neither path
+    // evaluates module bodies; preparation precedes worker deserialization.
+    if thread_literal_callback_prefix == &module_prefix
+        && (!opts.thread_literal_module_prefixes.is_empty() || local_thread_use)
+    {
+        // Normalize only in the owner, never once per module. Preserve the
+        // owner as the first entry; the remaining string-only calls are pure
+        // preparation and have no module-evaluation ordering dependencies.
+        let mut prefixes: Vec<_> = opts
+            .thread_literal_module_prefixes
+            .iter()
+            .skip(1)
+            .filter(|prefix| *prefix != &module_prefix)
+            .cloned()
+            .collect();
+        prefixes.sort();
+        prefixes.dedup();
+        prefixes.insert(0, module_prefix.clone());
+        for prefix in &prefixes {
+            llmod.declare_function(
+                &format!("__perry_prepare_agent_strings_{}", prefix),
+                crate::types::VOID,
+                &[],
+            );
+        }
+        let callback = llmod.define_function(
+            format!("__perry_prepare_thread_strings_{}", module_prefix),
+            crate::types::VOID,
+            vec![],
+        );
+        let blk = callback.create_block("entry");
+        for prefix in &prefixes {
+            blk.call_void(&format!("__perry_prepare_agent_strings_{}", prefix), &[]);
+        }
+        blk.ret_void();
+    }
 
     // One `JsFunctionInfo` per body a function object runs (`crate::fn_info`),
     // after every function — and so every allocation site — exists.
-    llmod.emit_fn_infos();
+    // Executables admit permanent ConstFn bodies unless explicitly disabled.
+    // A dylib never advertises a permanent body, even with the knob set.
+    let constfn_body_metadata = static_constfn::enabled(&opts.output_type);
+    if constfn_body_metadata {
+        // Omitted/dead literals must not leave body-info relocations behind.
+        static_constfn::emit_final_entries(
+            &mut llmod,
+            &module_prefix,
+            &static_shape_ids::module_final_seeds(),
+        );
+        // The seed table names every ConstFn body of every seed, including
+        // shapes that joined the seed set through a guard rather than a
+        // finalizer; each of those records must be emitted linkable too.
+        for info in static_shape_ids::module_seed_constfn_infos() {
+            llmod.request_static_seed_body(info.strip_suffix("$info").expect("body info suffix"));
+        }
+    }
+    llmod.emit_fn_infos(constfn_body_metadata);
 
     // Emit the buffer alias-scope metadata once per module, covering every
     // scope id allocated across compile_function / compile_closure /

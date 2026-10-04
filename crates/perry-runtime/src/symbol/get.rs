@@ -1029,6 +1029,28 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             if !ptr.is_null() && crate::object::is_valid_obj_ptr(ptr as *const u8) {
                 let class_id = crate::object::js_object_get_class_id(ptr);
                 if class_id != 0 {
+                    // Computed Symbol ClassBody members are real properties of
+                    // the declared prototype shape. Materialize that shape and
+                    // resolve it before the compiled dispatch registries: an
+                    // absent entry can then mean the configurable property was
+                    // deleted, rather than being silently resurrected here.
+                    if crate::object::class_has_symbol_member_in_chain(class_id, sym_key, false) {
+                        let _ = crate::object::class_decl_prototype_value(class_id);
+                        if let Some(v) = declared_prototype_chain_symbol(
+                            obj_f64,
+                            sym_f64,
+                            class_id,
+                            receiver_f64,
+                        ) {
+                            return v;
+                        }
+                        if let Some(v) =
+                            resolve_explicit_object_prototype_symbol(obj_f64, sym_f64, receiver_f64)
+                        {
+                            return v;
+                        }
+                        return f64::from_bits(TAG_UNDEFINED);
+                    }
                     if let Some(v) = crate::object::class_symbol_getter_value(
                         class_id,
                         sym_key,
@@ -1385,6 +1407,21 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                 {
                     return slot.read(receiver_f64);
                 }
+                // A class OBJECT (a pointer, e.g. a class declared in a function
+                // body) extending a built-in constructor inherits that
+                // constructor's symbol statics, as the class-ref form does.
+                if crate::object::is_class_object_ptr(obj_ptr as *const u8) {
+                    if let Some(parent_ctor) = crate::object::builtin_parent_ctor_in_chain(cid) {
+                        let v = js_object_get_symbol_property_with_receiver(
+                            parent_ctor,
+                            sym_f64,
+                            receiver_f64,
+                        );
+                        if v.to_bits() != TAG_UNDEFINED {
+                            return v;
+                        }
+                    }
+                }
                 // A symbol-keyed property added to a DECLARED class's
                 // `.prototype` after the declaration — `C.prototype[S] = f`,
                 // `Object.defineProperty(C.prototype, S, ...)`, or
@@ -1455,7 +1492,9 @@ unsafe fn declared_prototype_symbol_holder(
     mut class_id: u32,
 ) -> Option<f64> {
     let receiver_addr = (receiver.to_bits() & crate::value::POINTER_MASK) as usize;
-    if crate::object::prototype_chain::object_has_user_prototype_override(receiver_addr) {
+    // A receiver whose shape names a prototype other than its class's is
+    // read along its own chain, not the declared one.
+    if crate::object::prototype_chain::object_prototype_is_foreign(receiver_addr) {
         return None;
     }
     for _ in 0..32 {
@@ -1465,7 +1504,8 @@ unsafe fn declared_prototype_symbol_holder(
             if has_own_symbol_property(proto_value, sym) {
                 return Some(proto_value);
             }
-            if crate::object::prototype_chain::object_has_user_prototype_override(declared as usize)
+            if crate::object::prototype_chain::any_class_chain_relinked()
+                && crate::object::decl_prototype_relinked(class_id, declared)
             {
                 return None;
             }

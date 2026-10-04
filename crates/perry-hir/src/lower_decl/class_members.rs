@@ -640,6 +640,12 @@ pub fn lower_class_method_with_name(
         }
     }
 
+    crate::lower::unrebound_params::note(
+        ctx,
+        &params,
+        method.function.params.iter().map(|p| &p.pat),
+        method.function.body.as_ref(),
+    );
     // Lower body — see issue #569.
     let mut body = if let Some(ref block) = method.function.body {
         lower_fn_body_block_stmt(ctx, block)?

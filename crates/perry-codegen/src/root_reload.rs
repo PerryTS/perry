@@ -206,7 +206,6 @@ const NON_COLLECTING: &[&str] = &[
     "js_write_barrier_root_nanbox",
     "perry_transition_cache_base",
     "js_transition_ic_note_hit",
-    "js_inherited_read_cache_hit_f64",
     // S2 GC-leaf IC hits; proven `Leaf` by the generated call-effects table.
     "js_object_get_field_ic_fast",
     // First-read D3: a generic read's miss front, proven `Leaf` likewise.
@@ -262,7 +261,6 @@ const NON_COLLECTING: &[&str] = &[
     "js_object_get_class_id",
     "js_object_get_own_field_or_undef",
     "js_object_mark_class",
-    "js_class_object_pin_parent",
     "js_new_target_get",
     "js_new_target_set",
     "js_ctor_return_override",
@@ -447,10 +445,23 @@ struct Facts {
     succs: Vec<String>,
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Test seam: skip this pass on the current thread, so a lowering test can
+    /// assert what the lowering itself emits. Without it, a lowering that
+    /// carries a stale register is repaired here and its test cannot fail.
+    pub(crate) static TEST_SKIP_ROOT_RELOAD: std::cell::Cell<bool> =
+        const { std::cell::Cell::new(false) };
+}
+
 /// Apply the reload rule to every function in `module`. Returns the number of
 /// operands rewritten, which the unit tests assert on so a pass that silently
 /// stops firing is a failure rather than a no-op.
 pub(crate) fn apply_to_module(module: &mut crate::module::LlModule) -> usize {
+    #[cfg(test)]
+    if TEST_SKIP_ROOT_RELOAD.with(std::cell::Cell::get) {
+        return 0;
+    }
     let mut total = 0;
     for f in module.functions_mut() {
         total += apply_to_function(f);

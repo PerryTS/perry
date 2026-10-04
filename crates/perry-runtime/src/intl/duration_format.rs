@@ -392,8 +392,7 @@ fn to_duration_record(value: f64) -> Vec<f64> {
     // `ToDurationRecord` first branch: a `Temporal.Duration` (or subclass) copies
     // its internal slots directly — no prototype getters observed, no field-order
     // side effects. Only reachable when the Temporal engine is compiled in.
-    #[cfg(feature = "temporal")]
-    if let Some(vals) = crate::temporal::duration_unit_values(value) {
+    if let Some(vals) = crate::temporal::hooked::duration_unit_values(value) {
         let vals = vals.to_vec();
         validate_duration(&vals);
         return vals;

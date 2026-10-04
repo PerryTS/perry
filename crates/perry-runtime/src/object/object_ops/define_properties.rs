@@ -484,7 +484,17 @@ pub extern "C" fn js_object_set_prototype_of(obj_value: f64, proto: f64) -> f64 
         // builtin prototype objects during startup, so invalidate here at the
         // user-visible `Object.setPrototypeOf` entry rather than poisoning the
         // fast path for every program during initialization.
-        crate::object::invalidate_class_prototype_fast_guards();
+        // A target on no declared class chain cannot move a compiled direct
+        // arm (#10504), so only the runtime caches restart for it.
+        if unsafe {
+            crate::object::class_registry::prototype_relink_may_retarget_direct_arms(
+                obj_ptr_for_record,
+            )
+        } {
+            crate::object::invalidate_class_prototype_fast_guards();
+        } else {
+            crate::object::class_registry::retire_prototype_caches_without_direct_arms();
+        }
         super::super::prototype_chain::object_set_user_prototype(obj_ptr_for_record, proto_bits);
         // A grown array's local may still hold the FORWARDED (old) pointer;
         // the spec [[HasProperty]]/[[Get]] helpers look the prototype up by

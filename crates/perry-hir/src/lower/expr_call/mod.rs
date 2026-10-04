@@ -68,6 +68,76 @@ mod module_static;
 mod name_fold;
 mod native_module;
 mod native_module_spread_tests;
+
+/// Does this call pass any argument with `...`?
+///
+/// Lowered call arguments are flat: a spread operand arrives as ONE argument
+/// holding the whole array. An intrinsic arm that consumes `args`
+/// positionally therefore computes the wrong thing for a spread call —
+/// `Object.assign({}, ...sources)` copied the array's indices ("0", "1")
+/// instead of each source's properties (prettier's option table, which then
+/// threw `Unexpected type undefined`), `JSON.stringify(...[v])` printed `[v]`,
+/// `parseInt(...["ff", 16])` was NaN. Such an arm declines a spread call, and
+/// the generic tail builds an `Expr::CallSpread` over the callee, which
+/// materializes the arguments and calls the real built-in.
+pub(super) fn call_has_spread_arg(call: &ast::CallExpr) -> bool {
+    call.args.iter().any(|arg| arg.spread.is_some())
+}
+
+/// The callee of a spread call to a built-in static (`JSON.stringify(...xs)`,
+/// `Array.of(...xs)`, `Reflect.has(...xs)`).
+///
+/// In member-object position a built-in namespace collapses to the intrinsic
+/// static surface `PropertyGet { GlobalGet(0), method }` — the receiver is
+/// dropped (`expr_member::member_tail`, #973/#4139) because the positional
+/// intrinsic arms recognise that shape. A spread call takes none of those arms
+/// (`call_has_spread_arg`), and the spread dispatch then has no receiver to
+/// find `method` on: it threw "value is not a function". Give it the real
+/// namespace object back, so the call dispatches `method` by name on it, as
+/// `globalThis.JSON.stringify(...xs)` does. `console` keeps the collapsed
+/// shape: codegen's `console.log(...xs)` arm matches it.
+fn restore_builtin_spread_receiver(
+    ctx: &LoweringContext,
+    ast_callee: &ast::Expr,
+    callee: Expr,
+) -> Expr {
+    let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+    } = callee
+    else {
+        return callee;
+    };
+    let namespace = match unwrap_call_callee_ts_wrappers(ast_callee) {
+        ast::Expr::Member(member) if matches!(object.as_ref(), Expr::GlobalGet(0)) => {
+            match member.obj.as_ref() {
+                ast::Expr::Ident(ident) => Some(ident.sym.as_ref()),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let object = match namespace {
+        Some(name)
+            if !matches!(name, "console" | "globalThis" | "global")
+                && crate::analysis::is_builtin_global_value_name(name)
+                && ctx.lookup_local(name).is_none() =>
+        {
+            Box::new(Expr::PropertyGet {
+                object,
+                property: name.to_string(),
+                byte_offset: 0,
+            })
+        }
+        _ => object,
+    };
+    Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+    }
+}
 mod nested_namespace;
 mod object_static;
 mod os;
@@ -77,6 +147,8 @@ mod post_args_dispatch;
 mod prescans;
 mod reflect_args;
 mod regex_string;
+#[cfg(test)]
+mod server_response_call_tests;
 mod static_and_instance;
 mod static_receiver;
 mod stream;
@@ -514,6 +586,29 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
                             }
                             return Ok(Expr::SuperMethodCall { method, args });
                         }
+                        // A dynamic computed key still denotes a SuperProperty
+                        // reference. Its lookup starts at the current class's
+                        // home object's prototype, while the call receiver is
+                        // the current `this`. Rewriting it to `this[key]`
+                        // re-selects an override on the derived class (and for
+                        // `super[Symbol.iterator]()` recurses forever).
+                        if let Some(class_name) = ctx.current_class.clone() {
+                            let home = if ctx.current_class_member_is_static {
+                                Expr::ClassRef(class_name)
+                            } else {
+                                Expr::PropertyGet {
+                                    object: Box::new(Expr::ClassRef(class_name)),
+                                    property: "prototype".to_string(),
+                                    byte_offset: 0,
+                                }
+                            };
+                            return Ok(Expr::ObjectSuperMethodCall {
+                                home: Box::new(home),
+                                key: Box::new(lower_expr(ctx, computed.expr.as_ref())?),
+                                receiver: Box::new(Expr::This),
+                                args,
+                            });
+                        }
                     }
                 }
             }
@@ -766,6 +861,7 @@ fn lower_call_inner(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
 
             // Use CallSpread if any argument has spread
             if let Some(spread_args) = spread_args {
+                let callee = Box::new(restore_builtin_spread_receiver(ctx, expr, *callee));
                 Ok(Expr::CallSpread {
                     callee,
                     args: spread_args,

@@ -13,12 +13,10 @@ pub(super) fn active_slot(ctx: &mut FnCtx<'_>, e: &Expr, r: Recv, key: &str) -> 
     if !a.bare.contains(&(e as *const Expr as usize)) {
         return None;
     }
-    let rv = a.receivers.iter().find(|x| x.recv == r)?;
+    let rv = a.receivers.iter().find(|x| x.recv == r)?.clone();
     let i = rv.keys.iter().position(|k| k == key)?;
     let word = rv.word.clone();
-    let shift = (32 + SLOT_BITS * i as u32).to_string();
-    let s = ctx.block().lshr(I64, &word, &shift);
-    Some(ctx.block().and(I64, &s, "63"))
+    Some(super::guard::slot_of(ctx, &rv, &word, i))
 }
 
 /// The receiver's handle for a bare access. Every derivation reads the
@@ -159,6 +157,19 @@ pub(super) fn note_emitted(ctx: &mut FnCtx<'_>) {
     }
 }
 
+/// Count the selected receiver only at an emitted access served by the static
+/// supplier its class proof selected. Learned words and type guesses do not
+/// consume that proof, nor does merely constructing a guard.
+fn note_ptr_shape_access(ctx: &FnCtx<'_>, r: Recv, site: &'static str) {
+    if ctx.region_loop_facts.last().is_some_and(|a| {
+        a.receivers
+            .iter()
+            .any(|rv| rv.recv == r && rv.uses_ptr_shape_class)
+    }) {
+        ctx.note_ptr_shape_consumed(&r.expr(), site);
+    }
+}
+
 /// The address a bare READ loads. In an all-inline copy (and for every store,
 /// whose key the runtime publishes only when inline) it is the inline slot.
 /// In a spill copy the key's field says where the value lives: `< 32` is an
@@ -256,11 +267,13 @@ pub(crate) fn try_lower_bare_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option
     let p = bare_read_ptr(ctx, &h, &slot);
     note_emitted(ctx);
     let v = ctx.block().load(DOUBLE, &p);
+    note_ptr_shape_access(ctx, r, "ptr_shape_region_get");
     stat(2, 1);
     Ok(Some(v))
 }
 
-/// The `PutValueSet` hook: a planned-bare store in F-body. The value is
+/// The `PutValueSet` and `PropertySet` hook: a planned-bare store in F-body
+/// (`k` is the static key). The value is
 /// evaluated first (the target is a binding read, so evaluating it after the
 /// RHS is unobservable), then the receiver's CURRENT address is read from its
 /// root, then the store and exactly the store IC's GC obligations.
@@ -268,13 +281,13 @@ pub(crate) fn try_lower_bare_put(
     ctx: &mut FnCtx<'_>,
     e: &Expr,
     target: &Expr,
-    key: &Expr,
+    k: &str,
     value: &Expr,
 ) -> Result<Option<String>> {
     if ctx.region_loop_facts.is_empty() {
         return Ok(None);
     }
-    let (Some(r), Expr::String(k)) = (Recv::of(target), key) else {
+    let Some(r) = Recv::of(target) else {
         return Ok(None);
     };
     let Some(slot) = active_slot(ctx, e, r, k) else {
@@ -292,11 +305,13 @@ pub(crate) fn try_lower_bare_put(
     if raw_double {
         // GC_STORE_AUDIT(POINTER_FREE): a proven canonical raw double carries no pointer.
         ctx.block().store(DOUBLE, &val_double, &p);
+        note_ptr_shape_access(ctx, r, "ptr_shape_region_set");
         stat(3, 1);
         return Ok(Some(val_double));
     }
     // GC_STORE_AUDIT(BARRIERED): the obligations follow, from the stored bits.
     ctx.block().store(DOUBLE, &val_double, &p);
+    note_ptr_shape_access(ctx, r, "ptr_shape_region_set");
     crate::expr::put_value_store_ic::emit_static_store_ic_bookkeeping(
         ctx,
         &h,
@@ -359,6 +374,7 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
             let p = bare_read_ptr(ctx, &h, &slot);
             note_emitted(ctx);
             values[i] = Some(ctx.block().load(DOUBLE, &p));
+            note_ptr_shape_access(ctx, r, "ptr_shape_region_get");
             stat(2, 1);
         }
     }
@@ -411,6 +427,7 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
         spill: false,
         arrays: Vec::new(),
         emitted_arr: Vec::new(),
+        dirty_after: HashSet::new(),
     });
     let slow = lower_expr(ctx, e);
     ctx.region_loop_facts.pop();

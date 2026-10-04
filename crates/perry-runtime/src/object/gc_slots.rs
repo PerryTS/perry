@@ -36,6 +36,20 @@ pub(crate) fn gc_shape_keys_edge_slot(record: Option<shapes::ShapeRecordRef>) ->
     Some(record.keys_slot())
 }
 
+/// The AUTHORITATIVE [[Prototype]] edge of a traced receiver whose shape names
+/// its prototype object (`shapes_prototype`): the shape record's own
+/// `prototype` word, shared by every sibling exactly like the keys edge above
+/// (a young carrier emits it; a minor also roots every word naming a young
+/// object, which covers the old carriers it never traces). In a full trace
+/// only the first carrier of each identity emits it (`identity_edge_slot`).
+#[inline]
+pub(crate) fn gc_shape_prototype_edge_slot(
+    record: Option<shapes::ShapeRecordRef>,
+    full_trace: bool,
+) -> Option<*mut u64> {
+    record?.prototype_slot(full_trace)
+}
+
 /// The object's inline field-slot range, given the receiver's shape record
 /// resolved once by the collector.
 pub(crate) unsafe fn gc_field_slot_range(
@@ -60,13 +74,9 @@ pub(crate) unsafe fn gc_field_slot_range(
     if field_count > 1_000_000 {
         return None;
     }
-    #[cfg(any(
-        debug_assertions,
-        feature = "field-rep-assert",
-        feature = "gc-instruments"
-    ))]
+    #[cfg(any(debug_assertions, feature = "field-rep-assert", perry_gc_instruments))]
     if super::field_rep_store::field_rep_verify_enabled() {
-        super::field_rep_store::assert_f64_lanes_hold_numbers(obj, record, field_count);
+        super::field_rep_store::assert_field_rep_lanes(obj, record, field_count);
     }
     let fields = (obj as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
     Some(crate::gc::HeapSlotRange::new(fields, field_count))

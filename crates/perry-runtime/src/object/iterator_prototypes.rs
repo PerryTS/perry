@@ -209,9 +209,11 @@ unsafe fn dispatch_on_this(this: crate::closure::JsThis, method: &str) -> f64 {
         crate::string::STRING_ITERATOR_CLASS_ID => {
             crate::string::dispatch_string_iterator_method_builtin(obj, method)
         }
-        #[cfg(feature = "regex-engine")]
         crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID => {
-            crate::regex::dispatch_regexp_string_iterator_method_builtin(obj, method)
+            match crate::regex::hooked_iterator_method_builtin(obj, method) {
+                Some(value) => value,
+                None => brand_type_error(method),
+            }
         }
         _ => brand_type_error(method),
     }

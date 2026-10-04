@@ -1,35 +1,28 @@
-// Allocation-free private-member brand checks (#10501).
+// Allocation-free private-member brand checks (#10501, #11791).
 //
 // `js_private_guard` runs for every `obj.#x` read and write and every
-// `obj.#m()` call. Its general path spells the brand marker
-// (`#<perry:private-field:…>` or `#<perry:private-brand:…>`) with `format!`,
-// resolves the storage namespace, and scans the receiver's own keys by name —
-// twice, once as the brand fallback and once as the "initialized" check. That
-// was ~4,600 instructions per access against ~60 for a public field, and
-// `lru-cache` (≈20 private fields and methods touched per get/set) spent about
-// half its CPU there.
+// `obj.#m()` call. A private field is an `ENTRY_PRIVATE` entry of the
+// receiver's key list and a class brand is in its shape's brand list (#11791),
+// so both questions the general path asks — does the receiver carry the
+// element, in the evaluation the access resolves to — are facts of the
+// receiver's ShapeId.
 //
-// The fast path below answers the same two questions without building a
-// string, for the overwhelmingly common case: an INSTANCE member of an
-// ordinary (single-evaluation) class, accessed on an ordinary object.
+// The fast path below answers them for the overwhelmingly common case: an
+// INSTANCE member of an ordinary (single-evaluation) class, accessed on an
+// ordinary object.
 //
 //   * Every input the storage namespace depends on is checked to be inert — no
 //     fresh ClassDefinitionEvaluation on the lexical brand stack, on the
 //     receiver, or on the brand owner. Under exactly those conditions the
-//     general path resolves the TEMPLATE namespace (the bare class id), both of
-//     its checks read the same marker, and each reduces to "the receiver owns
-//     that marker with a non-undefined value". Each of those three inputs can
-//     only name an evaluation by reaching a class object whose `class_id` IS
-//     the declaring template, so until one has been minted for that template
-//     (`note_private_template_evaluated`, from `js_object_mark_class`) none of
-//     them needs to be looked at.
-//   * Which own key carries the marker, and whether that key's slot is inline,
-//     are pure functions of the receiver's ShapeId: the ordered key list and
-//     the live inline-slot bound are part of it, and ids are never reused (see
-//     `SHAPE_ID_NEXT`). So a small per-agent cache maps
-//     `(ShapeId, class id, marker)` to that slot and a hit reads it directly,
-//     with the same undefined-means-absent rule as
-//     `js_object_get_own_field_or_undef`.
+//     general path resolves the TEMPLATE namespace (the bare class id). Each of
+//     those three inputs can only name an evaluation by reaching a class object
+//     whose `class_id` IS the declaring template, so until one has been minted
+//     for that template (`note_private_template_evaluated`, from
+//     `js_object_mark_class`) none of them needs to be looked at.
+//   * The answer is a pure function of `(ShapeId, class, name)`: ids are never
+//     reused (see `SHAPE_ID_NEXT`), and a private element is never removed. So
+//     a small per-agent cache remembers the proven triples, and a compiled site
+//     remembers the last proven ShapeId in its own word.
 //
 // Whatever the fast path cannot prove it leaves to the general path, which
 // remains the single source of every exact verdict and every throw. A fast
@@ -94,7 +87,12 @@ pub(crate) fn intern_private_name(bytes: &[u8]) -> Option<&'static str> {
 /// a deep-copied class object reaching another agent carries a template that
 /// was marked before the copy existed.
 const PRIVATE_TEMPLATE_BITS: usize = 1 << 16;
-static PRIVATE_TEMPLATE_EVALUATED: [std::sync::atomic::AtomicU64; PRIVATE_TEMPLATE_BITS / 64] =
+///
+/// Exported: a compiled private-access site tests its template's bit inline
+/// before it trusts its cached ShapeId (codegen `emit_private_site_guard`).
+#[no_mangle]
+pub static PERRY_PRIVATE_TEMPLATE_EVALUATED: [std::sync::atomic::AtomicU64;
+    PRIVATE_TEMPLATE_BITS / 64] =
     [const { std::sync::atomic::AtomicU64::new(0) }; PRIVATE_TEMPLATE_BITS / 64];
 
 #[inline(always)]
@@ -107,18 +105,19 @@ fn private_template_bit(class_id: u32) -> (usize, u64) {
 /// wherever an object becomes a class object, before it can be observed.
 pub(crate) fn note_private_template_evaluated(class_id: u32) {
     let (word, mask) = private_template_bit(class_id);
-    PRIVATE_TEMPLATE_EVALUATED[word].fetch_or(mask, std::sync::atomic::Ordering::Relaxed);
+    PERRY_PRIVATE_TEMPLATE_EVALUATED[word].fetch_or(mask, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[inline(always)]
 fn private_template_may_be_evaluated(class_id: u32) -> bool {
     let (word, mask) = private_template_bit(class_id);
-    PRIVATE_TEMPLATE_EVALUATED[word].load(std::sync::atomic::Ordering::Relaxed) & mask != 0
+    PERRY_PRIVATE_TEMPLATE_EVALUATED[word].load(std::sync::atomic::Ordering::Relaxed) & mask != 0
 }
 
-/// One learned `(ShapeId, class, access site name) -> marker slot` fact.
+/// One learned `(ShapeId, class, access site name) -> present` fact: the
+/// shape lists the private field, or carries the class brand (#11791).
 #[derive(Clone, Copy)]
-struct PrivateMarkerSlot {
+struct PrivateShapeProof {
     shape_id: u32,
     class_id: u32,
     /// The caller's name address. A hit also compares `name`'s bytes, so a
@@ -126,51 +125,45 @@ struct PrivateMarkerSlot {
     site_name: usize,
     /// The interned spelling, handed back for the hint records.
     name: &'static str,
-    /// Field marker (kind 0) or the class brand (methods and accessors).
+    /// A field (kind 0) or the class brand (methods and accessors).
     is_field: bool,
-    /// First own-key index spelling the marker, as the general scan finds it.
-    index: u32,
-    /// `index <` the shape's live inline-slot bound.
-    inline: bool,
 }
 
-impl PrivateMarkerSlot {
+impl PrivateShapeProof {
     const EMPTY: Self = Self {
         shape_id: 0,
         class_id: 0,
         site_name: 0,
         name: "",
         is_field: false,
-        index: 0,
-        inline: false,
     };
 }
 
 /// Two-way sets: an entry and the one it displaced, so two hot sites that
 /// hash together do not evict each other on every access.
-const PRIVATE_MARKER_CACHE_SETS: usize = 128;
+const PRIVATE_PROOF_CACHE_SETS: usize = 128;
 
 crate::perry_thread_local! {
-    /// Pointer-free: a miss or an evicted entry only costs one general-path
-    /// scan. ShapeId 0 is never a real id, so `EMPTY` cannot match a lookup.
-    static PRIVATE_MARKER_CACHE: [[std::cell::Cell<PrivateMarkerSlot>; 2]; PRIVATE_MARKER_CACHE_SETS] =
+    /// Pointer-free: a miss or an evicted entry only costs one shape lookup.
+    /// ShapeId 0 is never a real id, so `EMPTY` cannot match a lookup.
+    static PRIVATE_PROOF_CACHE: [[std::cell::Cell<PrivateShapeProof>; 2]; PRIVATE_PROOF_CACHE_SETS] =
         const {
-            [const { [const { std::cell::Cell::new(PrivateMarkerSlot::EMPTY) }; 2] };
-                PRIVATE_MARKER_CACHE_SETS]
+            [const { [const { std::cell::Cell::new(PrivateShapeProof::EMPTY) }; 2] };
+                PRIVATE_PROOF_CACHE_SETS]
         };
 }
 
 /// Every bit of the site address participates: name literals are byte-aligned
 /// and packed, so `"#arr"` and `"#n"` can sit a few bytes apart.
 #[inline(always)]
-fn private_marker_cache_set(shape_id: u32, class_id: u32, site_name: usize) -> usize {
+fn private_proof_cache_set(shape_id: u32, class_id: u32, site_name: usize) -> usize {
     let key = ((u64::from(shape_id) << 32) | u64::from(class_id))
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ (site_name as u64).wrapping_mul(0xC2B2_AE3D_27D4_EB4F);
-    (key >> 57) as usize & (PRIVATE_MARKER_CACHE_SETS - 1)
+    (key >> 57) as usize & (PRIVATE_PROOF_CACHE_SETS - 1)
 }
 
-impl PrivateMarkerSlot {
+impl PrivateShapeProof {
     #[inline(always)]
     fn matches(&self, shape_id: u32, class_id: u32, name: &[u8], is_field: bool) -> bool {
         self.shape_id == shape_id
@@ -201,8 +194,7 @@ fn private_lexical_brand_is_inert(class_id: u32) -> bool {
 /// ShapeId. `None` means "not proven".
 ///
 /// A plausible heap address is above the handle band, so it is never a Proxy
-/// (`proxy::lookup` only decodes ids inside that band) and
-/// `private_element_receiver(obj)` is `obj` itself. Closures share
+/// (`proxy::lookup` only decodes ids inside that band). Closures share
 /// `GC_TYPE_OBJECT` but not the `ObjectHeader` layout, so they are rejected
 /// before the shape word is read.
 #[inline]
@@ -232,52 +224,10 @@ unsafe fn private_receiver_has_no_evaluation_brand(object: *const ObjectHeader) 
     meta.is_null() || !JSValue::from_bits((*meta).private_evaluation_brand).is_pointer()
 }
 
-/// First own-key index of `obj` whose key spells `marker`, exactly as
-/// `js_object_get_own_field_or_undef` scans (same first match, and the same
-/// refusal of a keys edge that is not a live dense array).
-unsafe fn private_marker_key_index(obj: *const ObjectHeader, marker: &[u8]) -> Option<u32> {
-    let keys_view = crate::object::object_keys(obj);
-    let keys = keys_view.arr();
-    let keys_gc = crate::value::addr_class::try_read_gc_header(keys as usize)?;
-    if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
-        || keys_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-    {
-        return None;
-    }
-    let key_count = keys_view.count() as usize;
-    if key_count > (*keys).capacity as usize || key_count > 65536 {
-        return None;
-    }
-    let key_slots =
-        crate::array::array_elements_ptr(keys as *const crate::array::ArrayHeader) as *const f64;
-    (0..key_count)
-        .find(|&i| {
-            let key = JSValue::from_bits((*key_slots.add(i)).to_bits());
-            crate::string::js_string_key_matches_bytes(key, marker)
-        })
-        .map(|i| i as u32)
-}
-
-/// `js_object_get_own_field_or_undef(obj, marker) != undefined` for a slot
-/// already located: inline slots read the field region (the null-pointer
-/// word reads as undefined there too), the rest read overflow storage, which
-/// filters undefined itself.
-#[inline]
-unsafe fn private_marker_slot_is_present(obj: *const ObjectHeader, slot: PrivateMarkerSlot) -> bool {
-    if slot.inline {
-        let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
-        let bits = *fields.add(slot.index as usize);
-        bits != crate::value::TAG_UNDEFINED && bits != crate::value::POINTER_TAG
-    } else {
-        overflow_get(obj as usize, slot.index as usize).is_some()
-    }
-}
-
 /// Prove that an INSTANCE private access of `(class_id, name, kind)` on `obj`
-/// passes both the brand check and the "initialized" check of the general
-/// path, without spelling the marker. Returns the marker slot (carrying the
-/// interned name) on success; `None` means "not proven" and must be followed
-/// by the general path.
+/// passes the general path's presence check, from the receiver's shape alone:
+/// the shape lists the field's `ENTRY_PRIVATE` entry, or carries the class
+/// brand. `None` means "not proven" and must be followed by the general path.
 ///
 /// Success also proves `private_access_owner(brand_owner, class_id)` is
 /// `None`, so the caller records hints exactly as the general path would with
@@ -289,7 +239,7 @@ fn private_instance_access_is_proven(
     class_id: u32,
     name: &[u8],
     kind: u32,
-) -> Option<PrivateMarkerSlot> {
+) -> Option<PrivateShapeProof> {
     let (object, shape_id) = unsafe { private_plain_receiver_shape(obj) }?;
     if private_template_may_be_evaluated(class_id) {
         if !unsafe { private_receiver_has_no_evaluation_brand(object) }
@@ -311,8 +261,8 @@ fn private_instance_access_is_proven(
         }
     }
     let is_field = kind == 0;
-    let set = private_marker_cache_set(shape_id, class_id, name.as_ptr() as usize);
-    let cached = PRIVATE_MARKER_CACHE.with(|cache| {
+    let set = private_proof_cache_set(shape_id, class_id, name.as_ptr() as usize);
+    let cached = PRIVATE_PROOF_CACHE.with(|cache| {
         let [first, second] = &cache[set];
         let first = first.get();
         if first.matches(shape_id, class_id, name, is_field) {
@@ -321,26 +271,25 @@ fn private_instance_access_is_proven(
         let second = second.get();
         second.matches(shape_id, class_id, name, is_field).then_some(second)
     });
-    if let Some(cached) = cached {
-        return unsafe { private_marker_slot_is_present(object, cached) }.then_some(cached);
+    if cached.is_some() {
+        return cached;
     }
-    private_marker_slot_learn(object, shape_id, class_id, name, is_field, set)
+    private_shape_proof_learn(object, shape_id, class_id, name, is_field, set)
 }
 
-/// Cold half of [`private_instance_access_is_proven`]: spell the marker once
-/// and find its slot by the general scan.
+/// Cold half of [`private_instance_access_is_proven`]: read the shape once.
 #[cold]
 #[inline(never)]
-fn private_marker_slot_learn(
+fn private_shape_proof_learn(
     object: *const ObjectHeader,
     shape_id: u32,
     class_id: u32,
     name: &[u8],
     is_field: bool,
     cache_set: usize,
-) -> Option<PrivateMarkerSlot> {
-    // Class objects resolve their own brand as a static evaluation, so only
-    // ordinary shapes are cached; the kind is part of the ShapeId, so a cache
+) -> Option<PrivateShapeProof> {
+    // Class objects hold static private elements by identity, so only
+    // ordinary shapes are proven; the kind is part of the ShapeId, so a cache
     // hit can only be an ordinary object too.
     let interned = intern_private_name(name)?;
     if !crate::object::shapes::shape_object_kind_by_id(shape_id)
@@ -348,26 +297,25 @@ fn private_marker_slot_learn(
     {
         return None;
     }
-    let spelled = if is_field {
-        format!("#<perry:private-field:{class_id}:{interned}>")
+    // The template namespace: the callers established that no fresh
+    // evaluation is involved.
+    let present = if is_field {
+        let storage = private_storage_key_by_id(class_id, 0, interned);
+        unsafe { crate::object::key_attrs::object_key_is_private(object, storage.as_bytes()) }
     } else {
-        format!("#<perry:private-brand:{class_id}>")
+        unsafe { crate::object::shapes::object_has_brand(object, private_brand_id(class_id, 0)) }
     };
-    let index = unsafe { private_marker_key_index(object, spelled.as_bytes()) }?;
-    let live = crate::object::shapes::shape_live_inline_slot_count_by_id(shape_id).unwrap_or(0);
-    let learned = PrivateMarkerSlot {
+    if !present {
+        return None;
+    }
+    let learned = PrivateShapeProof {
         shape_id,
         class_id,
         site_name: name.as_ptr() as usize,
         name: interned,
         is_field,
-        index,
-        inline: index < live,
     };
-    if !unsafe { private_marker_slot_is_present(object, learned) } {
-        return None;
-    }
-    PRIVATE_MARKER_CACHE.with(|cache| {
+    PRIVATE_PROOF_CACHE.with(|cache| {
         let [first, second] = &cache[cache_set];
         second.set(first.get());
         first.set(learned);
@@ -379,20 +327,17 @@ fn private_marker_slot_learn(
 // Per-site guard caches.
 //
 // A compiled access site owns one `i64` (`@perry_private_site_*`, zero
-// initialized) holding `(ShapeId << 32) | overflow bit | (marker slot + 1)` for
-// the last receiver shape it proved, published only when the marker slot holds
-// `true` — which is what every runtime-written marker holds. A hit is a
-// shape-word compare plus one slot read (inline, or the object's overflow
-// storage): no TLS, no hashing, no string.
+// initialized) holding the last receiver ShapeId it proved (#11791). The
+// element's presence is a fact of the shape — a private field is an
+// `ENTRY_PRIVATE` entry of its key list, a brand is in its brand list, and
+// neither is ever removed — so a hit is a header check and one compare: no
+// slot read, no TLS, no hashing, no string.
 //
-// It is exactly as strong as the proof that primed it: the ShapeId fixes the
-// key order and the inline bound (so the same slot spells the same marker), a
-// `true` value is present by the general path's undefined-means-absent rule,
-// and the template bit is re-checked on every hit, so the first class object
-// of that template turns every site of it back to the full checks. The word
-// holds no managed address, so the collector never needs to see it, and a
-// racing store from another agent can only publish another correct fact —
-// ShapeIds are process-global.
+// The template bit is re-checked on every hit, so the first class object of
+// that template turns every site of it back to the full checks. The word holds
+// no managed address, so the collector never needs to see it, and a racing
+// store from another agent can only publish another correct fact — ShapeIds
+// are process-global.
 // ---------------------------------------------------------------------------
 
 #[inline(always)]
@@ -405,48 +350,211 @@ unsafe fn private_site_hit(obj: f64, class_id: u32, site: *const u64) -> bool {
     if word == 0 || private_template_may_be_evaluated(class_id) {
         return false;
     }
-    let Some((object, shape_id)) = private_plain_receiver_shape(obj) else {
+    let Some((_, shape_id)) = private_plain_receiver_shape(obj) else {
         return false;
     };
-    if shape_id != (word >> 32) as u32 {
-        return false;
-    }
-    let index = (word & PRIVATE_SITE_INDEX_MASK) as usize - 1;
-    if word & PRIVATE_SITE_OVERFLOW != 0 {
-        return overflow_get(object as usize, index) == Some(crate::value::TAG_TRUE);
-    }
-    let fields = (object as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
-    *fields.add(index) == crate::value::TAG_TRUE
+    // A field site's word also carries the slot (see
+    // [`private_field_site_word`]); the ShapeId is its low half.
+    shape_id == word as u32
 }
 
-/// Site-word flag: the marker slot is in overflow storage, not inline.
-const PRIVATE_SITE_OVERFLOW: u64 = 1 << 31;
-const PRIVATE_SITE_INDEX_MASK: u64 = PRIVATE_SITE_OVERFLOW - 1;
-
-/// Publish a proven marker slot to `site` when a later hit can re-derive the
-/// same verdict from the shape word and one inline load.
+/// Publish a proven receiver shape to `site`.
 #[inline]
-unsafe fn private_site_publish(obj: f64, class_id: u32, site: *mut u64, slot: PrivateMarkerSlot) {
+unsafe fn private_site_publish(class_id: u32, site: *mut u64, proof: PrivateShapeProof) {
     if site.is_null() || private_template_may_be_evaluated(class_id) {
         return;
     }
-    let object = (obj.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
-    let marker = if slot.inline {
-        let fields = (object as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
-        Some(*fields.add(slot.index as usize))
-    } else {
-        overflow_get(object as usize, slot.index as usize)
-    };
-    // Key indices are bounded by 65536, far below the flag bit.
-    if marker != Some(crate::value::TAG_TRUE) || u64::from(slot.index) + 1 > PRIVATE_SITE_INDEX_MASK
+    (*(site as *const std::sync::atomic::AtomicU64))
+        .store(u64::from(proof.shape_id), std::sync::atomic::Ordering::Relaxed);
+}
+
+/// A field site word's lane bit: the field's slot is an `F64` lane of the
+/// word's ShapeId, so the compiled store writes a plain finite double there
+/// and takes the miss for anything else. Without it the slot is an `Any`
+/// lane, stored with the write barrier. Codegen mirrors it
+/// (`expr/private_field_site.rs`).
+pub(crate) const PRIVATE_FIELD_SITE_F64: u64 = 1 << 48;
+/// The slot bits of a field site word: `word >> 32 & PRIVATE_FIELD_SITE_SLOT_MASK`.
+pub(crate) const PRIVATE_FIELD_SITE_SLOT_MASK: u64 = 0xFFFF;
+
+/// The word a compiled INSTANCE FIELD site keeps for receivers carrying
+/// `shape_id` (#11791): `ShapeId | slot << 32 | lane bit`, or 0 when the
+/// field is not a plain inline slot of that shape. Every input is a fact of
+/// the ShapeId (the key list with the entry and its position, the live
+/// inline bound, the slot's lane), so the word holds for every receiver the
+/// inline compare admits. A lane that is neither `Any` nor `F64` (deprecated
+/// or ConstFn) publishes nothing; such receivers keep the runtime path.
+unsafe fn private_field_site_word(
+    object: *const ObjectHeader,
+    shape_id: u32,
+    class_id: u32,
+    name: &'static str,
+) -> u64 {
+    if (*object).class_id == NATIVE_MODULE_CLASS_ID
+        || crate::object::dictionary::is_dictionary(object)
     {
+        return 0;
+    }
+    let Some(d) = crate::object::shapes::shape_descriptor_by_id(shape_id) else {
+        return 0;
+    };
+    if !d.object_kind.is_ordinary_layout() {
+        return 0;
+    }
+    let keys = d.keys_view();
+    if keys.is_null() {
+        return 0;
+    }
+    let storage = private_storage_key_by_id(class_id, 0, name);
+    let Some(slot) =
+        crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), storage.as_bytes())
+    else {
+        return 0;
+    };
+    if crate::object::key_attrs::keys_entry(keys.arr(), slot)
+        != crate::object::key_attrs::PRIVATE_FIELD_ENTRY
+        || slot >= d.live_inline_slot_count
+        || u64::from(slot) > PRIVATE_FIELD_SITE_SLOT_MASK
+    {
+        return 0;
+    }
+    let lane = if slot < crate::object::field_rep::REP_SLOTS {
+        crate::object::field_rep::slot_rep(d.rep, slot)
+    } else {
+        crate::object::field_rep::REP_ANY
+    };
+    let lane_bit = match lane {
+        crate::object::field_rep::REP_ANY => 0,
+        crate::object::field_rep::REP_F64 => PRIVATE_FIELD_SITE_F64,
+        _ => return 0,
+    };
+    u64::from(shape_id) | (u64::from(slot) << 32) | lane_bit
+}
+
+/// Publish a proven receiver shape to a FIELD site, with its slot and lane.
+#[inline]
+unsafe fn private_field_site_publish(
+    obj: f64,
+    class_id: u32,
+    site: *mut u64,
+    proof: PrivateShapeProof,
+) {
+    if site.is_null() || private_template_may_be_evaluated(class_id) {
         return;
     }
-    let word = (u64::from(slot.shape_id) << 32)
-        | if slot.inline { 0 } else { PRIVATE_SITE_OVERFLOW }
-        | (u64::from(slot.index) + 1);
-    (*(site as *const std::sync::atomic::AtomicU64))
-        .store(word, std::sync::atomic::Ordering::Relaxed);
+    let Some((object, shape_id)) = private_plain_receiver_shape(obj) else {
+        return;
+    };
+    if shape_id != proof.shape_id {
+        return;
+    }
+    let word = private_field_site_word(object, shape_id, class_id, proof.name);
+    if word != 0 {
+        (*(site as *const std::sync::atomic::AtomicU64))
+            .store(word, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// The brand check of a compiled INSTANCE FIELD site's miss: prove the
+/// receiver and publish the site word, or run the general guard, which
+/// throws or records the hint the by-name access after it consumes.
+#[inline]
+fn private_field_site_check(
+    obj: f64,
+    brand_owner: f64,
+    declaring_class_id: u32,
+    field_name_ptr: *const u8,
+    field_name_len: u32,
+    op: u32,
+    site: *mut u64,
+) {
+    if declaring_class_id != 0 && !field_name_ptr.is_null() && field_name_len != 0 {
+        let name = unsafe { std::slice::from_raw_parts(field_name_ptr, field_name_len as usize) };
+        if let Some(proof) =
+            private_instance_access_is_proven(obj, brand_owner, declaring_class_id, name, 0)
+        {
+            unsafe { private_field_site_publish(obj, declaring_class_id, site, proof) };
+            return;
+        }
+    }
+    js_private_guard(
+        obj,
+        brand_owner,
+        declaring_class_id,
+        field_name_ptr,
+        field_name_len,
+        0,
+        op,
+    );
+}
+
+/// Miss of a compiled `recv.#x` read whose hit is the inline slot load
+/// (#11791): the brand check, then the by-name read of the field's storage
+/// key `key` (a heap string), which also resolves a fresh evaluation's
+/// storage.
+#[no_mangle]
+pub extern "C" fn js_private_field_site_get(
+    obj: f64,
+    brand_owner: f64,
+    declaring_class_id: u32,
+    field_name_ptr: *const u8,
+    field_name_len: u32,
+    site: *mut u64,
+    key: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_nanbox_f64(obj);
+    let key = scope.root_nanbox_f64(key);
+    private_field_site_check(
+        obj.get_nanbox_f64(),
+        brand_owner,
+        declaring_class_id,
+        field_name_ptr,
+        field_name_len,
+        0,
+        site,
+    );
+    let key_ptr = (key.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+        as *const crate::StringHeader;
+    js_object_get_field_by_name_boxed(obj.get_nanbox_f64(), key_ptr)
+}
+
+/// Miss of a compiled `recv.#x = value` whose hit is the inline slot store
+/// (#11791): the brand check, then the PutValue of the storage key `key`,
+/// which stores into the field (or into a fresh evaluation's storage).
+/// Returns `value`.
+#[no_mangle]
+pub extern "C" fn js_private_field_site_set(
+    obj: f64,
+    brand_owner: f64,
+    declaring_class_id: u32,
+    field_name_ptr: *const u8,
+    field_name_len: u32,
+    site: *mut u64,
+    key: f64,
+    value: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_nanbox_f64(obj);
+    let key = scope.root_nanbox_f64(key);
+    let value = scope.root_nanbox_f64(value);
+    private_field_site_check(
+        obj.get_nanbox_f64(),
+        brand_owner,
+        declaring_class_id,
+        field_name_ptr,
+        field_name_len,
+        1,
+        site,
+    );
+    crate::proxy::js_put_value_set(
+        obj.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        value.get_nanbox_f64(),
+        obj.get_nanbox_f64(),
+        1,
+    );
+    value.get_nanbox_f64()
 }
 
 /// [`js_private_guard`] for a compiled INSTANCE FIELD access (`kind` 0,
@@ -471,10 +579,10 @@ pub extern "C" fn js_private_guard_site(
         if !field_name_ptr.is_null() && field_name_len != 0 {
             let name =
                 unsafe { std::slice::from_raw_parts(field_name_ptr, field_name_len as usize) };
-            if let Some(slot) =
+            if let Some(proof) =
                 private_instance_access_is_proven(obj, brand_owner, declaring_class_id, name, 0)
             {
-                unsafe { private_site_publish(obj, declaring_class_id, site, slot) };
+                unsafe { private_field_site_publish(obj, declaring_class_id, site, proof) };
                 return obj;
             }
         }
@@ -525,10 +633,10 @@ pub extern "C" fn js_private_method_guard(
         return obj;
     }
     let name = unsafe { std::slice::from_raw_parts(method_name_ptr, method_name_len as usize) };
-    if let Some(slot) =
+    if let Some(proof) =
         private_instance_access_is_proven(obj, brand_owner, declaring_class_id, name, 1)
     {
-        unsafe { private_site_publish(obj, declaring_class_id, site, slot) };
+        unsafe { private_site_publish(declaring_class_id, site, proof) };
         return obj;
     }
     private_guard_checked(obj, brand_owner, declaring_class_id, name, 1, 0, false)
@@ -678,14 +786,13 @@ fn private_guard_record_access(
     access_owner: Option<u64>,
     record_hints: bool,
 ) {
-    let illegal = matches!(
-        (is_write, kind),
-        (false, 3) /* read setter-only: [[Get]] of accessor without getter */
-            | (true, 2) /* write getter-only: [[Set]] of accessor without setter */
-            | (true, 1) /* write private method */
-    );
-    if illegal {
-        throw_private_type_error("Invalid private member operation for its kind");
+    match (is_write, kind) {
+        // [[Get]] of an accessor without a getter.
+        (false, 3) => throw_private_type_error(&format!("'{name}' was defined without a getter")),
+        // [[Set]] of an accessor without a setter.
+        (true, 2) => throw_private_type_error(&format!("'{name}' was defined without a setter")),
+        (true, 1) => throw_private_type_error(&format!("Private method '{name}' is not writable")),
+        _ => {}
     }
     if !record_hints {
         return;
@@ -737,35 +844,43 @@ mod private_guard_fast_tests {
         assert_eq!(intern_private_name(&[0xFF, 0xFE]), None);
     }
 
-    unsafe fn instance_with_markers(cid: u32, markers: &[&str]) -> f64 {
-        let obj = crate::object::js_object_alloc(cid, 0);
-        for marker in markers {
-            let key = crate::string::js_string_from_bytes(marker.as_ptr(), marker.len() as u32);
-            js_object_set_field_by_name(obj, key, f64::from_bits(crate::value::TAG_TRUE));
+    /// An instance of `cid` carrying private `fields` (added as the class
+    /// would) and, when `brand`, the class brand (#11791).
+    unsafe fn instance_with(cid: u32, fields: &[&str], brand: bool) -> f64 {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let obj = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(cid, 0) as i64,
+        ));
+        if brand {
+            js_private_brand_add(obj.get_nanbox_f64(), cid);
         }
-        crate::value::js_nanbox_pointer(obj as i64)
+        for field in fields {
+            let key = crate::string::js_string_from_bytes(field.as_ptr(), field.len() as u32);
+            js_private_field_add(
+                obj.get_nanbox_f64(),
+                cid,
+                crate::value::js_nanbox_string(key as i64),
+                1.0,
+            );
+        }
+        obj.get_nanbox_f64()
     }
 
-    /// The fast path agrees with the general marker check for present and
+    /// The fast path agrees with the general presence check for present and
     /// absent fields and brands, before and after its cache is warm.
     #[test]
-    fn fast_path_matches_the_general_marker_check() {
+    fn fast_path_matches_the_general_presence_check() {
         unsafe {
             const CID: u32 = 62_601;
             const OTHER: u32 = 62_602;
             let name = intern_private_name(b"#fast").unwrap();
-            let branded = instance_with_markers(
-                CID,
-                &[
-                    "#<perry:private-field:62601:#fast>",
-                    "#<perry:private-brand:62601>",
-                ],
-            );
-            let plain = instance_with_markers(CID, &[]);
+            let branded = instance_with(CID, &["#fast"], true);
+            let plain = instance_with(CID, &[], false);
             for _ in 0..3 {
                 assert!(proven(branded, branded, CID, name, 0));
                 assert!(proven(branded, branded, CID, name, 1));
                 assert!(!proven(branded, branded, OTHER, name, 0));
+                assert!(!proven(branded, branded, OTHER, name, 1));
                 assert!(!proven(plain, plain, CID, name, 0));
                 assert!(!proven(plain, plain, CID, name, 1));
             }
@@ -784,31 +899,45 @@ mod private_guard_fast_tests {
         }
     }
 
-    /// A marker whose value became `undefined` is absent to the general path;
-    /// a warm cache entry for that shape must re-read the slot, not trust it.
+    /// The brand is a fact of the shape: two objects with the same keys
+    /// differ in ShapeId by their brands, every later transition carries the
+    /// brand, and a second install is refused.
     #[test]
-    fn warm_cache_rereads_the_marker_slot() {
+    fn brand_is_a_shape_fact_carried_by_transitions() {
         unsafe {
-            const CID: u32 = 62_603;
-            let marker = "#<perry:private-field:62603:#slot>";
-            let name = intern_private_name(b"#slot").unwrap();
-            let obj = instance_with_markers(CID, &[marker]);
-            assert!(proven(obj, obj, CID, name, 0));
-            let raw = JSValue::from_bits(obj.to_bits()).as_pointer::<ObjectHeader>();
-            let key = crate::string::js_string_from_bytes(marker.as_ptr(), marker.len() as u32);
-            js_object_set_field_by_name(
-                raw as *mut ObjectHeader,
-                key,
-                f64::from_bits(crate::value::TAG_UNDEFINED),
+            const CID: u32 = 62_605;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let branded = scope.root_nanbox_f64(instance_with(CID, &[], true));
+            let plain = scope.root_nanbox_f64(instance_with(CID, &[], false));
+            let shape_of = |value: f64| {
+                crate::object::shapes::object_shape_stamp(
+                    JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>(),
+                )
+            };
+            assert_ne!(shape_of(branded.get_nanbox_f64()), shape_of(plain.get_nanbox_f64()));
+            assert_eq!(
+                crate::object::shapes::shape_brands_by_id(shape_of(branded.get_nanbox_f64())),
+                Some(&[u64::from(CID)][..])
             );
-            assert!(!private_instance_element_is_present(
-                obj,
-                CID,
-                name.as_ptr(),
-                name.len() as u32,
-                0
+            let key = crate::string::intern_ascii_literal(b"later");
+            js_object_set_field_by_name(
+                JSValue::from_bits(branded.get_nanbox_f64().to_bits()).as_pointer::<ObjectHeader>()
+                    as *mut ObjectHeader,
+                key,
+                3.0,
+            );
+            assert!(
+                crate::object::shapes::object_has_brand(
+                    JSValue::from_bits(branded.get_nanbox_f64().to_bits()).as_pointer::<ObjectHeader>(),
+                    u64::from(CID)
+                ),
+                "a key add must carry the brand"
+            );
+            assert!(!crate::object::shapes::transition_object_shape_add_brand(
+                JSValue::from_bits(branded.get_nanbox_f64().to_bits()).as_pointer::<ObjectHeader>()
+                    as *mut ObjectHeader,
+                u64::from(CID)
             ));
-            assert!(!proven(obj, obj, CID, name, 0));
         }
     }
 
@@ -826,11 +955,11 @@ mod private_guard_fast_tests {
             ] {
                 assert!(!proven(value, value, CID, name, 0));
             }
+            let obj = instance_with(CID, &["#eval"], false);
+            assert!(proven(obj, obj, CID, name, 0));
             let class = crate::object::js_object_alloc(CID, 0);
             crate::object::class_registry::js_object_mark_class(class as i64);
             let class_value = crate::value::js_nanbox_pointer(class as i64);
-            let obj = instance_with_markers(CID, &["#<perry:private-field:62604:#eval>"]);
-            assert!(proven(obj, obj, CID, name, 0));
             stamp_private_evaluation_brand(
                 JSValue::from_bits(obj.to_bits()).as_pointer::<ObjectHeader>() as *mut ObjectHeader,
                 class_value,
@@ -839,29 +968,24 @@ mod private_guard_fast_tests {
         }
     }
 
-    /// The per-site word learns inline and overflow marker slots, a warm word
-    /// answers on the shape word alone, and it stops answering the moment the
-    /// marker stops reading `true` or the template gains a class object.
+    /// The per-site word learns the receiver's ShapeId for inline and
+    /// overflow fields alike, answers on the shape word alone, misses for a
+    /// shape without the field, and stops answering the moment the template
+    /// gains a class object.
     #[test]
     fn site_word_publishes_hits_and_refuses_stale_facts() {
         unsafe {
             const CID: u32 = 62_611;
-            let inline_marker = "#<perry:private-field:62611:#in>";
-            let spilled_marker = "#<perry:private-field:62611:#out>";
-            // The second marker sits behind enough filler keys to be past any
-            // initial inline capacity, so it lands in overflow storage.
-            let mut markers = vec![inline_marker];
-            let fillers: Vec<String> = (0..16).map(|i| format!("#<filler:{i}>")).collect();
-            markers.extend(fillers.iter().map(String::as_str));
-            markers.push(spilled_marker);
-            let obj = instance_with_markers(CID, &markers);
+            let mut fields = vec!["#in"];
+            let fillers: Vec<String> = (0..16).map(|i| format!("#filler{i}")).collect();
+            fields.extend(fillers.iter().map(String::as_str));
+            fields.push("#out");
+            let obj = instance_with(CID, &fields, false);
             let (_, shape_id) = private_plain_receiver_shape(obj).unwrap();
             let live = crate::object::shapes::shape_live_inline_slot_count_by_id(shape_id).unwrap();
-            assert!(live < markers.len() as u32, "fixture must spill its last key");
-            for (name, marker, overflow) in [
-                (&b"#in"[..], inline_marker, false),
-                (&b"#out"[..], spilled_marker, true),
-            ] {
+            assert!(live < fields.len() as u32, "fixture must spill its last field");
+            let other = instance_with(CID, &[], false);
+            for (name, inline) in [(&b"#in"[..], true), (&b"#out"[..], false)] {
                 let mut site = 0u64;
                 assert!(!private_site_hit(obj, CID, &site));
                 let returned = js_private_guard_site(
@@ -875,26 +999,22 @@ mod private_guard_fast_tests {
                     &mut site,
                 );
                 assert_eq!(returned.to_bits(), obj.to_bits());
-                assert_ne!(site, 0, "a proven access must publish its site word");
-                assert_eq!(site & PRIVATE_SITE_OVERFLOW != 0, overflow);
+                if !inline {
+                    // A spilled field is no plain inline slot: no word, and
+                    // every access keeps the runtime path (#11791).
+                    assert_eq!(site, 0, "a spilled field publishes no site word");
+                    continue;
+                }
+                assert_eq!(site as u32, shape_id, "a proven access publishes its shape");
+                assert_eq!(
+                    (site >> 32) & PRIVATE_FIELD_SITE_SLOT_MASK,
+                    0,
+                    "and the field's slot"
+                );
                 assert!(private_site_hit(obj, CID, &site));
-
-                let raw = JSValue::from_bits(obj.to_bits()).as_pointer::<ObjectHeader>();
-                let key =
-                    crate::string::js_string_from_bytes(marker.as_ptr(), marker.len() as u32);
-                js_object_set_field_by_name(
-                    raw as *mut ObjectHeader,
-                    key,
-                    f64::from_bits(crate::value::TAG_UNDEFINED),
-                );
                 assert!(
-                    !private_site_hit(obj, CID, &site),
-                    "a marker that no longer reads true must not be answered from the site"
-                );
-                js_object_set_field_by_name(
-                    raw as *mut ObjectHeader,
-                    key,
-                    f64::from_bits(crate::value::TAG_TRUE),
+                    !private_site_hit(other, CID, &site),
+                    "a shape without the field must not be answered from the site"
                 );
             }
 

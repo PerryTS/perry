@@ -276,6 +276,7 @@ pub(super) fn lower_manifest_param(
     js_argument_index: usize,
     abi_slot_index: usize,
     val: &str,
+    coerced_ptr: Option<&str>,
     lowered: &mut Vec<String>,
     arg_types: &mut Vec<crate::types::LlvmType>,
 ) {
@@ -313,8 +314,13 @@ pub(super) fn lower_manifest_param(
             arg_types.push(DOUBLE);
         }
         NativeAbiType::String => {
+            // `coerced_ptr` is the rooted result of the coercion pass (#11830);
+            // only a string literal is still checked here.
             let blk = ctx.block();
-            let raw_ptr = blk.call(I64, "js_native_abi_check_string_ptr", &[(DOUBLE, val)]);
+            let raw_ptr = match coerced_ptr {
+                Some(ptr) => ptr.to_string(),
+                None => blk.call(I64, "js_native_abi_check_string_ptr", &[(DOUBLE, val)]),
+            };
             let ptr_val = blk.inttoptr(I64, &raw_ptr);
             let native = LoweredValue::native_handle(raw_ptr);
             record_native_abi_param(
@@ -336,7 +342,10 @@ pub(super) fn lower_manifest_param(
             // side receives a `*const StringHeader` and `serde_json`-decodes it.
             // `type_hint` 0 == TYPE_UNKNOWN (let the runtime classify the value).
             let blk = ctx.block();
-            let raw_ptr = blk.call(I64, "js_json_stringify", &[(DOUBLE, val), (I32, "0")]);
+            let raw_ptr = match coerced_ptr {
+                Some(ptr) => ptr.to_string(),
+                None => blk.call(I64, "js_json_stringify", &[(DOUBLE, val), (I32, "0")]),
+            };
             let ptr_val = blk.inttoptr(I64, &raw_ptr);
             let native = LoweredValue::native_handle(raw_ptr);
             record_native_abi_param(
@@ -729,13 +738,14 @@ pub fn try_lower_extern_func_call(
                 return Ok(Some(call));
             }
             let runtime_fn = if name == "jsx" { "js_jsx" } else { "js_jsxs" };
-            let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-            for a in args {
-                lowered.push(lower_expr(ctx, a)?);
-            }
+            // #11789 sweep: the element type is held while the props object
+            // (whose children are calls) is lowered.
+            let (lowered, group) = super::lower_call_args_rooted(ctx, args)?;
             let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                 lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
-            return Ok(Some(ctx.block().call(DOUBLE, runtime_fn, &arg_slices)));
+            let result = ctx.block().call(DOUBLE, runtime_fn, &arg_slices);
+            group.release(ctx);
+            return Ok(Some(result));
         }
         _ => {}
     }
@@ -752,10 +762,9 @@ pub fn try_lower_extern_func_call(
     // tracked separately under #793.
     if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name).cloned()
     {
-        let mut lowered_args = Vec::with_capacity(args.len());
-        for a in args {
-            lowered_args.push(crate::expr::lower_expr(ctx, a)?);
-        }
+        // #11789 sweep: each argument is held across the ones after it, and
+        // across `js_node_submodule_export_as_function`'s allocation below.
+        let (lowered_args, args_group) = super::lower_call_args_rooted(ctx, args)?;
         let submod_label = crate::expr::emit_string_literal_global(ctx, &submod_key);
         let name_label = crate::expr::emit_string_literal_global(ctx, &exported_name);
         let submod_len = submod_key.len();
@@ -785,11 +794,9 @@ pub fn try_lower_extern_func_call(
         let closure_bits = blk.bitcast_double_to_i64(&closure_value);
         let closure_handle = blk.and(I64, &closure_bits, POINTER_MASK_I64);
         // #10420: no 16-argument truncation — wider calls take the array path.
-        return Ok(Some(super::emit_closure_handle_call(
-            ctx,
-            &closure_handle,
-            &lowered_args,
-        )));
+        let result = super::emit_closure_handle_call(ctx, &closure_handle, &lowered_args);
+        args_group.release(ctx);
+        return Ok(Some(result));
     }
     // perry/system dispatch: map JS names (isDarkMode, getDeviceIdiom,
     // keychainSave, etc.) to their perry_system_* / perry_* C symbols.
@@ -832,13 +839,13 @@ pub fn try_lower_extern_func_call(
     // declaration from `ffi_signatures` instead of treating it as a
     // runtime builtin.
     if name.starts_with("js_") && !ctx.ffi_signatures.contains_key(name) {
-        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-        for a in args {
-            lowered.push(lower_expr(ctx, a)?);
-        }
+        // #11789 sweep: argument `i` is held across arguments `i+1..`.
+        let (lowered, group) = super::lower_call_args_rooted(ctx, args)?;
         let arg_slices: Vec<(crate::types::LlvmType, &str)> =
             lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
-        return Ok(Some(ctx.block().call(DOUBLE, name, &arg_slices)));
+        let result = ctx.block().call(DOUBLE, name, &arg_slices);
+        group.release(ctx);
+        return Ok(Some(result));
     }
     // Issue #692: default-import call against an unresolved module.
     // `import sanitizeHtml from "sanitize-html"` (when sanitize-html
@@ -911,10 +918,49 @@ pub fn try_lower_extern_func_call(
         let mut lowered: Vec<String> = Vec::with_capacity(args.len());
         let mut arg_types: Vec<crate::types::LlvmType> = Vec::with_capacity(args.len());
         let mut abi_slot_index = 0usize;
+
+        // #11789 sweep: an argument's ABI form is a RAW pointer into a movable
+        // heap object (a string's bytes, an array's element data), so
+        // converting it where it is lowered froze the pre-move address while
+        // the later arguments ran — `bloom_draw_text(String(x), work())`.
+        // Phase 1 evaluates the arguments in order and roots every plain one
+        // across the arguments after it (a pod parameter copies into its own
+        // stack temporary, so it is complete when lowered). Phase 2 re-reads
+        // the roots below the last argument and only then converts, so the
+        // raw forms are made from post-relocation addresses and nothing
+        // collects between a conversion and the call.
+        enum StagedArg {
+            Pod(Vec<String>, Vec<crate::types::LlvmType>),
+            Plain(usize),
+        }
+        enum Coercion {
+            CheckString,
+            Json,
+            Unified,
+        }
+        let coercions: Vec<Option<Coercion>> = args
+            .iter()
+            .enumerate()
+            .map(|(idx, a)| {
+                if matches!(a, Expr::String(_)) {
+                    return None;
+                }
+                match manifest_sig.as_ref().and_then(|(p, _)| p.get(idx)) {
+                    Some(NativeAbiType::String) => Some(Coercion::CheckString),
+                    Some(NativeAbiType::Json) => Some(Coercion::Json),
+                    Some(_) => None,
+                    None => is_string_expr(ctx, a).then_some(Coercion::Unified),
+                }
+            })
+            .collect();
+        let mut arg_group = crate::rooting::open_rooted_group(args.len());
+        let mut staged: Vec<(StagedArg, usize)> = Vec::with_capacity(args.len());
         for (idx, a) in args.iter().enumerate() {
             let manifest_kind: Option<&NativeAbiType> =
                 manifest_sig.as_ref().and_then(|(p, _)| p.get(idx));
             if let Some(descriptor @ NativeAbiType::Pod(pod)) = manifest_kind {
+                let mut pod_lowered = Vec::new();
+                let mut pod_types = Vec::new();
                 lower_manifest_pod_param(
                     ctx,
                     descriptor,
@@ -922,13 +968,16 @@ pub fn try_lower_extern_func_call(
                     idx,
                     abi_slot_index,
                     a,
-                    &mut lowered,
-                    &mut arg_types,
+                    &mut pod_lowered,
+                    &mut pod_types,
                 )?;
+                staged.push((StagedArg::Pod(pod_lowered, pod_types), abi_slot_index));
                 abi_slot_index += descriptor.abi_slot_count();
                 continue;
             }
             if let Some(descriptor @ NativeAbiType::PodAndCount(pod)) = manifest_kind {
+                let mut pod_lowered = Vec::new();
+                let mut pod_types = Vec::new();
                 lower_manifest_pod_view_param(
                     ctx,
                     descriptor,
@@ -936,31 +985,88 @@ pub fn try_lower_extern_func_call(
                     idx,
                     abi_slot_index,
                     a,
-                    &mut lowered,
-                    &mut arg_types,
+                    &mut pod_lowered,
+                    &mut pod_types,
                 )?;
+                staged.push((StagedArg::Pod(pod_lowered, pod_types), abi_slot_index));
                 abi_slot_index += descriptor.abi_slot_count();
                 continue;
             }
-            let val = lower_expr(ctx, a)?;
+            let collects = coercions[idx + 1..].iter().any(|c| c.is_some())
+                || crate::rooting::any_operand_may_collect(ctx, args[idx + 1..].iter());
+            let root = arg_group.lower(ctx, a, collects)?;
+            staged.push((StagedArg::Plain(root), abi_slot_index));
+            abi_slot_index += manifest_kind.map_or(1, |d| d.abi_slot_count());
+        }
+        // #11830: the conversion window. A `string` / `json` parameter's raw
+        // pointer comes from a call that allocates and, for `json`, runs a
+        // user `toJSON`; taking each pointer in order stranded every earlier
+        // one. Each such argument is converted, in order, into its own rooted
+        // slot, and the pointers are read back in the pass below, after the
+        // last conversion. A string literal is already a heap string.
+        let mut pending = coercions.iter().filter(|c| c.is_some()).count();
+        let mut coerced: Vec<Option<crate::rooting::EmittedValue>> = Vec::with_capacity(args.len());
+        for (stage, coercion) in staged.iter().zip(coercions.iter()) {
+            coerced.push(match (stage, coercion) {
+                ((StagedArg::Plain(root), _), Some(coercion)) => {
+                    pending -= 1;
+                    let (callee, flag) = match coercion {
+                        Coercion::CheckString => ("js_native_abi_check_string_ptr", None),
+                        Coercion::Json => ("js_json_stringify", Some("0")),
+                        Coercion::Unified => ("js_get_string_pointer_unified", None),
+                    };
+                    Some(arg_group.coerce_to_ptr(ctx, *root, pending > 0, |ctx, v| {
+                        let blk = ctx.block();
+                        match flag {
+                            Some(f) => blk.call(I64, callee, &[(DOUBLE, v), (I32, f)]),
+                            None => blk.call(I64, callee, &[(DOUBLE, v)]),
+                        }
+                    })?)
+                }
+                _ => None,
+            });
+        }
+        abi_slot_index = 0;
+        for (idx, ((stage, slot_index), coerced)) in staged.into_iter().zip(coerced).enumerate() {
+            let a = &args[idx];
+            let manifest_kind: Option<&NativeAbiType> =
+                manifest_sig.as_ref().and_then(|(p, _)| p.get(idx));
+            let root = match stage {
+                StagedArg::Pod(pod_lowered, pod_types) => {
+                    lowered.extend(pod_lowered);
+                    arg_types.extend(pod_types);
+                    abi_slot_index = slot_index + manifest_kind.map_or(1, |d| d.abi_slot_count());
+                    continue;
+                }
+                StagedArg::Plain(root) => root,
+            };
+            let coerced_ptr = coerced.map(|e| arg_group.reread_emitted(ctx, e));
+            let val = match coerced_ptr {
+                Some(_) => String::new(),
+                None => arg_group.reread(ctx, root)?,
+            };
             if let Some(descriptor) = manifest_kind {
                 lower_manifest_param(
                     ctx,
                     descriptor,
                     idx,
-                    abi_slot_index,
+                    slot_index,
                     &val,
+                    coerced_ptr.as_deref(),
                     &mut lowered,
                     &mut arg_types,
                 );
-                abi_slot_index += descriptor.abi_slot_count();
+                abi_slot_index = slot_index + descriptor.abi_slot_count();
             } else if is_string_expr(ctx, a) {
                 let blk = ctx.block();
-                let raw_ptr = blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val)]);
+                let raw_ptr = match coerced_ptr {
+                    Some(ptr) => ptr,
+                    None => blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, &val)]),
+                };
                 let ptr_val = blk.inttoptr(I64, &raw_ptr);
                 lowered.push(ptr_val);
                 arg_types.push(PTR);
-                abi_slot_index += 1;
+                abi_slot_index = slot_index + 1;
             } else if is_array_expr(ctx, a) {
                 let blk = ctx.block();
                 let bits = blk.bitcast_double_to_i64(&val);
@@ -972,13 +1078,16 @@ pub fn try_lower_extern_func_call(
                 let data_ptr = blk.gep(I8, &header_ptr, &[(I64, &eight)]);
                 lowered.push(data_ptr);
                 arg_types.push(PTR);
-                abi_slot_index += 1;
+                abi_slot_index = slot_index + 1;
             } else {
                 lowered.push(val);
                 arg_types.push(DOUBLE);
-                abi_slot_index += 1;
+                abi_slot_index = slot_index + 1;
             }
         }
+        // Every root has been re-read and converted; nothing below collects
+        // before the call, so the scope ends here.
+        arg_group.release(ctx);
 
         // Issue #5812 item 4 — pad omitted trailing manifest params with
         // defined null/zero sentinels so the emitted call/declaration has
@@ -1271,13 +1380,11 @@ pub fn try_lower_extern_func_call(
     // (the origin was demoted to V8 and never emitted a native one).
     // Route the call through the runtime V8 bridge.
     if let Some(specifier) = ctx.import_function_v8_specifiers.get(name).cloned() {
-        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-        for a in args {
-            lowered.push(lower_expr(ctx, a)?);
-        }
-        return Ok(Some(crate::expr::emit_v8_export_call(
-            ctx, &specifier, name, &lowered,
-        )));
+        // #11789 sweep: argument `i` is held across arguments `i+1..`.
+        let (lowered, group) = super::lower_call_args_rooted(ctx, args)?;
+        let result = crate::expr::emit_v8_export_call(ctx, &specifier, name, &lowered);
+        group.release(ctx);
+        return Ok(Some(result));
     }
     // Issue #678: re-export rename (`export { default as render } from
     // './render.js'`) means the origin module emits the symbol under

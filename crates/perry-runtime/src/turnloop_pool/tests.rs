@@ -396,6 +396,35 @@ fn a_full_pool_queue_refuses_rather_than_growing_without_bound() {
     let gate = Arc::new(Gate::default());
     let mut accepted = 0usize;
     let mut refusal = None;
+    // A full queue is only momentary while a worker can still dequeue its
+    // first job. Hold every bounded worker before filling the queue, so no
+    // slot can reopen between the first refusal and the inline-fallback probe.
+    // `threads` is the fixed configured count, not the approximate busy count;
+    // acknowledgements come from these jobs and remain true until gate.open().
+    let entered = Arc::new(AtomicUsize::new(0));
+    loop {
+        let (gate, entered) = (gate.clone(), entered.clone());
+        submit(
+            move || {
+                entered.fetch_add(1, Ordering::Release);
+                gate.wait();
+            },
+            |_| record(Rec::Done("fill", vec![])),
+        )
+        .expect("the empty queue accepts the worker-holding jobs");
+        accepted += 1;
+        if accepted == turnloop::pool_stats().threads {
+            break;
+        }
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while entered.load(Ordering::Acquire) != accepted {
+        assert!(
+            Instant::now() < deadline,
+            "every bounded worker must be held"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
     for _ in 0..20_000 {
         let gate = gate.clone();
         match submit(move || gate.wait(), |_| record(Rec::Done("fill", vec![]))) {

@@ -1359,6 +1359,11 @@ fn finish_revalidated_read(
 use super::stable_packed_accumulator::collect_numeric_accumulators;
 
 pub(crate) fn has_numeric_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+    // A loop region's bare read of a dense raw-f64 array (#10741): the
+    // region guard proved the slot a canonical double, with no fallback edge.
+    if crate::stmt::region_loop::is_f64_index_read(ctx, expr) {
+        return true;
+    }
     let Expr::IndexGet { object, index } = expr else {
         return false;
     };

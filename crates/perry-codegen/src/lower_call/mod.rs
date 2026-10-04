@@ -79,9 +79,14 @@ pub(crate) use func_ref::{
     guarded_call_return_proof, guarded_discriminant_branch_proofs, guarded_expr_proof,
     guarded_path_type,
 };
+mod direct_method_guard;
 mod jsx;
 pub(crate) mod method_override;
-pub(crate) use method_override::emit_inline_direct_method_shape_guard;
+pub(crate) use direct_method_guard::emit_inline_direct_method_shape_guard;
+#[cfg(test)]
+mod args_sweep_tests;
+#[cfg(test)]
+mod conversion_window_tests;
 #[cfg(test)]
 mod named_import_install_tests;
 mod namespace_call;
@@ -134,8 +139,7 @@ use jsx::try_rewrite_perry_tui_jsx_intrinsic;
 // sites in sibling submodules (builtin/native/ui_styling) keep
 // resolving unchanged after the split.
 use options::{
-    build_headers_from_object, get_raw_string_ptr, lower_fetch_native_method,
-    lower_notification_schedule,
+    get_raw_string_ptr, lower_fetch_native_method, lower_notification_schedule, raw_string_ptr_of,
 };
 // `native_table.rs` (#1099): the ~5k-row `NATIVE_MODULE_TABLE` data +
 // arg/ret kind types. The dispatch consumers below
@@ -254,6 +258,72 @@ pub(crate) fn lower_call_args_rooted<'a>(
     }
     let values = group.reread_all(ctx)?;
     Ok((values, group))
+}
+
+/// [`lower_call_args_rooted`] for operands that are not one contiguous
+/// `&[Expr]` — the sub-expressions an `Expr::Foo { a, b }` variant names
+/// (#11789 sweep). Operand `i` is rooted across exactly the operands after it,
+/// all are re-read below the last, and the caller releases the returned group
+/// BELOW the call that consumes them.
+pub(crate) fn lower_operand_list_rooted<'a>(
+    ctx: &mut FnCtx<'_>,
+    operands: &[&'a Expr],
+) -> Result<(Vec<String>, crate::rooting::RootedGroup<'a>)> {
+    let mut group = crate::rooting::open_rooted_group(operands.len());
+    for (i, operand) in operands.iter().enumerate() {
+        let collects =
+            crate::rooting::any_operand_may_collect(ctx, operands[i + 1..].iter().copied());
+        group.lower(ctx, operand, collects)?;
+    }
+    let values = group.reread_all(ctx)?;
+    Ok((values, group))
+}
+
+/// [`lower_call_args_rooted`] with one leading operand: a receiver, a callee or
+/// a namespace object, which is evaluated BEFORE the arguments and is live
+/// across every one of them (#11789 sweep).
+///
+/// It is the same group with the same windows — the leading operand is rooted
+/// across all the arguments, argument `i` across the ones after it — and the
+/// same contract: the caller releases the returned group BELOW the consuming
+/// call. The leading operand is returned separately because every caller binds
+/// it to its own name; the arguments stay in lowering order.
+pub(crate) fn lower_operands_rooted<'a>(
+    ctx: &mut FnCtx<'_>,
+    first: &'a Expr,
+    args: &'a [Expr],
+) -> Result<(String, Vec<String>, crate::rooting::RootedGroup<'a>)> {
+    let mut group = crate::rooting::open_rooted_group(1 + args.len());
+    let collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
+    group.lower(ctx, first, collects)?;
+    for (i, arg) in args.iter().enumerate() {
+        let collects = crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+        group.lower(ctx, arg, collects)?;
+    }
+    let mut values = group.reread_all(ctx)?;
+    let first_value = values.remove(0);
+    Ok((first_value, values, group))
+}
+
+/// [`lower_operands_rooted`] for a leading operand the caller EMITTED rather
+/// than lowered from an `Expr` — a namespace object materialised by a runtime
+/// call, say. It is adopted into the group before the first argument is
+/// lowered, exactly as a lowered receiver is.
+pub(crate) fn lower_args_after_emitted_rooted<'a>(
+    ctx: &mut FnCtx<'_>,
+    first: &str,
+    args: &'a [Expr],
+) -> Result<(String, Vec<String>, crate::rooting::RootedGroup<'a>)> {
+    let mut group = crate::rooting::open_rooted_group(1 + args.len());
+    let collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
+    let first_root = group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, first, collects);
+    for (i, arg) in args.iter().enumerate() {
+        let collects = crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+        group.lower(ctx, arg, collects)?;
+    }
+    let first_value = group.reread_emitted(ctx, first_root);
+    let values = group.reread_all(ctx)?;
+    Ok((first_value, values, group))
 }
 
 /// Emit a direct call over an already-lowered argument list, then release the
@@ -510,6 +580,10 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    // #11826: a module-level TDZ check is an inline compare, never a call.
+    if let Some(v) = crate::expr::tdz_module_check::try_lower(ctx, callee, args)? {
+        return Ok(v);
+    }
     // #5253: localize the `ReferenceError: X is not defined` thrown by the
     // unresolved-identifier runtime helper. A bare unresolved identifier
     // (`module`, winston's stray globals, …) lowers to

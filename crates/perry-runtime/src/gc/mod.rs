@@ -150,7 +150,24 @@ use barrier_arming::*;
 /// `pin::pin_object`; `scripts/gc_pin_sites.py` enforces that in `lint`.
 mod pin;
 #[cfg(test)]
+pub(crate) use copying_parent_facts::copy_decode_sabotage;
+#[cfg(test)]
+pub(crate) use pin::scan_pinned_object_roots_mut;
+#[cfg(test)]
 pub(crate) use pin::test_reset_young_pin_latch;
+
+/// Test-only: pin the copying minor's promotion age for the guard's life.
+#[cfg(test)]
+pub(crate) fn pin_tenuring_survivals_for_test(survivals: u8) -> impl Drop {
+    tenuring::set_survivals_for_test(survivals)
+}
+
+/// Test-only: is the old-page remembered set holding the page of `slot_addr`?
+#[cfg(test)]
+pub(crate) fn old_slot_page_is_remembered_for_test(slot_addr: usize) -> bool {
+    let page = crate::arena::generation_page_for_addr(slot_addr);
+    barrier::DIRTY_OLD_PAGES.with(|s| s.borrow().contains(&page))
+}
 pub use pin::{
     copied_minor_preflight_skips, copied_minor_preflight_walks, pin_object, pin_object_non_young,
     pin_user_ptr_non_young, unpin_object, unpin_user_ptr,
@@ -184,6 +201,8 @@ use copying_first_cycle::*;
 // Named rather than glob-imported: a glob does not propagate through the
 // transitive re-exports the gc submodules reach these through.
 use copying_pointer_set::{plausible_gc_header, CopyingPointer, CopyingPointerKind};
+#[cfg(any(debug_assertions, feature = "field-rep-assert", perry_gc_instruments))]
+pub(crate) use forwarding::field_rep_live_address;
 use forwarding::*;
 use sticky_remembered::*;
 // The copied-minor pointer classifier is consumed by the weak-holder registry
@@ -279,12 +298,12 @@ pub use verify::*;
 /// Env-gated heap census (`PERRY_GC_CENSUS`); off by default.
 pub(crate) mod census;
 mod census_field_repr;
-#[cfg(feature = "diagnostics")]
+#[cfg(perry_diagnostics)]
 mod heap_snapshot;
 mod heap_stats;
 mod regex_census;
 pub use census::{census_poll_signal, gc_census_enabled};
-#[cfg(feature = "diagnostics")]
+#[cfg(perry_diagnostics)]
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
 pub(crate) use heap_stats::heap_stats;
 
@@ -435,6 +454,7 @@ fn gc_collect_minor_with_trigger_inner(
     }
     let mut trace = GcCycleTrace::new(GcCollectionKind::Minor, trigger);
     let start = Instant::now();
+    crate::arena::discard_previously_idle_eden_pages();
     crate::arena::old_pages_begin_gc_cycle();
     let previous_pause_us = gc_last_pause_us();
     let current_rss_bytes = crate::process::get_rss_bytes();
@@ -469,6 +489,7 @@ fn gc_collect_minor_with_trigger_inner(
     };
     if let Some(fast_path) = copying_outcome {
         let freed_bytes = fast_path.freed_bytes;
+        crate::arena::advance_block_pool_reuse_window();
         let elapsed_us = start.elapsed().as_micros() as u64;
         GC_STATS.with(|stats| {
             stats
@@ -978,9 +999,9 @@ pub fn gc_init() {
         return;
     }
     crate::perf_hooks::init_time_origin();
-    #[cfg(not(feature = "gc-instruments"))]
+    #[cfg(not(perry_gc_instruments))]
     instruments::refuse_instrument_knobs_without_instruments();
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     crate::hot_diag::refuse_knobs_without_hot_diag();
     // `PERRY_GC_CENSUS`: remember the main thread and install the SIGUSR2
     // trigger. No-op (one OnceLock read) when the env var is unset.
@@ -1034,6 +1055,9 @@ pub fn gc_init() {
     // ordered-keys slot; this scanner only follows existing forwarding records
     // for descriptors and the pointer-keyed slot accelerator after evacuation.
     reg_scanner!(crate::object::shapes::scan_shape_table_rekey_mut);
+    // The shape records' [[Prototype]] words and their identity index are
+    // strong roots (object::shapes_prototype).
+    reg_scanner!(crate::object::shapes::scan_shape_prototype_words_mut);
     reg_scanner!(crate::proxy::scan_proxy_roots_mut);
     // Object/string-valued `err.<prop> = v` user props live as raw bits in
     reg_scanner!(exception_mutable_root_scanner);
@@ -1067,18 +1091,17 @@ pub fn gc_init() {
     // or Proxy trap can re-enter after moving GC. Rewrite that temporary
     // identity so malformed prototype cycles remain bounded.
     reg_scanner!(crate::object::prototype_chain::scan_prototype_resolution_stack_roots_mut,);
-    // Lane 3: the inherited-read cache records a holder ADDRESS per entry and
-    // a hit LOADS through it, so the slots are STRONG roots: marked, so the
-    // address cannot be recycled under the entry, and rewritten, so a
-    // compacting or copying pass leaves it pointing at the same object.
-    reg_scanner!(crate::object::inherited_read_cache::scan_inherited_read_cache_roots_mut);
-    // Inherited-access lane: a store site's chain verdict names its interned
+    // A store site's chain verdict names its interned
     // key and the receiver's recorded prototype, and compares them on every
     // use, so both are STRONG roots (`object::chain_store`).
     reg_scanner!(crate::object::chain_store::scan_chain_store_roots_mut);
-    // Method-calls lane: an inherited method-site entry holds the method
-    // closure it calls, so the closure is a STRONG root (`object::method_site`).
+    reg_scanner!(crate::proxy::scan_setter_site_roots_mut);
+    // An inherited method-site entry roots its direct prototype holder.
     reg_scanner!(crate::object::method_site::scan_method_site_roots_mut);
+    // A site's chain memo names every prototype from the receiver's
+    // [[Prototype]] to the holder of the method it answers; it compares each
+    // one's header word on use, so each is a STRONG root.
+    reg_scanner!(crate::object::method_site::chain_memo::scan_chain_memo_roots_mut);
     // A read site's holder entry names the object that holds the answer (and
     // the hops to it); the emitted hit loads through it, so each is a STRONG
     // root (`object::method_site::read_holder`).
@@ -1214,8 +1237,6 @@ pub fn gc_init() {
     // capture heap words, so copied-minor must rewrite them after moving
     // captured young values or future cache hits miss on stale addresses.
     reg_scanner!(crate::closure::scan_singleton_closure_roots_mut);
-    // The per-agent class function objects (`object::class_value`).
-    reg_scanner!(crate::object::class_value::scan_class_value_roots_mut);
     reg_scanner!(crate::closure::scan_closure_dynamic_props_roots_mut);
     // #8393: built-in prototype methods carry per-closure identity metadata
     // keyed by their raw heap address. Copying minor GC moves those closures;
@@ -1238,8 +1259,9 @@ pub fn gc_init() {
     // temporaries, arguments of in-flight interpreted frames). Mark +
     // REWRITE — interpreter state must survive moving collections triggered
     // from inside interpreted code.
-    #[cfg(feature = "dyn-eval")]
-    reg_scanner!(crate::dyn_eval::scan_dyn_eval_roots_mut);
+    // Registered unconditionally; it scans once the `dyn-eval` install has
+    // connected the interpreter (see `crate::dyn_eval_hooks`).
+    reg_scanner!(crate::dyn_eval_hooks::scan_dyn_eval_roots_mut);
     reg_scanner!(crate::tls::scan_tls_roots_mut);
     reg_scanner!(crate::process::scan_process_finalization_roots_mut);
     reg_scanner!(crate::process::scan_process_module_loader_roots_mut);
@@ -1401,6 +1423,9 @@ pub extern "C" fn js_gc_init() {
         crate::object::disable_class_field_inline_guard();
     }
     gc_init();
+    // Optional runtime features install from the program's generated
+    // installer (see `crate::feature_hooks`), before any user code runs.
+    crate::feature_hooks::run_feature_installer();
 }
 
 /// Release external Map/Set/JSON-tape storage owned by the current thread.

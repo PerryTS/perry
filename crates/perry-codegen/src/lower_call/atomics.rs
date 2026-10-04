@@ -3,7 +3,7 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_expr, FnCtx};
+use crate::expr::FnCtx;
 use crate::nanbox::double_literal;
 
 fn is_global_this_atomics_expr(e: &Expr) -> bool {
@@ -47,27 +47,30 @@ pub fn try_lower_atomics_static_call(
     };
 
     let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-    let mut lowered: Vec<String> = Vec::with_capacity(arity);
-    for i in 0..arity {
-        if let Some(arg) = args.get(i) {
-            lowered.push(lower_expr(ctx, arg)?);
-        } else {
-            lowered.push(undefined.clone());
-        }
-    }
-    for arg in args.iter().skip(arity) {
-        let _ = lower_expr(ctx, arg)?;
-    }
+    // #11789 sweep: every argument, the surplus ones included, is evaluated
+    // left to right and each is held across the ones after it, so they are
+    // one group read back below the last.
+    let (lowered_all, group) = super::lower_call_args_rooted(ctx, args)?;
+    let lowered: Vec<String> = (0..arity)
+        .map(|i| {
+            lowered_all
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| undefined.clone())
+        })
+        .collect();
 
     // The `js_atomics_*` natives are JS bodies (the function objects
     // `Atomics.load` &c. run): no environment, and they never read their
     // receiver.
     let this_bits = crate::expr::body_call::JS_THIS_UNDEFINED;
-    Ok(Some(crate::expr::body_call::emit_js_body_call(
+    let result = crate::expr::body_call::emit_js_body_call(
         ctx.block(),
         crate::expr::body_call::JsBody::Symbol(runtime_fn),
         "0",
         this_bits,
         &lowered,
-    )))
+    );
+    group.release(ctx);
+    Ok(Some(result))
 }

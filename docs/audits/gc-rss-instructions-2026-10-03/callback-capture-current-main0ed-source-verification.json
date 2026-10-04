@@ -1,0 +1,19 @@
+{
+  "private_commit": "6668861ff3",
+  "production_parent": "aa6eeebed01e34486e0db25cad1694ded151c978",
+  "tracked_source_inputs_verified": 4994,
+  "production_code_diff": [
+    "crates/perry-runtime/src/gc/trace.rs"
+  ],
+  "generated_or_cache_entries_excluded": 21,
+  "products": {
+    "perry": "4d0c43a5f6d85680826ba425e6665e8e587ee26336fa40b5098d0c607dae8730",
+    "libperry_runtime.a": "a9eef61821753251fbf1b21686f87b507c69de2d86a56336b75fd27e3dffecb1",
+    "libperry_stdlib.a": "58790d2ead8429e02e5cb5f82ea4161c17793863d5528da88bf729696514e7a9"
+  },
+  "runtime_passed": 4856,
+  "linked_executions": 20,
+  "moving_copied_and_protected": 10,
+  "inputs_sha256": "cb03487f03f77162da5bafe4d5952cb54b39acff54bf7845e79659264036bd3b",
+  "scope": "Only tracked Rust and Cargo source inputs are attested; copied own generated/cache inputs are excluded. Explicit own target isolation and refreshed tracked source inputs preserved. Experiment remains unapplied."
+}

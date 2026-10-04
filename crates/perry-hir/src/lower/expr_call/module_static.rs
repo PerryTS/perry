@@ -376,7 +376,8 @@ pub(super) fn try_module_static_methods(
             // and the string-literal computed form (`JSON["parse"](...)`) so the
             // computed key does not fall through to generic dispatch (→
             // `TypeError: value is not a function`).
-            if obj_ident.sym.as_ref() == "JSON" {
+            // A spread call declines: see `call_has_spread_arg`.
+            if obj_ident.sym.as_ref() == "JSON" && !has_spread {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "parse" => {
@@ -649,6 +650,11 @@ pub(super) fn try_module_static_methods(
             // and the string-literal computed form (`Math["max"](...)`).
             if obj_ident.sym.as_ref() == "Math" {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
+                    // Only `min` / `max` have arms written for a spread; every
+                    // other spread call declines (see `call_has_spread_arg`).
+                    if has_spread && !matches!(method_name, "min" | "max") {
+                        return Ok(Err(args));
+                    }
                     match method_name {
                         "floor" if !args.is_empty() => {
                             return Ok(Ok(Expr::MathFloor(Box::new(
@@ -857,7 +863,8 @@ pub(super) fn try_module_static_methods(
             // already recognizes typed arrays, Uint8Array-from-ctor and
             // DataView-marked buffers) by re-emitting a `util/types`
             // NativeMethodCall — no new HIR variant or runtime helper needed.
-            if obj_ident.sym.as_ref() == "ArrayBuffer" {
+            // A spread call declines: see `call_has_spread_arg`.
+            if obj_ident.sym.as_ref() == "ArrayBuffer" && !has_spread {
                 // #6677: accept the string-literal computed form too.
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "isView" {
@@ -880,7 +887,8 @@ pub(super) fn try_module_static_methods(
             // a receiver-less NativeMethodCall. (The statics are also installed
             // on the BigInt ctor closure for the `const B = BigInt; B.asIntN`
             // value path.)
-            if obj_ident.sym.as_ref() == "BigInt" {
+            // A spread call declines: see `call_has_spread_arg`.
+            if obj_ident.sym.as_ref() == "BigInt" && !has_spread {
                 // #6677: accept the string-literal computed form too.
                 if let Some(m) = super::static_call_prop_name(&member.prop) {
                     if m == "asIntN" || m == "asUintN" {
@@ -899,7 +907,8 @@ pub(super) fn try_module_static_methods(
             }
 
             // Check for Number.methodName() static calls. #6677: computed form too.
-            if obj_ident.sym.as_ref() == "Number" {
+            // A spread call declines: see `call_has_spread_arg`.
+            if obj_ident.sym.as_ref() == "Number" && !has_spread {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         // A missing argument is `undefined` (Type ≠ Number), so
@@ -1186,7 +1195,8 @@ pub(super) fn try_module_static_methods(
                     ctx.lookup_native_module(obj_name),
                     Some(("buffer", Some("Buffer")))
                 );
-            if is_buffer_ref {
+            // A spread call declines: see `call_has_spread_arg`.
+            if is_buffer_ref && !has_spread {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
@@ -1330,7 +1340,8 @@ pub(super) fn try_module_static_methods(
                     || ctx.lookup_func(obj_name).is_some()
                     || ctx.lookup_imported_func(obj_name).is_some()
                     || ctx.lookup_class(obj_name).is_some();
-                if !shadowed && obj_name != "Uint8Array" {
+                // A spread call declines: see `call_has_spread_arg`.
+                if !shadowed && obj_name != "Uint8Array" && !has_spread {
                     if let ast::MemberProp::Ident(method_ident) = &member.prop {
                         let method_name = method_ident.sym.as_ref();
                         match method_name {
@@ -1513,7 +1524,8 @@ pub(super) fn try_module_static_methods(
 
             // Check for Date.now() / Date.parse() / Date.UTC() static method calls.
             // #6677: computed form too.
-            if obj_ident.sym.as_ref() == "Date" {
+            // A spread call declines: see `call_has_spread_arg`.
+            if obj_ident.sym.as_ref() == "Date" && !has_spread {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "now" {
                         return Ok(Ok(Expr::DateNow));
@@ -1536,7 +1548,8 @@ pub(super) fn try_module_static_methods(
             // never reached the canonical class-method path. This
             // arm intercepts both spellings and routes to dedicated
             // HIR variants.
-            if obj_ident.sym.as_ref() == "URL" {
+            // A spread call declines: see `call_has_spread_arg`.
+            if obj_ident.sym.as_ref() == "URL" && !has_spread {
                 // #6677: accept the string-literal computed form too.
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "canParse" && !args.is_empty() {

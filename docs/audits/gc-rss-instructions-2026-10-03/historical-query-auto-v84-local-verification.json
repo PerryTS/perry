@@ -1,0 +1,11 @@
+{
+  "time_utc": "2026-10-04T05:45:07Z",
+  "archive": "/Users/amlug/projects/perry/secret-tests/scratchpad/rss-header-20261002/historical-query-auto-v84.tar.gz",
+  "archive_bytes": 921283642,
+  "archive_sha256": "a4fee41787dcb786a3b98dd2eda0223f0a78fd88c5c4c714547676e8f6df9c49",
+  "manifest_sha256": "c3de66c16e6f05693a064a419217d44ce87b1080e9d67632dbe9fe1f19c15d14",
+  "verified_files": 7659,
+  "verified_hardlinks": 8,
+  "all_members_sizes_and_hashes_verified": true,
+  "method": "Streaming verification without extraction; TAR hardlinks bind to separately hashed regular members."
+}

@@ -708,6 +708,8 @@ fn ic_diag_note(
     crate::hot_diag::ic_note(site, bytes, reason);
 }
 
+#[path = "ic_miss/class_field_define_fast.rs"]
+mod class_field_define_fast;
 #[path = "ic_miss/packed_get.rs"]
 mod packed_get;
 pub use packed_get::{js_object_get_field_ic_miss, js_object_get_field_ic_miss_packed};
@@ -719,6 +721,16 @@ pub(super) fn get_field_ic_miss_impl(
     packed: *const std::sync::atomic::AtomicU64,
 ) -> f64 {
     use crate::hot_diag::IcMissReason as R;
+    // #11725: an explicit-this native subclass reads missing properties
+    // from its aliased handle. The ordinary IC ladder bypasses the f64
+    // getter (and may cache an absent key), so preserve that getter's alias
+    // semantics before consulting or priming shape-based caches.
+    if super::super::native_this_alias::alias_active()
+        && super::super::native_this_alias::alias_handle_for_object(f64::from_bits(obj as u64))
+            .is_some()
+    {
+        return js_object_get_field_by_name_f64(obj, key);
+    }
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_decoded_pointer(obj as usize);
     }
@@ -776,42 +788,10 @@ pub(super) fn get_field_ic_miss_impl(
     // `< 0x100000` proxy / HANDLE_PROPERTY_DISPATCH routing below — matching
     // the ordering in `js_object_get_field_by_name`. The macOS heap floor
     // (0x200_0000_0000 in is_valid_obj_ptr) masked this; Linux's is 0x1000.
-    // Lane 3 hook A, hoisted ABOVE the async-resource probe below.
-    //
-    // That probe costs 16.0 instructions per call once its latch is armed (a
-    // thread-local registry lookup), and it ran on every inherited read before
-    // this one could answer. The lookup cannot be confused by an async
-    // resource handle: those are `Box::into_raw` native allocations outside
-    // the GC arena, so their word at payload +4 is the high half of a small
-    // counter rather than a live ShapeId, `object_shape_stamp` answers 0, and
-    // the lookup returns `Unknown` in about ten instructions without
-    // dereferencing anything further. See the rule-3 note in
-    // `object::inherited_read_cache`.
     // Charter step 5: a receiver still carrying a shape whose lane the
     // lineage generalized moves to the normalized shape before anything is
     // learned from it, so the site converges instead of going polymorphic.
     unsafe { crate::object::field_rep_store::migrate_on_miss(obj as usize) };
-    let mut inherited_declined = false;
-    if crate::value::addr_class::is_above_handle_band(obj as usize) {
-        // Lane 3 hook A: an INHERITED read that this site has already resolved
-        // once. Placed before the ladder rather than after it because the
-        // whole point is the ladder: an inherited read otherwise re-walks the
-        // chain on every read (~1300 instructions, measured). The guard proves
-        // the receiver is a GC_TYPE_OBJECT itself, so nothing below has been
-        // skipped on its behalf; see `object::inherited_read_cache`.
-        match unsafe { crate::object::inherited_read_cache::inherited_read_cache_lookup(obj, key) }
-        {
-            crate::object::inherited_read_cache::Lookup::Hit(value) => {
-                if diag {
-                    ic_diag_note(cache_slot, key, R::NotOwn);
-                }
-                return f64::from_bits(value.bits());
-            }
-            crate::object::inherited_read_cache::Lookup::Declined => inherited_declined = true,
-            crate::object::inherited_read_cache::Lookup::Unknown => {}
-        }
-    }
-
     if !key.is_null() && crate::async_hooks::is_async_resource_handle(obj as i64) {
         unsafe {
             if let Some(name) = crate::string::header_str_checked(key) {
@@ -826,12 +806,6 @@ pub(super) fn get_field_ic_miss_impl(
             }
         }
     }
-    // Lane 3 hook A's answer, carried to hook B at the bottom of this
-    // function: `Declined` means the chain walk has already been tried for
-    // this (receiver shape, key) and refused, so hook B must not try it again.
-    // Without that, every read the cache CANNOT serve pays for a full chain
-    // walk per read — measured at +424 instructions per read for an accessor
-    // on the prototype, a regression against no cache at all.
     // ONE validated header read classifies the receiver for everything below.
     // `try_read_gc_header` rejects the handle band and implausible addresses
     // without touching memory, so `None` here is "not a heap cell" and the
@@ -839,11 +813,22 @@ pub(super) fn get_field_ic_miss_impl(
     // to read the same header three more times (kind, descriptor flag,
     // forwarding flag); it now takes all three from this one read.
     //
-    // Hook A and `inherited_declined` are NOT re-declared here: #10842 hoisted
-    // them above the async-resource probe, so this commit's copy would be a
-    // second lookup per read and a shadowed binding.
     let gc_header = unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) };
     let gc_kind = gc_header.map(|h| h.obj_type);
+    // An accessor can run JS and collect, so this lives in the collecting
+    // miss handler. The leaf front only recognizes data and absent entries.
+    if gc_kind == Some(crate::gc::GC_TYPE_OBJECT) {
+        if let Some(value) = unsafe {
+            crate::object::method_site::read_holder::try_cached_class_read(obj, cache_slot)
+        } {
+            return f64::from_bits(value.bits());
+        }
+        if let Some(value) =
+            unsafe { crate::object::method_site::read_holder::try_cached_accessor(obj, cache_slot) }
+        {
+            return f64::from_bits(value.bits());
+        }
+    }
     if crate::value::addr_class::is_above_handle_band(obj as usize) {
         // # The receiver-classification ladder runs only for NON-object kinds
         //
@@ -952,6 +937,18 @@ pub(super) fn get_field_ic_miss_impl(
                 return crate::array::js_array_length(arr) as f64;
             }
             unsafe {
+                // A plain function on its base shape: the site's holder entry
+                // answers a key its shape and `%Function.prototype%`'s chain
+                // prove (`read_holder::prime_function_read`).
+                if gc_kind == Some(crate::gc::GC_TYPE_CLOSURE) {
+                    if let Some(val) = crate::object::method_site::read_holder::prime_function_read(
+                        obj as usize,
+                        key,
+                        cache_slot,
+                    ) {
+                        return val;
+                    }
+                }
                 if let Some(val) = closure_dynamic_prop_by_key(obj as usize, key) {
                     if diag {
                         ic_diag_note(cache_slot, key, R::ClosureProp);
@@ -960,15 +957,19 @@ pub(super) fn get_field_ic_miss_impl(
                 }
                 // The generic IC-miss object path below may inspect GC/object
                 // metadata, so mirror js_object_get_field_by_name's
-                // buffer-first dispatch here.
-                if crate::buffer::is_registered_buffer(obj as usize) {
+                // buffer-first dispatch here. One header read rules both
+                // arms out for every other receiver (#10694).
+                let binary_receiver = crate::typedarray::is_offheap_sidetable_alloc(obj as usize);
+                if binary_receiver && crate::buffer::is_registered_buffer(obj as usize) {
                     if diag {
                         ic_diag_note(cache_slot, key, R::Buffer);
                     }
                     let value = js_object_get_field_by_name(obj, key);
                     return f64::from_bits(value.bits());
                 }
-                if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some() {
+                if binary_receiver
+                    && crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+                {
                     if diag {
                         ic_diag_note(cache_slot, key, R::TypedArray);
                     }
@@ -1109,11 +1110,8 @@ pub(super) fn get_field_ic_miss_impl(
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
             };
-            // #10868 step 2.5 stage 1: "no keys array" implies "no own
-            // properties" for every receiver EXCEPT a dictionary-mode one,
-            // whose key list lives in its `ObjectMeta`. Priming the
-            // inherited-read cache on that claim would answer an OWN property
-            // from the prototype chain — a wrong value, not a slow one.
+            // A dictionary-mode receiver stores its key list in ObjectMeta;
+            // the no-keys-array shortcut cannot classify it as empty.
             if crate::object::dictionary::is_dictionary(obj) {
                 let value = js_object_get_field_by_name(obj, key);
                 return f64::from_bits(value.bits());
@@ -1123,39 +1121,14 @@ pub(super) fn get_field_ic_miss_impl(
                 if diag {
                     ic_diag_note(cache_slot, key, R::ObjectNoKeys);
                 }
-                // #10834 gated its only prime site on `miss_reason == NotOwn`,
-                // and this arm returns before reaching it. A receiver with no
-                // keys array has NO own properties at all, so "the key is not
-                // an own property" holds here MORE strongly than it does for
-                // `NotOwn` — and this is the single most common inherited-read
-                // shape there is: `Object.create(p)` with nothing of its own.
-                //
-                // Without this the lookup at the top of this function runs on
-                // every such read, always misses because nothing can ever be
-                // recorded, and the chain walk proceeds unchanged: measured at
-                // +106 instructions per read against the same binary with
-                // `PERRY_INHERITED_IC=0`, i.e. the cache was pure overhead for
-                // this shape.
-                // The site's holder entry: primed here, answered by the
-                // emitted tower from then on (`method_site::read_holder`).
+                // An empty ordinary receiver has no own keys. Prime the
+                // site's holder-shape answer before the generic walk.
                 if let Some(value) =
                     crate::object::method_site::read_holder::prime_read_holder(obj, key, cache_slot)
                 {
                     return f64::from_bits(value.bits());
                 }
-                if !inherited_declined {
-                    // Already inside this function's `unsafe` block (line 874),
-                    // so a nested one is `unused_unsafe` under -D warnings.
-                    if let Some(value) =
-                        crate::object::inherited_read_cache::inherited_read_cache_prime(obj, key)
-                    {
-                        return f64::from_bits(value.bits());
-                    }
-                }
-                // Past the cache, not through it: the lookup at the top of
-                // this function has already asked.
-                let value =
-                    super::get_field_by_name::get_field_by_name_past_inherited_cache(obj, key);
+                let value = super::get_field_by_name::get_field_by_name_after_site_miss(obj, key);
                 return f64::from_bits(value.bits());
             }
             // #10939: `header + 8` is not where a keys array's elements
@@ -1291,11 +1264,8 @@ pub(super) fn get_field_ic_miss_impl(
     if diag {
         ic_diag_note(cache_slot, key, miss_reason);
     }
-    // Lane 3 hook B: the own-key search above has failed, so this is the one
-    // place in the runtime that KNOWS the key is not an own property without
-    // paying for a second search. Walk the chain once and record the answer.
-    // A decline leaves the generic getter below untouched, which is today's
-    // behaviour for every case the cache refuses.
+    // The own-key search above has failed. Record a holder-shape answer at
+    // the site when this receiver and chain admit one.
     if matches!(miss_reason, R::NotOwn) {
         // The site's holder entry (`method_site::read_holder`).
         if let Some(value) = unsafe {
@@ -1304,16 +1274,7 @@ pub(super) fn get_field_ic_miss_impl(
             return f64::from_bits(value.bits());
         }
     }
-    if matches!(miss_reason, R::NotOwn) && !inherited_declined {
-        if let Some(value) =
-            unsafe { crate::object::inherited_read_cache::inherited_read_cache_prime(obj, key) }
-        {
-            return f64::from_bits(value.bits());
-        }
-    }
-    // Past the cache, not through it: hook A above has already asked, and for
-    // the reads this cache refuses that question is the whole added cost.
-    let value = super::get_field_by_name::get_field_by_name_past_inherited_cache(obj, key);
+    let value = super::get_field_by_name::get_field_by_name_after_site_miss(obj, key);
     f64::from_bits(value.bits())
 }
 
@@ -1504,16 +1465,6 @@ pub(crate) fn get_field_ic_dispatch(
         // The monomorphic hit the emitted diamond does inline. Everything it
         // declines still reaches the handler below, so this only ever removes
         // work. See `pic_outlined_mru_hit`.
-        //
-        // The inherited-read hook the inline tower emits on its declined edge
-        // (`js_inherited_read_cache_hit_f64`) is deliberately NOT mirrored
-        // here: this entry is already inside the runtime, so the cost that
-        // hook removes for an inline site (the slow entry's prologue and
-        // dispatch) is already paid, and `get_field_ic_miss_impl` asks the
-        // same cache first thing for a heap receiver (hook A). The two
-        // programs answer from the same lookup in the same order — own hit,
-        // then the inherited cache, then the ladder — so they stay
-        // behaviourally identical with one call fewer here.
         //
         // POINTER tag only, exactly as the emitted tower tests it (#10833):
         // the hit compares the receiver's `+4` word against a ShapeId with no
@@ -1773,7 +1724,6 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
     if declaring_class_id == 0 {
         return None;
     }
-    let value = crate::proxy::private_element_receiver(value);
     let value_is_class_object = super::super::class_registry::is_class_object_value(value);
     if value_is_class_object {
         let object = JSValue::from_bits(value.to_bits()).as_pointer::<ObjectHeader>();
@@ -1811,7 +1761,6 @@ fn private_evaluation_brand(value: f64, declaring_class_id: u32) -> Option<u64> 
 /// caller to know the compile-time template id; method dispatch uses it to
 /// establish the callee's lexical private-name environment.
 pub(crate) fn private_evaluation_brand_value(value: f64) -> Option<f64> {
-    let value = crate::proxy::private_element_receiver(value);
     if super::super::class_registry::is_class_object_value(value) {
         return Some(value);
     }
@@ -1833,44 +1782,42 @@ pub(crate) fn private_evaluation_brand_value(value: f64) -> Option<f64> {
 include!("ic_miss/private_member_access.rs");
 include!("ic_miss/private_guard_fast.rs");
 
-#[cfg(test)]
-fn private_field_marker_key(
-    declaring_class_id: u32,
-    field_name_ptr: *const u8,
-    field_name_len: u32,
-) -> Option<String> {
-    private_field_marker_key_for(None, declaring_class_id, field_name_ptr, field_name_len)
-}
-
-fn private_field_marker_key_for(
-    receiver: Option<f64>,
-    declaring_class_id: u32,
-    field_name_ptr: *const u8,
-    field_name_len: u32,
-) -> Option<String> {
-    if field_name_ptr.is_null() || field_name_len == 0 {
+/// The object that holds `value`'s private elements (#11791): `value`
+/// itself when it is a shaped object. A Proxy holds none of its target's
+/// private elements, and a primitive holds none at all.
+///
+/// # Safety
+/// Reads only headers; `value` may be any NaN-boxed value.
+unsafe fn private_element_holder(value: f64) -> Option<*mut ObjectHeader> {
+    let value = JSValue::from_bits(value.to_bits());
+    if !value.is_pointer() {
         return None;
     }
-    let field_name = unsafe {
-        std::str::from_utf8(std::slice::from_raw_parts(
-            field_name_ptr,
-            field_name_len as usize,
-        ))
-        .ok()?
-    };
-    let field_name = field_name.to_owned();
-    Some(format!(
-        "#<perry:private-field:{}:{field_name}>",
-        private_storage_namespace_for(declaring_class_id, receiver)
-    ))
+    let object = value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    (crate::value::addr_class::is_plausible_heap_addr(object as usize)
+        && crate::object::object_is_shaped(object))
+    .then_some(object)
 }
 
-fn private_marker_is_present(storage: f64, marker: &str) -> bool {
-    crate::object::js_object_get_own_field_or_undef(storage, marker.as_ptr(), marker.len())
-        .to_bits()
-        != crate::value::TAG_UNDEFINED
+/// The private brand of class `class_id` in evaluation `evaluation_id`
+/// (#11791): the class id for the shared evaluation, the evaluation's scalar
+/// id (`private_storage_evaluation_id`) with the top bit set for a fresh one,
+/// so the two spaces never meet. Scalars: a brand retains no class object.
+#[inline]
+fn private_brand_id(class_id: u32, evaluation_id: u64) -> u64 {
+    if evaluation_id == 0 {
+        u64::from(class_id)
+    } else {
+        PRIVATE_FRESH_EVALUATION_BRAND | evaluation_id
+    }
 }
 
+/// Marks a brand that names a fresh evaluation rather than a class id.
+pub(crate) const PRIVATE_FRESH_EVALUATION_BRAND: u64 = 1 << 63;
+
+/// Is private element `name` (`kind` 0 = field, else a method or accessor,
+/// which the class brand covers) of `declaring_class_id` present on
+/// `storage`, in the evaluation the access resolves to?
 fn private_instance_element_is_present(
     storage: f64,
     declaring_class_id: u32,
@@ -1878,31 +1825,41 @@ fn private_instance_element_is_present(
     field_name_len: u32,
     kind: u32,
 ) -> bool {
+    if field_name_ptr.is_null() || field_name_len == 0 {
+        return false;
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(field_name_ptr, field_name_len as usize) };
+    let Some(name) = intern_private_name(bytes) else {
+        return false;
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let storage = scope.root_nanbox_f64(storage);
-    let marker = if kind == 0 {
-        private_field_marker_key_for(
-            Some(storage.get_nanbox_f64()),
-            declaring_class_id,
-            field_name_ptr,
-            field_name_len,
-        )
-    } else {
-        Some(format!(
-            "#<perry:private-brand:{}>",
-            private_storage_namespace_for(declaring_class_id, Some(storage.get_nanbox_f64()))
-        ))
-    };
-    marker.is_some_and(|marker| private_marker_is_present(storage.get_nanbox_f64(), &marker))
+    let evaluation_id =
+        private_storage_evaluation_id(declaring_class_id, Some(storage.get_nanbox_f64()), None);
+    if kind == 0 {
+        return private_storage_key_by_id(declaring_class_id, evaluation_id, name)
+            .is_present(storage.get_nanbox_f64());
+    }
+    let brand = private_brand_id(declaring_class_id, evaluation_id);
+    unsafe { private_element_holder(storage.get_nanbox_f64()) }
+        .is_some_and(|holder| unsafe { crate::object::shapes::object_has_brand(holder, brand) })
 }
 
-/// Install one class's instance-private brand on `obj`.
+/// The name a class takes in its brand-check messages.
+fn private_class_display_name(class_id: u32) -> String {
+    super::super::class_registry::class_name_for_id(class_id)
+        .filter(|name| !name.is_empty())
+        .unwrap_or_else(|| "anonymous".to_string())
+}
+
+/// Install one class's instance-private brand on `obj` (#11791): move `obj`
+/// to the shape that also carries the brand.
 ///
-/// A class contributes one brand regardless of how many private fields,
-/// methods, or accessors it declares.  Re-installing that brand on the same
-/// object is the observable error required by PrivateFieldAdd and
-/// PrivateMethodOrAccessorAdd (for example when a base constructor returns an
-/// object that was already initialized by the derived class once).
+/// A class contributes one brand regardless of how many private methods or
+/// accessors it declares. Re-installing that brand on the same object is the
+/// observable error PrivateMethodOrAccessorAdd requires (for example when a
+/// base constructor returns an object that was already initialized by the
+/// derived class once).
 #[no_mangle]
 pub extern "C" fn js_private_brand_add(obj: f64, declaring_class_id: u32) -> f64 {
     if declaring_class_id == 0 {
@@ -1910,39 +1867,29 @@ pub extern "C" fn js_private_brand_add(obj: f64, declaring_class_id: u32) -> f64
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_nanbox_f64(obj);
-    let marker = format!(
-        "#<perry:private-brand:{}>",
-        private_storage_namespace_for(declaring_class_id, Some(obj.get_nanbox_f64()))
-    );
-    let storage = crate::proxy::private_element_receiver(obj.get_nanbox_f64());
-    if private_marker_is_present(storage, &marker) {
-        throw_private_type_error("Cannot initialize private elements twice on the same object");
+    // Resolving the evaluation can allocate class metadata; the holder is
+    // derived from the rooted value afterwards.
+    let evaluation_id =
+        private_storage_evaluation_id(declaring_class_id, Some(obj.get_nanbox_f64()), None);
+    let brand = private_brand_id(declaring_class_id, evaluation_id);
+    let Some(holder) = (unsafe { private_element_holder(obj.get_nanbox_f64()) }) else {
+        throw_private_type_error(&format!(
+            "Cannot initialize private methods of class {} on this object",
+            private_class_display_name(declaring_class_id)
+        ));
+    };
+    if !unsafe { crate::object::shapes::transition_object_shape_add_brand(holder, brand) } {
+        throw_private_type_error(&format!(
+            "Cannot initialize private methods of class {} twice on the same object",
+            private_class_display_name(declaring_class_id)
+        ));
     }
-    let value = JSValue::from_bits(storage.to_bits());
-    if !value.is_pointer() {
-        throw_private_type_error("Cannot initialize private elements on a non-object");
-    }
-    let object = value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
-    if object.is_null() || !crate::value::addr_class::is_plausible_heap_addr(object as usize) {
-        throw_private_type_error("Cannot initialize private elements on a non-object");
-    }
-    // The marker-key allocation can evacuate both the receiver and any live
-    // value. Root first, then derive raw pointers only inside scoped handle
-    // accessors after the allocation.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let object = scope.root_raw_mut_ptr(object);
-    let key = crate::string::js_string_from_bytes(marker.as_ptr(), marker.len() as u32);
-    let key = scope.root_string_ptr(key);
-    object.with_mut_ptr::<ObjectHeader, _>(|object| {
-        key.with_const_ptr::<crate::StringHeader, _>(|key| {
-            js_object_set_field_by_name(object, key, f64::from_bits(crate::value::TAG_TRUE));
-        });
-    });
     obj.get_nanbox_f64()
 }
 
-/// Define an instance private field without going through Proxy [[Set]].  The
-/// corresponding class brand is installed once by `js_private_brand_add`.
+/// Define an instance private field (#11791): claim its qualified name as an
+/// own `ENTRY_PRIVATE` entry and store the value. Never Proxy [[Set]] or
+/// [[DefineOwnProperty]]: a private field is not a property.
 #[no_mangle]
 pub extern "C" fn js_private_field_add(
     obj: f64,
@@ -1964,51 +1911,67 @@ pub extern "C" fn js_private_field_add(
     }
     let field_name_len = unsafe { (*field_key_ptr).byte_len };
     let field_name_ptr = crate::string::string_data(field_key_ptr);
-    let field_name = unsafe {
-        std::str::from_utf8(std::slice::from_raw_parts(
-            field_name_ptr,
-            field_name_len as usize,
-        ))
-    }
-    .unwrap_or_else(|_| throw_private_type_error("Invalid private field name"));
-    let field_name = field_name.to_owned();
-    let marker = private_field_marker_key_for(
-        Some(obj.get_nanbox_f64()),
-        declaring_class_id,
-        field_name.as_ptr(),
-        field_name.len() as u32,
-    )
+    let field_name = intern_private_name(unsafe {
+        std::slice::from_raw_parts(field_name_ptr, field_name_len as usize)
+    })
     .unwrap_or_else(|| throw_private_type_error("Invalid private field name"));
-    let storage_name =
-        private_instance_value_name(declaring_class_id, &field_name, obj.get_nanbox_f64(), None);
-    let storage = crate::proxy::private_element_receiver(obj.get_nanbox_f64());
-    if private_marker_is_present(storage, &marker) {
-        throw_private_type_error("Cannot initialize a private field twice on the same object");
+    let storage =
+        private_instance_value_name(declaring_class_id, field_name, obj.get_nanbox_f64(), None);
+    if storage.is_present(obj.get_nanbox_f64()) {
+        throw_private_type_error(&format!(
+            "Cannot initialize {field_name} twice on the same object"
+        ));
     }
-    let receiver = JSValue::from_bits(storage.to_bits());
-    if !receiver.is_pointer() {
-        throw_private_type_error("Cannot initialize a private field on a non-object");
-    }
-    let object = receiver.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
-    if object.is_null() || !crate::value::addr_class::is_plausible_heap_addr(object as usize) {
-        throw_private_type_error("Cannot initialize a private field on a non-object");
-    }
-    let object = scope.root_raw_mut_ptr(object);
-    let storage_key =
-        crate::string::js_string_from_bytes(storage_name.as_ptr(), storage_name.len() as u32);
-    let storage_key = scope.root_string_ptr(storage_key);
-    let marker_key = crate::string::js_string_from_bytes(marker.as_ptr(), marker.len() as u32);
-    let marker_key = scope.root_string_ptr(marker_key);
-    object.with_mut_ptr::<ObjectHeader, _>(|object| {
-        storage_key.with_const_ptr::<crate::StringHeader, _>(|storage_key| {
-            js_object_set_field_by_name(object, storage_key, value.get_nanbox_f64());
-        });
+    let Some(holder) = (unsafe { private_element_holder(obj.get_nanbox_f64()) }) else {
+        throw_private_type_error(&format!("Cannot initialize {field_name} on this object"));
+    };
+    // The claim allocates the key (inside its own no-move window); the store
+    // re-reads the holder from its handle.
+    let pred_rep = crate::object::shapes::shape_rep_by_id(unsafe {
+        crate::object::shapes::object_shape_stamp(holder)
     });
-    object.with_mut_ptr::<ObjectHeader, _>(|object| {
-        marker_key.with_const_ptr::<crate::StringHeader, _>(|marker_key| {
-            js_object_set_field_by_name(object, marker_key, f64::from_bits(crate::value::TAG_TRUE));
-        });
+    let holder = scope.root_raw_mut_ptr(holder);
+    holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+        crate::object::key_attrs::apply_edits(
+            holder,
+            &[crate::object::key_attrs::AttrsEdit::Private(
+                storage.as_bytes(),
+            )],
+        )
     });
+    if !storage.set_cached(obj.get_nanbox_f64(), value.get_nanbox_f64()) {
+        // A dictionary holder: its private list carries the entry, and the
+        // generic store overwrites the claimed key in place.
+        let key = scope.root_string_ptr(crate::string::intern_ascii_literal(storage.as_bytes()));
+        holder.with_mut_ptr::<ObjectHeader, _>(|holder| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                js_object_set_field_by_name(holder, key, value.get_nanbox_f64())
+            })
+        });
+        return value.get_nanbox_f64();
+    }
+    // The claim is an append: like any key-add's, its successor carries the
+    // predecessor's lanes, and the initializer's value types the new slot (a
+    // Number in an inline slot is an `F64` lane, which compiled field sites
+    // read and write raw).
+    let slot = holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+        let keys = crate::object::object_keys(holder);
+        if keys.is_null() {
+            None
+        } else {
+            crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), storage.as_bytes())
+        }
+    });
+    if let Some(slot) = slot {
+        let lanes = holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+            crate::object::field_rep_store::private_field_lanes_target(holder, slot, pred_rep)
+        });
+        if let Some(lanes) = lanes {
+            holder.with_mut_ptr::<ObjectHeader, _>(|holder| unsafe {
+                crate::object::field_rep_store::install_private_field_lanes(holder, slot, lanes)
+            });
+        }
+    }
     value.get_nanbox_f64()
 }
 
@@ -2021,6 +1984,13 @@ pub extern "C" fn js_class_field_add(receiver: f64, key: f64, value: f64) -> f64
     let receiver = scope.root_nanbox_f64(receiver);
     let key = scope.root_nanbox_f64(key);
     let value = scope.root_nanbox_f64(value);
+    if class_field_define_fast::try_define_new_class_field(
+        receiver.get_nanbox_f64(),
+        key.get_nanbox_f64(),
+        value.get_nanbox_f64(),
+    ) {
+        return value.get_nanbox_f64();
+    }
     // Use [[DefineOwnProperty]] for both ordinary objects and Proxies.  The
     // ordinary define path bypasses an inherited setter; the Proxy path invokes
     // the receiver's `defineProperty` trap.  A normal `[[Set]]` helper cannot
@@ -2105,7 +2075,7 @@ fn private_guard_checked(
     let is_write = op & 1 != 0;
     // #10501: settle the common instance access without spelling a marker.
     if !is_static {
-        if let Some(slot) = private_instance_access_is_proven(
+        if let Some(proof) = private_instance_access_is_proven(
             obj,
             brand_owner,
             declaring_class_id,
@@ -2114,7 +2084,7 @@ fn private_guard_checked(
         ) {
             private_guard_record_access(
                 declaring_class_id,
-                slot.name,
+                proof.name,
                 kind,
                 false,
                 is_write,
@@ -2140,9 +2110,15 @@ fn private_guard_checked(
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_root = scope.root_nanbox_f64(obj);
     let brand_owner_root = scope.root_nanbox_f64(brand_owner);
+    let field_name = interned.unwrap_or("");
     if is_static && crate::proxy::js_proxy_is_proxy(obj) != 0 {
-        throw_private_type_error(
-            "Cannot access private member from an object whose class did not declare it",
+        throw_private_brand_mismatch(
+            obj,
+            declaring_class_id,
+            field_name,
+            kind,
+            is_static,
+            is_write,
         );
     }
     let _owner = PrivateHintBrandScope::new(private_access_owner(brand_owner, declaring_class_id));
@@ -2155,7 +2131,7 @@ fn private_guard_checked(
             super::super::class_ref_id(obj) == Some(declaring_class_id)
         } else {
             private_instance_element_is_present(
-                crate::proxy::private_element_receiver(obj),
+                obj,
                 declaring_class_id,
                 _field_name_ptr,
                 _field_name_len,
@@ -2164,22 +2140,33 @@ fn private_guard_checked(
         }
     });
     if !has_brand {
-        throw_private_type_error(
-            "Cannot access private member from an object whose class did not declare it",
+        throw_private_brand_mismatch(
+            obj,
+            declaring_class_id,
+            field_name,
+            kind,
+            is_static,
+            is_write,
         );
     }
     // Without an evaluation verdict the brand above WAS the element-present
     // check, under this same lexical scope, so repeating it cannot differ.
     if !is_static && evaluation_verdict.is_some() {
-        let storage = crate::proxy::private_element_receiver(obj_root.get_nanbox_f64());
         if !private_instance_element_is_present(
-            storage,
+            obj_root.get_nanbox_f64(),
             declaring_class_id,
             _field_name_ptr,
             _field_name_len,
             kind,
         ) {
-            throw_private_type_error("Cannot access private member before it has been initialized");
+            throw_private_brand_mismatch(
+                obj,
+                declaring_class_id,
+                field_name,
+                kind,
+                false,
+                is_write,
+            );
         }
     }
     let access_owner = private_access_owner(brand_owner_root.get_nanbox_f64(), declaring_class_id);
@@ -2192,11 +2179,67 @@ fn private_guard_checked(
         access_owner,
         record_hints,
     );
-    if is_static {
-        obj_root.get_nanbox_f64()
-    } else {
-        crate::proxy::private_element_receiver(obj_root.get_nanbox_f64())
-    }
+    obj_root.get_nanbox_f64()
+}
+
+/// Throw node's TypeError for a private access whose receiver lacks the
+/// element (#11791): a field names the operation, a method or accessor names
+/// the class the receiver must be an instance of. Diverges.
+fn throw_private_brand_mismatch(
+    receiver: f64,
+    class_id: u32,
+    name: &str,
+    kind: u32,
+    is_static: bool,
+    is_write: bool,
+) -> ! {
+    let nullish = match receiver.to_bits() {
+        crate::value::TAG_NULL => Some("null"),
+        crate::value::TAG_UNDEFINED => Some("undefined"),
+        _ => None,
+    };
+    let message = match (nullish, kind, is_write) {
+        // A field (or a static field) names itself; an instance method or
+        // accessor names its class, as V8 does.
+        (Some(what), 0, false) => format!("Cannot read properties of {what} (reading '{name}')"),
+        (Some(what), 0, true) => format!("Cannot set properties of {what} (setting '{name}')"),
+        (Some(what), _, _) if !is_static => format!(
+            "Cannot read properties of {what} (reading '{}')",
+            private_class_display_name(class_id)
+        ),
+        _ => throw_private_receiver_mismatch(class_id, name, kind, is_static, is_write),
+    };
+    throw_private_type_error(&message)
+}
+
+fn throw_private_receiver_mismatch(
+    class_id: u32,
+    name: &str,
+    kind: u32,
+    is_static: bool,
+    is_write: bool,
+) -> ! {
+    let message = match (kind, is_write) {
+        (0, false) => {
+            format!(
+                "Cannot read private member {name} from an object whose class did not declare it"
+            )
+        }
+        (0, true) => {
+            format!(
+                "Cannot write private member {name} to an object whose class did not declare it"
+            )
+        }
+        _ if is_static => format!(
+            "Receiver must be class {}",
+            private_class_display_name(class_id)
+        ),
+        _ => format!(
+            "Receiver must be an instance of class {}",
+            private_class_display_name(class_id)
+        ),
+    };
+    throw_private_type_error(&message)
 }
 
 #[cfg(test)]

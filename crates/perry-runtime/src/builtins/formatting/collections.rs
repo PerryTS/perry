@@ -162,6 +162,8 @@ pub(super) fn raw_heap_pointer_display(value: f64, depth: usize) -> Option<Strin
     let raw_bits = value.to_bits();
     if raw_bits > 0x1000
         && (raw_bits >> 48) == 0
+        // #10694: allocator-owned before the brand probes read the header.
+        && crate::buffer::header_is_owned(raw_bits as usize)
         && (crate::typedarray::lookup_typed_array_kind(raw_bits as usize).is_some()
             || crate::buffer::is_registered_buffer(raw_bits as usize))
     {

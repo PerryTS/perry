@@ -1,0 +1,28 @@
+{
+  "private_commit": "d4f491673b",
+  "base": "07e50b14a3",
+  "runtime": {
+    "passed": 4878,
+    "failed": 0,
+    "ignored": 5
+  },
+  "tracked_inputs": 5011,
+  "result": {
+    "command": [
+      "cargo",
+      "+nightly-2026-08-20",
+      "test",
+      "--locked",
+      "--release",
+      "-p",
+      "perry-runtime",
+      "--lib"
+    ],
+    "rc": 0,
+    "pid": 10946,
+    "elapsed_s": 170.58751537511125,
+    "source_manifest_sha256": "f8a585c0fae95ada439895d258eb815f8a59523d62a169e0268304d998716ee4",
+    "raw_log_sha256": "b8ab7ee7a42ca7e5e77d64c59d57c11695ccf15a8ca8459e120e15e1294df8e5"
+  },
+  "scope": "Full unfiltered Mac runtime suite; real copied minor skips RSS and pinned fallback samples positive RSS. No application benefit yet."
+}

@@ -1185,6 +1185,8 @@ fn infers_class_prototype_and_super_meta_value_shapes() {
                 computed_statics: Vec::new(),
                 static_init_order: Vec::new(),
                 captured_args: Vec::new(),
+                shared_first_evaluation: None,
+                evaluated_parent: None,
             },
             &env,
         ),

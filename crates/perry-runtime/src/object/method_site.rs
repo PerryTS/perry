@@ -9,9 +9,16 @@
 //!   proves the value is a closure whose body info equals
 //!   [`MethodEntry::info`], and calls [`MethodEntry::code`] directly with the
 //!   receiver as `this`;
-//! * **inherited entry** ([`METHOD_SITE_INHERITED`] in `slot`) — compares
-//!   [`MethodEntry::gen`] against `PERRY_PROTO_VALIDITY` and calls
-//!   [`MethodEntry::code`] on the memoized closure [`MethodEntry::closure`].
+//! * **inherited entry** ([`METHOD_SITE_INHERITED`] in `slot`) — compares the
+//!   direct holder's word with [`MethodEntry::gen`], loads its slot, proves
+//!   the loaded closure has [`MethodEntry::info`], and calls it directly.
+//! * **ConstFn entry** ([`METHOD_SITE_CONSTFN`], own or inherited) — the
+//!   compared shape (the receiver's, or for an inherited entry the holder's)
+//!   carries a ConstFn lane for the slot, so the slot holds a closure of the
+//!   recorded body: the hit loads it only as the callee environment and calls
+//!   [`MethodEntry::code`] with exactly the call's arguments, with no kind or
+//!   info check. Primed only for a body declaring at most the call's argument
+//!   count (a body that wants `undefined` padding keeps a plain entry).
 //!
 //! Everything else calls [`js_method_site_miss`], which primes the entry when
 //! the facts below hold and then performs the ordinary dispatch.
@@ -30,19 +37,15 @@
 //!   seen at once. The body info, not the closure, is compared: a factory
 //!   that returns fresh closures per object shares one body, and the call
 //!   passes the LOADED closure, so each object's captures are its own.
-//! * An inherited entry holds the method closure itself. The chain it was
-//!   found through is made of MARKED prototypes only, and
-//!   `PERRY_PROTO_VALIDITY` moves on every structural change of a marked
-//!   object AND on every write to an existing slot of one
-//!   (`proto_validity::note_marked_value_write`, owner decision D3(b)), so an
-//!   unchanged word proves the closure is still the value `m` resolves to.
+//! * An inherited entry holds the direct holder as a strong root. The
+//!   receiver's shape pins that holder, and the holder's shape pins the
+//!   inline slot. A structural change invalidates one of those word compares;
+//!   a value overwrite is seen by loading the slot on every hit.
 //!
 //! What the prime refuses (they keep the ordinary dispatch): non-ordinary
 //! receivers (class objects, native-module namespaces, dictionaries,
 //! `Object.prototype`, typed-array prototypes, exotic read receivers),
-//! accessors, spill slots, class instances for the inherited entry (their
-//! methods live in the vtable until class prototypes carry real slots, D4),
-//! and any value that is not a plain closure the call can enter directly for
+//! accessors, spill slots, and any value that is not a plain closure the call can enter directly for
 //! this site's argument count (bound functions, rest / `arguments` bodies,
 //! runtime thunks, class constructors, closures that capture `this`).
 //!
@@ -66,34 +69,36 @@
 //! * an entry that holds a heap reference stores it in [`MethodEntry::closure`]
 //!   and is registered by [`publish`], so [`scan_method_site_roots_mut`] marks
 //!   and rewrites it;
-//! * anything the ShapeId does not pin is validated by `PERRY_PROTO_VALIDITY`
-//!   ([`MethodEntry::gen`]), which moves on every structural change of a
-//!   marked prototype and every write to an existing slot of one
-//!   (`proto_validity::note_marked_value_write`,
-//!   `proto_validity::store_cache_may_learn`);
+//! * an inherited entry records the direct holder's word in
+//!   [`MethodEntry::gen`]; deeper chains stay on ordinary dispatch;
 //! * primes run after the ordinary dispatch, with collection suppressed.
 //!
 //! # GC
 //!
-//! [`MethodEntry::closure`] is a STRONG root: marked, and rewritten when the
-//! closure moves (`scan_method_site_roots_mut`). Every site that ever primed an
+//! [`MethodEntry::closure`] is a STRONG root for the inherited holder: marked,
+//! and rewritten when it moves (`scan_method_site_roots_mut`). Every site that ever primed an
 //! inherited entry is registered once for the scan.
 //!
 //! # Agents
 //!
-//! Entries are primed only on the primary agent, like the chain-store
-//! verdicts. A program with workers emits thread-local site slots (#10399), so
-//! a worker never reads a primary-heap closure through a site.
+//! The first worker start atomically gates every emitted method site and
+//! prevents further primes. It does not rewrite a live site while primary
+//! code may be reading it. Existing inherited entries are no longer read or
+//! traced by any agent after the gate; their stale words are inert and the
+//! holders can be collected by the primary GC. The cost thereafter is
+//! ordinary method dispatch at every site.
 
 use crate::object::ObjectHeader;
 
+pub(crate) mod chain_memo;
+mod function_intrinsic;
 pub(crate) mod read_holder;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// `word` of a site no prime has touched: no receiver word is all-ones.
 pub const METHOD_SITE_EMPTY: u64 = u64::MAX;
 /// The `slot` bit that marks an inherited entry.
-pub const METHOD_SITE_INHERITED: u64 = 1 << 63;
+pub const METHOD_SITE_INHERITED: u64 = crate::codegen_abi::METHOD_SITE_INHERITED;
 /// The `slot` bit that marks an own entry whose key lives in the receiver's
 /// spill buffer (`ObjectMeta::spill`) at the index in the low bits.
 pub const METHOD_SITE_SPILL: u64 = 1 << 62;
@@ -102,6 +107,8 @@ pub const METHOD_SITE_SPILL: u64 = 1 << 62;
 /// (`ClosureHeader::props`, `closure/props.rs`). A keyed Function ShapeId is
 /// canonical per that object's key list, so the receiver word pins the slot.
 pub const METHOD_SITE_FUNCTION_BAG: u64 = crate::codegen_abi::METHOD_SITE_FUNCTION_BAG;
+/// An own inline method whose ShapeId owns the body's identity.
+pub const METHOD_SITE_CONSTFN: u64 = crate::codegen_abi::METHOD_SITE_CONSTFN;
 /// The index bits of an entry's `slot` word.
 pub const METHOD_SITE_INDEX_MASK: u64 = crate::codegen_abi::METHOD_SITE_INDEX_MASK;
 
@@ -112,14 +119,15 @@ pub const METHOD_SITE_INDEX_MASK: u64 = crate::codegen_abi::METHOD_SITE_INDEX_MA
 pub struct MethodEntry {
     /// The receiver's `(class_id | ShapeId << 32)` word.
     pub word: u64,
-    /// Own entry: the inline slot. Inherited entry: [`METHOD_SITE_INHERITED`].
+    /// Own entry: the inline slot, optionally tagged as ConstFn. Inherited
+    /// entry: [`METHOD_SITE_INHERITED`] plus the direct holder's slot index.
     pub slot: u64,
     /// The method body's `JsFunctionInfo` (the identity an own hit compares
     /// the slot closure's info word with).
     pub info: u64,
-    /// Inherited entry: the method closure's address (a STRONG GC root).
+    /// Inherited entry: the direct holder's address (a STRONG GC root).
     pub closure: usize,
-    /// Inherited entry: `PERRY_PROTO_VALIDITY` when the entry was primed.
+    /// Inherited entry: the holder's full `(class_id | ShapeId)` word.
     pub gen: u64,
     /// The method body's code address, the hit's call target.
     pub code: u64,
@@ -184,51 +192,67 @@ const _: () = {
 /// The emitted `@perry_ic_N = private global ptr null` for a method site.
 pub type MethodSiteSlot = *mut MethodSite;
 
-crate::perry_thread_local! {
-    /// Every site that holds (or held) an inherited entry, for the root scan.
-    static METHOD_SITES: std::cell::UnsafeCell<Vec<*mut MethodSite>> =
-        const { std::cell::UnsafeCell::new(Vec::new()) };
-}
+/// Every site that holds (or held) an inherited entry, for the primary agent's
+/// root scan until a worker starts. The sites are process-lifetime
+/// allocations, but their holders belong to the primary heap.
+static METHOD_SITES: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
 
-/// Set when the first `perry/thread` worker agent starts. Site memos are
-/// process-global and an inherited entry holds a primary-heap closure, so from
-/// then on no inherited entry is primed and every existing one is dead: the
-/// same call bumps `PERRY_PROTO_VALIDITY`, which no entry primed earlier can
-/// match again. Own entries hold no heap reference (ShapeIds are
-/// process-unique; the call passes the receiver's own closure).
-static WORKER_AGENTS_EXIST: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+/// Sticky process-wide gate: a worker cannot read a primary-heap holder from
+/// a process-global method or read site. Emitted method sites read this byte
+/// atomically and take the generic miss once it is set. Keeping the old words
+/// intact avoids racing a worker startup write against a primary inline hit.
+/// After the gate, no agent reads or traces the stale entries, so they do not
+/// retain their primary-heap holders.
+#[cfg_attr(not(test), export_name = "PERRY_METHOD_SITE_WORKERS_PRESENT")]
+pub(crate) static WORKER_AGENTS_EXIST: std::sync::atomic::AtomicU8 =
+    std::sync::atomic::AtomicU8::new(0);
+
+/// Run a gate-sensitive unit in a fresh test process. Worker startup is
+/// process-wide and sticky: clearing it in a parallel libtest process can
+/// re-enable a worker's access to primary-heap holder pointers.
+#[cfg(test)]
+pub(crate) fn run_with_fresh_worker_gate(filter: &str) -> bool {
+    const MARKER: &str = "PERRY_A2_FRESH_WORKER_GATE_TEST";
+    if std::env::var_os(MARKER).as_deref() == Some(std::ffi::OsStr::new(filter)) {
+        return true;
+    }
+    let output = std::process::Command::new(std::env::current_exe().expect("test executable"))
+        .arg("--test-threads=1")
+        .arg(filter)
+        .env(MARKER, filter)
+        .output()
+        .expect("run filtered test in a fresh process");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success() && stdout.contains("running 1 test") && stdout.contains("1 passed"),
+        "isolated test {filter} failed or matched no test:\n{stdout}\n{stderr}",
+    );
+    false
+}
 
 /// Called by `agent::enter_worker_agent` before the worker runs any code.
 pub fn note_worker_agent() {
-    if !WORKER_AGENTS_EXIST.swap(true, Ordering::SeqCst) {
+    // Publish the gate under the same lock as `publish`: every in-flight
+    // write finishes before a worker can run emitted code, and all later
+    // publishes decline. No site word is written at worker startup.
+    let _sites = METHOD_SITES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let first = WORKER_AGENTS_EXIST.swap(1, Ordering::SeqCst) == 0;
+    drop(_sites);
+    if first {
         super::proto_validity::bump_proto_validity();
-        read_holder::empty_read_holder_entries();
     }
 }
 
-/// Why a miss did not prime (diagnostic; `PERRY_METHOD_SITE_STATS` prints it).
-const REFUSALS: [&str; 19] = [
-    "not_object_pointer",
-    "not_ordinary",
-    "dictionary",
-    "own_spill_slot",
-    "own_accessor",
-    "own_not_direct_callable",
-    "inh_class_instance",
-    "inh_proto_not_in_shape",
-    "inh_hop_refused",
-    "inh_not_found",
-    "inh_not_direct_callable",
-    "inh_workers",
-    "dc_not_closure",
-    "dc_special",
-    "dc_rest",
-    "dc_captures_this",
-    "dc_arity_pad",
-    "dc_bound",
-    "site_megamorphic",
-];
+/// Why a miss did not prime (diagnostic; `PERRY_METHOD_SITE_STATS` prints it),
+/// by the index [`refuse`] counts under. One string, see
+/// [`crate::hot_diag::report_name`].
+fn refusal_name(reason: usize) -> &'static str {
+    const NAMES: &str = "not_object_pointer not_ordinary dictionary own_spill_slot own_accessor own_not_direct_callable inh_class_instance inh_proto_not_in_shape inh_hop_refused inh_not_found inh_not_direct_callable inh_workers dc_not_closure dc_special dc_rest dc_captures_this dc_arity_pad dc_bound site_megamorphic";
+    crate::hot_diag::report_name(NAMES, reason)
+}
 per_test_global! {
     static SITE_REFUSED: [AtomicU64; 19] = [const { AtomicU64::new(0) }; 19];
 }
@@ -240,8 +264,10 @@ fn refuse(reason: usize) {
 per_test_global! {
     static PRIMES_OWN: AtomicU64 = AtomicU64::new(0);
     static PRIMES_INHERITED: AtomicU64 = AtomicU64::new(0);
+    static HOLDER_REWRITES: AtomicU64 = AtomicU64::new(0);
     static MISSES: AtomicU64 = AtomicU64::new(0);
     static PRIMES_FUNCTION: AtomicU64 = AtomicU64::new(0);
+    static PRIMES_CONSTFN: AtomicU64 = AtomicU64::new(0);
 }
 
 /// Function-bag entries primed ([`METHOD_SITE_FUNCTION_BAG`]).
@@ -259,7 +285,7 @@ pub fn method_site_stats() -> (u64, u64, u64) {
 }
 
 /// `js_method_site_stats(which)`: 0 own primes, 1 inherited primes, 2 misses,
-/// 3 function-bag primes.
+/// 3 function-bag primes, 4 ConstFn own primes, 5 chain memo ways recorded.
 /// Exposed so gap tests can prove a path ran.
 #[no_mangle]
 pub extern "C" fn js_method_site_stats(which: i32) -> f64 {
@@ -268,16 +294,31 @@ pub extern "C" fn js_method_site_stats(which: i32) -> f64 {
         0 => a,
         1 => b,
         3 => method_site_function_primes(),
+        4 => PRIMES_CONSTFN.load(Ordering::Relaxed),
+        5 => chain_memo::chain_memo_records(),
         _ => c,
     }) as f64
 }
 
+/// Is `PERRY_METHOD_SITE_STATS` set? Read once; the reader that settles the
+/// answer installs the exit report. A tri-state byte (0 unread, 1 off, 2 on)
+/// rather than a `OnceLock<bool>`: `OnceLock` initialises through a `dyn`
+/// closure whose vtable is load-time relocations in every program that links
+/// the miss path.
 fn stats_report_enabled() -> bool {
     per_test_global! {
-        static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        static ON: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
     }
-    *ON.get_or_init(|| {
-        let on = std::env::var_os("PERRY_METHOD_SITE_STATS").is_some();
+    match ON.load(Ordering::Relaxed) {
+        0 => {}
+        state => return state == 2,
+    }
+    let on = std::env::var_os("PERRY_METHOD_SITE_STATS").is_some();
+    let state = if on { 2 } else { 1 };
+    if ON
+        .compare_exchange(0, state, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
         if on {
             extern "C" fn report() {
                 let (a, b, c) = method_site_stats();
@@ -285,20 +326,32 @@ fn stats_report_enabled() -> bool {
                 for (i, n) in SITE_REFUSED.iter().enumerate() {
                     let n = n.load(Ordering::Relaxed);
                     if n != 0 {
-                        refused.push_str(&format!(" refused.{}={n}", REFUSALS[i]));
+                        refused.push_str(&format!(" refused.{}={n}", refusal_name(i)));
                     }
                 }
                 let (hd, ha, hr) = read_holder::read_holder_stats();
+                let (ap, ah) = read_holder::read_accessor_stats();
+                let (cp, ch, cr) = read_holder::class_read_stats();
+                let (fp, fneg, fh) = function_intrinsic::function_intrinsic_stats();
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_holder_refused={hr} marked_value_write_bumps={}{refused}",
+                    "[method-site] fn_intrinsic_primes={fp} fn_intrinsic_negative={fneg} fn_intrinsic_hits={fh}"
+                );
+                eprintln!(
+                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} primes_constfn={} chain_memo_records={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} class_read_root_rewrites={cr} read_holder_rewrites={} read_accessor_rewrites={} read_accessor_same_shape_relinks={} read_holder_refused={hr}{refused}",
                     method_site_function_primes(),
-                    crate::object::proto_validity::marked_value_write_bumps()
+                    PRIMES_CONSTFN.load(Ordering::Relaxed),
+                    chain_memo::chain_memo_records(),
+                    HOLDER_REWRITES.load(Ordering::Relaxed),
+                    read_holder::read_accessor_class_primes(),
+                    read_holder::read_holder_rewrites(),
+                    read_holder::read_accessor_rewrites(),
+                    read_holder::read_accessor_same_shape_relinks()
                 );
             }
             unsafe { libc::atexit(report) };
         }
-        on
-    })
+    }
+    on
 }
 
 /// The miss entry: prime the site when the facts hold, then dispatch as the
@@ -322,11 +375,48 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
     else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
+    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
+        refuse(11);
+        return crate::typed_feedback::js_typed_feedback_native_call_method(
+            site_id,
+            recv,
+            name_ref.ptr as *const i8,
+            name_ref.len,
+            args_ptr,
+            argc,
+        );
+    }
+    let name = std::slice::from_raw_parts(name_ref.ptr, name_ref.len);
+    // One read of the receiver's header classifies it for both steps below.
+    let receiver = miss_receiver(recv);
+    // A function receiver calling an intrinsic it inherits from
+    // `%Function.prototype%` (`fn.bind(this)`): the site's function-intrinsic
+    // entry answers from words, or the call primes one (`function_intrinsic`).
+    // Only once the realm has built `%Function.prototype%` can an entry
+    // exist, and only for a receiver whose ShapeId says it inherits from it,
+    // whatever the key: the base Function shape, or a keyed Function shape
+    // over `Function.prototype`. A class method, a class function object, a
+    // FunctionDictionary receiver or an async/generator function is refused
+    // on its ShapeId, before any site or name is read.
+    if let MissReceiver::Function { word, base, keyed } = receiver {
+        if (base || keyed)
+            && crate::object::native_call_method::function_prototype_built()
+            && (base
+                || crate::closure::shape::keyed_function_shape_has_function_prototype(
+                    (word >> 32) as u32,
+                ))
+        {
+            if let Some(result) =
+                function_intrinsic::on_miss(slot, site_id, recv, word, name, args_ptr, argc)
+            {
+                return result;
+            }
+        }
+    }
     // Only an ordinary heap object can prime. Everything else (primitives,
     // handles, functions, arrays) dispatches with no extra work at all.
     let megamorphic = site_is_megamorphic(slot);
-    if megamorphic || !prime_candidate(recv, std::slice::from_raw_parts(name_ref.ptr, name_ref.len))
-    {
+    if megamorphic || !prime_candidate(receiver, name) {
         refuse(if megamorphic { 18 } else { 1 });
         return crate::typed_feedback::js_typed_feedback_native_call_method(
             site_id,
@@ -352,7 +442,6 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
         argc,
     );
     let result_h = scope.root_nanbox_f64(result);
-    let name = std::slice::from_raw_parts(name_ref.ptr, name_ref.len);
     {
         // The prime reads the receiver, its holder chain and the method value
         // as raw addresses and may allocate (a prototype mark, the
@@ -364,41 +453,77 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
     result_h.get_nanbox_f64()
 }
 
-/// A cheap first cut of [`ordinary_receiver`] / [`prime_function`]: a heap
-/// pointer whose GcHeader says ordinary object, or a function object whose
-/// SHAPE lists `name` as an own key. Most calls on functions (`fn.bind`,
-/// `fn.call`) name an inherited builtin a site never memoizes; they leave
-/// here on the shape's key list, before the miss roots anything.
+/// What one read of a miss receiver's header says.
+#[derive(Clone, Copy)]
+enum MissReceiver {
+    /// A heap object whose GcHeader says ordinary object.
+    Ordinary,
+    /// A heap function object: its word (`capture_count | ShapeId`), whether
+    /// its ShapeId is the base Function shape (keyless, over
+    /// `%Function.prototype%`), and whether it is keyed (neither that nor the
+    /// FunctionDictionary shape).
+    Function { word: u64, base: bool, keyed: bool },
+    /// Anything else: primitives, handles, arrays, strings.
+    Other,
+}
+
+// A closure's first word is `capture_count | ShapeId`: the ShapeId is its
+// high half.
+const _: () = assert!(crate::closure::CLOSURE_SHAPE_OFFSET == 4);
+
 #[inline]
-fn prime_candidate(recv: f64, name: &[u8]) -> bool {
+fn miss_receiver(recv: f64) -> MissReceiver {
     let bits = recv.to_bits();
     if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
-        return false;
+        return MissReceiver::Other;
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     if !crate::value::addr_class::is_above_handle_band(addr) {
-        return false;
+        return MissReceiver::Other;
     }
     match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => true,
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_CLOSURE => unsafe {
-            function_shape_lists_key(addr, name)
-        },
-        _ => false,
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => MissReceiver::Ordinary,
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_CLOSURE => {
+            // SAFETY: the header says a live closure; its first word is the
+            // `capture_count | ShapeId` word.
+            let word = unsafe { std::ptr::read(addr as *const u64) };
+            let id = (word >> 32) as u32;
+            let (base, dictionary) = crate::closure::shape::function_base_and_dictionary_shapes();
+            let keyed = id != base && super::shapes::is_exotic_shape_id(id) && id != dictionary;
+            MissReceiver::Function {
+                word,
+                base: id == base,
+                keyed,
+            }
+        }
+        _ => MissReceiver::Other,
     }
 }
 
-/// Does the (claimed) function object at `addr` sit on a KEYED Function shape
-/// whose key list holds `name`? Reads the ShapeId word and the shape's key
-/// list only; [`prime_function`] re-proves ownership before trusting it.
+/// A cheap first cut of [`ordinary_receiver`] / [`prime_function`]: an
+/// ordinary heap object, or a function object whose SHAPE lists `name` as an
+/// own key. Most calls on functions (`fn.bind`, `fn.call`) name an inherited
+/// builtin a site never memoizes; they leave here on the shape's key list,
+/// before the miss roots anything.
 #[inline]
-unsafe fn function_shape_lists_key(addr: usize, name: &[u8]) -> bool {
-    let id = *((addr as *const u8).add(crate::closure::CLOSURE_SHAPE_OFFSET) as *const u32);
-    if !super::shapes::is_exotic_shape_id(id)
-        || id == crate::closure::shape::function_dictionary_shape()
-    {
-        return false;
+fn prime_candidate(receiver: MissReceiver, name: &[u8]) -> bool {
+    match receiver {
+        MissReceiver::Ordinary => true,
+        // The base shape lists no key and the FunctionDictionary shape
+        // answers nothing: only a keyed shape can list `name`.
+        MissReceiver::Function {
+            word, keyed: true, ..
+        } => unsafe { function_shape_lists_key((word >> 32) as u32, name) },
+        MissReceiver::Function { .. } => false,
+        MissReceiver::Other => false,
     }
+}
+
+/// Does the keyed Function ShapeId `id` (a claimed function object's, see
+/// [`MissReceiver::Function`]) list `name` in its key list? Reads the shape's
+/// key list only; [`prime_function`] re-proves ownership before trusting it.
+#[inline]
+unsafe fn function_shape_lists_key(id: u32, name: &[u8]) -> bool {
     // The record in place (no descriptor copy): its key list and count.
     let Some(record) = super::shapes::shape_record_by_id(id) else {
         return false;
@@ -440,6 +565,12 @@ unsafe fn site_is_megamorphic(slot: *mut MethodSiteSlot) -> bool {
 /// receiver word, else into an empty one, else over the next in turn. The
 /// word is written LAST, so a half-written entry never matches.
 unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
+    let Ok(mut sites) = METHOD_SITES.lock() else {
+        return false;
+    };
+    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
+        return false;
+    }
     let site = site_of(slot);
     if site.is_null() {
         return false;
@@ -449,14 +580,14 @@ unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
     // an own entry replaces only the one naming the same slot AND body, so
     // objects of one shape holding different bodies each get an entry (the
     // emitted own hit falls through to the next way on a body mismatch).
-    let inherited = entry.slot == METHOD_SITE_INHERITED;
+    let inherited = entry.slot & METHOD_SITE_INHERITED != 0;
     let idx = site
         .entries
         .iter()
         .position(|e| {
             e.word == entry.word
                 && if inherited {
-                    e.slot == METHOD_SITE_INHERITED
+                    e.slot & METHOD_SITE_INHERITED != 0
                 } else {
                     e.slot == entry.slot && e.info == entry.info
                 }
@@ -473,8 +604,7 @@ unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
         });
     if entry.closure != 0 && site.registered == 0 {
         site.registered = 1;
-        let ptr = site as *mut MethodSite;
-        METHOD_SITES.with(|cell| (*cell.get()).push(ptr));
+        sites.push(site as *mut MethodSite as usize);
     }
     let e = &mut site.entries[idx];
     e.word = METHOD_SITE_EMPTY;
@@ -500,6 +630,7 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
     if slot.is_null()
         || name_refused(name)
         || crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
+        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
     {
         return;
     }
@@ -514,13 +645,23 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
         prime_function(slot, addr, name, argc);
         return;
     }
-    let Some(obj) = ordinary_receiver(addr) else {
-        let dict = crate::value::addr_class::try_read_gc_header(addr)
-            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
-            && !crate::closure::is_closure_ptr(addr)
-            && super::dictionary::is_dictionary(addr as *const ObjectHeader);
-        refuse(if dict { 2 } else { 1 });
-        return;
+    // A per-evaluation class object (`ClassExprFresh`) serves its OWN keys
+    // only: its static methods are own data properties of it, born in its
+    // template's final shape, but what it inherits follows its pinned
+    // parent, not a [[Prototype]] a holder entry could name.
+    let (obj, own_only) = match ordinary_receiver(addr) {
+        Some(obj) => (obj, false),
+        None => match class_object_receiver(addr) {
+            Some(obj) => (obj, true),
+            None => {
+                let dict = crate::value::addr_class::try_read_gc_header(addr)
+                    .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+                    && !crate::closure::is_closure_ptr(addr)
+                    && super::dictionary::is_dictionary(addr as *const ObjectHeader);
+                refuse(if dict { 2 } else { 1 });
+                return;
+            }
+        },
     };
     let Some(shape) = super::shapes::object_shape_descriptor(obj) else {
         refuse(1);
@@ -572,6 +713,43 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
             refuse(13);
             return;
         }
+        let slot_word = if s < crate::object::field_rep::REP_SLOTS
+            && shape.special_constfn_mask & (1 << s) != 0
+        {
+            // The shape, not this closure object, owns the body fact. A
+            // freshly allocated factory closure may have different captures;
+            // the hit must still load that receiver's current slot.
+            let body = shape
+                .constfn_infos()
+                .iter()
+                .find(|entry| u32::from(entry.slot) == s)
+                .map(|entry| entry.info);
+            if body != Some(info as *const crate::closure::JsFunctionInfo as u64)
+                || slot_word & METHOD_SITE_SPILL != 0
+            {
+                #[cfg(any(debug_assertions, feature = "field-rep-assert", perry_gc_instruments))]
+                if super::field_rep_store::field_rep_verify_enabled() {
+                    if let Some(record) =
+                        super::shapes::shape_record_by_id(super::shapes::object_shape_stamp(obj))
+                    {
+                        super::field_rep_store::assert_constfn_slot_body(
+                            obj, record, s as usize, value,
+                        );
+                    }
+                }
+                refuse(17);
+                return;
+            }
+            if declares_at_most(info, argc) {
+                slot_word | METHOD_SITE_CONSTFN
+            } else {
+                // The ConstFn hit passes exactly the call's arguments; a body
+                // that wants padding keeps the info-checked plain entry.
+                slot_word
+            }
+        } else {
+            slot_word
+        };
         let entry = MethodEntry {
             word,
             slot: slot_word,
@@ -582,7 +760,14 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
         };
         if publish(slot, entry) {
             PRIMES_OWN.fetch_add(1, Ordering::Relaxed);
+            if slot_word & METHOD_SITE_CONSTFN != 0 {
+                PRIMES_CONSTFN.fetch_add(1, Ordering::Relaxed);
+            }
         }
+        return;
+    }
+    if own_only {
+        refuse(1);
         return;
     }
     prime_inherited(slot, obj, word, name, argc);
@@ -690,6 +875,43 @@ unsafe fn ordinary_receiver(addr: usize) -> Option<*const ObjectHeader> {
     Some(obj)
 }
 
+/// A class object an own entry may serve: everything [`ordinary_receiver`]
+/// asks of an ordinary object, on an object whose shape kind is `Class`.
+///
+/// # Safety
+/// `addr` is a plausible object address.
+unsafe fn class_object_receiver(addr: usize) -> Option<*const ObjectHeader> {
+    if !crate::value::addr_class::is_above_handle_band(addr) {
+        return None;
+    }
+    let header = crate::value::addr_class::try_read_gc_header(addr)?;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || crate::closure::is_closure_ptr(addr)
+        || !address_is_prime_stable(addr)
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
+        || !super::class_registry::is_class_object_ptr(addr as *const u8)
+    {
+        return None;
+    }
+    // A class object is not `object_is_regular` (its kind is `Class`), but
+    // its own keys live in inline slots exactly as an ordinary object's do.
+    let obj = addr as *const ObjectHeader;
+    if super::dictionary::is_dictionary(obj)
+        || !super::shapes::is_shape_id(super::shapes::object_shape_stamp(obj))
+    {
+        return None;
+    }
+    let meta = (*obj).meta;
+    if !meta.is_null()
+        && ((*meta).elements != 0
+            || (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)
+    {
+        return None;
+    }
+    Some(obj)
+}
+
 fn address_is_prime_stable(addr: usize) -> bool {
     crate::value::addr_class::is_plausible_heap_addr(addr)
         && crate::arena::classify_heap_generation(addr) != crate::arena::HeapGeneration::Unknown
@@ -754,6 +976,16 @@ fn is_user_method(value_bits: u64, name: &[u8]) -> bool {
         Ok(name) => crate::array::value_is_own_user_method(f64::from_bits(value_bits), name),
         Err(_) => false,
     }
+}
+
+/// A ConstFn hit calls the body with exactly the call's `argc` arguments (the
+/// plain hit pads with `undefined`, see `method_site_padded_argc`), so a
+/// ConstFn entry is admitted only for a body declaring at most `argc`.
+fn declares_at_most(info: &crate::closure::JsFunctionInfo, argc: usize) -> bool {
+    matches!(
+        crate::closure::resolve_strategy(info).kind(),
+        crate::closure::DispatchKind::Arity(declared) if declared as usize <= argc
+    )
 }
 
 /// The body info whose code a site may call for `value` with `argc`
@@ -832,8 +1064,8 @@ unsafe fn direct_callable(
     }
 }
 
-/// Prime an inherited entry: `name` is absent from the receiver and found as
-/// a plain inline data slot on a chain of MARKED prototypes.
+/// Prime an inherited entry when the receiver's shape pins a direct holder
+/// with `name` in a plain inline data slot. Deeper chains use ordinary dispatch.
 unsafe fn prime_inherited(
     slot: *mut MethodSiteSlot,
     obj: *const ObjectHeader,
@@ -841,36 +1073,57 @@ unsafe fn prime_inherited(
     name: &[u8],
     argc: usize,
 ) {
-    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) {
+    if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
         refuse(11);
         return;
     }
-    // Class instances resolve methods through their vtable (D4: until class
-    // prototypes carry real slots).
+    // A declared-class instance's direct prototype is its class's prototype
+    // object (a bare CLASS identity: the class's function object keeps that
+    // link for the agent's life, and a relink retires the displaced
+    // prototype's ShapeId) or the serial a MIXED identity records. Its
+    // methods are real slots of that object (class prototypes hold function
+    // objects of their bodies, with ConstFn lanes), so the entry is the same
+    // holder entry as for any receiver.
     let class_id = (*obj).class_id;
-    if class_id != 0
+    let class_instance = class_id != 0
         && class_id < super::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE
-        && !super::is_anon_shape_class_id(class_id)
-    {
-        refuse(6);
-        return;
-    }
+        && !super::is_anon_shape_class_id(class_id);
     if key_may_be_accessor(obj, name) {
         refuse(8);
         return;
     }
-    // The ShapeId must name the prototype this walk follows (#11342).
-    let stamp = super::shapes::object_shape_stamp(obj);
-    if super::shapes::shape_proto_id(stamp) != Some(super::shapes::object_proto_id(obj)) {
-        refuse(7);
-        return;
-    }
-    // Read BEFORE the walk: a change during it can only make the entry older.
-    let gen = super::proto_validity::proto_validity();
-    let mut current = obj;
-    for _hop in 0..4 {
-        let next = next_prototype(current);
-        if next.is_null() || next == current || next == obj {
+    let class_holder = if class_instance {
+        match read_holder::class_link(obj) {
+            Some(holder) => Some(holder),
+            None => {
+                refuse(6);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    // Otherwise only a serial or the realm-default identity pins one direct
+    // prototype.
+    let proto_id = match class_holder {
+        Some(_) => super::shapes::PROTO_ID_CLASS,
+        None => match read_holder::admitted_proto_id(obj) {
+            Some(pid) => pid,
+            None => {
+                refuse(7);
+                return;
+            }
+        },
+    };
+    {
+        let next = if let Some(holder) = class_holder {
+            holder
+        } else if proto_id == super::shapes::PROTO_ID_DEFAULT {
+            crate::array::object_prototype_addr_if_resolved() as *const ObjectHeader
+        } else {
+            next_prototype(obj)
+        };
+        if next.is_null() || next == obj {
             refuse(9);
             return;
         }
@@ -902,16 +1155,9 @@ unsafe fn prime_inherited(
             return;
         }
         let meta = (*next).meta;
-        if meta.is_null() || (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE == 0 {
-            // Only a marked hop invalidates an entry recorded through it.
-            // Marking allocates (the meta record), so nothing here may be
-            // touched afterwards: mark and abandon; the next miss primes.
-            let _ = super::proto_validity::mark_object_as_prototype(next_addr);
-            refuse(8);
-            return;
-        }
-        if (*meta).elements != 0
-            || (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0
+        if (!meta.is_null()
+            && ((*meta).elements != 0
+                || (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0))
             || key_may_be_accessor(next, name)
         {
             refuse(8);
@@ -935,21 +1181,47 @@ unsafe fn prime_inherited(
                     refuse(13);
                     return;
                 }
+                // A holder whose shape owns this slot's body (ConstFn) lets
+                // the hit call the body after the two word compares, with no
+                // kind or info check of the slot value: the holder word pins
+                // the holder's shape and that shape pins the body.
+                let constfn = if s < crate::object::field_rep::REP_SLOTS
+                    && shape.special_constfn_mask & (1 << s) != 0
+                {
+                    let body = shape
+                        .constfn_infos()
+                        .iter()
+                        .find(|entry| u32::from(entry.slot) == s)
+                        .map(|entry| entry.info);
+                    if body != Some(info as *const crate::closure::JsFunctionInfo as u64) {
+                        refuse(17);
+                        return;
+                    }
+                    if declares_at_most(info, argc) {
+                        METHOD_SITE_CONSTFN
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
                 let entry = MethodEntry {
                     word,
-                    slot: METHOD_SITE_INHERITED,
+                    slot: METHOD_SITE_INHERITED | constfn | u64::from(s),
                     info: info as *const crate::closure::JsFunctionInfo as u64,
                     code: info.code as u64,
-                    closure: (value & crate::value::POINTER_MASK) as usize,
-                    gen,
+                    closure: next_addr,
+                    gen: std::ptr::read(next_addr as *const u64),
                 };
                 if publish(slot, entry) {
                     PRIMES_INHERITED.fetch_add(1, Ordering::Relaxed);
+                    if constfn != 0 {
+                        PRIMES_CONSTFN.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
                 return;
             }
         }
-        current = next;
     }
     refuse(9);
 }
@@ -958,9 +1230,9 @@ unsafe fn prime_inherited(
 /// record's `[[Prototype]]`, else a synthetic class's (`Object.create`, an ES5
 /// constructor) registered prototype. Null for a default builtin prototype.
 unsafe fn next_prototype(obj: *const ObjectHeader) -> *const ObjectHeader {
-    let meta = (*obj).meta;
-    if !meta.is_null() && (*meta).prototype != 0 {
-        let p = crate::value::JSValue::from_bits((*meta).prototype);
+    let recorded = crate::object::shapes::object_prototype_word(obj);
+    if recorded != 0 {
+        let p = crate::value::JSValue::from_bits(recorded);
         if !p.is_pointer() {
             return std::ptr::null();
         }
@@ -975,15 +1247,184 @@ unsafe fn next_prototype(obj: *const ObjectHeader) -> *const ObjectHeader {
     super::class_prototype_object(class_id)
 }
 
-/// Root scan: every inherited entry's closure is marked and rewritten.
+/// Root scan: before workers exist, every inherited entry's holder is marked
+/// and rewritten. After the sticky gate, no emitted or runtime path reads an
+/// entry; returning here lets otherwise-dead holders collect. A primary
+/// inline hit begun before the gate cannot safepoint between its entry read
+/// and method call, so no primary GC can observe an in-flight holder read.
 pub(crate) fn scan_method_site_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    METHOD_SITES.with(|cell| unsafe {
-        for &site in (*cell.get()).iter() {
-            for e in (*site).entries.iter_mut() {
+    if crate::agent::current_agent() != crate::agent::PRIMARY_AGENT
+        || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0
+    {
+        return;
+    }
+    if let Ok(sites) = METHOD_SITES.lock() {
+        for &site in sites.iter() {
+            for e in unsafe { (*(site as *mut MethodSite)).entries.iter_mut() } {
                 if e.closure != 0 {
-                    visitor.visit_tagged_usize_slot(&mut e.closure, crate::value::POINTER_TAG);
+                    if visitor.visit_tagged_usize_slot(&mut e.closure, crate::value::POINTER_TAG) {
+                        HOLDER_REWRITES.fetch_add(1, Ordering::Relaxed);
+                    }
                 }
             }
         }
-    });
+    }
+}
+
+#[cfg(test)]
+mod constfn_tests {
+    use super::*;
+
+    extern "C" fn method(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        7.0
+    }
+
+    unsafe fn one_method(info: *const crate::closure::JsFunctionInfo) -> (*mut ObjectHeader, u32) {
+        let closure = crate::closure::js_closure_alloc(info, 0);
+        let obj = crate::object::js_object_alloc(0, 4);
+        let key = b"constfn_site_method";
+        let name = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        crate::object::js_object_set_field_by_name(
+            obj,
+            name,
+            crate::value::js_nanbox_pointer(closure as i64),
+        );
+        (obj, super::super::shapes::object_shape_stamp(obj))
+    }
+
+    unsafe fn primed_slot(obj: *mut ObjectHeader) -> u64 {
+        let mut slot: MethodSiteSlot = std::ptr::null_mut();
+        prime(
+            &mut slot,
+            crate::value::js_nanbox_pointer(obj as i64),
+            b"constfn_site_method",
+            0,
+        );
+        assert!(!slot.is_null(), "eligible method site must prime");
+        let word = std::ptr::read(obj as *const u64);
+        (*slot)
+            .entries
+            .iter()
+            .find(|entry| entry.word == word)
+            .expect("site entry for receiver shape")
+            .slot
+    }
+
+    #[test]
+    fn constfn_site_uses_shape_body_fact_only_for_permanent_images() {
+        if !run_with_fresh_worker_gate(
+            "constfn_site_uses_shape_body_fact_only_for_permanent_images",
+        ) {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let _no_move = crate::gc::GcSuppressScope::new();
+            let permanent =
+                crate::fn_info!(method, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+            let (object, id) = one_method(permanent);
+            let d = super::super::shapes::shape_descriptor_by_id(id).expect("shape");
+            assert_eq!(d.special_constfn_mask, 1);
+            assert_eq!(primed_slot(object), METHOD_SITE_CONSTFN);
+
+            // An unloadable image has no ConstFn shape fact. It may still use
+            // the existing guarded own-method entry, which validates the
+            // closure's kind and body info on every hit.
+            let transient = crate::fn_info!(method, 0);
+            let (object, id) = one_method(transient);
+            let d = super::super::shapes::shape_descriptor_by_id(id).expect("shape");
+            assert_eq!(d.special_constfn_mask, 0);
+            assert_eq!(primed_slot(object), 0);
+        }
+    }
+
+    #[test]
+    fn constfn_static_captured_this_arrow_primes_and_rebinding_closure_refuses() {
+        if !run_with_fresh_worker_gate(
+            "constfn_static_captured_this_arrow_primes_and_rebinding_closure_refuses",
+        ) {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        unsafe {
+            let _no_gc = crate::gc::GcSuppressScope::new();
+            let arrow = crate::fn_info!(method, 0; with_flags(
+                crate::codegen_abi::FN_PERMANENT_IMAGE | crate::closure::FN_ARROW
+            ));
+            let rebinding =
+                crate::fn_info!(method, 0; with_flags(crate::codegen_abi::FN_PERMANENT_IMAGE));
+            let packed = b"constfn_site_method\0";
+            let keys =
+                super::super::static_shapes::canonical_keys_for_names(&[b"constfn_site_method"]);
+            for (info, admitted) in [(arrow, true), (rebinding, false)] {
+                let obj = crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(
+                    1,
+                    keys.arr() as *mut _,
+                    0,
+                );
+                let base = super::super::shapes::object_shape_stamp(obj);
+                let birth = super::super::shapes::shape_descriptor_by_id(base).unwrap();
+                assert_eq!(
+                    birth.object_kind,
+                    super::super::shapes::ShapeObjectKind::Ordinary
+                );
+                assert_eq!(birth.special_constfn_mask, 0, "allocation must stay Any");
+                let c =
+                    crate::closure::js_closure_alloc(info, crate::closure::CAPTURES_THIS_FLAG | 1);
+                crate::closure::js_closure_set_capture_bits(
+                    c,
+                    0,
+                    crate::JSValue::object_ptr(obj.cast()).bits(),
+                );
+                crate::object::store_object_field_slot(
+                    obj,
+                    0,
+                    crate::JSValue::object_ptr(c.cast()).bits(),
+                );
+                let entries = [super::super::static_shapes::ConstFnStaticEntry { slot: 0, info }];
+                let finalized = super::super::static_shapes::js_object_finalize_constfn_static(
+                    obj as usize as u64,
+                    0,
+                    packed.as_ptr(),
+                    packed.len() as u32,
+                    1,
+                    1,
+                    0,
+                    super::super::field_rep::REP_SPECIAL,
+                    entries.as_ptr(),
+                    1,
+                ) as usize as *mut ObjectHeader;
+                let id = super::super::shapes::object_shape_stamp(finalized);
+                let d = super::super::shapes::shape_descriptor_by_id(id).unwrap();
+                assert_eq!(d.special_constfn_mask != 0, admitted);
+                if admitted {
+                    assert_ne!(base, id, "ordinary allocation must finalize after stores");
+                    assert!(super::super::field_rep_store::final_shape_matches_birth(
+                        id, base
+                    ));
+                    assert_eq!(primed_slot(finalized), METHOD_SITE_CONSTFN);
+                    assert_eq!(
+                        crate::closure::js_closure_get_capture_bits(c, 0),
+                        crate::JSValue::object_ptr(finalized.cast()).bits()
+                    );
+                } else {
+                    assert_eq!(id, base, "captured-this rebinding remains excluded");
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod report_names_line_up {
+    #[test]
+    fn refusal_names_cover_every_counter() {
+        assert_eq!(super::refusal_name(0), "not_object_pointer");
+        assert_eq!(super::refusal_name(11), "inh_workers");
+        assert_eq!(super::refusal_name(18), "site_megamorphic");
+        assert_eq!(super::refusal_name(19), "?");
+    }
 }

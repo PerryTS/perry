@@ -108,6 +108,19 @@ impl<'a> FuncEmitCtx<'a> {
                 // (closure, delay) and return the timer id; the clear_* bridges
                 // take (id). Trailing setTimeout(fn, delay, ...args) extras are
                 // dropped (Node passes them to the callback — out of scope here).
+                // #11826: a module-level TDZ `check_then` yields its value;
+                // the plain check and the throw fall through to the unknown-
+                // extern arm (args dropped, `undefined`).
+                if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
+                    if name == perry_hir::tdz_check::TDZ_CHECK_THEN {
+                        if let Some(value) = args.get(2) {
+                            self.emit_expr(func, value);
+                        } else {
+                            func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                        }
+                        return true;
+                    }
+                }
                 if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
                     let timer = match name.as_str() {
                         "setTimeout" => Some(("set_timeout", 2u32)),

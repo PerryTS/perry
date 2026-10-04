@@ -19,7 +19,6 @@
     // — use `extract_options_fields` to pull the fields out either way.
     if module == "perry/tui" && method == "Text" && object.is_none() && args.len() >= 2 {
         if let Some(props) = extract_options_fields(ctx, &args[1]) {
-            let content_ptr = get_raw_string_ptr(ctx, &args[0])?;
             let mut fg_str = Expr::String(String::new());
             let mut bg_str = Expr::String(String::new());
             let mut style_bits: u8 = 0;
@@ -62,25 +61,32 @@
                     _ => {}
                 }
             }
-            let fg_ptr = get_raw_string_ptr(ctx, &fg_str)?;
-            let bg_ptr = get_raw_string_ptr(ctx, &bg_str)?;
-            let bits_lit = double_literal(style_bits as f64);
-            ctx.pending_declares.push((
-                "js_perry_tui_text_styled".to_string(),
-                I64,
-                vec![I64, I64, I64, DOUBLE],
-            ));
-            let handle = ctx.block().call(
-                I64,
-                "js_perry_tui_text_styled",
-                &[
-                    (I64, &content_ptr),
-                    (I64, &fg_ptr),
-                    (I64, &bg_ptr),
-                    (DOUBLE, &bits_lit),
-                ],
-            );
-            return Ok(nanbox_pointer_inline(ctx.block(), &handle));
+            // #11789 sweep: content, foreground and background are each held
+            // across the ones after them; their raw pointers are taken from
+            // the re-read, below the last.
+            let operands: [&Expr; 3] = [&args[0], &fg_str, &bg_str];
+            return crate::rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
+                let content_ptr = super::raw_string_ptr_of(ctx, &vals[0]);
+                let fg_ptr = super::raw_string_ptr_of(ctx, &vals[1]);
+                let bg_ptr = super::raw_string_ptr_of(ctx, &vals[2]);
+                let bits_lit = double_literal(style_bits as f64);
+                ctx.pending_declares.push((
+                    "js_perry_tui_text_styled".to_string(),
+                    I64,
+                    vec![I64, I64, I64, DOUBLE],
+                ));
+                let handle = ctx.block().call(
+                    I64,
+                    "js_perry_tui_text_styled",
+                    &[
+                        (I64, &content_ptr),
+                        (I64, &fg_ptr),
+                        (I64, &bg_ptr),
+                        (DOUBLE, &bits_lit),
+                    ],
+                );
+                Ok(nanbox_pointer_inline(ctx.block(), &handle))
+            });
         }
     }
 
@@ -90,8 +96,9 @@
     // video at the right offset. The 1-arg `Input(value)` form falls
     // through to the regular dispatch table. (#404.)
     if module == "perry/tui" && method == "Input" && object.is_none() && args.len() >= 2 {
-        let content_ptr = get_raw_string_ptr(ctx, &args[0])?;
-        let cursor = lower_expr(ctx, &args[1])?;
+        let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+        let content_ptr = super::raw_string_ptr_of(ctx, &arg_values[0]);
+        let cursor = arg_values[1].clone();
         ctx.pending_declares
             .push(("js_perry_tui_input_at".to_string(), I64, vec![I64, DOUBLE]));
         let handle = ctx.block().call(
@@ -99,7 +106,9 @@
             "js_perry_tui_input_at",
             &[(I64, &content_ptr), (DOUBLE, &cursor)],
         );
-        return Ok(nanbox_pointer_inline(ctx.block(), &handle));
+        let result = nanbox_pointer_inline(ctx.block(), &handle);
+        arg_group.release(ctx);
+        return Ok(result);
     }
 
     // perry/tui AnimatedSpinner({ interval, frames }) — unpacks the
@@ -159,30 +168,49 @@
                     _ => {}
                 }
             }
-            let headers = match headers_expr {
-                Some(e) => lower_expr(ctx, &e)?,
-                None => double_literal(0.0),
-            };
-            let rows = match rows_expr {
-                Some(e) => lower_expr(ctx, &e)?,
-                None => double_literal(0.0),
-            };
-            let selected = lower_expr(ctx, &selected_expr)?;
-            // Unbox the array pointers (NaN-boxed POINTER) into raw i64.
-            let blk = ctx.block();
-            let headers_h = unbox_to_i64(blk, &headers);
-            let rows_h = unbox_to_i64(blk, &rows);
-            ctx.pending_declares.push((
-                "js_perry_tui_table".to_string(),
-                I64,
-                vec![I64, I64, DOUBLE],
-            ));
-            let handle = ctx.block().call(
-                I64,
-                "js_perry_tui_table",
-                &[(I64, &headers_h), (I64, &rows_h), (DOUBLE, &selected)],
-            );
-            return Ok(nanbox_pointer_inline(ctx.block(), &handle));
+            // #11789 sweep: the headers array is held across the rows
+            // expression and both across the selection. They are lowered and
+            // rooted in order and unboxed to raw pointers only from the
+            // re-read, below the last of them.
+            let mut operands: Vec<&Expr> = Vec::with_capacity(3);
+            if let Some(e) = &headers_expr {
+                operands.push(e);
+            }
+            if let Some(e) = &rows_expr {
+                operands.push(e);
+            }
+            operands.push(&selected_expr);
+            let has_headers = headers_expr.is_some();
+            let has_rows = rows_expr.is_some();
+            return crate::rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
+                let mut it = vals.iter().cloned();
+                let headers = if has_headers {
+                    it.next().expect("headers operand")
+                } else {
+                    double_literal(0.0)
+                };
+                let rows = if has_rows {
+                    it.next().expect("rows operand")
+                } else {
+                    double_literal(0.0)
+                };
+                let selected = it.next().expect("selected operand");
+                // Unbox the array pointers (NaN-boxed POINTER) into raw i64.
+                let blk = ctx.block();
+                let headers_h = unbox_to_i64(blk, &headers);
+                let rows_h = unbox_to_i64(blk, &rows);
+                ctx.pending_declares.push((
+                    "js_perry_tui_table".to_string(),
+                    I64,
+                    vec![I64, I64, DOUBLE],
+                ));
+                let handle = ctx.block().call(
+                    I64,
+                    "js_perry_tui_table",
+                    &[(I64, &headers_h), (I64, &rows_h), (DOUBLE, &selected)],
+                );
+                Ok(nanbox_pointer_inline(ctx.block(), &handle))
+            });
         }
     }
 
@@ -203,29 +231,46 @@
                     _ => {}
                 }
             }
-            let tabs = match tabs_expr {
-                Some(e) => lower_expr(ctx, &e)?,
-                None => double_literal(0.0),
-            };
-            let active = lower_expr(ctx, &active_expr)?;
-            let body = match body_expr {
-                Some(e) => lower_expr(ctx, &e)?,
-                None => double_literal(0.0),
-            };
-            let blk = ctx.block();
-            let tabs_h = unbox_to_i64(blk, &tabs);
-            let body_h = unbox_to_i64(blk, &body);
-            ctx.pending_declares.push((
-                "js_perry_tui_tabs".to_string(),
-                I64,
-                vec![I64, DOUBLE, I64],
-            ));
-            let handle = ctx.block().call(
-                I64,
-                "js_perry_tui_tabs",
-                &[(I64, &tabs_h), (DOUBLE, &active), (I64, &body_h)],
-            );
-            return Ok(nanbox_pointer_inline(ctx.block(), &handle));
+            // #11789 sweep: tabs, active and body are lowered and rooted in
+            // order; the raw pointers come from the re-read.
+            let mut operands: Vec<&Expr> = Vec::with_capacity(3);
+            if let Some(e) = &tabs_expr {
+                operands.push(e);
+            }
+            operands.push(&active_expr);
+            if let Some(e) = &body_expr {
+                operands.push(e);
+            }
+            let has_tabs = tabs_expr.is_some();
+            let has_body = body_expr.is_some();
+            return crate::rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
+                let mut it = vals.iter().cloned();
+                let tabs = if has_tabs {
+                    it.next().expect("tabs operand")
+                } else {
+                    double_literal(0.0)
+                };
+                let active = it.next().expect("active operand");
+                let body = if has_body {
+                    it.next().expect("body operand")
+                } else {
+                    double_literal(0.0)
+                };
+                let blk = ctx.block();
+                let tabs_h = unbox_to_i64(blk, &tabs);
+                let body_h = unbox_to_i64(blk, &body);
+                ctx.pending_declares.push((
+                    "js_perry_tui_tabs".to_string(),
+                    I64,
+                    vec![I64, DOUBLE, I64],
+                ));
+                let handle = ctx.block().call(
+                    I64,
+                    "js_perry_tui_tabs",
+                    &[(I64, &tabs_h), (DOUBLE, &active), (I64, &body_h)],
+                );
+                Ok(nanbox_pointer_inline(ctx.block(), &handle))
+            });
         }
     }
 
@@ -507,13 +552,14 @@
         let container_slot = ctx.func.alloca_entry(I64);
         ctx.block().store(I64, &container, &container_slot);
 
+        let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
         // args[0]: State handle — NaN-boxed pointer, unbox to i64.
-        let state_box = lower_expr(ctx, &args[0])?;
+        let state_box = arg_values[0].clone();
         let blk = ctx.block();
         let state_handle = unbox_to_i64(blk, &state_box);
 
         // args[1]: render closure — stays as a NaN-boxed f64.
-        let closure_d = lower_expr(ctx, &args[1])?;
+        let closure_d = arg_values[1].clone();
 
         let blk = ctx.block();
         let container_reload = blk.load(I64, &container_slot);
@@ -528,6 +574,8 @@
 
         let blk = ctx.block();
         let container_final = blk.load(I64, &container_slot);
-        return Ok(nanbox_pointer_inline(blk, &container_final));
+        let result = nanbox_pointer_inline(blk, &container_final);
+        arg_group.release(ctx);
+        return Ok(result);
     }
 }

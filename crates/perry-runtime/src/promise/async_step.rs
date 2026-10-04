@@ -174,9 +174,15 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
         let promise = js_promise_new();
         // When lifecycle hooks are active, go through the real resolve path so
         // `settled`/`before`/`after` fire (instead of poking the state field).
+        // A `settled` hook can collect, so the promise is reread after it.
         if crate::v8::promise_hooks_active() || crate::async_hooks::promise_hooks_active() {
-            js_promise_resolve(promise, value);
-            return promise;
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let promise = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
+            js_promise_resolve(
+                crate::value::js_nanbox_get_pointer(promise.get_nanbox_f64()) as *mut Promise,
+                value,
+            );
+            return crate::value::js_nanbox_get_pointer(promise.get_nanbox_f64()) as *mut Promise;
         }
         unsafe {
             (*promise).state = PromiseState::Fulfilled;
@@ -242,8 +248,14 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
     // steady state is untouched; only real thenables (drizzle's `QueryPromise`,
     // object literals with `then`) defer by one microtask — which the await
     // loop drains, leaving the resolved value identical.
-    super::assimilate::promise_resolve_assimilating(promise, value_h.get_nanbox_f64());
-    promise
+    // Assimilating reads `then` (a getter can run) and enqueues a job: either
+    // can collect, so the promise is reread after it.
+    let promise = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
+    super::assimilate::promise_resolve_assimilating(
+        crate::value::js_nanbox_get_pointer(promise.get_nanbox_f64()) as *mut Promise,
+        value_h.get_nanbox_f64(),
+    );
+    crate::value::js_nanbox_get_pointer(promise.get_nanbox_f64()) as *mut Promise
 }
 
 /// Run the spec PromiseResolve path behind an exception boundary.  Async

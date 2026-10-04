@@ -1,0 +1,39 @@
+{
+  "base": "0ed699b9f26267d5ede9e9aabd12160c842cec81",
+  "source_head": "8e07570c3706e3b42fb58812ac879b28a1c207b6",
+  "host": "qb6",
+  "inputs_sha256": "2d645df866c40a2ebf26c9e1a1d56d903e0f4e70e7efb58e7135865dc98a6aa5",
+  "products": {
+    "base/libperry_stdlib.a": "0c46ee24c7dccb2fbba054ce45d8753af73ea6ed1999c76c5b00968897f7a2e1",
+    "base/libperry_runtime.a": "9168069fb0c0a82280087fd700c8e2a91d6b2af2676c018ae454d0bf7fcfd4f7",
+    "base/perry": "466ed76854a1ef568ebe80a6a136aa4eb2c54d477c69dd764cb33764c169b8db",
+    "gc/libperry_stdlib.a": "51ebf6f669502251654b52a34c139f7a4e2eb1ef143af2aa37947e57082b45fa",
+    "gc/libperry_runtime.a": "30d7d4313f4db816e8c0e49007c5478eb224e580f8d9c379f6af8cd33401c77f",
+    "gc/perry": "3a28c3f54eca0e716f13310d65cee9b320e1c621d10d5661798cb4a5cfc6bfe2"
+  },
+  "logs": {
+    "base-build.log": "6fc2d6f400f5bea3a63bd05a253a273fa34944c7de28d430aca0986e65f6fec2",
+    "gc-build.log": "e33afcba5e57054e944c61f711433518f24406d96b48e399a4fd432094a0dbba",
+    "gc-runtime-tests.log": "39940f47f46295bcc73dbaf82673ac8597646990ca2381803424d8e269b49c5b",
+    "gc-ffi-tests.log": "9cb570821b88e35a04e11e58ba1305d7cb5ded113fd726af6bab4d625eb6bf96",
+    "gc-events-tests.log": "3cee0d3fc6b239fdf7fd52d85c6ef1879952cbff31d1832d2189dc52748a9f5d"
+  },
+  "tests": {
+    "runtime": 4856,
+    "ffi": 75,
+    "events": 15
+  },
+  "linked": {
+    "executions": 40,
+    "default": 20,
+    "moving": 20,
+    "all_copied_and_protected": true,
+    "manifest_sha256": "8caaf20c0a19d6382e9eab2828f4264392065c798fc6eaae69cfe20a06a9d74f",
+    "derived_source": {
+      "original_source_sha256": "4fdd474d413311824938248e53dc64aa5a82d33568ac4cf8e2b0362ce7d65c5b",
+      "derived_source_sha256": "0415e6b2fc06d14811546100ed73f517b8baf9bae73854e77dc90d4408e4d1f9",
+      "scope": "Three explicit collections between fresh class creation and subsequent static reads. Original campaign fixture remains unchanged. Node output must match original."
+    }
+  },
+  "performance_acceptance": false
+}

@@ -54,11 +54,6 @@ pub(super) fn hidden_ended_key() -> *mut crate::string::StringHeader {
 }
 
 #[inline]
-pub(super) fn hidden_max_listeners_key() -> *mut crate::string::StringHeader {
-    hidden_key(STREAM_MAX_LISTENERS_KEY)
-}
-
-#[inline]
 pub(super) fn hidden_capture_rejections_key() -> *mut crate::string::StringHeader {
     hidden_key(STREAM_CAPTURE_REJECTIONS_KEY)
 }

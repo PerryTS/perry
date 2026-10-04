@@ -76,43 +76,55 @@ pub unsafe extern "C" fn js_net_socket_read(handle: i64, size: f64) -> f64 {
 }
 
 /// Main-thread custody for write/end callbacks awaiting socket-task I/O.
-pub(crate) fn socket_completions() -> &'static Mutex<std::collections::HashMap<u64, (i64, i64)>> {
-    static COMPLETIONS: OnceLock<Mutex<std::collections::HashMap<u64, (i64, i64)>>> =
+pub(crate) fn socket_completions() -> &'static Mutex<std::collections::HashMap<u64, (i64, Vec<i64>)>>
+{
+    static COMPLETIONS: OnceLock<Mutex<std::collections::HashMap<u64, (i64, Vec<i64>)>>> =
         OnceLock::new();
     COMPLETIONS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
 }
 
 pub(crate) unsafe fn dispatch_socket_completion(completion: u64, error: Option<String>) {
-    let callback = (completion != 0)
-        .then(|| socket_completions().lock().unwrap().remove(&completion))
-        .flatten()
-        .map(|(_, callback)| callback)
-        .unwrap_or(0);
-    if callback == 0 {
+    let callbacks = socket_completions()
+        .lock()
+        .unwrap()
+        .remove(&completion)
+        .map(|(_, callbacks)| callbacks)
+        .unwrap_or_default();
+    if callbacks.is_empty() {
         return;
     }
-    let mut frame = crate::dispatch_custody::DispatchFrame::park(vec![callback]);
-    if let Some(message) = error {
-        frame.set_payload(crate::build_error_object(&message).to_bits());
-        let _ = perry_ffi::JsClosure::from_raw(frame.cb(0) as *const perry_ffi::RawClosureHeader)
-            .call1(
+    let mut frame = crate::dispatch_custody::DispatchFrame::park(callbacks);
+    if let Some(ref message) = error {
+        frame.set_payload(crate::build_error_object(message).to_bits());
+    }
+    for i in 0..frame.len() {
+        let cb = perry_ffi::JsClosure::from_raw(frame.cb(i) as *const perry_ffi::RawClosureHeader);
+        if error.is_some() {
+            let _ = cb.call1(
                 perry_ffi::JsThis::UNDEFINED,
                 f64::from_bits(frame.payload_bits()),
             );
-    } else {
-        let _ = perry_ffi::JsClosure::from_raw(frame.cb(0) as *const perry_ffi::RawClosureHeader)
-            .call0(perry_ffi::JsThis::UNDEFINED);
+        } else {
+            let _ = cb.call0(perry_ffi::JsThis::UNDEFINED);
+        }
     }
 }
 
-pub(crate) fn drop_socket_completions(socket_id: i64) {
-    let completions = socket_completions()
+/// Snapshot unfinished writes/end callbacks in their registration order.
+pub(crate) fn pending_socket_completions(socket_id: i64) -> Vec<u64> {
+    let mut completions = socket_completions()
         .lock()
         .unwrap()
         .iter()
         .filter_map(|(completion, (owner, _))| (*owner == socket_id).then_some(*completion))
         .collect::<Vec<_>>();
-    for completion in completions {
+    // Tokens are monotonically allocated; HashMap iteration is unordered.
+    completions.sort_unstable();
+    completions
+}
+
+pub(crate) fn drop_socket_completions(socket_id: i64) {
+    for completion in pending_socket_completions(socket_id) {
         unsafe {
             dispatch_socket_completion(completion, Some("Socket is closed".to_string()));
         }
@@ -494,7 +506,7 @@ fn write_return_value(handle: i64, accepted: bool) -> f64 {
             if !accepted || s.destroyed || s.writable_ended {
                 return Some(false);
             }
-            if s.awaiting_connect {
+            if s.awaiting_connect && s.cork.depth == 0 {
                 // `new net.Socket()` written before `connect()`: Node refuses
                 // the write (`ERR_SOCKET_CLOSED`) and returns false. No
                 // `'drain'` is owed, since nothing will ever be flushed.
@@ -688,7 +700,7 @@ fn register_socket_completion(handle: i64, callback: i64) -> u64 {
     socket_completions()
         .lock()
         .unwrap()
-        .insert(token, (handle, callback));
+        .insert(token, (handle, vec![callback]));
     token
 }
 
@@ -752,7 +764,7 @@ pub unsafe extern "C" fn js_ext_net_socket_end(handle: i64, chunk_bits: i64) {
         }
     }
     let mut sockets = statics::sockets().lock().unwrap();
-    if let Some(s) = sockets.get_mut(&handle) {
+    let failure = if let Some(s) = sockets.get_mut(&handle) {
         if let Some(bytes) = final_bytes {
             if !bytes.is_empty() {
                 let _ = s.command(handle, crate::SocketCommand::Write(bytes, 0));
@@ -763,7 +775,13 @@ pub unsafe extern "C" fn js_ext_net_socket_end(handle: i64, chunk_bits: i64) {
         s.writable_ended = true;
         // Routed through `command`, the one place that knows which thread
         // owns the socket's loop.
-        let _ = s.command(handle, crate::SocketCommand::End(0));
+        s.command(handle, crate::SocketCommand::End(0)).err()
+    } else {
+        None
+    };
+    drop(sockets);
+    if let Some(message) = failure {
+        crate::turnloop_io::submission_failed(handle, 0, message);
     }
 }
 
@@ -809,21 +827,24 @@ pub unsafe extern "C" fn js_ext_net_socket_end3(
         }
     }
     let mut sockets = statics::sockets().lock().unwrap();
-    if let Some(socket) = sockets.get_mut(&handle) {
+    let failure = if let Some(socket) = sockets.get_mut(&handle) {
         if let Some(bytes) = final_bytes.filter(|bytes| !bytes.is_empty()) {
             let _ = socket.command(handle, crate::SocketCommand::Write(bytes, 0));
         }
         // #10465 — see the sibling note in `js_ext_net_socket_end`.
         socket.writable_ended = true;
-        if socket
+        socket
             .command(handle, crate::SocketCommand::End(completion))
-            .is_err()
-            && completion != 0
-        {
+            .err()
+    } else {
+        if completion != 0 {
             socket_completions().lock().unwrap().remove(&completion);
         }
-    } else if completion != 0 {
-        socket_completions().lock().unwrap().remove(&completion);
+        None
+    };
+    drop(sockets);
+    if let Some(message) = failure {
+        crate::turnloop_io::submission_failed(handle, completion, message);
     }
 }
 
@@ -855,6 +876,9 @@ pub unsafe extern "C" fn js_net_socket_destroy(handle: i64) {
 pub extern "C" fn js_ext_net_destroy_socket(handle: i64) {
     let mut sockets = statics::sockets().lock().unwrap();
     if let Some(s) = sockets.get_mut(&handle) {
+        if s.destroyed {
+            return;
+        }
         s.destroyed = true;
         s.is_open = false;
         let _ = s.command(handle, crate::SocketCommand::Destroy);

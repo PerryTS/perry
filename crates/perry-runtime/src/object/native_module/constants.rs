@@ -404,13 +404,8 @@ pub(crate) unsafe fn get_native_module_constant(
         }
         #[cfg(not(unix))]
         {
-            match prop {
-                "RTLD_LAZY" => Some(1.0),
-                "RTLD_NOW" => Some(2.0),
-                "RTLD_GLOBAL" => Some(8.0),
-                "RTLD_LOCAL" => Some(4.0),
-                _ => None,
-            }
+            let _ = prop;
+            None
         }
     };
 
@@ -878,7 +873,10 @@ pub(crate) unsafe fn get_native_module_constant(
                 &WORKER_THREADS_WORKER_DATA_GETTER,
                 || f64::from_bits(crate::value::TAG_NULL),
             )),
-            "threadId" => Some(0.0),
+            "threadId" => Some(call_worker_threads_getter(
+                &WORKER_THREADS_THREAD_ID_GETTER,
+                || 0.0,
+            )),
             "threadName" => Some(call_worker_threads_getter(
                 &WORKER_THREADS_THREAD_NAME_GETTER,
                 || str_val(""),

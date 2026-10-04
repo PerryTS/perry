@@ -27,8 +27,10 @@ mod async_shim;
 mod broadcast_channel;
 mod channel_pump;
 mod direct_message;
+mod entry_table;
 mod message_port;
 mod parent_port;
+mod thread_values;
 mod worker_options;
 mod worker_pump;
 mod worker_surface;
@@ -42,6 +44,11 @@ pub use channel_pump::{
 // points, which moved into sibling modules to keep this file under the
 // 2000-line lint cap.
 pub use broadcast_channel::js_worker_threads_broadcast_channel_new;
+pub use entry_table::{js_worker_threads_register_entry, js_worker_threads_worker_new_by_spec};
+pub use thread_values::{
+    js_worker_threads_is_main_thread, js_worker_threads_parent_port,
+    js_worker_threads_resource_limits, js_worker_threads_thread_id, js_worker_threads_thread_name,
+};
 pub use worker_pump::{js_worker_threads_has_pending, js_worker_threads_process_pending};
 
 use message_port::message_port_object;
@@ -213,8 +220,37 @@ enum WorkerCommand {
     Terminate,
 }
 
+/// The parent's end of a worker's command channel. Every send also wakes the
+/// worker's own loop: while the worker has I/O in flight it blocks in that
+/// loop, not on this channel (see the wait in `js_worker_threads_worker_new`).
+#[derive(Clone)]
+struct WorkerSender {
+    tx: Sender<WorkerCommand>,
+    /// The worker's agent id, published by the worker thread before it runs
+    /// any JS (so before it can have I/O in flight); 0 until then.
+    agent: std::sync::Arc<AtomicU64>,
+}
+
+impl WorkerSender {
+    fn new(tx: Sender<WorkerCommand>) -> Self {
+        Self {
+            tx,
+            agent: std::sync::Arc::new(AtomicU64::new(0)),
+        }
+    }
+
+    fn send(&self, command: WorkerCommand) -> Result<(), mpsc::SendError<WorkerCommand>> {
+        self.tx.send(command)?;
+        let agent = self.agent.load(Ordering::Acquire);
+        if agent != 0 {
+            perry_runtime::event_pump::notify_agent_loop(agent);
+        }
+        Ok(())
+    }
+}
+
 struct WorkerRecord {
-    sender: Sender<WorkerCommand>,
+    sender: WorkerSender,
     /// NaN-boxed Worker handle used as the target for property handlers such
     /// as `worker.onmessage = fn`. Kept as a mutable GC root below.
     object_bits: u64,
@@ -392,7 +428,7 @@ pub(crate) mod thread_exit_probe {
             }],
         );
         let mut record = WorkerRecord {
-            sender: tx,
+            sender: WorkerSender::new(tx),
             object_bits,
             listeners,
             alive: false,
@@ -703,11 +739,21 @@ fn pump_worker_microtasks() {
         // this worker's arena. That is what lets `await` of a timer — or of
         // anything a timer ultimately resolves — resume inside a worker.
         ran += perry_runtime::timer::js_await_loop_tick_timers();
+        // This worker's native completions (#11433 tags each with its owner
+        // agent, so this settles only promises in this worker's heap): a
+        // fetch's response lands here once a turn of the worker's own loop
+        // collects it, and nothing else ever settles it.
+        ran += crate::common::async_bridge::js_stdlib_process_pending();
         if ran == 0 {
             break;
         }
     }
 }
+
+/// Upper bound on one park in the worker's own loop while it has I/O in
+/// flight. Completions and sends wake the park early; this only bounds how
+/// stale an unrelated check (a close request) can get.
+const WORKER_IO_PARK_MS: u64 = 1000;
 
 /// How long the worker may block waiting for its next command.
 ///
@@ -1460,6 +1506,8 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         }
     };
     let (tx, rx) = mpsc::channel::<WorkerCommand>();
+    let sender = WorkerSender::new(tx);
+    let published_agent = sender.agent.clone();
     let worker_obj = worker_object(worker_id, &options_state);
     let resource_scope = perry_runtime::gc::RuntimeHandleScope::new();
     let mut async_resources = [perry_runtime::async_hooks::AsyncResourceIds {
@@ -1487,7 +1535,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         resource_handles[2].get_nanbox_f64().to_bits(),
     ];
     let mut record = WorkerRecord {
-        sender: tx,
+        sender: sender.clone(),
         object_bits: object_value(worker_obj).to_bits(),
         listeners: HashMap::new(),
         alive: false,
@@ -1509,6 +1557,10 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
     // shares the parent's class tables instead of building a second copy. Its
     // entry's `js_gc_init` then finds an image already installed and keeps it.
     let class_image = perry_runtime::object::class_image::current_image_handle();
+    // Same image, so the same module initializers: a runtime `require` of a
+    // Deferred module (a function-local or conditional `require`) must find
+    // its initializer on the worker too.
+    let path_inits = perry_runtime::module_require::current_path_init_image();
     // #10399: a worker runs the module graph, so it needs the same stack
     // headroom as the blocking pool — the program's static TLS block is
     // carved from this same mapping (see `async_bridge::RUNTIME`).
@@ -1516,6 +1568,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
         .stack_size(crate::common::thread_config::blocking_thread_stack_size())
         .spawn(move || {
             perry_runtime::object::class_image::adopt_image(class_image);
+            perry_runtime::module_require::adopt_path_init_image(path_inits);
             // #10854/#6185: claim this thread's own agent id BEFORE it can allocate
             // or enqueue anything. A `worker_threads` Worker gets its own arena and
             // GC, but it never claimed an agent, so `current_agent()` fell back to
@@ -1535,6 +1588,7 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             // later by `ensure_loop_with` — failing after acceptance instead of
             // taking the fallback path.
             let worker_agent = perry_runtime::agent::enter_worker_agent();
+            published_agent.store(worker_agent, Ordering::Release);
             let previous_env = apply_worker_env(&thread_options.env);
             CURRENT_WORKER_ID.with(|id| id.set(worker_id));
             CURRENT_PARENT_AGENT.with(|agent| agent.set(parent_agent));
@@ -1566,19 +1620,49 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
                     loop {
                         // #10854: a continuation may be waiting on a timer another
                         // thread owns, so bound the wait when anything is pending.
-                        let received = match worker_wait_budget() {
-                            Some(budget) => match rx.recv_timeout(budget) {
-                                Ok(command) => Ok(command),
-                                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                                    pump_worker_microtasks();
-                                    continue;
+                        // A worker with I/O in flight (a fetch, a socket) must turn
+                        // its own loop: only a turn on THIS thread completes that
+                        // I/O, and blocking on the channel instead left every
+                        // fetch in a worker pending forever (OpenCode's TUI server
+                        // timed out fetching models.dev and never finished its
+                        // bootstrap). A send wakes the turn (`WorkerSender::send`),
+                        // and the notification latches, so a message that arrives
+                        // after `try_recv` and before the park is not missed.
+                        let received =
+                            if perry_runtime::event_pump::agent_loop_has_outstanding_work() {
+                                match rx.try_recv() {
+                                    Ok(command) => Ok(command),
+                                    Err(mpsc::TryRecvError::Empty) => {
+                                        let budget_ms = worker_wait_budget()
+                                            .map_or(WORKER_IO_PARK_MS, |budget| {
+                                                budget.as_millis() as u64
+                                            });
+                                        perry_runtime::event_pump::js_loop_turn_bounded(budget_ms);
+                                        pump_worker_microtasks();
+                                        if CURRENT_WORKER_CLOSE_REQUESTED.with(Cell::get) {
+                                            return;
+                                        }
+                                        continue;
+                                    }
+                                    Err(mpsc::TryRecvError::Disconnected) => {
+                                        Err(std::sync::mpsc::RecvError)
+                                    }
                                 }
-                                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                                    Err(std::sync::mpsc::RecvError)
+                            } else {
+                                match worker_wait_budget() {
+                                    Some(budget) => match rx.recv_timeout(budget) {
+                                        Ok(command) => Ok(command),
+                                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                                            pump_worker_microtasks();
+                                            continue;
+                                        }
+                                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                                            Err(std::sync::mpsc::RecvError)
+                                        }
+                                    },
+                                    None => rx.recv(),
                                 }
-                            },
-                            None => rx.recv(),
-                        };
+                            };
                         match received {
                             Ok(WorkerCommand::Message(message)) => {
                                 deliver_parent_port_message(&message);
@@ -1700,38 +1784,6 @@ pub extern "C" fn js_worker_threads_get_worker_data() -> f64 {
     let ptr = js_string_from_bytes(data.as_ptr(), data.len() as u32);
     let bits = unsafe { js_json_parse(ptr) };
     f64::from_bits(bits)
-}
-
-#[no_mangle]
-pub extern "C" fn js_worker_threads_is_main_thread() -> f64 {
-    js_bool(CURRENT_WORKER_ID.with(|id| id.get()) == 0)
-}
-
-/// Get parentPort handle (returns NaN-boxed POINTER_TAG handle)
-#[no_mangle]
-pub extern "C" fn js_worker_threads_parent_port() -> f64 {
-    if CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
-        return object_value(parent_port::worker_parent_port_object());
-    }
-    // On the main thread there is no parent port: Node exposes `parentPort`
-    // as `null` (only a spawned Worker has a MessagePort back to its parent).
-    // Returning a `{}` object here made `if (parentPort)` truthy on the main
-    // thread, diverging from Node.
-    js_null()
-}
-
-#[no_mangle]
-pub extern "C" fn js_worker_threads_thread_name() -> f64 {
-    CURRENT_THREAD_NAME.with(|slot| string_value(&slot.borrow()))
-}
-
-#[no_mangle]
-pub extern "C" fn js_worker_threads_resource_limits() -> f64 {
-    if CURRENT_WORKER_ID.with(|id| id.get()) == 0 {
-        return object_value(empty_object());
-    }
-    CURRENT_RESOURCE_LIMITS
-        .with(|limits| object_value(worker_resource_limits_object(&limits.get())))
 }
 
 /// parentPort.postMessage(data) - JSON-stringify and write to stdout
@@ -1908,6 +1960,12 @@ static KEEP_WT_MARK_AS_UNCLONEABLE: extern "C" fn(f64) -> f64 =
     js_worker_threads_mark_as_uncloneable;
 #[used(compiler)]
 static KEEP_WT_WORKER_NEW: extern "C" fn(i64, f64) -> f64 = js_worker_threads_worker_new;
+#[used(compiler)]
+static KEEP_WT_WORKER_NEW_BY_SPEC: extern "C" fn(f64, f64) -> f64 =
+    js_worker_threads_worker_new_by_spec;
+#[used(compiler)]
+static KEEP_WT_REGISTER_ENTRY: unsafe extern "C" fn(*const u8, i64, i64) =
+    js_worker_threads_register_entry;
 #[used(compiler)]
 static KEEP_WT_WORKER_POST_MESSAGE: extern "C" fn(i64, f64) -> f64 =
     js_worker_threads_worker_post_message;

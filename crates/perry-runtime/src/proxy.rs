@@ -32,6 +32,7 @@ pub use has_delete::{js_proxy_delete, js_proxy_has};
 mod invariants;
 mod put_value;
 pub(crate) use put_value::note_packed_add_carriers;
+pub(crate) use put_value::scan_setter_site_roots_mut;
 pub use put_value::{js_proxy_set, js_put_value_set};
 pub(crate) use put_value::{
     js_put_value_set_ic_miss, proxy_set_with_receiver, IC_SLOT_OVERFLOW_BIT,
@@ -538,34 +539,6 @@ pub extern "C" fn js_proxy_is_proxy(value: f64) -> i32 {
     } else {
         0
     }
-}
-
-/// Resolve the backing object used by Perry's private-element storage without
-/// invoking any Proxy trap.  Private names use the object's internal
-/// [[PrivateElements]] list in ECMAScript; they are deliberately not ordinary
-/// `[[Get]]`/`[[Set]]` operations.  Perry's Proxy is a stable registry handle,
-/// so its private storage lives on the backing target and all private-element
-/// entry points consistently resolve through this helper.
-pub(crate) fn private_element_receiver(mut value: f64) -> f64 {
-    for _ in 0..32 {
-        let Some(id) = lookup(value) else {
-            return value;
-        };
-        let (target, revoked) = PROXIES.with(|p| {
-            p.borrow()
-                .get(id as usize)
-                .and_then(|entry| entry.as_ref())
-                .map(|entry| (entry.target, entry.revoked))
-                .unwrap_or((f64::from_bits(TAG_UNDEFINED), false))
-        });
-        if revoked {
-            revoked_return_with_message(
-                "Cannot access a private element on a proxy that has been revoked",
-            );
-        }
-        value = target;
-    }
-    value
 }
 
 /// `IsArray`'s Proxy branch (ECMA-262 §7.2.2). If `value` is a live Proxy,
@@ -1376,6 +1349,7 @@ fn is_non_configurable_exotic_own(target: f64, key: f64) -> bool {
             // is a non-configurable own property.
             if !crate::closure::closure_is_arrow(closure)
                 && !crate::closure::closure_is_bound_method(closure)
+                && !crate::closure::closure_body_is_non_constructor(closure)
             {
                 return true;
             }
@@ -2118,9 +2092,6 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                             // neither record nor honor store plans.
                             let plan_eligible = header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO
                                 == 0
-                                && !crate::object::prototype_chain::object_has_prototype_divergence(
-                                    addr,
-                                )
                                 && class_id != crate::object::NATIVE_MODULE_CLASS_ID
                                 // #8113: this asks for ORDINARY specifically —
                                 // it must stay FALSE for a class object or

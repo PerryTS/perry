@@ -83,6 +83,48 @@ fn declared_typed_array_class_f64(ctx: &FnCtx<'_>, id: &u32) -> Option<String> {
     }
 }
 
+/// Byte offset of a typed-array object's inline elements from its header, which
+/// holds the `u32` length at offset 0. The checked load reads exactly this
+/// layout.
+const TA_INLINE_DATA_OFFSET: i32 = 16;
+
+/// Whether a receiver with a tracked buffer view may take the guarded read.
+///
+/// A view owns its receiver while it can still serve the read itself: every
+/// view tier (`lower_typed_array_load`, the proven checked and proven guarded
+/// tiers) requires the view's `noalias` proof and a live alias scope, and a
+/// native-owned view names memory this load does not read. Such a view is
+/// left alone; the guarded read must not shadow its stronger path (in number
+/// context, `binary.rs` tries this tier first).
+///
+/// A view that lost the proof (an alias, an escape, a refresh or a `.buffer`
+/// exposure demoted it) is served by no view tier, so the read used to fall
+/// to the unconditional `js_typed_array_get` call, slower than having no view
+/// at all (#11810). The guarded read takes it instead: it uses nothing from
+/// the view. It re-reads the receiver at every access, admits it only through
+/// the runtime kind cache keyed by the object's own address, reads the length
+/// from the object's header and the element from its inline storage, and sends
+/// every miss (a different kind, out-of-line or detached storage) to the
+/// memory-safe helper.
+///
+/// The guard only pays off while the elements are where the load reads them,
+/// so the view must still prove that: inline storage, and a cached pointer
+/// that no `.buffer` exposure or storage change has invalidated. Exposing
+/// `.buffer` moves the elements out of line (#10516), the kind cache then
+/// tags the address as external storage, and every guarded read would miss
+/// into the helper, which costs more than the plain call. Likewise the view
+/// must have the typed-array object layout the load reads; a buffer-layout
+/// view (a perry `Uint8Array`, whose length sits 8 bytes before its data)
+/// keeps its own lane.
+fn view_leaves_receiver_to_guarded_read(view: &crate::native_value::BufferViewSlot) -> bool {
+    let serves_itself = view.alias.allows_noalias() && view.scope_idx.is_some();
+    !serves_itself
+        && view.native_owned.is_none()
+        && view.storage_inline_proven
+        && view.pointer_state.is_stable()
+        && view.length_offset_from_data == -TA_INLINE_DATA_OFFSET
+}
+
 fn checked_typed_array_f64_kind(
     ctx: &FnCtx<'_>,
     object: &Expr,
@@ -95,10 +137,10 @@ fn checked_typed_array_f64_kind(
     let Expr::LocalGet(id) = object else {
         return None;
     };
-    // A tracked buffer view owns this receiver via its own (stronger-bounds)
-    // native path; don't shadow it.
-    if ctx.receiver_descriptors.contains_buffer_view(id) {
-        return None;
+    if let Some(view) = ctx.receiver_descriptors.buffer_view(id) {
+        if !view_leaves_receiver_to_guarded_read(view) {
+            return None;
+        }
     }
     // Class proof: first the function-local proof, then — for a MODULE-GLOBAL
     // typed array (allocated once at module scope and read inside functions,
@@ -218,7 +260,7 @@ pub(crate) fn try_lower_ta_f64_read_for_number_context(
 
 /// Emit the checked inline f64 element load. Same runtime-fact guard and header
 /// bounds check as [`super::i32_fast_path`]'s `lower_checked_typed_array_i32_load`
-/// (pointer + inline-storage `PERRY_TA_VIEW_GUARD == 0` + kind-cache addr/kind),
+/// (pointer + kind-cache addr/kind, whose tag also says inline storage),
 /// but the load arm widens the element to f64, the OOB arm merges in the
 /// `TAG_UNDEFINED` double, and guard misses defer to `js_typed_array_read_f64`.
 #[allow(clippy::too_many_arguments)]
@@ -255,8 +297,9 @@ fn lower_checked_typed_array_f64_load(
         let raw = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
         let tagged = blk.and(I64, &obj_bits, &tag_mask);
         let is_ptr = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
-        let vg = blk.load(I64, "@PERRY_TA_VIEW_GUARD");
-        let vg_zero = blk.icmp_eq(I64, &vg, "0");
+        // #10516: the kind-cache tag carries the receiver's storage: an
+        // external-storage typed array (a view) caches `kind | 0x80`, so the
+        // kind compare below rejects it. No process-wide view count.
         let slot = blk.lshr(I64, &raw, "3");
         let slot = blk.and(I64, &slot, "63");
         let entry_ptr = blk.gep(
@@ -269,8 +312,7 @@ fn lower_checked_typed_array_f64_load(
         let addr_match = blk.icmp_eq(I64, &entry_addr, &raw); // also rejects empty slot 0
         let kind_bits = blk.and(I64, &entry_val, "255");
         let kind_ok = blk.icmp_eq(I64, &kind_bits, &kind.to_string());
-        let g = blk.and(I1, &is_ptr, &vg_zero);
-        let g = blk.and(I1, &g, &addr_match);
+        let g = blk.and(I1, &is_ptr, &addr_match);
         let g = blk.and(I1, &g, &kind_ok);
         blk.cond_br(&g, &chk_label, &slow_label);
         raw
@@ -292,7 +334,7 @@ fn lower_checked_typed_array_f64_load(
     ctx.current_block = load_idx;
     let (load_val, load_end) = {
         let blk = ctx.block();
-        let data_base = blk.add(I64, &raw, "16");
+        let data_base = blk.add(I64, &raw, &TA_INLINE_DATA_OFFSET.to_string());
         let idx_i64 = blk.zext(I32, &idx_i32, I64);
         let shift = elem_size.trailing_zeros().to_string();
         let off = blk.shl(I64, &idx_i64, &shift);

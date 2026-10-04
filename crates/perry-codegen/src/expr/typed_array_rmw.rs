@@ -152,8 +152,9 @@ fn emit_receiver_guard(ctx: &mut FnCtx<'_>, object_box: &str) -> (String, String
     let raw = blk.and(I64, &object_bits, POINTER_MASK_I64);
     let tagged = blk.and(I64, &object_bits, &tag_mask);
     let is_pointer = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
-    let view_guard = blk.load(I64, "@PERRY_TA_VIEW_GUARD");
-    let inline_storage = blk.icmp_eq(I64, &view_guard, "0");
+    // #10516: the kind-cache tag carries the receiver's storage: an
+    // external-storage typed array (a view) caches `kind | 0x80`, so the
+    // kind compare below rejects it. No process-wide view count.
     let slot = blk.lshr(I64, &raw, "3");
     let slot = blk.and(I64, &slot, "63");
     let entry_ptr = blk.gep(
@@ -166,8 +167,7 @@ fn emit_receiver_guard(ctx: &mut FnCtx<'_>, object_box: &str) -> (String, String
     let address_matches = blk.icmp_eq(I64, &cached_addr, &raw);
     let kind = blk.and(I64, &entry, "255");
     let kind_matches = blk.icmp_eq(I64, &kind, &UINT32_KIND.to_string());
-    let guard = blk.and(I1, &is_pointer, &inline_storage);
-    let guard = blk.and(I1, &guard, &address_matches);
+    let guard = blk.and(I1, &is_pointer, &address_matches);
     (raw, blk.and(I1, &guard, &kind_matches))
 }
 
@@ -213,10 +213,13 @@ fn emit_generic_set(
 ) -> Result<String> {
     // Re-read the immutable reference temporaries after any allocating RHS;
     // their slots are the GC-visible source of truth.
-    let object_box = lower_expr(ctx, object)?;
-    let index_box = lower_expr(ctx, index)?;
+    let rooted_operands: [&perry_hir::Expr; 2] = [object, index];
+    let (rooted_values, rooted_group) =
+        crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+    let object_box = rooted_values[0].clone();
+    let index_box = rooted_values[1].clone();
     let strict = if assignment_strict { "1" } else { "0" };
-    Ok(ctx.block().call(
+    let rooted_result = ctx.block().call(
         DOUBLE,
         "js_dyn_index_set_strict",
         &[
@@ -225,7 +228,9 @@ fn emit_generic_set(
             (DOUBLE, value),
             (I32, strict),
         ],
-    ))
+    );
+    rooted_group.release(ctx);
+    Ok(rooted_result)
 }
 
 /// Try the guarded Uint32Array `base[key] += numeric_rhs` lowering.
@@ -265,8 +270,11 @@ pub(super) fn try_lower_guarded_uint32_add(
     // The HIR has already evaluated the source base and computed key once into
     // immutable locals.  Loading those values here therefore has no user-code
     // effect and is the correct reference snapshot for both arms.
-    let object_box = lower_expr(ctx, candidate.object)?;
-    let index_box = lower_expr(ctx, candidate.index)?;
+    let rooted_operands: [&perry_hir::Expr; 2] = [candidate.object, candidate.index];
+    let (rooted_values, rooted_group) =
+        crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
+    let object_box = rooted_values[0].clone();
+    let index_box = rooted_values[1].clone();
     let (raw, receiver_ok) = emit_receiver_guard(ctx, &object_box);
     let index_range_ok = emit_index_range_guard(ctx, &index_box);
     let precheck_ok = ctx.block().and(I1, &receiver_ok, &index_range_ok);
@@ -425,5 +433,7 @@ pub(super) fn try_lower_guarded_uint32_add(
     // `fast_sum_end` is deliberately retained as an assertion of CFG shape:
     // the RHS block must terminate at the post-RHS guard, not at the store.
     debug_assert_ne!(fast_sum_end, store_end);
-    Ok(Some(result))
+    let rooted_result = Some(result);
+    rooted_group.release(ctx);
+    Ok(rooted_result)
 }

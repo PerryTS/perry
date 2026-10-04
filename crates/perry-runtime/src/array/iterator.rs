@@ -864,6 +864,13 @@ pub extern "C" fn js_get_async_iterator(value: f64) -> f64 {
         }
         // @@asyncIterator absent → fall through to the sync-iterator path.
     }
+    // #11620: a readable stream that is a bare handle (a zlib transform) has
+    // no properties to hold @@asyncIterator.
+    if let Some(iterator) =
+        crate::node_stream::async_iterator::readable_handle_async_iterator(value)
+    {
+        return iterator;
+    }
 
     let iter = crate::symbol::js_get_iterator(value);
     let raw = crate::value::js_nanbox_get_pointer(iter) as usize;
@@ -1400,25 +1407,51 @@ pub extern "C" fn js_iterator_next_result(iter_f64: f64) -> f64 {
 /// reports itself rather than corrupting a result.
 const MAX_ITERATOR_DRAIN: usize = u32::MAX as usize - 1;
 
-/// `IteratorClose(iterator)` when destructuring exits before the iterator is done.
+/// IteratorClose when a consumer exits before exhaustion. As with the
+/// iterator materializer, debug/test builds must allow a catchable JS throw
+/// to cross this entry; production uses the plain C exception transport.
+#[cfg(panic = "abort")]
 #[no_mangle]
 pub extern "C" fn js_iterator_close_if_not_done(iter_f64: f64, done_f64: f64) -> f64 {
+    iterator_close_if_not_done(iter_f64, done_f64)
+}
+
+#[cfg(not(panic = "abort"))]
+#[no_mangle]
+pub extern "C-unwind" fn js_iterator_close_if_not_done(iter_f64: f64, done_f64: f64) -> f64 {
+    iterator_close_if_not_done(iter_f64, done_f64)
+}
+
+fn iterator_close_if_not_done(iter_f64: f64, done_f64: f64) -> f64 {
     if crate::value::js_is_truthy(done_f64) != 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
-    let ret = named_field(iter_f64, b"return");
-    if ret.to_bits() == crate::value::TAG_UNDEFINED {
+    // GetMethod may invoke a getter and collect. Root the receiver before
+    // allocating its key, then reload it for Call. Root the returned method
+    // too: neither value may remain a raw local across user code.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter = scope.root_nanbox_f64(iter_f64);
+    let key = crate::string::js_string_from_bytes_longlived(b"return".as_ptr(), 6);
+    let ret = crate::object::js_object_get_field_by_name_f64(
+        crate::value::js_nanbox_get_pointer(iter.get_nanbox_f64())
+            as *const crate::object::ObjectHeader,
+        key,
+    );
+    if matches!(
+        ret.to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    if !is_callable_value(ret) {
+    if !crate::proxy::is_callable_function(ret) {
         crate::closure::throw_not_callable();
     }
-
+    let method = scope.root_nanbox_f64(ret);
     let result = unsafe {
         crate::closure::native_call_value_this(
-            ret,
-            crate::closure::JsThis::from_f64(iter_f64),
+            method.get_nanbox_f64(),
+            crate::closure::JsThis::from_f64(iter.get_nanbox_f64()),
             std::ptr::null(),
             0,
         )

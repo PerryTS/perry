@@ -413,6 +413,19 @@ pub(super) fn prove_group_numeric_fields<'a>(
 
 // ── #7770: numeric-by-construction locals ──────────────────────────────────
 
+/// Extra leaves and entry candidates for one guarded region's F clone.
+pub(crate) struct RegionNumberAssumptions<'a> {
+    pub(crate) entry_candidates: &'a HashSet<u32>,
+    pub(crate) static_numbers: &'a HashSet<u32>,
+    pub(crate) f64_reads: &'a HashSet<usize>,
+    /// Expressions the region evaluates on every iteration outside its
+    /// statements: a loop region's condition and update. F observes their
+    /// writes on the back edge exactly as it observes its own, and the entry
+    /// tests run once before the loop, so a local they write must be judged
+    /// by the same fixed point as a body write.
+    pub(crate) loop_control: &'a [&'a Expr],
+}
+
 /// Locals whose every write is number-producing by construction — above all
 /// the loop counter (`let i = 0` + `i++`) that feeds a provenance
 /// `new C(i, i + 1)`.
@@ -449,6 +462,38 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
     shape_members: &HashSet<u32>,
     shape_numeric_fields: &HashSet<String>,
 ) -> HashSet<u32> {
+    collect_numeric_by_construction_locals_in_region(
+        stmts,
+        boxed_vars,
+        module_globals,
+        not_bigint_locals,
+        const_local_inits,
+        numeric_ta_views,
+        shape_members,
+        shape_numeric_fields,
+        None,
+    )
+}
+
+pub(crate) fn collect_numeric_by_construction_locals_in_region<'a>(
+    stmts: &'a [Stmt],
+    boxed_vars: &HashSet<u32>,
+    module_globals: &HashMap<u32, String>,
+    not_bigint_locals: &HashSet<u32>,
+    const_local_inits: &HashMap<u32, Option<&'a Expr>>,
+    // #8619: view bindings proven to hold a numeric-kind typed array (spec-ABI
+    // `TaPtr` params). Empty for the `Ptr<Shape>` type-analysis caller.
+    numeric_ta_views: &HashSet<u32>,
+    // #10777: shape-proven receivers visible to THIS walk, and the property
+    // names numeric on all of them. Both were hardcoded empty here, so
+    // `expr_numeric_by_construction`'s `PropertyGet` arm — gated on
+    // `members.contains(id)` — could never fire for a function-scope walk. An
+    // accumulator written `h = h + o.a` was therefore never admitted, however
+    // completely `o`'s shape was proven. Empty for every pre-existing caller.
+    shape_members: &HashSet<u32>,
+    shape_numeric_fields: &HashSet<String>,
+    region: Option<&RegionNumberAssumptions<'a>>,
+) -> HashSet<u32> {
     // ONE write walker for both fixpoints (`collect_not_bigint_locals` and
     // this one) — see its doc for why sharing is load-bearing. `None` = a
     // no-init `Let`, which THIS consumer treats as fatal (`undefined` is not
@@ -456,6 +501,11 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
     let mut writes: HashMap<u32, Vec<Option<&'a Expr>>> = HashMap::new();
     let mut let_bound: HashSet<u32> = HashSet::new();
     super::super::not_bigint_locals::collect_writes(stmts, &mut writes, &mut let_bound);
+    // A region's loop control runs between F iterations: every write it
+    // makes reaches F as surely as a body write does.
+    for e in region.map_or(&[][..], |r| r.loop_control) {
+        super::super::not_bigint_locals::collect_writes_expr(e, &mut writes, &mut let_bound);
+    }
     // The standalone #8105 consumer does not run the Ptr<Shape> provenance
     // walk that normally supplies `const_local_inits`. Reconstruct the same
     // safe fact from the shared exhaustive write set: one initialized write
@@ -464,6 +514,12 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
     // constructors without trusting their erased annotation.
     let mut stable_local_inits = const_local_inits.clone();
     for (&id, local_writes) in &writes {
+        // An entry-tested loop-carried local can have just one F-body write.
+        // That write is not a stable initializer and must be judged through
+        // the running fixed-point assumption (h = h + x).
+        if region.is_some_and(|r| r.entry_candidates.contains(&id)) {
+            continue;
+        }
         if let [Some(init)] = local_writes.as_slice() {
             stable_local_inits.entry(id).or_insert(Some(*init));
         }
@@ -472,17 +528,28 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
     let empty_fields: HashSet<String> = shape_numeric_fields.clone();
     let mut numeric: HashSet<u32> = let_bound
         .into_iter()
+        .chain(
+            region
+                .into_iter()
+                .flat_map(|r| r.entry_candidates.iter().copied()),
+        )
         .filter(|id| !boxed_vars.contains(id) && !module_globals.contains_key(id))
         .collect();
+    if let Some(r) = region {
+        numeric.extend(r.static_numbers.iter().copied());
+    }
     loop {
         let mut drop: Vec<u32> = Vec::new();
         for &id in &numeric {
+            if region.is_some_and(|r| r.static_numbers.contains(&id)) {
+                continue;
+            }
             let ok = writes
                 .get(&id)
                 .map(|ws| {
                     ws.iter().all(|w| match w {
                         None => false,
-                        Some(e) => expr_numeric_by_construction(
+                        Some(e) => expr_numeric_by_construction_with_region(
                             e,
                             &ParamEnv::None,
                             &empty_members,
@@ -492,12 +559,13 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
                             &numeric,
                             numeric_ta_views,
                             0,
+                            region.map(|r| r.f64_reads),
                         ),
                     })
                 })
-                // A `let_bound` id always has its `Let` recorded; treat a
-                // missing entry as unproven rather than as vacuously true.
-                .unwrap_or(false);
+                // Only a strictly tested entry candidate may have no local
+                // write inside F; its incoming value is the guarded leaf.
+                .unwrap_or_else(|| region.is_some_and(|r| r.entry_candidates.contains(&id)));
             if !ok {
                 drop.push(id);
             }
@@ -510,6 +578,86 @@ pub(in crate::collectors) fn collect_numeric_by_construction_locals<'a>(
         }
     }
     numeric
+}
+
+/// Trace Number-consuming local uses back through the shared exhaustive
+/// write inventory to the property reads feeding them. The caller intersects
+/// these expression identities with the planner's fresh bare reads, so a
+/// read after an E2 call never becomes an R leaf.
+pub(crate) fn region_number_flow_reads(
+    stmts: &[Stmt],
+    roots: &HashSet<u32>,
+) -> (HashSet<usize>, HashSet<u32>, HashSet<u32>) {
+    fn deps(e: &Expr, reads: &mut HashSet<usize>, locals: &mut Vec<u32>) {
+        match e {
+            Expr::PropertyGet { .. } => {
+                reads.insert(e as *const Expr as usize);
+                return;
+            }
+            Expr::LocalGet(id) => {
+                locals.push(*id);
+                return;
+            }
+            // A value only tested for truthiness does not flow into the
+            // result: a conditional's test (its arms are the values) and a
+            // `!` operand (the result is a Boolean).
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                deps(then_expr, reads, locals);
+                deps(else_expr, reads, locals);
+                return;
+            }
+            Expr::Unary {
+                op: perry_hir::UnaryOp::Not,
+                ..
+            } => return,
+            _ => {}
+        }
+        perry_hir::walker::walk_expr_children(e, &mut |child| deps(child, reads, locals));
+    }
+
+    let mut writes = HashMap::new();
+    let mut bound = HashSet::new();
+    super::super::not_bigint_locals::collect_writes(stmts, &mut writes, &mut bound);
+    let mut reads = HashSet::new();
+    let mut seen = HashSet::new();
+    let mut pending: Vec<u32> = roots.iter().copied().collect();
+    while let Some(id) = pending.pop() {
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Some(ws) = writes.get(&id) {
+            for value in ws.iter().flatten() {
+                deps(value, &mut reads, &mut pending);
+            }
+        }
+    }
+    (reads, seen, bound)
+}
+
+/// Reuse the Number-by-construction expression rule when the region planner
+/// decides whether a bare store is compatible with an R-proven F64 lane.
+pub(crate) fn region_store_value_is_number(
+    value: &Expr,
+    f64_reads: &HashSet<usize>,
+    numeric_locals: &HashSet<u32>,
+    not_bigint_locals: &HashSet<u32>,
+) -> bool {
+    expr_numeric_by_construction_with_region(
+        value,
+        &ParamEnv::None,
+        &HashSet::new(),
+        &HashSet::new(),
+        not_bigint_locals,
+        &HashMap::new(),
+        numeric_locals,
+        &HashSet::new(),
+        0,
+        Some(f64_reads),
+    )
 }
 
 // ── The expression-level proof ─────────────────────────────────────────────
@@ -536,12 +684,47 @@ pub(super) fn expr_numeric_by_construction(
     numeric_ta_views: &HashSet<u32>,
     depth: usize,
 ) -> bool {
+    expr_numeric_by_construction_with_region(
+        e,
+        param_env,
+        members,
+        numeric_fields,
+        not_bigint_locals,
+        const_local_inits,
+        numeric_locals,
+        numeric_ta_views,
+        depth,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn expr_numeric_by_construction_with_region(
+    e: &Expr,
+    param_env: &ParamEnv<'_>,
+    members: &HashSet<u32>,
+    numeric_fields: &HashSet<String>,
+    not_bigint_locals: &HashSet<u32>,
+    const_local_inits: &HashMap<u32, Option<&Expr>>,
+    numeric_locals: &HashSet<u32>,
+    // #8619: view bindings PROVEN to permanently hold a numeric-kind typed
+    // array — a spec-ABI `TaPtr` parameter (the entry contract binds the raw
+    // header of a proven numeric non-view typed array). A read
+    // `view_id[numeric_index]` is then a Number (in-bounds) or `undefined`
+    // (OOB) by construction, never a pointer/string, which the Add rule below
+    // launders into a genuine Number. Empty on every path that is not a
+    // specialized-entry local proof (the class-field provers, the `Ptr<Shape>`
+    // pass).
+    numeric_ta_views: &HashSet<u32>,
+    depth: usize,
+    region_f64_reads: Option<&HashSet<usize>>,
+) -> bool {
     if depth > 16 {
         return false;
     }
     use perry_hir::BinaryOp;
     let rec = |x: &Expr| {
-        expr_numeric_by_construction(
+        expr_numeric_by_construction_with_region(
             x,
             param_env,
             members,
@@ -551,6 +734,7 @@ pub(super) fn expr_numeric_by_construction(
             numeric_locals,
             numeric_ta_views,
             depth + 1,
+            region_f64_reads,
         )
     };
     // A numeric index into one of these compiler-owned constructors can only
@@ -628,6 +812,12 @@ pub(super) fn expr_numeric_by_construction(
         numeric_storage && rec(index)
     };
     match e {
+        Expr::PropertyGet { .. }
+            if region_f64_reads
+                .is_some_and(|reads| reads.contains(&(e as *const Expr as usize))) =>
+        {
+            true
+        }
         Expr::Number(_)
         | Expr::Integer(_)
         | Expr::PodLayoutSizeOf { .. }
@@ -738,7 +928,7 @@ pub(super) fn expr_numeric_by_construction(
                         return !sites.is_empty()
                             && sites.iter().all(|args| {
                                 args.get(pos).map(|a| {
-                                    expr_numeric_by_construction(
+                                    expr_numeric_by_construction_with_region(
                                         a,
                                         &ParamEnv::None,
                                         members,
@@ -748,6 +938,7 @@ pub(super) fn expr_numeric_by_construction(
                                         numeric_locals,
                                         numeric_ta_views,
                                         depth + 1,
+                                        region_f64_reads,
                                     )
                                 }) == Some(true)
                             });
@@ -762,7 +953,7 @@ pub(super) fn expr_numeric_by_construction(
                     // A single-Let const temp: chase its init (function
                     // scope, so no parameter mapping applies to it).
                     if let Some(Some(init)) = const_local_inits.get(id) {
-                        return expr_numeric_by_construction(
+                        return expr_numeric_by_construction_with_region(
                             init,
                             &ParamEnv::None,
                             members,
@@ -772,6 +963,7 @@ pub(super) fn expr_numeric_by_construction(
                             numeric_locals,
                             numeric_ta_views,
                             depth + 1,
+                            region_f64_reads,
                         );
                     }
                     // #7770: a local every one of whose writes is
@@ -819,3 +1011,177 @@ pub(super) fn expr_provably_not_bigint(e: &Expr, not_bigint_locals: &HashSet<u32
 // ToNumber(Symbol) THROWS, so the store never completes — throw behavior is
 // identical on the guarded and bare paths, and no non-number value can reach
 // the slot through these operators.
+
+#[cfg(test)]
+mod region_number_tests {
+    use super::*;
+
+    const OBJECT: u32 = 1;
+    const ACC: u32 = 2;
+    const FRESH: u32 = 3;
+    const STALE: u32 = 4;
+
+    fn read() -> Expr {
+        Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(OBJECT)),
+            property: "x".to_string(),
+            byte_offset: 0,
+        }
+    }
+
+    fn let_read(id: u32) -> Stmt {
+        Stmt::Let {
+            id,
+            name: format!("n{id}"),
+            ty: perry_hir::types::Type::Any,
+            mutable: false,
+            init: Some(read()),
+        }
+    }
+
+    fn add_to_acc(id: u32) -> Stmt {
+        Stmt::Expr(Expr::LocalSet(
+            ACC,
+            Box::new(Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(ACC)),
+                right: Box::new(Expr::LocalGet(id)),
+            }),
+        ))
+    }
+
+    fn number_set(stmts: &[Stmt], fresh_read: usize) -> HashSet<u32> {
+        number_set_with_control(stmts, &[], fresh_read)
+    }
+
+    fn number_set_with_control(
+        stmts: &[Stmt],
+        loop_control: &[&Expr],
+        fresh_read: usize,
+    ) -> HashSet<u32> {
+        let boxed = HashSet::new();
+        let globals = HashMap::new();
+        let empty_ids = HashSet::new();
+        let empty_fields = HashSet::new();
+        let inits = HashMap::new();
+        let entry = HashSet::from([ACC]);
+        let reads = HashSet::from([fresh_read]);
+        let region = RegionNumberAssumptions {
+            entry_candidates: &entry,
+            static_numbers: &empty_ids,
+            f64_reads: &reads,
+            loop_control,
+        };
+        collect_numeric_by_construction_locals_in_region(
+            stmts,
+            &boxed,
+            &globals,
+            &empty_ids,
+            &inits,
+            &empty_ids,
+            &empty_ids,
+            &empty_fields,
+            Some(&region),
+        )
+    }
+
+    #[test]
+    fn an_e2_stale_second_read_drops_the_loop_carried_number_fact() {
+        let mut stmts = vec![let_read(FRESH), add_to_acc(FRESH)];
+        let fresh_ptr = match &stmts[0] {
+            Stmt::Let { init: Some(e), .. } => e as *const Expr as usize,
+            _ => unreachable!(),
+        };
+        let first = number_set(&stmts, fresh_ptr);
+        assert!(first.contains(&FRESH) && first.contains(&ACC));
+
+        // The intervening call makes the second slot read stale in the
+        // region planner. Only the first read's exact Expr identity is an
+        // F64 leaf; the second write must withdraw ACC from N_F.
+        stmts.push(Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::LocalGet(99)),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }));
+        stmts.push(let_read(STALE));
+        stmts.push(add_to_acc(STALE));
+        let fresh_ptr = match &stmts[0] {
+            Stmt::Let { init: Some(e), .. } => e as *const Expr as usize,
+            _ => unreachable!(),
+        };
+        let stale_ptr = match &stmts[3] {
+            Stmt::Let { init: Some(e), .. } => e as *const Expr as usize,
+            _ => unreachable!(),
+        };
+        let roots = HashSet::from([ACC]);
+        let (flows, locals, bound) = region_number_flow_reads(&stmts, &roots);
+        assert!(flows.contains(&fresh_ptr) && flows.contains(&stale_ptr));
+        assert!(locals.contains(&ACC) && locals.contains(&FRESH) && locals.contains(&STALE));
+        assert!(bound.contains(&FRESH) && bound.contains(&STALE) && !bound.contains(&ACC));
+        let after = number_set(&stmts, fresh_ptr);
+        assert!(after.contains(&FRESH));
+        assert!(!after.contains(&STALE));
+        assert!(!after.contains(&ACC), "the stale write must drop ACC");
+    }
+
+    fn fresh_ptr(stmts: &[Stmt]) -> usize {
+        match &stmts[0] {
+            Stmt::Let { init: Some(e), .. } => e as *const Expr as usize,
+            _ => unreachable!(),
+        }
+    }
+
+    /// `for (...; ...; i++, acc = "a") { const n = o.x; acc = acc + n; }`:
+    /// the update clause runs between F iterations, after the one preheader
+    /// test of ACC. Its write must be judged like a body write, or F adds
+    /// a string's bits as a double.
+    #[test]
+    fn an_update_clause_write_withdraws_the_loop_carried_number_fact() {
+        let stmts = vec![let_read(FRESH), add_to_acc(FRESH)];
+        let read = fresh_ptr(&stmts);
+        assert!(
+            number_set(&stmts, read).contains(&ACC),
+            "fixture: without loop control ACC is proven, or the check below is vacuous"
+        );
+        let string_write = Expr::LocalSet(ACC, Box::new(Expr::String("a".to_string())));
+        let after = number_set_with_control(&stmts, &[&string_write], read);
+        assert!(
+            !after.contains(&ACC),
+            "the update clause's string write must drop ACC"
+        );
+        assert!(after.contains(&FRESH));
+
+        // A number-producing loop-control write keeps the fact: the fixed
+        // point judges the write, it does not refuse every written local.
+        let numeric_write = Expr::LocalSet(
+            ACC,
+            Box::new(Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(ACC)),
+                right: Box::new(Expr::Number(1.0)),
+            }),
+        );
+        let kept = number_set_with_control(&stmts, &[&numeric_write], read);
+        assert!(kept.contains(&ACC));
+    }
+
+    /// `while ((acc = f()), ...)`: a condition write of an unknown value.
+    #[test]
+    fn a_condition_write_withdraws_the_loop_carried_number_fact() {
+        let stmts = vec![let_read(FRESH), add_to_acc(FRESH)];
+        let read = fresh_ptr(&stmts);
+        let call_write = Expr::LocalSet(
+            ACC,
+            Box::new(Expr::Call {
+                callee: Box::new(Expr::LocalGet(99)),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+        );
+        let cond = Expr::Sequence(vec![call_write, Expr::LocalGet(ACC)]);
+        let after = number_set_with_control(&stmts, &[&cond], read);
+        assert!(!after.contains(&ACC), "the condition's write must drop ACC");
+    }
+}

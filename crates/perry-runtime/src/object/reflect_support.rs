@@ -124,20 +124,25 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
             if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
                 || (*gc).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             {
-                let arr = crate::array::clean_arr_ptr(obj as *const crate::array::ArrayHeader);
-                if arr.is_null() {
-                    return false;
-                }
-                // #6943: `arr` is the (tag-cleaned) array header, resolved
-                // before the GC-capable coercion and walked after it.
+                // Root the receiver before coercion or lazy materialization,
+                // and keep the coerced key live while resolving the array.
                 let scope = crate::gc::RuntimeHandleScope::new();
-                let arr_handle = scope.root_raw_const_ptr(arr);
-                let key_str = crate::builtins::js_string_coerce(key);
-                let arr = arr_handle.get_raw_const_ptr::<crate::array::ArrayHeader>();
+                let obj_handle = scope.root_raw_mut_ptr(obj);
+                let key_handle = scope.root_nanbox_f64(key);
+                let key_str = crate::builtins::js_string_coerce(key_handle.get_nanbox_f64());
                 if key_str.is_null() {
                     return false;
                 }
-                return super::has_own_helpers::array_own_key_present(arr, key_str);
+                let key_str = scope.root_string_ptr(key_str);
+                return obj_handle.with_mut_ptr::<super::ObjectHeader, _>(|obj| {
+                    let arr = crate::array::clean_arr_ptr(obj.cast());
+                    if arr.is_null() {
+                        return false;
+                    }
+                    key_str.with_const_ptr(|key| {
+                        super::has_own_helpers::array_own_key_present(arr, key)
+                    })
+                });
             }
         }
         if crate::closure::is_closure_ptr(obj_addr) {
@@ -242,9 +247,20 @@ pub(crate) fn obj_value_attrs(value: f64, key: f64) -> Option<(bool, bool)> {
         // across the coercion. (Not in #6943's site list; found by reading.)
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_handle = scope.root_raw_mut_ptr(obj);
-        let k = key_to_rust_string(key)?;
+        let key_handle = scope.root_nanbox_f64(key);
+        let k = key_to_rust_string(key_handle.get_nanbox_f64())?;
         let obj = obj_handle.get_raw_mut_ptr::<super::ObjectHeader>();
-        super::get_property_attrs(obj as usize, &k).map(|a| (a.writable(), a.configurable()))
+        // Lazy numeric definitions and indexed reads use the materialized
+        // ArrayHeader. Resolve it after coercion, with the wrapper still rooted.
+        let lazy_index = super::canonical_array_index(&k).is_some()
+            && crate::value::addr_class::try_read_tracked_gc_header(obj as usize)
+                .is_some_and(|gc| (*gc.as_ptr()).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY);
+        let owner = if lazy_index {
+            super::array_object_ops::array_header(obj) as usize
+        } else {
+            obj as usize
+        };
+        super::get_property_attrs(owner, &k).map(|a| (a.writable(), a.configurable()))
     }
 }
 

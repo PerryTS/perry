@@ -155,6 +155,10 @@ pub(crate) struct BoundsFacts {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AliasNoAliasFacts {
     pub known_noalias_buffer_locals: HashSet<u32>,
+    /// Locals that always hold a Number, BigInt or `undefined`: keys an owned
+    /// typed array can take through the guarded view tier without reaching
+    /// its `buffer` getter. See `collectors/numeric_key_locals.rs`.
+    pub numeric_key_locals: HashSet<u32>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -207,6 +211,11 @@ pub(crate) struct ShapeStabilityFacts {
     /// and unguarded direct method dispatch
     /// (`lower_call/property_get/dynamic_dispatch.rs`).
     pub shape_proven_ptr_locals: HashMap<u32, super::PtrShapeLocal>,
+    /// #11759 (c′): locals bound to a repeatable class declaration's guarded
+    /// `new`, proven up to the class TEMPLATE (`ShapeProof::lineage`). Only
+    /// their `numeric_fields` are consumed, as a fact about the VALUES read
+    /// from those fields; never a layout or dispatch license.
+    pub shape_lineage_locals: HashMap<u32, super::PtrShapeLocal>,
     /// Fresh-object containment facts consumed exclusively by guarded
     /// argument-shape clone routes. This map remains available in modules
     /// with shape barriers, so it must never license guard-free field access:
@@ -365,6 +374,10 @@ impl TypeFacts {
         &self.alias_noalias.known_noalias_buffer_locals
     }
 
+    pub(crate) fn numeric_key_locals(&self) -> &HashSet<u32> {
+        &self.alias_noalias.numeric_key_locals
+    }
+
     pub(crate) fn compile_time_constants(&self) -> &HashMap<u32, f64> {
         &self.platform_constants.constants
     }
@@ -447,6 +460,12 @@ impl TypeFacts {
     /// when it is a proven `Ptr<Shape>` local (`collectors/ptr_shape.rs`).
     pub(crate) fn shape_proven_ptr_local(&self, local_id: u32) -> Option<&super::PtrShapeLocal> {
         self.shape_stability.shape_proven_ptr_locals.get(&local_id)
+    }
+
+    /// #11759 (c′): the template-lineage fact for a local bound to a
+    /// repeatable class declaration's guarded `new` (`ShapeProof::lineage`).
+    pub(crate) fn shape_lineage_local(&self, local_id: u32) -> Option<&super::PtrShapeLocal> {
+        self.shape_stability.shape_lineage_locals.get(&local_id)
     }
 
     pub(crate) fn guarded_argument_route_local(
@@ -649,7 +668,6 @@ pub(crate) fn collect_type_facts(
     } else {
         HashSet::new()
     };
-    let known_noalias_buffer_locals = collect_known_noalias_buffer_locals(stmts);
     let non_escaping_news = super::escape_news::collect_non_escaping_news(
         stmts,
         boxed_vars,
@@ -710,17 +728,20 @@ pub(crate) fn collect_type_facts(
     // Representation-selection Phase 3b: shape-proven pointer locals. Gated
     // on `PERRY_PTR_SHAPE_LOCALS` and the module-wide §5.2 barrier scan
     // inside the collector.
-    let (shape_proven_ptr_locals, exact_numeric_element_fields) =
-        super::ptr_shape::collect_shape_proven_ptr_locals_and_element_fields(
-            stmts,
-            boxed_vars,
-            module_globals,
-            classes,
-            module_dispatch,
-            &not_bigint_locals,
-            &element_shape_facts,
-            spec_numeric_params,
-        );
+    let super::ptr_shape::ShapeProof {
+        exact: shape_proven_ptr_locals,
+        element_fields: exact_numeric_element_fields,
+        lineage: shape_lineage_locals,
+    } = super::ptr_shape::collect_shape_proven_ptr_locals_and_element_fields(
+        stmts,
+        boxed_vars,
+        module_globals,
+        classes,
+        module_dispatch,
+        &not_bigint_locals,
+        &element_shape_facts,
+        spec_numeric_params,
+    );
     array_facts.exact_numeric_element_fields = exact_numeric_element_fields;
 
     // #8105 / #10777: locals that hold a JS Number by construction.
@@ -739,8 +760,20 @@ pub(crate) fn collect_type_facts(
     // `PERRY_PTR_SHAPE_LOCALS=0`; that still holds, because an empty
     // `shape_proven_ptr_locals` yields empty inputs below and the fixpoint then
     // computes exactly what it computed before.
-    let (nbc_shape_members, nbc_shape_numeric_fields) =
-        super::number_by_construction::shape_numeric_inputs(&shape_proven_ptr_locals);
+    //
+    // #11759 (c′): a repeatable class declaration's guarded `new` is proven
+    // only up to its template (`ShapeProof::lineage`); which of its fields
+    // hold a Number is a template fact, so it feeds this proof and nothing
+    // that relies on one class object's layout.
+    let (nbc_shape_members, nbc_shape_numeric_fields) = {
+        let mut numeric_inputs = shape_proven_ptr_locals.clone();
+        numeric_inputs.extend(
+            shape_lineage_locals
+                .iter()
+                .map(|(id, fact)| (*id, fact.clone())),
+        );
+        super::number_by_construction::shape_numeric_inputs(&numeric_inputs)
+    };
     let number_by_construction_locals = super::collect_number_by_construction_locals(
         stmts,
         params,
@@ -753,6 +786,34 @@ pub(crate) fn collect_type_facts(
         module_global_proven_types,
         &nbc_shape_members,
         &nbc_shape_numeric_fields,
+    );
+    // A constructor argument that is never an Object is a LENGTH: the
+    // buffer, typed-array and array-like forms of `new TA(x)` all need an
+    // object. Numbers by construction, integer locals (an i32 proof, or
+    // `undefined` before a scaffolding seed's first write, which is length 0)
+    // and the specialized entry's proven numeric parameters qualify. A
+    // parameter only while the body never rebinds it: the entry proved the
+    // value it arrived with, not later writes.
+    let rebound = super::spec_abi_sites::rebound_locals(stmts);
+    let number_locals: HashSet<u32> = number_by_construction_locals
+        .iter()
+        .chain(
+            spec_numeric_params
+                .iter()
+                .filter(|id| !rebound.contains(id)),
+        )
+        .copied()
+        .collect();
+    let non_object_locals: HashSet<u32> = number_locals.union(&integer_locals).copied().collect();
+    let known_noalias_buffer_locals =
+        collect_known_noalias_buffer_locals(stmts, &non_object_locals);
+    let numeric_key_locals = super::numeric_key_locals::collect_numeric_key_locals(
+        stmts,
+        params,
+        boxed_vars,
+        module_globals,
+        &non_object_locals,
+        &known_noalias_buffer_locals,
     );
     let guarded_argument_route_locals = if module_dispatch.has_argument_shape_routes() {
         super::ptr_shape::collect_guarded_argument_route_locals(
@@ -807,6 +868,7 @@ pub(crate) fn collect_type_facts(
         },
         alias_noalias: AliasNoAliasFacts {
             known_noalias_buffer_locals,
+            numeric_key_locals,
         },
         escape: EscapeFacts {
             non_escaping_news,
@@ -829,6 +891,7 @@ pub(crate) fn collect_type_facts(
         shape_stability: ShapeStabilityFacts {
             scalar_replaceable_object_locals,
             shape_proven_ptr_locals,
+            shape_lineage_locals,
             guarded_argument_route_locals,
             num_array_locals,
         },
@@ -950,26 +1013,45 @@ pub(crate) fn collect_hir_facts(
     )
 }
 
-fn collect_known_noalias_buffer_locals(stmts: &[Stmt]) -> HashSet<u32> {
+/// Immutable locals bound to a fresh, owned buffer or typed array.
+///
+/// `non_object_locals` are locals proven never to hold an Object at any read
+/// (see the call site). A constructor argument built from them is a length,
+/// so `new Int32Array(n)` owns fresh inline storage exactly as
+/// `new Int32Array(8)` does. Unlike `known_length_locals` they are
+/// whole-function facts, not scoped to a `let`, so a re-declaration never
+/// removes them.
+fn collect_known_noalias_buffer_locals(
+    stmts: &[Stmt],
+    non_object_locals: &HashSet<u32>,
+) -> HashSet<u32> {
     let mut out = HashSet::new();
     let mut known_length_locals = HashSet::new();
-    collect_owned_buffer_lets(stmts, &mut out, &mut known_length_locals);
+    let lengths = LengthFacts { non_object_locals };
+    collect_owned_buffer_lets(stmts, &mut out, &mut known_length_locals, &lengths);
     out
+}
+
+/// Whole-function facts consulted by the length predicates below.
+struct LengthFacts<'a> {
+    non_object_locals: &'a HashSet<u32>,
 }
 
 fn collect_owned_buffer_lets_child_scope(
     stmts: &[Stmt],
     out: &mut HashSet<u32>,
     known_length_locals: &HashSet<u32>,
+    lengths: &LengthFacts<'_>,
 ) {
     let mut child_length_locals = known_length_locals.clone();
-    collect_owned_buffer_lets(stmts, out, &mut child_length_locals);
+    collect_owned_buffer_lets(stmts, out, &mut child_length_locals, lengths);
 }
 
 fn collect_owned_buffer_lets(
     stmts: &[Stmt],
     out: &mut HashSet<u32>,
     known_length_locals: &mut HashSet<u32>,
+    lengths: &LengthFacts<'_>,
 ) {
     for stmt in stmts {
         match stmt {
@@ -979,10 +1061,11 @@ fn collect_owned_buffer_lets(
                 init: Some(init),
                 ..
             } => {
-                if !*mutable && is_owned_u8_buffer_alloc(init, known_length_locals) {
+                if !*mutable && is_owned_u8_buffer_alloc(init, known_length_locals, lengths) {
                     out.insert(*id);
                 }
-                if !*mutable && is_fresh_uint8array_length_expr(init, known_length_locals) {
+                if !*mutable && is_fresh_uint8array_length_expr(init, known_length_locals, lengths)
+                {
                     known_length_locals.insert(*id);
                 } else {
                     known_length_locals.remove(id);
@@ -993,13 +1076,23 @@ fn collect_owned_buffer_lets(
                 else_branch,
                 ..
             } => {
-                collect_owned_buffer_lets_child_scope(then_branch, out, known_length_locals);
+                collect_owned_buffer_lets_child_scope(
+                    then_branch,
+                    out,
+                    known_length_locals,
+                    lengths,
+                );
                 if let Some(else_branch) = else_branch {
-                    collect_owned_buffer_lets_child_scope(else_branch, out, known_length_locals);
+                    collect_owned_buffer_lets_child_scope(
+                        else_branch,
+                        out,
+                        known_length_locals,
+                        lengths,
+                    );
                 }
             }
             Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                collect_owned_buffer_lets_child_scope(body, out, known_length_locals);
+                collect_owned_buffer_lets_child_scope(body, out, known_length_locals, lengths);
             }
             Stmt::For { init, body, .. } => {
                 let mut loop_length_locals = known_length_locals.clone();
@@ -1008,15 +1101,17 @@ fn collect_owned_buffer_lets(
                         std::slice::from_ref(init.as_ref()),
                         out,
                         &mut loop_length_locals,
+                        lengths,
                     );
                 }
-                collect_owned_buffer_lets(body, out, &mut loop_length_locals);
+                collect_owned_buffer_lets(body, out, &mut loop_length_locals, lengths);
             }
             Stmt::Labeled { body, .. } => {
                 collect_owned_buffer_lets_child_scope(
                     std::slice::from_ref(body.as_ref()),
                     out,
                     known_length_locals,
+                    lengths,
                 );
             }
             Stmt::Try {
@@ -1024,17 +1119,32 @@ fn collect_owned_buffer_lets(
                 catch,
                 finally,
             } => {
-                collect_owned_buffer_lets_child_scope(body, out, known_length_locals);
+                collect_owned_buffer_lets_child_scope(body, out, known_length_locals, lengths);
                 if let Some(catch) = catch {
-                    collect_owned_buffer_lets_child_scope(&catch.body, out, known_length_locals);
+                    collect_owned_buffer_lets_child_scope(
+                        &catch.body,
+                        out,
+                        known_length_locals,
+                        lengths,
+                    );
                 }
                 if let Some(finally) = finally {
-                    collect_owned_buffer_lets_child_scope(finally, out, known_length_locals);
+                    collect_owned_buffer_lets_child_scope(
+                        finally,
+                        out,
+                        known_length_locals,
+                        lengths,
+                    );
                 }
             }
             Stmt::Switch { cases, .. } => {
                 for case in cases {
-                    collect_owned_buffer_lets_child_scope(&case.body, out, known_length_locals);
+                    collect_owned_buffer_lets_child_scope(
+                        &case.body,
+                        out,
+                        known_length_locals,
+                        lengths,
+                    );
                 }
             }
             Stmt::Let { init: None, .. }
@@ -1052,17 +1162,21 @@ fn collect_owned_buffer_lets(
     }
 }
 
-fn is_owned_u8_buffer_alloc(expr: &Expr, known_length_locals: &HashSet<u32>) -> bool {
+fn is_owned_u8_buffer_alloc(
+    expr: &Expr,
+    known_length_locals: &HashSet<u32>,
+    lengths: &LengthFacts<'_>,
+) -> bool {
     match expr {
         Expr::BufferAlloc { .. } | Expr::BufferAllocUnsafe(_) => true,
         Expr::Uint8ArrayNew(None) => true,
         Expr::Uint8ArrayNew(Some(size)) => {
-            is_fresh_uint8array_length_expr(size, known_length_locals)
+            is_fresh_uint8array_length_expr(size, known_length_locals, lengths)
         }
         Expr::TypedArrayNew { arg: None, .. } => true,
         Expr::TypedArrayNew {
             arg: Some(size), ..
-        } => is_fresh_uint8array_length_expr(size, known_length_locals),
+        } => is_fresh_uint8array_length_expr(size, known_length_locals, lengths),
         Expr::NativeMethodCall {
             module,
             method,
@@ -1074,30 +1188,29 @@ fn is_owned_u8_buffer_alloc(expr: &Expr, known_length_locals: &HashSet<u32>) -> 
     }
 }
 
-fn is_fresh_uint8array_length_expr(expr: &Expr, known_length_locals: &HashSet<u32>) -> bool {
+fn is_fresh_uint8array_length_expr(
+    expr: &Expr,
+    known_length_locals: &HashSet<u32>,
+    lengths: &LengthFacts<'_>,
+) -> bool {
     match expr {
-        Expr::LocalGet(id) => known_length_locals.contains(id),
-        // `new Uint8Array(SIZE * SIZE)` — a fixed arithmetic combination of
-        // literals and known-length locals is exactly as fixed as either leaf
-        // on its own, and this predicate asks only whether the allocation's
-        // SIZE is fixed, never what it is (`length_source_from_expr` resolves
-        // the value later, with a `FnCtx` in hand, and simply records no
-        // constant length when it cannot).
+        Expr::LocalGet(id) => {
+            known_length_locals.contains(id) || lengths.non_object_locals.contains(id)
+        }
+        // `new Uint8Array(SIZE * SIZE)`, `new Float64Array(rows.length * 7)`:
+        // the constructor's form depends only on whether its argument is an
+        // Object, so any operator whose result is never one proves the length
+        // form, whatever its operands are. This predicate asks only that, never
+        // what the length is (`length_source_from_expr` resolves the value
+        // later, with a `FnCtx` in hand, and records no constant length when
+        // it cannot).
         //
         // Rejecting the product cost the whole buffer-view tier for the
         // receiver: no view means no inline element load, so every read paid a
         // `js_uint8array_index_get_value` call —
         // `benchmarks/suite/bench_int_arithmetic.ts` allocates exactly this way
         // and spent 54 calls per pixel because of it.
-        Expr::Binary { op, left, right }
-            if matches!(
-                op,
-                perry_hir::BinaryOp::Add | perry_hir::BinaryOp::Sub | perry_hir::BinaryOp::Mul
-            ) =>
-        {
-            is_fresh_uint8array_length_expr(left, known_length_locals)
-                && is_fresh_uint8array_length_expr(right, known_length_locals)
-        }
+        e if super::spec_abi_sites::operator_result_is_never_object(e) => true,
         _ => is_fresh_uint8array_length_literal(expr),
     }
 }
@@ -2048,7 +2161,11 @@ mod tests {
     }
 
     fn known_ids(stmts: Vec<Stmt>) -> HashSet<u32> {
-        collect_known_noalias_buffer_locals(&stmts)
+        collect_known_noalias_buffer_locals(&stmts, &HashSet::new())
+    }
+
+    fn known_ids_with_non_objects(stmts: Vec<Stmt>, non_objects: &[u32]) -> HashSet<u32> {
+        collect_known_noalias_buffer_locals(&stmts, &non_objects.iter().copied().collect())
     }
 
     fn mutable_number_let(id: u32, init: Expr) -> Stmt {
@@ -2167,6 +2284,164 @@ mod tests {
         ]);
 
         assert!(ids.is_empty(), "unexpected noalias ids: {ids:?}");
+    }
+
+    fn int32_new(arg: Expr) -> Expr {
+        Expr::TypedArrayNew {
+            kind: perry_hir::TYPED_ARRAY_KIND_INT32,
+            arg: Some(Box::new(arg)),
+        }
+    }
+
+    #[test]
+    fn typed_array_of_a_non_object_local_owns_its_storage() {
+        // `new Int32Array(n)` with `n` proven never an Object (a Number, an
+        // integer local) is the LENGTH form, including through arithmetic.
+        let ids = known_ids_with_non_objects(
+            vec![
+                const_let(1, int32_new(Expr::LocalGet(50))),
+                const_let(
+                    2,
+                    int32_new(Expr::Binary {
+                        op: BinaryOp::Sub,
+                        left: Box::new(Expr::LocalGet(50)),
+                        right: Box::new(Expr::Integer(1)),
+                    }),
+                ),
+            ],
+            &[50],
+        );
+        assert!(ids.contains(&1) && ids.contains(&2), "{ids:?}");
+    }
+
+    #[test]
+    fn typed_array_of_a_computed_length_owns_its_storage_whatever_the_operands() {
+        // #11810: `new Int32Array(rows.length * 7)`, `-x`, `a < b`, `typeof x`
+        // with `rows`/`x` (local 99) of unknown provenance. Each operator's
+        // result is never an Object, so each is the LENGTH form. The bare
+        // property read and the bare unknown local stay unowned.
+        let rows_length = || Expr::PropertyGet {
+            object: Box::new(Expr::LocalGet(99)),
+            property: "length".to_string(),
+            byte_offset: 0,
+        };
+        let ids = known_ids(vec![
+            const_let(
+                1,
+                int32_new(Expr::Binary {
+                    op: BinaryOp::Mul,
+                    left: Box::new(rows_length()),
+                    right: Box::new(Expr::Integer(7)),
+                }),
+            ),
+            const_let(
+                2,
+                int32_new(Expr::Unary {
+                    op: perry_hir::UnaryOp::Neg,
+                    operand: Box::new(Expr::LocalGet(99)),
+                }),
+            ),
+            const_let(
+                3,
+                int32_new(Expr::Compare {
+                    op: perry_hir::CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(99)),
+                    right: Box::new(rows_length()),
+                }),
+            ),
+            const_let(4, int32_new(Expr::TypeOf(Box::new(Expr::LocalGet(99))))),
+            const_let(5, int32_new(rows_length())),
+            const_let(6, int32_new(Expr::LocalGet(99))),
+        ]);
+        for id in [1, 2, 3, 4] {
+            assert!(ids.contains(&id), "local {id} not owned: {ids:?}");
+        }
+        for id in [5, 6] {
+            assert!(!ids.contains(&id), "local {id} wrongly owned: {ids:?}");
+        }
+    }
+
+    /// `collect_type_facts` for one function whose parameter 1 is a
+    /// specialized entry's proven Number.
+    fn facts_with_spec_numeric_param(stmts: &[Stmt]) -> TypeFacts {
+        let params = vec![perry_hir::Param {
+            id: 1,
+            name: "n".into(),
+            ty: Type::Number,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }];
+        collect_type_facts(
+            stmts,
+            &params,
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &super::super::ModuleDispatchFacts::default(),
+            &HashMap::new(),
+            &HashSet::new(),
+            &[1].into_iter().collect(),
+            &HashSet::new(),
+            &HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn a_rebound_specialized_numeric_parameter_is_not_a_length() {
+        // The entry proved the Number the parameter ARRIVED with. A `var n`
+        // re-declaration reuses the parameter's id and may bind a buffer, so
+        // `new Int32Array(n)` is then the view form, not owned storage; with
+        // no rebinding it is the length form.
+        let owned = |rebind: bool| {
+            let mut stmts = Vec::new();
+            if rebind {
+                stmts.push(Stmt::Let {
+                    id: 1,
+                    name: "n".into(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::LocalGet(99)),
+                });
+            }
+            stmts.push(const_let(2, int32_new(Expr::LocalGet(1))));
+            facts_with_spec_numeric_param(&stmts)
+                .known_noalias_buffer_locals()
+                .contains(&2)
+        };
+        assert!(owned(false), "an untouched numeric parameter is a length");
+        assert!(!owned(true), "a re-declared parameter is not a length");
+    }
+
+    #[test]
+    fn typed_array_of_a_buffer_array_like_or_typed_array_is_never_owned_by_length() {
+        // 60 = new Uint8Array(16), 61 = [1, 2], 62 = new Int32Array(4), 99 an
+        // unknown (buffer-valued) local: each is an Object, so
+        // `new Int32Array(x)` is the view / copy form. None is a non-Object
+        // local, and a `const` binding of one is not a length local either,
+        // whatever its declared type says.
+        let ids = known_ids_with_non_objects(
+            vec![
+                const_number_let(60, Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(16))))),
+                const_number_let(61, Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)])),
+                const_let(62, int32_new(Expr::Integer(4))),
+                const_let(1, int32_new(Expr::LocalGet(60))),
+                const_let(2, int32_new(Expr::LocalGet(61))),
+                const_let(3, int32_new(Expr::LocalGet(62))),
+                const_let(4, int32_new(Expr::LocalGet(99))),
+            ],
+            &[50],
+        );
+        assert!(ids.contains(&62), "{ids:?}");
+        for id in [1, 2, 3, 4] {
+            assert!(!ids.contains(&id), "local {id} wrongly owned: {ids:?}");
+        }
     }
 
     #[test]

@@ -152,7 +152,11 @@ unsafe fn stamp_reserved_floor_shape(
         kind,
         floor,
         proto_id,
-        shapes::receiver_extra_summary(obj),
+        // The brands are the lineage's: the receiver's own shape (#11791).
+        match lineage.as_ref() {
+            Some(d) => shapes::receiver_facts_of_current(obj, d),
+            None => shapes::ReceiverFacts::summary(shapes::receiver_extra_summary(obj)),
+        },
         None,
     ));
     shapes::stamp_object_shape_id_with_carrier_note(obj, id);

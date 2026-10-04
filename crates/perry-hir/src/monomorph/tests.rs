@@ -1182,16 +1182,35 @@ fn fill_defaults_pads_before_appended_class_captures() {
         .expect("child method");
     let mut found = None;
     fn find_new<'a>(stmts: &'a [Stmt], out: &mut Option<(&'a Vec<Expr>, u32)>) {
+        // #11759 (c′): `outer` may run more than once, so `new Doc(...)` is
+        // the static construction guarded on Doc's first evaluation
+        // (recorded on the instance in a guarded class environment).
+        fn construct<'a>(e: &'a Expr) -> Option<&'a Expr> {
+            match e {
+                Expr::Conditional {
+                    condition,
+                    then_expr,
+                    ..
+                } if matches!(condition.as_ref(), Expr::ClassIsFirstEvaluation { .. }) => {
+                    construct(then_expr)
+                }
+                Expr::ClassEnvStamp { instance, .. } => construct(instance),
+                Expr::New { .. } => Some(e),
+                _ => None,
+            }
+        }
         for stmt in stmts {
-            if let Stmt::Return(Some(Expr::New {
-                class_name,
-                args,
-                cap_args_appended,
-                ..
-            })) = stmt
-            {
-                if class_name == "Doc" {
-                    *out = Some((args, *cap_args_appended));
+            if let Stmt::Return(Some(ret)) = stmt {
+                if let Some(Expr::New {
+                    class_name,
+                    args,
+                    cap_args_appended,
+                    ..
+                }) = construct(ret)
+                {
+                    if class_name == "Doc" {
+                        *out = Some((args, *cap_args_appended));
+                    }
                 }
             }
         }

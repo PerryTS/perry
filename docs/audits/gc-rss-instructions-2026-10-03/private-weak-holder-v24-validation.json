@@ -1,0 +1,13 @@
+{
+  "private_commit": "ff68bb0578",
+  "production_parent": "e1e1bb09bc",
+  "production_applied": false,
+  "macos_runtime": {
+    "passed": 4872,
+    "failed": 0,
+    "ignored": 5,
+    "log_sha256": "2d778878ebbd6503127b5646a9fd7c62d6bf45e2ad2039bc37b809a365fb0bb1"
+  },
+  "source_sha256": "170098f50c84a3bf9a7c069700dd93ccc7248e21ecc84d120e8d6e8515d3937d",
+  "scope": "Two remembered-parent visitors read parent weak-holder identity once per object. Their slot callbacks only record remembered edges and cannot mutate class identity. Linux4856/0/5 also passes; exact Linux product/log binding is verified separately. App benefit pending."
+}

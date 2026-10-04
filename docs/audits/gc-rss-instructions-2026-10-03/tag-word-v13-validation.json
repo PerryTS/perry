@@ -1,0 +1,86 @@
+{
+  "private_head": "6fc7b304f87aff5660da6fc95ddfe6e62cc9e7ef",
+  "base_main": "e532bf3d0efce80ef699aa67b4834967050cf5ef",
+  "trace_sha256": "0ecc6fb6a4ad9c641bdd6da82c3a8cca1844c71e161196cac3ffe262d45c1212",
+  "patch_sha256": "16105da15db8af5a1b22a3a98d663ff9a9abf960d8ce9b1603426181c867ce23",
+  "production_applied": false,
+  "scope": "Only mark_field_into_worklist tag comparison changes. Exact ValidPointerSet lookup, proxy path, raw-pointer bounds, marking and worklist behavior unchanged.",
+  "macos_tests": {
+    "passed": 4862,
+    "failed": 0,
+    "ignored": 5,
+    "log_sha256": "4c263d2ca6d4a7f911117645618503694774020f402fdd73a52e4750a579f7b5",
+    "command": "RUST_TEST_THREADS=1 cargo test --release -p perry-runtime --lib",
+    "codegen_units": 16
+  },
+  "tag_high_words_exhaustively_compared": 65536,
+  "assembly": {
+    "control": {
+      "input": {
+        "head": "6b967f5afaf62ca534eed3d05b3e1baed5c9c796",
+        "source_root": "/Users/amlug/projects/perry/rss-gc-runtime-20261003",
+        "changed": [],
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "-p",
+          "perry-runtime",
+          "--lib",
+          "--",
+          "--emit=asm"
+        ],
+        "trace_sha256": "7debbcd869502ef13aa52e5e712362e13749128b8e0bd4c7b9c9b5ea64b456ca",
+        "started": 1791036260.546112,
+        "scope": "arm64 default-feature release runtime rlib before final application link; static instructions only",
+        "exit_code": 0,
+        "ended": 1791036336.5212631,
+        "log_sha256": "8b15298e9f233786540c7f98d4eed532cba94450e378af5118df59b9144921f4",
+        "assembly_files": {
+          "perry_runtime-8e2fc356256476ca.perry_runtime.7490c544b15b3e61-cgu.11.rcgu.s": "9e21fd35cc7d2ce1129e60b9be3194cb21abb39c23e515f84fbe4147a8e93353",
+          "perry_runtime-8e2fc356256476ca.perry_runtime.7490c544b15b3e61-cgu.01.rcgu.s": "e189cdd927228723f85aa8cdf69d934d99621b5f88d795820ca1f5aa64c69ce3",
+          "perry_runtime-8e2fc356256476ca.perry_runtime.7490c544b15b3e61-cgu.06.rcgu.s": "af0fc3de2b4149a52e32c5cc47950d03b30da38897709a8264bfe2414b76ac06"
+        }
+      },
+      "callback_sha256": "c053b850abebfdf05bd9c30649f61befaa8c696e6734584bb1227eb07cc4bd0f",
+      "whole_callback_static_instructions": 125
+    },
+    "candidate": {
+      "input": {
+        "head": "6b967f5afaf62ca534eed3d05b3e1baed5c9c796",
+        "source_root": "/Users/amlug/projects/perry/rss-gc-tags-20261003",
+        "changed": [
+          "crates/perry-runtime/src/gc/trace.rs"
+        ],
+        "command": [
+          "cargo",
+          "rustc",
+          "--release",
+          "-p",
+          "perry-runtime",
+          "--lib",
+          "--",
+          "--emit=asm"
+        ],
+        "trace_sha256": "0ecc6fb6a4ad9c641bdd6da82c3a8cca1844c71e161196cac3ffe262d45c1212",
+        "started": 1791036336.988506,
+        "scope": "arm64 default-feature release runtime rlib before final application link; static instructions only",
+        "exit_code": 0,
+        "ended": 1791036431.362433,
+        "log_sha256": "57230dfb534b838dd6a989473bb6e61857d7b3251a3a78f8f0be9b76d82ee3e9",
+        "assembly_files": {
+          "perry_runtime-8e2fc356256476ca.perry_runtime.7490c544b15b3e61-cgu.15.rcgu.s": "a8e5002a055aa6d9998067f28a47a782435755d97c46ce1b189e6ed3aa149433",
+          "perry_runtime-8e2fc356256476ca.perry_runtime.7490c544b15b3e61-cgu.07.rcgu.s": "d5dc22da13c73296bb1f0d98657e1c94eaf070e463cc59c8db4d3a52872ee130",
+          "perry_runtime-8e2fc356256476ca.perry_runtime.7490c544b15b3e61-cgu.01.rcgu.s": "21cf51734e1d8df8f09a02d9e96b2169b644bdcb3f72058a91a83bf5d03a962e"
+        }
+      },
+      "callback_sha256": "c4dccd8ee827eecb15061f9368c6629262af507973b03f2a8fccc34d5889ede4",
+      "whole_callback_static_instructions": 124
+    }
+  },
+  "usual_tagged_pointer_comparison_static_instructions": {
+    "control": 8,
+    "candidate": 7
+  },
+  "limits": "Arm64 default-feature rlib only. Linked x86/app retired instructions, branch/cycle costs and RSS unmeasured; no acceptance claim."
+}

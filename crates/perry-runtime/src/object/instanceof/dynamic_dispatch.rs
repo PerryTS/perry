@@ -9,6 +9,25 @@ use super::*;
 
 #[no_mangle]
 pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
+    // #10507: `x instanceof F` for an ordinary compiled function `F`: one
+    // shape compare when `x`'s ShapeId names `F.prototype`, else, for an
+    // object of no compiled class, OrdinaryHasInstance's prototype walk.
+    {
+        use crate::object::class_registry::OrdinaryInstanceof;
+        match crate::object::class_registry::ordinary_compiled_function_has_instance(
+            value, type_ref,
+        ) {
+            Some(OrdinaryInstanceof::Instance) => return f64::from_bits(crate::value::TAG_TRUE),
+            Some(OrdinaryInstanceof::PrototypeWalk) => {
+                return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
+                    crate::value::TAG_TRUE
+                } else {
+                    crate::value::TAG_FALSE
+                });
+            }
+            None => {}
+        }
+    }
     // Proxy ids are registry handles, not closure headers. Resolve their
     // observable @@hasInstance/prototype reads before any constructor probe
     // or unwrapping of the left operand (#10364).
@@ -44,7 +63,6 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         // recover that cell and compare its kind. The receiver reaches here both
         // NaN-boxed (top16 == 0x7FFD) and as a raw-I64 heap pointer (top16 == 0,
         // how module-level object vars are stored) — accept both. (#5587)
-        #[cfg(feature = "temporal")]
         {
             let bits = value.to_bits();
             let top16 = bits >> 48;
@@ -56,7 +74,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
                 0
             };
             if raw != 0 {
-                if let Some(cell) = unsafe { crate::object::temporal_subclass_cell(raw) } {
+                if let Some(cell) = unsafe { crate::temporal::hooked::subclass_cell(raw) } {
                     if crate::temporal::temporal_kind(cell) == Some(kind) {
                         return f64::from_bits(crate::value::TAG_TRUE);
                     }
@@ -80,6 +98,11 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
                 }
             }
         }
+    }
+    // OrdinaryHasInstance step 2: a bound function (with no own
+    // `@@hasInstance`, answered above) is `instanceof` exactly as its target.
+    if let Some(target) = crate::object::class_registry::bound_function_target_value(type_ref) {
+        return js_instanceof_dynamic(value, target);
     }
     // OrdinaryHasInstance step 3 (#11261): a primitive is never an instance.
     // Only once the RHS is known callable — a non-callable RHS must still
@@ -116,6 +139,19 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     // ref) must fall through to the unresolved-RHS `TypeError` below
     // instead of being dispatched into `js_instanceof` as a bogus class id.
     if let Some(class_id) = class_ref_id(type_ref) {
+        // #11759 (c′): the class function object is the first evaluation of a
+        // declaration whose later evaluations share its template id. A value
+        // with an individually recorded prototype chain (an instance of a
+        // later evaluation) answers by its actual chain.
+        if crate::object::class_value::class_value_is_first_evaluation(class_id)
+            && super::prototype_chain::object_static_prototype(value_addr(value)).is_some()
+        {
+            return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
+                crate::value::TAG_TRUE
+            } else {
+                TAG_FALSE
+            });
+        }
         return js_instanceof(value, class_id);
     }
     // #9502: a heap class object's template id identifies its code, not its
@@ -124,10 +160,17 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     if is_class_object_value(type_ref) {
         // Static/forward `new C()` sites can still construct by template id
         // without attaching an evaluated prototype. Retain that representation's
-        // class-id check; recorded individual chains are authoritative.
-        if !super::prototype_chain::object_has_prototype_divergence(value_addr(value)) {
-            let obj = crate::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
-            return js_instanceof(value, js_object_get_class_id(obj));
+        // class-id check; a recorded prototype (a fact of the receiver's
+        // shape) is authoritative.
+        let obj = crate::JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
+        let template = js_object_get_class_id(obj);
+        // #11759 (c′): when the template's class function object is the
+        // declaration's first evaluation, a template-id instance belongs to
+        // THAT evaluation, never to this later one: the chain decides.
+        if super::prototype_chain::object_static_prototype(value_addr(value)).is_none()
+            && !crate::object::class_value::class_value_is_first_evaluation(template)
+        {
+            return js_instanceof(value, template);
         }
         return f64::from_bits(if ordinary_has_instance_prototype_walk(value, type_ref) {
             crate::value::TAG_TRUE
@@ -425,8 +468,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
     // Intl constructor value can exist (the namespace install is a no-op), so
     // the probe could never match — and skipping it keeps this always-live
     // dispatcher from statically pinning every Intl constructor thunk (~204 KB).
-    #[cfg(feature = "intl-namespace")]
-    if let Some(is_inst) = crate::intl::intl_instanceof(value, type_ref) {
+    if let Some(is_inst) = crate::intl::hooked::intl_instanceof(value, type_ref) {
         return if is_inst {
             f64::from_bits(crate::value::TAG_TRUE)
         } else {

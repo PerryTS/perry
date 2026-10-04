@@ -377,6 +377,8 @@ pub(crate) unsafe fn js_string_key_matches_bytes(
     stored: crate::JSValue,
     incoming_bytes: &[u8],
 ) -> bool {
+    #[cfg(test)]
+    KEY_BYTE_READS.with(|count| count.set(count.get() + 1));
     if stored.is_string() {
         let stored_ptr = stored.as_string_ptr();
         if stored_ptr.is_null() {
@@ -415,6 +417,8 @@ pub(crate) unsafe fn js_string_key_bytes(
     stored: crate::JSValue,
     stored_buf: &mut [u8; crate::value::SHORT_STRING_MAX_LEN],
 ) -> Option<&[u8]> {
+    #[cfg(test)]
+    KEY_BYTE_READS.with(|count| count.set(count.get() + 1));
     if stored.is_string() {
         let stored_ptr = stored.as_string_ptr();
         if stored_ptr.is_null() {
@@ -1978,4 +1982,16 @@ mod tests_sso_helpers {
             assert_eq!(js_string_key_bytes(JSValue::int32(7), &mut buf), None);
         }
     }
+}
+
+// Count actual stored-key byte reads/comparisons, including both indexed
+// content validation and the linear lookup backstops. No timing dependence.
+#[cfg(test)]
+thread_local! {
+    static KEY_BYTE_READS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn test_key_byte_reads() -> u64 {
+    KEY_BYTE_READS.with(std::cell::Cell::get)
 }

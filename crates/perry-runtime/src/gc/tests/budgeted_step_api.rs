@@ -191,10 +191,11 @@ fn allocate_unreachable_old_for_reclaim() -> u64 {
 }
 
 /// #5476: a compute-only workload that churns large temporaries never runs a
-/// host GC step, so the old-gen reclaim cycle must complete from the allocator
-/// hook (`gc_check_trigger`) alone. A single call — what every allocation does —
-/// must drive the full reclaim cycle to completion and return the dead old block,
-/// not leave it stalled mid-flight as bounded mutator-assist stepping does.
+/// host GC step, so the old-gen reclaim cycle must complete without one. The
+/// allocator hook (`gc_check_trigger`) defers it to the next precise safepoint
+/// (#11873) and the loop's back-edge poll (`js_gc_loop_safepoint`) drives the
+/// full reclaim to completion and returns the dead old block, rather than
+/// leaving it stalled mid-flight as bounded mutator-assist stepping does.
 #[test]
 fn check_trigger_drives_old_reclaim_to_completion_without_host_stepping() {
     let _guard = CopyingNurseryTestGuard::new(2);
@@ -210,6 +211,7 @@ fn check_trigger_drives_old_reclaim_to_completion_without_host_stepping() {
     // Old-gen reclaim pressure is due, but the host never steps GC.
     GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
     gc_check_trigger();
+    js_gc_loop_safepoint();
 
     assert!(
         !gc_budgeted_cycle_active(),

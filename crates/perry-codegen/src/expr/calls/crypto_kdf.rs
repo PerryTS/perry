@@ -15,8 +15,10 @@ pub(crate) fn arm_crypto_argon2_sync(
     if args.len() < 2 {
         return Ok(double_literal(0.0));
     }
-    let alg_box = lower_expr(ctx, &args[0])?;
-    let params_box = lower_expr(ctx, &args[1])?;
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
+    let alg_box = arg_values[0].clone();
+    let params_box = arg_values[1].clone();
     let blk = ctx.block();
     let alg_handle = unbox_ffi_str_arg(blk, &alg_box);
     let buf_handle = blk.call(
@@ -24,7 +26,9 @@ pub(crate) fn arm_crypto_argon2_sync(
         "js_crypto_argon2_sync",
         &[(I64, &alg_handle), (DOUBLE, &params_box)],
     );
-    Ok(nanbox_pointer_inline(blk, &buf_handle))
+    let result = nanbox_pointer_inline(blk, &buf_handle);
+    arg_group.release(ctx);
+    Ok(result)
 }
 
 /// crypto.argon2(algorithm, parameters, callback).
@@ -36,16 +40,20 @@ pub(crate) fn arm_crypto_argon2(
     if args.len() < 3 {
         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
     }
-    let alg_box = lower_expr(ctx, &args[0])?;
-    let params_box = lower_expr(ctx, &args[1])?;
-    let cb_box = lower_expr(ctx, &args[2])?;
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
+    let alg_box = arg_values[0].clone();
+    let params_box = arg_values[1].clone();
+    let cb_box = arg_values[2].clone();
     let blk = ctx.block();
     let alg_handle = unbox_ffi_str_arg(blk, &alg_box);
-    Ok(blk.call(
+    let result = blk.call(
         DOUBLE,
         "js_crypto_argon2_async",
         &[(I64, &alg_handle), (DOUBLE, &params_box), (DOUBLE, &cb_box)],
-    ))
+    );
+    arg_group.release(ctx);
+    Ok(result)
 }
 
 /// crypto.hkdfSync(algorithm, ikm, salt, info, keylen) -> Buffer.
@@ -57,11 +65,13 @@ pub(crate) fn arm_crypto_hkdf_sync_alg(
     if args.len() < 5 {
         return Ok(double_literal(0.0));
     }
-    let alg_box = lower_expr(ctx, &args[0])?;
-    let ikm_box = lower_expr(ctx, &args[1])?;
-    let salt_box = lower_expr(ctx, &args[2])?;
-    let info_box = lower_expr(ctx, &args[3])?;
-    let len_box = lower_expr(ctx, &args[4])?;
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(5)])?;
+    let alg_box = arg_values[0].clone();
+    let ikm_box = arg_values[1].clone();
+    let salt_box = arg_values[2].clone();
+    let info_box = arg_values[3].clone();
+    let len_box = arg_values[4].clone();
     let blk = ctx.block();
     let alg_handle = unbox_ffi_str_arg(blk, &alg_box);
     let ikm_handle = unbox_ffi_str_arg(blk, &ikm_box);
@@ -78,7 +88,9 @@ pub(crate) fn arm_crypto_hkdf_sync_alg(
             (DOUBLE, &len_box),
         ],
     );
-    Ok(nanbox_pointer_inline(blk, &buf_handle))
+    let result = nanbox_pointer_inline(blk, &buf_handle);
+    arg_group.release(ctx);
+    Ok(result)
 }
 
 /// crypto.hkdf(algorithm, ikm, salt, info, keylen, callback).
@@ -90,18 +102,20 @@ pub(crate) fn arm_crypto_hkdf_async_alg(
     if args.len() < 6 {
         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
     }
-    let alg_box = lower_expr(ctx, &args[0])?;
-    let ikm_box = lower_expr(ctx, &args[1])?;
-    let salt_box = lower_expr(ctx, &args[2])?;
-    let info_box = lower_expr(ctx, &args[3])?;
-    let len_box = lower_expr(ctx, &args[4])?;
-    let cb_box = lower_expr(ctx, &args[5])?;
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(6)])?;
+    let alg_box = arg_values[0].clone();
+    let ikm_box = arg_values[1].clone();
+    let salt_box = arg_values[2].clone();
+    let info_box = arg_values[3].clone();
+    let len_box = arg_values[4].clone();
+    let cb_box = arg_values[5].clone();
     let blk = ctx.block();
     let alg_handle = unbox_ffi_str_arg(blk, &alg_box);
     let ikm_handle = unbox_ffi_str_arg(blk, &ikm_box);
     let salt_handle = unbox_ffi_str_arg(blk, &salt_box);
     let info_handle = unbox_ffi_str_arg(blk, &info_box);
-    Ok(blk.call(
+    let result = blk.call(
         DOUBLE,
         "js_crypto_hkdf_async_alg",
         &[
@@ -112,7 +126,9 @@ pub(crate) fn arm_crypto_hkdf_async_alg(
             (DOUBLE, &len_box),
             (DOUBLE, &cb_box),
         ],
-    ))
+    );
+    arg_group.release(ctx);
+    Ok(result)
 }
 
 /// crypto.scrypt(password, salt, keylen[, options], callback).
@@ -124,22 +140,24 @@ pub(crate) fn arm_crypto_scrypt(
     if args.len() < 4 {
         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
     }
-    let pwd_box = lower_expr(ctx, &args[0])?;
-    let salt_box = lower_expr(ctx, &args[1])?;
-    let len_box = lower_expr(ctx, &args[2])?;
-    let (opts_box, cb_expr) = if args.len() >= 5 {
-        (lower_expr(ctx, &args[3])?, &args[4])
+    // #11789 sweep: each argument is held across the ones after it.
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(5)])?;
+    let pwd_box = arg_values[0].clone();
+    let salt_box = arg_values[1].clone();
+    let len_box = arg_values[2].clone();
+    let (opts_box, cb_box) = if arg_values.len() >= 5 {
+        (arg_values[3].clone(), arg_values[4].clone())
     } else {
         (
             double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
-            &args[3],
+            arg_values[3].clone(),
         )
     };
-    let cb_box = lower_expr(ctx, cb_expr)?;
     let blk = ctx.block();
     let pwd_handle = unbox_ffi_str_arg(blk, &pwd_box);
     let salt_handle = unbox_ffi_str_arg(blk, &salt_box);
-    Ok(blk.call(
+    let result = blk.call(
         DOUBLE,
         "js_crypto_scrypt_async",
         &[
@@ -149,7 +167,9 @@ pub(crate) fn arm_crypto_scrypt(
             (DOUBLE, &opts_box),
             (DOUBLE, &cb_box),
         ],
-    ))
+    );
+    arg_group.release(ctx);
+    Ok(result)
 }
 
 /// crypto.pbkdf2Sync(password, salt, iterations, keylen, digest) -> Buffer.
@@ -161,12 +181,14 @@ pub(crate) fn arm_crypto_pbkdf2_sync(
     if args.len() < 4 {
         return Ok(double_literal(0.0));
     }
-    let pwd_box = lower_expr(ctx, &args[0])?;
-    let salt_box = lower_expr(ctx, &args[1])?;
-    let iter_box = lower_expr(ctx, &args[2])?;
-    let keylen_box = lower_expr(ctx, &args[3])?;
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(5)])?;
+    let pwd_box = arg_values[0].clone();
+    let salt_box = arg_values[1].clone();
+    let iter_box = arg_values[2].clone();
+    let keylen_box = arg_values[3].clone();
     let digest_box = if args.len() >= 5 {
-        Some(lower_expr(ctx, &args[4])?)
+        Some(arg_values[4].clone())
     } else {
         None
     };
@@ -197,7 +219,9 @@ pub(crate) fn arm_crypto_pbkdf2_sync(
             (I64, &digest_handle),
         ],
     );
-    Ok(nanbox_pointer_inline(blk, &buf_handle))
+    let result = nanbox_pointer_inline(blk, &buf_handle);
+    arg_group.release(ctx);
+    Ok(result)
 }
 
 /// crypto.pbkdf2(password, salt, iterations, keylen, algorithm, callback).
@@ -209,17 +233,19 @@ pub(crate) fn arm_crypto_pbkdf2_async(
     if args.len() < 6 {
         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
     }
-    let pwd_box = lower_expr(ctx, &args[0])?;
-    let salt_box = lower_expr(ctx, &args[1])?;
-    let iter_box = lower_expr(ctx, &args[2])?;
-    let keylen_box = lower_expr(ctx, &args[3])?;
-    let alg_box = lower_expr(ctx, &args[4])?;
-    let cb_box = lower_expr(ctx, &args[5])?;
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(6)])?;
+    let pwd_box = arg_values[0].clone();
+    let salt_box = arg_values[1].clone();
+    let iter_box = arg_values[2].clone();
+    let keylen_box = arg_values[3].clone();
+    let alg_box = arg_values[4].clone();
+    let cb_box = arg_values[5].clone();
     let blk = ctx.block();
     let pwd_handle = unbox_ffi_str_arg(blk, &pwd_box);
     let salt_handle = unbox_ffi_str_arg(blk, &salt_box);
     let alg_handle = unbox_ffi_str_arg(blk, &alg_box);
-    Ok(blk.call(
+    let result = blk.call(
         DOUBLE,
         "js_crypto_pbkdf2_async_alg",
         &[
@@ -230,7 +256,9 @@ pub(crate) fn arm_crypto_pbkdf2_async(
             (I64, &alg_handle),
             (DOUBLE, &cb_box),
         ],
-    ))
+    );
+    arg_group.release(ctx);
+    Ok(result)
 }
 
 /// crypto.scryptSync(password, salt, keylen, options?) -> Buffer.
@@ -242,11 +270,13 @@ pub(crate) fn arm_crypto_scrypt_sync(
     if args.len() < 3 {
         return Ok(double_literal(0.0));
     }
-    let pwd_box = lower_expr(ctx, &args[0])?;
-    let salt_box = lower_expr(ctx, &args[1])?;
-    let keylen_box = lower_expr(ctx, &args[2])?;
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(4)])?;
+    let pwd_box = arg_values[0].clone();
+    let salt_box = arg_values[1].clone();
+    let keylen_box = arg_values[2].clone();
     let opts_box = if args.len() >= 4 {
-        lower_expr(ctx, &args[3])?
+        arg_values[3].clone()
     } else {
         double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
     };
@@ -265,7 +295,9 @@ pub(crate) fn arm_crypto_scrypt_sync(
             (DOUBLE, &opts_box),
         ],
     );
-    Ok(nanbox_pointer_inline(blk, &buf_handle))
+    let result = nanbox_pointer_inline(blk, &buf_handle);
+    arg_group.release(ctx);
+    Ok(result)
 }
 
 /// crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
@@ -277,11 +309,13 @@ pub(crate) fn arm_crypto_hkdf_sync(
     if args.len() < 5 {
         return Ok(double_literal(0.0));
     }
-    let digest_box = lower_expr(ctx, &args[0])?;
-    let ikm_box = lower_expr(ctx, &args[1])?;
-    let salt_box = lower_expr(ctx, &args[2])?;
-    let info_box = lower_expr(ctx, &args[3])?;
-    let keylen_box = lower_expr(ctx, &args[4])?;
+    let (arg_values, arg_group) =
+        crate::lower_call::lower_call_args_rooted(ctx, &args[..args.len().min(5)])?;
+    let digest_box = arg_values[0].clone();
+    let ikm_box = arg_values[1].clone();
+    let salt_box = arg_values[2].clone();
+    let info_box = arg_values[3].clone();
+    let keylen_box = arg_values[4].clone();
     let blk = ctx.block();
     let digest_handle = unbox_ffi_str_arg(blk, &digest_box);
     let ikm_handle = unbox_ffi_str_arg(blk, &ikm_box);
@@ -298,5 +332,7 @@ pub(crate) fn arm_crypto_hkdf_sync(
             (DOUBLE, &keylen_box),
         ],
     );
-    Ok(nanbox_pointer_inline(blk, &buf_handle))
+    let result = nanbox_pointer_inline(blk, &buf_handle);
+    arg_group.release(ctx);
+    Ok(result)
 }

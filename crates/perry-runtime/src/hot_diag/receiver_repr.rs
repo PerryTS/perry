@@ -5,7 +5,7 @@
 //! relaxed load and enters none of the range, registry, or ownership probes.
 
 // See the parent module: without `hot-diag` nothing arms these probes.
-#![cfg_attr(not(feature = "hot-diag"), allow(dead_code, unused_imports))]
+#![cfg_attr(not(perry_hot_diag), allow(dead_code, unused_imports))]
 
 use super::{sink_from_env, write_sink, Sink};
 use std::fmt::Write as _;
@@ -39,7 +39,6 @@ pub enum ReceiverReprFamily {
 }
 
 impl ReceiverReprFamily {
-    #[cfg(test)]
     const ALL: [Self; FAMILY_COUNT] = [
         Self::Common,
         Self::Fetch,
@@ -57,22 +56,12 @@ impl ReceiverReprFamily {
         Self::NullStub,
     ];
 
-    const NAMES: [&'static str; FAMILY_COUNT] = [
-        "common",
-        "fetch",
-        "zlib",
-        "proxy",
-        "timer",
-        "text",
-        "tui",
-        "async_hook",
-        "async_resource",
-        "symbol_global",
-        "external_buffer",
-        "sab",
-        "event_target",
-        "null_stub",
-    ];
+    /// The family's report name. One string, see
+    /// [`crate::hot_diag::report_name`].
+    fn name(self) -> &'static str {
+        const NAMES: &str = "common fetch zlib proxy timer text tui async_hook async_resource symbol_global external_buffer sab event_target null_stub";
+        super::report_name(NAMES, self.index())
+    }
 
     #[inline]
     const fn index(self) -> usize {
@@ -125,9 +114,9 @@ pub fn receiver_repr_on() -> bool {
     if TEST_FORCE_ON.load(Ordering::Relaxed) {
         return true;
     }
-    #[cfg(not(feature = "hot-diag"))]
+    #[cfg(not(perry_hot_diag))]
     return false;
-    #[cfg(feature = "hot-diag")]
+    #[cfg(perry_hot_diag)]
     {
         if RECEIVER_REPR_SINK.get().is_none() {
             receiver_repr_sink();
@@ -275,11 +264,17 @@ fn maybe_dump() {
 }
 
 fn append_family_counts(out: &mut String, values: &[AtomicU64; FAMILY_COUNT]) {
-    for (index, name) in ReceiverReprFamily::NAMES.iter().enumerate() {
+    for family in ReceiverReprFamily::ALL {
+        let index = family.index();
         if index != 0 {
             out.push(' ');
         }
-        let _ = write!(out, "{name}={}", values[index].load(Ordering::Relaxed));
+        let _ = write!(
+            out,
+            "{}={}",
+            family.name(),
+            values[index].load(Ordering::Relaxed)
+        );
     }
 }
 
@@ -573,6 +568,22 @@ mod tests {
                 expected,
                 "producer-side diagnostic bump changed in {relative}"
             );
+        }
+    }
+}
+
+#[cfg(test)]
+mod report_names_line_up {
+    use super::*;
+
+    #[test]
+    fn family_names_follow_the_variants() {
+        assert_eq!(ReceiverReprFamily::Common.name(), "common");
+        assert_eq!(ReceiverReprFamily::NullStub.name(), "null_stub");
+        let names: Vec<&str> = ReceiverReprFamily::ALL.iter().map(|f| f.name()).collect();
+        for (i, f) in ReceiverReprFamily::ALL.iter().enumerate() {
+            assert_eq!(f.index(), i);
+            assert!(names[i] != "?" && !names[..i].contains(&names[i]));
         }
     }
 }

@@ -1,0 +1,71 @@
+commit 8e087ff43e105283659ffa826b15eb70ae8314be
+Author:     Ralph Küpper <ralph@skelpo.com>
+AuthorDate: Sat Oct 3 22:47:15 2026 +0200
+Commit:     Ralph Küpper <ralph@skelpo.com>
+CommitDate: Sat Oct 3 22:47:15 2026 +0200
+
+    test: verify physical idle-Eden reclamation and warm mapping reuse
+
+diff --git a/crates/perry-runtime/src/arena/block/reuse_window_tests.rs b/crates/perry-runtime/src/arena/block/reuse_window_tests.rs
+index cf49a57e52..8a78ba492c 100644
+--- a/crates/perry-runtime/src/arena/block/reuse_window_tests.rs
++++ b/crates/perry-runtime/src/arena/block/reuse_window_tests.rs
+@@ -42,0 +43,58 @@ unsafe fn resident_pages(raw: *mut u8, size: usize) -> usize {
++#[cfg(target_os = "linux")]
++#[test]
++fn idle_eden_pages_leave_rss_without_releasing_recent_or_reused_blocks() {
++    crate::arena::tests::run_with_fresh_arenas(|| unsafe {
++        let _change = crate::gc::heap_generation::HeapChange::begin(
++            crate::gc::heap_generation::HeapChangeKind::Sweep,
++        );
++        // Bare arena buffers need no object roots. Fill enough distinct blocks
++        // to put two of them outside the allocator's recent keep window.
++        for _ in 0..7 {
++            crate::arena::arena_alloc(BLOCK_SIZE, 8);
++        }
++        super::super::sync_inline_arena_state();
++        ARENA.with(|cell| {
++            let arena = &mut *cell.get();
++            assert!(arena.current >= 6);
++            let recent = arena.current;
++            for i in [0, 1, recent] {
++                let block = &arena.blocks[i];
++                assert!(!block.data.is_null() && block.size >= BLOCK_SIZE);
++                std::ptr::write_bytes(block.data, 0xa5, block.size);
++                assert!(resident_pages(block.data, block.size) > 100);
++            }
++            // Model a previous copying reset. Slot 1 stays in use; the empty
++            // current block must remain warm even though its offset is zero.
++            for i in [0, recent] {
++                arena.blocks[i].clear_object_starts();
++                arena.blocks[i].offset = 0;
++                arena.blocks[i].dead_cycles = 0;
++            }
++            arena.resync_inline_to_current();
++            let mapping = arena.blocks[0].data;
++            let bitmap = arena.blocks[0].object_starts_ptr();
++            let stats = crate::arena::reset::release_idle_eden_blocks(arena);
++            assert_eq!(stats.removed_blocks, 0, "advice must retain the mapping");
++            assert_eq!(arena.blocks[0].data, mapping);
++            assert_eq!(arena.blocks[0].object_starts_ptr(), bitmap);
++            assert_eq!(arena.blocks[0].dead_cycles, 1);
++            assert_eq!(resident_pages(mapping, arena.blocks[0].size), 0);
++            for i in [1, recent] {
++                assert!(resident_pages(arena.blocks[i].data, arena.blocks[i].size) > 100);
++                assert_eq!(*arena.blocks[i].data.add(4096), 0xa5);
++            }
++
++            // Reuse through the real block allocator: pages still map writable
++            // storage, and use retires the idle count before a later pass.
++            let reused = arena.try_block_alloc(0, BLOCK_SIZE, 8).unwrap();
++            assert_eq!(reused, mapping);
++            std::ptr::write_bytes(reused, 0x5a, BLOCK_SIZE);
++            let stats = crate::arena::reset::release_idle_eden_blocks(arena);
++            assert_eq!(stats.removed_blocks, 0);
++            assert_eq!(arena.blocks[0].dead_cycles, 0);
++            assert!(resident_pages(mapping, arena.blocks[0].size) > 100);
++            assert_eq!(*mapping.add(4096), 0x5a);
++        });
++    });
++}
++

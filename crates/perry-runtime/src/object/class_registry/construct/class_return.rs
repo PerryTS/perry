@@ -44,20 +44,25 @@ fn constructor_return_overrides_this(value: f64) -> bool {
     } else {
         0
     };
-    if raw_addr != 0 && crate::buffer::is_registered_buffer(raw_addr) {
+    // `raw_addr` may be arbitrary bits (a top-16-clear number), so the
+    // allocator must vouch for it before its header is read.
+    if raw_addr != 0 && crate::buffer::buffer_family_type_owned(raw_addr).is_some() {
         return true;
     }
     if !jv.is_pointer() {
         return false;
     }
-    if is_callable_function_value(value) {
-        return true;
-    }
     // A Proxy is represented by a registered handle rather than a directly
     // dereferenceable heap pointer. It is nevertheless an Object and therefore
     // overrides the default receiver when returned from a constructor. Detect
-    // it before the raw object/array probes below inspect the pointer payload.
+    // it before ANY probe that reads the pointer payload as a heap address,
+    // including the callable probe below: that one reads the GC header at
+    // `payload - 8`, which for a proxy id is unmapped memory once the id is
+    // large enough (the 8th Proxy of a process faulted here).
     if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        return true;
+    }
+    if is_callable_function_value(value) {
         return true;
     }
     let raw = jv.as_pointer::<u8>();

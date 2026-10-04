@@ -103,6 +103,43 @@ use utf16::{byte_index_to_utf16_index, utf16_index_to_byte};
 /// always-linked iterator-prototype dispatch, so it stays ungated even when
 /// the regex engine (which produces these iterators) is compiled out.
 pub const REGEXP_STRING_ITERATOR_CLASS_ID: u32 = 0xFFFF_000A;
+
+/// `matchAll` iterator methods reached from the always-live generic dispatchers
+/// (`js_native_call_method`, the iterator prototypes' `next`). They reach the
+/// regex engine only through slots the `regex-engine` install fills (see
+/// `crate::feature_hooks`); without it no RegExp string iterator exists and
+/// these answer `None`, so the dispatchers take their no-regex path.
+static ITERATOR_METHOD: crate::feature_hooks::Hook<
+    unsafe fn(*mut crate::ObjectHeader, &str) -> f64,
+> = crate::feature_hooks::Hook::empty();
+static ITERATOR_METHOD_BUILTIN: crate::feature_hooks::Hook<
+    unsafe fn(*mut crate::ObjectHeader, &str) -> f64,
+> = crate::feature_hooks::Hook::empty();
+
+/// # Safety
+/// `iter` must be a live RegExp string iterator object.
+pub(crate) unsafe fn hooked_iterator_method(
+    iter: *mut crate::ObjectHeader,
+    method: &str,
+) -> Option<f64> {
+    ITERATOR_METHOD.get().map(|f| f(iter, method))
+}
+
+/// # Safety
+/// `iter` must be a live RegExp string iterator object.
+pub(crate) unsafe fn hooked_iterator_method_builtin(
+    iter: *mut crate::ObjectHeader,
+    method: &str,
+) -> Option<f64> {
+    ITERATOR_METHOD_BUILTIN.get().map(|f| f(iter, method))
+}
+
+/// The `regex-engine` install's hub half.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn install_iterator_hooks() {
+    ITERATOR_METHOD.set(dispatch_regexp_string_iterator_method);
+    ITERATOR_METHOD_BUILTIN.set(dispatch_regexp_string_iterator_method_builtin);
+}
 #[cfg(feature = "regex-engine")]
 pub use perex_replace_compat::*;
 #[cfg(not(feature = "regex-engine"))]
@@ -366,6 +403,20 @@ pub(crate) fn store_last_index_number(re: *mut RegExpHeader, n: usize) {
     }
 }
 
+/// The TypeError message for a write to a non-writable `lastIndex`.
+#[cfg(feature = "regex-engine")]
+pub(crate) const LAST_INDEX_READ_ONLY: &str =
+    "Cannot assign to read only property 'lastIndex' of object";
+
+/// Whether `lastIndex` on this RegExp is writable (the default). A lookup in
+/// the descriptor state; it runs no user code.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn last_index_writable(re: *const RegExpHeader) -> bool {
+    crate::object::get_property_attrs(re as usize, "lastIndex")
+        .map(|a| a.writable())
+        .unwrap_or(true)
+}
+
 /// Spec `Set(R, "lastIndex", n, true)` — the lastIndex updates in
 /// RegExpBuiltinExec (steps 14/18) are performed with the *Throw* flag set.
 /// A user can make `lastIndex` non-writable
@@ -375,11 +426,8 @@ pub(crate) fn store_last_index_number(re: *mut RegExpHeader, n: usize) {
 /// `lastIndex` is writable (the default) this just stores the number.
 #[cfg(feature = "regex-engine")]
 pub(crate) fn set_last_index_throwing(re: *mut RegExpHeader, n: usize) {
-    let writable = crate::object::get_property_attrs(re as usize, "lastIndex")
-        .map(|a| a.writable())
-        .unwrap_or(true);
-    if !writable {
-        let message = b"Cannot assign to read only property 'lastIndex' of object";
+    if !last_index_writable(re) {
+        let message = LAST_INDEX_READ_ONLY.as_bytes();
         let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
         let err = crate::error::js_typeerror_new(msg);
         crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));

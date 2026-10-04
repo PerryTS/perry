@@ -137,6 +137,9 @@ PERRY_BIN="${PERRY_BIN:-target/release/perry}"
 #   dynamic    - dynamic dispatch, where the receiver's type is not proven
 #   spread     - spread/rest, which allocate per element
 #   map/set    - collection literals
+#   region     - loop regions: an unrooted derived element base kept across the
+#                loop poll and re-derived there only while the region is valid
+#                (module-level arrays read it back from a moving global root)
 #
 PATTERNS=(
   'test_gap_gc_*.ts'
@@ -152,6 +155,7 @@ PATTERNS=(
   'test_gap_dynamic*.ts'
   'test_gap_map*.ts'
   'test_gap_set*.ts'
+  'test_gap_region*.ts'
 )
 
 # --- the two ratchets, and why a lone MIN_COMPILED could not fail -----------
@@ -181,11 +185,14 @@ PATTERNS=(
 # could vanish before the "corpus shrank" arm could fire. Raised to the
 # measured count (#8810).
 #
+# Raised again to the measured 245 with `test_gap_region*` (12 sources); the
+# floor had drifted to 152 against 233 discovered.
+#
 # Raise MIN_SOURCES when you add a prefix; there is nothing else to keep in
 # sync, because the compile floor is now DERIVED (MIN_SOURCES - MAX_SKIPPED)
 # rather than restated. Lowering either to make a run pass is the thing this
 # comment exists to stop.
-MIN_SOURCES="${MIN_SOURCES:-152}"
+MIN_SOURCES="${MIN_SOURCES:-245}"
 MAX_SKIPPED="${MAX_SKIPPED:-0}"
 
 if [ ! -x "$PERRY_BIN" ]; then

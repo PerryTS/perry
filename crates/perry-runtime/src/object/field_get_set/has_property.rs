@@ -76,7 +76,7 @@ fn is_canonical_numeric_index_string(name: &str) -> bool {
 /// handling: `null`/`undefined` render literally, a Symbol as `Symbol(desc)`,
 /// and every other primitive via its natural string coercion. We must special-
 /// case Symbols because `js_jsvalue_to_string` on a Symbol itself throws.
-unsafe fn describe_in_operand(value: f64) -> String {
+pub(super) unsafe fn describe_in_operand(value: f64) -> String {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_undefined() {
         return "undefined".to_string();
@@ -142,7 +142,7 @@ fn throw_in_operator_non_object(obj: f64, key: f64) -> ! {
 /// object-like here — a deliberately conservative false-negative that avoids
 /// ever regressing a real stream handle; test262's primitive-RHS cases use
 /// small literals well below that band.
-fn in_rhs_is_object(obj: f64) -> bool {
+pub(super) fn in_rhs_is_object(obj: f64) -> bool {
     let jv = JSValue::from_bits(obj.to_bits());
     if jv.is_pointer() {
         return unsafe { crate::symbol::js_is_symbol(obj) } == 0;
@@ -305,9 +305,21 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             if h.obj_type == crate::gc::GC_TYPE_OBJECT
                 && super::super::exotic_expando::exotic_expando_kind(addr).is_none()
             {
-                return unsafe {
+                let present = unsafe {
                     object_string_key_has_property(addr as *const ObjectHeader, key, key_val)
                 };
+                // A class object owns `prototype` without storing it. Only a
+                // miss on that one 9-byte key looks at the receiver's kind.
+                if present.to_bits() == nanbox_false.to_bits() {
+                    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                    if unsafe { crate::string::js_string_key_bytes(key_val, &mut sso) }
+                        .is_some_and(super::class_object_has_prototype_property)
+                        && super::super::class_registry::is_class_object_ptr(addr as *const u8)
+                    {
+                        return nanbox_true;
+                    }
+                }
+                return present;
             }
         }
     }
@@ -657,8 +669,8 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
             }
             return nanbox_false;
         }
-        // #6148: `Uint8Array` / `Buffer` are backed by a header-less registered
-        // buffer (not `TYPED_ARRAY_REGISTRY`), so the typed-array arm above misses
+        // #6148: `Uint8Array` / `Buffer` are `BufferHeader` cells (a buffer-family
+        // GC type, not `GC_TYPE_TYPED_ARRAY`), so the typed-array arm above misses
         // them. A Buffer is a `Uint8Array`, so `in` consults numeric indices
         // (bounds) and the own/inherited members property-get can resolve.
         // #8149: an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` is a
@@ -843,6 +855,9 @@ pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
     // genuine private brand check (`#name in obj`) routes through
     // `js_private_brand_check`, not here. Mirrors `js_object_has_own`'s
     // `#`-hiding (gated on `class_id != 0`).
+    // A private field (#11791) is an entry of the key list, not a property:
+    // the own lookup of every hop (`ordinary_has_property`) reads its entry
+    // where it finds the key.
     if unsafe { (*obj_ptr).class_id != 0 } && key_val.is_any_string() {
         let key_ptr =
             crate::value::js_get_string_pointer_unified(key) as *const crate::StringHeader;
@@ -1027,11 +1042,12 @@ unsafe fn object_string_key_has_property(
         }
     }
 
+    // Runtime-only keys of a class instance are invisible to ordinary
+    // [[HasProperty]], while a public computed key such as `"#name"` is a
+    // normal String property. A private field (#11791) is not a property
+    // either: `ordinary_has_property` reads its entry where it finds the key.
     let class_id = (*obj_ptr).class_id;
     if class_id != 0 {
-        // Compiler/runtime-only private storage keys are invisible to ordinary
-        // [[HasProperty]], while a public computed key such as `"#name"` is a
-        // normal String property.
         let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso) {
             if super::is_internal_runtime_key_bytes(b) {
@@ -1169,8 +1185,10 @@ unsafe fn ordinary_has_property(
             // `own_key_present` scan made `k in wideObj` O(N) per MISS, which
             // turned webpack/Babel's re-export loop (`if (k in exports) …` per
             // key) quadratic. Narrow or non-indexable receivers keep the scan.
-            let own = super::super::own_key_present_via_index(cur as *mut ObjectHeader, key)
-                .unwrap_or_else(|| super::super::own_key_present(cur as *mut ObjectHeader, key));
+            let own = super::super::own_property_present_via_index(cur as *mut ObjectHeader, key)
+                .unwrap_or_else(|| {
+                    super::super::own_property_present(cur as *mut ObjectHeader, key)
+                });
             if own {
                 // Own data / overflow key present (value-agnostic: `delete`
                 // removes the key, so a present key — even one holding

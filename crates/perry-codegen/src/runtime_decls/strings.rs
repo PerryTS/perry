@@ -384,6 +384,23 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, I32, PTR, I32, I32, I32, PTR],
     );
+    // #11791: the misses of the inline private field read and write.
+    module.declare_function(
+        "js_private_field_site_get",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, PTR, I32, PTR, DOUBLE],
+    );
+    module.declare_function(
+        "js_private_field_site_set",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, PTR, I32, PTR, DOUBLE, DOUBLE],
+    );
+    // #11791: a class's completed private shape, minted at module init.
+    module.declare_function(
+        "js_object_final_shape_id_for_class_keys_static_private",
+        I32,
+        &[I64, I32, I32, I32, I32, I64, PTR, I32, PTR, I32],
+    );
     module.declare_function(
         "js_private_method_guard",
         DOUBLE,
@@ -660,6 +677,14 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         "js_typed_feedback_object_get_field_by_value_f64",
         DOUBLE,
         &[I64, I64, DOUBLE],
+    );
+    // #10753: the computed string-key read. `(site, receiver handle, key
+    // value, receiver value)`: answered from the receiver's shape, else the
+    // by-value read above.
+    module.declare_function(
+        "js_typed_feedback_object_get_field_by_key_f64",
+        DOUBLE,
+        &[I64, I64, DOUBLE, DOUBLE],
     );
     module.declare_function("js_dyn_index_get", DOUBLE, &[DOUBLE, DOUBLE]);
     // #8655: guarded packed-array / dense Array-subclass read before the
@@ -1136,7 +1161,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function(
         "js_region_loop_prime",
         I64,
-        &[PTR, I32, I32, I64, I64, I64, I64, I64, I32, I32, I32],
+        &[PTR, I32, I32, I64, I64, I64, I64, I64, I32, I32, I32, I32],
     );
     // Design step 4: the per-class mint with the driver's static id, and the
     // literal-shape seed.
@@ -1144,6 +1169,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         "js_object_shape_id_for_class_keys_static",
         I32,
         &[I64, I32, I32, I32, I32, I64],
+    );
+    module.declare_function(
+        "js_object_final_shape_id_for_class_keys_static_constfn",
+        I32,
+        &[I64, I32, I32, I32, I32, I64, PTR, I32],
+    );
+    module.declare_function(
+        "js_object_finalize_constfn_static",
+        I64,
+        &[I64, I32, PTR, I32, I32, I32, I32, I64, PTR, I32],
     );
     module.declare_function("js_shape_seed_plain", I32, &[I32, PTR, I32, I32, I32, I64]);
     module.declare_function("js_shape_register_static_seed", VOID, &[PTR]);
@@ -1603,6 +1638,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         &[DOUBLE],
     );
     module.declare_function("js_throw_reference_error_unresolved_get", DOUBLE, &[]);
+    // #11826: module-level TDZ checks (`expr/tdz_module_check.rs`).
+    module.declare_function("js_throw_reference_error_tdz", DOUBLE, &[DOUBLE]);
     // with-statement implicit-global sentinel (HOLE) helpers.
     module.declare_function("js_with_implicit_unset", DOUBLE, &[]);
     module.declare_function("js_with_implicit_read", DOUBLE, &[DOUBLE, DOUBLE]);

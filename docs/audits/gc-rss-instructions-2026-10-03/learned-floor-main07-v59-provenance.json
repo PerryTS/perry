@@ -1,0 +1,14 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "private_commit": "3fb6cd50ede80fe2cbef031d984f70c9dcb13def",
+  "private_paths": [
+    "crates/perry-runtime/src/gc/mod.rs",
+    "crates/perry-runtime/src/gc/tests/mod.rs",
+    "crates/perry-runtime/src/gc/tests/minor_lazy_rss.rs",
+    "crates/perry-runtime/src/gc/tenuring.rs",
+    "crates/perry-runtime/src/gc/tests/copying/adaptive_tenuring.rs"
+  ],
+  "overlay_sha256": "72d9e0e0f1ff5630760987ac980d4a7a4e223a90350509b9293c62692a71ba40",
+  "parent_private_commit": "d4f491673b1d5930eaaffdd1f03c939754091eb5",
+  "scope": "PRIVATE UNAPPLIED learned low-influx floor experiment, based on deferred RSS query; startup quarter-base and lifetime budgets unchanged"
+}

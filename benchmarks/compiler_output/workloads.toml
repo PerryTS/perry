@@ -1625,16 +1625,20 @@ native_rep_name = "f64"
 access_mode = "unchecked_native"
 bounds_state = "proven_or_guarded"
 
+# #11810: `const alias = aliasSource` names the same owning storage as its
+# source, so it shares the source's proven view (same data pointer slot, same
+# alias scope) instead of demoting both names to the runtime helper. Its reads
+# and writes are native with a bounds guard. An alias of a view that is NOT
+# proven (demoted, invalidated, native-owned) still falls back; that is pinned
+# in crates/perry-codegen/tests/native_proof_buffer_views/runtime_fallback.rs.
 [[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
-name = "typed_array_alias_get_fallback"
+name = "typed_array_alias_get_keeps_view"
 source_function = "typedArrayHazards"
 expr_kind = "TypedArrayGet"
-consumer = "TypedArrayGet.slow_path"
-native_rep_name = "js_value"
-access_mode = "dynamic_fallback"
-bounds_state = "unknown"
-materialization_reason = "unknown_alias"
-notes_contains = "typed_array_fallback=untracked_or_unproven"
+consumer = "TypedArrayGet.native_u32"
+native_rep_name = "u32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
 min = 2
 
 [[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
@@ -1649,15 +1653,13 @@ materialization_reason = "unknown_call_escape"
 notes_contains = "typed_array_fallback=untracked_or_unproven"
 
 [[workloads.width_aware_buffer_kernels.native_rep_checks.require_records]]
-name = "typed_array_alias_set_fallback"
+name = "typed_array_alias_set_keeps_view"
 source_function = "typedArrayHazards"
 expr_kind = "TypedArraySet"
-consumer = "TypedArraySet.slow_path"
-native_rep_name = "js_value"
-access_mode = "dynamic_fallback"
-bounds_state = "unknown"
-materialization_reason = "unknown_alias"
-notes_contains = "typed_array_fallback=untracked_or_unproven"
+consumer = "u16_store_trunc_i32"
+native_rep_name = "i32"
+access_mode = "unchecked_native"
+bounds_state = "proven_or_guarded"
 min = 2
 
 [workloads.native_owned_typed_views]

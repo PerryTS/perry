@@ -92,14 +92,17 @@ pub use codegen::{
     decode_static_seed, encode_static_seed, module_birth_shapes, namespace_member_class_key,
     namespace_member_func_key, namespace_member_var_key, resolve_target_triple,
     short_spread_method_capabilities, take_module_static_seeds, user_function_symbol, AppMetadata,
-    BirthProto, BirthShape, CompileOptions, ConstructorContracts, CtorAbi, DefinedClassShape,
-    ExportedObjectLiteralCapability, FpContractMode, ImportedClass, ImportedObjectLiteral,
-    ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry, NamespaceEntryKind,
-    ObjectLiteralMethodCandidate, ProgramClassShapeIds, ResolvedConstructorContracts,
-    ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,
+    BirthProto, BirthShape, ClassAccessorNames, CompileOptions, ConstFnBirth, ConstructorContracts,
+    CtorAbi, DefinedClassShape, ExportedObjectLiteralCapability, FpContractMode, ImportedClass,
+    ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
+    NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds,
+    ResolvedConstructorContracts, ShortSpreadMethodCandidate, TypedMasks, STATIC_SEED_FORMAT,
 };
 // #10399: whole-program Worker flag, set by the driver before module codegen.
-pub use codegen::{program_has_worker, set_program_has_worker};
+pub use codegen::{
+    program_has_thread_agents, program_has_worker, set_program_has_thread_agents,
+    set_program_has_worker, set_worker_entries, worker_entries,
+};
 pub use collectors::CjsPreambleCensus;
 // #9843: the segment-view for-of matcher's counter. Exported so the
 // driver can run it at the HIR-trace point — after every transform, on

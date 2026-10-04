@@ -224,6 +224,23 @@ impl ArenaObjectCursor {
             .expect("unbounded arena cursor build must complete")
     }
 
+    /// Keep blocks that can contain remembered parents. Generation, not arena
+    /// ownership, is authoritative: a promoting block is already old while
+    /// still in Eden or a survivor arena. Unknown/mixed ranges remain in the
+    /// walk, and global block indices still match the full-cycle census.
+    pub(crate) fn new_remembered_parents() -> Self {
+        let mut cursor = Self::new(ArenaWalkOrder::BlockIndex);
+        if let ArenaObjectCursorBlocks::BlockIndex(blocks) = &mut cursor.blocks {
+            blocks.retain(|block| {
+                !matches!(
+                    uniform_heap_generation(block.data, block.data + block.offset),
+                    Some(HeapGeneration::Nursery | HeapGeneration::Longlived)
+                )
+            });
+        }
+        cursor
+    }
+
     pub(crate) fn next_budgeted(&mut self, remaining: &mut usize) -> Option<(*mut u8, usize)> {
         use crate::gc::GcHeader;
 
@@ -439,7 +456,7 @@ pub(crate) struct ArenaRegionTelemetry {
 }
 
 #[derive(Clone, Copy, Default)]
-#[cfg_attr(not(feature = "diagnostics"), allow(dead_code))]
+#[cfg_attr(not(perry_diagnostics), allow(dead_code))]
 pub(crate) struct ArenaTelemetrySnapshot {
     pub(crate) arena: ArenaRegionTelemetry,
     pub(crate) survivor0: ArenaRegionTelemetry,

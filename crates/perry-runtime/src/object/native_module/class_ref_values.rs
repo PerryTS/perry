@@ -87,7 +87,7 @@ pub(crate) fn class_has_own_method(class_id: u32, method_name: &str) -> bool {
 /// class metadata ("may this chain resolve `name`?") for paths that must not
 /// materialize a prototype; it never answers a property query itself.
 pub(crate) fn class_instance_has_member(class_id: u32, name: &str) -> bool {
-    class_chain_declares(class_id, name, true)
+    class_chain_declares(class_id, name, true, false)
 }
 
 /// Wall 10 — `name in instance` for a class instance whose walk found nothing:
@@ -97,11 +97,20 @@ pub(crate) fn class_instance_has_member(class_id: u32, name: &str) -> bool {
 /// see, which made `'method' in instance` wrongly `false` (NestJS's app Proxy
 /// gates routing on `'listen' in receiver`). Accessors are not consulted: they
 /// are real properties of the class prototype, which that walk visits.
+///
+/// It answers for an instance's chain, so it stops where that chain leaves the
+/// declared classes: past a class whose prototype a user relinked, the parent's
+/// methods are not inherited (`instance_chain_parent_class_id`), and the
+/// ordinary walk has already read the recorded link.
 pub(crate) fn class_instance_has_method(class_id: u32, name: &str) -> bool {
-    class_chain_declares(class_id, name, false)
+    class_chain_declares(class_id, name, false, true)
 }
 
-fn class_chain_declares(class_id: u32, name: &str, accessors: bool) -> bool {
+/// `instance_chain`: the walk answers for an instance's `[[Prototype]]` chain
+/// and stops at a relinked class prototype. The member filter keeps the
+/// declared chain: it serves constructor-side reads, whose chain is the
+/// constructor's own and does not change when `C.prototype` is relinked.
+fn class_chain_declares(class_id: u32, name: &str, accessors: bool, instance_chain: bool) -> bool {
     if class_id == 0 {
         return false;
     }
@@ -125,7 +134,12 @@ fn class_chain_declares(class_id: u32, name: &str, accessors: bool) -> bool {
                 return true;
             }
         }
-        match super::class_registry::get_parent_class_id(cid) {
+        let parent = if instance_chain {
+            super::class_registry::instance_chain_parent_class_id(cid)
+        } else {
+            super::class_registry::get_parent_class_id(cid)
+        };
+        match parent {
             Some(p) if p != 0 && p != cid => {
                 cid = p;
                 depth += 1;
@@ -147,25 +161,102 @@ pub fn class_prototype_method_value_for_name(class_id: u32, method_name: &str) -
         return f64::from_bits(bits);
     }
 
-    // Bounded leak: `js_class_method_bind` keeps the byte pointer for the
-    // lifetime of the bound closure (it's stashed inside the closure's
-    // capture frame). We leak one allocation per unique
-    // `(class_id, method_name)` pair the program ever asks for, so the
-    // total leak is bounded by the static set of decorated method
-    // descriptors. The cache below short-circuits repeat queries.
-    let leaked = intern_class_method_name(class_id, method_name);
-    let class_ref = class_prototype_ref_value(class_id);
-    // Build the closure DIRECTLY (not via `js_class_method_bind`, whose
-    // canonical short-circuit would call back into this function and recurse).
-    // The captured receiver is the prototype-ref, which doubles as the
-    // "canonical class method" marker that `dispatch_bound_method` keys on.
-    let value = build_bound_method_closure(class_ref, leaked.as_ptr(), leaked.len());
+    // A method `class_id` declares itself is a function object of its own
+    // body: it runs the method's closure-convention entry, whose
+    // JsFunctionInfo is what the prototype's shape records for the slot (a
+    // ConstFn lane), so neither a call through it nor a slot read resolves
+    // anything by name. Its one capture is `C.prototype`'s ref, a non-pointer
+    // that names no evaluation: the entry then runs in its receiver's
+    // evaluation, as a vtable call of the same body does.
+    let value = match super::class_registry::class_method_entry(class_id, method_name) {
+        Some(code) => class_method_entry_value(code, class_id, method_name),
+        None => {
+            // An inherited or entry-less member: the name trampoline. Bounded
+            // leak: `js_class_method_bind` keeps the byte pointer for the
+            // lifetime of the bound closure (it's stashed inside the closure's
+            // capture frame). We leak one allocation per unique
+            // `(class_id, method_name)` pair the program ever asks for, so the
+            // total leak is bounded by the static set of decorated method
+            // descriptors. The cache below short-circuits repeat queries.
+            let leaked = intern_class_method_name(class_id, method_name);
+            let class_ref = class_prototype_ref_value(class_id);
+            // Build the closure DIRECTLY (not via `js_class_method_bind`, whose
+            // canonical short-circuit would call back into this function and
+            // recurse). The captured receiver is the prototype-ref, which
+            // doubles as the "canonical class method" marker that
+            // `dispatch_bound_method` keys on.
+            build_bound_method_closure(class_ref, leaked.as_ptr(), leaked.len())
+        }
+    };
     class_prototype_method_value_cache_root_store(
         class_id,
         method_name.to_string(),
         value.to_bits(),
     );
     value
+}
+
+/// The function object of declared class `class_id`'s method `name` whose
+/// closure-convention entry is `code` (its JsFunctionInfo): one capture,
+/// `C.prototype`'s ref. Built once per method (the caller caches it), which
+/// is also when the entry's code is given the method's name: module init
+/// registers none, so a class costs nothing per method until a method value
+/// exists.
+fn class_method_entry_value(code: usize, class_id: u32, name: &str) -> f64 {
+    let f = crate::closure::js_closure_alloc(code as *const crate::closure::JsFunctionInfo, 1);
+    if f.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let entry_code = unsafe { (*f).code() } as usize;
+    if !name.is_empty() && crate::builtins::function_name_for_ptr(entry_code).is_none() {
+        unsafe {
+            crate::builtins::js_register_function_name(
+                entry_code as *const u8,
+                name.as_ptr(),
+                name.len() as u32,
+            )
+        };
+    }
+    // No allocation since `f` was made: the capture is a non-pointer.
+    unsafe {
+        crate::closure::closure_install_boxed_captures(
+            f,
+            &[class_prototype_ref_value(class_id).to_bits()],
+        )
+    };
+    crate::value::js_nanbox_pointer(f as i64)
+}
+
+/// The method body a class method's function object runs, for its retained
+/// source text: `closure` runs the closure-convention entry of a method of the
+/// class its one capture names (`C.prototype`'s ref for a declared class, the
+/// evaluation's class object for a per-evaluation template).
+pub(crate) unsafe fn class_method_entry_source_func_ptr(
+    closure: *const crate::closure::ClosureHeader,
+) -> Option<usize> {
+    if closure.is_null()
+        || crate::closure::real_capture_count((*closure).capture_count) != 1
+        || (*closure).info.is_null()
+    {
+        return None;
+    }
+    let home = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 0));
+    let class_id = class_prototype_ref_id(home).or_else(|| {
+        super::class_registry::is_class_object_value(home).then(|| {
+            crate::object::js_object_get_class_id(
+                JSValue::from_bits(home.to_bits()).as_pointer::<ObjectHeader>(),
+            )
+        })
+    })?;
+    let info = (*closure).info as usize;
+    let guard = CLASS_VTABLE_REGISTRY.read().ok()?;
+    guard
+        .as_ref()?
+        .get(&class_id)?
+        .methods
+        .values()
+        .find(|m| m.entry == info)
+        .map(|m| m.func_ptr)
 }
 
 #[no_mangle]

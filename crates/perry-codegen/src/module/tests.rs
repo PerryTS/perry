@@ -402,6 +402,51 @@ fn owner_only_global_declares_cross_unit_function_from_initializer() {
 }
 
 #[test]
+fn mach_o_split_keeps_an_external_definition_no_function_uses() {
+    // A ConstFn body's `$info` is emitted `hidden` because the static
+    // shape-seed object references it. When the seed set reaches a body only
+    // through a guard, NOTHING in the module references the record. Under the
+    // old rule a sole external definition became `linkonce_odr`, which is
+    // discardable, and LLVM dropped it from its owner: the 13 MB Claude Code
+    // bundle then failed to link with an undefined `$info` referenced from
+    // `_perry_static_shape_seeds.o`. The record must be defined exactly once,
+    // with a linkage LLVM may not discard.
+    let mut m = LlModule::new("arm64-apple-macosx15.0.0");
+    m.declare_function("js_touch", VOID, &[PTR]);
+    m.add_global("perry_shared_m__used", I32, "0");
+    m.add_raw_global(
+        "@perry_closure_m__7$info = hidden constant { ptr, i64 } { ptr @perry_closure_m__7, i64 0 }"
+            .to_string(),
+    );
+    for name in ["perry_closure_m__7", "perry_fn_m__g"] {
+        let f = m.define_function(name, DOUBLE, vec![]);
+        let e = f.create_block("entry");
+        e.call_void("js_touch", &[(PTR, "@perry_shared_m__used")]);
+        e.ret(DOUBLE, "0.0");
+    }
+
+    let units = m.render_codegen_units(2);
+    assert_eq!(units.len(), 2, "two functions → two units");
+    let defining: Vec<&String> = units
+        .iter()
+        .filter(|u| u.contains("@perry_closure_m__7$info = weak_odr hidden constant"))
+        .collect();
+    assert_eq!(
+        defining.len(),
+        1,
+        "the unreferenced external record is defined by exactly one unit, \
+         non-discardably:\n{}",
+        units.join("\n----\n")
+    );
+    assert!(
+        units
+            .iter()
+            .all(|u| !u.contains("@perry_closure_m__7$info = linkonce_odr")),
+        "a discardable linkage lets LLVM drop a record only another object uses"
+    );
+}
+
+#[test]
 fn mach_o_split_promotes_only_globals_two_units_define() {
     // #9610: `linkonce_odr` is weak-for-linker, and
     // `TargetLoweringObjectFileMachO::SelectSectionForGlobal` routes every
@@ -473,13 +518,14 @@ fn mach_o_split_promotes_only_globals_two_units_define() {
         "a global both units reference is defined in both, folded by linkage"
     );
 
-    // A strong EXTERNAL definition keeps the promotion even at one unit:
-    // `linkonce_odr` is what lets ld64 coalesce two modules' same-named
-    // globals rather than report a duplicate symbol, and this change is
-    // about section placement, not about that.
+    // A strong EXTERNAL definition keeps a coalescing linkage even at one
+    // unit, so ld64 folds two modules' same-named globals rather than report
+    // a duplicate symbol. It is `weak_odr`, not `linkonce_odr`: another
+    // object may name it, and a discardable sole copy is dropped by LLVM
+    // when nothing in its own unit uses it.
     let external_defs = units
         .iter()
-        .filter(|u| u.contains("@perry_class_shape_id_m__C = linkonce_odr global i32 0"))
+        .filter(|u| u.contains("@perry_class_shape_id_m__C = weak_odr global i32 0"))
         .count();
     assert_eq!(
         external_defs, 1,
@@ -802,6 +848,33 @@ fn split_unit_declares_local_function_used_as_pointer_argument() {
         .expect("init unit");
     assert!(!init_unit.contains(&format!("define double @{wrapper_name}(")));
     assert!(init_unit.contains(&format!("declare double @{wrapper_name}(i64, double)")));
+}
+
+#[test]
+fn external_decl_keeps_hidden_visibility_of_closure_info() {
+    // Closure-info records are emitted `hidden constant` (fn_info.rs). On ELF
+    // and COFF every cross-unit reference to one is declared through
+    // `external_decl_for_global`, which only stripped LINKAGE keywords and so
+    // returned `None` for a VISIBILITY keyword — a panic while splitting
+    // effect's Schema.ts into codegen units on Linux.
+    use crate::module::linkage::external_decl_for_global;
+    assert_eq!(
+        external_decl_for_global(
+            "@perry_closure_m__247$info = hidden constant { ptr, i16, i16 } { ptr @perry_closure_m__247, i16 2, i16 0 }"
+        )
+        .as_deref(),
+        Some("@perry_closure_m__247$info = external hidden constant { ptr, i16, i16 }")
+    );
+    // The preemption specifier precedes visibility and is kept too.
+    assert_eq!(
+        external_decl_for_global("@g = dso_local hidden global i32 0").as_deref(),
+        Some("@g = external dso_local hidden global i32")
+    );
+    // Visibility composes with the TLS specifier in LLVM's order.
+    assert_eq!(
+        external_decl_for_global("@t = hidden thread_local global i8 0").as_deref(),
+        Some("@t = external hidden thread_local global i8")
+    );
 }
 
 #[test]

@@ -31,9 +31,10 @@ mod typeof_narrow;
 pub(crate) use block::{
     collect_annexb_block_fn_decl_names, collect_lexical_decl_names,
     collect_var_binding_names_from_pat, collect_var_binding_names_from_stmt,
-    compute_prealloc_for_hoisted_closures, enter_class_rename_scope, exit_class_rename_scope,
-    lower_block_stmt, lower_block_stmt_scoped, lower_fn_body_block_stmt, lower_stmts_using_aware,
-    pre_register_forward_captured_lets, rebind_nested_forward_scope_lets,
+    compute_prealloc_for_hoisted_closures, enter_class_rename_scope, enter_forward_class_scope,
+    exit_class_rename_scope, exit_forward_class_scope, lower_block_stmt, lower_block_stmt_scoped,
+    lower_fn_body_block_stmt, lower_stmts_using_aware, pre_register_forward_captured_lets,
+    rebind_nested_forward_scope_lets, register_switch_case_tdz_lets,
 };
 pub(crate) use body_stmt::gen_capture_scan::forward_referenced_nested_generators;
 pub(crate) use body_stmt::{find_native_return_in_stmts, lower_body_stmt};
@@ -45,7 +46,9 @@ pub(crate) use class_computed::{
     class_computed_member_registration_expr, prepare_ordered_class_computed_names,
 };
 pub(crate) use class_decl::{
-    fresh_class_decl_self_binding, lower_class_decl, lower_class_from_ast,
+    fresh_class_decl_self_binding, guard_shared_first_capture_snapshot, guard_shared_first_new,
+    guard_shared_first_static_call, guard_shared_first_static_get, lower_class_decl,
+    lower_class_from_ast,
 };
 pub(crate) use class_members::{
     lower_class_method, lower_class_method_with_name, lower_class_prop, lower_constructor,

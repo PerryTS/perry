@@ -543,7 +543,35 @@ fn generate_single_byte_encodings(out_dir: &str) {
     .expect("write single_byte_encodings.rs");
 }
 
+/// The GC/diagnostic instruments (`diagnostics`, `gc-instruments`, `hot-diag`)
+/// compile under the `perry_diagnostics` / `perry_gc_instruments` /
+/// `perry_hot_diag` cfgs, set here when the feature is on — unless
+/// `PERRY_RELEASE_STRIP_INSTRUMENTS=1`. The release workflow sets that for
+/// every build in its jobs, so the shipped archives carry no instruments while
+/// every other build (dev, CI, auto-optimize) is unchanged. An env var rather
+/// than a feature: a feature can only be added by Cargo's unification, and the
+/// release co-builds each ext crate with the runtime (#6303/#7358), whose
+/// `default` would switch the instruments back on; the build script sees the
+/// variable in every one of those invocations alike. A shipped runtime asked
+/// for an instrument knob refuses it with the existing
+/// "instruments not compiled in" diagnostic.
+fn emit_instrument_cfgs() {
+    println!("cargo:rerun-if-env-changed=PERRY_RELEASE_STRIP_INSTRUMENTS");
+    let strip = std::env::var("PERRY_RELEASE_STRIP_INSTRUMENTS").is_ok_and(|v| v == "1");
+    for (feature_env, cfg) in [
+        ("CARGO_FEATURE_DIAGNOSTICS", "perry_diagnostics"),
+        ("CARGO_FEATURE_GC_INSTRUMENTS", "perry_gc_instruments"),
+        ("CARGO_FEATURE_HOT_DIAG", "perry_hot_diag"),
+    ] {
+        println!("cargo:rustc-check-cfg=cfg({cfg})");
+        if std::env::var_os(feature_env).is_some() && !strip {
+            println!("cargo:rustc-cfg={cfg}");
+        }
+    }
+}
+
 fn main() {
+    emit_instrument_cfgs();
     println!("cargo:rerun-if-changed=src/ffi/perry_memory_profile.c");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
         && std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH").as_deref() == Ok("64")

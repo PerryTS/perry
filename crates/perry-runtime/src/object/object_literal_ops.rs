@@ -109,6 +109,43 @@ pub unsafe extern "C" fn js_object_literal_set_computed(
     value
 }
 
+/// `{ ...src, k: v }`: a static key of a source-ordered object literal is
+/// `CreateDataPropertyOrThrow(obj, "k", v)` on the literal's own fresh object
+/// (PropertyDefinitionEvaluation), never `[[Set]]`: an accessor for `k` on
+/// `Object.prototype` must not run, and a key an earlier part made an
+/// accessor is replaced by a data property.
+///
+/// The receiver shape answers the common case (`define_own_data`). Otherwise,
+/// when neither an own descriptor for the key nor the prototype chain can
+/// intercept a write, `[[Set]]` performs exactly this definition and is the
+/// path that teaches the lattice the key-add edge; anything else takes the
+/// general definition.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_literal_define(
+    obj_value: f64,
+    key_value: f64,
+    value: f64,
+) -> f64 {
+    if let Some(stored) =
+        super::define_own_data::define_own_data_from_shape(obj_value, key_value, value)
+    {
+        return stored;
+    }
+    let obj = extract_obj_ptr(obj_value);
+    if obj.is_null() {
+        return value;
+    }
+    if !super::descriptor_state::plain_data_write_may_intercept(obj as usize, 0, key_value) {
+        return crate::proxy::js_put_value_set(obj_value, key_value, value, obj_value, 1);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_handle = scope.root_nanbox_f64(value);
+    if !crate::proxy::create_data_property(obj_value, key_value, value) {
+        crate::collection_iter::throw_type_error("Cannot define property on object literal");
+    }
+    value_handle.get_nanbox_f64()
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_object_literal_set_prototype(obj_value: f64, proto_value: f64) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;

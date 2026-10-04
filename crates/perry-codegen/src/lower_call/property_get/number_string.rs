@@ -102,11 +102,13 @@ pub(crate) fn try_lower_number_string_methods(
             })
             .unwrap_or(false);
         if !has_user_to_string {
-            let v = lower_expr(ctx, object)?;
             // Always lower the raw arg value too: for a Number/BigInt receiver
             // the string is the radix (ToNumber-coerced at runtime, #2864), not
             // an encoding. Disambiguation is by receiver type at runtime.
-            let arg_box = lower_expr(ctx, &args[0])?;
+            // #11789 sweep: the receiver is held across the argument.
+            let (v, arg_vals, enc_group) =
+                crate::lower_call::lower_operands_rooted(ctx, object, &args[..1])?;
+            let arg_box = arg_vals[0].clone();
             let enc_tag_i32 = if let Expr::String(s) = &args[0] {
                 let lower = s.to_ascii_lowercase();
                 let tag: i32 = match lower.as_str() {
@@ -130,7 +132,9 @@ pub(crate) fn try_lower_number_string_methods(
                 "js_value_to_string_with_encoding_or_radix",
                 &[(DOUBLE, &v), (I32, &enc_tag_i32), (DOUBLE, &arg_box)],
             );
-            return Ok(Some(nanbox_string_inline(blk, &handle)));
+            let boxed = nanbox_string_inline(blk, &handle);
+            enc_group.release(ctx);
+            return Ok(Some(boxed));
         }
     }
     // Number.prototype.toString(radix) — special case where the
@@ -161,19 +165,23 @@ pub(crate) fn try_lower_number_string_methods(
             })
             .unwrap_or(false);
         if !has_user_to_string {
-            let v = lower_expr(ctx, object)?;
             // Pass the *raw* NaN-boxed radix value (not an `fptosi` i32). The
             // runtime performs ECMAScript ToNumber/ToInteger coercion and
             // `RangeError` validation on it (#2864); an `fptosi` here would
             // silently collapse NaN/Infinity/string radices to 0 or garbage.
-            let radix_v = lower_expr(ctx, &args[0])?;
+            // #11789 sweep: the receiver is held across the radix expression.
+            let (v, radix_vals, radix_group) =
+                crate::lower_call::lower_operands_rooted(ctx, object, &args[..1])?;
+            let radix_v = radix_vals[0].clone();
             let blk = ctx.block();
             let handle = blk.call(
                 I64,
                 "js_jsvalue_to_string_radix",
                 &[(DOUBLE, &v), (DOUBLE, &radix_v)],
             );
-            return Ok(Some(nanbox_string_inline(blk, &handle)));
+            let boxed = nanbox_string_inline(blk, &handle);
+            radix_group.release(ctx);
+            return Ok(Some(boxed));
         }
     }
     // Universal `.toString()` — works for any JS value via the
@@ -208,9 +216,26 @@ pub(crate) fn try_lower_number_string_methods(
             })
             .unwrap_or(false);
         if !has_user_to_string {
-            let v = lower_expr(ctx, object)?;
-            for a in args {
-                let _ = lower_expr(ctx, a)?;
+            let numeric = args.is_empty() && crate::type_analysis::is_numeric_expr(ctx, object);
+            // #11789 sweep: the receiver is held across the (discarded)
+            // argument's evaluation.
+            let (v, _discarded, recv_group) =
+                crate::lower_call::lower_operands_rooted(ctx, object, args)?;
+            // A number receiver's small-integer text is built inline (#10762).
+            if numeric {
+                let text = crate::expr::number_to_string_inline::emit_number_to_string_inline(
+                    ctx,
+                    &v,
+                    |ctx| {
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_jsvalue_to_string_method_box",
+                            &[(DOUBLE, &v)],
+                        ))
+                    },
+                )?;
+                recv_group.release(ctx);
+                return Ok(Some(text));
             }
             let blk = ctx.block();
             // #3146: an explicit `.toString()` member call must throw a
@@ -220,11 +245,9 @@ pub(crate) fn try_lower_number_string_methods(
             // `js_jsvalue_to_string`. Its `_box` twin returns a short
             // number's text as an SSO immediate instead of allocating a
             // heap string for it (#10762).
-            return Ok(Some(blk.call(
-                DOUBLE,
-                "js_jsvalue_to_string_method_box",
-                &[(DOUBLE, &v)],
-            )));
+            let text = blk.call(DOUBLE, "js_jsvalue_to_string_method_box", &[(DOUBLE, &v)]);
+            recv_group.release(ctx);
+            return Ok(Some(text));
         }
     }
     Ok(None)

@@ -1,0 +1,41 @@
+ext-proto true true false
+ext-protoproto true true false
+ext-instanceof true false true false false
+ext-instance 1 2 D>L1 D>L2
+ext-statics make1 make2 make1 make2
+ext-top top
+own-names ["length","name","prototype","s","t","f"]
+own-keys ["f"]
+own-has true,true,true,true,true,true,false,false
+own-in true,true,true,true,true,false
+own-values 0 Q object s1 f1
+own-desc length=data:number,false,false,true name=data:string,false,false,true prototype=data:object,false,false,false s=data:function,true,false,true f=data:string,true,true,true
+own-identity true false false
+own-delete true true
+own-after ["length","name","prototype","t","f"] false undefined false
+own-sibling ["length","name","prototype","s","t","f"] s2
+own-delete-name true false true ["length","prototype","t","f"]
+own-redefine again ["length","prototype","t","f","s"]
+own-sibling2 Q s2 t2
+own-inherit Pa Pb false ["length","name","prototype"]
+own-inherit-deleted undefined Pb function
+own-over nw function lenw ["length","name","prototype","g"] data:string,true,true,true data:function,true,false,true
+str-string true true
+str-method true true
+str-template true true
+str-proto true
+str-override custom1 custom1 custom1
+str-deleted-static true d2
+str-own-undefined TypeError
+own-index ["0","length","name","prototype","s"] ["0","length","name","prototype","s"]
+tpl-own ["length","name","prototype","s","who"] ["constructor","m","n"]
+tpl-statics s1 s2 s3 false false s 0
+tpl-detached s2 s3 s2 s3 s3
+tpl-methods m1 m2 m3 3 b
+tpl-method-identity false true n 1 function
+tpl-proto true true true true false
+tpl-desc {"writable":true,"enumerable":false,"configurable":true} {"writable":true,"enumerable":false,"configurable":true}
+tpl-isolated undefined re s1 s4
+tpl-proto-isolated undefined function ["constructor","m","n"] ["constructor","m"]
+tpl-loop sk39mk390
+tpl-accessor-isolated ["constructor","g","m"] m3 m2 undefined 3

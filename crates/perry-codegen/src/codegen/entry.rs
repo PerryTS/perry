@@ -147,6 +147,7 @@ pub(super) fn compile_module_entry(
         // resolves the symbols at link time.
         for prefix in non_entry_module_prefixes {
             llmod.declare_function(&format!("{}__init", prefix), VOID, &[]);
+            llmod.declare_function(&format!("__perry_prepare_literals_{}", prefix), VOID, &[]);
         }
         // Issue #753: emit a no-op `<entry_prefix>__init` stub so the
         // dispatch site in some other module that does `await
@@ -312,6 +313,24 @@ pub(super) fn compile_module_entry(
                 (cn, len, prefix.clone())
             })
             .collect();
+        // Worker entries: `(path constant, byte_len, init symbol)`, registered
+        // below before any module init so every way of constructing a Worker
+        // can find a compiled entry by its path.
+        let worker_entry_inits: Vec<(String, usize, String)> = if cross_module.needs_stdlib {
+            crate::codegen::worker_entries()
+                .iter()
+                .filter(|(_, prefix)| non_entry_module_prefixes.contains(prefix))
+                .map(|(path, prefix)| {
+                    let (cn, len) = llmod.add_string_constant(path);
+                    // A program with worker entries always has thread-local
+                    // init guards (`program_has_worker`), so the guarded
+                    // wrapper runs once per thread.
+                    (cn, len, format!("{prefix}__init"))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         // `PERRY_DEBUG_INIT` is a startup-order diagnostic, so keep all of its
         // emitted code in the entry object.  The old implementation put a
         // `puts("INIT: <prefix>")` in every non-entry module body, which made
@@ -539,6 +558,19 @@ pub(super) fn compile_module_entry(
                     ],
                 );
             }
+            for (const_name, byte_len, init) in &worker_entry_inits {
+                let path_ptr = format!("@{}", const_name);
+                let len_str = byte_len.to_string();
+                let init_addr = format!("ptrtoint (ptr @{} to i64)", init);
+                blk.call_void(
+                    "js_worker_threads_register_entry",
+                    &[
+                        (PTR, path_ptr.as_str()),
+                        (I64, len_str.as_str()),
+                        (I64, init_addr.as_str()),
+                    ],
+                );
+            }
             // #10735: publish the shared `require.main` placeholder before
             // ANY module's `__init` below runs (those are this CJS entry's
             // OWN static imports, which ESM eval order runs before the
@@ -546,6 +578,19 @@ pub(super) fn compile_module_entry(
             // for an ESM entry, which must leave `require.main` `undefined`.
             if crate::collectors::is_cjs_wrapped_module(hir) {
                 blk.call_void("js_bootstrap_cjs_main_module_placeholder", &[]);
+            }
+            // The topo sort intentionally drops cyclic evaluation back-edges.
+            // A first eager module can therefore call a later module's hoisted
+            // factory without ever reaching that module's __init wrapper. All
+            // eager literal pools must be ready before ANY eager body runs.
+            // Deferred pools remain lazy and prepare in their own wrapper.
+            for prefix in non_entry_module_prefixes {
+                if cross_module.deferred_module_prefixes.contains(prefix) {
+                    continue;
+                }
+                let prepare_addr =
+                    format!("ptrtoint (ptr @__perry_prepare_literals_{} to i64)", prefix);
+                blk.call_void("js_run_module_init_catching", &[(I64, &prepare_addr)]);
             }
             for (index, prefix) in non_entry_module_prefixes.iter().enumerate() {
                 if cross_module.deferred_module_prefixes.contains(prefix) {
@@ -662,6 +707,7 @@ pub(super) fn compile_module_entry(
             proven_local_types: HashMap::new(),
             guarded_discriminant_aliases: HashMap::new(),
             module_global_proven_types: &cross_module.module_global_proven_types,
+            module_global_transfers: &cross_module.module_global_transfers,
             reassigned_locals: crate::collectors::reassigned_locals(&hir.init),
             const_string_locals: HashMap::new(),
             const_number_locals: HashMap::new(),
@@ -779,7 +825,6 @@ pub(super) fn compile_module_entry(
             array_length_snapshots: HashMap::new(),
             string_window_array_facts: Vec::new(),
             suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
-            class_field_loop_facts: Vec::new(),
             region_loops: Vec::new(),
             region_loop_facts: Vec::new(),
             element_shape_loop_facts: Vec::new(),
@@ -827,6 +872,7 @@ pub(super) fn compile_module_entry(
             imported_vars: &cross_module.imported_vars,
             imported_object_literals: &cross_module.imported_object_literals,
             short_spread_method_candidates: &cross_module.short_spread_method_candidates,
+            program_class_accessor_names: cross_module.program_class_accessor_names.as_deref(),
             object_literal_method_candidates: &cross_module.object_literal_method_candidates,
             compile_time_constants: main_native_facts.compile_time_constants(),
             target_triple: &cross_module.target_triple,
@@ -1353,6 +1399,14 @@ pub(super) fn compile_module_entry(
             {
                 let blk = wrap_fn.block_mut(2).unwrap();
                 blk.store(I8, "1", &format!("@{}", done_global));
+                // Cyclic dependencies may call our hoisted functions before
+                // our body. Prepare literal infrastructure without evaluating
+                // declared classes or any user statement ahead of dependencies.
+                let prepare_addr = format!(
+                    "ptrtoint (ptr @__perry_prepare_literals_{} to i64)",
+                    module_prefix
+                );
+                blk.call_void("js_run_module_init_catching", &[(I64, &prepare_addr)]);
                 // Trigger init of static-dep + re-export source modules
                 // before the body runs. Each `<dep>__init` is itself
                 // wrapped by the same guard pattern, so this short-
@@ -1527,6 +1581,7 @@ pub(super) fn compile_module_entry(
             proven_local_types: HashMap::new(),
             guarded_discriminant_aliases: HashMap::new(),
             module_global_proven_types: &cross_module.module_global_proven_types,
+            module_global_transfers: &cross_module.module_global_transfers,
             reassigned_locals: crate::collectors::reassigned_locals(&hir.init),
             const_string_locals: HashMap::new(),
             const_number_locals: HashMap::new(),
@@ -1644,7 +1699,6 @@ pub(super) fn compile_module_entry(
             array_length_snapshots: HashMap::new(),
             string_window_array_facts: Vec::new(),
             suppressed_cleared_shadow_slots: std::collections::HashSet::new(),
-            class_field_loop_facts: Vec::new(),
             region_loops: Vec::new(),
             region_loop_facts: Vec::new(),
             element_shape_loop_facts: Vec::new(),
@@ -1692,6 +1746,7 @@ pub(super) fn compile_module_entry(
             imported_vars: &cross_module.imported_vars,
             imported_object_literals: &cross_module.imported_object_literals,
             short_spread_method_candidates: &cross_module.short_spread_method_candidates,
+            program_class_accessor_names: cross_module.program_class_accessor_names.as_deref(),
             object_literal_method_candidates: &cross_module.object_literal_method_candidates,
             compile_time_constants: init_native_facts.compile_time_constants(),
             target_triple: &cross_module.target_triple,

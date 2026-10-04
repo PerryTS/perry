@@ -17,7 +17,7 @@ pub(super) enum GcCyclePhase {
 }
 
 impl GcCyclePhase {
-    #[cfg(feature = "diagnostics")]
+    #[cfg(perry_diagnostics)]
     #[inline]
     pub(super) const fn as_str(self) -> &'static str {
         match self {
@@ -624,6 +624,7 @@ impl GcCycleState {
         let trigger_kind = trigger.kind;
         let trace = GcCycleTrace::new(GcCollectionKind::Full, trigger);
         let start = Instant::now();
+        crate::arena::discard_previously_idle_eden_pages();
         crate::arena::old_pages_begin_gc_cycle();
         // #10182: promoted page runs are NOT expanded here any more. The sweep
         // expands a run only on a page where it is about to invalidate a dead
@@ -1512,6 +1513,7 @@ impl GcCycleState {
                 super::promoted_cohort::survival::check_minor_view_at_full_sweep_start();
             }
 
+            crate::arena::note_sweep_started(self.progress_kind.is_budgeted());
             let (do_age_bump, reclaim_dead_old_blocks, targeted_old_blocks, sweep_malloc) =
                 if let Some(minor) = self.minor.as_ref() {
                     let targeted_old_blocks = (minor.evacuation.old_page_moved_bytes > 0)
@@ -1728,6 +1730,7 @@ impl GcCycleState {
                     if self.minor.is_none() {
                         crate::object::shapes::shrink_shape_tables();
                         super::shrink_malloc_registry();
+                        crate::arena::shrink_page_tables();
                     }
                     let trim = run_malloc_trim(self.progress_kind);
                     // #9612: and purge the allocator the process actually uses.
@@ -1795,6 +1798,7 @@ impl GcCycleState {
     }
 
     fn publish_reclaim_outcome(&mut self) {
+        crate::arena::advance_block_pool_reuse_window();
         let elapsed_us = self.active_elapsed_us();
         GC_STATS.with(|stats| {
             stats

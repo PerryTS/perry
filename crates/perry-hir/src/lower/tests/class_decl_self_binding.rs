@@ -81,10 +81,41 @@ fn private_class_decl_self_reference_reads_its_evaluation() {
 }
 
 #[test]
-fn shared_template_class_decl_keeps_its_class_ref() {
-    // No private elements and no heritage: the declaration keeps the shared
-    // template path, so a self-reference stays the cheap `ClassRef` and does
-    // not become a capture that could move the class onto the fresh path.
+fn run_once_class_decl_keeps_its_class_ref() {
+    // No private elements and no heritage, in a body that runs once: the
+    // declaration keeps the shared template path, so a self-reference stays
+    // the cheap `ClassRef` and does not become a capture that could move the
+    // class onto the fresh path.
+    let hir = lower(
+        r#"
+            function factory() {
+                class Plain {
+                    static make() { return new Plain(); }
+                    static self() { return Plain; }
+                }
+                return Plain;
+            }
+            export const made = factory();
+        "#,
+    );
+    let self_body = static_method_body(&hir, "Plain", "self");
+    assert!(
+        self_body.contains("ClassRef(\"Plain\")"),
+        "a run-once declaration keeps its ClassRef: {self_body}"
+    );
+    let factory = factory_body(&hir);
+    assert!(
+        !factory.contains("ClassExprFresh"),
+        "a run-once declaration must stay off the fresh path: {factory}"
+    );
+}
+
+#[test]
+fn repeatable_class_decl_shares_its_first_evaluation() {
+    // #11759 (c′): the same declaration in a function that may run more than
+    // once. Its first evaluation is the shared class and its later ones are
+    // fresh; its members read their own evaluation, and `new Plain()` through
+    // it takes the static construction while it holds the first evaluation.
     let hir = lower(
         r#"
             export function factory() {
@@ -96,14 +127,21 @@ fn shared_template_class_decl_keeps_its_class_ref() {
             }
         "#,
     );
-    let self_body = static_method_body(&hir, "Plain", "self");
-    assert!(
-        self_body.contains("ClassRef(\"Plain\")"),
-        "a shared-template declaration keeps its ClassRef: {self_body}"
-    );
     let factory = factory_body(&hir);
     assert!(
-        !factory.contains("ClassExprFresh"),
-        "a shared-template declaration must stay off the fresh path: {factory}"
+        factory.contains("ClassExprFresh") && factory.contains("shared_first_evaluation: Some("),
+        "later evaluations are fresh, the first is shared: {factory}"
+    );
+    let self_body = static_method_body(&hir, "Plain", "self");
+    assert!(
+        !self_body.contains("ClassRef(\"Plain\")"),
+        "a member reads its own evaluation, not the template: {self_body}"
+    );
+    let make = static_method_body(&hir, "Plain", "make");
+    assert!(
+        make.contains("ClassIsFirstEvaluation")
+            && make.contains("class_name: \"Plain\"")
+            && make.contains("NewDynamic"),
+        "`new Plain()` is static for the first evaluation, by value after: {make}"
     );
 }

@@ -221,14 +221,13 @@ unsafe fn ta_receiver_or_throw(
     // is 0 (the receiver-typed fast path threads the bare pointer — see the
     // raw-pointer arm in `native_call_method`). Resolve both to a clean address
     // and brand-check it against the typed-array registry.
-    let top16 = bits >> 48;
-    let addr = if top16 >= 0x7FF8 {
-        (bits & crate::value::POINTER_MASK) as usize
-    } else if top16 == 0 && bits >= 0x10000 {
-        bits as usize
-    } else {
+    // #10694: the brand probes read the cell's header, so only a POINTER
+    // payload or an allocator-owned raw word is an address here (any other
+    // tag's payload — an inline short string's bytes — is not one).
+    let addr = crate::value::addr_class::object_ref_addr(f64::from_bits(bits));
+    if addr == 0 {
         throw_not_typed_array(method)
-    };
+    }
     if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
         return TypedArrayProtoReceiver::TypedArray(
             addr as *mut crate::typedarray::TypedArrayHeader,

@@ -24,6 +24,7 @@
                 Vec::with_capacity(1 + sig.args.len());
             llvm_args.push((I64, handle));
             runtime_param_types.push(I64);
+            let mut ui_args_group: Option<crate::rooting::RootedGroup<'_>> = None;
             if uniform_padding {
                 // A source expression is evaluated once even when the native
                 // four-edge ABI consumes the resulting value four times.
@@ -33,39 +34,15 @@
                     runtime_param_types.push(DOUBLE);
                 }
             } else {
-                for (kind, arg) in sig.args.iter().zip(args.iter()) {
-                    match kind {
-                        UiArgKind::Widget => {
-                            let v = lower_expr(ctx, arg)?;
-                            let blk = ctx.block();
-                            let h = unbox_to_i64(blk, &v);
-                            llvm_args.push((I64, h));
-                            runtime_param_types.push(I64);
-                        }
-                        UiArgKind::Str => {
-                            let h = get_raw_string_ptr(ctx, arg)?;
-                            llvm_args.push((I64, h));
-                            runtime_param_types.push(I64);
-                        }
-                        UiArgKind::F64 => {
-                            let v = lower_expr(ctx, arg)?;
-                            llvm_args.push((DOUBLE, v));
-                            runtime_param_types.push(DOUBLE);
-                        }
-                        UiArgKind::Closure => {
-                            let v = lower_expr(ctx, arg)?;
-                            llvm_args.push((DOUBLE, v));
-                            runtime_param_types.push(DOUBLE);
-                        }
-                        UiArgKind::I64Raw => {
-                            let v = lower_expr(ctx, arg)?;
-                            let blk = ctx.block();
-                            let i = blk.fptosi(DOUBLE, &v, I64);
-                            llvm_args.push((I64, i));
-                            runtime_param_types.push(I64);
-                        }
-                    }
-                }
+                // #11789 sweep: heap-valued arguments are rooted across the
+                // ones after them and converted from the re-read.
+                ui_args_group = Some(crate::lower_call::ui_tables::lower_ui_args_by_kind(
+                    ctx,
+                    &sig.args,
+                    &args[..sig.args.len().min(args.len())],
+                    &mut llvm_args,
+                    &mut runtime_param_types,
+                )?);
             }
             let return_type = match sig.ret {
                 UiReturnKind::Widget
@@ -81,7 +58,7 @@
             let ref_args: Vec<(crate::types::LlvmType, &str)> =
                 llvm_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
             let blk = ctx.block();
-            return match sig.ret {
+            let ui_result: Result<String> = match sig.ret {
                 UiReturnKind::Void => {
                     blk.call_void(sig.runtime, &ref_args);
                     Ok(double_literal(0.0))
@@ -104,6 +81,10 @@
                     Ok(blk.sitofp(I64, &raw, DOUBLE))
                 }
             };
+            if let Some(group) = ui_args_group {
+                group.release(ctx);
+            }
+            return ui_result;
         }
         // Unknown instance method — fail the compile. Previously this
         // lowered the args for side effects and returned TAG_UNDEFINED,
@@ -135,34 +116,14 @@
                 Vec::with_capacity(1 + args.len());
             llvm_args.push((I64, handle));
             runtime_param_types.push(I64);
-            for (kind, arg) in sig.args.iter().zip(args.iter()) {
-                match kind {
-                    UiArgKind::Widget => {
-                        let v = lower_expr(ctx, arg)?;
-                        let blk = ctx.block();
-                        let h = unbox_to_i64(blk, &v);
-                        llvm_args.push((I64, h));
-                        runtime_param_types.push(I64);
-                    }
-                    UiArgKind::Str => {
-                        let h = get_raw_string_ptr(ctx, arg)?;
-                        llvm_args.push((I64, h));
-                        runtime_param_types.push(I64);
-                    }
-                    UiArgKind::F64 | UiArgKind::Closure => {
-                        let v = lower_expr(ctx, arg)?;
-                        llvm_args.push((DOUBLE, v));
-                        runtime_param_types.push(DOUBLE);
-                    }
-                    UiArgKind::I64Raw => {
-                        let v = lower_expr(ctx, arg)?;
-                        let blk = ctx.block();
-                        let i = blk.fptosi(DOUBLE, &v, I64);
-                        llvm_args.push((I64, i));
-                        runtime_param_types.push(I64);
-                    }
-                }
-            }
+            // #11789 sweep: as for the perry/ui instance methods above.
+            let plugin_args_group = crate::lower_call::ui_tables::lower_ui_args_by_kind(
+                ctx,
+                &sig.args,
+                &args[..sig.args.len().min(args.len())],
+                &mut llvm_args,
+                &mut runtime_param_types,
+            )?;
             let return_type = match sig.ret {
                 UiReturnKind::Widget
                 | UiReturnKind::Promise
@@ -177,7 +138,7 @@
             let ref_args: Vec<(crate::types::LlvmType, &str)> =
                 llvm_args.iter().map(|(t, s)| (*t, s.as_str())).collect();
             let blk = ctx.block();
-            return match sig.ret {
+            let plugin_result: Result<String> = match sig.ret {
                 UiReturnKind::Void => {
                     blk.call_void(sig.runtime, &ref_args);
                     Ok(double_literal(0.0))
@@ -200,6 +161,8 @@
                     Ok(crate::expr::nanbox_string_inline(blk, &raw))
                 }
             };
+            plugin_args_group.release(ctx);
+            return plugin_result;
         }
         bail!(
             "perry/plugin: '.{}(...)' is not a known PluginApi method (args: {}). \
@@ -210,11 +173,9 @@
     }
 
     if module == "array" && method == "fill_generic" {
-        let recv_box = lower_expr(ctx, recv)?;
-        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
-        for arg in args {
-            lowered.push(lower_expr(ctx, arg)?);
-        }
+        // #11789 sweep: the receiver is held across every argument, each of
+        // which is held across the ones after it.
+        let (recv_box, lowered, fill_group) = super::lower_operands_rooted(ctx, recv, args)?;
         let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         let value = lowered
             .first()
@@ -230,7 +191,7 @@
         } else {
             ("0".to_string(), undefined)
         };
-        return Ok(ctx.block().call(
+        let result = ctx.block().call(
             DOUBLE,
             "js_array_fill_generic",
             &[
@@ -241,7 +202,9 @@
                 (I32, &has_end),
                 (DOUBLE, &end),
             ],
-        ));
+        );
+        fill_group.release(ctx);
+        return Ok(result);
     }
 
     if module == "array" && method == "push_spread" {
@@ -261,8 +224,11 @@
                 args.len()
             );
         }
-        let src_box = lower_expr(ctx, &args[0])?;
-        let arr_box = lower_expr(ctx, recv)?;
+        // #11789 sweep: the source is lowered first and held across the
+        // receiver's lowering (a property read, which can run an accessor).
+        let (src_box, recv_vals, push_group) =
+            super::lower_operands_rooted(ctx, &args[0], std::slice::from_ref(recv))?;
+        let arr_box = recv_vals[0].clone();
         let blk = ctx.block();
         let arr_handle = unbox_to_i64(blk, &arr_box);
         let orig_handle = arr_handle.clone();
@@ -275,6 +241,11 @@
         );
         let blk = ctx.block();
         let new_box = nanbox_pointer_inline(blk, &new_handle);
+        push_group.release(ctx);
+        // #11789 sweep: the length is read BEFORE the write-back, which can
+        // re-lower the receiver's object expression (a property read) with
+        // `new_handle` held in a register.
+        let len_i32 = crate::expr::array_length::emit_array_length_i32(ctx, &new_handle);
         // Same write-back-only-if-realloc'd pattern as push_single.
         let needs_writeback = matches!(recv, Expr::LocalGet(_) | Expr::PropertyGet { .. });
         if needs_writeback {
@@ -300,7 +271,16 @@
                 Expr::PropertyGet {
                     object: obj_expr,
                     property, .. } => {
+                    // The pushed array is held across the object expression.
+                    let mut wb_group = crate::rooting::open_rooted_group(1);
+                    let wb_root = wb_group.adopt_emitted(
+                        ctx,
+                        crate::rooting::Repr::Boxed,
+                        &new_box,
+                        crate::rooting::operand_may_collect(ctx, obj_expr),
+                    );
                     let obj_box = lower_expr(ctx, obj_expr)?;
+                    let new_box = wb_group.reread_emitted(ctx, wb_root);
                     let key_idx = ctx.strings.intern(property);
                     let key_handle_global =
                         format!("@{}", ctx.strings.entry(key_idx).handle_global);
@@ -314,6 +294,7 @@
                         "js_object_set_field_by_name",
                         &[(I64, &obj_handle), (I64, &key_raw), (DOUBLE, &new_box)],
                     );
+                    wb_group.release(ctx);
                 }
                 _ => unreachable!(),
             }
@@ -321,7 +302,6 @@
 
             ctx.current_block = merge_idx;
         }
-        let len_i32 = crate::expr::array_length::emit_array_length_i32(ctx, &new_handle);
         return Ok(ctx.block().uitofp(I32, &len_i32, DOUBLE));
     }
 
@@ -359,10 +339,21 @@
         } else {
             None
         };
-        let mut lowered: Vec<String> = Vec::with_capacity(args.len());
+        // #11789 sweep: the arguments are lowered BEFORE the receiver, so
+        // each is held across the ones after it AND across the receiver's
+        // lowering (a property read can run an accessor) — and across the
+        // pushes of the arguments before it, each of which can grow the
+        // array. The receiver-is-a-local, single-argument shape (`a.push(x)`)
+        // has an empty window and keeps the IR it always had.
+        let recv_collects = crate::rooting::operand_may_collect(ctx, recv);
+        let mut push_group = crate::rooting::open_rooted_group(args.len());
+        let mut push_roots: Vec<usize> = Vec::with_capacity(args.len());
         if u31_value.is_none() {
-            for a in args {
-                lowered.push(lower_expr(ctx, a)?);
+            for (i, a) in args.iter().enumerate() {
+                let collects = recv_collects
+                    || i > 0
+                    || crate::rooting::any_operand_may_collect(ctx, args[i + 1..].iter());
+                push_roots.push(push_group.lower(ctx, a, collects)?);
             }
         }
         let arr_box = lower_expr(ctx, recv)?;
@@ -414,16 +405,29 @@
             // Spec §23.1.3.21: Set(O,"length",…,true) fires unconditionally — guard
             // even when args is empty so frozen / non-writable-length throw correctly.
             blk.call_void("js_array_push_guard", &[(I64, &arr_handle)]);
-            for v in &lowered {
+            for &root in &push_roots {
+                // Re-read per element: the previous push may have grown the
+                // array, so the register an argument was lowered into can be
+                // stale.
+                let v = push_group.reread(ctx, root)?;
                 let blk = ctx.block();
                 arr_handle =
-                    blk.call(I64, "js_array_push_f64", &[(I64, &arr_handle), (DOUBLE, v)]);
+                    blk.call(I64, "js_array_push_f64", &[(I64, &arr_handle), (DOUBLE, &v)]);
             }
             None
         };
         let blk = ctx.block();
         let new_handle = arr_handle;
         let new_box = nanbox_pointer_inline(blk, &new_handle);
+        push_group.release(ctx);
+        // #11789 sweep: the length is read BEFORE the write-back, which can
+        // re-lower the receiver's object expression (a property read) with
+        // `new_handle` held in a register.
+        let len_i32 = if let Some(length_slot) = fused_length_slot {
+            ctx.block().load(I32, &length_slot)
+        } else {
+            crate::expr::array_length::emit_array_length_i32(ctx, &new_handle)
+        };
         // Compare the (possibly-realloc'd) pointer against the original
         // and only run the writeback when it actually differs. Setup
         // wb / merge basic blocks so the write-back path is cold.
@@ -456,7 +460,16 @@
                 Expr::PropertyGet {
                     object: obj_expr,
                     property, .. } => {
+                    // The pushed array is held across the object expression.
+                    let mut wb_group = crate::rooting::open_rooted_group(1);
+                    let wb_root = wb_group.adopt_emitted(
+                        ctx,
+                        crate::rooting::Repr::Boxed,
+                        &new_box,
+                        crate::rooting::operand_may_collect(ctx, obj_expr),
+                    );
                     let obj_box = lower_expr(ctx, obj_expr)?;
+                    let new_box = wb_group.reread_emitted(ctx, wb_root);
                     let key_idx = ctx.strings.intern(property);
                     let key_handle_global =
                         format!("@{}", ctx.strings.entry(key_idx).handle_global);
@@ -470,6 +483,7 @@
                         "js_object_set_field_by_name",
                         &[(I64, &obj_handle), (I64, &key_raw), (DOUBLE, &new_box)],
                     );
+                    wb_group.release(ctx);
                 }
                 _ => unreachable!(),
             }
@@ -477,11 +491,6 @@
 
             ctx.current_block = merge_idx;
         }
-        let len_i32 = if let Some(length_slot) = fused_length_slot {
-            ctx.block().load(I32, &length_slot)
-        } else {
-            crate::expr::array_length::emit_array_length_i32(ctx, &new_handle)
-        };
         return Ok(ctx.block().uitofp(I32, &len_i32, DOUBLE));
     }
 
@@ -503,10 +512,7 @@
     // methods (app.get, app.listen, conn.query, etc.), mysql2, ws, pg,
     // mongodb, better-sqlite3, etc.
     if let Some(sig) = native_module_lookup(module, true, method, class_name) {
-        let recv_val = lower_expr(ctx, recv)?;
-        let blk = ctx.block();
-        let handle = unbox_to_i64(blk, &recv_val);
-        return lower_native_module_dispatch(ctx, sig, Some(&handle), args);
+        return lower_native_module_dispatch(ctx, sig, Some(recv), args);
     }
 
     // Unknown native method: route to the runtime method dispatcher on the
@@ -522,11 +528,9 @@
     // its method, etc. (Same shape as the `new Console(...)` instance path
     // above.) Falls back gracefully for genuinely-unimplemented modules too:
     // the dispatcher returns `undefined` rather than a misleading numeric 0.
-    let recv_box = lower_expr(ctx, recv)?;
-    let mut lowered_args: Vec<String> = Vec::with_capacity(args.len());
-    for arg in args {
-        lowered_args.push(lower_expr(ctx, arg)?);
-    }
+    // #11789 sweep: the receiver is held across every argument, each of which
+    // is held across the ones after it.
+    let (recv_box, lowered_args, call_group) = super::lower_operands_rooted(ctx, recv, args)?;
     let (args_ptr, args_len) = if lowered_args.is_empty() {
         ("null".to_string(), "0".to_string())
     } else {
@@ -549,7 +553,7 @@
     // `e.indexOf`), but a genuinely nullish receiver returns the 0.0 sentinel
     // instead of hard-throwing (so app-page-turbo's top-level nullish-receiver
     // `.indexOf` doesn't abort the whole external module load → 500).
-    Ok(ctx.block().call(
+    let result = ctx.block().call(
         DOUBLE,
         "js_native_call_method_nullsafe",
         &[
@@ -559,5 +563,7 @@
             (PTR, &args_ptr),
             (I64, &args_len),
         ],
-    ))
+    );
+    call_group.release(ctx);
+    Ok(result)
 }

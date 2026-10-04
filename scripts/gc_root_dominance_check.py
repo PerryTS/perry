@@ -90,6 +90,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -466,10 +467,6 @@ NONCOLLECTING = {
     # `perry-codegen/src/gc_call_effects.rs` (`GcCallEffect::CannotCollect`).
     "js_write_barrier_root_nanbox", "perry_transition_cache_base",
     "js_transition_ic_note_hit",
-    # object/inherited_read_cache.rs `js_inherited_read_cache_hit_f64`: a
-    # per-thread table probe plus one load through the holder; no allocation,
-    # no user code, no chain walk (declines answer TAG_HOLE).
-    "js_inherited_read_cache_hit_f64",
     # S2 GC-leaf IC hits (`expr/ic_fast_split.rs`); audit in gc_call_effects.rs.
     "js_object_get_field_ic_fast",
     "js_class_field_get_ic_fast",
@@ -650,6 +647,9 @@ ALLOC_RE = re.compile(
     # fresh objects/collections handed back as a whole
     r"object_keys\w*|object_values\w*|object_entries\w*|object_from_entries|"
     r"object_assign\w*|object_group_by|object_coerce|"
+    # A rooted finalizer returns the refreshed heap receiver. Its result is
+    # a new SSA snapshot and must not cross later collectors without a root.
+    r"object_finalize_constfn_static|"
     r"object_get_own_property_descriptor\w*|object_get_own_property_names|"
     r"object_get_own_property_symbols|"
     r"map_from_iterable|set_from_iterable|map_group_by|"
@@ -822,19 +822,108 @@ def macro_generated_symbols(roots=SYMBOL_ROOTS):
     return syms - written
 
 
-def nm_exported_symbols(archives):
-    """`js_*` symbols `nm -gj` reports as defined in `archives`.
+def _nm_candidates():
+    """Symbol readers to try, most bitcode-capable first (#11496).
+
+    Plain `nm` is the LAST resort, not the first: the runtime archives are
+    thin-LTO, i.e. LLVM bitcode, which GNU nm reads as zero symbols without the
+    LLVM plugin and Apple `nm` reads as zero on rustc's LTO output. `llvm-nm`
+    reads bitcode natively; rustup's `llvm-tools` copy is tried before any
+    other because it is the one whose bitcode reader matches rustc's LLVM.
+    `PERRY_NM` pins a reader outright.
+    """
+    pinned = os.environ.get("PERRY_NM")
+    if pinned:
+        return [pinned]
+    cands = []
+    try:
+        sysroot = subprocess.run(["rustc", "--print", "sysroot"],
+                                 capture_output=True, text=True).stdout.strip()
+        host = subprocess.run(["rustc", "-vV"], capture_output=True,
+                              text=True).stdout
+        host = next((l.split(":", 1)[1].strip() for l in host.splitlines()
+                     if l.startswith("host:")), "")
+        if sysroot and host:
+            cands.append(os.path.join(sysroot, "lib", "rustlib", host, "bin",
+                                      "llvm-nm"))
+    except OSError:
+        pass
+    prefix = os.environ.get("LLVM_SYS_221_PREFIX")
+    if prefix:
+        cands.append(os.path.join(prefix, "bin", "llvm-nm"))
+    cands += ["llvm-nm-22", "/opt/homebrew/opt/llvm/bin/llvm-nm",
+              "/usr/local/opt/llvm/bin/llvm-nm", "llvm-nm", "nm"]
+    seen, out = set(), []
+    for c in cands:
+        path = c if os.sep in c else shutil.which(c)
+        if path and os.path.isfile(path) and path not in seen:
+            seen.add(path)
+            out.append(path)
+    return out
+
+
+def parse_nm_posix(text):
+    """Defined, external `js_*` names in `nm -g -P` output.
+
+    POSIX format (`name type value size`) is the one layout GNU nm, llvm-nm
+    and Apple nm all emit, and its type column separates definitions from
+    `U` references without relying on `--defined-only` spellings that differ
+    between them. Mach-O prefixes C symbols with `_`; ELF and COFF do not, so
+    the bare `js_` form is what a Linux archive reports -- matching only
+    `_js_` is what made every Linux run read zero symbols (#11496).
+    """
+    syms = set()
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 2 or parts[1] in ("U", "u", "w", "v"):
+            continue
+        name = parts[0]
+        if name.startswith("_js_"):
+            name = name[1:]
+        if name.startswith("js_"):
+            syms.add(name)
+    return syms
+
+
+def nm_exported_symbols(archives, readers=None):
+    """`js_*` symbols defined in `archives`, and the reader that found them.
 
     Ground truth, and a LOWER bound only: an archive built for one target omits
     every symbol the other targets' cfgs define, so the invariant to assert is
     `nm <= scanner`, never equality.
+
+    Readers are tried in `_nm_candidates` order. A reader must successfully
+    report definitions from every requested archive: a large readable runtime
+    must not hide an unreadable stdlib behind the combined non-vacuity floor.
+    Incomplete readers fall through; the caller reports all attempts if none
+    can read the complete archive set.
     """
-    syms = set()
-    for archive in archives:
-        out = subprocess.run(["nm", "-gj", archive],
-                             capture_output=True, text=True).stdout
-        syms.update(tok[1:] for tok in out.split() if tok.startswith("_js_"))
-    return syms
+    archives = tuple(archives)
+    tried = []
+    for reader in (readers if readers is not None else _nm_candidates()):
+        syms = set()
+        notes = []
+        complete = bool(archives)
+        for archive in archives:
+            try:
+                proc = subprocess.run([reader, "-g", "-P", archive],
+                                      capture_output=True, text=True)
+            except OSError as e:
+                complete = False
+                notes.append(f"{archive}: {e}")
+                continue
+            definitions = parse_nm_posix(proc.stdout)
+            syms |= definitions
+            if proc.returncode != 0 or not definitions:
+                complete = False
+                detail = (proc.stderr.strip().splitlines()[0]
+                          if proc.stderr.strip() else
+                          f"exit {proc.returncode}, {len(definitions)} js_* definitions")
+                notes.append(f"{archive}: {detail}")
+        tried.append((reader, len(syms), notes))
+        if complete:
+            return syms, reader, tried
+    return set(), None, tried
 
 
 def alloc_re_alternatives():
@@ -986,14 +1075,22 @@ def verify_symbols_against_archives(archives, roots=SYMBOL_ROOTS):
     if missing:
         print("error: no such archive: " + ", ".join(missing), file=sys.stderr)
         return 2
-    nm = nm_exported_symbols(archives)
+    nm, reader, tried = nm_exported_symbols(archives)
     if len(nm) < 500:
         # Same non-vacuity floor the other audits carry: an empty or
         # unreadable archive would otherwise report a serene clean.
         print(f"error: nm reported only {len(nm)} `js_*` symbols across "
               f"{len(archives)} archive(s). That is not a runtime build, so "
               "this check would pass having compared nothing.", file=sys.stderr)
+        for r, n, notes in tried:
+            print(f"  {r}: {n} js_* symbol(s)"
+                  + (f" ({'; '.join(notes[:2])})" if notes else ""),
+                  file=sys.stderr)
+        if not tried:
+            print("  no symbol reader found: install llvm-nm (rustup component "
+                  "add llvm-tools, or LLVM 22) or set PERRY_NM", file=sys.stderr)
         return 2
+    print(f"=== verify-symbols: read with {reader}")
     scanner = runtime_symbols(roots)
     unseen = sorted(nm - scanner)
     macro = macro_generated_symbols(roots)
@@ -1682,7 +1779,7 @@ POLL_CAPABLE_RUNTIME = {
     #
     # Measured when added: the ONLY window this reclassifies over the curated
     # corpus is that one, which the same PR fixes in
-    # `lower_call/new.rs::construction_runs_user_code`.
+    # `lower_call/new/instance.rs::construction_runs_user_code`.
     "js_private_brand_add",
 }
 
@@ -3338,9 +3435,226 @@ def _is_heap_source(ins, **kw):
     return hazardous
 
 
+# ## Flag correlation: a refresh guarded by the same flag as the use
+#
+# A loop region keeps an unrooted DERIVED address (an array's element base) in
+# an `i64` alloca and re-derives it from the root at the loop poll -- but only
+# while the region is valid:
+#
+#     gcpoll:   call @js_gc_loop_safepoint()
+#               %v = load i1, ptr %valid
+#               br i1 %v, label %refresh, label %done   ; refresh stores %base
+#     body:     %v2 = load i1, ptr %valid
+#               br i1 %v2, label %fast, label %slow     ; only %fast loads %base
+#
+# The store->collect->load window sees the poll between the preheader store
+# and the fast load and reports it: it cannot tell that every path that skips
+# the refresh has `%valid` false, and that every path to the load has `%valid`
+# true. The two conditions are the same memory cell, read twice.
+#
+# `flag_path_feasible` asks the window's question again, path by path, while
+# tracking the value of every `i1` alloca that only this function can write
+# (its address reaches nothing but the pointer operand of a direct `load i1` /
+# `store i1`, so no call and no other pointer can change it). A conditional
+# branch on a register loaded from such a cell follows only the edge consistent
+# with the cell's value on that path; `and`/`or`/`xor` of such values (and of
+# constants) are evaluated when their result is determined. Everything else --
+# a `phi`, a comparison, an undetermined `and` -- follows both edges, and a
+# register forgets its value
+# whenever its defining instruction runs again, so the search only ever drops
+# a path that CANNOT execute. It answers:
+#
+#   True   some flag-consistent path runs store -> collecting call -> load with
+#          no other store of the slot between: the window's report stands;
+#   False  no such path exists: the report is discharged, and TALLIED, never
+#          silent (a zero next to "discharged: 40" is a different corpus from a
+#          zero next to "discharged: 0");
+#   None   the search exceeded its budget: treated as True (fail closed).
+#
+# It never discharges anything the plain window would not have reported, and
+# it needs the refreshing store to be ON every collecting path to the load: a
+# refresh that is skipped, guarded by a different cell, or guarded by a cell
+# whose address escapes leaves the report standing. The self-test plants each.
+FLAG_SEARCH_BUDGET = 400_000
+_FLAG_LOAD_RE = re.compile(
+    r"^\s*%([\w.$]+)\s*=\s*load\s+i1,\s*ptr\s+%([\w.$]+)\s*(?:,.*)?$")
+_FLAG_STORE_RE = re.compile(
+    r"^\s*store\s+i1\s+([^,]+),\s*ptr\s+%([\w.$]+)\s*(?:,.*)?$")
+_I1_LOGIC_RE = re.compile(
+    r"^\s*%[\w.$]+\s*=\s*(and|or|xor)\s+i1\s+([^,\s]+),\s*([^,\s]+)\s*$")
+
+
+def _eval_i1(op, a, b, env):
+    """`and`/`or`/`xor` on i1 operands that are constants or registers with a
+    known value on this path; None when the result is not determined."""
+    def val(x):
+        if x in ("true", "1"):
+            return 1
+        if x in ("false", "0"):
+            return 0
+        if x.startswith("%"):
+            return env.get(x[1:])
+        return None
+    va, vb = val(a), val(b)
+    if op == "and":
+        if va == 0 or vb == 0:
+            return 0
+        return 1 if (va, vb) == (1, 1) else None
+    if op == "or":
+        if va == 1 or vb == 1:
+            return 1
+        return 0 if (va, vb) == (0, 0) else None
+    if va is None or vb is None:
+        return None
+    return va ^ vb
+
+
+_BR_COND_REG_RE = re.compile(
+    rf"^\s*br i1 %([\w.$]+), label %({LLVM_LABEL_TOKEN}), "
+    rf"label %({LLVM_LABEL_TOKEN})")
+
+
+def local_flag_cells(f):
+    """`i1` allocas whose address is used ONLY as the pointer of a direct
+    `load i1` / `store i1` in `f`: cells no call and no other pointer can
+    write."""
+    cells = set()
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            am = ALLOCA_RE.match(ins.text)
+            if am and am.group(2).split(",")[0].strip() == "i1":
+                cells.add(am.group(1))
+    if not cells:
+        return cells
+    for b in f.blocks:
+        for ins in f.insns[b]:
+            if ALLOCA_RE.match(ins.text):
+                continue
+            regs = set(operand_regs(ins.text)) & cells
+            if not regs:
+                continue
+            ok = set()
+            lm = _FLAG_LOAD_RE.match(ins.text)
+            if lm:
+                ok.add(lm.group(2))
+            sm = _FLAG_STORE_RE.match(ins.text)
+            if sm and sm.group(1).strip().lstrip("%") not in cells:
+                ok.add(sm.group(2))
+            cells -= regs - ok
+    return cells
+
+
+def flag_path_feasible(f, st, ld, reg, cells, is_mover,
+                       budget=None):
+    """Is there a flag-consistent path `st` -> collecting call -> `ld` with no
+    other store of `reg` between? Returns `(answer, level)`: answer True /
+    False / None (budget exceeded), level 2 if such a path's collection can be
+    a moving one, else 1."""
+    store_re = re.compile(
+        r"^\s*store\s+[^,]+,\s*ptr\s+%" + re.escape(reg) + r"\s*(?:,.*)?$")
+    if budget is None:
+        budget = FLAG_SEARCH_BUDGET
+    best = 0
+    seen = set()
+    work = [(st.block, st.idx + 1, 0, (), ())]
+    steps = 0
+    while work:
+        item = work.pop()
+        if item in seen:
+            continue
+        seen.add(item)
+        steps += 1
+        if steps > budget:
+            return None, 2
+        blk, start, stale, slots_t, env_t = item
+        states = [(stale, dict(slots_t), dict(env_t))]
+        insns = f.insns[blk]
+        ended = False
+        for ins in insns[start:]:
+            if ins is ld:
+                best = max([best] + [sl for (sl, _s, _e) in states])
+                if best == 2:
+                    return True, 2
+                # A clean arrival does NOT end the path: the load does not
+                # change the slot, and the next iteration's arrival after the
+                # back-edge poll is the #11590 loop-carried window.
+                states = [x for x in states if x[0] == 0]
+                if not states:
+                    ended = True
+                    break
+                continue
+            if store_re.match(ins.text):
+                # Another store of the slot: its own window is checked
+                # separately, from that store.
+                ended = True
+                break
+            t = ins.text
+            lm = _FLAG_LOAD_RE.match(t)
+            sm = _FLAG_STORE_RE.match(t)
+            collects = is_collecting(ins.callee)
+            bm_ = _I1_LOGIC_RE.match(t)
+            nxt = []
+            for (sl, slots, env) in states:
+                if ins.result is not None:
+                    env.pop(ins.result, None)
+                if lm and lm.group(2) in cells:
+                    cell, dst = lm.group(2), lm.group(1)
+                    v = slots.get(cell)
+                    if v is None:
+                        for vv in (0, 1):
+                            s2 = dict(slots)
+                            s2[cell] = vv
+                            e2 = dict(env)
+                            e2[dst] = vv
+                            nxt.append((sl, s2, e2))
+                        continue
+                    env[dst] = v
+                elif sm and sm.group(2) in cells:
+                    val, cell = sm.group(1).strip(), sm.group(2)
+                    if val in ("true", "1"):
+                        slots[cell] = 1
+                    elif val in ("false", "0"):
+                        slots[cell] = 0
+                    elif val.startswith("%") and val[1:] in env:
+                        slots[cell] = env[val[1:]]
+                    elif val.startswith("%"):
+                        for vv in (0, 1):
+                            s2 = dict(slots)
+                            s2[cell] = vv
+                            e2 = dict(env)
+                            e2[val[1:]] = vv
+                            nxt.append((sl, s2, e2))
+                        continue
+                    else:
+                        slots.pop(cell, None)
+                elif bm_ and ins.result is not None:
+                    v = _eval_i1(bm_.group(1), bm_.group(2), bm_.group(3), env)
+                    if v is not None:
+                        env[ins.result] = v
+                elif collects:
+                    sl = max(sl, 2 if is_mover(ins.callee) else 1)
+                nxt.append((sl, slots, env))
+            states = nxt
+        if ended:
+            continue
+        bm = _BR_COND_REG_RE.match(insns[-1].text) if insns else None
+        succs = f.succs[blk]
+        for (sl, slots, env) in states:
+            targets = succs
+            if bm and bm.group(1) in env:
+                lab = bm.group(2) if env[bm.group(1)] else bm.group(3)
+                if lab in succs:
+                    targets = (lab,)
+            st_t = tuple(sorted(slots.items()))
+            en_t = tuple(sorted(env.items()))
+            for s_ in targets:
+                work.append((s_, 0, sl, st_t, en_t))
+    return (best > 0), best
+
+
 def check_func_unrooted_allocas(module, f, want_moving_only=False,
                                 poll_reaching=frozenset(), source_opts=None,
-                                exempt_counts=None):
+                                exempt_counts=None, discharged=None):
     source_opts = source_opts or {}
     if not f.blocks:
         return []
@@ -3417,6 +3731,11 @@ def check_func_unrooted_allocas(module, f, want_moving_only=False,
                 hits += [c for c in f.insns[m_blk] if is_collecting(c.callee)]
         return hits
 
+    def is_mover(callee):
+        return (callee == MOVING_POLL or callee in poll_reaching
+                or callee in POLL_CAPABLE_RUNTIME)
+
+    flag_cells = None
     out = []
     for reg, alloca_ins in sorted(allocas.items()):
         if reg in bound or reg in escaped:
@@ -3457,6 +3776,23 @@ def check_func_unrooted_allocas(module, f, want_moving_only=False,
                 hits = window_hits(st, ld, reg)
                 if not hits:
                     continue
+                if hazardous:
+                    if flag_cells is None:
+                        flag_cells = local_flag_cells(f)
+                    feasible, level = None, 2
+                    if flag_cells:
+                        feasible, level = flag_path_feasible(
+                            f, st, ld, reg, flag_cells, is_mover)
+                    if feasible is False:
+                        # No flag-consistent path: discharged, and TALLIED
+                        # (see `flag_path_feasible`).
+                        if discharged is not None:
+                            discharged.append((module, f.name, reg))
+                        continue
+                    if feasible and level == 1:
+                        # Only non-moving collections reach the load on a
+                        # flag-consistent path.
+                        hits = [c for c in hits if not is_mover(c.callee)] or hits
                 v = UnrootedAlloca(module, f.name, alloca_ins, st, ld, hits,
                                    poll_reaching)
                 if want_moving_only and not v.moving:
@@ -3530,6 +3866,99 @@ _SELFTEST_LOOP_ROOTED = _SELFTEST_LOOP_CARRIED.replace(
     "  store double %g, ptr %slot\n",
     "  store double %g, ptr %slot\n"
     "  call void @js_shadow_slot_bind(i32 0, ptr %slot)\n")
+
+# The loop region's element base, reduced from `moduleConst` in
+# test_gap_region_array_facts.ts (shadow lowering). `%base` is an unrooted
+# derived address of a module-level array (the global is a registered root the
+# collector rewrites). The poll re-derives it only while `%valid` is set, and
+# only `%valid` arms load it; the slow arm (taken on odd iterations even while
+# the region is valid) clears `%valid` before it calls anything that can
+# collect (a POLL_CAPABLE_RUNTIME property read, so a MOVING collection), and
+# re-enters the fast arm afterwards only if `%valid` is still set. The plain window reports this
+# (store -> poll -> load); flag correlation discharges it. Each `_BAD` variant
+# breaks exactly one link and must be reported.
+_SELFTEST_FLAG_REFRESH = """\
+@perry_global_selftest__arr = global double 0.0
+
+define void @perry_fn_selftest__flag_refresh() {
+entry.0:
+  %base = alloca i64
+  %valid = alloca i1
+  %other = alloca i1
+  store i1 false, ptr %other
+  %g = load double, ptr @perry_global_selftest__arr
+  %gb = bitcast double %g to i64
+  %h = and i64 %gb, 281474976710655
+  %b0 = add i64 %h, 16
+  store i64 %b0, ptr %base
+  %ok = icmp ne i64 %h, 0
+  store i1 %ok, ptr %valid
+  br label %cond.1
+cond.1:
+  %i = phi i32 [ 0, %entry.0 ], [ %n, %done.7 ]
+  %c = icmp slt i32 %i, 80
+  br i1 %c, label %body.2, label %exit.8
+body.2:
+  %v = load i1, ptr %valid
+  %odd = and i32 %i, 1
+  %k = icmp eq i32 %odd, 0
+  %go = and i1 %v, %k
+  br i1 %go, label %fast.3, label %slow.4
+fast.3:
+  %bb = load i64, ptr %base
+  %p = inttoptr i64 %bb to ptr
+  %x = load double, ptr %p
+  br label %poll.5
+slow.4:
+  store i1 false, ptr %valid
+  %r = call double @js_object_get_field_ic_slow(double %g, i64 0)
+  %v3 = load i1, ptr %valid
+  br i1 %v3, label %fast.3, label %poll.5
+poll.5:
+  %n = add i32 %i, 1
+  call void @js_gc_loop_safepoint()
+  %pv = load i1, ptr %valid
+  br i1 %pv, label %refresh.6, label %done.7
+refresh.6:
+  %g2 = load double, ptr @perry_global_selftest__arr
+  %gb2 = bitcast double %g2 to i64
+  %h2 = and i64 %gb2, 281474976710655
+  %b2 = add i64 %h2, 16
+  store i64 %b2, ptr %base
+  br label %done.7
+done.7:
+  br label %cond.1
+exit.8:
+  ret void
+}
+"""
+
+# The refresh is skipped: the poll falls straight through.
+_SELFTEST_FLAG_REFRESH_SKIPPED = _SELFTEST_FLAG_REFRESH.replace(
+    "flag_refresh()", "flag_refresh_skipped()").replace(
+    "  br i1 %pv, label %refresh.6, label %done.7\n",
+    "  br label %done.7\n")
+# The refresh is guarded by a DIFFERENT cell than the use.
+_SELFTEST_FLAG_REFRESH_OTHER_CELL = _SELFTEST_FLAG_REFRESH.replace(
+    "flag_refresh()", "flag_refresh_other_cell()").replace(
+    "  %pv = load i1, ptr %valid\n", "  %pv = load i1, ptr %other\n")
+# The slow arm forgets to clear the cell, so the fast arm runs after its call.
+_SELFTEST_FLAG_REFRESH_NOT_CLEARED = _SELFTEST_FLAG_REFRESH.replace(
+    "flag_refresh()", "flag_refresh_not_cleared()").replace(
+    "  store i1 false, ptr %valid\n", "")
+# The cell's address escapes to a call: the callee may set it, so it is not a
+# cell this function alone writes, and nothing may be inferred from it.
+_SELFTEST_FLAG_REFRESH_ESCAPED = _SELFTEST_FLAG_REFRESH.replace(
+    "flag_refresh()", "flag_refresh_escaped()").replace(
+    "  store i1 false, ptr %valid\n",
+    "  store i1 false, ptr %valid\n"
+    "  call void @perry_fn_user__touch(ptr %valid)\n")
+# The refresh arm and the fall-through are swapped: the base is re-derived only
+# when the region is NOT valid, so the fast arm reads it stale.
+_SELFTEST_FLAG_REFRESH_INVERTED = _SELFTEST_FLAG_REFRESH.replace(
+    "flag_refresh()", "flag_refresh_inverted()").replace(
+    "  br i1 %pv, label %refresh.6, label %done.7\n",
+    "  br i1 %pv, label %done.7, label %refresh.6\n")
 
 _SELFTEST_ROOTED = """\
 define double @perry_fn_selftest__rooted(double %a) {
@@ -5273,8 +5702,9 @@ __SAFEPOINT__
 """.replace("__SAFEPOINT__", _sp())
 
 
-def _scan_unrooted(paths, moving_only=False, **source_opts):
-    """(violations, n_gc_capable_allocas) over `paths`."""
+def _scan_unrooted(paths, moving_only=False, discharged=None, **source_opts):
+    """(violations, n_gc_capable_allocas) over `paths`. Sites discharged by
+    flag correlation are appended to `discharged` when given."""
     parsed = [(os.path.basename(p), parse_file(p)) for p in sorted(paths)]
     poll_reaching, _known = compute_poll_reaching(
         [f for _m, fs in parsed for f in fs])
@@ -5292,7 +5722,8 @@ def _scan_unrooted(paths, moving_only=False, **source_opts):
         for mod, fs in parsed
         for f in fs
         for v in check_func_unrooted_allocas(mod, f, moving_only, poll_reaching,
-                                             source_opts)
+                                             source_opts,
+                                             discharged=discharged)
     ]
     return found, n
 
@@ -5377,6 +5808,37 @@ def self_test():
     that has not been shown to work.
     """
     ok = True
+    # A finalizer hands back its current rooted receiver, a heap-valued SSA
+    # source even though it did not allocate that object. Prove both the late
+    # store detector and stale-register detector still see that return value.
+    finalizer = """define i64 @perry_fn_selftest__constfn(i64 %receiver) {
+entry.0:
+  %slot = alloca i64
+  call void @js_shadow_frame_enter(i32 1)
+  %obj = call i64 @js_object_finalize_constfn_static(i64 %receiver, i32 1, ptr null, i32 1, i32 1, i32 1, i32 0, i64 3, ptr null, i32 1)
+  %poll = call double @js_gc_loop_safepoint(double 0.0)
+  store i64 %obj, ptr %slot
+  call void @js_shadow_slot_bind(i32 0, ptr %slot)
+  ret i64 %obj
+}
+"""
+    rooted_finalizer = finalizer.replace(
+        "  %poll = call double @js_gc_loop_safepoint(double 0.0)\n", ""
+    ).replace(
+        "  ret i64 %obj", "  %poll = call double @js_gc_loop_safepoint(double 0.0)\n"
+        "  %fresh = load i64, ptr %slot\n  ret i64 %fresh"
+    )
+    with tempfile.TemporaryDirectory() as td:
+        for name, fixture, expected in [("late", finalizer, 1), ("rooted", rooted_finalizer, 0)]:
+            path = os.path.join(td, name + ".ll")
+            with open(path, "w") as fh:
+                fh.write(fixture)
+            hits, _ = _scan([path], False, "alloc")
+            stale = check_func_stale(path, parse_file(path)[0], moving_only=True)
+            if len(hits) != expected or bool(stale) != bool(expected):
+                print(f"self-test FAIL: ConstFn {name} return: late roots={len(hits)}, "
+                      f"stale={len(stale)}, expected {expected}", file=sys.stderr)
+                ok = False
     with tempfile.TemporaryDirectory() as td:
         planted = os.path.join(td, "planted.ll")
         clean = os.path.join(td, "clean.ll")
@@ -5854,6 +6316,54 @@ def self_test():
         # And it must not fire on the bind-anchored fixtures, nor the reverse:
         # the two populations are disjoint by construction and a checker that
         # double-counts would make both numbers meaningless.
+        # Flag correlation (the loop region's guarded base refresh): the
+        # sound shape is discharged AND tallied; each one-link break is
+        # reported under the gated `--moving-only` filter.
+        fl_cases = (
+            ("flag_refresh", _SELFTEST_FLAG_REFRESH, 0),
+            ("flag_refresh_skipped", _SELFTEST_FLAG_REFRESH_SKIPPED, 1),
+            ("flag_refresh_other_cell", _SELFTEST_FLAG_REFRESH_OTHER_CELL, 1),
+            ("flag_refresh_not_cleared", _SELFTEST_FLAG_REFRESH_NOT_CLEARED, 1),
+            ("flag_refresh_escaped", _SELFTEST_FLAG_REFRESH_ESCAPED, 1),
+            ("flag_refresh_inverted", _SELFTEST_FLAG_REFRESH_INVERTED, 1),
+        )
+        for name, text, want in fl_cases:
+            fp = os.path.join(td, name + ".ll")
+            with open(fp, "w") as fh:
+                fh.write(text)
+            dis = []
+            found, _ = _scan_unrooted([fp], moving_only=True, discharged=dis)
+            if len(found) != want:
+                print(f"self-test FAIL: {name} -> {len(found)} --moving-only "
+                      f"violations, expected {want}. "
+                      + ("The refresh is on every flag-consistent path to the "
+                         "load; the flag correlation must discharge it."
+                         if want == 0 else
+                         "One link of the guarded refresh is broken; the "
+                         "stale base IS reachable and must be reported."),
+                      file=sys.stderr)
+                ok = False
+            if want == 0 and len(dis) != 1:
+                print(f"self-test FAIL: {name} -> {len(dis)} discharged sites, "
+                      "expected 1: a discharge must be tallied, never silent.",
+                      file=sys.stderr)
+                ok = False
+            if want == 0:
+                # The same shape with the flag search unable to finish fails
+                # closed (budget exceeded = reported).
+                saved = globals()["FLAG_SEARCH_BUDGET"]
+                try:
+                    globals()["FLAG_SEARCH_BUDGET"] = 1
+                    found, _ = _scan_unrooted([fp], moving_only=True)
+                finally:
+                    globals()["FLAG_SEARCH_BUDGET"] = saved
+                if len(found) != 1:
+                    print(f"self-test FAIL: {name} with a 1-step flag-search "
+                          f"budget -> {len(found)} violations, expected 1: an "
+                          "unfinished search must fail closed.",
+                          file=sys.stderr)
+                    ok = False
+
         found, _ = _scan_unrooted([planted])
         if found:
             print(f"self-test FAIL: the bind-anchored planted fixture has a "
@@ -6085,8 +6595,63 @@ def self_test():
     if not poll_reach_self_test():
         ok = False
 
+    if not nm_parse_self_test():
+        ok = False
+
     print("self-test OK" if ok else "self-test FAILED")
     return 0 if ok else 1
+
+
+# #11496: `--verify-symbols` read zero symbols on every Linux host because it
+# matched only Mach-O's `_js_` spelling. Both object-format spellings, and a
+# `U` reference that must NOT count as a definition, are planted here.
+_NM_POSIX_FIXTURE = """\
+libperry_runtime.a[a.o]:
+js_elf_defined T 0000000000000010 0000000000000008
+js_elf_referenced U
+_js_macho_defined T 0000000000000020 0000000000000004
+_js_macho_referenced U
+js_elf_data D 0000000000000030 0000000000000008
+not_js_symbol T 0000000000000040 0000000000000004
+"""
+
+
+def nm_parse_self_test():
+    got = parse_nm_posix(_NM_POSIX_FIXTURE)
+    want = {"js_elf_defined", "js_macho_defined", "js_elf_data"}
+    if got != want:
+        print(f"self-test FAIL: parse_nm_posix read {sorted(got)}, expected "
+              f"{sorted(want)} (ELF names carry no `_` prefix; `U` is a "
+              "reference, not a definition)", file=sys.stderr)
+        return False
+    # More than the combined floor in one archive must not hide a second
+    # unreadable/empty archive, even when nm emits partial stdout before failing.
+    from unittest.mock import patch
+    from types import SimpleNamespace
+    runtime = "".join(f"js_runtime_{i} T 0 1\n" for i in range(550))
+    for result in (SimpleNamespace(returncode=1, stdout="js_partial T 0 1\n",
+                                   stderr="bad bitcode"),
+                   SimpleNamespace(returncode=0, stdout="", stderr=""),
+                   OSError("reader unavailable")):
+        with patch.object(subprocess, "run", side_effect=[
+                SimpleNamespace(returncode=0, stdout=runtime, stderr=""), result]):
+            symbols, reader, _ = nm_exported_symbols(["runtime.a", "stdlib.a"],
+                                                    readers=["partial-nm"])
+        if symbols or reader is not None:
+            print("self-test FAIL: partial archive read was accepted", file=sys.stderr)
+            return False
+    # A complete later reader must still work, and include BOTH archives.
+    with patch.object(subprocess, "run", side_effect=[
+            SimpleNamespace(returncode=0, stdout=runtime, stderr=""),
+            SimpleNamespace(returncode=0, stdout="", stderr=""),
+            SimpleNamespace(returncode=0, stdout=runtime, stderr=""),
+            SimpleNamespace(returncode=0, stdout="js_stdlib T 0 1\n", stderr="")]):
+        symbols, reader, _ = nm_exported_symbols(["runtime.a", "stdlib.a"],
+                                                readers=["partial-nm", "complete-nm"])
+    if reader != "complete-nm" or len(symbols) != 551 or "js_stdlib" not in symbols:
+        print("self-test FAIL: complete fallback reader lost an archive", file=sys.stderr)
+        return False
+    return True
 
 
 # The `--audit-poll-reach` half of `--self-test`. Planted, not merely
@@ -6275,7 +6840,7 @@ def main():
                          "would be invisible to every audit here. Takes no "
                          "corpus and needs no build.")
     ap.add_argument("--verify-symbols", nargs="+", metavar="ARCHIVE",
-                    help="cross-check `runtime_symbols()` against `nm -gj` on "
+                    help="cross-check `runtime_symbols()` against `llvm-nm`/`nm` on "
                          "one or more built archives (libperry_runtime.a, "
                          "libperry_stdlib.a). The scanner is a REGEX and the "
                          "tree keeps growing macro families that define "
@@ -6569,6 +7134,7 @@ def main():
         n_allocas = 0
         source_opts = {"assume_boxes_in_gc_heap": ns.assume_boxes_in_gc_heap}
         exempt_counts = defaultdict(int)
+        discharged = []
         for mod, fs in parsed:
             for f in fs:
                 for b in f.blocks:
@@ -6580,7 +7146,8 @@ def main():
                 for v in check_func_unrooted_allocas(mod, f, moving_only,
                                                      poll_reaching,
                                                      source_opts,
-                                                     exempt_counts):
+                                                     exempt_counts,
+                                                     discharged):
                     total += 1
                     per_fn[v.func] += 1
                     if v.moving:
@@ -6616,6 +7183,15 @@ def main():
                 print(f"  {n:6d}  {k}{knob}")
         else:
             print("=== suppressed by an IMMOVABLE_SOURCES exemption: none")
+        # The same rule for the flag correlation: a discharge is a decision
+        # the window did not make, so it is counted and, under -v, named.
+        print(f"=== discharged by flag correlation (no flag-consistent path "
+              f"store -> collection -> load): {len(discharged)} "
+              f"(store, load) pair(s) in "
+              f"{len({(m_, fn_) for m_, fn_, _r in discharged})} function(s)")
+        if verbose:
+            for m_, fn_, r_ in sorted(set(discharged)):
+                print(f"  {m_}::{fn_}  %{r_}")
         # Liveness floor: the subject here is the alloca population, not the
         # bind population, so `--min-binds` would certify the wrong thing.
         if n_allocas < ns.min_binds:

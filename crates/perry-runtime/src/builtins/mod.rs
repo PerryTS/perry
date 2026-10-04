@@ -151,8 +151,9 @@ pub use fn_metadata::{
     bundle_function_name_registry_entries, bundle_function_name_registry_len,
     function_is_non_strict_ordinary_for_ptr, function_name_for_ptr, function_name_registry_entries,
     function_name_registry_len, function_source_for_func_ptr, function_source_for_ptr,
-    js_register_function_name, js_register_function_name_static, js_register_function_source,
-    js_register_function_source_static, register_function_name_if_absent,
+    js_register_function_name, js_register_function_name_static, js_register_function_names_static,
+    js_register_function_source, js_register_function_source_static,
+    js_register_function_sources_static, register_function_name_if_absent,
 };
 
 pub use formatting::{

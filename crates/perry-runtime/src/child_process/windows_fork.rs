@@ -61,11 +61,12 @@ pub(super) struct WindowsForkChild {
 pub(super) fn spawn(
     command: &Command,
     stdio: &[CpStdio],
-    ipc_fd: usize,
+    ipc_fd: Option<usize>,
+    argv0: Option<&str>,
     clear_environment: bool,
     detached: bool,
-) -> io::Result<(WindowsForkChild, IpcStream)> {
-    let count = stdio.len().max(ipc_fd + 1).max(3);
+) -> io::Result<(WindowsForkChild, Option<IpcStream>)> {
+    let count = stdio.len().max(ipc_fd.map_or(3, |fd| fd + 1)).max(3);
     if count > u8::MAX as usize {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -80,7 +81,7 @@ pub(super) fn spawn(
     let mut parent_stderr = None;
 
     for (fd, slot) in child_handles.iter_mut().enumerate().take(3) {
-        if fd == ipc_fd {
+        if Some(fd) == ipc_fd {
             continue;
         }
         let kind = stdio.get(fd).copied().unwrap_or(CpStdio::Pipe);
@@ -94,8 +95,13 @@ pub(super) fn spawn(
         }
     }
 
-    let (parent_ipc, child_ipc) = create_ipc_pair()?;
-    child_handles[ipc_fd] = Some(child_ipc);
+    let parent_ipc = if let Some(fd) = ipc_fd {
+        let (parent, child) = create_ipc_pair()?;
+        child_handles[fd] = Some(child);
+        Some(parent)
+    } else {
+        None
+    };
 
     // Descriptors above stderr are otherwise ignored today. Keep their CRT
     // slots invalid, matching libuv's UV_IGNORE representation.
@@ -121,7 +127,12 @@ pub(super) fn spawn(
     startup.StartupInfo.hStdError = raw_handle(&child_handles[2]);
     startup.lpAttributeList = attributes.as_mut_ptr();
 
-    let mut command_line = command_line(command)?;
+    let mut command_line = command_line_with_argv0(command, argv0)?;
+    let application = argv0
+        .map(|_| resolve_application(command))
+        .transpose()?
+        .map(|path| wide_nul(path.as_os_str()))
+        .transpose()?;
     let environment = environment_block(command, clear_environment)?;
     let cwd = command
         .get_current_dir()
@@ -137,7 +148,9 @@ pub(super) fn spawn(
     let mut info: PROCESS_INFORMATION = unsafe { zeroed() };
     let created = unsafe {
         CreateProcessW(
-            std::ptr::null(),
+            application
+                .as_ref()
+                .map_or(std::ptr::null(), |path| path.as_ptr()),
             command_line.as_mut_ptr(),
             std::ptr::null(),
             std::ptr::null(),
@@ -450,14 +463,115 @@ impl Drop for AttributeList {
 }
 
 pub(crate) fn command_line(command: &Command) -> io::Result<Vec<u16>> {
+    command_line_with_argv0(command, None)
+}
+
+fn command_line_with_argv0(command: &Command, argv0: Option<&str>) -> io::Result<Vec<u16>> {
     let mut out = Vec::new();
-    append_quoted(&mut out, command.get_program())?;
-    for arg in command.get_args() {
+    append_quoted(
+        &mut out,
+        argv0.map(OsStr::new).unwrap_or(command.get_program()),
+    )?;
+    let args: Vec<_> = command.get_args().collect();
+    let shell_line = std::path::Path::new(command.get_program())
+        .file_name()
+        .is_some_and(|name| {
+            name.to_string_lossy().eq_ignore_ascii_case("cmd.exe")
+                || name.to_string_lossy().eq_ignore_ascii_case("cmd")
+        })
+        && args.len() == 4
+        && args[..3] == ["/d", "/s", "/c"];
+    for (index, arg) in args.into_iter().enumerate() {
         out.push(b' ' as u16);
-        append_quoted(&mut out, arg)?;
+        if shell_line && index == 3 {
+            // cp_shell_command already supplies cmd.exe's outer quotes.
+            let line = wide_nul(arg)?;
+            out.extend_from_slice(&line[..line.len() - 1]);
+        } else {
+            append_quoted(&mut out, arg)?;
+        }
     }
     out.push(0);
     Ok(out)
+}
+
+fn resolve_application(command: &Command) -> io::Result<std::path::PathBuf> {
+    let program = std::path::Path::new(command.get_program());
+    let parent_cwd = std::env::current_dir()?;
+    let cwd = command
+        .get_current_dir()
+        .map(|dir| parent_cwd.join(dir))
+        .unwrap_or(parent_cwd);
+    let path_qualified = program.is_absolute() || program.components().count() > 1;
+    let path = command
+        .get_envs()
+        .find(|(k, _)| k.to_string_lossy().eq_ignore_ascii_case("PATH"))
+        .and_then(|(_, v)| v.map(OsStr::to_os_string))
+        .or_else(|| std::env::var_os("PATH"));
+    // libuv tries the literal name only when it has a nonempty extension,
+    // then appends (rather than replaces) .com and .exe. It ignores PATHEXT.
+    let mut names = Vec::new();
+    let filename: Vec<u16> = program
+        .file_name()
+        .unwrap_or_else(|| OsStr::new(""))
+        .encode_wide()
+        .collect();
+    if filename
+        .iter()
+        .position(|&c| c == b'.' as u16)
+        .is_some_and(|dot| dot + 1 < filename.len())
+    {
+        names.push(program.to_path_buf());
+    }
+    for extension in [".com", ".exe"] {
+        let mut name = program.as_os_str().to_os_string();
+        name.push(if filename.last() == Some(&(b'.' as u16)) {
+            &extension[1..]
+        } else {
+            extension
+        });
+        names.push(std::path::PathBuf::from(name));
+    }
+    for dir in std::iter::once(cwd.clone()).chain(
+        path.as_deref()
+            .filter(|_| !path_qualified)
+            .map(std::env::split_paths)
+            .into_iter()
+            .flatten(),
+    ) {
+        for name in &names {
+            let candidate = cwd.join(&dir).join(name);
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+    }
+    Err(io::Error::from_raw_os_error(2))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_argv0_does_not_replace_executable_or_arguments() {
+        let mut command = Command::new("node");
+        command.args(["-e", "process.stdout.write(process.argv0)"]);
+        let line = command_line_with_argv0(&command, Some("custom name €")).unwrap();
+        assert_eq!(
+            String::from_utf16(&line[..line.len() - 1]).unwrap(),
+            "\"custom name €\" -e process.stdout.write(process.argv0)"
+        );
+        assert_eq!(command.get_program(), "node");
+        assert!(command_line_with_argv0(&command, Some("bad\0name")).is_err());
+    }
+
+    #[test]
+    fn cleared_empty_environment_is_double_nul_terminated() {
+        let mut command = Command::new("node");
+        command.env_clear();
+        assert_eq!(environment_block(&command, true).unwrap(), [0, 0]);
+    }
 }
 
 fn append_quoted(out: &mut Vec<u16>, value: &OsStr) -> io::Result<()> {
@@ -529,6 +643,9 @@ pub(crate) fn environment_block(command: &Command, clear: bool) -> io::Result<Ve
         block.extend_from_slice(&key);
         block.push(b'=' as u16);
         block.extend_from_slice(&value);
+        block.push(0);
+    }
+    if block.is_empty() {
         block.push(0);
     }
     block.push(0);

@@ -11,6 +11,14 @@ use super::*;
 /// `var arrayProto = Array.prototype` chained read inside
 /// `runInContext`.
 pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeader) {
+    // Every install below is a builtin definition, which arms the own-override
+    // guard only on a Map, Set or Date owner (#10697).
+    super::super::own_override::as_builtin_definition(|| {
+        populate_global_this_builtins_inner(singleton_at_entry)
+    })
+}
+
+fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     if singleton_at_entry.is_null() {
         return;
     }
@@ -222,6 +230,8 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
             // global value coerce like the bare-call lowering does.
             "Number" => crate::fn_info!(global_this_number_thunk, 1; with_declared(1)),
             "Boolean" => crate::fn_info!(global_this_boolean_thunk, 1; with_declared(1)),
+            "BigInt" => crate::fn_info!(global_this_bigint_thunk, 1; with_declared(1)),
+            "Symbol" => crate::fn_info!(global_this_symbol_thunk, 1; with_declared(1)),
             "Error" => crate::fn_info!(error_constructor_call_thunk, 1; with_declared(1)),
             "TypeError" => crate::fn_info!(type_error_constructor_call_thunk, 1; with_declared(1)),
             "RangeError" => {
@@ -809,10 +819,13 @@ pub(crate) fn populate_global_this_builtins(singleton_at_entry: *mut ObjectHeade
                     set_intrinsic_to_string_tag(ns_obj, "Atomics");
                 }
                 "Intl" => crate::intl::install_intl_namespace(ns_obj),
-                #[cfg(feature = "temporal")]
+                // Members come from the `temporal` install (see
+                // `crate::temporal::hooked`); without it the namespace stays a
+                // plain empty object, as in a build without the feature.
                 "Temporal" => {
-                    install_temporal_namespace(ns_obj);
-                    set_intrinsic_to_string_tag(ns_obj, "Temporal");
+                    if crate::temporal::hooked::install_namespace(ns_obj) {
+                        set_intrinsic_to_string_tag(ns_obj, "Temporal");
+                    }
                 }
                 _ => {}
             }

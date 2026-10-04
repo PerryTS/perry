@@ -148,6 +148,46 @@ pub unsafe extern "C" fn js_register_class_method(
     has_synthetic_arguments: i64,
     has_rest: i64,
 ) {
+    js_register_class_method_with_entry(
+        class_id,
+        name_ptr,
+        name_len,
+        func_ptr,
+        param_count,
+        has_synthetic_arguments,
+        has_rest,
+        0,
+    );
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_REGISTER_CLASS_METHOD_WITH_ENTRY: unsafe extern "C" fn(
+    i64,
+    *const u8,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+    i64,
+) = js_register_class_method_with_entry;
+
+/// [`js_register_class_method`] of a compiled instance method together with
+/// its closure-convention entry `entry` (`<method>__eclo`'s JsFunctionInfo,
+/// 0 for none): the function object a prototype holds for the method runs
+/// it. One registration per method, as module init always made.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_method_with_entry(
+    class_id: i64,
+    name_ptr: *const u8,
+    name_len: i64,
+    func_ptr: i64,
+    param_count: i64,
+    has_synthetic_arguments: i64,
+    has_rest: i64,
+    entry: i64,
+) {
     // `name_len == 0` is a legal empty-string member key (`get ''()`), so only
     // reject a negative length / null pointer.
     let name = if name_ptr.is_null() || name_len < 0 {
@@ -171,6 +211,7 @@ pub unsafe extern "C" fn js_register_class_method(
             param_count: param_count as u32,
             has_synthetic_arguments: has_synthetic_arguments != 0,
             has_rest: has_rest != 0,
+            entry: entry as usize,
         },
     );
     VTABLE_GEN.fetch_add(1, Ordering::Release);
@@ -531,6 +572,35 @@ static KEEP_REGISTER_STATIC_SETTER: unsafe extern "C" fn(i64, *const u8, i64, i6
 
 /// Record the spec `.length` (params before the first default/rest) for a class
 /// method or accessor. Codegen emits one call per method at module init.
+/// Register the closure-convention entry of method `name` of class
+/// `class_id` on its vtable entry, which `js_register_class_method` created
+/// first.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_class_method_entry(
+    class_id: i64,
+    name_ptr: *const u8,
+    name_len: i64,
+    entry: i64,
+) {
+    if class_id == 0 || name_ptr.is_null() || name_len <= 0 || entry == 0 {
+        return;
+    }
+    let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len as usize))
+    else {
+        return;
+    };
+    let Ok(mut guard) = CLASS_VTABLE_REGISTRY.write() else {
+        return;
+    };
+    if let Some(method) = guard
+        .as_mut()
+        .and_then(|all| all.get_mut(&(class_id as u32)))
+        .and_then(|vtable| vtable.methods.get_mut(name))
+    {
+        method.entry = entry as usize;
+    }
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_register_class_method_bind_length(
     class_id: i64,

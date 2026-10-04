@@ -339,8 +339,12 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
     let ptr = if bits >> 48 >= 0x7FF8 {
         // NaN-boxed pointer
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
+    } else if super::header_is_owned(bits as usize) {
+        // #10694: a raw word must be allocator-owned before a brand probe
+        // reads its header.
         bits as usize
+    } else {
+        0
     };
 
     if ptr < 0x1000 {
@@ -443,8 +447,11 @@ pub extern "C" fn js_buffer_from_arraybuffer_slice(
     let bits = value_bits as u64;
     let raw = if bits >> 48 >= 0x7FF8 {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
+    } else if super::header_is_owned(bits as usize) {
+        // #10694: a raw word must be allocator-owned before the brand read.
         bits as usize
+    } else {
+        0
     };
     if raw < 0x1000 || !is_registered_buffer(raw) {
         return buffer_alloc(0);

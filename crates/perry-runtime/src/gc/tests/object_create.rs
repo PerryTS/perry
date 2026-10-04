@@ -91,8 +91,10 @@ fn object_create_keeps_distinct_prototypes_and_instanceof_chains() {
         js_register_class_id(CLASS);
         js_register_class_name(CLASS, b"CreatedBase".as_ptr(), 11);
     }
-    let proto = js_object_alloc(0, 0);
-    class_decl_prototype_object_root_store(CLASS, proto);
+    // The class's own prototype object: the one its function object links
+    // and owns as `CreatedBase.prototype`.
+    let proto =
+        crate::value::js_nanbox_get_pointer(class_decl_prototype_value(CLASS)) as *mut ObjectHeader;
     let obj = js_object_create(f64::from_bits(ptr_bits(proto as usize)));
     let child = js_object_create(obj);
     let other = js_object_create(f64::from_bits(ptr_bits(js_object_alloc(0, 0) as usize)));

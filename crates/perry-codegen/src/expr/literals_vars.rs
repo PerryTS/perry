@@ -436,8 +436,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 demote_extracted_string_binding(ctx, *id, &value);
                 Ok(value)
             } else if let Some(global_name) = ctx.module_globals.get(id).cloned() {
-                let g_ref = format!("@{}", global_name);
-                let value = ctx.block().load(DOUBLE, &g_ref);
+                let value =
+                    crate::codegen::global_transfer::load_module_global(ctx, *id, &global_name);
                 demote_extracted_string_binding(ctx, *id, &value);
                 Ok(value)
             } else {
@@ -1129,7 +1129,28 @@ pub(crate) fn typeof_compile_time_answer(ctx: &FnCtx<'_>, operand: &Expr) -> Opt
                 // real, so the generic typeof already reports the right
                 // primitive/object kind (`process.pid` → "number",
                 // `os.EOL` → "string", `crypto.constants` → "object").
-                if matches!(module.as_str(), "fs" | "node:fs")
+                if ctx.target_triple.contains("windows")
+                    && matches!(
+                        module.as_str(),
+                        "process" | "node:process" | "process.namespace" | "process.default"
+                    )
+                    && matches!(
+                        property.as_str(),
+                        "getuid"
+                            | "geteuid"
+                            | "getgid"
+                            | "getegid"
+                            | "getgroups"
+                            | "setuid"
+                            | "seteuid"
+                            | "setgid"
+                            | "setegid"
+                            | "setgroups"
+                            | "initgroups"
+                    )
+                {
+                    None
+                } else if matches!(module.as_str(), "fs" | "node:fs")
                     && matches!(property.as_str(), "lchmod" | "lchmodSync")
                     && !fs_lchmod_callable_on_target(ctx.target_triple)
                 {

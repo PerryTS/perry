@@ -779,6 +779,25 @@ fn emit_materialized_scalar_receiver_direct_field_store(
     }
 }
 
+/// Lower the arguments of a materialized-receiver fallback call (#11789 sweep).
+///
+/// Every argument is held while the ones after it are lowered AND across the
+/// receiver's materialization in [`lower_materialized_receiver_dispatch`],
+/// which allocates between the last argument and the consuming call — so the
+/// window of every argument is "collects", whatever follows it. The scope is
+/// released by the caller below that dispatch.
+fn lower_generic_args_rooted<'a>(
+    ctx: &mut FnCtx<'_>,
+    args: &'a [Expr],
+) -> Result<(Vec<String>, crate::rooting::RootedGroup<'a>)> {
+    let mut group = crate::rooting::open_rooted_group(args.len());
+    for arg in args {
+        group.lower(ctx, arg, true)?;
+    }
+    let values = group.reread_all(ctx)?;
+    Ok((values, group))
+}
+
 fn lower_materialized_receiver_dispatch(
     ctx: &mut FnCtx<'_>,
     receiver_id: u32,
@@ -836,10 +855,7 @@ fn lower_scalar_replaced_int32_method_call(
         .iter()
         .any(|plan| matches!(plan.kind, ScalarMethodArgKind::Generic))
     {
-        let mut lowered_args = Vec::with_capacity(args.len());
-        for arg in args {
-            lowered_args.push(lower_expr(ctx, arg)?);
-        }
+        let (lowered_args, args_group) = lower_generic_args_rooted(ctx, args)?;
         let fallback = lower_materialized_receiver_dispatch(
             ctx,
             receiver_id,
@@ -847,6 +863,7 @@ fn lower_scalar_replaced_int32_method_call(
             property,
             &lowered_args,
         )?;
+        args_group.release(ctx);
         record_scalar_method_materialized_fallback(
             ctx,
             receiver_id,
@@ -941,10 +958,7 @@ fn lower_scalar_replaced_int32_method_call(
     }
 
     ctx.current_block = fallback_idx;
-    let mut lowered_args = Vec::with_capacity(args.len());
-    for arg in args {
-        lowered_args.push(lower_expr(ctx, arg)?);
-    }
+    let (lowered_args, args_group) = lower_generic_args_rooted(ctx, args)?;
     let fallback_value = lower_materialized_receiver_dispatch(
         ctx,
         receiver_id,
@@ -952,6 +966,7 @@ fn lower_scalar_replaced_int32_method_call(
         property,
         &lowered_args,
     )?;
+    args_group.release(ctx);
     record_scalar_method_materialized_fallback(
         ctx,
         receiver_id,
@@ -1061,10 +1076,7 @@ pub(super) fn try_lower_scalar_replaced_method_call(
         .iter()
         .any(|plan| matches!(plan.kind, ScalarMethodArgKind::Generic))
     {
-        let mut lowered_args = Vec::with_capacity(args.len());
-        for arg in args {
-            lowered_args.push(lower_expr(ctx, arg)?);
-        }
+        let (lowered_args, args_group) = lower_generic_args_rooted(ctx, args)?;
         let fallback = lower_materialized_receiver_dispatch(
             ctx,
             *receiver_id,
@@ -1072,6 +1084,7 @@ pub(super) fn try_lower_scalar_replaced_method_call(
             property,
             &lowered_args,
         )?;
+        args_group.release(ctx);
         record_scalar_method_materialized_fallback(
             ctx,
             *receiver_id,
@@ -1166,10 +1179,7 @@ pub(super) fn try_lower_scalar_replaced_method_call(
     }
 
     ctx.current_block = fallback_idx;
-    let mut lowered_args = Vec::with_capacity(args.len());
-    for arg in args {
-        lowered_args.push(lower_expr(ctx, arg)?);
-    }
+    let (lowered_args, args_group) = lower_generic_args_rooted(ctx, args)?;
     let fallback_value = lower_materialized_receiver_dispatch(
         ctx,
         *receiver_id,
@@ -1177,6 +1187,7 @@ pub(super) fn try_lower_scalar_replaced_method_call(
         property,
         &lowered_args,
     )?;
+    args_group.release(ctx);
     record_scalar_method_materialized_fallback(
         ctx,
         *receiver_id,

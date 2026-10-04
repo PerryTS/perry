@@ -676,15 +676,16 @@ fn plain_object_member_admits_only_what_the_member_dispatch_would_walk() {
             assert!(super::plain_object_member(declined, &mut proof).is_none());
         }
 
-        // A recorded prototype lives in the meta record: declined.
+        // A recorded prototype (a fact of the receiver's shape): declined.
         let inherits = parsed(&scope, r#"{"a":1}"#);
         let proto = crate::object::js_object_alloc(0, 0);
         crate::object::prototype_chain::object_set_user_prototype(
             obj(&inherits) as usize,
             crate::value::js_nanbox_pointer(proto as i64).to_bits(),
         );
-        assert!(
-            !(*obj(&inherits)).meta.is_null(),
+        assert_eq!(
+            crate::object::prototype_chain::object_static_prototype(obj(&inherits) as usize),
+            Some(crate::value::js_nanbox_pointer(proto as i64).to_bits()),
             "fixture must record a prototype"
         );
         assert!(

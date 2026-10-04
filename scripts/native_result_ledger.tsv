@@ -91,6 +91,7 @@ js_net_server_remove_all_listeners	NR_HANDLE_ID	crates/perry-ext-net/src/lifecyc
 js_net_server_remove_listener	NR_HANDLE_ID	crates/perry-ext-net/src/lifecycle.rs	i64
 js_net_socket_address_new	NR_HANDLE_ID	crates/perry-ext-net/src/classes.rs	i64
 js_net_socket_alloc	NR_HANDLE_ID	crates/perry-ext-net/src/lib.rs	i64
+js_net_socket_cork	NR_HANDLE_ID	crates/perry-ext-net/src/cork.rs	i64
 js_net_socket_listeners	NR_GCPTR	crates/perry-ext-net/src/lifecycle.rs	i64
 js_net_socket_noop_self	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
 js_net_socket_prepend_listener	NR_HANDLE_ID	crates/perry-ext-net/src/lifecycle.rs	i64
@@ -103,6 +104,7 @@ js_net_socket_reset_and_destroy	NR_HANDLE_ID	crates/perry-ext-net/src/lifecycle.
 js_net_socket_set_encoding	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
 js_net_socket_set_timeout	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
 js_net_socket_set_type_of_service	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
+js_net_socket_uncork	NR_HANDLE_ID	crates/perry-ext-net/src/cork.rs	i64
 js_net_socket_unpipe	NR_HANDLE_ID	crates/perry-ext-net/src/pipe.rs	i64
 js_net_socket_unref	NR_HANDLE_ID	crates/perry-ext-net/src/option_setters.rs	i64
 js_node_http2_connect	NR_HANDLE_ID	crates/perry-ext-http/src/server/http2_server/session.rs	i64

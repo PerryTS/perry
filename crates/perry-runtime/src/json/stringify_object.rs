@@ -42,6 +42,9 @@ use std::fmt::Write as FmtWrite;
 /// `GC_TYPE_*` tags, so the `gc_obj_type` match's `_` arm already skips them.
 /// The pending `toJSON` key must already be recorded.
 unsafe fn member_to_json(value: f64) -> Option<f64> {
+    if crate::proxy::js_proxy_is_proxy(value) != 0 {
+        return super::stringify_proxy::to_json(value);
+    }
     let bits = value.to_bits();
     let ptr = extract_pointer(bits)?;
     if crate::value::addr_class::is_handle_band(ptr as usize) {
@@ -266,8 +269,8 @@ unsafe fn stringify_object_walk(
     // Whether the class can contribute anything a raw own-field emitter
     // would miss: a `toJSON` on its chain, or private/runtime-internal keys.
     // A plain member's admission already answered it.
-    let class_plain_record = plain_member.is_some()
-        || super::stringify_tojson_probe::class_is_plain_record((*obj).class_id);
+    let class_plain_record =
+        plain_member.is_some() || super::stringify_tojson_probe::object_is_plain_record(obj);
     // Whether a `toJSON` could come from anywhere but an own closure field.
     // The raw emitters below read own fields only, so they run only when it
     // cannot; the general walk probes when it can. When the parent already
@@ -293,6 +296,9 @@ unsafe fn stringify_object_walk(
         && !has_overflow_fields
         && !crate::object::descriptors_in_use()
         && !inherited_to_json_possible
+        // A private field (#11791) is an own key no template may emit.
+        && crate::object::key_attrs::object_summary(obj) & crate::object::key_attrs::SUMMARY_PRIVATE
+            == 0
     {
         if let Some(tmpl_ptr) = shape_template_for(ptr) {
             // Same proof, same contract: the template establishes it lazily
@@ -388,6 +394,9 @@ unsafe fn stringify_object_walk(
         && !has_overflow_fields
         && !inherited_to_json_possible
         && !crate::object::object_has_descriptors(ptr as usize)
+        // A private field (#11791) is an own key the raw walk would emit.
+        && crate::object::key_attrs::object_summary(obj) & crate::object::key_attrs::SUMMARY_PRIVATE
+            == 0
         && super::stringify_primitive_object::try_emit(obj, keys_view, buf)
     {
         if depth > MAX_FAST_DEPTH {

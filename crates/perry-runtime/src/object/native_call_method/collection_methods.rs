@@ -419,14 +419,14 @@ pub(super) unsafe fn dispatch_raw_pointer(
                     method_name,
                 ));
             }
-            #[cfg(feature = "regex-engine")]
             if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID
                 && crate::collection_iter_object::is_intrinsic_iterator_method(method_name)
             {
-                return Some(crate::regex::dispatch_regexp_string_iterator_method(
-                    obj as *mut ObjectHeader,
-                    method_name,
-                ));
+                if let Some(value) =
+                    crate::regex::hooked_iterator_method(obj as *mut ObjectHeader, method_name)
+                {
+                    return Some(value);
+                }
             }
             // #2874: lazy iterator-helper objects, same as the NaN-boxed path.
             if (*obj).class_id == crate::iterator_helpers::ITERATOR_HELPER_CLASS_ID {
@@ -465,62 +465,33 @@ pub(super) unsafe fn dispatch_raw_pointer(
                 }
             }
 
-            // Vtable lookup — fast path via per-callsite IC
+            // A class instance's method: the property its prototype chain's
+            // shapes name (`class_holder`), as for a NaN-boxed receiver.
             let class_id = (*obj).class_id;
             if class_id != 0 {
-                if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
-                    vtable_ic_lookup(class_id, method_name_ptr as usize, method_name.as_bytes())
-                {
-                    let this_i64 = raw_bits as i64;
-                    return Some(call_vtable_method(
-                        func_ptr,
-                        this_i64,
-                        args_ptr,
-                        args_len,
-                        param_count,
-                        has_synthetic_arguments,
-                        has_rest,
-                    ));
-                }
-                if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-                    if let Some(ref reg) = *registry {
-                        // Refs #420: parent-chain walk (mirror of the path
-                        // above for raw pointer instances).
-                        let mut cur_cid = class_id;
-                        let mut depth = 0u32;
-                        while depth < 32 {
-                            if let Some(vtable) = reg.get(&cur_cid) {
-                                if let Some(entry) = vtable.methods.get(method_name) {
-                                    vtable_ic_insert(
-                                        class_id,
-                                        method_name_ptr as usize,
-                                        method_name.as_bytes(),
-                                        entry.func_ptr,
-                                        entry.param_count,
-                                        entry.has_synthetic_arguments,
-                                        entry.has_rest,
-                                    );
-                                    let this_i64 = raw_bits as i64;
-                                    return Some(call_vtable_method(
-                                        entry.func_ptr,
-                                        this_i64,
-                                        args_ptr,
-                                        args_len,
-                                        entry.param_count,
-                                        entry.has_synthetic_arguments,
-                                        entry.has_rest,
-                                    ));
-                                }
-                            }
-                            match get_parent_class_id(cur_cid) {
-                                Some(pid) if pid != 0 => {
-                                    cur_cid = pid;
-                                    depth += 1;
-                                }
-                                _ => break,
-                            }
-                        }
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let recv = scope.root_nanbox_f64(reboxed);
+                if !super::class_holder::name_is_not_a_prototype_method(method_name.as_bytes()) {
+                    let key = super::class_holder::MethodKey::bytes(method_name.as_bytes());
+                    if let Some(value) =
+                        super::class_holder::class_instance_method_value(&recv, &key)
+                    {
+                        let args = refreshed_args();
+                        return Some(super::class_holder::call_chain_value(
+                            value,
+                            &recv,
+                            args.as_ptr(),
+                            args.len(),
+                        ));
                     }
+                } else if let Some(result) = super::class_holder::call_non_property_member(
+                    reboxed,
+                    class_id,
+                    method_name,
+                    args_ptr,
+                    args_len,
+                ) {
+                    return Some(result);
                 }
             }
         }

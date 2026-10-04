@@ -1,0 +1,65 @@
+{
+  "base": "07e50b14a3d23e8f914193ec4d5a679adbd7c37a",
+  "private_commit": "8e3013733da37ddc66998ee51b9bd1109a9175ec",
+  "tracked_inputs": 5011,
+  "private_paths": [
+    "crates/perry-runtime/src/arena/block.rs",
+    "crates/perry-runtime/src/arena/block/reuse_window_tests.rs",
+    "crates/perry-runtime/src/arena/mod.rs",
+    "crates/perry-runtime/src/arena/promote.rs",
+    "crates/perry-runtime/src/arena/quarantine.rs",
+    "crates/perry-runtime/src/arena/reset.rs",
+    "crates/perry-runtime/src/gc/cycle.rs",
+    "crates/perry-runtime/src/gc/mod.rs",
+    "crates/perry-runtime/src/gc/tests/eden_entry_residency.rs",
+    "crates/perry-runtime/src/gc/tests/mod.rs"
+  ],
+  "commands": [
+    {
+      "name": "build",
+      "command": [
+        "cargo",
+        "build",
+        "--locked",
+        "--release",
+        "-p",
+        "perry",
+        "-p",
+        "perry-runtime-static",
+        "-p",
+        "perry-stdlib-static"
+      ],
+      "rc": 0,
+      "pid": 1770414,
+      "elapsed_s": 219.89326009899378,
+      "log_sha256": "a75da3ef29c0d123fe8ece8682486757859dadb939eca86c25559288707b2a13"
+    },
+    {
+      "name": "runtime-tests",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "--release",
+        "-p",
+        "perry-runtime",
+        "--lib"
+      ],
+      "rc": 0,
+      "pid": 1800076,
+      "elapsed_s": 125.21540701203048,
+      "log_sha256": "a9884f6c7280d5901e85bcb601cab10cdbc449878879c93c5443e92bfde7c78b"
+    }
+  ],
+  "products": {
+    "perry": "7358a256d3d266d0a924e3d91a642726a142fbac36d2d8e711ba67deeea30807",
+    "libperry_runtime.a": "2cacd2f2c40bcce62476f52c9032837105a67fff6c1e1a98d9e6563d45ac4583",
+    "libperry_stdlib.a": "2002b184912a6bbc079b550ecd08f9b9f8377b24ee56ac983bd9b442f11f9625"
+  },
+  "runtime": {
+    "passed": 4863,
+    "failed": 0,
+    "ignored": 5
+  },
+  "scope": "Private once-advice build/mincore/actual full-GC/padding tests. Application RSS and instruction benefit remains unproven."
+}
