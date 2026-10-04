@@ -58,6 +58,7 @@ mod layout_inline_mask;
 mod layout_pointer_free_hazard;
 mod layout_residue_histogram;
 mod layout_trace;
+mod mark_frontier;
 mod lazy_intrinsic_towers;
 mod lazy_tape_side_alloc;
 mod leaf_marks;

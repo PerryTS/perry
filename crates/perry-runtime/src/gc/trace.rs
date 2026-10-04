@@ -1542,20 +1542,29 @@ pub(super) fn drain_trace_worklist_step(
     budget: usize,
 ) -> bool {
     let mut remaining = budget;
-    while remaining > 0 && *cursor < worklist.len() {
-        let header = worklist[*cursor];
-        // #10182: the drain visits headers in queue order and each one is a
-        // cold DRAM read on a heap larger than the cache (a 20 MB JSON tree);
-        // start the read of the entry a few places ahead, as the copying
-        // minor's drain already does. A prefetch cannot fault.
-        if let Some(&ahead) = worklist.get(*cursor + super::prefetch::PREFETCH_DISTANCE) {
-            super::prefetch::prefetch_read(ahead as usize);
+    while remaining > 0 {
+        let Some(header) = worklist.pop() else {
+            break;
+        };
+        // Keep only pending headers. The previous queue retained every
+        // processed header until the drain ended, including on long chains
+        // where the pending frontier contains just one object. Marking a
+        // child before pushing it keeps cycles and shared children finite.
+        // Prefetch an existing pending entry; descendants discovered below
+        // can change the next entry, but a prefetch cannot fault.
+        if let Some(index) = worklist
+            .len()
+            .checked_sub(super::prefetch::PREFETCH_DISTANCE)
+        {
+            super::prefetch::prefetch_read(worklist[index] as usize);
         }
+        // This is the cumulative number of processed headers, so budgeted
+        // block-persistence callers retain their work-unit accounting.
         *cursor += 1;
         trace_one_worklist_header(header, valid_ptrs, worklist, minor_only);
         remaining -= 1;
     }
-    *cursor >= worklist.len()
+    worklist.is_empty()
 }
 
 pub(super) fn trace_one_worklist_header(
