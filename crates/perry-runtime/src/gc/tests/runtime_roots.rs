@@ -30,6 +30,8 @@ mod perex_execution;
 #[cfg(feature = "regex-engine")]
 mod perex_glob;
 #[cfg(feature = "regex-engine")]
+mod perex_in_place;
+#[cfg(feature = "regex-engine")]
 mod perex_lifecycle;
 #[cfg(feature = "regex-engine")]
 mod perex_match_all;
