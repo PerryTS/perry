@@ -1101,14 +1101,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // reads, which is callable through the dynamic dispatch path.
             if is_global_this_builtin_name(name) {
                 crate::expr::property_get::globalget::emit_global_value_installs(ctx, name);
-                let name_idx = ctx.strings.intern(name);
-                let name_bytes_global = format!("@{}", ctx.strings.entry(name_idx).bytes_global);
-                let name_len = name.len().to_string();
-                return Ok(ctx.block().call(
-                    DOUBLE,
-                    "js_get_global_this_builtin_value",
-                    &[(PTR, &name_bytes_global), (I64, &name_len)],
-                ));
+                return crate::expr::property_get::globalget::lower_global_builtin_read(ctx, name);
             }
             // A default-import alias of a Node builtin module used as a VALUE
             // (`const nodeTimers = require('node:timers')`, adopted to an
