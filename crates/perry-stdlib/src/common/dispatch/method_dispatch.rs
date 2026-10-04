@@ -654,7 +654,16 @@ unsafe fn arm_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Option<f64
     // binary — `optimized_libs.rs` now keeps `database-sqlite` for
     // exactly this reason (the duplicate `js_sqlite_*` symbols are
     // resolved by the linker to a single impl).
-    if matches!(method_name, "raw" | "all" | "get" | "run") {
+    // Handle id spaces are not unified, so a `get` on any other handle (a
+    // fetch Response's `headers`, …) reaches this arm too. Claim only handles
+    // the sqlite registry owns: since #11919 the sqlite entry points throw
+    // "The database connection is not open" for a handle they do not know.
+    extern "C" {
+        fn js_sqlite_is_stmt_handle(handle: i64) -> i32;
+        fn js_sqlite_is_db_handle(handle: i64) -> i32;
+    }
+    if matches!(method_name, "raw" | "all" | "get" | "run") && js_sqlite_is_stmt_handle(handle) != 0
+    {
         let result = dispatch_sqlite_stmt(handle, method_name, &args);
         if result.to_bits() != perry_runtime::JSValue::undefined().bits() {
             return Some(result);
@@ -676,7 +685,7 @@ unsafe fn arm_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Option<f64
     // class fields the codegen can't statically resolve. Refs #645 /
     // #488 / #643. Method-gated to avoid claiming small handles owned
     // by other registries (HashHandle, FastifyApp, etc.).
-    if matches!(method_name, "prepare" | "exec" | "close") {
+    if matches!(method_name, "prepare" | "exec" | "close") && js_sqlite_is_db_handle(handle) != 0 {
         let result = dispatch_sqlite_db(handle, method_name, &args);
         if result.to_bits() != perry_runtime::JSValue::undefined().bits() {
             return Some(result);
