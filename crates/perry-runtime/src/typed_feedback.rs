@@ -2263,6 +2263,17 @@ pub extern "C" fn js_typed_feedback_array_index_get_fallback_boxed(
     if receiver_value.is_string() || receiver_value.is_short_string() {
         return crate::value::js_dyn_index_get(receiver, index);
     }
+    // #11875: a Proxy held in a `T[]`-annotated binding fails the inline
+    // array guard and lands here as a pointer-tagged proxy id, which
+    // `is_valid_obj_ptr` below rejects (every read answered `undefined`).
+    // Its element read is the proxy's `[[Get]]`.
+    if receiver_value.is_pointer() {
+        if let Some(proxy) =
+            crate::array::array_ptr_as_proxy(receiver.to_bits() as *const ArrayHeader)
+        {
+            return crate::proxy::js_proxy_get(proxy, index);
+        }
+    }
 
     let raw_addr = normalize_raw_object_addr(receiver.to_bits());
     if raw_addr == 0 {
