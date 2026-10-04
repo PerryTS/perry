@@ -163,6 +163,10 @@ pub struct LoweringContext {
     /// LocalIds that represent immutable bindings (`const`, imports, and
     /// other lexical bindings that must throw when assigned).
     pub(crate) immutable_locals: HashSet<LocalId>,
+    /// Parameters that nothing in their function can rebind after entry
+    /// (`lower::unrebound_params`). A read of one yields the value of any
+    /// earlier read. Ids are unique per lowering, so the set is never pruned.
+    pub(crate) unrebound_params: HashSet<LocalId>,
     /// Global variables: name -> (id, type)
     // #854: initialized in `new` but currently unread (globals tracked
     // elsewhere). Retained alongside `next_global_id` for the global table.

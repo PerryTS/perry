@@ -83,6 +83,7 @@ mod global_eval_hoist;
 mod run_once;
 mod shared_mutable_capture;
 pub(crate) mod type_widening;
+pub(crate) mod unrebound_params;
 pub(crate) use closure_analysis::*;
 mod decorators;
 pub(crate) use decorators::*;
