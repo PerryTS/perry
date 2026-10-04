@@ -115,10 +115,17 @@ fn an_own_symbol_iterator_sends_the_spread_back_to_the_protocol() {
         dense_spread_source(value).is_some(),
         "must be eligible BEFORE the shadowing install, or this test proves nothing"
     );
+    assert!(unsafe { array_has_plain_shape_resolved(src) });
     let sym = iterator_symbol_value();
     unsafe {
         crate::symbol::js_object_set_symbol_property(value, sym, 1.0);
     }
+    assert_ne!(
+        array_object_flags(src) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
+        0,
+        "an own Symbol key must move the array off its canonical shape"
+    );
+    assert!(!unsafe { array_has_plain_shape_resolved(src) });
     assert!(
         dense_spread_source(value).is_none(),
         "an own [Symbol.iterator] shadows the builtin walk — the copy is not equivalent"
@@ -222,6 +229,20 @@ fn a_grown_arrays_forwarding_header_is_followed_not_copied() {
             );
         }
     }
+
+    let sym = iterator_symbol_value();
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(stale, sym, 1.0);
+    }
+    assert_ne!(
+        array_object_flags(cleaned) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS,
+        0,
+        "installing through a stale pointer must mark the live array shape"
+    );
+    assert!(
+        dense_spread_source(stale).is_none(),
+        "the cheap shape proof must follow forwarding before admitting the array"
+    );
 }
 
 #[test]
