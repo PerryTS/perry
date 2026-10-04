@@ -35,9 +35,44 @@ proof.
   across user callbacks.
 
 The regression suite also covers a moving destination and a method getter
-that collects before returning the write function. Candidate Linux full-runtime
-tests and macOS focused tests were started against `4473019ec4`; results are
-pending. Production wrapper, integration and full lint checks remain pending.
+that collects before returning the write function. Validation of the final head is
+recorded in the PR description.
+
+## Review follow-up (Claude, 2026-10-04)
+
+The review on #11882 found the same class in sibling paths. Each window now
+has a test that collects in it, asserts the values under test moved, and runs
+with the from-space poisoned, so a stale address reads as no object at all.
+
+- Stream-list path (`pipeline(a, b, [c])`): source, destination, the rest
+  array, the promise and the callback were raw across `js_promise_new`, which
+  runs `promiseHooks` init hooks, and across the allocations building the
+  argument array; the rest entries were a Rust `Vec` snapshot. All are held
+  in one handle scope and the arguments are pushed from the rooted array.
+  Trigger: a collecting init hook.
+- `js_node_stream_readable_chunks_result` returns the chunks as a GC array
+  rooted in the caller's scope, and rereads the stream after `_read` (user
+  code) and after each hidden-property lookup. No `Vec` of JS values reaches
+  a destination write. Trigger: a collecting `_read`.
+- The getter test now installs `write` as an accessor only, counts getter
+  calls (exactly three) and asserts that the getter's own collection moved
+  the chunks. On the original base it fails after one lookup.
+- `unpipe()` with no argument and the end fan-out walked a `Vec` of
+  destinations, and a raw source, across `'unpipe'`/`'end'` listeners. They
+  now share the rooted GC-array snapshot #11841 introduced for writes.
+  Trigger: the first destination's listener collects.
+- `js_promise_rejected` held its reason raw across `js_promise_new`.
+  Trigger: a collecting init hook while the pipeline rejects with a source
+  error.
+
+Negative controls: the tests-only commit on top of the PR's previous head
+fails the read, promise-hook, rejection, unpipe and end tests; the same tests
+on the original base `4b7564c638` fail all of them, including the chunk,
+receiver and getter tests.
+
+Remaining raw snapshots of JS values in the stream code are listed in the PR
+description; the classic `stream.pipeline` and compose paths hold `Vec`
+snapshots of stages across user stage functions and need the same treatment.
 
 This establishes a native rooting bug. It does not establish that this path
 causes the package-manager corruption reported in #11842. Conservative scan
