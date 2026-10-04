@@ -1,6 +1,8 @@
-//! The read site's class-accessor arm (#10498): `recv.k` where `k` is a
-//! compiled class getter the receiver inherits, answered by two ShapeId
-//! compares, one lane load and a direct call.
+//! The read site's accessor arm (#10498): `recv.k` where `k` is an accessor
+//! the receiver inherits from its direct prototype, answered by two ShapeId
+//! compares, one lane load and a direct call: of a compiled class getter, or
+//! of the runtime's closure-getter entry for any other function-object getter
+//! (a compiled function body or a builtin thunk).
 //!
 //! The runtime primes the entry in the site's own cache
 //! (`perry-runtime/src/object/method_site/read_holder.rs`, kind
@@ -12,7 +14,7 @@
 //!   bare class whose registry link retires the holder's ShapeId if it is
 //!   ever replaced (`class_registry::retire_displaced_decl_prototype`);
 //! * the holder's ShapeId proves `k`'s slot is still an accessor lane;
-//! * the lane still holds the primed pair, which names the compiled getter.
+//! * the lane still holds the primed pair, which names the getter.
 //!
 //! Emitted on the MRU compare's false edge, ahead of the GC-leaf front:
 //!
@@ -22,9 +24,9 @@
 //!   (u32)c[RECV] == [recv+4]                       else FRONT
 //!   c[KIND] & ACCESSOR                             else FRONT
 //!   [c[OBJ]+4] == (u32)c[SHAPE]                    else FRONT
-//!   [c[OBJ] + HDR + 8*(u32)c[KIND]] == POINTER_TAG | c[PAIR]
-//!   && no worker && c[GETTER] != 0                 else FRONT
-//!   r = c[GETTER](recv)
+//!   no worker && c[GETTER] != 0                    else FRONT
+//!   [c[OBJ] + HDR + 8*(u32)c[KIND]] == POINTER_TAG | c[PAIR]   else FRONT
+//!   r = c[GETTER](recv, c[PAIR])
 //! ```
 //!
 //! Only a site whose MRU word was never primed takes the arm: a site that
@@ -130,10 +132,27 @@ pub(super) fn emit_class_accessor_arm(
         blk.cond_br(&same, &lane_l, miss_label);
     }
 
-    // The lane still holds the primed pair; no worker; a getter to call.
+    // No worker, and a getter to call. An entry the slow call answers (a
+    // setter-only pair, or a lane in the holder's spill storage, whose kind
+    // does not name an inline slot) has getter word 0, so it leaves here,
+    // before the inline lane load.
     ctx.current_block = lane_idx;
     let pair = word(ctx, abi::PIC_HOLDER_PAIR_WORD);
     let getter = word(ctx, abi::PIC_HOLDER_GETTER_WORD);
+    let inline_idx = ctx.new_block("pic.acc.inline");
+    let inline_l = ctx.block_label(inline_idx);
+    {
+        let blk = ctx.block();
+        let workers = blk.load_atomic_seq_cst(I8, "@PERRY_METHOD_SITE_WORKERS_PRESENT", 1);
+        let workers = blk.zext(I8, &workers, I32);
+        let no_workers = blk.icmp_eq(I32, &workers, "0");
+        let has_getter = blk.icmp_ne(I64, &getter, "0");
+        let ok = blk.and(I1, &no_workers, &has_getter);
+        blk.cond_br(&ok, &inline_l, miss_label);
+    }
+
+    // The inline lane still holds the primed pair.
+    ctx.current_block = inline_idx;
     {
         let blk = ctx.block();
         let slot = blk.and(I64, &kind, "4294967295");
@@ -143,13 +162,7 @@ pub(super) fn emit_class_accessor_arm(
         let lane = blk.load(I64, &lane_ptr);
         let tagged = blk.or(I64, &pair, crate::nanbox::POINTER_TAG_I64);
         let same = blk.icmp_eq(I64, &lane, &tagged);
-        let workers = blk.load_atomic_seq_cst(I8, "@PERRY_METHOD_SITE_WORKERS_PRESENT", 1);
-        let workers = blk.zext(I8, &workers, I32);
-        let no_workers = blk.icmp_eq(I32, &workers, "0");
-        let has_getter = blk.icmp_ne(I64, &getter, "0");
-        let ok = blk.and(I1, &same, &no_workers);
-        let ok = blk.and(I1, &ok, &has_getter);
-        blk.cond_br(&ok, &call_l, miss_label);
+        blk.cond_br(&same, &call_l, miss_label);
     }
 
     // The getter runs user code: a versioned loop records its bailout here,
@@ -158,7 +171,7 @@ pub(super) fn emit_class_accessor_arm(
     crate::expr::emit_versioned_loop_callback_deopt(ctx);
     let blk = ctx.block();
     let code = blk.inttoptr(I64, &getter);
-    let value = crate::expr::body_call::emit_class_getter_call(blk, &code, recv_box);
+    let value = crate::expr::body_call::emit_accessor_getter_call(blk, &code, recv_box, &pair);
     let end = blk.label.clone();
     blk.br(merge_label);
     (value, end)

@@ -147,13 +147,14 @@ fn verify_front_flow(blocks: &Blocks) -> Result<usize, String> {
 }
 
 /// The class-accessor arm's guards, in chain order (#10498, `accessor_arm.rs`).
-pub(super) const ACCESSOR_ARM_GUARDS: [&str; 6] = [
+pub(super) const ACCESSOR_ARM_GUARDS: [&str; 7] = [
     "pic.acc.empty",
     "pic.acc.cache",
     "pic.acc.recv",
     "pic.acc.kind",
     "pic.acc.holder",
     "pic.acc.lane",
+    "pic.acc.inline",
 ];
 
 /// #10498: the class-accessor arm on `pic.token`'s false edge, ahead of the

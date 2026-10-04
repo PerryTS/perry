@@ -826,6 +826,45 @@ mod tests_1802 {
     }
 }
 
+/// Does `header`'s body read `this` from its reserved last capture slot, so
+/// that calling it with a receiver other than the one captured needs
+/// [`clone_closure_rebind_this`]? When this is false the body binds `this`
+/// from the call's receiver parameter (or lexically, or never reads it), and
+/// a call through the closure ABI with the receiver as `this` is the whole
+/// [[Call]].
+///
+/// # Safety
+/// `header` passed `is_closure_ptr`.
+#[inline]
+pub(crate) unsafe fn closure_reads_this_from_capture(header: *const ClosureHeader) -> bool {
+    // Arrow functions bind `this` lexically: their `this` capture slot holds
+    // the enclosing instance and must NEVER be overwritten with a call-time
+    // receiver (proxy handler, getter receiver, method-call object, …).
+    // They still carry CAPTURES_THIS_FLAG (the body reads `this`), so the
+    // flag check below does not exclude them — guard explicitly. Without this,
+    // an arrow used as a proxy trap / accessor would observe the rebind
+    // receiver and lose its captured instance's data fields (#wall11).
+    if crate::closure::closure_is_arrow(header) {
+        return false;
+    }
+    let raw_count = (*header).capture_count;
+    // No CAPTURES_THIS_FLAG → the closure body doesn't read `this`, no rebind needed.
+    if raw_count & CAPTURES_THIS_FLAG == 0 {
+        return false;
+    }
+    // Generator state-machine step closures (`next`/`return`/`throw`) capture
+    // the generator BODY's `this` lexically — it is fixed at generator
+    // creation and must NOT be re-bound by `.call`/method dispatch. The
+    // `yield* gen` desugar calls `next.call(iter, v)`; rebinding here would
+    // clobber the captured body-`this` with the iterator object. The flag is
+    // stamped on the closure header (per-closure, no global table) by
+    // `js_generator_attach_prototype` when it wires the generator instance.
+    if raw_count & NO_THIS_REBIND_FLAG != 0 {
+        return false;
+    }
+    real_capture_count(raw_count) != 0
+}
+
 /// Issue #450: clone an accessor closure (from `Object.defineProperty(obj, k, { get, set })`)
 /// and patch its reserved `this` slot with `recv_box` (the NaN-boxed target object pointer).
 ///
@@ -861,35 +900,11 @@ pub(crate) fn clone_closure_rebind_this(closure_bits: u64, recv_box: f64) -> u64
     }
     unsafe {
         let header = ptr as *const ClosureHeader;
-        // Arrow functions bind `this` lexically: their `this` capture slot holds
-        // the enclosing instance and must NEVER be overwritten with a call-time
-        // receiver (proxy handler, getter receiver, method-call object, …).
-        // They still carry CAPTURES_THIS_FLAG (the body reads `this`), so the
-        // flag check below does not exclude them — guard explicitly. Without this,
-        // an arrow used as a proxy trap / accessor would observe the rebind
-        // receiver and lose its captured instance's data fields (#wall11).
-        if crate::closure::closure_is_arrow(header) {
+        if !closure_reads_this_from_capture(header) {
             return closure_bits;
         }
         let raw_count = (*header).capture_count;
-        // No CAPTURES_THIS_FLAG → the closure body doesn't read `this`, no rebind needed.
-        if raw_count & CAPTURES_THIS_FLAG == 0 {
-            return closure_bits;
-        }
-        // Generator state-machine step closures (`next`/`return`/`throw`) capture
-        // the generator BODY's `this` lexically — it is fixed at generator
-        // creation and must NOT be re-bound by `.call`/method dispatch. The
-        // `yield* gen` desugar calls `next.call(iter, v)`; rebinding here would
-        // clobber the captured body-`this` with the iterator object. The flag is
-        // stamped on the closure header (per-closure, no global table) by
-        // `js_generator_attach_prototype` when it wires the generator instance.
-        if raw_count & NO_THIS_REBIND_FLAG != 0 {
-            return closure_bits;
-        }
         let count = real_capture_count(raw_count) as usize;
-        if count == 0 {
-            return closure_bits;
-        }
         // Allocate a fresh closure of the same body + capture_count (preserving the flag).
         let scope = crate::gc::RuntimeHandleScope::new();
         let closure_handle = scope.root_nanbox_u64(closure_bits);

@@ -823,9 +823,9 @@ pub(super) fn get_field_ic_miss_impl(
         } {
             return f64::from_bits(value.bits());
         }
-        if let Some(value) = unsafe {
-            crate::object::method_site::read_holder::try_cached_class_accessor(obj, cache_slot)
-        } {
+        if let Some(value) =
+            unsafe { crate::object::method_site::read_holder::try_cached_accessor(obj, cache_slot) }
+        {
             return f64::from_bits(value.bits());
         }
     }

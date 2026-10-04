@@ -191,18 +191,31 @@ pub(crate) unsafe fn pair_of_value(value: u64) -> Option<Accessor> {
     })
 }
 
-/// The compiled INSTANCE getter at an already-proved accessor slot, or
-/// `Some(0)` for a setter-only pair (whose read is `undefined`): what a class
-/// accessor read site may call with the receiver as `this`. Asked when the
-/// site primes. A pair is immutable once published, so the site keeps the
+/// How a read site's accessor entry calls the getter at an already-proved
+/// accessor slot: the word it keeps in `PIC_HOLDER_GETTER_WORD`. Asked when
+/// the site primes. A pair is immutable once published, so the site keeps the
 /// answer with the pair it came from, and each hit compares the slot's value
 /// with that pair (the value may be replaced without a holder ShapeId
 /// transition).
 ///
+/// * a compiled instance class getter: its code address, called as
+///   `fn(this) -> value`;
+/// * a setter-only pair with a compiled setter: 0 (the read is `undefined`);
+/// * a getter that is a function object (a compiled function body or a
+///   builtin thunk) binding `this` from its call's receiver: the address of
+///   [`holder_closure_getter`], which the hit calls with the pair; it calls
+///   the pair's getter closure through the closure ABI with the receiver as
+///   `this`, the call `[[Get]]` makes.
+///
+/// `None` for a getter whose body reads `this` from its reserved capture
+/// slot (an object-literal method, which `[[Get]]` must call through a clone
+/// rebound to the receiver), for a static entry, and for a pair with neither
+/// half.
+///
 /// # Safety
 /// `value` is the slot value of a key proved to carry `ENTRY_ACCESSOR`.
 #[inline]
-pub(crate) unsafe fn raw_instance_getter_of_value(value: u64) -> Option<usize> {
+pub(crate) unsafe fn site_getter_word_of_value(value: u64) -> Option<usize> {
     if value & TAG_MASK != POINTER_TAG {
         return None;
     }
@@ -213,13 +226,55 @@ pub(crate) unsafe fn raw_instance_getter_of_value(value: u64) -> Option<usize> {
     }
     let w = crate::array::array_elements_ptr(pair);
     let raw_get = raw_of(*w.add(PAIR_RAW_GET));
-    let raw_set = raw_of(*w.add(PAIR_RAW_SET));
-    // A compiled setter does not make a closure getter callable through
-    // the raw getter ABI. Let the generic accessor path invoke that closure.
-    if raw_get == 0 && closure_of(*w.add(PAIR_GET)) != 0 {
-        return None;
+    if raw_get != 0 {
+        return Some(raw_get);
     }
-    (raw_get != 0 || raw_set != 0).then_some(raw_get)
+    let get = closure_of(*w.add(PAIR_GET));
+    if get != 0 {
+        let closure = (get & POINTER_MASK) as usize;
+        if !crate::closure::is_closure_ptr(closure)
+            || crate::closure::closure_reads_this_from_capture(
+                closure as *const crate::closure::ClosureHeader,
+            )
+        {
+            return None;
+        }
+        return Some(holder_closure_getter_entry());
+    }
+    (raw_of(*w.add(PAIR_RAW_SET)) != 0).then_some(0)
+}
+
+/// The code a site accessor entry calls for a function-object getter, as
+/// `double get(double this, i64 pair)` (`perry_abi::PIC_HOLDER_GETTER_WORD`).
+#[inline]
+pub(crate) fn holder_closure_getter_entry() -> usize {
+    holder_closure_getter as *const () as usize
+}
+
+/// [`holder_closure_getter_entry`]: call the getter closure `pair` holds with
+/// `this` through the closure ABI. The site's hit has just compared the
+/// holder's lane with `pair` (immutable once published, and a strong root of
+/// the entry), so the closure is the getter `[[Get]]` calls; nothing between
+/// the load and the call collects.
+#[inline(always)]
+unsafe fn holder_closure_getter_call(this: f64, pair: i64) -> f64 {
+    let w = crate::array::array_elements_ptr(pair as usize as *const ArrayHeader);
+    let closure = (*w.add(PAIR_GET) & POINTER_MASK) as *const crate::closure::ClosureHeader;
+    crate::closure::js_closure_call0(closure, crate::closure::JsThis::from_f64(this))
+}
+
+// `extern "C-unwind"` in unwinding (test) builds so a getter's throw reaches
+// the caller's landing pad; production keeps plain C, as `js_closure_call0`
+// does (#8479).
+#[cfg(panic = "abort")]
+pub(crate) extern "C" fn holder_closure_getter(this: f64, pair: i64) -> f64 {
+    unsafe { holder_closure_getter_call(this, pair) }
+}
+
+/// See the production definition above.
+#[cfg(not(panic = "abort"))]
+pub(crate) extern "C-unwind" fn holder_closure_getter(this: f64, pair: i64) -> f64 {
+    unsafe { holder_closure_getter_call(this, pair) }
 }
 
 /// The accessor stored in `obj`'s slot for key position `pos`.
