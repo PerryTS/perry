@@ -1115,3 +1115,7 @@ thunk!(
     thunk_fs_promises_constants,
     "node:fs/promises.constants is not callable."
 );
+
+#[cfg(test)]
+#[path = "fs_promises_gc_tests.rs"]
+mod gc_tests;
