@@ -159,6 +159,44 @@ pub(crate) fn emit_direct_method_site_word(ctx: &mut FnCtx<'_>) -> String {
     format!("@{slot_name}")
 }
 
+/// [`emit_direct_method_site_word`] followed by the site's chain memo slot
+/// (null, see [`emit_chain_memo_slot`]): `{ i64 word, ptr memo }`. The
+/// emitted code reads only the word; the miss edge
+/// (`js_native_call_method_by_id_learn`) finds the memo slot next to it.
+pub(crate) fn emit_direct_method_site_word_with_memo(ctx: &mut FnCtx<'_>) -> String {
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let prefix = ctx.strings.module_prefix();
+    let slot_name = if prefix.is_empty() {
+        format!("perry_mdirect_site_{site_id}")
+    } else {
+        format!("perry_mdirect_site_{prefix}__{site_id}")
+    };
+    ctx.typed_parse_rodata.push(format!(
+        "@{slot_name} = private global {{ i64, ptr }} {{ i64 -1, ptr null }}, align 8"
+    ));
+    format!("@{slot_name}")
+}
+
+/// One pointer owned by a by-name method call site: the slot of its chain
+/// memo (`perry-runtime` `object/method_site/chain_memo.rs`), which the
+/// runtime allocates on the site's first class-method answer and which
+/// records the prototype walk that answered it, validated by ShapeId on every
+/// use. Starts null; emitted code never reads it.
+pub(crate) fn emit_chain_memo_slot(ctx: &mut FnCtx<'_>) -> String {
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let prefix = ctx.strings.module_prefix();
+    let slot_name = if prefix.is_empty() {
+        format!("perry_cmemo_{site_id}")
+    } else {
+        format!("perry_cmemo_{prefix}__{site_id}")
+    };
+    ctx.typed_parse_rodata
+        .push(format!("@{slot_name} = private global ptr null, align 8"));
+    format!("@{slot_name}")
+}
+
 /// `i1`: `recv_box` is a heap object of `GC_TYPE_OBJECT`, not forwarded, whose
 /// exact receiver word equals the site's learned word. Emits
 /// its own pointer gate, so it is safe for any value.

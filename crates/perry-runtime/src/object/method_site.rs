@@ -45,9 +45,7 @@
 //! What the prime refuses (they keep the ordinary dispatch): non-ordinary
 //! receivers (class objects, native-module namespaces, dictionaries,
 //! `Object.prototype`, typed-array prototypes, exotic read receivers),
-//! accessors, spill slots, class instances for the inherited entry (their
-//! methods live in the vtable until class prototypes carry real slots, D4),
-//! and any value that is not a plain closure the call can enter directly for
+//! accessors, spill slots, and any value that is not a plain closure the call can enter directly for
 //! this site's argument count (bound functions, rest / `arguments` bodies,
 //! runtime thunks, class constructors, closures that capture `this`).
 //!
@@ -92,6 +90,7 @@
 
 use crate::object::ObjectHeader;
 
+pub(crate) mod chain_memo;
 mod function_intrinsic;
 pub(crate) mod read_holder;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -301,7 +300,7 @@ pub fn method_site_stats() -> (u64, u64, u64) {
 }
 
 /// `js_method_site_stats(which)`: 0 own primes, 1 inherited primes, 2 misses,
-/// 3 function-bag primes, 4 ConstFn own primes.
+/// 3 function-bag primes, 4 ConstFn own primes, 5 chain memo ways recorded.
 /// Exposed so gap tests can prove a path ran.
 #[no_mangle]
 pub extern "C" fn js_method_site_stats(which: i32) -> f64 {
@@ -311,6 +310,7 @@ pub extern "C" fn js_method_site_stats(which: i32) -> f64 {
         1 => b,
         3 => method_site_function_primes(),
         4 => PRIMES_CONSTFN.load(Ordering::Relaxed),
+        5 => chain_memo::chain_memo_records(),
         _ => c,
     }) as f64
 }
@@ -339,9 +339,10 @@ fn stats_report_enabled() -> bool {
                     "[method-site] fn_intrinsic_primes={fp} fn_intrinsic_negative={fneg} fn_intrinsic_hits={fh}"
                 );
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} primes_constfn={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} class_read_root_rewrites={cr} read_holder_rewrites={} read_accessor_rewrites={} read_accessor_same_shape_relinks={} read_holder_refused={hr}{refused}",
+                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} primes_constfn={} chain_memo_records={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} class_read_root_rewrites={cr} read_holder_rewrites={} read_accessor_rewrites={} read_accessor_same_shape_relinks={} read_holder_refused={hr}{refused}",
                     method_site_function_primes(),
                     PRIMES_CONSTFN.load(Ordering::Relaxed),
+                    chain_memo::chain_memo_records(),
                     HOLDER_REWRITES.load(Ordering::Relaxed),
                     read_holder::read_accessor_class_primes(),
                     read_holder::read_holder_rewrites(),
@@ -1027,27 +1028,48 @@ unsafe fn prime_inherited(
         refuse(11);
         return;
     }
-    // Class instances resolve methods through their vtable (D4: until class
-    // prototypes carry real slots).
+    // A declared-class instance's direct prototype is its class's prototype
+    // object (a bare CLASS identity: the class's function object keeps that
+    // link for the agent's life, and a relink retires the displaced
+    // prototype's ShapeId) or the serial a MIXED identity records. Its
+    // methods are real slots of that object (class prototypes hold function
+    // objects of their bodies, with ConstFn lanes), so the entry is the same
+    // holder entry as for any receiver.
     let class_id = (*obj).class_id;
-    if class_id != 0
+    let class_instance = class_id != 0
         && class_id < super::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE
-        && !super::is_anon_shape_class_id(class_id)
-    {
-        refuse(6);
-        return;
-    }
+        && !super::is_anon_shape_class_id(class_id);
     if key_may_be_accessor(obj, name) {
         refuse(8);
         return;
     }
-    // Only a serial or the realm-default identity pins one direct prototype.
-    let Some(proto_id) = read_holder::admitted_proto_id(obj) else {
-        refuse(7);
-        return;
+    let class_holder = if class_instance {
+        match read_holder::class_link(obj) {
+            Some(holder) => Some(holder),
+            None => {
+                refuse(6);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    // Otherwise only a serial or the realm-default identity pins one direct
+    // prototype.
+    let proto_id = match class_holder {
+        Some(_) => super::shapes::PROTO_ID_CLASS,
+        None => match read_holder::admitted_proto_id(obj) {
+            Some(pid) => pid,
+            None => {
+                refuse(7);
+                return;
+            }
+        },
     };
     {
-        let next = if proto_id == super::shapes::PROTO_ID_DEFAULT {
+        let next = if let Some(holder) = class_holder {
+            holder
+        } else if proto_id == super::shapes::PROTO_ID_DEFAULT {
             crate::array::object_prototype_addr_if_resolved() as *const ObjectHeader
         } else {
             next_prototype(obj)

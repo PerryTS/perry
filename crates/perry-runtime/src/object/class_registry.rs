@@ -3,9 +3,10 @@
 //! registers its methods, getters, and setters at startup;
 //! `js_native_call_method` / `js_dynamic_object_get_property` look up
 //! the vtable by the object's `class_id` when static dispatch isn't
-//! possible. Also home for the per-callsite inline cache
-//! (`vtable_ic_*` / `call_vtable_method`) and the parent-chain
-//! registration helpers used by codegen.
+//! possible. Also home for `call_vtable_method` and the parent-chain
+//! registration helpers used by codegen. A by-name call of a class
+//! instance's string-keyed method does not consult the vtable: its
+//! prototype chain's shapes answer it (`native_call_method::class_holder`).
 //!
 //! Split out of `object/mod.rs` (issue #1103). Pure relocation — no
 //! logic changes.
@@ -123,10 +124,9 @@ pub use state::{
 pub(crate) use prototype_objects::{
     class_decl_prototype_relinked, class_prototype_object, decl_prototype_relinked,
     ensure_function_prototype_object, function_class_id, function_value_for_class_id,
-    instance_class_prototype_object, object_proto_chain_symbol_slot, relinked_class_prototype_read,
-    resolve_proto_chain_field, resolve_proto_chain_field_noting_miss,
-    resolve_proto_chain_field_with_receiver, resolve_proto_chain_symbol,
-    synthetic_class_prototype_object, SYNTHETIC_CLASS_ID_BASE,
+    object_proto_chain_symbol_slot, relinked_class_prototype_read, resolve_proto_chain_field,
+    resolve_proto_chain_field_noting_miss, resolve_proto_chain_field_with_receiver,
+    resolve_proto_chain_symbol, synthetic_class_prototype_object, SYNTHETIC_CLASS_ID_BASE,
 };
 pub use prototype_objects::{
     js_set_function_prototype, js_set_prototype_property, NEXT_SYNTHETIC_CLASS_ID,
@@ -229,8 +229,7 @@ pub(crate) use dispatch::test_bump_vtable_generation;
 pub(crate) use dispatch::{
     call_vtable_method, call_vtable_method_value, call_vtable_method_with_private_brand,
     class_lookup_surface_gen_bump, class_lookup_surface_generation, fetch_parent_kind_in_chain,
-    obj_dispatch_ic_insert, obj_dispatch_ic_lookup, vtable_generation, vtable_ic_insert,
-    vtable_ic_lookup, VTABLE_GEN,
+    vtable_generation, VTABLE_GEN,
 };
 
 // ── parent_static.rs ────────────────────────────────────────────────────────

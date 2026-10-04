@@ -9,6 +9,7 @@
 use super::*;
 
 mod bare_receiver;
+mod class_holder;
 mod collection_methods;
 mod common_methods;
 mod direct_site;
@@ -19,6 +20,7 @@ pub(crate) use function_shape::{
     FunctionIntrinsicFacts,
 };
 mod handle_methods;
+mod memo_entries;
 mod namespace_override;
 mod object_proto;
 mod own_slot;
@@ -40,7 +42,7 @@ mod probe_dispatch_tests;
 mod to_locale_string_tests;
 mod typed_array;
 #[cfg(test)]
-/// #10724: the vtable guard's own-key scan never uses the element accessor.
+/// #10724: the class receiver guard's own-key scan never uses the element accessor.
 mod vtable_guard_scan_tests;
 
 use bare_receiver::{
@@ -65,46 +67,9 @@ pub(crate) use proto_dispatch::{
 };
 pub(super) use typed_array::dispatch_typed_array_method;
 
-/// #7769: skip the dispatch tower for an ordinary user-class instance whose
-/// `(class_id, method_name)` the tower has already resolved to a vtable method.
-///
-/// `js_native_call_method` is the virtual-call path for every receiver whose
-/// static type does not pin the callee — which is *every* call through a
-/// base-typed collection, the shape a class hierarchy is written in. Reaching
-/// its vtable arm costs a `String` allocation for the method name, a
-/// `RuntimeHandleScope`, ~900 lines of probes for exotic receiver kinds, a
-/// GC-heap `StringHeader` allocation for the prototype-chain probe, a
-/// process-global `RwLock` read and two SipHash lookups. For `shape.area()`
-/// that is four heap allocations and a lock around a single multiply.
-///
-/// # Why a cache hit is sound
-///
-/// An [`obj_dispatch_ic`](crate::object::class_registry::obj_dispatch_ic_lookup)
-/// entry exists ONLY because an earlier call with this exact
-/// `(class_id, method_name_ptr)` ran the entire tower and fell through to the
-/// vtable arm. That is the proof that no *name-keyed* or *class-keyed* probe in
-/// the tower claims this pair.
-///
-/// Everything the tower decides per RECEIVER rather than per (class, name) is
-/// re-established here, on every hit:
-///
-/// * the value is a NaN-boxed pointer to a real heap object above the handle
-///   band (excludes every small-handle registry receiver, and every primitive);
-/// * its GC type is `GC_TYPE_OBJECT` and its GcHeader carries no class-object
-///   marker (excludes errors, arrays, maps, buffers, regexes, closures, and
-///   class values — each of which the tower routes elsewhere);
-/// * `class_id` matches the cache key;
-/// * `meta` is null, so the object carries no `Object.setPrototypeOf` override,
-///   no per-key descriptor state, and no exotic-kind tag — this is *stricter*
-///   than the tower, which tolerates a meta record and resolves through it;
-/// * no OWN key equals the method name, through the shared content-validated
-///   key index (an own field shadows the vtable);
-/// * no static prototype is recorded for the address, so the tower's
-///   `resolve_inherited_field` probe would have found nothing to shadow with.
-///
-/// A miss (`None`) is always safe: the caller falls through to the full tower.
-/// The receiver-shape predicate `G` shared by the fast path and by the sites
-/// that are allowed to populate its cache.
+/// The receiver predicate of a class instance's fast method call
+/// ([`class_holder::try_class_holder_fast_dispatch`]) and of the compiled
+/// class-method sites' learned words (`direct_site`).
 ///
 /// Returns the receiver's `class_id` when `object` is an ORDINARY heap
 /// instance of a user class: everything the dispatch tower decides per RECEIVER
@@ -125,16 +90,16 @@ pub(super) use typed_array::dispatch_typed_array_method;
 /// * `meta` null — no `Object.setPrototypeOf` override, no per-key descriptor
 ///   state, no exotic-kind tag. STRICTER than the tower, which resolves
 ///   through a meta record;
-/// * no OWN key equal to the method name (an own field shadows the vtable),
+/// * no OWN key equal to the method name (an own field shadows the prototype),
 ///   using the shared content-validated key index;
 /// * no recorded static prototype for the address, so the tower's
 ///   `resolve_inherited_field` probe had nothing to shadow with.
 #[inline]
-unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(usize, u32)> {
-    class_vtable_receiver_guard::<false>(object, method_bytes)
+unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(usize, u32)> {
+    class_receiver_guard::<false>(object, method_bytes)
 }
 
-/// [`class_vtable_fast_guard`], optionally accepting a receiver that carries
+/// [`class_receiver_fast_guard`], optionally accepting a receiver that carries
 /// an [`ObjectMeta`](crate::object::ObjectMeta) record for storage only.
 ///
 /// With `META_STORAGE_OK`, a metadata record is accepted when every field
@@ -151,7 +116,7 @@ unsafe fn class_vtable_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(u
 /// changes, whereas the `(class, name)` cache this guard otherwise feeds is
 /// not.
 #[inline]
-unsafe fn class_vtable_receiver_guard<const META_STORAGE_OK: bool>(
+unsafe fn class_receiver_guard<const META_STORAGE_OK: bool>(
     object: f64,
     method_bytes: &[u8],
 ) -> Option<(usize, u32)> {
@@ -207,13 +172,13 @@ unsafe fn class_vtable_receiver_guard<const META_STORAGE_OK: bool>(
         return None;
     }
 
-    // Own fields shadow vtable methods — the same indexed lookup as the
+    // Own fields shadow prototype methods — the same indexed lookup as the
     // tower's field lookup. ShapeId supplies both the moving root and its exact
     // logical length; the ObjectHeader mirrors are compatibility scratch only.
     let descriptor = crate::object::shapes::object_shape_descriptor(obj)?;
     // #10868 step 2.5 stage 1: a dictionary-mode receiver's own fields are in
     // its `ObjectMeta`, so a null `keys` word would make this shadowing scan
-    // vacuously true and let a vtable method win over an own field.
+    // vacuously true and let a prototype method win over an own field.
     if crate::object::dictionary::is_dictionary(obj) {
         return None;
     }
@@ -232,7 +197,7 @@ unsafe fn class_vtable_receiver_guard<const META_STORAGE_OK: bool>(
             return None;
         }
         // #10502: the shared shape index proves presence AND absence after
-        // its first build. Do not re-scan every field on a vtable cache hit.
+        // its first build. Do not re-scan every field on every call.
         if own_slot::find_method_slot(keys, key_count as u32, method_bytes).is_some() {
             return None;
         }
@@ -248,7 +213,7 @@ unsafe fn class_vtable_receiver_guard<const META_STORAGE_OK: bool>(
 }
 
 /// True for the method names whose tower probes depend on per-object state
-/// [`class_vtable_fast_guard`] does not pin.
+/// [`class_receiver_fast_guard`] does not pin.
 ///
 /// * the `using` / `await using` disposal hooks read a SYMBOL-keyed own
 ///   property (`obj[Symbol.dispose]`), which the guard's descriptor-backed
@@ -263,84 +228,6 @@ pub(crate) fn method_name_is_fast_dispatch_ineligible(name: &str) -> bool {
         name,
         "__perry_dispose__" | "__perry_async_dispose__" | "__perry_using_check__"
     ) || crate::iterator_helpers::is_iterator_helper_method(name)
-}
-
-#[inline]
-unsafe fn try_class_vtable_fast_dispatch(
-    object: f64,
-    method_name_ptr: *const i8,
-    method_name_len: usize,
-    args_ptr: *const f64,
-    args_len: usize,
-) -> Option<f64> {
-    if method_name_ptr.is_null() || method_name_len == 0 {
-        return None;
-    }
-    let method_bytes = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
-    let (obj_addr, class_id) = class_vtable_fast_guard(object, method_bytes)?;
-    let (func_ptr, param_count, has_synthetic_arguments, has_rest) =
-        crate::object::class_registry::obj_dispatch_ic_lookup(class_id, method_bytes)?;
-    // A synthesized `arguments` object or a user rest param makes
-    // `call_vtable_method` allocate a JS array for that slot — a collection
-    // point. `obj_addr` is a bare local here (no handle scope: not creating one
-    // is most of the win), so keep the fast path free of any allocation
-    // between reading the receiver address and entering the callee. These two
-    // shapes are rare; the tower roots the receiver and handles them.
-    if has_synthetic_arguments || has_rest {
-        return None;
-    }
-
-    // The recursion-depth guard is kept on the fast path. Skipping it would be
-    // a few instructions cheaper, but a cached dispatch is still a dispatch:
-    // mutually-recursive `a.m()`/`b.m()` chains reach the same unbounded stack
-    // growth this guard exists to stop, and once cached they would reach it
-    // WITHOUT ever being counted.
-    let _depth_guard = CallMethodDepthGuard::enter("")?;
-
-    Some(crate::object::class_registry::call_vtable_method(
-        func_ptr,
-        obj_addr as i64,
-        args_ptr,
-        args_len,
-        param_count,
-        has_synthetic_arguments,
-        has_rest,
-    ))
-}
-
-/// Record a class-walk resolution for the fast path, but only for a receiver
-/// that satisfies [`class_vtable_fast_guard`] — the same predicate the fast
-/// path re-checks — and only for a name whose tower probes are class/name
-/// keyed.
-///
-/// Callers are the two sites where the tower resolves an ORDINARY class
-/// instance's method: the parent-chain walk in
-/// `native_call_method::handle_methods` (which serves inherited methods, the
-/// common case) and the tail vtable arm in `js_native_call_method`.
-#[inline]
-pub(crate) unsafe fn note_class_vtable_resolution(
-    object: f64,
-    method_name: &str,
-    func_ptr: usize,
-    param_count: u32,
-    has_synthetic_arguments: bool,
-    has_rest: bool,
-) {
-    if method_name_is_fast_dispatch_ineligible(method_name) {
-        return;
-    }
-    let bytes = method_name.as_bytes();
-    let Some((_, class_id)) = class_vtable_fast_guard(object, bytes) else {
-        return;
-    };
-    crate::object::class_registry::obj_dispatch_ic_insert(
-        class_id,
-        bytes,
-        func_ptr,
-        param_count,
-        has_synthetic_arguments,
-        has_rest,
-    );
 }
 
 unsafe fn call_primitive_closure_value(
@@ -735,6 +622,21 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    native_call_method_value_memo(object, key, args_ptr, args_len, 0)
+}
+
+/// [`js_native_call_method_value`] for a site that owns a chain memo
+/// (`memo_entries`, a keyed [`class_holder::MemoRef`]), or none (0).
+///
+/// # Safety
+/// As [`js_native_call_method_value`]; `memo` is 0 or names a live memo slot.
+pub(crate) unsafe fn native_call_method_value_memo(
+    object: f64,
+    key: f64,
+    args_ptr: *const f64,
+    args_len: usize,
+    memo: class_holder::MemoRef,
+) -> f64 {
     let key_jsval = JSValue::from_bits(key.to_bits());
     let is_symbol_key = crate::symbol::js_is_symbol(key) != 0;
 
@@ -892,6 +794,11 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value(
         if !str_ptr.is_null() {
             let bytes_ptr = (str_ptr as *const i8).add(std::mem::size_of::<crate::StringHeader>());
             let bytes_len = (*str_ptr).byte_len as usize;
+            if memo != 0 {
+                return memo_entries::memo_call(
+                    object, bytes_ptr, bytes_len, args_ptr, args_len, memo, false,
+                );
+            }
             return js_native_call_method(object, bytes_ptr, bytes_len, args_ptr, args_len);
         }
     }
@@ -1242,6 +1149,40 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> f64 {
+    native_call_method_tower(
+        object,
+        method_name_ptr,
+        method_name_len,
+        args_ptr,
+        args_len,
+        0,
+    )
+}
+
+/// The body of [`js_native_call_method`], for a call site that may own a
+/// chain memo (`memo`, see `method_site::chain_memo`; 0 for none): a repeat
+/// the memo names is answered before any probe (each declines an ordinary
+/// class instance), and the class instance's fast call records its walk
+/// there.
+///
+/// # Safety
+/// As [`js_native_call_method`]; `memo` is 0 or names a live memo slot.
+pub(crate) unsafe fn native_call_method_tower(
+    object: f64,
+    method_name_ptr: *const i8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+    memo: class_holder::MemoRef,
+) -> f64 {
+    if memo != 0 && !method_name_ptr.is_null() {
+        let name = std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len);
+        if let Some(result) =
+            class_holder::try_chain_memo_dispatch(object, memo, name, args_ptr, args_len)
+        {
+            return result;
+        }
+    }
     // #9675: a LEGACY BARE managed receiver — a real GC pointer that was never
     // NaN-boxed — must be reboxed under its true tag HERE, before the root
     // below and before the first probe. See `bare_receiver` for why the tail
@@ -1314,13 +1255,18 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             }
         }
     }
-    // #7769: the tower's own previously-computed answer for this
-    // (class_id, method_name) pair, when the receiver still satisfies every
-    // per-object precondition. See `try_class_vtable_fast_dispatch`.
-    if let Some(result) =
-        try_class_vtable_fast_dispatch(object, method_name_ptr, method_name_len, args_ptr, args_len)
-    {
-        return result;
+    // A class instance's method: the shapes of its prototype chain name the
+    // holder and the slot (`class_holder`), for an ordinary receiver whose
+    // per-object state the tower's probes would not act on.
+    if !method_name_ptr.is_null() && method_name_len > 0 {
+        let key = class_holder::MethodKey {
+            bytes: std::slice::from_raw_parts(method_name_ptr as *const u8, method_name_len),
+        };
+        if let Some(result) =
+            class_holder::try_class_holder_fast_dispatch(object, &key, args_ptr, args_len, memo)
+        {
+            return result;
+        }
     }
     // #10522: `t.unref()` & co. on a pristine timer handle; the guard proves the
     // tower would resolve the family's own native method (`timer::handle_object`).
@@ -2356,49 +2302,18 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
             }
         }
 
-        // Vtable lookup: check if this class has a registered method in the vtable
-        let class_id = (*obj).class_id;
-        if class_id != 0
-            && (!class_prototype_fast_guard_invalidated_for_method(
-                class_prototype_method_guard_slot(method_name),
-            ) || !class_proto_key_deleted(class_id, method_name))
-        {
-            if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-                if let Some(ref reg) = *registry {
-                    if let Some(vtable) = reg.get(&class_id) {
-                        if let Some(entry) = vtable.methods.get(method_name) {
-                            let this_i64 = jsval().as_pointer::<u8>() as i64;
-                            // #7769: reaching HERE is the proof that no
-                            // name-keyed or class-keyed probe above claims
-                            // this (class_id, method_name) — record it so the
-                            // next call can go straight to the method. The
-                            // per-receiver preconditions are re-checked on
-                            // every hit; see `try_class_vtable_fast_dispatch`.
-                            let func_ptr = entry.func_ptr;
-                            let param_count = entry.param_count;
-                            let has_synthetic_arguments = entry.has_synthetic_arguments;
-                            let has_rest = entry.has_rest;
-                            note_class_vtable_resolution(
-                                object(),
-                                method_name,
-                                func_ptr,
-                                param_count,
-                                has_synthetic_arguments,
-                                has_rest,
-                            );
-                            return call_vtable_method(
-                                func_ptr,
-                                this_i64,
-                                args_ptr,
-                                args_len,
-                                param_count,
-                                has_synthetic_arguments,
-                                has_rest,
-                            );
-                        }
-                    }
-                }
-            }
+        // A class instance's method: the property its prototype chain's
+        // shapes name (`class_holder`), the class's prototype object built
+        // first if no read has built it yet.
+        if let Some(result) = class_holder::call_class_instance_member(
+            &object_handle,
+            &arg_handles,
+            (*obj).class_id,
+            method_name,
+            args_ptr,
+            args_len,
+        ) {
+            return result;
         }
     }
 
@@ -2463,38 +2378,28 @@ pub unsafe extern "C-unwind" fn js_native_call_method(
     if jsval().is_int32() {
         let payload = jsval().as_int32() as u32;
         if payload != 0 {
-            let guard = REGISTERED_CLASS_IDS.read().unwrap();
-            if let Some(set) = guard.as_ref() {
-                if set.contains(&payload) {
-                    if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-                        if let Some(ref reg) = *registry {
-                            if let Some(vtable) = reg.get(&payload) {
-                                if let Some(entry) = vtable.methods.get(method_name) {
-                                    let undefined_this =
-                                        f64::from_bits(crate::value::TAG_UNDEFINED);
-                                    return call_vtable_method(
-                                        entry.func_ptr,
-                                        undefined_this.to_bits() as i64,
-                                        args_ptr,
-                                        args_len,
-                                        entry.param_count,
-                                        entry.has_synthetic_arguments,
-                                        entry.has_rest,
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    if matches!(method_name, "pipe" | "annotations") {
-                        return object();
-                    }
-                    crate::error::js_throw_type_error_not_a_function(
-                        std::ptr::null(),
-                        0,
-                        method_name.as_ptr(),
-                        method_name.len(),
-                    );
+            let registered = REGISTERED_CLASS_IDS
+                .read()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|set| set.contains(&payload));
+            if registered {
+                // The class's prototype method, called with an undefined
+                // `this`: the property `C.prototype` holds for the name.
+                if let Some(result) =
+                    class_holder::call_class_ref_method(payload, method_name, &arg_handles)
+                {
+                    return result;
                 }
+                if matches!(method_name, "pipe" | "annotations") {
+                    return object();
+                }
+                crate::error::js_throw_type_error_not_a_function(
+                    std::ptr::null(),
+                    0,
+                    method_name.as_ptr(),
+                    method_name.len(),
+                );
             }
         }
     }

@@ -261,17 +261,6 @@ fn declared_parent_class_object(
     Some(proto_obj)
 }
 
-/// [`class_prototype_object`] for a walk that serves an INSTANCE. Null where
-/// that entry is a declared class's parent class object: its statics are not
-/// on the instance's prototype chain (#10890).
-pub(crate) fn instance_class_prototype_object(class_id: u32) -> *mut ObjectHeader {
-    let proto_obj = class_prototype_object(class_id);
-    if declared_parent_class_object(class_id, proto_obj).is_some() {
-        return std::ptr::null_mut();
-    }
-    proto_obj
-}
-
 /// Perform ordinary `.prototype` assignment, then synchronize the synthetic
 /// class metadata used when a class extends a function (#711, #9365).
 #[no_mangle]

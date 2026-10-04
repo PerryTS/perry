@@ -992,235 +992,41 @@ pub(super) unsafe fn dispatch_handle(
                 }
             }
 
-            // Vtable lookup for class instances — fast path via per-callsite IC
+            // A class instance's method: the property its prototype chain's
+            // shapes name (`class_holder`), the class's prototype object built
+            // first if no read has built it yet. A runtime assignment
+            // (`C.prototype.m = f`) or delete is a property write on that
+            // object, so the chain sees it like any other key.
             let class_id = (*obj).class_id;
             if class_id != 0 {
-                if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
-                    vtable_ic_lookup(class_id, method_name_ptr as usize, method_name.as_bytes())
-                {
-                    let this_i64 = jsval.as_pointer::<u8>() as i64;
-                    return Some(call_vtable_method(
-                        func_ptr,
-                        this_i64,
-                        args_ptr,
-                        args_len,
-                        param_count,
-                        has_synthetic_arguments,
-                        has_rest,
-                    ));
-                }
-                // Refs #420: walk the parent chain via the class registry. Per
-                // JS spec, `subInstance.method()` for a method defined on a
-                // parent dispatches to the parent's implementation — drizzle's
-                // `serial("id").primaryKey()` where primaryKey is on
-                // ColumnBuilder (grandparent) but the receiver is a
-                // PgSerialBuilder (grandchild). The codegen-side dispatch tower
-                // in `lower_call.rs` only registers classes the importing module
-                // knows about; for not-by-name-imported subclasses (return
-                // values of imported functions) we depend on this runtime walk.
-                //
-                // DEADLOCK SAFETY: resolve the target under the registry READ
-                // lock, then DROP the lock before invoking the method body.
-                // A user method body can lazily init a module (function-local
-                // `require()` — Next.js `getServerImpl()` → `require('./next-
-                // server')`) whose top-level `class` declarations call
-                // `js_register_class_method` → a registry WRITE lock. std
-                // `RwLock` is not re-entrant, so holding the read guard across
-                // the call deadlocked the (single) main thread.
-                enum ResolvedMethod {
-                    Vtable {
-                        func_ptr: usize,
-                        param_count: u32,
-                        has_synthetic_arguments: bool,
-                        has_rest: bool,
-                        this_i64: i64,
-                    },
-                    // #711 part 2 / #321: a method that is an own-property of a
-                    // registered prototype object (`Function.prototype = X`,
-                    // effect's `EffectPrototype.pipe`).
-                    ProtoClosure {
-                        field_bits: u64,
-                    },
-                }
-                let mut resolved_method: Option<ResolvedMethod> = None;
-                // Prototype assignments/deletes for this method are rare.
-                // Until its scoped guard is retired, the producer-registered
-                // vtable is authoritative and the per-class side tables cannot
-                // contain an override for this name.
-                let prototype_mutated = class_prototype_fast_guard_invalidated_for_method(
-                    class_prototype_method_guard_slot(method_name),
-                );
-                if let Ok(registry) = CLASS_VTABLE_REGISTRY.read() {
-                    if let Some(ref reg) = *registry {
-                        let mut cur_cid = class_id;
-                        let mut depth = 0u32;
-                        while depth < 32 {
-                            let deleted =
-                                prototype_mutated && class_proto_key_deleted(cur_cid, method_name);
-                            // A runtime assignment is an own property of this
-                            // exact prototype and replaces the declared vtable
-                            // entry. Resolve it first; deletion hides both.
-                            if prototype_mutated && !deleted {
-                                if let Some(method_value) =
-                                    lookup_own_prototype_method(cur_cid, method_name)
-                                {
-                                    resolved_method = Some(ResolvedMethod::ProtoClosure {
-                                        field_bits: method_value.to_bits(),
-                                    });
-                                    break;
-                                }
-                            }
-                            if !deleted {
-                                if let Some(vtable) = reg.get(&cur_cid) {
-                                    if let Some(entry) = vtable.methods.get(method_name) {
-                                        vtable_ic_insert(
-                                            class_id,
-                                            method_name_ptr as usize,
-                                            method_name.as_bytes(),
-                                            entry.func_ptr,
-                                            entry.param_count,
-                                            entry.has_synthetic_arguments,
-                                            entry.has_rest,
-                                        );
-                                        // #7769: this walk — not the tail vtable
-                                        // arm of `js_native_call_method` — is where
-                                        // an INHERITED method resolves, and
-                                        // inherited methods are the common case in
-                                        // any real hierarchy (`class Square extends
-                                        // Rect` calling `Rect`'s `area`). Recording
-                                        // the outcome here is what lets the
-                                        // top-of-tower fast path serve them; the
-                                        // helper re-checks the receiver-shape
-                                        // predicate before storing anything.
-                                        super::note_class_vtable_resolution(
-                                            f64::from_bits(jsval.bits()),
-                                            method_name,
-                                            entry.func_ptr,
-                                            entry.param_count,
-                                            entry.has_synthetic_arguments,
-                                            entry.has_rest,
-                                        );
-                                        resolved_method = Some(ResolvedMethod::Vtable {
-                                            func_ptr: entry.func_ptr,
-                                            param_count: entry.param_count,
-                                            has_synthetic_arguments: entry.has_synthetic_arguments,
-                                            has_rest: entry.has_rest,
-                                            this_i64: jsval.as_pointer::<u8>() as i64,
-                                        });
-                                        break;
-                                    }
-                                }
-                            }
-                            let proto_obj = if deleted {
-                                std::ptr::null_mut()
-                            } else {
-                                // #10890: never a parent class object's statics.
-                                instance_class_prototype_object(cur_cid)
-                            };
-                            if !proto_obj.is_null() {
-                                let method_key = crate::string::js_string_from_bytes(
-                                    method_name.as_ptr(),
-                                    method_name.len() as u32,
-                                );
-                                // An inherited method that resolves to an ACCESSOR
-                                // on the prototype must observe the instance as
-                                // `this` (spec `[[Get]](P, Receiver)`), not the
-                                // prototype object the getter lives on. Stash the
-                                // receiver so `invoke_accessor_getter` rebinds it.
-                                // Without this, a schema library's lazily-installed
-                                // `describe`/`clone` accessors — `Object.define-
-                                // Property(proto, k, { get() { const b = fn.bind(this);
-                                // Object.defineProperty(this, k, { value: b }); return b } })`
-                                // on the shared class prototype — run with
-                                // `this === prototype`, bake `this = prototype` into
-                                // the returned bound method, and cache it on the
-                                // prototype. Every downstream read of an
-                                // instance-only field via `this.<field>` then
-                                // returns `undefined` (`Cannot read properties of
-                                // undefined`) even though the instance has it.
-                                // Mirrors `resolve_proto_chain_field_with_receiver`
-                                // (the winston `get transports()` fix).
-                                let receiver_f64 = f64::from_bits(jsval.bits());
-                                // #10490: the displaced accessor receiver rides
-                                // through the getter call — root it.
-                                let override_scope = crate::gc::RuntimeHandleScope::new();
-                                let prev_override =
-                                    super::super::field_get_set::accessor_receiver_override_begin(
-                                        receiver_f64,
-                                    )
-                                    .map(|value| override_scope.root_nanbox_f64(value));
-                                let field_val = js_object_get_field_by_name(
-                                    proto_obj as *const _,
-                                    method_key as *const crate::StringHeader,
-                                );
-                                super::super::field_get_set::accessor_receiver_override_end(
-                                    prev_override.map(|handle| handle.get_nanbox_f64()),
-                                );
-                                if !field_val.is_undefined() && !field_val.is_null() {
-                                    resolved_method = Some(ResolvedMethod::ProtoClosure {
-                                        field_bits: field_val.bits(),
-                                    });
-                                    break;
-                                }
-                            }
-                            match crate::object::class_registry::instance_chain_parent_class_id(
-                                cur_cid,
-                            ) {
-                                Some(pid) if pid != 0 => {
-                                    cur_cid = pid;
-                                    depth += 1;
-                                }
-                                _ => break,
-                            }
-                        }
-                    }
-                }
-                // Registry guard released — safe to run the method body (which
-                // may register classes via lazy module init).
-                match resolved_method {
-                    Some(ResolvedMethod::Vtable {
-                        func_ptr,
-                        param_count,
-                        has_synthetic_arguments,
-                        has_rest,
-                        this_i64,
-                    }) => {
-                        return Some(call_vtable_method(
-                            func_ptr,
-                            this_i64,
-                            args_ptr,
-                            args_len,
-                            param_count,
-                            has_synthetic_arguments,
-                            has_rest,
+                if !super::class_holder::name_is_not_a_prototype_method(method_name.as_bytes()) {
+                    let key = super::class_holder::MethodKey {
+                        bytes: method_name.as_bytes(),
+                    };
+                    if let Some(value) =
+                        super::class_holder::class_instance_method_value(object_handle, &key)
+                    {
+                        let args = refreshed_args();
+                        return Some(super::class_holder::call_chain_value(
+                            value,
+                            object_handle,
+                            args.as_ptr(),
+                            args.len(),
                         ));
                     }
-                    Some(ResolvedMethod::ProtoClosure { field_bits }) => {
-                        // #321 (effect Context/Layer/Scope): rebind the closure's
-                        // `this` slot to the receiver — `clone_closure_rebind_this`
-                        // is a no-op for closures that don't capture `this` and for
-                        // non-closure values, so those paths are unaffected.
-                        let bound = crate::closure::clone_closure_rebind_this(
-                            field_bits,
-                            f64::from_bits(jsval.bits()),
-                        );
-                        let result = crate::closure::native_call_value_this(
-                            f64::from_bits(bound),
-                            crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
-                            args_ptr,
-                            args_len,
-                        );
-                        return Some(result);
-                    }
-                    None => {}
+                } else if let Some(result) = super::class_holder::call_non_property_member(
+                    object_handle.get_nanbox_f64(),
+                    class_id,
+                    method_name,
+                    args_ptr,
+                    args_len,
+                ) {
+                    return Some(result);
                 }
-                // #809: independent prototype-object resolution. The walk
-                // above only runs when `CLASS_VTABLE_REGISTRY` is `Some` —
-                // a program with no user classes that only does
-                // `Object.create(objLiteral).method()` has an empty/None
-                // registry, so `inst.method()` never reached
-                // `class_prototype_object` and threw `<m> is not a
-                // function`. Resolve the method off the synthetic-class-id
+                // #809: independent prototype-object resolution. A
+                // synthetic class id (`Object.create(objLiteral)`, an ES5
+                // constructor) has no declared prototype for the chain
+                // above to start from. Resolve the method off the synthetic-class-id
                 // prototype chain directly (reuses the same helper as
                 // `js_object_get_field_by_name`), then invoke it with
                 // `this` bound to the receiver.

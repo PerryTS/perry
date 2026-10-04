@@ -918,15 +918,10 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, I64, PTR, I64],
     );
-    // Miss edge of a class-method site that keeps a learned receiver word
-    // (`lower_call/method_override.rs`): learns, then dispatches as above.
-    module.declare_function(
-        "js_native_call_method_by_id_learn",
-        DOUBLE,
-        &[DOUBLE, I64, PTR, I64, PTR, I32],
-    );
-    // Miss edge of a class-method site that keeps a learned receiver word
-    // (): learns, then dispatches as above.
+    // Miss edge of a class-method site (`lower_call/method_override.rs`):
+    // learns the receiver word (unless the site address is tagged with bit
+    // 0), then dispatches as above with the chain memo slot that follows the
+    // word.
     module.declare_function(
         "js_native_call_method_by_id_learn",
         DOUBLE,
@@ -952,6 +947,18 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         "js_native_call_method_str_key",
         DOUBLE,
         &[DOUBLE, I64, PTR, I64],
+    );
+    // The computed-key call site's forms that pass its chain memo slot
+    // (`lower_call/early_branches.rs`).
+    module.declare_function(
+        "js_native_call_method_str_key_memo",
+        DOUBLE,
+        &[DOUBLE, I64, PTR, I64, PTR],
+    );
+    module.declare_function(
+        "js_native_call_method_value_memo",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, PTR, I64, PTR],
     );
     // #321: dispatch obj[key](args) for a runtime-value key (not statically a
     // string). Binds `this = obj` for any key type — string keys go through

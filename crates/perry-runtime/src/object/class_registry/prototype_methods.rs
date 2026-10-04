@@ -270,11 +270,10 @@ pub(crate) fn invalidate_class_prototype_fast_guards_for_method(name: &str) {
 ///   ancestor declares — exactly the names whose resolution it can change. A
 ///   name the class itself declares still resolves to its own body, and a
 ///   name no declared class carries never had a direct arm;
-/// * the `(class_id, method name)` dispatch caches (`VTABLE_IC`,
-///   `OBJ_DISPATCH_IC`) are keyed on `VTABLE_GEN`, which the retirement bumps.
-///
-/// The receiver-word site memos need nothing: the relink restamps `proto`'s
-/// shape, which their hop facts compare.
+/// The runtime's by-name method calls need nothing: they read the
+/// prototype chain's shapes (`native_call_method::class_holder`), and the
+/// relink restamps `proto`. Neither do the receiver-word site memos: the
+/// relink restamps `proto`'s shape, which their hop facts compare.
 ///
 /// # Safety
 /// `proto` must point to a live, meta-capable object.

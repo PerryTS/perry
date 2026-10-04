@@ -1987,8 +1987,10 @@ js_native_call_method_nullsafe	f64	f64,ptr,usize,ptr,usize
 js_native_call_method_patched_proto	f64	f64,ptr,usize,ptr,usize
 js_native_call_method_patched_proto_apply	f64	f64,ptr,usize,i64
 js_native_call_method_str_key	f64	f64,i64,ptr,usize
+js_native_call_method_str_key_memo	f64	f64,i64,ptr,usize,ptr
 js_native_call_method_value	f64	f64,f64,ptr,usize
 js_native_call_method_value_apply	f64	f64,f64,i64
+js_native_call_method_value_memo	f64	f64,f64,ptr,usize,ptr
 js_native_call_value	f64	f64,i64,ptr,usize
 js_native_handle_dispose	i32s	f64
 js_native_handle_mark_main_thread	void	

@@ -614,7 +614,7 @@ pub(super) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> 
 /// names its registry-resolved prototype: priming resolves the live
 /// declared-prototype pointer, and a later relink retires that pointer's
 /// ShapeId (see the module docs), which the hit's holder compare sees.
-unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const ObjectHeader> {
+pub(super) unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const ObjectHeader> {
     let pid = shape_proto_id(object_shape_stamp(recv))?;
     let (stated, word) = stated_link(recv);
     if stated != pid {

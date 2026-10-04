@@ -1098,6 +1098,10 @@ pub fn gc_init() {
     reg_scanner!(crate::proxy::scan_setter_site_roots_mut);
     // An inherited method-site entry roots its direct prototype holder.
     reg_scanner!(crate::object::method_site::scan_method_site_roots_mut);
+    // A site's chain memo names every prototype from the receiver's
+    // [[Prototype]] to the holder of the method it answers; it compares each
+    // one's header word on use, so each is a STRONG root.
+    reg_scanner!(crate::object::method_site::chain_memo::scan_chain_memo_roots_mut);
     // A read site's holder entry names the object that holds the answer (and
     // the hops to it); the emitted hit loads through it, so each is a STRONG
     // root (`object::method_site::read_holder`).
