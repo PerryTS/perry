@@ -1,0 +1,1 @@
+Re-audit `scripts/gc_runtime_root_holders.json`: refresh the PASS1_MARKED window pins after reviewing the gc/cycle.rs and gc/mod.rs changes, delete the stale PRIVATE_MARKER_CACHE entry, and record verdicts for PRIVATE_PROOF_CACHE, THEN_SITE and CLASS_VALUES.
