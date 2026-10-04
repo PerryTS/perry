@@ -12,6 +12,36 @@ use super::combinators::{
     callable_closure_value, combinator_catch_js, PROMISE_REJECT_FN_INFO, PROMISE_RESOLVE_FN_INFO,
 };
 use super::*;
+use crate::object::field_get_set::runtime_read_site::{object_receiver, RuntimeReadSite};
+
+crate::perry_thread_local! {
+    /// `Get(resolution, "then")` (27.2.1.3.2 step 8) for a resolution
+    /// `then_probe::definitely_no_then` could not prove: a runtime read site,
+    /// answered from the resolution's shape (and its holder's) as a compiled
+    /// `resolution.then` is.
+    static THEN_SITE: RuntimeReadSite = const { RuntimeReadSite::new() };
+}
+
+/// The `then` site's answer for an ordinary-object resolution when the shapes
+/// give it: no `setjmp`, no key, no collection. `None` takes
+/// [`get_then_collecting`].
+#[inline]
+fn then_site_leaf(value: f64) -> Option<f64> {
+    let obj = object_receiver(value)?;
+    THEN_SITE.with(|site| unsafe { site.read_leaf(obj) })
+}
+
+/// The collecting `Get(value, "then")`: the site's slow entry (which primes
+/// it) for an ordinary object, the generic dynamic getter for every other
+/// value. Can run a getter and throw; callers catch.
+fn get_then_collecting(value: f64) -> f64 {
+    match object_receiver(value) {
+        Some(obj) => THEN_SITE.with(|site| unsafe { site.read_slow(obj, b"then").0 }),
+        None => unsafe {
+            crate::value::js_dynamic_object_get_property(value, b"then".as_ptr() as *const i8, 4)
+        },
+    }
+}
 
 fn is_native_array_value(value: f64) -> bool {
     let bits = value.to_bits();
@@ -114,9 +144,17 @@ pub(super) fn get_then_action(value: f64) -> Result<Option<f64>, f64> {
     if super::then_probe::definitely_no_then(value) {
         return Ok(None);
     }
-    let then = combinator_catch_js(|| unsafe {
-        crate::value::js_dynamic_object_get_property(value, b"then".as_ptr() as *const i8, 4)
-    })?;
+    get_then_action_read(value)
+}
+
+/// `get_then_action` past the probe: the `Get` itself. Out of line so the
+/// probe's answer stays the whole inlined body of every resolve.
+#[inline(never)]
+fn get_then_action_read(value: f64) -> Result<Option<f64>, f64> {
+    let then = match then_site_leaf(value) {
+        Some(then) => then,
+        None => combinator_catch_js(|| get_then_collecting(value))?,
+    };
     if callable_closure_value(then).is_some() {
         return Ok(Some(then));
     }
@@ -448,13 +486,11 @@ pub(super) fn assimilate_via_then_property(value: f64) -> f64 {
     // completion → resolve-with-thenable rejects the wrapper promise with the
     // thrown value (step 9), rather than letting the exception unwind out of the
     // resolve path. Return that rejected wrapper so callers chain it.
-    let then_val = match combinator_catch_js(|| unsafe {
-        crate::value::js_dynamic_object_get_property(
-            value_handle.get_nanbox_f64(),
-            b"then".as_ptr() as *const i8,
-            4,
-        )
-    }) {
+    let then_val = match then_site_leaf(value_handle.get_nanbox_f64())
+        .map(Ok)
+        .unwrap_or_else(|| {
+            combinator_catch_js(|| get_then_collecting(value_handle.get_nanbox_f64()))
+        }) {
         Ok(v) => v,
         Err(reason) => {
             let reason_handle = scope.root_nanbox_f64(reason);

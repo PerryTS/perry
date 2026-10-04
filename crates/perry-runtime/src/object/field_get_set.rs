@@ -233,6 +233,8 @@ mod probe_dispatch;
 /// #9131: per-instance `[[Prototype]]` override lookup, split out of
 /// `get_field_by_name_tail.rs` for the 2000-line cap.
 mod prototype_override;
+/// A builtin's spec `Get` as a read site: an emitted site's two words, per agent.
+pub(crate) mod runtime_read_site;
 #[allow(dead_code)] // #9244: field-get short-circuits removed; kept for the method path.
 
 /// Size of the direct-mapped `(keys_ptr, key_hash, field_index)` inline
