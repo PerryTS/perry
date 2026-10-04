@@ -2155,9 +2155,11 @@ js_object_is_frozen	Reenters
 js_object_is_sealed	Reenters
 js_object_keys	Reenters
 js_object_keys_value	Reenters
+js_object_literal_define	Reenters
 js_object_literal_infer_computed_function_name	Reenters
 js_object_literal_set_computed	Reenters
 js_object_literal_set_prototype	Reenters
+js_object_literal_spread	Reenters
 js_object_literal_to_property_key	Reenters
 js_object_live_slot_count	Leaf
 js_object_lookup_getter	Reenters
