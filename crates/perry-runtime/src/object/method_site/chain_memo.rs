@@ -20,7 +20,10 @@
 //! * the receiver's `(class_id | ShapeId)` word: the receiver lacks the name
 //!   (its key list), and its [[Prototype]] is the first hop (a declared
 //!   class's prototype, whose relink retires the displaced prototype's
-//!   ShapeId, or the serial its shape names);
+//!   ShapeId, or the serial its shape names). An instance of a
+//!   per-evaluation class names its evaluation's prototype by serial, so
+//!   each evaluation's instances have their own ShapeIds and a way never
+//!   answers one evaluation's receiver with another's method;
 //! * each hop's word, read from the hop itself: the hop lacks the name and
 //!   links to the next hop by the serial identity its shape records (a
 //!   `setPrototypeOf`, key add, delete or descriptor change restamps it);
@@ -174,15 +177,12 @@ pub(crate) unsafe fn memo_lookup_value(
         return None;
     }
     // The receiver predicate's per-object part its word does not carry: a
-    // metadata record only for storage (no recorded [[Prototype]], no flags,
-    // no brand, no dictionary keys).
+    // metadata record only for storage (no flags, no dictionary keys). A
+    // recorded [[Prototype]] is the one its ShapeId names (a way is recorded
+    // only for a receiver whose shape states it), and a per-evaluation
+    // class's private brand is a fact of that prototype.
     let meta = (*(addr as *const ObjectHeader)).meta;
-    if !meta.is_null()
-        && ((*meta).prototype != 0
-            || (*meta).flags != 0
-            || (*meta).private_evaluation_brand != 0
-            || (*meta).dictionary_keys != 0)
-    {
+    if !meta.is_null() && ((*meta).flags != 0 || (*meta).dictionary_keys != 0) {
         return None;
     }
     ways_lookup(&*memo_ptr, memo & MEMO_KEYED != 0, addr, name)

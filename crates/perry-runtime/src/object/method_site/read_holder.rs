@@ -637,6 +637,40 @@ pub(super) unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const Obje
     (!holder.is_null() && holder != recv).then_some(holder)
 }
 
+/// The [[Prototype]] a class instance with the recorded prototype `word`
+/// (non-zero, read off the object) inherits from, when its ShapeId pins it:
+/// `None` for the one its class implies (a CLASS identity), `Some(object)`
+/// for a recorded one (a MIXED identity: a per-evaluation class's
+/// prototype, or one set on the instance). `Err` when the shape does not
+/// state that link.
+///
+/// A MIXED identity carries the prototype's serial, so two receivers of
+/// one ShapeId inherit from one object; two evaluations of a class
+/// declaration have two prototypes, hence two ShapeIds.
+///
+/// # Safety
+/// `recv` is a live ordinary object; `word` is its recorded prototype word.
+pub(crate) unsafe fn recorded_class_link(
+    recv: *const ObjectHeader,
+    word: u64,
+) -> Result<Option<*const ObjectHeader>, ()> {
+    let pid = shape_proto_id(object_shape_stamp(recv)).ok_or(())?;
+    if crate::object::shapes::object_proto_id_for(recv, word) != pid {
+        return Err(());
+    }
+    if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
+        return Ok(None);
+    }
+    if !(PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
+        return Err(());
+    }
+    let holder = next_from_word(recv, word);
+    if holder.is_null() || holder == recv {
+        return Err(());
+    }
+    Ok(Some(holder))
+}
+
 struct HolderAccessor {
     holder: usize,
     shape: u32,
