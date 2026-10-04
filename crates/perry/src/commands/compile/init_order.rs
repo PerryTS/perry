@@ -102,6 +102,166 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
     }
 }
 
+/// Preserve cross-module lexical TDZ only for modules on a static-import
+/// cycle. In an acyclic graph every dependency finishes evaluation before an
+/// importer can read its exported binding, so the export getter cannot observe
+/// its initial uninitialized state.
+pub(super) fn mark_cyclic_export_tdz(ctx: &mut CompilationContext) {
+    let mut deps: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
+    for (path, module) in &ctx.native_modules {
+        let mut targets: Vec<PathBuf> = module
+            .imports
+            .iter()
+            .filter(|import| {
+                !import.is_dynamic
+                    && !import.type_only
+                    && !import.runtime_erased
+                    && !import.is_deferred_require
+            })
+            .filter_map(|import| import.resolved_path.as_ref().map(PathBuf::from))
+            .filter(|target| ctx.native_modules.contains_key(target))
+            .collect();
+        for export in &module.exports {
+            let source = match export {
+                perry_hir::Export::ExportAll { source }
+                | perry_hir::Export::ReExport { source, .. }
+                | perry_hir::Export::NamespaceReExport { source, .. } => Some(source),
+                perry_hir::Export::Named { .. } => None,
+            };
+            if let Some(source) = source {
+                if let Some((target, _)) = resolve_import_with_context(source, path, ctx) {
+                    if ctx.native_modules.contains_key(&target) {
+                        targets.push(target);
+                    }
+                }
+            }
+        }
+        targets.sort();
+        targets.dedup();
+        deps.insert(path.clone(), targets);
+    }
+
+    fn reaches(
+        current: &PathBuf,
+        target: &PathBuf,
+        deps: &HashMap<PathBuf, Vec<PathBuf>>,
+        seen: &mut HashSet<PathBuf>,
+    ) -> bool {
+        if !seen.insert(current.clone()) {
+            return false;
+        }
+        deps.get(current).is_some_and(|next| {
+            next.iter()
+                .any(|node| node == target || reaches(node, target, deps, seen))
+        })
+    }
+
+    let cyclic: Vec<PathBuf> = deps
+        .iter()
+        .filter_map(|(path, direct)| {
+            direct
+                .iter()
+                .any(|dep| dep == path || reaches(dep, path, &deps, &mut HashSet::new()))
+                .then(|| path.clone())
+        })
+        .collect();
+
+    for path in cyclic {
+        let Some(module) = ctx.native_modules.get_mut(&path) else {
+            continue;
+        };
+        let exported_names: HashSet<&str> = module
+            .exports
+            .iter()
+            .filter_map(|export| match export {
+                perry_hir::Export::Named { local, .. } => Some(local.as_str()),
+                _ => None,
+            })
+            .collect();
+        let getter_ids: Vec<u32> = module
+            .init
+            .iter()
+            .filter_map(|stmt| match stmt {
+                perry_hir::Stmt::Let { id, name, .. }
+                    if exported_names.contains(name.as_str())
+                        && module.module_lexical_bindings.contains(id) =>
+                {
+                    Some(*id)
+                }
+                _ => None,
+            })
+            .collect();
+        let mut ids = getter_ids.clone();
+        // A cycle can also call an exported hoisted function before this
+        // module starts (or finishes) evaluation. Retain sentinels for module
+        // lexicals reachable from function/class bodies in cyclic modules;
+        // limiting this to cycles keeps the ordinary acyclic path check-free.
+        // We intentionally include private helpers because an exported body
+        // may reach one through a FuncRef call chain.
+        let mut body_refs = Vec::new();
+        let mut visited = HashSet::new();
+        let mut collect_function = |function: &perry_hir::Function| {
+            for stmt in &function.body {
+                perry_hir::collect_local_refs_stmt(stmt, &mut body_refs, &mut visited);
+            }
+            for default in function
+                .params
+                .iter()
+                .filter_map(|param| param.default.as_ref())
+            {
+                perry_hir::collect_local_refs_expr(default, &mut body_refs, &mut visited);
+            }
+        };
+        for function in &module.functions {
+            collect_function(function);
+        }
+        for class in &module.classes {
+            for function in class
+                .methods
+                .iter()
+                .chain(&class.static_methods)
+                .chain(class.getters.iter().map(|(_, function)| function))
+                .chain(class.setters.iter().map(|(_, function)| function))
+                .chain(class.constructor.iter())
+                .chain(class.computed_members.iter().map(|member| &member.function))
+            {
+                collect_function(function);
+            }
+        }
+        drop(collect_function);
+        for class in &module.classes {
+            for field in class.fields.iter().chain(&class.static_fields) {
+                for expr in field.init.iter().chain(&field.key_expr) {
+                    perry_hir::collect_local_refs_expr(expr, &mut body_refs, &mut visited);
+                }
+            }
+        }
+        ids.extend(
+            body_refs
+                .into_iter()
+                .filter(|id| module.module_lexical_bindings.contains(id)),
+        );
+        if ids.is_empty() {
+            continue;
+        }
+        module
+            .cyclic_export_tdz_bindings
+            .extend(getter_ids.iter().copied());
+        if let Some(perry_hir::Stmt::PreallocateTdzBoxes(existing)) = module.init.first_mut() {
+            ids.extend(existing.iter().copied());
+            ids.sort_unstable();
+            ids.dedup();
+            *existing = ids;
+        } else {
+            ids.sort_unstable();
+            ids.dedup();
+            module
+                .init
+                .insert(0, perry_hir::Stmt::PreallocateTdzBoxes(ids));
+        }
+    }
+}
+
 /// Collect non-entry module names for init function calls.
 ///
 /// Topologically sort by import dependencies so that if module A imports from module B,

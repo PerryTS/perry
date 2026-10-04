@@ -18,77 +18,6 @@ use crate::lower_types::hoisted_text_codec::{
     infer_hoisted_text_codec_var_type, require_literal_specifier,
 };
 
-fn module_forward_tdz_ids(module: &Module, lexical_ids: &[LocalId]) -> Vec<LocalId> {
-    fn collect_function_refs(
-        function: &Function,
-        refs: &mut Vec<LocalId>,
-        visited: &mut HashSet<usize>,
-    ) {
-        for stmt in &function.body {
-            crate::analysis::collect_local_refs_stmt(stmt, refs, visited);
-        }
-        for param in &function.params {
-            if let Some(default) = &param.default {
-                crate::analysis::collect_local_refs_expr(default, refs, visited);
-            }
-        }
-    }
-
-    let lexical: HashSet<LocalId> = lexical_ids.iter().copied().collect();
-    let mut tdz = HashSet::new();
-    let mut initialized = HashSet::new();
-    let mut visited = HashSet::new();
-
-    // Module init keeps source execution order. A reference in a statement is
-    // evaluated before any binding introduced by that statement is initialized
-    // (`const x = x`), so collect references before declarations.
-    for stmt in &module.init {
-        let mut refs = Vec::new();
-        crate::analysis::collect_local_refs_stmt(stmt, &mut refs, &mut visited);
-        tdz.extend(
-            refs.into_iter()
-                .filter(|id| lexical.contains(id) && !initialized.contains(id)),
-        );
-
-        let mut declared = HashSet::new();
-        crate::lower_decl::collect_top_level_let_ids_stmt(stmt, &mut declared);
-        initialized.extend(declared.into_iter().filter(|id| lexical.contains(id)));
-    }
-
-    // A function/class body can run before a lexical declaration regardless
-    // of where the declaration itself appears because function declarations
-    // are hoisted. Conservatively retain the TDZ for every module lexical read
-    // from executable nested code; these ids are promoted to module globals by
-    // codegen, so this does not turn ordinary entry locals into heap boxes.
-    let mut nested_refs = Vec::new();
-    for function in &module.functions {
-        collect_function_refs(function, &mut nested_refs, &mut visited);
-    }
-    for class in &module.classes {
-        for function in class
-            .methods
-            .iter()
-            .chain(&class.static_methods)
-            .chain(class.getters.iter().map(|(_, f)| f))
-            .chain(class.setters.iter().map(|(_, f)| f))
-            .chain(class.constructor.iter())
-            .chain(class.computed_members.iter().map(|member| &member.function))
-        {
-            collect_function_refs(function, &mut nested_refs, &mut visited);
-        }
-        for field in class.fields.iter().chain(&class.static_fields) {
-            for expr in field.init.iter().chain(&field.key_expr) {
-                crate::analysis::collect_local_refs_expr(expr, &mut nested_refs, &mut visited);
-            }
-        }
-    }
-    tdz.extend(nested_refs.into_iter().filter(|id| lexical.contains(id)));
-
-    let mut tdz: Vec<_> = tdz.into_iter().collect();
-    tdz.sort_unstable();
-    tdz
-}
-
 fn reflect_script_var_initializers(
     stmts: Vec<Stmt>,
     script_vars: &HashMap<LocalId, String>,
@@ -1627,7 +1556,10 @@ pub fn lower_module_full_with_platform_globals(
         }
     }
 
-    let module_tdz_ids = module_forward_tdz_ids(&module, &module_lexical_ids);
+    module
+        .module_lexical_bindings
+        .extend(module_lexical_ids.iter().copied());
+    let module_tdz_ids = super::module_tdz::forward_ids(&module, &module_lexical_ids);
     if !module_tdz_ids.is_empty() {
         // Global/ModuleDeclarationInstantiation creates every top-level
         // lexical binding before any source statement executes, but leaves it

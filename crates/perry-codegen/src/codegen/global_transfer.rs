@@ -273,6 +273,15 @@ pub(crate) fn load_module_global(ctx: &mut FnCtx<'_>, id: u32, global_name: &str
     } else {
         ctx.block().load(DOUBLE, &format!("@{global_name}"))
     };
+    // `tdz_binding_names` says the module global is sentinel-capable;
+    // `tdz_boxes` says this particular lexical program point can still run
+    // before its declaration. Module init removes the id at the declaration,
+    // so later top-level reads are plain loads. Function contexts seed the set
+    // because a hoisted/cyclic call may enter them before module init reaches
+    // the declaration.
+    if !ctx.tdz_boxes.contains(&id) {
+        return value;
+    }
     let Some(name) = ctx.strings.tdz_binding_names.get(&id).cloned() else {
         return value;
     };

@@ -161,6 +161,7 @@ pub(crate) fn emit_module_globals(
     imported_classes: &[ImportedClass],
     compile_time_constants: &HashMap<u32, f64>,
     tdz_binding_names: &HashMap<u32, String>,
+    cyclic_tdz_name_globals: &HashMap<u32, String>,
     module_prefix: &str,
     cjs_property_exports: &super::cjs_exports::PropertyExports,
     thread_transfer: bool,
@@ -571,12 +572,39 @@ pub(crate) fn emit_module_globals(
                             } else {
                                 let getter = llmod.define_function(&getter_name, DOUBLE, vec![]);
                                 let _ = getter.create_block("entry");
-                                let blk = getter.block_mut(0).unwrap();
-                                let val = match &transfer {
-                                    Some(transfer) => blk.call(DOUBLE, &transfer.accessor, &[]),
-                                    None => blk.load(DOUBLE, &format!("@{}", global_name)),
+                                let val = {
+                                    let blk = getter.block_mut(0).unwrap();
+                                    match &transfer {
+                                        Some(transfer) => blk.call(DOUBLE, &transfer.accessor, &[]),
+                                        None => blk.load(DOUBLE, &format!("@{}", global_name)),
+                                    }
                                 };
-                                blk.ret(DOUBLE, &val);
+                                if let Some(name_global) = cyclic_tdz_name_globals.get(id) {
+                                    let _ = getter.create_block("tdz");
+                                    let _ = getter.create_block("ready");
+                                    let tdz_label = getter.block_mut(1).unwrap().label.clone();
+                                    let ready_label = getter.block_mut(2).unwrap().label.clone();
+                                    let entry = getter.block_mut(0).unwrap();
+                                    let bits = entry.bitcast_double_to_i64(&val);
+                                    let is_tdz = entry.icmp_eq(
+                                        crate::types::I64,
+                                        &bits,
+                                        crate::nanbox::TAG_TDZ_I64,
+                                    );
+                                    entry.cond_br(&is_tdz, &tdz_label, &ready_label);
+
+                                    let tdz = getter.block_mut(1).unwrap();
+                                    let name = tdz.load(DOUBLE, &format!("@{}", name_global));
+                                    tdz.call(
+                                        DOUBLE,
+                                        "js_throw_reference_error_tdz",
+                                        &[(DOUBLE, &name)],
+                                    );
+                                    tdz.unreachable();
+                                    getter.block_mut(2).unwrap().ret(DOUBLE, &val);
+                                } else {
+                                    getter.block_mut(0).unwrap().ret(DOUBLE, &val);
+                                }
                             }
                         }
 

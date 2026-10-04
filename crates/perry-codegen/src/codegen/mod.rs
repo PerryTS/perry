@@ -593,6 +593,14 @@ fn compile_module_impl(
     let mut strings = StringPool::with_prefix(module_prefix.clone());
     strings.set_thread_literal_callback_prefix(thread_literal_callback_prefix.clone());
     strings.tdz_binding_names = tdz_names::collect(hir);
+    let mut cyclic_tdz_name_globals = HashMap::new();
+    for id in &hir.cyclic_export_tdz_bindings {
+        let Some(name) = strings.tdz_binding_names.get(id).cloned() else {
+            continue;
+        };
+        let index = strings.intern(&name);
+        cyclic_tdz_name_globals.insert(*id, strings.entry(index).handle_global.clone());
+    }
     // #5247: install per-module source-location context for the dynamic
     // call-dispatch throw path, but only under `--debug-symbols` (which sets
     // `opts.debug_locations` + `opts.module_source`). Off by default — no
@@ -2941,6 +2949,7 @@ fn compile_module_impl(
         &opts.imported_classes,
         &cross_module.compile_time_constants,
         &strings.tdz_binding_names,
+        &cyclic_tdz_name_globals,
         &module_prefix,
         &cjs_property_exports,
         global_transfer::enabled(thread_agents),

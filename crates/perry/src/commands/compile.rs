@@ -87,7 +87,7 @@ use collect_modules::collect_modules;
 use harmonyos_shim::emit_harmonyos_arkts_stubs;
 use host_config::apply_pkg_and_toml_config;
 use i18n_emit::{emit_android_i18n_resources, write_i18n_key_registry};
-use init_order::{classify_eager_modules, topo_sort_non_entry_modules};
+use init_order::{classify_eager_modules, mark_cyclic_export_tdz, topo_sort_non_entry_modules};
 pub use library_search::find_library;
 pub(crate) use library_search::host_target_triple;
 use library_search::{

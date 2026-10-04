@@ -98,6 +98,16 @@ pub struct Module {
     pub init_is_strict: bool,
     /// Top-level statements to execute
     pub init: Vec<Stmt>,
+    /// Top-level `let`/`const` binding ids. The compile driver uses this HIR
+    /// fact after the complete import graph is known to retain TDZ sentinels
+    /// for exported lexicals only in modules that participate in a static
+    /// import cycle. It is otherwise inert; the emitted TDZ shape lives in
+    /// `init` as `PreallocateTdzBoxes`.
+    pub module_lexical_bindings: std::collections::HashSet<crate::types::LocalId>,
+    /// Exported lexical ids whose defining module lies on a static-import
+    /// cycle. Their cross-module value getters retain a TDZ check; acyclic
+    /// exports do not.
+    pub cyclic_export_tdz_bindings: std::collections::HashSet<crate::types::LocalId>,
     /// Lexical bindings from multi-declarator classic `for` heads.
     ///
     /// HIR has one `For::init` statement slot, so these declarations are
@@ -237,6 +247,8 @@ impl Module {
             annexb_global_undefined_names: Vec::new(),
             init_is_strict: false,
             init: Vec::new(),
+            module_lexical_bindings: std::collections::HashSet::new(),
+            cyclic_export_tdz_bindings: std::collections::HashSet::new(),
             classic_for_lexical_bindings: std::collections::HashSet::new(),
             exported_native_instances: Vec::new(),
             exported_func_return_native_instances: Vec::new(),

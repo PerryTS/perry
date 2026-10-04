@@ -1075,6 +1075,11 @@ pub fn run_with_parse_cache(
 
     let i18n_table = apply_i18n_pass(&mut ctx, i18n_config.as_ref(), &i18n_translations, format);
 
+    // The complete, post-tree-shake static graph is available only here.
+    // Mark exported lexical bindings in actual cycles before module const
+    // folding decides which function-body reads may become literals.
+    mark_cyclic_export_tdz(&mut ctx);
+
     // Module-level const literals fold into their reads only now, after the
     // whole transform phase: every cross-module harvest has been taken from
     // the unfolded bodies, so no inlining decision moves, while the typed-ABI

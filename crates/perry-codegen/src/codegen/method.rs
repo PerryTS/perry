@@ -540,6 +540,7 @@ pub(super) fn compile_method(
         // invalidate the wrapper's exact-value proof.
         reassigned_locals.remove(&method.params[index].id);
     }
+    let initial_tdz_boxes = strings.tdz_binding_names.keys().copied().collect();
     let mut ctx = FnCtx {
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -607,7 +608,7 @@ pub(super) fn compile_method(
         func_returns_class: &cross_module.func_returns_class,
         boxed_vars: method_boxed_vars,
         prealloc_boxes: std::collections::HashSet::new(),
-        tdz_boxes: std::collections::HashSet::new(),
+        tdz_boxes: initial_tdz_boxes,
         compiler_private_async_i32_control_locals: &cross_module
             .compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals: &cross_module

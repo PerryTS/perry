@@ -885,7 +885,18 @@ pub(crate) fn lower_let(
                     MaterializationReason::UnknownAlias,
                 );
             }
+        } else {
+            // A declaration without an initializer still initializes the
+            // binding to `undefined`; do not leave the preallocated TDZ
+            // sentinel in the module-global slot.
+            let g_ref = format!("@{}", global_name);
+            let undefined =
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            ctx.block().store(DOUBLE, &undefined, &g_ref);
         }
+        // Keep the binding in TDZ while its initializer is evaluated (so
+        // `const x = x` throws), then make later top-level reads unchecked.
+        ctx.tdz_boxes.remove(&id);
         return Ok(());
     }
     // Boxed local: allocate a heap box and store its pointer

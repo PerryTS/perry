@@ -192,6 +192,8 @@ fn bare_module(name: &str) -> Module {
         functions: Vec::new(),
         init_is_strict: false,
         init: Vec::new(),
+        module_lexical_bindings: Default::default(),
+        cyclic_export_tdz_bindings: Default::default(),
         classic_for_lexical_bindings: std::collections::HashSet::new(),
         exported_native_instances: Vec::new(),
         exported_func_return_native_instances: Vec::new(),

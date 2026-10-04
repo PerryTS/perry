@@ -24,6 +24,10 @@ impl SH for Module {
             annexb_global_undefined_names,
             init_is_strict,
             init,
+            // Analysis input for the whole-graph TDZ finalizer. The resulting
+            // PreallocateTdzBoxes statement in `init` is already hashed.
+            module_lexical_bindings: _,
+            cyclic_export_tdz_bindings,
             classic_for_lexical_bindings,
             exported_native_instances,
             exported_func_return_native_instances,
@@ -69,6 +73,12 @@ impl SH for Module {
         // reused for a strict module.
         init_is_strict.hash(h);
         init.hash(h);
+        if !cyclic_export_tdz_bindings.is_empty() {
+            tag(h, 0x5a43);
+            let mut cyclic_ids: Vec<u32> = cyclic_export_tdz_bindings.iter().copied().collect();
+            cyclic_ids.sort_unstable();
+            cyclic_ids.hash(h);
+        }
         let mut classic_for_ids: Vec<u32> = classic_for_lexical_bindings.iter().copied().collect();
         classic_for_ids.sort_unstable();
         classic_for_ids.hash(h);
