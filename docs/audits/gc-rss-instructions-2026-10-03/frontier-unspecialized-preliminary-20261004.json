@@ -1,0 +1,159 @@
+{
+  "scope": "17 matched workloads, full unspecialized runtime (--no-auto-optimize), GC defaults; preliminary, normal-auto validation required before adoption",
+  "comparisons": [
+    {
+      "case": "12_large_live_set",
+      "base_rss_bytes": 102916096,
+      "frontier_rss_bytes": 103157760,
+      "rss_bytes_percent": 0.23481652471544212,
+      "base_instructions": 3261315543,
+      "frontier_instructions": 3260528687,
+      "instructions_percent": -0.02412695090755479
+    },
+    {
+      "case": "14_grow_then_churn",
+      "base_rss_bytes": 111964160,
+      "frontier_rss_bytes": 111689728,
+      "rss_bytes_percent": -0.24510700567038635,
+      "base_instructions": 2716707865,
+      "frontier_instructions": 2698926757,
+      "instructions_percent": -0.6545093872284968
+    },
+    {
+      "case": "23-binary-trees",
+      "base_rss_bytes": 168534016,
+      "frontier_rss_bytes": 143478784,
+      "rss_bytes_percent": -14.866572692363778,
+      "base_instructions": 28069647875,
+      "frontier_instructions": 27934979445,
+      "instructions_percent": -0.4797652988014156
+    },
+    {
+      "case": "30-string-build",
+      "base_rss_bytes": 222085120,
+      "frontier_rss_bytes": 222060544,
+      "rss_bytes_percent": -0.011066027296202652,
+      "base_instructions": 17690057538,
+      "frontier_instructions": 17690897372,
+      "instructions_percent": 0.004747491624579325
+    },
+    {
+      "case": "31-json",
+      "base_rss_bytes": 162295808,
+      "frontier_rss_bytes": 163262464,
+      "rss_bytes_percent": 0.5956136587335736,
+      "base_instructions": 26594701759,
+      "frontier_instructions": 26636062689,
+      "instructions_percent": 0.1555231954650571
+    },
+    {
+      "case": "51-pipeline",
+      "base_rss_bytes": 270286848,
+      "frontier_rss_bytes": 270401536,
+      "rss_bytes_percent": 0.0424319573255838,
+      "base_instructions": 11214527968,
+      "frontier_instructions": 11206555665,
+      "instructions_percent": -0.0710890643168316
+    },
+    {
+      "case": "60-ring-churn",
+      "base_rss_bytes": 17612800,
+      "frontier_rss_bytes": 18108416,
+      "rss_bytes_percent": 2.8139534883721007,
+      "base_instructions": 681056329,
+      "frontier_instructions": 680831062,
+      "instructions_percent": -0.03307611873025751
+    },
+    {
+      "case": "71-async-worker",
+      "base_rss_bytes": 84414464,
+      "frontier_rss_bytes": 84516864,
+      "rss_bytes_percent": 0.1213062254354913,
+      "base_instructions": 4733293729,
+      "frontier_instructions": 4728675467,
+      "instructions_percent": -0.09756973186989537
+    },
+    {
+      "case": "72-request-processing",
+      "base_rss_bytes": 66867200,
+      "frontier_rss_bytes": 69648384,
+      "rss_bytes_percent": 4.159264931087292,
+      "base_instructions": 84276861426,
+      "frontier_instructions": 83949821394,
+      "instructions_percent": -0.38805435616176
+    },
+    {
+      "case": "73-retain-then-release",
+      "base_rss_bytes": 263507968,
+      "frontier_rss_bytes": 260677632,
+      "rss_bytes_percent": -1.0740988295276144,
+      "base_instructions": 19596559479,
+      "frontier_instructions": 19562912909,
+      "instructions_percent": -0.17169631248820094
+    },
+    {
+      "case": "70-documents-replace",
+      "base_rss_bytes": 141496320,
+      "frontier_rss_bytes": 141627392,
+      "rss_bytes_percent": 0.09263279779996303,
+      "base_instructions": 16230851851,
+      "frontier_instructions": 16223762661,
+      "instructions_percent": -0.043677251601326184
+    },
+    {
+      "case": "70-documents-retain",
+      "base_rss_bytes": 327761920,
+      "frontier_rss_bytes": 329527296,
+      "rss_bytes_percent": 0.5386153461634624,
+      "base_instructions": 20531437021,
+      "frontier_instructions": 20477423284,
+      "instructions_percent": -0.26307820998965337
+    },
+    {
+      "case": "70-documents-transition",
+      "base_rss_bytes": 182943744,
+      "frontier_rss_bytes": 182353920,
+      "rss_bytes_percent": -0.3224073078989753,
+      "base_instructions": 18408233050,
+      "frontier_instructions": 18367643366,
+      "instructions_percent": -0.22049744747228983
+    },
+    {
+      "case": "tscwork",
+      "base_rss_bytes": 260227072,
+      "frontier_rss_bytes": 246411264,
+      "rss_bytes_percent": -5.309135553736699,
+      "base_instructions": 63154875905,
+      "frontier_instructions": 63375682828,
+      "instructions_percent": 0.34962767297990194
+    },
+    {
+      "case": "zodwork",
+      "base_rss_bytes": 30134272,
+      "frontier_rss_bytes": 29872128,
+      "rss_bytes_percent": -0.8699198042680489,
+      "base_instructions": 973822572,
+      "frontier_instructions": 973299910,
+      "instructions_percent": -0.053671173274061346
+    },
+    {
+      "case": "00-noop",
+      "base_rss_bytes": 10100736,
+      "frontier_rss_bytes": 9687040,
+      "rss_bytes_percent": -4.09570154095702,
+      "base_instructions": 5683476,
+      "frontier_instructions": 5749398,
+      "instructions_percent": 1.1598887722935824
+    },
+    {
+      "case": "15-crc32",
+      "base_rss_bytes": 19079168,
+      "frontier_rss_bytes": 19169280,
+      "rss_bytes_percent": 0.47230571060541404,
+      "base_instructions": 18253822164,
+      "frontier_instructions": 18254008685,
+      "instructions_percent": 0.0010218188734700817
+    }
+  ],
+  "executions": 238
+}

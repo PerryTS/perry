@@ -4051,6 +4051,14 @@
    ],
    "verdict": "no_heap_address",
    "why": "Holds the address of the generated seed unit's `extern \"C\" fn()` (a code address in the program image, stored by js_shape_register_static_seed from a global_ctors entry before any heap exists), or 0 for none. It is never an arena or heap address, so an exited thread's Arena::drop cannot leave it dangling."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/block/decommit.rs",
+   "names": [
+    "SIZE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "#11781: cached result of libc::sysconf(_SC_PAGESIZE), converted to Some(usize) only when positive. It contains a byte count or None, never an allocation or arena address; thread exit cannot leave a dangling reference."
   }
  ]
 }
