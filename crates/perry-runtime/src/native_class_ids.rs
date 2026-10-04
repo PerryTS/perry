@@ -52,6 +52,14 @@ pub(crate) const TUI_STDOUT: u32 = 0xFFFF_240F;
 pub(crate) const TUI_FOCUS_MANAGER: u32 = 0xFFFF_2410;
 pub(crate) const ASYNC_HOOK: u32 = 0xFFFF_2411;
 
+// --- Native-payload families (#11919 P0, `native_payload.rs`): an ordinary
+// --- object whose `native_state` word is a traced payload cell. Public so the
+// --- crate that implements a family (perry-stdlib) can name its own id.
+pub const CRYPTO_HASH: u32 = 0xFFFF_2412;
+pub const CRYPTO_HMAC: u32 = 0xFFFF_2413;
+pub const CRYPTO_CIPHERIV: u32 = 0xFFFF_2414;
+pub const CRYPTO_DECIPHERIV: u32 = 0xFFFF_2415;
+
 /// #10926: `AsyncResource` is native-backed too, but keeps its LEGACY
 /// `0xFFFF_0079`, which `instanceof` and `class_registry::parent_static`
 /// already bake into emitted code -- moving a live class id is #10824's hazard
@@ -63,7 +71,7 @@ pub(crate) const ASYNC_RESOURCE_LEGACY: u32 = 0xFFFF_0079;
 /// family between them carries a `native_state` word the far side of a
 /// `postMessage` could not reconstruct.
 const NATIVE_BACKED_FIRST: u32 = ABORT_CONTROLLER;
-const NATIVE_BACKED_LAST: u32 = ASYNC_HOOK;
+const NATIVE_BACKED_LAST: u32 = CRYPTO_DECIPHERIV;
 
 /// Class ids whose instances are ordinary objects carrying native state that
 /// cannot cross a thread boundary (#340/#341).
@@ -77,6 +85,18 @@ const NATIVE_BACKED_LAST: u32 = ASYNC_HOOK;
 pub(crate) fn is_native_backed_class_id(class_id: u32) -> bool {
     (NATIVE_BACKED_FIRST..=NATIVE_BACKED_LAST).contains(&class_id)
         || class_id == ASYNC_RESOURCE_LEGACY
+}
+
+/// The first native-PAYLOAD family (`native_payload.rs`). Payload families
+/// take ids after every other family, so they are the tail of the
+/// native-backed range: `NATIVE_PAYLOAD_FIRST..=NATIVE_BACKED_LAST`.
+const NATIVE_PAYLOAD_FIRST: u32 = CRYPTO_HASH;
+
+/// Is `class_id` a native-payload family (an ordinary object whose
+/// `native_state` is a traced payload cell)? One range compare.
+#[inline(always)]
+pub(crate) fn is_native_payload_class_id(class_id: u32) -> bool {
+    (NATIVE_PAYLOAD_FIRST..=NATIVE_BACKED_LAST).contains(&class_id)
 }
 
 /// Every id this module hands out, newest last. Used by the assertions below
@@ -99,6 +119,10 @@ const ALL: &[u32] = &[
     TUI_STDOUT,
     TUI_FOCUS_MANAGER,
     ASYNC_HOOK,
+    CRYPTO_HASH,
+    CRYPTO_HMAC,
+    CRYPTO_CIPHERIV,
+    CRYPTO_DECIPHERIV,
 ];
 
 /// Strictly ascending ⟹ no two families share an id, and the block stays
@@ -155,6 +179,10 @@ mod tests {
             TUI_STDOUT,
             TUI_FOCUS_MANAGER,
             ASYNC_HOOK,
+            CRYPTO_HASH,
+            CRYPTO_HMAC,
+            CRYPTO_CIPHERIV,
+            CRYPTO_DECIPHERIV,
             ASYNC_RESOURCE_LEGACY,
         ] {
             assert!(

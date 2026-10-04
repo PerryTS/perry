@@ -805,7 +805,6 @@ js_crypto_sha256	Reenters
 js_crypto_sha256_bytes	Reenters
 js_crypto_sign_async	Reenters
 js_crypto_sign_rsa_sha256	Reenters
-js_crypto_stream_process_pending	Reenters
 js_crypto_timing_safe_equal	Reenters
 js_crypto_verify_async	Reenters
 js_crypto_verify_rsa_sha256	Reenters

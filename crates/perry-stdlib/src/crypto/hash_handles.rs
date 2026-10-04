@@ -1,7 +1,23 @@
+//! `crypto.Hash` / `crypto.Hmac`: ordinary objects that own their digest
+//! state (#11919 P0, `perry_runtime::native_payload`).
+//!
+//! `createHash` / `createHmac` return a `GC_TYPE_OBJECT` of the family's class
+//! id whose prototype carries `update` / `digest` / `copy` and the small
+//! stream surface (`write` / `end` / `on` / `pipe` / `setEncoding`). The
+//! hasher lives in the object's native payload; `digest()` / `end()` close it,
+//! which drops it at once, and a Hash that is never digested is dropped by the
+//! collection that finds it dead. Stream listeners and pipe destinations are
+//! JS values, so they live in the object's hidden JS-state object, never in
+//! the payload, and the stream's events are delivered by a `process.nextTick`
+//! closure that holds the object.
+//!
+//! The handle-free chain path (`hash_chain.rs`, #11516) shares the digest
+//! helpers below and allocates no object at all.
+
 use super::*;
-use perry_runtime::{js_closure_call0, js_closure_call1, ClosureHeader};
-use std::collections::HashMap;
-use std::sync::Mutex;
+use perry_runtime::closure::{js_closure_call0, js_closure_call1, ClosureHeader, JsThis};
+use perry_runtime::native_class_ids::{CRYPTO_HASH, CRYPTO_HMAC};
+use perry_runtime::native_payload::{self, NativePayloadFamily, PayloadMiss, PayloadPrototype};
 
 /// node validates the `data` arg of `hash.update`/`hmac.update` is a string
 /// or `Buffer`/`TypedArray`/`DataView` before touching it. Without this a
@@ -21,118 +37,25 @@ fn validate_update_data(args: &[f64]) -> f64 {
     data
 }
 
-#[derive(Default)]
-struct CryptoDigestStream {
-    listeners: HashMap<String, Vec<i64>>,
-    pipes: Vec<u64>,
-    encoding: Option<String>,
-    ended: bool,
+const UNDEFINED: f64 = f64::from_bits(0x7FFC_0000_0000_0001);
+
+fn is_undefined(value: f64) -> bool {
+    value.to_bits() == UNDEFINED.to_bits()
 }
 
-impl CryptoDigestStream {
-    fn holds_freed(&self, freed: &perry_runtime::arena::thread_exit::FreedRanges) -> bool {
-        self.listeners
-            .values()
-            .flatten()
-            .any(|cb| freed.holds_i64(*cb))
+/// The arguments a fixed-arity prototype method received, without the
+/// trailing `undefined`s the call padded it with, so the shared decoders see
+/// the same slice the old variadic dispatch saw.
+pub(super) fn passed_args(args: &[f64]) -> &[f64] {
+    let mut len = args.len();
+    while len > 0 && is_undefined(args[len - 1]) {
+        len -= 1;
     }
-
-    fn scan_roots(&mut self, visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
-        for callbacks in self.listeners.values_mut() {
-            for cb in callbacks {
-                visitor.visit_i64_slot(cb);
-            }
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-enum CryptoStreamKind {
-    Hash,
-    Hmac,
-}
-
-enum CryptoStreamEvent {
-    Data {
-        kind: CryptoStreamKind,
-        handle: i64,
-        bytes: Vec<u8>,
-        encoding: Option<String>,
-    },
-    End {
-        kind: CryptoStreamKind,
-        handle: i64,
-    },
-}
-
-static CRYPTO_STREAM_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<CryptoStreamEvent>>> =
-    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
-
-thread_local! {
-    // The mutable-root scanner registry is thread-local, so this latch must be too.
-    static CRYPTO_STREAM_GC_REGISTERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-fn ensure_crypto_stream_gc_scanner() {
-    // #11471: retire a Hash/Hmac whose stream listeners live in an exiting
-    // thread's arena (`HANDLES` is process-global).
-    static REGISTER_RELEASERS: std::sync::Once = std::sync::Once::new();
-    REGISTER_RELEASERS.call_once(|| {
-        use crate::common::handle::register_handle_payload_releaser as register;
-        register::<HashHandle>(|h, freed| {
-            h.stream
-                .get_mut()
-                .unwrap_or_else(|p| p.into_inner())
-                .holds_freed(freed)
-        });
-        register::<HmacHandle>(|h, freed| {
-            h.stream
-                .get_mut()
-                .unwrap_or_else(|p| p.into_inner())
-                .holds_freed(freed)
-        });
-    });
-    CRYPTO_STREAM_GC_REGISTERED.with(|registered| {
-        if registered.get() {
-            return;
-        }
-        perry_runtime::gc::gc_register_mutable_root_scanner_named(
-            "stdlib:crypto-streams",
-            scan_crypto_stream_roots,
-        );
-        registered.set(true);
-    });
-}
-
-fn scan_crypto_stream_roots(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
-    crate::common::handle::for_each_handle_mut_of::<HashHandle, _>(|h| {
-        h.stream.lock().unwrap().scan_roots(visitor);
-    });
-    crate::common::handle::for_each_handle_mut_of::<HmacHandle, _>(|h| {
-        h.stream.lock().unwrap().scan_roots(visitor);
-    });
-}
-
-extern "C" {
-    fn js_native_call_method_str_key(
-        object: f64,
-        name_handle: i64,
-        args_ptr: *const f64,
-        args_len: usize,
-    ) -> f64;
-}
-
-fn nanbox_handle(handle: i64) -> f64 {
-    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
+    &args[..len]
 }
 
 fn js_true() -> f64 {
     f64::from_bits(JSValue::bool(true).bits())
-}
-
-fn unbox_to_i64(value: f64) -> i64 {
-    // SSO-aware (#11430): a short string argument is materialized first.
-    arg_ptr(value)
 }
 
 pub(super) fn update_hash_state(state: &mut HashState, bytes: &[u8]) {
@@ -227,188 +150,6 @@ unsafe fn digest_value(bytes: &[u8], encoding: Option<&str>) -> f64 {
     nanbox_pointer_f64(alloc_buffer_from_slice(bytes) as usize)
 }
 
-unsafe fn emit_callback0(cb: i64) {
-    if cb != 0 {
-        js_closure_call0(
-            cb as *const ClosureHeader,
-            perry_runtime::closure::plain_call_receiver(),
-        );
-    }
-}
-
-unsafe fn emit_callback1(cb: i64, arg: f64) {
-    if cb != 0 {
-        js_closure_call1(
-            cb as *const ClosureHeader,
-            perry_runtime::closure::plain_call_receiver(),
-            arg,
-        );
-    }
-}
-
-fn listeners_for(kind: CryptoStreamKind, handle: i64, event: &str) -> Vec<i64> {
-    match kind {
-        CryptoStreamKind::Hash => get_handle_mut::<HashHandle>(handle)
-            .and_then(|h| h.stream.lock().unwrap().listeners.get(event).cloned())
-            .unwrap_or_default(),
-        CryptoStreamKind::Hmac => get_handle_mut::<HmacHandle>(handle)
-            .and_then(|h| h.stream.lock().unwrap().listeners.get(event).cloned())
-            .unwrap_or_default(),
-    }
-}
-
-fn pipes_for(kind: CryptoStreamKind, handle: i64) -> Vec<u64> {
-    match kind {
-        CryptoStreamKind::Hash => get_handle_mut::<HashHandle>(handle)
-            .map(|h| h.stream.lock().unwrap().pipes.clone())
-            .unwrap_or_default(),
-        CryptoStreamKind::Hmac => get_handle_mut::<HmacHandle>(handle)
-            .map(|h| h.stream.lock().unwrap().pipes.clone())
-            .unwrap_or_default(),
-    }
-}
-
-unsafe fn forward_method(dest_bits: u64, name: &[u8], args: &[f64]) {
-    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    if key.is_null() {
-        return;
-    }
-    js_native_call_method_str_key(
-        f64::from_bits(dest_bits),
-        key as i64,
-        args.as_ptr(),
-        args.len(),
-    );
-}
-
-unsafe fn forward_write(dest_bits: u64, bytes: &[u8], encoding: Option<&str>) {
-    let chunk = digest_value(bytes, encoding);
-    forward_method(dest_bits, b"write", &[chunk]);
-}
-
-unsafe fn forward_end(dest_bits: u64) {
-    forward_method(dest_bits, b"end", &[]);
-}
-
-fn queue_crypto_stream_digest(
-    kind: CryptoStreamKind,
-    handle: i64,
-    bytes: Vec<u8>,
-    encoding: Option<String>,
-) {
-    {
-        let mut pending = CRYPTO_STREAM_PENDING_EVENTS.lock().unwrap();
-        pending.push(CryptoStreamEvent::Data {
-            kind,
-            handle,
-            bytes,
-            encoding,
-        });
-        pending.push(CryptoStreamEvent::End { kind, handle });
-    }
-    crate::common::async_bridge::ensure_pump_registered();
-    perry_runtime::event_pump::js_notify_main_thread();
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_crypto_stream_process_pending() -> i32 {
-    let events = {
-        let mut pending = CRYPTO_STREAM_PENDING_EVENTS.lock().unwrap();
-        std::mem::take(&mut *pending)
-    };
-    let count = events.len() as i32;
-    for event in events {
-        match event {
-            CryptoStreamEvent::Data {
-                kind,
-                handle,
-                bytes,
-                encoding,
-            } => {
-                let callbacks = listeners_for(kind, handle, "data");
-                if !callbacks.is_empty() {
-                    let value = digest_value(&bytes, encoding.as_deref());
-                    for cb in callbacks {
-                        emit_callback1(cb, value);
-                    }
-                }
-                for dest in pipes_for(kind, handle) {
-                    forward_write(dest, &bytes, encoding.as_deref());
-                }
-            }
-            CryptoStreamEvent::End { kind, handle } => {
-                for event_name in ["end", "finish", "close"] {
-                    for cb in listeners_for(kind, handle, event_name) {
-                        emit_callback0(cb);
-                    }
-                }
-                for dest in pipes_for(kind, handle) {
-                    forward_end(dest);
-                }
-            }
-        }
-    }
-    count
-}
-
-pub fn js_crypto_stream_has_active_handles() -> i32 {
-    if CRYPTO_STREAM_PENDING_EVENTS.lock().unwrap().is_empty() {
-        0
-    } else {
-        1
-    }
-}
-
-unsafe fn stream_event_name(value: f64) -> Option<String> {
-    string_from_jsvalue(value.to_bits())
-}
-
-unsafe fn register_stream_listener(stream: &Mutex<CryptoDigestStream>, args: &[f64]) {
-    if args.len() < 2 {
-        return;
-    }
-    ensure_crypto_stream_gc_scanner();
-    let Some(event) = stream_event_name(args[0]) else {
-        return;
-    };
-    stream
-        .lock()
-        .unwrap()
-        .listeners
-        .entry(event)
-        .or_default()
-        .push(unbox_to_i64(args[1]));
-}
-
-unsafe fn set_stream_encoding(stream: &Mutex<CryptoDigestStream>, args: &[f64]) {
-    let encoding = args
-        .first()
-        .and_then(|value| string_from_jsvalue(value.to_bits()))
-        .map(|s| s.to_ascii_lowercase());
-    stream.lock().unwrap().encoding = encoding;
-}
-
-fn stream_pipe(stream: &Mutex<CryptoDigestStream>, args: &[f64]) -> f64 {
-    if let Some(dest) = args.first() {
-        stream.lock().unwrap().pipes.push(dest.to_bits());
-        *dest
-    } else {
-        nanbox_undefined()
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Hash handle — powers `const h = crypto.createHash('sha1'); h.update(x);
-// h.digest()` (issue #86). The runtime-resident chain-collapse in
-// `perry-codegen/src/expr.rs` only catches the literal single-expression
-// form; once the user binds the hash to a local and calls update/digest on
-// subsequent statements, the chain pattern no longer matches and the calls
-// fall through to `js_native_call_method`. We register the hash state in
-// the handle registry and the small-integer dispatch path (see
-// `perry-runtime/src/object.rs` ~line 3040) routes update/digest back to
-// `dispatch_hash` below.
-// ---------------------------------------------------------------------------
-
 #[derive(Clone)]
 pub enum HashState {
     Sha1(Sha1),
@@ -420,36 +161,6 @@ pub enum HashState {
     Shake128(Shake128),
     Shake256(Shake256),
     Md5(Md5),
-}
-
-pub struct HashHandle {
-    /// `Option` so `digest()` can `take()` ownership of the hasher
-    /// (sha1/sha2 `finalize()` consumes `self`).
-    state: Mutex<Option<HashState>>,
-    output_len: Option<usize>,
-    stream: Mutex<CryptoDigestStream>,
-}
-
-/// Allocate a new Hash handle for the given algorithm. Returns the handle
-/// id NaN-boxed with POINTER_TAG (0x7FFD_…). Small integers survive the
-/// 48-bit POINTER_MASK, and the runtime's handle-range check in
-/// `js_native_call_method` (`raw_ptr < 0x100000`) routes subsequent
-/// `.update(...)` / `.digest(...)` through `HANDLE_METHOD_DISPATCH` which
-/// calls `dispatch_hash` below. Unknown algorithms return undefined.
-#[no_mangle]
-pub unsafe extern "C" fn js_crypto_create_hash(alg_ptr: i64) -> f64 {
-    js_crypto_create_hash_options(alg_ptr, f64::from_bits(JSValue::undefined().bits()))
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn js_crypto_create_hash_options(alg_ptr: i64, options_bits: f64) -> f64 {
-    let (state, output_len) = new_hash_state_or_throw(alg_ptr, options_bits);
-    let handle: Handle = crate::common::register_reclaimable_handle(HashHandle {
-        state: Mutex::new(Some(state)),
-        output_len,
-        stream: Mutex::new(CryptoDigestStream::default()),
-    });
-    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
 }
 
 /// The digest state `createHash(alg, options)` starts from, shared by the
@@ -522,166 +233,6 @@ pub(super) unsafe fn hmac_digest_value(state: Option<HmacState>, arg: Option<f64
     super::hash_chain::DigestEncoding::parse(arg).output(&digest)
 }
 
-/// Dispatch `update` / `digest` / `copy` on a HashHandle. Called from
-/// `common/dispatch.rs::js_handle_method_dispatch`.
-pub unsafe fn dispatch_hash(handle: i64, method: &str, args: &[f64]) -> f64 {
-    let h = match get_handle_mut::<HashHandle>(handle) {
-        Some(h) => h,
-        None => return f64::from_bits(0x7FFC_0000_0000_0001),
-    };
-    // Stream use keys listeners, pipes and queued digest events by this id
-    // in native state, so the handle stops being GC-reclaimable (#11453).
-    if is_stream_method(method) {
-        crate::common::retain_strongly(handle);
-    }
-    // #2944 — once `digest()` consumed the hasher state, Node throws
-    // `Error [ERR_CRYPTO_HASH_FINALIZED]: Digest already called` for any
-    // subsequent `update`, `digest`, or `copy`. The `state` Mutex holds
-    // `None` after the first `digest()`, so a `None` here means finalized.
-    if matches!(method, "update" | "digest" | "copy") && h.state.lock().unwrap().is_none() {
-        perry_runtime::fs::validate::throw_error_with_code(
-            "Digest already called",
-            "ERR_CRYPTO_HASH_FINALIZED",
-        );
-    }
-    match method {
-        "update" => {
-            let bytes = hash_update_bytes(args);
-            let mut guard = h.state.lock().unwrap();
-            if let Some(state) = guard.as_mut() {
-                update_hash_state(state, &bytes);
-            }
-            f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
-        }
-        "digest" => {
-            let state = {
-                let mut guard = h.state.lock().unwrap();
-                guard.take()
-            };
-            hash_digest_value(state, h.output_len, args.first().copied())
-        }
-        // `hash.copy()` (#1369) — return an independent Hash whose internal
-        // state is a snapshot of this one, so the two can be `.update()`d and
-        // `.digest()`ed separately. An already-digested hash (state taken)
-        // yields undefined, mirroring the error a caller would hit using a
-        // finalized hash. The optional `outputLength` arg only applies to XOF
-        // hashes (shake*) — propagated via `output_len`.
-        "copy" => {
-            let state = {
-                let guard = h.state.lock().unwrap();
-                guard.clone()
-            };
-            let Some(state) = state else {
-                return f64::from_bits(0x7FFC_0000_0000_0001);
-            };
-            let handle: Handle = crate::common::register_reclaimable_handle(HashHandle {
-                state: Mutex::new(Some(state)),
-                output_len: h.output_len,
-                stream: Mutex::new(CryptoDigestStream::default()),
-            });
-            f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
-        }
-        "write" if !args.is_empty() => {
-            let encoding = arg_string(args, 1);
-            let bytes = decode_hash_update_value(args[0], &encoding);
-            let mut guard = h.state.lock().unwrap();
-            if let Some(state) = guard.as_mut() {
-                update_hash_state(state, &bytes);
-            }
-            js_true()
-        }
-        "end" => {
-            if let Some(chunk) = args.first().copied() {
-                let v = JSValue::from_bits(chunk.to_bits());
-                if !v.is_undefined() && !v.is_null() {
-                    let encoding = arg_string(args, 1);
-                    let bytes = decode_hash_update_value(chunk, &encoding);
-                    let mut guard = h.state.lock().unwrap();
-                    if let Some(state) = guard.as_mut() {
-                        update_hash_state(state, &bytes);
-                    }
-                }
-            }
-            let encoding = {
-                let mut stream = h.stream.lock().unwrap();
-                if stream.ended {
-                    return nanbox_handle(handle);
-                }
-                stream.ended = true;
-                stream.encoding.clone()
-            };
-            let state = {
-                let mut guard = h.state.lock().unwrap();
-                guard.take()
-            };
-            if let Some(digest) = finalize_hash_state(state, h.output_len, None) {
-                queue_crypto_stream_digest(CryptoStreamKind::Hash, handle, digest, encoding);
-            }
-            nanbox_handle(handle)
-        }
-        "on" | "once" | "addListener" if args.len() >= 2 => {
-            register_stream_listener(&h.stream, args);
-            nanbox_handle(handle)
-        }
-        "setEncoding" => {
-            set_stream_encoding(&h.stream, args);
-            nanbox_handle(handle)
-        }
-        "pipe" => stream_pipe(&h.stream, args),
-        "destroy" | "close" => nanbox_undefined(),
-        _ => f64::from_bits(0x7FFC_0000_0000_0001),
-    }
-}
-
-pub unsafe fn dispatch_hash_property(handle: i64, property: &str) -> f64 {
-    let name_bytes: &'static [u8] = match property {
-        "update" => b"update",
-        "digest" => b"digest",
-        "copy" => b"copy",
-        "write" => b"write",
-        "end" => b"end",
-        "on" => b"on",
-        "once" => b"once",
-        "addListener" => b"addListener",
-        "pipe" => b"pipe",
-        "setEncoding" => b"setEncoding",
-        "destroy" => b"destroy",
-        "close" => b"close",
-        _ => return nanbox_undefined(),
-    };
-    let this_f64 = nanbox_pointer_f64(handle as usize);
-    extern "C" {
-        fn js_class_method_bind(
-            instance: f64,
-            method_name_ptr: *const u8,
-            method_name_len: usize,
-        ) -> f64;
-    }
-    js_class_method_bind(this_f64, name_bytes.as_ptr(), name_bytes.len())
-}
-
-fn is_stream_method(method: &str) -> bool {
-    matches!(
-        method,
-        "write" | "end" | "on" | "once" | "addListener" | "pipe" | "setEncoding"
-    )
-}
-
-// ---------------------------------------------------------------------------
-// HMAC handle — covers the same #1076 silent-empty bug shape that the hash
-// handle covers for `createHash`. The chain-collapse in
-// `perry-codegen/src/expr.rs` only emits the literal-`"sha256"` fast path
-// for `crypto.createHmac(alg, key).update(data).digest(enc)`. When `alg`
-// is a `const`-bound identifier, a for-of binding, a ternary, or anything
-// else that isn't an inline `Expr::String`, the codegen falls back to
-// `js_crypto_create_hmac` which returns a handle. Subsequent `.update(...)`
-// and `.digest(...)` calls dispatch through `HANDLE_METHOD_DISPATCH` →
-// `dispatch_hmac` below. Supports sha1, sha256, sha512, and md5 — Node's
-// commonly-used HMAC algorithms. Unknown algorithms return undefined so
-// the symptom (silent empty hex) becomes a real `undefined.update is not
-// a function` at the call site instead of a wrong answer.
-// ---------------------------------------------------------------------------
-
 pub enum HmacState {
     Sha1(hmac::Hmac<Sha1>),
     Sha224(hmac::Hmac<Sha224>),
@@ -690,26 +241,6 @@ pub enum HmacState {
     Sha512(hmac::Hmac<Sha512>),
     Sha512_256(hmac::Hmac<Sha512_256>),
     Md5(hmac::Hmac<Md5>),
-}
-
-pub struct HmacHandle {
-    /// `Option` so `digest()` can `take()` ownership of the MAC
-    /// (`finalize()` consumes `self`).
-    state: Mutex<Option<HmacState>>,
-    stream: Mutex<CryptoDigestStream>,
-}
-
-/// Allocate a new HMAC handle for `(alg, key)`. Mirrors `js_crypto_create_hash`
-/// in shape: returns the handle id NaN-boxed with `POINTER_TAG`. Unknown
-/// algorithms return undefined.
-#[no_mangle]
-pub unsafe extern "C" fn js_crypto_create_hmac(alg_ptr: i64, key_ptr: i64) -> f64 {
-    let state = new_hmac_state_or_throw(alg_ptr, key_ptr);
-    let handle: Handle = crate::common::register_reclaimable_handle(HmacHandle {
-        state: Mutex::new(Some(state)),
-        stream: Mutex::new(CryptoDigestStream::default()),
-    });
-    f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
 }
 
 /// The MAC state `createHmac(alg, key)` starts from, shared by the handle
@@ -773,148 +304,575 @@ unsafe fn new_hmac_state(alg_ptr: i64, key_ptr: i64) -> Option<HmacState> {
     Some(state)
 }
 
-/// Dispatch `update` / `digest` on an HmacHandle. Called from
-/// `common/dispatch.rs::js_handle_method_dispatch`.
-pub unsafe fn dispatch_hmac(handle: i64, method: &str, args: &[f64]) -> f64 {
-    let h = match get_handle_mut::<HmacHandle>(handle) {
-        Some(h) => h,
-        None => return f64::from_bits(0x7FFC_0000_0000_0001),
+// ---------------------------------------------------------------------------
+// The two families.
+// ---------------------------------------------------------------------------
+
+/// The payload of a `Hash`. Closed by `digest()` / `end()`.
+pub struct HashPayload {
+    /// `Option` only so `digest()` can move the hasher out (sha1/sha2
+    /// `finalize()` consumes `self`); it is `Some` while the payload is open.
+    state: Option<HashState>,
+    output_len: Option<usize>,
+}
+
+/// The payload of an `Hmac`. Closed by `digest()` / `end()`.
+pub struct HmacPayload {
+    state: Option<HmacState>,
+}
+
+pub(super) static HASH_FAMILY: NativePayloadFamily = NativePayloadFamily {
+    class_id: CRYPTO_HASH,
+    name: "Hash",
+    constructor_export: None,
+    constructor_length: 2,
+    install_prototype: install_hash_prototype,
+};
+
+pub(super) static HMAC_FAMILY: NativePayloadFamily = NativePayloadFamily {
+    class_id: CRYPTO_HMAC,
+    name: "Hmac",
+    constructor_export: None,
+    constructor_length: 3,
+    install_prototype: install_hmac_prototype,
+};
+
+macro_rules! builtin {
+    ($body:path, $n:tt) => {
+        perry_runtime::fn_info!($body, $n; with_declared($n), with_flags(perry_runtime::closure::FN_BUILTIN))
     };
-    // Stream use keys listeners, pipes and queued digest events by this id
-    // in native state, so the handle stops being GC-reclaimable (#11453).
-    if is_stream_method(method) {
-        crate::common::retain_strongly(handle);
+}
+
+fn install_stream_methods(proto: &mut PayloadPrototype, kind: DigestKind) {
+    match kind {
+        DigestKind::Hash => {
+            proto.method("write", builtin!(hash_write_thunk, 2), 2);
+            proto.method("end", builtin!(hash_end_thunk, 2), 2);
+        }
+        DigestKind::Hmac => {
+            proto.method("write", builtin!(hmac_write_thunk, 2), 2);
+            proto.method("end", builtin!(hmac_end_thunk, 2), 2);
+        }
     }
-    // #2945 — after the MAC is finalized by `digest()`, Node keeps a second
-    // `digest()` idempotent (returns `""` / empty Buffer) but throws
-    // `Error [ERR_CRYPTO_HASH_FINALIZED]: Digest already called` on `update()`.
-    // The `state` Mutex holds `None` once finalized, so only the `update`
-    // path needs to throw here (the `digest` arm already returns the empty
-    // shape for a taken state).
-    if method == "update" && h.state.lock().unwrap().is_none() {
-        perry_runtime::fs::validate::throw_error_with_code(
-            "Digest already called",
-            "ERR_CRYPTO_HASH_FINALIZED",
-        );
+    proto.method("on", builtin!(digest_on_thunk, 2), 2);
+    proto.method("once", builtin!(digest_on_thunk, 2), 2);
+    proto.method("addListener", builtin!(digest_on_thunk, 2), 2);
+    proto.method("pipe", builtin!(digest_pipe_thunk, 1), 1);
+    proto.method("setEncoding", builtin!(digest_set_encoding_thunk, 1), 1);
+    proto.method("destroy", builtin!(digest_destroy_thunk, 0), 0);
+    proto.method("close", builtin!(digest_destroy_thunk, 0), 0);
+}
+
+fn install_hash_prototype(proto: &mut PayloadPrototype) {
+    // node's own names on Hash.prototype: copy, update, digest (+ the
+    // stream internals); the stream methods node inherits from Transform
+    // are installed here directly.
+    proto.method("copy", builtin!(hash_copy_thunk, 1), 1);
+    proto.method("update", builtin!(hash_update_thunk, 2), 2);
+    proto.method("digest", builtin!(hash_digest_thunk, 1), 1);
+    install_stream_methods(proto, DigestKind::Hash);
+}
+
+fn install_hmac_prototype(proto: &mut PayloadPrototype) {
+    proto.method("update", builtin!(hmac_update_thunk, 2), 2);
+    proto.method("digest", builtin!(hmac_digest_thunk, 1), 1);
+    install_stream_methods(proto, DigestKind::Hmac);
+}
+
+#[derive(Clone, Copy)]
+enum DigestKind {
+    Hash,
+    Hmac,
+}
+
+impl DigestKind {
+    fn family(self) -> &'static NativePayloadFamily {
+        match self {
+            DigestKind::Hash => &HASH_FAMILY,
+            DigestKind::Hmac => &HMAC_FAMILY,
+        }
     }
-    match method {
-        "update" => {
-            let bytes = hash_update_bytes(args);
-            let mut guard = h.state.lock().unwrap();
-            if let Some(state) = guard.as_mut() {
-                update_hmac_state(state, &bytes);
-            }
-            // Return the same handle (NaN-boxed) so the chain
-            // `hmac.update(data).digest(enc)` continues against the same
-            // state. Mirrors Node's behavior (`update` returns `this`).
-            f64::from_bits(0x7FFD_0000_0000_0000u64 | ((handle as u64) & 0x0000_FFFF_FFFF_FFFF))
+
+    fn of(value: f64) -> Option<DigestKind> {
+        if native_payload::is_instance(value, &HASH_FAMILY) {
+            Some(DigestKind::Hash)
+        } else if native_payload::is_instance(value, &HMAC_FAMILY) {
+            Some(DigestKind::Hmac)
+        } else {
+            None
         }
-        "digest" => {
-            let state = {
-                let mut guard = h.state.lock().unwrap();
-                guard.take()
-            };
-            // Node keeps Hmac.digest() idempotent in shape after the first
-            // finalization: encoded digests become an empty string and buffer
-            // digests become an empty Buffer instead of `undefined`.
-            hmac_digest_value(state, args.first().copied())
-        }
-        "write" if !args.is_empty() => {
-            let encoding = arg_string(args, 1);
-            let bytes = decode_hash_update_value(args[0], &encoding);
-            let mut guard = h.state.lock().unwrap();
-            if let Some(state) = guard.as_mut() {
-                update_hmac_state(state, &bytes);
-            }
-            js_true()
-        }
-        "end" => {
-            if let Some(chunk) = args.first().copied() {
-                let v = JSValue::from_bits(chunk.to_bits());
-                if !v.is_undefined() && !v.is_null() {
-                    let encoding = arg_string(args, 1);
-                    let bytes = decode_hash_update_value(chunk, &encoding);
-                    let mut guard = h.state.lock().unwrap();
-                    if let Some(state) = guard.as_mut() {
-                        update_hmac_state(state, &bytes);
-                    }
-                }
-            }
-            let encoding = {
-                let mut stream = h.stream.lock().unwrap();
-                if stream.ended {
-                    return nanbox_handle(handle);
-                }
-                stream.ended = true;
-                stream.encoding.clone()
-            };
-            let state = {
-                let mut guard = h.state.lock().unwrap();
-                guard.take()
-            };
-            let digest = finalize_hmac_state(state);
-            queue_crypto_stream_digest(CryptoStreamKind::Hmac, handle, digest, encoding);
-            nanbox_handle(handle)
-        }
-        "on" | "once" | "addListener" if args.len() >= 2 => {
-            register_stream_listener(&h.stream, args);
-            nanbox_handle(handle)
-        }
-        "setEncoding" => {
-            set_stream_encoding(&h.stream, args);
-            nanbox_handle(handle)
-        }
-        "pipe" => stream_pipe(&h.stream, args),
-        "destroy" | "close" => nanbox_undefined(),
-        _ => f64::from_bits(0x7FFC_0000_0000_0001),
     }
 }
 
-pub unsafe fn dispatch_hmac_property(handle: i64, property: &str) -> f64 {
-    let name_bytes: &'static [u8] = match property {
-        "update" => b"update",
-        "digest" => b"digest",
-        "write" => b"write",
-        "end" => b"end",
-        "on" => b"on",
-        "once" => b"once",
-        "addListener" => b"addListener",
-        "pipe" => b"pipe",
-        "setEncoding" => b"setEncoding",
-        "destroy" => b"destroy",
-        "close" => b"close",
-        _ => return nanbox_undefined(),
-    };
-    let this_f64 = nanbox_pointer_f64(handle as usize);
-    extern "C" {
-        fn js_class_method_bind(
-            instance: f64,
-            method_name_ptr: *const u8,
-            method_name_len: usize,
-        ) -> f64;
+/// node's own enumerable properties of a fresh Hash / Hmac: `_options` (the
+/// options argument, `undefined` when none was passed).
+fn digest_object<T: 'static>(
+    family: &'static NativePayloadFamily,
+    payload: T,
+    options: f64,
+) -> f64 {
+    let bytes = std::mem::size_of::<T>();
+    native_payload::alloc(family, payload, bytes, &[(b"_options", options)])
+}
+
+fn throw_digest_already_called() -> ! {
+    perry_runtime::fs::validate::throw_error_with_code(
+        "Digest already called",
+        "ERR_CRYPTO_HASH_FINALIZED",
+    )
+}
+
+/// `crypto.createHash(alg)` — a new `Hash`. An unsupported algorithm throws
+/// node's `Error: Digest method not supported`.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_create_hash(alg_ptr: i64) -> f64 {
+    js_crypto_create_hash_options(alg_ptr, UNDEFINED)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_create_hash_options(alg_ptr: i64, options_bits: f64) -> f64 {
+    let (state, output_len) = new_hash_state_or_throw(alg_ptr, options_bits);
+    digest_object(
+        &HASH_FAMILY,
+        HashPayload {
+            state: Some(state),
+            output_len,
+        },
+        options_bits,
+    )
+}
+
+/// `crypto.createHmac(alg, key)` — a new `Hmac`. An unsupported algorithm
+/// throws node's `ERR_CRYPTO_INVALID_DIGEST`.
+#[no_mangle]
+pub unsafe extern "C" fn js_crypto_create_hmac(alg_ptr: i64, key_ptr: i64) -> f64 {
+    let state = new_hmac_state_or_throw(alg_ptr, key_ptr);
+    digest_object(&HMAC_FAMILY, HmacPayload { state: Some(state) }, UNDEFINED)
+}
+
+/// Feed `bytes` to an open payload. False when the payload is closed (or the
+/// receiver is foreign).
+unsafe fn feed(this: f64, kind: DigestKind, bytes: &[u8]) -> bool {
+    match kind {
+        DigestKind::Hash => match native_payload::payload_mut::<HashPayload>(this, &HASH_FAMILY) {
+            Ok(p) => {
+                if let Some(state) = p.state.as_mut() {
+                    update_hash_state(state, bytes);
+                }
+                true
+            }
+            Err(_) => false,
+        },
+        DigestKind::Hmac => match native_payload::payload_mut::<HmacPayload>(this, &HMAC_FAMILY) {
+            Ok(p) => {
+                if let Some(state) = p.state.as_mut() {
+                    update_hmac_state(state, bytes);
+                }
+                true
+            }
+            Err(_) => false,
+        },
     }
-    js_class_method_bind(this_f64, name_bytes.as_ptr(), name_bytes.len())
+}
+
+/// Close the payload and return its digest bytes (`None` when it was already
+/// closed). The payload is dropped before the result is allocated.
+unsafe fn finish(this: f64, kind: DigestKind, option_len: Option<usize>) -> Option<Vec<u8>> {
+    let bytes = match kind {
+        DigestKind::Hash => {
+            let p = native_payload::payload_mut::<HashPayload>(this, &HASH_FAMILY).ok()?;
+            let (state, output_len) = (p.state.take(), p.output_len);
+            finalize_hash_state(state, output_len, option_len)
+        }
+        DigestKind::Hmac => {
+            let p = native_payload::payload_mut::<HmacPayload>(this, &HMAC_FAMILY).ok()?;
+            Some(finalize_hmac_state(p.state.take()))
+        }
+    };
+    native_payload::close(this, kind.family());
+    bytes
+}
+
+fn payload_state(this: f64, kind: DigestKind) -> Result<(), PayloadMiss> {
+    unsafe {
+        match kind {
+            DigestKind::Hash => {
+                native_payload::payload_mut::<HashPayload>(this, &HASH_FAMILY).map(|_| ())
+            }
+            DigestKind::Hmac => {
+                native_payload::payload_mut::<HmacPayload>(this, &HMAC_FAMILY).map(|_| ())
+            }
+        }
+    }
+}
+
+extern "C" fn hash_update_thunk(
+    _c: *const ClosureHeader,
+    this: JsThis,
+    data: f64,
+    enc: f64,
+) -> f64 {
+    digest_update(this.as_f64(), DigestKind::Hash, data, enc)
+}
+
+extern "C" fn hmac_update_thunk(
+    _c: *const ClosureHeader,
+    this: JsThis,
+    data: f64,
+    enc: f64,
+) -> f64 {
+    digest_update(this.as_f64(), DigestKind::Hmac, data, enc)
+}
+
+/// `update(data, inputEncoding?)` returns `this`. After `digest()` both
+/// families throw `ERR_CRYPTO_HASH_FINALIZED` (#2944 / #2945).
+fn digest_update(this: f64, kind: DigestKind, data: f64, enc: f64) -> f64 {
+    match payload_state(this, kind) {
+        Err(PayloadMiss::Foreign) => return UNDEFINED,
+        Err(PayloadMiss::Closed) => throw_digest_already_called(),
+        Ok(()) => {}
+    }
+    let args = [data, enc];
+    // Decoding validates and may allocate, so it runs before the payload is
+    // borrowed.
+    let bytes = unsafe { hash_update_bytes(passed_args(&args)) };
+    unsafe { feed(this, kind, &bytes) };
+    this
+}
+
+extern "C" fn hash_digest_thunk(_c: *const ClosureHeader, this: JsThis, enc: f64) -> f64 {
+    let this = this.as_f64();
+    match payload_state(this, DigestKind::Hash) {
+        Err(PayloadMiss::Foreign) => return UNDEFINED,
+        Err(PayloadMiss::Closed) => throw_digest_already_called(),
+        Ok(()) => {}
+    }
+    let arg = (!is_undefined(enc)).then_some(enc);
+    let encoding = unsafe { super::hash_chain::DigestEncoding::parse(arg) };
+    let Some(digest) = (unsafe { finish(this, DigestKind::Hash, encoding.output_len) }) else {
+        return UNDEFINED;
+    };
+    unsafe { encoding.output(&digest) }
+}
+
+/// `hmac.digest(enc?)`. node keeps a second `digest()` idempotent in shape:
+/// an empty string for an encoded digest, an empty Buffer otherwise.
+extern "C" fn hmac_digest_thunk(_c: *const ClosureHeader, this: JsThis, enc: f64) -> f64 {
+    let this = this.as_f64();
+    let arg = (!is_undefined(enc)).then_some(enc);
+    match payload_state(this, DigestKind::Hmac) {
+        Err(PayloadMiss::Foreign) => UNDEFINED,
+        Err(PayloadMiss::Closed) => unsafe { hmac_digest_value(None, arg) },
+        Ok(()) => {
+            let digest = unsafe { finish(this, DigestKind::Hmac, None) }.unwrap_or_default();
+            unsafe { super::hash_chain::DigestEncoding::parse(arg).output(&digest) }
+        }
+    }
+}
+
+/// `hash.copy()` (#1369): an independent Hash whose state is a snapshot of
+/// this one. A digested hash throws `ERR_CRYPTO_HASH_FINALIZED`.
+extern "C" fn hash_copy_thunk(_c: *const ClosureHeader, this: JsThis, _options: f64) -> f64 {
+    let this = this.as_f64();
+    let snapshot = unsafe { native_payload::payload_mut::<HashPayload>(this, &HASH_FAMILY) }
+        .map(|p| (p.state.clone(), p.output_len));
+    match snapshot {
+        Err(PayloadMiss::Foreign) => UNDEFINED,
+        Err(PayloadMiss::Closed) | Ok((None, _)) => throw_digest_already_called(),
+        Ok((Some(state), output_len)) => digest_object(
+            &HASH_FAMILY,
+            HashPayload {
+                state: Some(state),
+                output_len,
+            },
+            UNDEFINED,
+        ),
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Cipher handle — powers `crypto.createCipheriv(alg, key, iv)` /
-// `crypto.createDecipheriv(alg, key, iv)` followed by `.update(buf)` /
-// `.final()` / `.getAuthTag()` / `.setAuthTag(buf)` (issue #1075).
-//
-// Mirrors the HashHandle shape above: `js_crypto_create_cipheriv` allocates
-// a CipherHandle in the common handle registry and returns a small-integer
-// handle NaN-boxed with POINTER_TAG. The runtime's small-pointer detection
-// in `js_native_call_method` then routes subsequent method calls through
-// HANDLE_METHOD_DISPATCH → `dispatch_cipher` below.
-//
-// Supported algorithms (priority order, what new code wants first):
-//   - aes-256-gcm  (authenticated, 12-byte IV, 16-byte auth tag)
-//   - aes-128-gcm  (authenticated, 12-byte IV, 16-byte auth tag)
-//   - aes-256-cbc  (legacy/compat, 16-byte IV, PKCS7 padding)
-//   - aes-128-cbc  (legacy/compat, 16-byte IV, PKCS7 padding)
-//
-// Buffer.update(plain).final() returns ciphertext bytes; for GCM the auth
-// tag is appended to the AEAD output and split out by `getAuthTag()` once
-// `final()` has run. For decrypt-side GCM, `setAuthTag(buf)` must be called
-// before `final()` so the verifier can authenticate.
+// The stream surface. Every JS value it keeps (listeners, pipe destinations,
+// the output encoding, the ended flag) is a field of the object's hidden
+// JS-state object, so the collector traces and moves it with the object.
 // ---------------------------------------------------------------------------
+
+/// `state[key]` for a runtime-chosen ASCII key. `state` is rooted across the
+/// key's allocation.
+unsafe fn state_get(state: f64, key: &str) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let state = scope.root_nanbox_f64(state);
+    let key = js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let obj = (state.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF)
+        as *mut perry_runtime::object::ObjectHeader;
+    perry_runtime::object::js_object_get_field_by_name_f64(obj, key)
+}
+
+/// `state[key] = value`, with `state` and `value` rooted across the key's
+/// allocation and the store.
+unsafe fn state_set(state: f64, key: &str, value: f64) {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let state = scope.root_nanbox_f64(state);
+    let value = scope.root_nanbox_f64(value);
+    let key = scope.root_string_ptr(js_string_from_bytes(key.as_ptr(), key.len() as u32));
+    key.with_const_ptr::<StringHeader, _>(|key| {
+        let obj = (state.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF)
+            as *mut perry_runtime::object::ObjectHeader;
+        perry_runtime::object::js_object_set_field_by_name(obj, key, value.get_nanbox_f64())
+    });
+}
+
+/// Append `value` to the array at `state[key]`, creating it.
+unsafe fn state_push(state: f64, key: &str, value: f64) {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let state = scope.root_nanbox_f64(state);
+    let value = scope.root_nanbox_f64(value);
+    let existing = state_get(state.get_nanbox_f64(), key);
+    let array = if JSValue::from_bits(existing.to_bits()).is_pointer() {
+        (existing.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut perry_runtime::array::ArrayHeader
+    } else {
+        perry_runtime::array::js_array_alloc(2)
+    };
+    let array = perry_runtime::array::js_array_push_f64(array, value.get_nanbox_f64());
+    state_set(
+        state.get_nanbox_f64(),
+        key,
+        perry_runtime::value::js_nanbox_pointer(array as i64),
+    );
+}
+
+/// The elements of the array at `state[key]` (empty when absent), copied
+/// out so a listener that adds listeners cannot disturb the walk.
+unsafe fn state_list(state: f64, key: &str) -> Vec<f64> {
+    let existing = state_get(state, key);
+    if !JSValue::from_bits(existing.to_bits()).is_pointer() {
+        return Vec::new();
+    }
+    let array =
+        (existing.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::array::ArrayHeader;
+    let len = perry_runtime::array::js_array_length(array);
+    (0..len)
+        .map(|i| perry_runtime::array::js_array_get_f64(array, i))
+        .collect()
+}
+
+fn listener_key(event: &str) -> String {
+    format!("on:{event}")
+}
+
+extern "C" fn digest_on_thunk(
+    _c: *const ClosureHeader,
+    this: JsThis,
+    event: f64,
+    listener: f64,
+) -> f64 {
+    let this = this.as_f64();
+    let Some(kind) = DigestKind::of(this) else {
+        return UNDEFINED;
+    };
+    let Some(event) = (unsafe { string_from_jsvalue(event.to_bits()) }) else {
+        return this;
+    };
+    if !JSValue::from_bits(listener.to_bits()).is_pointer() {
+        return this;
+    }
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this_root = scope.root_nanbox_f64(this);
+    let listener = scope.root_nanbox_f64(listener);
+    let state = native_payload::js_state(this_root.get_nanbox_f64(), kind.family(), true);
+    unsafe { state_push(state, &listener_key(&event), listener.get_nanbox_f64()) };
+    this_root.get_nanbox_f64()
+}
+
+extern "C" fn digest_pipe_thunk(_c: *const ClosureHeader, this: JsThis, dest: f64) -> f64 {
+    let this = this.as_f64();
+    let Some(kind) = DigestKind::of(this) else {
+        return UNDEFINED;
+    };
+    if is_undefined(dest) {
+        return UNDEFINED;
+    }
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let dest = scope.root_nanbox_f64(dest);
+    let state = native_payload::js_state(this, kind.family(), true);
+    unsafe { state_push(state, "pipes", dest.get_nanbox_f64()) };
+    dest.get_nanbox_f64()
+}
+
+extern "C" fn digest_set_encoding_thunk(_c: *const ClosureHeader, this: JsThis, enc: f64) -> f64 {
+    let this = this.as_f64();
+    let Some(kind) = DigestKind::of(this) else {
+        return UNDEFINED;
+    };
+    let encoding = unsafe { string_from_jsvalue(enc.to_bits()) }.map(|s| s.to_ascii_lowercase());
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this_root = scope.root_nanbox_f64(this);
+    let value = match encoding {
+        Some(enc) => nanbox_str(js_string_from_bytes(enc.as_ptr(), enc.len() as u32)),
+        None => UNDEFINED,
+    };
+    let value = scope.root_nanbox_f64(value);
+    let state = native_payload::js_state(this_root.get_nanbox_f64(), kind.family(), true);
+    unsafe { state_set(state, "encoding", value.get_nanbox_f64()) };
+    this_root.get_nanbox_f64()
+}
+
+/// `destroy()` / `close()`: release the hasher now.
+extern "C" fn digest_destroy_thunk(_c: *const ClosureHeader, this: JsThis) -> f64 {
+    let this = this.as_f64();
+    if let Some(kind) = DigestKind::of(this) {
+        native_payload::close(this, kind.family());
+    }
+    UNDEFINED
+}
+
+extern "C" fn hash_write_thunk(
+    _c: *const ClosureHeader,
+    this: JsThis,
+    chunk: f64,
+    enc: f64,
+) -> f64 {
+    digest_write(this.as_f64(), DigestKind::Hash, chunk, enc)
+}
+
+extern "C" fn hmac_write_thunk(
+    _c: *const ClosureHeader,
+    this: JsThis,
+    chunk: f64,
+    enc: f64,
+) -> f64 {
+    digest_write(this.as_f64(), DigestKind::Hmac, chunk, enc)
+}
+
+fn digest_write(this: f64, kind: DigestKind, chunk: f64, enc: f64) -> f64 {
+    if DigestKind::of(this).is_none() || is_undefined(chunk) {
+        return UNDEFINED;
+    }
+    let args = [chunk, enc];
+    let args = passed_args(&args);
+    let encoding = unsafe { arg_string(args, 1) };
+    let bytes = unsafe { decode_hash_update_value(chunk, &encoding) };
+    unsafe { feed(this, kind, &bytes) };
+    js_true()
+}
+
+extern "C" fn hash_end_thunk(_c: *const ClosureHeader, this: JsThis, chunk: f64, enc: f64) -> f64 {
+    digest_end(this.as_f64(), DigestKind::Hash, chunk, enc)
+}
+
+extern "C" fn hmac_end_thunk(_c: *const ClosureHeader, this: JsThis, chunk: f64, enc: f64) -> f64 {
+    digest_end(this.as_f64(), DigestKind::Hmac, chunk, enc)
+}
+
+/// `end(chunk?)`: feed the last chunk, close the payload, and deliver the
+/// digest as one `data` event (and to every pipe), then `end` / `finish` /
+/// `close`, on the next tick.
+fn digest_end(this: f64, kind: DigestKind, chunk: f64, enc: f64) -> f64 {
+    if DigestKind::of(this).is_none() {
+        return UNDEFINED;
+    }
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this_root = scope.root_nanbox_f64(this);
+    let v = JSValue::from_bits(chunk.to_bits());
+    if !v.is_undefined() && !v.is_null() {
+        let args = [chunk, enc];
+        let args = passed_args(&args);
+        let encoding = unsafe { arg_string(args, 1) };
+        let bytes = unsafe { decode_hash_update_value(chunk, &encoding) };
+        unsafe { feed(this_root.get_nanbox_f64(), kind, &bytes) };
+    }
+    let state = scope.root_nanbox_f64(native_payload::js_state(
+        this_root.get_nanbox_f64(),
+        kind.family(),
+        true,
+    ));
+    let ended = unsafe { state_get(state.get_nanbox_f64(), "ended") };
+    if JSValue::from_bits(ended.to_bits()).is_bool() && ended.to_bits() == js_true().to_bits() {
+        return this_root.get_nanbox_f64();
+    }
+    unsafe { state_set(state.get_nanbox_f64(), "ended", js_true()) };
+    let encoding_value = unsafe { state_get(state.get_nanbox_f64(), "encoding") };
+    let encoding = unsafe { string_from_jsvalue(encoding_value.to_bits()) };
+    let Some(digest) = (unsafe { finish(this_root.get_nanbox_f64(), kind, None) }) else {
+        return this_root.get_nanbox_f64();
+    };
+    let chunk = scope.root_nanbox_f64(unsafe { digest_value(&digest, encoding.as_deref()) });
+    let tick =
+        perry_runtime::closure::js_closure_alloc(perry_runtime::fn_info!(digest_stream_tick, 0), 2);
+    perry_runtime::closure::js_closure_set_capture_f64(tick, 0, this_root.get_nanbox_f64());
+    perry_runtime::closure::js_closure_set_capture_f64(tick, 1, chunk.get_nanbox_f64());
+    perry_runtime::builtins::js_queue_next_tick(tick as i64);
+    this_root.get_nanbox_f64()
+}
+
+/// The next-tick delivery `end()` scheduled: `data` with the digest, a
+/// `write` to every pipe, then `end` / `finish` / `close` and `end()` on
+/// every pipe.
+extern "C" fn digest_stream_tick(closure: *const ClosureHeader, _this: JsThis) -> f64 {
+    unsafe {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let this = scope.root_nanbox_f64(perry_runtime::closure::js_closure_get_capture_f64(
+            closure, 0,
+        ));
+        let chunk = scope.root_nanbox_f64(perry_runtime::closure::js_closure_get_capture_f64(
+            closure, 1,
+        ));
+        let Some(kind) = DigestKind::of(this.get_nanbox_f64()) else {
+            return UNDEFINED;
+        };
+        let state = native_payload::js_state(this.get_nanbox_f64(), kind.family(), false);
+        if !JSValue::from_bits(state.to_bits()).is_pointer() {
+            return UNDEFINED;
+        }
+        let state = scope.root_nanbox_f64(state);
+        let data_listeners =
+            scope.root_nanbox_f64_slice(&state_list(state.get_nanbox_f64(), &listener_key("data")));
+        let pipes = scope.root_nanbox_f64_slice(&state_list(state.get_nanbox_f64(), "pipes"));
+        for cb in data_listeners.iter() {
+            emit_callback1(cb.get_nanbox_f64(), chunk.get_nanbox_f64());
+        }
+        for dest in pipes.iter() {
+            forward_method(dest.get_nanbox_f64(), b"write", &[chunk.get_nanbox_f64()]);
+        }
+        for event in ["end", "finish", "close"] {
+            let listeners = state_list(state.get_nanbox_f64(), &listener_key(event));
+            for cb in scope.root_nanbox_f64_slice(&listeners).iter() {
+                emit_callback0(cb.get_nanbox_f64());
+            }
+        }
+        for dest in pipes.iter() {
+            forward_method(dest.get_nanbox_f64(), b"end", &[]);
+        }
+    }
+    UNDEFINED
+}
+
+unsafe fn emit_callback0(cb: f64) {
+    if JSValue::from_bits(cb.to_bits()).is_pointer() {
+        let ptr = (cb.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const ClosureHeader;
+        js_closure_call0(ptr, perry_runtime::closure::plain_call_receiver());
+    }
+}
+
+unsafe fn emit_callback1(cb: f64, arg: f64) {
+    if JSValue::from_bits(cb.to_bits()).is_pointer() {
+        let ptr = (cb.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const ClosureHeader;
+        js_closure_call1(ptr, perry_runtime::closure::plain_call_receiver(), arg);
+    }
+}
+
+extern "C" {
+    fn js_native_call_method_str_key(
+        object: f64,
+        name_handle: i64,
+        args_ptr: *const f64,
+        args_len: usize,
+    ) -> f64;
+}
+
+unsafe fn forward_method(dest: f64, name: &[u8], args: &[f64]) {
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    if key.is_null() {
+        return;
+    }
+    js_native_call_method_str_key(dest, key as i64, args.as_ptr(), args.len());
+}

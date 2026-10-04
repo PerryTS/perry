@@ -547,11 +547,6 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     // reader's queue and dispatches to question/line/close callbacks.
     count += crate::readline::js_readline_process_pending();
 
-    // Process pending crypto Hash/Hmac stream digest events (#2479).
-    if let Some(pump) = PUMP_CRYPTO.get() {
-        count += unsafe { pump() };
-    }
-
     // Process pending zlib stream events (#1843) — `createGzip()` etc.
     // buffer input across `.write()` and queue 'data'/'end' on `.end()`;
     // drained + dispatched to listeners (and forwarded to `.pipe()` dests)
@@ -593,12 +588,10 @@ type PumpArm = unsafe fn() -> i32;
 type ActiveArm = fn() -> bool;
 
 static PUMP_TLS: Hook<PumpArm> = Hook::empty();
-static PUMP_CRYPTO: Hook<PumpArm> = Hook::empty();
 static PUMP_ZLIB: Hook<PumpArm> = Hook::empty();
 static ACTIVE_TURNLOOP_HTTP: Hook<ActiveArm> = Hook::empty();
 static ACTIVE_TURNLOOP_SMTP: Hook<ActiveArm> = Hook::empty();
 static ACTIVE_TLS: Hook<ActiveArm> = Hook::empty();
-static ACTIVE_CRYPTO: Hook<ActiveArm> = Hook::empty();
 static ACTIVE_ZLIB: Hook<ActiveArm> = Hook::empty();
 
 #[cfg(all(
@@ -615,18 +608,6 @@ pub(crate) fn install_tls_pump() {
     }
     PUMP_TLS.set(pump);
     ACTIVE_TLS.set(active);
-}
-
-#[cfg(feature = "crypto")]
-pub(crate) fn install_crypto_pump() {
-    unsafe fn pump() -> i32 {
-        crate::crypto::js_crypto_stream_process_pending()
-    }
-    fn active() -> bool {
-        crate::crypto::js_crypto_stream_has_active_handles() != 0
-    }
-    PUMP_CRYPTO.set(pump);
-    ACTIVE_CRYPTO.set(active);
 }
 
 #[cfg(feature = "compression-gzip")]
@@ -709,9 +690,6 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
         return 1;
     }
     if crate::worker_threads::js_worker_threads_has_pending() != 0 {
-        return 1;
-    }
-    if ACTIVE_CRYPTO.get().is_some_and(|active| active()) {
         return 1;
     }
     // zlib streams (#1843) — keep the loop alive while `.end()`-queued

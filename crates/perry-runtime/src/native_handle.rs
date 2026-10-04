@@ -43,12 +43,35 @@ pub struct NativeHandleHeader {
     pub debug_name_len: u16,
     pub _pad1: [u8; 6],
     pub debug_name: [u8; DEBUG_NAME_CAP],
+    /// Native bytes this cell's resource holds, reported to the collector
+    /// through `gc_note_external_side_alloc` while the resource is live and
+    /// released by `finalize_once` (#11919 P0). 0 for C resources, whose size
+    /// the runtime cannot know.
+    pub external_bytes: u64,
 }
 
 fn current_thread_id() -> u64 {
-    let mut hasher = DefaultHasher::new();
-    std::thread::current().id().hash(&mut hasher);
-    hasher.finish()
+    // Cached per thread: a Rust-payload method checks it on every call, and
+    // hashing `std::thread::current().id()` clones an `Arc` and runs SipHash.
+    std::thread_local! {
+        static CURRENT_THREAD_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+    fn compute() -> u64 {
+        let mut hasher = DefaultHasher::new();
+        std::thread::current().id().hash(&mut hasher);
+        hasher.finish()
+    }
+    CURRENT_THREAD_ID
+        .try_with(|cached| {
+            let id = cached.get();
+            if id != 0 {
+                return id;
+            }
+            let id = compute();
+            cached.set(id);
+            id
+        })
+        .unwrap_or_else(|_| compute())
 }
 
 /// The OS thread id, with NO thread-local storage behind it.
@@ -203,6 +226,7 @@ unsafe fn native_handle_new(
         debug_name_len.max(0) as usize,
     );
     (*handle)._pad1 = [0; 6];
+    (*handle).external_bytes = 0;
     f64::from_bits(crate::value::JSValue::pointer(handle as *const u8).bits())
 }
 
@@ -236,6 +260,14 @@ unsafe fn handle_from_value(value: f64) -> *mut NativeHandleHeader {
 }
 
 unsafe fn finalize_once(handle: *mut NativeHandleHeader) -> bool {
+    finalize_once_with(handle, true)
+}
+
+/// Run the resource's finalizer at most once and release its external bytes.
+///
+/// `account` is false only on the thread-teardown path, where the collector's
+/// thread-local pacing counters may already be destroyed and no longer matter.
+unsafe fn finalize_once_with(handle: *mut NativeHandleHeader, account: bool) -> bool {
     if handle.is_null() || (*handle).finalized != 0 {
         return false;
     }
@@ -249,7 +281,104 @@ unsafe fn finalize_once(handle: *mut NativeHandleHeader) -> bool {
     }
     (*handle).resource_ptr = ptr::null_mut();
     (*handle).ownership = OWNERSHIP_NULL;
+    let bytes = std::mem::take(&mut (*handle).external_bytes);
+    if account && bytes != 0 {
+        crate::gc::gc_note_external_side_free(bytes as usize);
+    }
     should_finalize
+}
+
+/// Create an OWNED handle cell for a Rust payload (#11919 P0).
+///
+/// `drop_thunk` is the monomorphized `Box<T>` drop for `resource_ptr`; it is
+/// the cell's finalizer, so it runs exactly once: on `dispose`, at the sweep
+/// that finds the cell dead, or at thread teardown, whichever comes first.
+/// The cell starts with no external bytes: the owner reports them with
+/// [`native_handle_set_external_bytes`] once the cell is reachable, because
+/// that report can start a collection. The cell is bound to the creating
+/// thread.
+pub(crate) unsafe fn native_handle_new_rust_payload(
+    resource_ptr: *mut c_void,
+    type_id: u64,
+    drop_thunk: NativeHandleFinalizer,
+    debug_name: &str,
+) -> *mut NativeHandleHeader {
+    runtime_main_thread_id();
+    let value = native_handle_new(
+        resource_ptr as i64,
+        type_id as i64,
+        OWNERSHIP_OWNED,
+        0,
+        THREAD_CREATOR as i32,
+        drop_thunk as *mut c_void,
+        debug_name.as_ptr(),
+        debug_name.len() as i64,
+    );
+    crate::value::JSValue::from_bits(value.to_bits()).as_pointer::<NativeHandleHeader>()
+        as *mut NativeHandleHeader
+}
+
+/// State the native bytes a live Rust payload holds (at creation, or after a
+/// buffer grew or was released). No-op on a finalized cell. Growth is
+/// reported through `gc_note_external_side_alloc`, which can start a
+/// collection: the cell must be reachable when this is called.
+pub(crate) unsafe fn native_handle_set_external_bytes(
+    handle: *mut NativeHandleHeader,
+    bytes: usize,
+) {
+    if handle.is_null() || (*handle).finalized != 0 {
+        return;
+    }
+    let old = (*handle).external_bytes as usize;
+    (*handle).external_bytes = bytes as u64;
+    if bytes > old {
+        crate::gc::gc_note_external_side_alloc(bytes - old);
+    } else if old > bytes {
+        crate::gc::gc_note_external_side_free(old - bytes);
+    }
+}
+
+/// The resource pointer of a live Rust-payload cell of `type_id` owned by the
+/// calling thread, or null (wrong type, already finalized, or another thread).
+#[inline]
+pub(crate) unsafe fn native_handle_rust_payload_ptr(
+    handle: *mut NativeHandleHeader,
+    type_id: u64,
+) -> *mut c_void {
+    if handle.is_null()
+        || (*handle).magic != NATIVE_HANDLE_MAGIC
+        || (*handle).type_id != type_id
+        || (*handle).finalized != 0
+    {
+        return ptr::null_mut();
+    }
+    if (*handle).creator_thread_id != current_thread_id() {
+        throw_type_error("Native handle used from the wrong thread");
+    }
+    (*handle).resource_ptr
+}
+
+/// Finalize a Rust-payload cell now (explicit close). True when this call ran
+/// the drop; false when it had already run.
+pub(crate) unsafe fn native_handle_dispose_rust_payload(handle: *mut NativeHandleHeader) -> bool {
+    if handle.is_null() || (*handle).magic != NATIVE_HANDLE_MAGIC {
+        return false;
+    }
+    if (*handle).finalized == 0 && (*handle).creator_thread_id != current_thread_id() {
+        throw_type_error("Native handle used from the wrong thread");
+    }
+    finalize_once(handle)
+}
+
+/// Thread teardown: run a dying thread's handle finalizers without touching
+/// the collector's pacing counters (they are thread-locals in destruction).
+/// Called from the malloc state's `Drop` for every `GC_TYPE_NATIVE_HANDLE`
+/// cell it frees, so a worker's owned payloads are dropped exactly once
+/// instead of leaking at exit.
+pub(crate) unsafe fn finalize_native_handle_at_teardown(handle: *mut NativeHandleHeader) {
+    if !handle.is_null() && (*handle).magic == NATIVE_HANDLE_MAGIC {
+        let _ = finalize_once_with(handle, false);
+    }
 }
 
 unsafe fn validate_thread(handle: *const NativeHandleHeader) {

@@ -1676,6 +1676,7 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
             .as_bytes()
         || b == b"__perry_ctor_caps"
         || b == crate::async_hooks::ASYNC_RESOURCE_EVENT_EMITTER_KEY
+        || b == crate::native_payload::JS_STATE_KEY
         || is_class_capture_key(b)
         || b.starts_with(crate::node_stream::NATIVE_BASE_SUPER_PREFIX)
         || b == crate::node_stream::STREAM_CAPTURE_REJECTIONS_KEY

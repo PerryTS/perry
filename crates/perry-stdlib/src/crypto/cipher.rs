@@ -489,11 +489,9 @@ fn decrypt_gcm_for_kind(
 /// the implementation small. GCM decrypt also buffers ciphertext until
 /// `.final()` authenticates it; GCM encrypt emits ciphertext at `.update()`
 /// and keeps enough plaintext to finalize the authentication tag.
-pub struct CipherHandle {
-    state: std::sync::Mutex<CipherState>,
-}
-
-pub(super) struct CipherState {
+/// The payload of a `Cipheriv` / `Decipheriv` object (#11919 P0,
+/// `perry_runtime::native_payload`): plain Rust data, no JS values.
+pub struct CipherState {
     kind: CipherKind,
     encrypt: bool,
     key: Vec<u8>,
@@ -589,25 +587,149 @@ pub(super) unsafe fn create_cipher_handle(
     } else {
         0
     };
-    let handle: Handle = crate::common::register_reclaimable_handle(CipherHandle {
-        state: std::sync::Mutex::new(CipherState {
-            kind,
-            encrypt,
-            key,
-            iv,
-            auth_tag_len,
-            buffer: Vec::new(),
-            auth_tag: None,
-            aad: Vec::new(),
-            auto_padding: true,
-            finished: false,
-            updated: false,
-        }),
-    });
-    nanbox_pointer_f64(handle as usize)
+    let state = CipherState {
+        kind,
+        encrypt,
+        key,
+        iv,
+        auth_tag_len,
+        buffer: Vec::new(),
+        auth_tag: None,
+        aad: Vec::new(),
+        auto_padding: true,
+        finished: false,
+        updated: false,
+    };
+    let bytes = cipher_external_bytes(&state);
+    let family = if encrypt {
+        &CIPHERIV_FAMILY
+    } else {
+        &DECIPHERIV_FAMILY
+    };
+    // node's own enumerable properties of a fresh Cipheriv / Decipheriv:
+    // `_decoder` (null until an output encoding is used) and `_options`.
+    perry_runtime::native_payload::alloc(
+        family,
+        state,
+        bytes,
+        &[
+            (b"_decoder", f64::from_bits(0x7FFC_0000_0000_0002)),
+            (b"_options", options_bits),
+        ],
+    )
 }
 
-/// `crypto.createCipheriv(alg, key, iv)` — register a CipherHandle for
+/// The native bytes a cipher payload really retains: the state itself plus
+/// its heap buffers (key, IV, buffered input, AAD, tag). Re-stated after
+/// every call, since `update` grows `buffer` and `final` empties it.
+fn cipher_external_bytes(state: &CipherState) -> usize {
+    std::mem::size_of::<CipherState>()
+        + state.key.capacity()
+        + state.iv.capacity()
+        + state.buffer.capacity()
+        + state.aad.capacity()
+        + state.auth_tag.as_ref().map_or(0, Vec::capacity)
+}
+
+pub(super) static CIPHERIV_FAMILY: perry_runtime::native_payload::NativePayloadFamily =
+    perry_runtime::native_payload::NativePayloadFamily {
+        class_id: perry_runtime::native_class_ids::CRYPTO_CIPHERIV,
+        name: "Cipheriv",
+        constructor_export: Some(("crypto", "Cipheriv")),
+        constructor_length: 4,
+        install_prototype: install_cipheriv_prototype,
+    };
+
+pub(super) static DECIPHERIV_FAMILY: perry_runtime::native_payload::NativePayloadFamily =
+    perry_runtime::native_payload::NativePayloadFamily {
+        class_id: perry_runtime::native_class_ids::CRYPTO_DECIPHERIV,
+        name: "Decipheriv",
+        constructor_export: Some(("crypto", "Decipheriv")),
+        constructor_length: 4,
+        install_prototype: install_decipheriv_prototype,
+    };
+
+macro_rules! cipher_method {
+    ($proto:expr, $name:literal, $body:ident, $n:tt) => {
+        $proto.method(
+            $name,
+            perry_runtime::fn_info!(
+                $body, $n;
+                with_declared($n),
+                with_flags(perry_runtime::closure::FN_BUILTIN)
+            ),
+            $n,
+        )
+    };
+}
+
+/// node's own names: `Cipheriv.prototype` has `update`, `final`,
+/// `setAutoPadding`, `getAuthTag`, `setAAD`; `Decipheriv.prototype` has
+/// `setAuthTag` in place of `getAuthTag`.
+fn install_cipheriv_prototype(proto: &mut perry_runtime::native_payload::PayloadPrototype) {
+    cipher_method!(proto, "update", cipher_update_thunk, 3);
+    cipher_method!(proto, "final", cipher_final_thunk, 1);
+    cipher_method!(proto, "setAutoPadding", cipher_set_auto_padding_thunk, 1);
+    cipher_method!(proto, "getAuthTag", cipher_get_auth_tag_thunk, 0);
+    cipher_method!(proto, "setAAD", cipher_set_aad_thunk, 2);
+}
+
+fn install_decipheriv_prototype(proto: &mut perry_runtime::native_payload::PayloadPrototype) {
+    cipher_method!(proto, "update", cipher_update_thunk, 3);
+    cipher_method!(proto, "final", cipher_final_thunk, 1);
+    cipher_method!(proto, "setAutoPadding", cipher_set_auto_padding_thunk, 1);
+    cipher_method!(proto, "setAuthTag", cipher_set_auth_tag_thunk, 2);
+    cipher_method!(proto, "setAAD", cipher_set_aad_thunk, 2);
+}
+
+use perry_runtime::closure::{ClosureHeader, JsThis};
+
+extern "C" fn cipher_update_thunk(
+    _c: *const ClosureHeader,
+    this: JsThis,
+    data: f64,
+    input_encoding: f64,
+    output_encoding: f64,
+) -> f64 {
+    let args = [data, input_encoding, output_encoding];
+    unsafe { dispatch_cipher(this.as_f64(), "update", &args) }
+}
+
+extern "C" fn cipher_final_thunk(_c: *const ClosureHeader, this: JsThis, enc: f64) -> f64 {
+    unsafe { dispatch_cipher(this.as_f64(), "final", &[enc]) }
+}
+
+extern "C" fn cipher_set_auto_padding_thunk(
+    _c: *const ClosureHeader,
+    this: JsThis,
+    on: f64,
+) -> f64 {
+    unsafe { dispatch_cipher(this.as_f64(), "setAutoPadding", &[on]) }
+}
+
+extern "C" fn cipher_get_auth_tag_thunk(_c: *const ClosureHeader, this: JsThis) -> f64 {
+    unsafe { dispatch_cipher(this.as_f64(), "getAuthTag", &[]) }
+}
+
+extern "C" fn cipher_set_auth_tag_thunk(
+    _c: *const ClosureHeader,
+    this: JsThis,
+    tag: f64,
+    enc: f64,
+) -> f64 {
+    unsafe { dispatch_cipher(this.as_f64(), "setAuthTag", &[tag, enc]) }
+}
+
+extern "C" fn cipher_set_aad_thunk(
+    _c: *const ClosureHeader,
+    this: JsThis,
+    aad: f64,
+    options: f64,
+) -> f64 {
+    unsafe { dispatch_cipher(this.as_f64(), "setAAD", &[aad, options]) }
+}
+
+/// `crypto.createCipheriv(alg, key, iv)` — a new `Cipheriv` object for
 /// encryption and return its handle NaN-boxed as POINTER_TAG.
 ///
 /// # Safety
@@ -623,7 +745,7 @@ pub unsafe extern "C" fn js_crypto_create_cipheriv(
     create_cipher_handle(alg_ptr, key_ptr, iv_ptr, options_bits, true)
 }
 
-/// `crypto.createDecipheriv(alg, key, iv)` — register a CipherHandle for
+/// `crypto.createDecipheriv(alg, key, iv)` — a new `Decipheriv` object for
 /// decryption and return its handle NaN-boxed as POINTER_TAG.
 ///
 /// # Safety
@@ -639,13 +761,40 @@ pub unsafe extern "C" fn js_crypto_create_decipheriv(
     create_cipher_handle(alg_ptr, key_ptr, iv_ptr, options_bits, false)
 }
 
-/// Dispatch `update` / `final` / `getAuthTag` / `setAuthTag` on a
-/// CipherHandle. Called from `common/dispatch.rs::js_handle_method_dispatch`.
-pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
-    let h = match get_handle_mut::<CipherHandle>(handle) {
-        Some(h) => h,
-        None => return nanbox_undefined(),
+/// Run `update` / `final` / `getAuthTag` / `setAuthTag` / `setAAD` /
+/// `setAutoPadding` on a Cipheriv / Decipheriv object, then re-state the
+/// native bytes its payload retains.
+unsafe fn dispatch_cipher(this: f64, method: &str, args: &[f64]) -> f64 {
+    let family = if perry_runtime::native_payload::is_instance(this, &CIPHERIV_FAMILY) {
+        &CIPHERIV_FAMILY
+    } else if perry_runtime::native_payload::is_instance(this, &DECIPHERIV_FAMILY) {
+        &DECIPHERIV_FAMILY
+    } else {
+        return nanbox_undefined();
     };
+    // The methods allocate their results while the payload is borrowed, so
+    // the receiver is rooted for the whole call (the payload lives as long as
+    // the object does) and `this` is re-read from the root when returned.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this_root = scope.root_nanbox_f64(this);
+    let args = super::hash_handles::passed_args(args);
+    let state = match perry_runtime::native_payload::payload_mut::<CipherState>(this, family) {
+        Ok(state) => state as *mut CipherState,
+        Err(_) => return nanbox_undefined(),
+    };
+    let result = cipher_step(&mut *state, &this_root, method, args);
+    let bytes = cipher_external_bytes(&*state);
+    perry_runtime::native_payload::set_external_bytes(this_root.get_nanbox_f64(), family, bytes);
+    result
+}
+
+unsafe fn cipher_step(
+    state_ptr: &mut CipherState,
+    this_root: &perry_runtime::gc::RuntimeHandle<'_>,
+    method: &str,
+    args: &[f64],
+) -> f64 {
+    let state_ptr: *mut CipherState = state_ptr;
     // #2962 — validate the Node Cipher/Decipher state machine BEFORE taking
     // the working lock below. The `throw_*` helpers `longjmp` out of this
     // frame, which would otherwise leave the per-handle `Mutex` locked on this
@@ -655,7 +804,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
     let mut invalid_state_for: Option<&'static str> = None;
     let mut plain_error: Option<&'static str> = None;
     {
-        let mut g = h.state.lock().unwrap();
+        let g = &mut *state_ptr;
         match method {
             "final" if g.finished => invalid_state = true,
             "final" if g.kind.is_gcm() && !g.encrypt && g.auth_tag.is_none() => {
@@ -686,8 +835,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
     if let Some(message) = plain_error {
         throw_plain_error(message);
     }
-    let mut guard = h.state.lock().unwrap();
-    let state = &mut *guard;
+    let state = &mut *state_ptr;
     match method {
         // `.update(buf)` — accumulate plaintext / ciphertext. Node returns
         // an incremental chunk here; for CBC/GCM we can safely return an
@@ -1119,7 +1267,6 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                 _ => return nanbox_undefined(),
             };
             if gcm_auth_failed {
-                drop(guard);
                 throw_plain_error(GCM_AUTH_FAILURE_MESSAGE);
             }
             // #3381 — `final(outputEncoding)`: when an output encoding string
@@ -1163,7 +1310,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
             let ptr = arg_ptr(args[0]);
             let tag = bytes_from_ptr(ptr);
             state.auth_tag = Some(tag);
-            nanbox_pointer_f64(handle as usize)
+            this_root.get_nanbox_f64()
         }
         // `.setAAD(buf)` — bind additional authenticated data for GCM.
         "setAAD" => {
@@ -1175,7 +1322,7 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
                 let ptr = arg_ptr(args[0]);
                 state.aad = bytes_from_ptr(ptr);
             }
-            nanbox_pointer_f64(handle as usize)
+            this_root.get_nanbox_f64()
         }
         // `.setAutoPadding([autoPadding])` — Node defaults to PKCS#7
         // padding for CBC/ECB and allows callers to disable it for exact
@@ -1183,55 +1330,10 @@ pub unsafe fn dispatch_cipher(handle: i64, method: &str, args: &[f64]) -> f64 {
         "setAutoPadding" => {
             // After-final rejection handled in the pre-lock guard above.
             state.auto_padding = args.first().copied().map(js_truthy).unwrap_or(true);
-            nanbox_pointer_f64(handle as usize)
+            this_root.get_nanbox_f64()
         }
         _ => nanbox_undefined(),
     }
-}
-
-/// Property reads on a CipherHandle — `c.getAuthTag` / `c.setAuthTag` /
-/// `c.update` / `c.final` / `c.setAAD`. Issue #1111: without this,
-/// `c.getAuthTag?.()` short-circuited because the property access
-/// returned undefined (small handles have no field storage), so the
-/// `?.` lowering's `c.getAuthTag == null` check fired and the call
-/// never happened.
-///
-/// Each known method name returns a bound-method closure (via
-/// `js_class_method_bind`) whose `this` is the POINTER_TAG-NaN-boxed
-/// handle. When invoked the closure routes through
-/// `js_native_call_method` → `HANDLE_METHOD_DISPATCH` → `dispatch_cipher`,
-/// the exact path `c.method(args)` takes when called inline. So
-/// `typeof c.getAuthTag === "function"` and `const g = c.getAuthTag; g()`
-/// both work, mirroring Node's `Cipher` shape.
-pub unsafe fn dispatch_cipher_property(handle: i64, property: &str) -> f64 {
-    if matches!(property, "getAuthTag" | "setAuthTag") {
-        let h = match get_handle_mut::<CipherHandle>(handle) {
-            Some(h) => h,
-            None => return nanbox_undefined(),
-        };
-        let encrypt = h.state.lock().unwrap().encrypt;
-        if (property == "getAuthTag" && !encrypt) || (property == "setAuthTag" && encrypt) {
-            return nanbox_undefined();
-        }
-    }
-    let name_bytes: &'static [u8] = match property {
-        "update" => b"update",
-        "final" => b"final",
-        "getAuthTag" => b"getAuthTag",
-        "setAuthTag" => b"setAuthTag",
-        "setAAD" => b"setAAD",
-        "setAutoPadding" => b"setAutoPadding",
-        _ => return nanbox_undefined(),
-    };
-    let this_f64 = nanbox_pointer_f64(handle as usize);
-    extern "C" {
-        fn js_class_method_bind(
-            instance: f64,
-            method_name_ptr: *const u8,
-            method_name_len: usize,
-        ) -> f64;
-    }
-    js_class_method_bind(this_f64, name_bytes.as_ptr(), name_bytes.len())
 }
 
 #[cfg(test)]

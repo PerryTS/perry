@@ -413,6 +413,13 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
             }
         }
     }
+    if let MissReceiver::Payload = receiver {
+        if let Some(result) =
+            crate::native_payload::try_payload_method_fast_dispatch(recv, name, args_ptr, argc)
+        {
+            return result;
+        }
+    }
     // Only an ordinary heap object can prime. Everything else (primitives,
     // handles, functions, arrays) dispatches with no extra work at all.
     let megamorphic = site_is_megamorphic(slot);
@@ -475,6 +482,8 @@ enum MissReceiver {
     /// `%Function.prototype%`), and whether it is keyed (neither that nor the
     /// FunctionDictionary shape).
     Function { word: u64, base: bool, keyed: bool },
+    /// An instance of a native-payload family (`native_payload.rs`).
+    Payload,
     /// Anything else: primitives, handles, arrays, strings.
     Other,
 }
@@ -494,7 +503,19 @@ fn miss_receiver(recv: f64) -> MissReceiver {
         return MissReceiver::Other;
     }
     match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => MissReceiver::Ordinary,
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            // #11919 P0: a native-payload instance's methods are builtins on
+            // its family prototype, which a site never memoizes: priming
+            // would fail on every call, and the tower would walk every probe
+            // before reaching them. The miss answers them directly.
+            // SAFETY: the header says a live ordinary object.
+            let class_id = unsafe { (*(addr as *const crate::object::ObjectHeader)).class_id };
+            if crate::native_class_ids::is_native_payload_class_id(class_id) {
+                MissReceiver::Payload
+            } else {
+                MissReceiver::Ordinary
+            }
+        }
         Some(h) if h.obj_type == crate::gc::GC_TYPE_CLOSURE => {
             // SAFETY: the header says a live closure; its first word is the
             // `capture_count | ShapeId` word.
@@ -527,7 +548,7 @@ fn prime_candidate(receiver: MissReceiver, name: &[u8]) -> bool {
             word, keyed: true, ..
         } => unsafe { function_shape_lists_key((word >> 32) as u32, name) },
         MissReceiver::Function { .. } => false,
-        MissReceiver::Other => false,
+        MissReceiver::Payload | MissReceiver::Other => false,
     }
 }
 

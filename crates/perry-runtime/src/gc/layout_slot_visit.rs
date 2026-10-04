@@ -507,6 +507,17 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             visit(fixed_slot(
                 &mut (*meta).private_evaluation_brand as *mut u64,
             ));
+            // #11919 P0: a native-payload object's `native_state` is its
+            // POINTER_TAG-boxed payload cell, reachable ONLY through this
+            // record, so it is a child edge exactly like `arguments`. Other
+            // families pack POD into the same word (text bits, timer/tui ids,
+            // a Set's malloc'd index, a class's private-storage serial) and
+            // none of those words carries the pointer tag, so they are never
+            // visited; `native_payload_cell_survives_a_moving_collection`
+            // reddens if this visit is removed.
+            if crate::native_payload::is_payload_state_word((*meta).native_state) {
+                visit(fixed_slot(&mut (*meta).native_state as *mut u64));
+            }
         }
         GcRewriteDescriptorKind::MetaOnly => {
             // #6759 phase 1: the cell's only traced edge is its metadata

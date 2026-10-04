@@ -137,7 +137,7 @@ pub(crate) unsafe fn dispatch_sqlite_db(handle: i64, method: &str, args: &[f64])
             // handle — the registry lookup inside `js_sqlite_prepare`
             // returns None for the latter). Returning undefined lets
             // the outer dispatcher fall through to other arms (e.g.
-            // when the handle is actually a HashHandle or FastifyApp
+            // when the handle is actually a SignHandle or FastifyApp
             // with a coincidentally-named "prepare" method).
             if stmt_handle < 0 {
                 return f64::from_bits(perry_runtime::JSValue::undefined().bits());

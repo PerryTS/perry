@@ -387,6 +387,10 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
                 f64::from_bits(TAG_FALSE)
             };
         }
+        // #11919 P0: a native-payload family answers by its class id.
+        if let Some(class_id) = crate::native_payload::export_class_id(&module, &method) {
+            return js_instanceof(value, class_id);
+        }
         if module == "perf_hooks" {
             let class_id = match method.as_str() {
                 "Performance" => crate::perf_hooks::CLASS_ID_PERFORMANCE,

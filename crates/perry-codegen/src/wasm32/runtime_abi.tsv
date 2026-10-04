@@ -865,7 +865,6 @@ js_crypto_sha256	ptr	ptr
 js_crypto_sha256_bytes	ptr	i64
 js_crypto_sign_async	f64	i64,i64,f64,f64
 js_crypto_sign_rsa_sha256	ptr	i64,i64,f64
-js_crypto_stream_process_pending	i32s	
 js_crypto_timing_safe_equal	f64	f64,f64
 js_crypto_verify_async	f64	i64,i64,f64,i64,f64
 js_crypto_verify_rsa_sha256	f64	i64,i64,f64,i64
