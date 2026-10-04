@@ -932,32 +932,33 @@ pub fn inline_calls_in_expr(
         return all;
     }
 
+    // Every multi-operand arm below evaluates its operands left to right, and
+    // an operand's inline setup is spliced in front of the whole statement,
+    // ahead of the operands before it. `ordered!` admits that setup only when
+    // `EarlierOperands` proves the move unobservable.
+    macro_rules! ordered {
+        ($operand:expr, $earlier:expr) => {
+            inline_calls_in_ordered_operand(
+                $operand,
+                $earlier,
+                func_candidates,
+                method_candidates,
+                local_types,
+                exact_receiver_facts,
+                next_local_id,
+                enclosing_class,
+                class_field_types,
+                preserve_loop_closures,
+            )
+        };
+    }
     // Otherwise recurse into sub-expressions, collecting hoisted stmts
     let mut hoisted = Vec::new();
     match expr {
         Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
-            hoisted.extend(inline_calls_in_expr(
-                left,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
-            hoisted.extend(inline_calls_in_expr(
-                right,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
+            let mut earlier = EarlierOperands::default();
+            hoisted.extend(ordered!(left, &mut earlier));
+            hoisted.extend(ordered!(right, &mut earlier));
         }
         Expr::Logical { left, right, .. } => {
             hoisted.extend(inline_calls_in_expr(
@@ -1071,6 +1072,7 @@ pub fn inline_calls_in_expr(
             return hoisted;
         }
         Expr::Call { callee, args, .. } => {
+            let mut earlier = EarlierOperands::before_arguments_of(callee);
             hoisted.extend(inline_calls_in_expr(
                 callee,
                 func_candidates,
@@ -1083,83 +1085,47 @@ pub fn inline_calls_in_expr(
                 preserve_loop_closures,
             ));
             for arg in args.iter_mut() {
-                hoisted.extend(inline_calls_in_expr(
-                    arg,
-                    func_candidates,
-                    method_candidates,
-                    local_types,
-                    exact_receiver_facts,
-                    next_local_id,
-                    enclosing_class,
-                    class_field_types,
-                    preserve_loop_closures,
-                ));
+                hoisted.extend(ordered!(arg, &mut earlier));
             }
             exact_receiver_facts.clear();
         }
         Expr::Array(elements) => {
+            let mut earlier = EarlierOperands::default();
             for elem in elements {
-                hoisted.extend(inline_calls_in_expr(
-                    elem,
-                    func_candidates,
-                    method_candidates,
-                    local_types,
-                    exact_receiver_facts,
-                    next_local_id,
-                    enclosing_class,
-                    class_field_types,
-                    preserve_loop_closures,
-                ));
+                hoisted.extend(ordered!(elem, &mut earlier));
                 kill_referenced_exact_receivers(elem, exact_receiver_facts);
             }
         }
         Expr::Object(fields) => {
+            let mut earlier = EarlierOperands::default();
             for (_, v) in fields {
-                hoisted.extend(inline_calls_in_expr(
-                    v,
-                    func_candidates,
-                    method_candidates,
-                    local_types,
-                    exact_receiver_facts,
-                    next_local_id,
-                    enclosing_class,
-                    class_field_types,
-                    preserve_loop_closures,
-                ));
+                hoisted.extend(ordered!(v, &mut earlier));
                 kill_referenced_exact_receivers(v, exact_receiver_facts);
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, v) in parts {
-                hoisted.extend(inline_calls_in_expr(
-                    v,
-                    func_candidates,
-                    method_candidates,
-                    local_types,
-                    exact_receiver_facts,
-                    next_local_id,
-                    enclosing_class,
-                    class_field_types,
-                    preserve_loop_closures,
-                ));
+            let mut earlier = EarlierOperands::default();
+            for (key, v) in parts {
+                hoisted.extend(ordered!(v, &mut earlier));
+                if key.is_none() {
+                    // Spreading copies own properties, which runs getters.
+                    earlier.note_effect();
+                }
                 kill_referenced_exact_receivers(v, exact_receiver_facts);
             }
         }
         Expr::ArraySpread(elements) => {
+            let mut earlier = EarlierOperands::default();
             for elem in elements {
                 match elem {
-                    perry_hir::ArrayElement::Expr(e) | perry_hir::ArrayElement::Spread(e) => {
-                        hoisted.extend(inline_calls_in_expr(
-                            e,
-                            func_candidates,
-                            method_candidates,
-                            local_types,
-                            exact_receiver_facts,
-                            next_local_id,
-                            enclosing_class,
-                            class_field_types,
-                            preserve_loop_closures,
-                        ));
+                    perry_hir::ArrayElement::Expr(e) => {
+                        hoisted.extend(ordered!(e, &mut earlier));
+                        kill_referenced_exact_receivers(e, exact_receiver_facts);
+                    }
+                    perry_hir::ArrayElement::Spread(e) => {
+                        hoisted.extend(ordered!(e, &mut earlier));
+                        // Spreading drives the iterator protocol.
+                        earlier.note_effect();
                         kill_referenced_exact_receivers(e, exact_receiver_facts);
                     }
                     perry_hir::ArrayElement::Hole => {}
@@ -1167,6 +1133,7 @@ pub fn inline_calls_in_expr(
             }
         }
         Expr::CallSpread { callee, args, .. } => {
+            let mut earlier = EarlierOperands::before_arguments_of(callee);
             hoisted.extend(inline_calls_in_expr(
                 callee,
                 func_candidates,
@@ -1180,85 +1147,31 @@ pub fn inline_calls_in_expr(
             ));
             for arg in args.iter_mut() {
                 match arg {
-                    perry_hir::CallArg::Expr(e) | perry_hir::CallArg::Spread(e) => {
-                        hoisted.extend(inline_calls_in_expr(
-                            e,
-                            func_candidates,
-                            method_candidates,
-                            local_types,
-                            exact_receiver_facts,
-                            next_local_id,
-                            enclosing_class,
-                            class_field_types,
-                            preserve_loop_closures,
-                        ));
+                    perry_hir::CallArg::Expr(e) => {
+                        hoisted.extend(ordered!(e, &mut earlier));
+                    }
+                    perry_hir::CallArg::Spread(e) => {
+                        hoisted.extend(ordered!(e, &mut earlier));
+                        earlier.note_effect();
                     }
                 }
             }
             exact_receiver_facts.clear();
         }
         Expr::IndexGet { object, index } => {
-            hoisted.extend(inline_calls_in_expr(
-                object,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
-            hoisted.extend(inline_calls_in_expr(
-                index,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
+            let mut earlier = EarlierOperands::default();
+            hoisted.extend(ordered!(object, &mut earlier));
+            hoisted.extend(ordered!(index, &mut earlier));
         }
         Expr::IndexSet {
             object,
             index,
             value,
         } => {
-            hoisted.extend(inline_calls_in_expr(
-                object,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
-            hoisted.extend(inline_calls_in_expr(
-                index,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
-            hoisted.extend(inline_calls_in_expr(
-                value,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
+            let mut earlier = EarlierOperands::default();
+            hoisted.extend(ordered!(object, &mut earlier));
+            hoisted.extend(ordered!(index, &mut earlier));
+            hoisted.extend(ordered!(value, &mut earlier));
             exact_receiver_facts.clear();
         }
         // #6812 (w6): PutValue references — sloppy-mode `o.k = f(x)` lowers
@@ -1272,18 +1185,9 @@ pub fn inline_calls_in_expr(
             receiver,
             ..
         } => {
+            let mut earlier = EarlierOperands::default();
             for sub in [target, key, value, receiver] {
-                hoisted.extend(inline_calls_in_expr(
-                    sub,
-                    func_candidates,
-                    method_candidates,
-                    local_types,
-                    exact_receiver_facts,
-                    next_local_id,
-                    enclosing_class,
-                    class_field_types,
-                    preserve_loop_closures,
-                ));
+                hoisted.extend(ordered!(sub, &mut earlier));
             }
             exact_receiver_facts.clear();
         }
@@ -1301,28 +1205,9 @@ pub fn inline_calls_in_expr(
             ));
         }
         Expr::PropertySet { object, value, .. } => {
-            hoisted.extend(inline_calls_in_expr(
-                object,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
-            hoisted.extend(inline_calls_in_expr(
-                value,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
+            let mut earlier = EarlierOperands::default();
+            hoisted.extend(ordered!(object, &mut earlier));
+            hoisted.extend(ordered!(value, &mut earlier));
             exact_receiver_facts.clear();
         }
         Expr::LocalSet(id, value) => {
@@ -1341,98 +1226,31 @@ pub fn inline_calls_in_expr(
             kill_referenced_exact_receivers(value.as_ref(), exact_receiver_facts);
         }
         Expr::NativeMethodCall { object, args, .. } => {
+            let mut earlier = EarlierOperands::default();
             if let Some(obj) = object {
-                hoisted.extend(inline_calls_in_expr(
-                    obj,
-                    func_candidates,
-                    method_candidates,
-                    local_types,
-                    exact_receiver_facts,
-                    next_local_id,
-                    enclosing_class,
-                    class_field_types,
-                    preserve_loop_closures,
-                ));
+                hoisted.extend(ordered!(obj, &mut earlier));
             }
             for arg in args.iter_mut() {
-                hoisted.extend(inline_calls_in_expr(
-                    arg,
-                    func_candidates,
-                    method_candidates,
-                    local_types,
-                    exact_receiver_facts,
-                    next_local_id,
-                    enclosing_class,
-                    class_field_types,
-                    preserve_loop_closures,
-                ));
+                hoisted.extend(ordered!(arg, &mut earlier));
             }
             exact_receiver_facts.clear();
         }
         // Issue #169: a Call nested inside a Uint8Array index/set/length
         // (e.g. `buf[clamp(i)]`) wouldn't be inlined without these arms.
         Expr::Uint8ArrayGet { array, index } => {
-            hoisted.extend(inline_calls_in_expr(
-                array,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
-            hoisted.extend(inline_calls_in_expr(
-                index,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
+            let mut earlier = EarlierOperands::default();
+            hoisted.extend(ordered!(array, &mut earlier));
+            hoisted.extend(ordered!(index, &mut earlier));
         }
         Expr::Uint8ArraySet {
             array,
             index,
             value,
         } => {
-            hoisted.extend(inline_calls_in_expr(
-                array,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
-            hoisted.extend(inline_calls_in_expr(
-                index,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
-            hoisted.extend(inline_calls_in_expr(
-                value,
-                func_candidates,
-                method_candidates,
-                local_types,
-                exact_receiver_facts,
-                next_local_id,
-                enclosing_class,
-                class_field_types,
-                preserve_loop_closures,
-            ));
+            let mut earlier = EarlierOperands::default();
+            hoisted.extend(ordered!(array, &mut earlier));
+            hoisted.extend(ordered!(index, &mut earlier));
+            hoisted.extend(ordered!(value, &mut earlier));
             kill_referenced_exact_receivers(array.as_ref(), exact_receiver_facts);
             kill_referenced_exact_receivers(index.as_ref(), exact_receiver_facts);
             kill_referenced_exact_receivers(value.as_ref(), exact_receiver_facts);
@@ -1464,61 +1282,16 @@ pub fn inline_calls_in_expr(
             ));
         }
         Expr::Sequence(exprs) => {
-            // A comma-sequence evaluates its elements left-to-right; element
-            // `i>0` runs only AFTER the side effects of elements `0..i`. Inline
-            // setup statements (the `let <param> = <arg>` arg-bindings) bubble
-            // up to *before the enclosing statement*, so hoisting a later
-            // element's setup would move its arg reads ahead of the earlier
-            // stores those reads depend on. For an esbuild `__esm` schema
-            // factory — one big comma-sequence of `Global = ctor({...})`
-            // assignments where a later object literal reads an
-            // earlier-assigned schema var (`C31 = KP({ k: YE7.optional() })`) —
-            // that reorders the read of `YE7` ahead of its store, yielding
-            // `undefined` and a `Cannot read properties of undefined` throw.
-            //
-            // Only the first element is evaluated before any sibling side
-            // effect, so only its setup may safely hoist. For later elements,
-            // inline into a candidate clone and commit only when it needs no
-            // hoisted setup (a pure substitution stays in place); otherwise
-            // leave the element as its original runtime call — always correct,
-            // just un-inlined. Mirrors the clone-and-revert guard the
-            // short-circuit `Logical` / `Conditional` arms already use.
-            for (idx, item) in exprs.iter_mut().enumerate() {
-                if idx == 0 {
-                    hoisted.extend(inline_calls_in_expr(
-                        item,
-                        func_candidates,
-                        method_candidates,
-                        local_types,
-                        exact_receiver_facts,
-                        next_local_id,
-                        enclosing_class,
-                        class_field_types,
-                        preserve_loop_closures,
-                    ));
-                    continue;
-                }
-                let before_facts = exact_receiver_facts.clone();
-                let mut candidate = item.clone();
-                let mut candidate_facts = before_facts.clone();
-                let item_hoisted = inline_calls_in_expr(
-                    &mut candidate,
-                    func_candidates,
-                    method_candidates,
-                    local_types,
-                    &mut candidate_facts,
-                    next_local_id,
-                    enclosing_class,
-                    class_field_types,
-                    preserve_loop_closures,
-                );
-                if item_hoisted.is_empty() {
-                    *item = candidate;
-                    *exact_receiver_facts = candidate_facts;
-                } else {
-                    *exact_receiver_facts = before_facts;
-                    invalidate_exact_receivers_for_expr(item, exact_receiver_facts);
-                }
+            // A comma-sequence evaluates its elements left-to-right. For an
+            // esbuild `__esm` schema factory — one big comma-sequence of
+            // `Global = ctor({...})` assignments where a later object literal
+            // reads an earlier-assigned schema var (`C31 = KP({ k: YE7.optional() })`)
+            // — hoisting a later element's setup read `YE7` ahead of its
+            // store. `EarlierOperands` keeps every later element's setup
+            // behind the elements before it.
+            let mut earlier = EarlierOperands::default();
+            for item in exprs.iter_mut() {
+                hoisted.extend(ordered!(item, &mut earlier));
             }
         }
         // Descend into closure bodies. Without this, the inliner never
@@ -1582,6 +1355,157 @@ pub fn inline_calls_in_expr(
         }
     }
     hoisted
+}
+/// How an operand that runs before a later sibling can interact with that
+/// sibling's inline setup when the setup is moved in front of it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OperandOrder {
+    /// Produces the same value wherever it runs, and does nothing.
+    Constant,
+    /// Does nothing, but reads state that an effect could change.
+    Read,
+    /// May do something (write, call, throw, run a getter).
+    Effect,
+}
+
+fn operand_order(operand: &Expr) -> OperandOrder {
+    match operand {
+        Expr::Integer(_)
+        | Expr::Number(_)
+        | Expr::Bool(_)
+        | Expr::String(_)
+        | Expr::WtfString(_)
+        | Expr::BigInt(_)
+        | Expr::Null
+        | Expr::Undefined
+        | Expr::FuncRef(_)
+        | Expr::ClassRef(_)
+        // Creating a closure has no effect, and what it captures does not
+        // depend on when it is created: a fresh setup local is never captured,
+        // and a mutable capture is shared by reference.
+        | Expr::Closure { .. } => OperandOrder::Constant,
+        Expr::LocalGet(_) | Expr::GlobalGet(_) | Expr::This => OperandOrder::Read,
+        _ => OperandOrder::Effect,
+    }
+}
+
+/// The operands of one expression already evaluated, left to right, before
+/// the operand being inlined.
+///
+/// Inlining an operand can produce setup statements (the callee's parameter
+/// bindings, `let p = <arg>`), and those are spliced in front of the whole
+/// enclosing statement, ahead of every operand before this one. The move is
+/// unobservable only when no earlier operand does anything the setup could
+/// see (`f(x = g(), zp(x))` would bind `zp`'s parameter before the store to
+/// `x`), and the setup does nothing an earlier operand could see.
+#[derive(Clone, Copy, Default)]
+struct EarlierOperands {
+    reads: bool,
+    effects: bool,
+}
+
+impl EarlierOperands {
+    /// The operands a call evaluates before its arguments. A member call
+    /// evaluates its receiver first; the member itself is looked up by the
+    /// dispatch, after the arguments.
+    fn before_arguments_of(callee: &Expr) -> Self {
+        let mut earlier = Self::default();
+        match callee {
+            Expr::PropertyGet { object, .. } => earlier.note(operand_order(object)),
+            other => earlier.note(operand_order(other)),
+        }
+        earlier
+    }
+
+    fn note(&mut self, order: OperandOrder) {
+        match order {
+            OperandOrder::Constant => {}
+            OperandOrder::Read => self.reads = true,
+            OperandOrder::Effect => self.effects = true,
+        }
+    }
+
+    fn note_effect(&mut self) {
+        self.effects = true;
+    }
+
+    fn is_empty(&self) -> bool {
+        !self.reads && !self.effects
+    }
+
+    fn admits(&self, setup: &[Stmt]) -> bool {
+        setup.is_empty() || (!self.effects && (!self.reads || setup.iter().all(setup_only_reads)))
+    }
+}
+
+/// A setup statement that binds a fresh local to a value read without effect.
+fn setup_only_reads(stmt: &Stmt) -> bool {
+    matches!(
+        stmt,
+        Stmt::Let { init: Some(init), .. } if operand_order(init) != OperandOrder::Effect
+    )
+}
+
+/// Inline the calls in `operand`, which runs after the operands summarized by
+/// `earlier`. Its setup is kept only when `earlier` admits moving it in front
+/// of them; otherwise the operand keeps its original calls (always correct,
+/// just not inlined), mirroring the clone-and-revert guard of the
+/// short-circuit `Logical` / `Conditional` arms.
+#[allow(clippy::too_many_arguments)]
+fn inline_calls_in_ordered_operand(
+    operand: &mut Expr,
+    earlier: &mut EarlierOperands,
+    func_candidates: &HashMap<FuncId, Function>,
+    method_candidates: &HashMap<(String, String), MethodCandidate>,
+    local_types: &HashMap<LocalId, String>,
+    exact_receiver_facts: &mut ExactReceiverFacts,
+    next_local_id: &mut LocalId,
+    enclosing_class: Option<&str>,
+    class_field_types: &HashMap<(String, String), String>,
+    preserve_loop_closures: bool,
+) -> Vec<Stmt> {
+    let order = operand_order(operand);
+    // A closure literal never hands setup outward (its body is inlined in
+    // place), so it needs no trial copy.
+    let setup = if earlier.is_empty() || matches!(operand, Expr::Closure { .. }) {
+        inline_calls_in_expr(
+            operand,
+            func_candidates,
+            method_candidates,
+            local_types,
+            exact_receiver_facts,
+            next_local_id,
+            enclosing_class,
+            class_field_types,
+            preserve_loop_closures,
+        )
+    } else {
+        let before_facts = exact_receiver_facts.clone();
+        let mut candidate = operand.clone();
+        let mut candidate_facts = before_facts.clone();
+        let setup = inline_calls_in_expr(
+            &mut candidate,
+            func_candidates,
+            method_candidates,
+            local_types,
+            &mut candidate_facts,
+            next_local_id,
+            enclosing_class,
+            class_field_types,
+            preserve_loop_closures,
+        );
+        if earlier.admits(&setup) {
+            *operand = candidate;
+            *exact_receiver_facts = candidate_facts;
+            setup
+        } else {
+            *exact_receiver_facts = before_facts;
+            invalidate_exact_receivers_for_expr(operand, exact_receiver_facts);
+            Vec::new()
+        }
+    };
+    earlier.note(order);
+    setup
 }
 
 pub fn build_inline_arg_bindings(
@@ -2486,6 +2410,146 @@ mod tests {
             }];
         }
         stmts
+    }
+
+    /// `function keep(e) { return e; }` with an untyped (non-primitive)
+    /// parameter: a local argument keeps its parameter-binding boundary, so
+    /// inlining `keep(x)` yields the setup `let e = x`.
+    fn keep_candidate() -> HashMap<FuncId, Function> {
+        let param = perry_hir::Param {
+            id: 100,
+            name: "e".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        };
+        let keep = Function {
+            id: 7,
+            name: "keep".to_string(),
+            type_params: Vec::new(),
+            params: vec![param],
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(Expr::LocalGet(100)))],
+            is_async: false,
+            is_generator: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+            is_strict: false,
+        };
+        HashMap::from([(7, keep)])
+    }
+
+    fn call(callee: Expr, args: Vec<Expr>) -> Expr {
+        Expr::Call {
+            callee: Box::new(callee),
+            args,
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }
+    }
+
+    fn inline_in(expr: &mut Expr, candidates: &HashMap<FuncId, Function>) -> Vec<Stmt> {
+        let mut next_local_id = 1000;
+        inline_calls_in_expr(
+            expr,
+            candidates,
+            &HashMap::new(),
+            &HashMap::new(),
+            &mut ExactReceiverFacts::new(),
+            &mut next_local_id,
+            None,
+            &HashMap::new(),
+            false,
+        )
+    }
+
+    /// TypeScript's conditional-expression parser (prettier's typescript
+    /// plugin): `make(..., x = parseExpected(colon), present(x) ? ... : ...)`.
+    /// The setup of an inlined later argument is spliced in front of the
+    /// statement, so it must not move ahead of an earlier argument's store to
+    /// the local it reads.
+    #[test]
+    fn a_later_argument_setup_never_moves_ahead_of_an_earlier_store() {
+        let candidates = keep_candidate();
+        // opaque(x = 1, keep(x))
+        let mut expr = call(
+            Expr::FuncRef(99),
+            vec![
+                Expr::LocalSet(1, Box::new(Expr::Integer(1))),
+                call(Expr::FuncRef(7), vec![Expr::LocalGet(1)]),
+            ],
+        );
+        let setup = inline_in(&mut expr, &candidates);
+        assert!(
+            setup.iter().all(|stmt| !matches!(
+                stmt,
+                Stmt::Let {
+                    init: Some(Expr::LocalGet(1)),
+                    ..
+                }
+            )),
+            "x is read in front of the statement, before `x = 1` stores it: {setup:?}"
+        );
+        // The same inside a comma sequence and a binary operand.
+        for mut expr in [
+            Expr::Sequence(vec![
+                Expr::LocalSet(1, Box::new(Expr::Integer(1))),
+                call(Expr::FuncRef(7), vec![Expr::LocalGet(1)]),
+            ]),
+            Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::LocalSet(1, Box::new(Expr::Integer(1)))),
+                right: Box::new(call(Expr::FuncRef(7), vec![Expr::LocalGet(1)])),
+            },
+        ] {
+            let setup = inline_in(&mut expr, &candidates);
+            assert!(
+                setup.iter().all(|stmt| !matches!(
+                    stmt,
+                    Stmt::Let {
+                        init: Some(Expr::LocalGet(1)),
+                        ..
+                    }
+                )),
+                "x is read before its store: {setup:?}"
+            );
+        }
+    }
+
+    /// The guard does not cost the inlining where the move is unobservable:
+    /// earlier operands that only read, and a setup that only reads.
+    #[test]
+    fn a_later_argument_setup_still_inlines_after_reads() {
+        let candidates = keep_candidate();
+        // opaque(y, 2, keep(x))
+        let mut expr = call(
+            Expr::FuncRef(99),
+            vec![
+                Expr::LocalGet(2),
+                Expr::Integer(2),
+                call(Expr::FuncRef(7), vec![Expr::LocalGet(1)]),
+            ],
+        );
+        let setup = inline_in(&mut expr, &candidates);
+        assert!(
+            matches!(
+                setup.as_slice(),
+                [Stmt::Let {
+                    init: Some(Expr::LocalGet(1)),
+                    ..
+                }]
+            ),
+            "keep(x) should still inline: {setup:?}"
+        );
+        let Expr::Call { args, .. } = &expr else {
+            panic!("the outer call stays a call")
+        };
+        assert!(matches!(args[2], Expr::LocalGet(_)), "{:?}", args[2]);
     }
 
     #[test]
