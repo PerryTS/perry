@@ -1,3 +1,17 @@
+PRIVATE LAZY RSS MAC VERIFIED; APPLICATION ACCEPTANCE QUEUED
+Mac4878/0/5/0filtered passes; actual copied/pinned fallback subjects pass.
+5011source hashes unchanged after build; source/log/receipt rehashed.
+Node/address/filecap/registration checks pass. Linuxbuild/fullsuite1762987
+queued;17-case204fresh measurements1769141 waits for that specific receipt
+before sharedlock. Reuses15exact V40GCcontrol builds,15freshprivatebuilds,
+noGCknobs. No application instruction/RSS benefit yet.
+Historical2026 user/kernel split18cells independentlyverified; rawarchive
+copiedlocally/rehashed, all event-running percentages100%. TS privateentry
+user instructions+1.456%, kernelinstructions-0.483%. Extra kernel advice
+work does not explain the earlier TS regression: primarily usermode, exact
+cause unresolved. Current07entry has opposite totalinstruction sign; keep
+bases separate. No causalproof or uniformbenefit from these3diagnosticcases.
+
 CURRENT07 FULL APPLICATION MATRIX VERIFIED; PRIVATE LAZY RSS IMPLEMENTED
 45/45 fresh builds;306/306 correct measurements across17cases. Independent
 source/product/raw-output/RSS/perf/repetition verification passes;749raw and
