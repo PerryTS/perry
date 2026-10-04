@@ -476,16 +476,6 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                         );
                     }
                 }
-                // `C.prototype` is a non-writable, non-enumerable, non-configurable
-                // own data property of the class constructor (ECMA-262
-                // MakeConstructor). Only the constructor ref carries it — the
-                // prototype ref's own `prototype` lookup falls through.
-                // (Test262 definition/prototype-property.)
-                if method_name == "prototype" && super::class_prototype_ref_id(obj_value).is_none()
-                {
-                    let proto = super::native_module::class_prototype_ref_value(class_id);
-                    return build_data_descriptor(proto, false, false, false);
-                }
                 if method_name == "name"
                     && super::class_prototype_ref_id(obj_value).is_none()
                     && super::class_registry::lookup_static_method_in_chain(class_id, "name")
@@ -560,12 +550,9 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                     super::rebuild_object_field_layout(desc, 4);
                     return f64::from_bits((desc as u64) | 0x7FFD_0000_0000_0000);
                 }
-                // Static methods are own properties of the class *constructor*
-                // (not the prototype). `getOwnPropertyDescriptor(C, "m")` for a
-                // Static FIELDS are own data properties of the constructor,
-                // created via CreateDataPropertyOrThrow → writable, enumerable,
-                // configurable all true. Codegen registers each declared
-                // static field in CLASS_DYNAMIC_PROPS at module init.
+                // Own data properties, including `prototype`, live in the
+                // class function object's property bag. Read their actual
+                // values and shape attributes, never an encoded class ref.
                 if super::class_prototype_ref_id(obj_value).is_none() {
                     if let Some(v) =
                         super::class_registry::class_own_static_field_value(class_id, &method_name)
