@@ -1,0 +1,17 @@
+[
+  {
+    "name": "primary-entry-once-main07-v46-auto.py",
+    "before": "8ba2dc881350caae024d5024efe1c7cfa1da943b44ab593d1ce6628e868512cb",
+    "after": "b3024a95d21a998ebbe0950df9ecda22cf21c09336b95c80b8cd30bba034167c"
+  },
+  {
+    "name": "primary-lazy-rss-main07-v51-build.py",
+    "before": "ad44e1fb30073c8e206faf9e477489f8641c6f94f5cf2cf42e3fc73b66667eb8",
+    "after": "edf165cab2a10aa8188778aee29a5a549941561852c3b003f220f3169b512fa4"
+  },
+  {
+    "name": "primary-lazy-rss-main07-v52-auto.py",
+    "before": "e3878bf306af73cbb78c729117a246b466e84c8d93a5be628096bfa2caa7b369",
+    "after": "22d22be629615f4c3c2ebfffbaba3a49f9f7bcdaa8b069244a84065e9813e10e"
+  }
+]
