@@ -446,17 +446,6 @@ pub(crate) fn build_optimized_libs(
             if matches!(module_normalized, "http" | "https") {
                 features.insert("external-http-client-pump");
             }
-            // Issue #4995 — when `node:events` routes to perry-ext-events,
-            // have js_stdlib_init_dispatch eagerly register the ext crate's
-            // EventEmitter constructor as the runtime's events construct
-            // dispatcher. Without this, a dynamic `new` on the bound
-            // `events.EventEmitter` export value (`require('events')`,
-            // default import, aliased ctor) falls through to the
-            // empty-object path until the first static construction has
-            // lazily registered the hooks.
-            if module_normalized == "events" {
-                features.insert("external-events-construct");
-            }
         }
     }
 
@@ -826,7 +815,7 @@ pub(crate) fn build_optimized_libs(
     {
         // The "archives fresh" fast-path must still carry the NON-co-built
         // routed well-known libs collected by the routing loop above (e.g.
-        // perry-ext-zlib for `node:zlib`, perry-ext-events, …). They live in
+        // perry-ext-zlib for `node:zlib`, …). They live in
         // the outer `well_known_libs`; `resolve_auto_well_known_libs` only
         // resolves the co-built bindings. Without merging them, the routed
         // CPU-only ext staticlibs are dropped here and the link fails with

@@ -216,6 +216,27 @@ pub(crate) unsafe fn nm_ctor_repl(
     None
 }
 
+/// #4995: `new EE()` where `EE = require('events')` or came in as a default /
+/// namespace import (`import EE from 'events'`, `import * as ev from
+/// 'events'; new ev.EventEmitter()`). The callee is the bound
+/// `events.EventEmitter` export value; the instance is the same ordinary
+/// object the static `new EventEmitter()` builds (#10508).
+pub(crate) unsafe fn nm_ctor_events(
+    _module: &str,
+    method: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let options = nm_ctor_arg(args_ptr, args_len, 0);
+    match method {
+        "EventEmitter" => Some(crate::node_stream::js_event_emitter_object_new(options)),
+        "EventEmitterAsyncResource" => {
+            Some(crate::node_stream::js_event_emitter_async_resource_object_new(options))
+        }
+        _ => None,
+    }
+}
+
 pub(crate) unsafe fn nm_ctor_stream(
     _module: &str,
     method: &str,
@@ -454,28 +475,6 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
                     args_ptr,
                     args_len,
                 );
-            }
-        }
-        // #4995: `new EE()` where `EE = require('events')` or came in as a
-        // default / namespace import (`import EE from 'events'`, `import * as
-        // ev from 'events'; new ev.EventEmitter()`). The callee is the bound
-        // `events.EventEmitter` export value; without this arm construction
-        // fell through to the generic empty-object path, so the instance had
-        // no `.on`/`.emit`/`.setMaxListeners` (signal-exit's init throws).
-        // Route to the linked emitter impl (perry-stdlib `bundled-events` or
-        // perry-ext-events) via the construct dispatcher registered at
-        // startup — this crate can't call the constructors directly.
-        if module == "events"
-            && matches!(
-                method.as_str(),
-                "EventEmitter" | "EventEmitterAsyncResource"
-            )
-        {
-            let ptr =
-                crate::value::JS_NATIVE_EVENTS_CONSTRUCT.load(std::sync::atomic::Ordering::SeqCst);
-            if !ptr.is_null() {
-                let dispatch: crate::value::JsNativeEventsConstructFn = std::mem::transmute(ptr);
-                return dispatch(method.as_ptr(), method.len(), args_ptr, args_len);
             }
         }
         // `new <bound async_hooks.AsyncLocalStorage>()` / `<...AsyncResource>()`.

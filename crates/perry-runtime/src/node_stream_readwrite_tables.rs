@@ -30,7 +30,7 @@ static NS_SET_MAX_LISTENERS_INFO: JsFunctionInfo =
 static NS_GET_MAX_LISTENERS_INFO: JsFunctionInfo =
     ns_info!(ns_get_max_listeners, 0).with_declared(0);
 static NS_EVENT_NAMES_INFO: JsFunctionInfo = ns_info!(ns_event_names, 0).with_declared(0);
-static NS_LISTENER_COUNT_INFO: JsFunctionInfo = ns_info!(ns_listener_count, 1).with_declared(1);
+static NS_LISTENER_COUNT_INFO: JsFunctionInfo = ns_info!(ns_listener_count, 2).with_declared(2);
 static NS_LISTENERS_INFO: JsFunctionInfo = ns_info!(ns_listeners, 1).with_declared(1);
 static NS_RAW_LISTENERS_INFO: JsFunctionInfo = ns_info!(ns_raw_listeners, 1).with_declared(1);
 static NS_READ1_INFO: JsFunctionInfo = ns_info!(ns_read1, 1).with_declared(1);

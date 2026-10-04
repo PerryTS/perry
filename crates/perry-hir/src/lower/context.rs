@@ -1367,6 +1367,16 @@ impl LoweringContext {
         if is_compile_package_override(&module_name) {
             return false;
         }
+        // An EventEmitter is an ordinary object whose methods live on
+        // `EventEmitter.prototype` (#10508): calls on it are ordinary method
+        // calls, never native-table rows. The binding still hides an outer
+        // native instance of the same name.
+        if module_name == "events" {
+            if self.lookup_native_instance(&local_name).is_some() {
+                self.shadow_native_instance(local_name);
+            }
+            return false;
+        }
         // Push the new index onto this name's shadow stack (innermost last).
         let idx = self.native_instances.len();
         self.native_instances_index

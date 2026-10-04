@@ -117,7 +117,7 @@ fn coerce_event_name(event_bits: i64) -> Option<String> {
 /// Validate an EventEmitter listener argument supplied as raw NaN-box bits
 /// and return its closure pointer (#3047). Non-callable values throw Node's
 /// `TypeError [ERR_INVALID_ARG_TYPE]` with the shared `"listener"` message
-/// via `js_validate_event_listener`, matching `perry-stdlib::events`.
+/// via `js_validate_event_listener`, matching `EventEmitter.prototype`.
 fn validate_listener(listener_bits: i64) -> *const crate::closure::ClosureHeader {
     let name = "listener";
     let ptr = unsafe {
@@ -416,7 +416,7 @@ pub(crate) fn emit_process_event(event: &str, args: &[f64]) -> bool {
 /// to `undefined`. This replaces the previous behaviour of throwing the raw
 /// first argument (so `emit("error", "boom")` now throws an `ERR_UNHANDLED_ERROR`
 /// `Error` rather than the bare `"boom"` string).
-fn throw_unhandled_error_event(args: &[f64]) -> ! {
+pub(crate) fn throw_unhandled_error_event(args: &[f64]) -> ! {
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
     let first = args.first().copied().unwrap_or(undefined);
 

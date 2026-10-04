@@ -864,10 +864,8 @@ pub struct CompilationContext {
     /// Whether codegen routes any construction to the native `EventEmitter`
     /// (a `new EventEmitter()` / `EventEmitterAsyncResource`, regardless of
     /// where the binding was imported from — e.g. `eventemitter3`'s default
-    /// export, whose local name is `EventEmitter`). The `js_event_emitter_*`
-    /// helpers live in perry-stdlib's `events` module behind `bundled-events`;
-    /// without this flag a program that uses native EventEmitter but never
-    /// imports `node:events` fails to link (#5140).
+    /// export, whose local name is `EventEmitter`). Such a program is treated
+    /// as importing `node:events`, so its module helpers are linked (#5140).
     pub uses_event_emitter: bool,
     /// Whether any TS module uses a WHATWG URL API (`new URL`, the hostname
     /// setter, `url.domainToASCII/Unicode`, legacy `url.resolve`,

@@ -676,7 +676,7 @@ extern "C" fn process_warning_callback(
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
-fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &str) {
+pub(crate) fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &str) {
     let pid = std::process::id();
     let line = if code.is_empty() {
         format!("(node:{pid}) {label}: {msg}")

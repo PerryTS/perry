@@ -1670,6 +1670,9 @@ POLL_CAPABLE_RUNTIME = {
     "js_broadcast_channel_new",
     "js_create_namespace",
     "js_ethers_wallet_create_random",
+    # #10508: `new EventEmitter(opts)` reads `opts.captureRejections` (a
+    # getter can run) and the AsyncResource form runs the subclass init.
+    "js_event_emitter_async_resource_object_new", "js_event_emitter_object_new",
     "js_event_target_new",
     "js_iterator_to_array",
     "js_new_function_construct", "js_new_function_construct_with_new_target",

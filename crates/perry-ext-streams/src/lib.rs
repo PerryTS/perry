@@ -207,7 +207,7 @@ static GC_REGISTERED: Once = Once::new();
 /// `transform` / `flush` callbacks live in the registry maps below; the
 /// runtime GC mark phase wouldn't see them otherwise and a sweep
 /// between registration and dispatch would free the closure body. Same
-/// shape as perry-ext-events / perry-ext-http.
+/// shape as perry-ext-http.
 fn ensure_gc_registered() {
     GC_REGISTERED.call_once(|| {
         gc_register_mutable_root_scanner_named("perry-ext-streams", scan_stream_roots);

@@ -209,20 +209,6 @@ fn call_old_stream_on(old_stream: f64, event: &[u8], listener: *const ClosureHea
         return;
     }
     let event = crate::string::js_string_from_bytes(event.as_ptr(), event.len() as u32);
-    let handle = raw_ptr_from_value(old_stream) as i64;
-    if handle != 0 {
-        if let (Some(probe), Some(on)) = (
-            crate::object::event_emitter_handle_probe(),
-            crate::object::event_emitter_on(),
-        ) {
-            if unsafe { probe(handle) } {
-                let event_bits = crate::value::js_nanbox_string(event as i64).to_bits() as i64;
-                let listener_value = crate::value::js_nanbox_pointer(listener as i64);
-                unsafe { on(handle, event_bits, listener_value.to_bits() as i64) };
-                return;
-            }
-        }
-    }
     let event_value = f64::from_bits(JSValue::string_ptr(event).bits());
     let listener_value = f64::from_bits(JSValue::pointer(listener as *const u8).bits());
     let args = [event_value, listener_value];
@@ -560,6 +546,50 @@ extern "C" fn ns_emit_rest(
         raw_ptr_from_value(rest) as *const _,
     )
 }
+/// `recv.emit(...args)` for a method-call site's miss (`NmEeOps::emit_call`):
+/// when `recv`'s shapes resolve `emit` to an ordinary data property holding
+/// the emitter `emit` body (every emitter prototype and stream table installs
+/// the one body), run it with the call's arguments as they arrived -- the
+/// body's rest array would only be unpacked again. `None`, having done
+/// nothing, for anything else (an override, an accessor, a receiver the
+/// shapes cannot answer for): the caller's ordinary dispatch handles it.
+///
+/// # Safety
+/// `args_ptr` holds `argc` values (or is null with `argc == 0`).
+pub(crate) unsafe fn emitter_emit_call(
+    recv: f64,
+    args_ptr: *const f64,
+    argc: usize,
+) -> Option<f64> {
+    let value =
+        crate::object::native_get::try_data_get_bytes(JSValue::from_bits(recv.to_bits()), b"emit")?;
+    let bits = value.bits();
+    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
+        return None;
+    }
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if !crate::closure::is_closure_ptr(addr) {
+        return None;
+    }
+    let closure = addr as *const ClosureHeader;
+    let info = (*closure).info.as_ref()?;
+    if info.code != ns_emit_rest as *const u8 {
+        return None;
+    }
+    let args: &[f64] = if args_ptr.is_null() || argc == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args_ptr, argc)
+    };
+    // No allocation precedes the read of the closure's receiver capture; the
+    // emit roots everything it holds before it allocates.
+    let target = this_value(closure, crate::closure::JsThis::from_f64(recv));
+    Some(match args.split_first() {
+        Some((event, rest)) => event_emitter::emit_stream_event(target, *event, rest),
+        None => event_emitter::emit_stream_event(target, f64::from_bits(TAG_UNDEFINED), &[]),
+    })
+}
+
 extern "C" fn ns_resume0(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
     resume_readable_stream(this_value(closure, this))
 }

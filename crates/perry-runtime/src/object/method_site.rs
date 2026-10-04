@@ -427,6 +427,18 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
             argc,
         );
     }
+    // `emitter.emit(...)`: its body takes a rest parameter, which no site
+    // entry can call, so every call misses. The emitter machinery (armed by
+    // the events / stream installs) calls it directly instead of the tower.
+    if let MissReceiver::Ordinary = receiver {
+        if name == b"emit" {
+            if let Some(ops) = super::nm_ee_ops() {
+                if let Some(result) = (ops.emit_call)(recv, args_ptr, argc) {
+                    return result;
+                }
+            }
+        }
+    }
     // Dispatch first, then prime: the prime may allocate (marking a
     // prototype hop, the borrowed-builtin classifier's key), which can move
     // the receiver and the arguments the dispatcher still needs. The

@@ -378,50 +378,40 @@ pub(crate) fn install_event_emitter_prototype(proto: *mut ObjectHeader) {
     }
 }
 
-enum EventEmitterAsyncResourceBacking {
-    ExternalEmitter(i64),
-    RuntimeResource(i64),
-}
-
-fn event_emitter_async_resource_backing(receiver: f64) -> Option<EventEmitterAsyncResourceBacking> {
+/// The `AsyncResource` behind an `EventEmitterAsyncResource` receiver: the
+/// public resource object held in its hidden field.
+fn event_emitter_async_resource_backing(receiver: f64) -> Option<i64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let bits = receiver.get_nanbox_f64().to_bits();
-    if bits >> 48 == 0x7FFD {
-        let handle = (bits & crate::value::POINTER_MASK) as i64;
-        if crate::object::event_emitter_async_resource_handle_probe()
-            .is_some_and(|probe| unsafe { probe(handle) })
-        {
-            return Some(EventEmitterAsyncResourceBacking::ExternalEmitter(handle));
-        }
-        let raw = handle as usize;
-        if crate::value::addr_class::is_plausible_heap_addr(raw) {
-            let key = scope.root_string_ptr(hidden_key(EVENT_EMITTER_ASYNC_RESOURCE_KEY));
-            let raw = (receiver.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
-            let value = key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                js_object_get_field_by_name_f64(raw as *const ObjectHeader, key)
-            });
-            if value.to_bits() >> 48 == 0x7FFD {
-                let resource = (value.to_bits() & crate::value::POINTER_MASK) as i64;
-                // #10926: the hidden field holds what `js_async_resource_new`
-                // returned -- the public handle OBJECT, not the native backing
-                // -- so brand it by resolving, not by backing-registry
-                // membership. `resource` stays the public object: the
-                // `asyncResource` getter hands it to JS, and every
-                // `js_async_resource_*` entry point resolves it.
-                if crate::async_hooks::resolve_async_resource_handle(resource).is_some() {
-                    return Some(EventEmitterAsyncResourceBacking::RuntimeResource(resource));
-                }
-            }
-        }
+    if bits >> 48 != 0x7FFD {
+        return None;
     }
-    None
+    let raw = (bits & crate::value::POINTER_MASK) as usize;
+    if !crate::value::addr_class::is_plausible_heap_addr(raw) {
+        return None;
+    }
+    let key = scope.root_string_ptr(hidden_key(EVENT_EMITTER_ASYNC_RESOURCE_KEY));
+    let raw = (receiver.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
+    let value = key.with_const_ptr::<crate::StringHeader, _>(|key| {
+        js_object_get_field_by_name_f64(raw as *const ObjectHeader, key)
+    });
+    if value.to_bits() >> 48 != 0x7FFD {
+        return None;
+    }
+    let resource = (value.to_bits() & crate::value::POINTER_MASK) as i64;
+    // #10926: the hidden field holds what `js_async_resource_new` returned --
+    // the public handle OBJECT, not the native backing -- so brand it by
+    // resolving, not by backing-registry membership. `resource` stays the
+    // public object: the `asyncResource` getter hands it to JS, and every
+    // `js_async_resource_*` entry point resolves it.
+    crate::async_hooks::resolve_async_resource_handle(resource).map(|_| resource)
 }
 
 fn require_event_emitter_async_resource_receiver(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
-) -> EventEmitterAsyncResourceBacking {
+) -> i64 {
     if let Some(backing) = event_emitter_async_resource_backing(this_value(closure, this)) {
         return backing;
     }
@@ -436,13 +426,8 @@ extern "C" fn ns_ee_async_resource_emit_rest(
     event: f64,
     rest: f64,
 ) -> f64 {
-    let backing = require_event_emitter_async_resource_receiver(closure, this);
-    let runtime_async_id = match backing {
-        EventEmitterAsyncResourceBacking::RuntimeResource(resource) => {
-            crate::async_hooks::js_async_resource_async_id(resource) as u64
-        }
-        EventEmitterAsyncResourceBacking::ExternalEmitter(_) => 0,
-    };
+    let resource = require_event_emitter_async_resource_receiver(closure, this);
+    let runtime_async_id = crate::async_hooks::js_async_resource_async_id(resource) as u64;
     if runtime_async_id != 0 {
         crate::async_hooks::js_async_hooks_provider_enter(runtime_async_id);
     }
@@ -457,16 +442,8 @@ extern "C" fn ns_ee_async_resource_destroy(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
 ) -> f64 {
-    match require_event_emitter_async_resource_receiver(closure, this) {
-        EventEmitterAsyncResourceBacking::ExternalEmitter(handle) => {
-            crate::object::event_emitter_async_resource_dispatch()
-                .map(|dispatch| unsafe { dispatch(handle, 3) })
-                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
-        }
-        EventEmitterAsyncResourceBacking::RuntimeResource(resource) => {
-            crate::async_hooks::js_async_resource_emit_destroy(resource) as f64
-        }
-    }
+    let resource = require_event_emitter_async_resource_receiver(closure, this);
+    crate::async_hooks::js_async_resource_emit_destroy(resource) as f64
 }
 
 /// `EventEmitterAsyncResource.prototype.emit`'s body: `(event, ...args)`.
@@ -488,18 +465,12 @@ extern "C" fn ns_ee_async_resource_getter(
     this: crate::closure::JsThis,
 ) -> f64 {
     let operation = crate::closure::js_closure_get_capture_ptr(closure, 1) as u32;
-    match require_event_emitter_async_resource_receiver(closure, this) {
-        EventEmitterAsyncResourceBacking::ExternalEmitter(handle) => {
-            crate::object::event_emitter_async_resource_dispatch()
-                .map(|dispatch| unsafe { dispatch(handle, operation) })
-                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
-        }
-        EventEmitterAsyncResourceBacking::RuntimeResource(resource) => match operation {
-            0 => crate::async_hooks::js_async_resource_async_id(resource),
-            1 => crate::async_hooks::js_async_resource_trigger_async_id(resource),
-            2 => f64::from_bits(crate::value::js_nanbox_pointer(resource).to_bits()),
-            _ => f64::from_bits(crate::value::TAG_UNDEFINED),
-        },
+    let resource = require_event_emitter_async_resource_receiver(closure, this);
+    match operation {
+        0 => crate::async_hooks::js_async_resource_async_id(resource),
+        1 => crate::async_hooks::js_async_resource_trigger_async_id(resource),
+        2 => f64::from_bits(crate::value::js_nanbox_pointer(resource).to_bits()),
+        _ => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
 }
 
@@ -645,16 +616,6 @@ pub(crate) unsafe fn install_event_emitter_async_resource_instance_methods(
                 );
             });
         });
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_event_emitter_async_resource_subclass_backing(receiver: i64) -> i64 {
-    let receiver =
-        f64::from_bits(crate::value::POINTER_TAG | (receiver as u64 & crate::value::POINTER_MASK));
-    match event_emitter_async_resource_backing(receiver) {
-        Some(EventEmitterAsyncResourceBacking::RuntimeResource(resource)) => resource,
-        _ => 0,
     }
 }
 

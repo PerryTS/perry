@@ -40,8 +40,6 @@ pub(crate) use emitter_als::{
     dispatch_async_local_storage_method, dispatch_async_local_storage_property,
     unbound_async_local_storage_method,
 };
-#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-pub(crate) use emitter_als::{dispatch_event_emitter_method, dispatch_event_emitter_property};
 #[cfg(feature = "database-sqlite")]
 pub(crate) use sqlite::{dispatch_sqlite_db, dispatch_sqlite_stmt};
 
@@ -67,10 +65,8 @@ pub(crate) fn install_streams() {
     unsafe { init::install_streams_registrations() };
 }
 
-#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
+#[cfg(feature = "bundled-events")]
 pub(crate) fn install_events() {
-    method_dispatch::install_events();
-    property_dispatch::install_events();
     unsafe { init::install_events_registrations() };
 }
 
@@ -148,10 +144,7 @@ pub(crate) fn install_fetch() {
     unsafe { init::install_fetch_registrations() };
 }
 
-pub(crate) type EventEmitterOn = unsafe extern "C" fn(i64, i64, i64) -> i64;
-
 pub(crate) const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001);
-pub(crate) const TAG_UNDEFINED_BITS: i64 = 0x7FFC_0000_0000_0001u64 as i64;
 pub(crate) const POINTER_TAG_BITS: u64 = 0x7FFD_0000_0000_0000;
 pub(crate) const POINTER_MASK_BITS: u64 = 0x0000_FFFF_FFFF_FFFF;
 
@@ -170,64 +163,4 @@ pub(crate) unsafe fn pack_args_array(args: &[f64]) -> *mut perry_runtime::ArrayH
         arr_handle.set_raw_mut_ptr(arr);
     }
     arr_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>()
-}
-
-// Shared `extern "C"` surface of the EventEmitter implementation. Both
-// perry-stdlib (`bundled-events`) and perry-ext-events export these exact
-// symbols, kept byte-identical per #3072. The dispatch arms below call
-// through the linker-resolved symbol instead of `crate::events::*` so that
-// when the well-known flip links perry-ext-events, dynamic dispatch
-// consults the SAME handle registry the constructors used. An in-crate call
-// always hit perry-stdlib's registry and returned `None` for ext-events
-// handles — every dynamic `.on`/`.emit`/`.setMaxListeners` on an emitter
-// silently no-op'd and method-value reads came back `undefined` (#4995).
-// Mirrors the sqlite duplicate-symbol contract noted in
-// `compile/optimized_libs.rs` (#643).
-#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-extern "C" {
-    pub(crate) fn js_event_emitter_is_handle(handle: i64) -> bool;
-    pub(crate) fn js_event_emitter_on(handle: i64, event_bits: i64, listener_bits: i64) -> i64;
-    pub(crate) fn js_event_emitter_once(handle: i64, event_bits: i64, listener_bits: i64) -> i64;
-    pub(crate) fn js_event_emitter_prepend_listener(
-        handle: i64,
-        event_bits: i64,
-        listener_bits: i64,
-    ) -> i64;
-    pub(crate) fn js_event_emitter_prepend_once_listener(
-        handle: i64,
-        event_bits: i64,
-        listener_bits: i64,
-    ) -> i64;
-    pub(crate) fn js_event_emitter_remove_listener(
-        handle: i64,
-        event_bits: i64,
-        listener_bits: i64,
-    ) -> i64;
-    pub(crate) fn js_event_emitter_remove_all_listeners(
-        handle: i64,
-        args_ptr: *const perry_runtime::ArrayHeader,
-    ) -> i64;
-    pub(crate) fn js_event_emitter_emit(
-        handle: i64,
-        event_bits: i64,
-        args_ptr: *mut perry_runtime::ArrayHeader,
-    ) -> f64;
-    pub(crate) fn js_event_emitter_listener_count(
-        handle: i64,
-        event_bits: i64,
-        listener_bits: i64,
-    ) -> f64;
-    pub(crate) fn js_event_emitter_listeners(
-        handle: i64,
-        event_bits: i64,
-    ) -> *mut perry_runtime::ArrayHeader;
-    pub(crate) fn js_event_emitter_raw_listeners(
-        handle: i64,
-        event_bits: i64,
-    ) -> *mut perry_runtime::ArrayHeader;
-    pub(crate) fn js_event_emitter_event_names(handle: i64) -> *mut perry_runtime::ArrayHeader;
-    pub(crate) fn js_event_emitter_set_max_listeners(handle: i64, n: f64) -> i64;
-    pub(crate) fn js_event_emitter_get_max_listeners(handle: i64) -> f64;
-    pub(crate) fn js_event_emitter_domain_value(handle: i64) -> f64;
-    pub(crate) fn js_event_emitter_new_with_options(options: f64) -> i64;
 }

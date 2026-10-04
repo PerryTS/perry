@@ -19,7 +19,7 @@ mod exec_env;
 pub(crate) use env_misc::{
     exit_after_current_thread_collection_teardown, format_out_of_range_number,
     process_env_delete_field, process_env_get_field, process_env_has_field, process_env_set_field,
-    run_process_exit_sequence, scan_process_env_cache_roots_mut,
+    run_process_exit_sequence, scan_process_env_cache_roots_mut, schedule_warning,
 };
 mod finalization;
 pub(crate) mod ipc;

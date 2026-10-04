@@ -128,15 +128,6 @@ pub extern "C" fn js_set_native_http_dispatch(func: JsNativeHttpDispatchFn) {
     JS_NATIVE_HTTP_DISPATCH.store(func as *mut (), Ordering::SeqCst);
 }
 
-/// Set the node:events class-constructor dispatcher. Registered by
-/// perry-stdlib (`bundled-events`) or perry-ext-events at startup so dynamic
-/// `new` on a bound `events.EventEmitter` export value reaches the real
-/// emitter constructor. Stays null when no events impl is linked. (#4995)
-#[no_mangle]
-pub extern "C" fn js_set_native_events_construct(func: JsNativeEventsConstructFn) {
-    JS_NATIVE_EVENTS_CONSTRUCT.store(func as *mut (), Ordering::SeqCst);
-}
-
 /// Register the async_hooks dynamic-construct dispatcher. Called by perry-stdlib
 /// at startup so `new <bound async_hooks.AsyncLocalStorage>()` (the Next.js
 /// `new maybeGlobalAsyncLocalStorage()` shape, where the ctor value came from

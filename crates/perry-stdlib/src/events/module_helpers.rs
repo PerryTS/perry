@@ -12,25 +12,12 @@ use perry_runtime::{
     js_string_from_bytes, ArrayHeader, ClosureHeader, StringHeader,
 };
 
-use crate::common::get_handle_mut;
-
-pub(super) unsafe fn call_net_socket_method(handle: i64, name: &str, args: &[f64]) -> f64 {
+/// `emitter[name](eventName)` with the event name rooted across the call.
+unsafe fn call_with_event(target: f64, name: &str, event_name_ptr: *const StringHeader) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let args = args
-        .iter()
-        .map(|value| scope.root_nanbox_f64(*value))
-        .collect::<Vec<_>>();
-    let name = scope.root_string_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
-    let args = args
-        .iter()
-        .map(|value| value.get_nanbox_f64())
-        .collect::<Vec<_>>();
-    perry_runtime::object::js_native_call_method_str_key(
-        js_nanbox_pointer(handle),
-        name.get_raw_const_ptr::<StringHeader>() as i64,
-        args.as_ptr(),
-        args.len(),
-    )
+    let target = scope.root_nanbox_f64(target);
+    let event = scope.root_nanbox_f64(event_value(event_name_ptr));
+    call_emitter_method(target.get_nanbox_f64(), name, &[event.get_nanbox_f64()])
 }
 
 extern "C" fn events_abort_listener_dispose(
@@ -120,31 +107,14 @@ pub unsafe extern "C" fn js_events_get_event_listeners(
             target_value,
         ))
     }) {
-        EventHelperTarget::EventEmitter(handle) => {
-            js_event_emitter_listeners(handle, event_bits_from_string_ptr(event_name_ptr))
-        }
-        EventHelperTarget::EventTarget(target) => {
-            perry_runtime::event_target::js_event_target_get_event_listeners(target, event_name_ptr)
-        }
-        EventHelperTarget::NetSocket(handle) => {
+        EventHelperTarget::Emitter(target) => {
             if event_name_ptr.is_null() {
                 return js_array_alloc(0);
             }
-            let result = call_net_socket_method(
-                handle,
-                "listeners",
-                &[js_nanbox_string(event_name_ptr as i64)],
-            );
-            let value = JSValue::from_bits(result.to_bits());
-            if value.is_pointer() {
-                value.as_pointer::<ArrayHeader>() as *mut ArrayHeader
-            } else {
-                js_array_alloc(0)
-            }
+            result_array(call_with_event(target, "listeners", event_name_ptr))
         }
-        EventHelperTarget::Stream(handle) => {
-            stream_listeners_for_heap_object(handle, event_name_ptr)
-                .unwrap_or_else(|| js_array_alloc(0))
+        EventHelperTarget::EventTarget(target) => {
+            perry_runtime::event_target::js_event_target_get_event_listeners(target, event_name_ptr)
         }
     }
 }
@@ -171,21 +141,10 @@ pub unsafe extern "C" fn js_events_listener_count(
             target_value,
         ))
     }) {
-        EventHelperTarget::EventEmitter(handle) => js_event_emitter_listener_count(
-            handle,
-            event_bits_from_string_ptr(event_name_ptr),
-            undefined_bits(),
-        ),
-        EventHelperTarget::EventTarget(target) => event_target_array_len(target, event_name_ptr),
-        EventHelperTarget::NetSocket(handle) => call_net_socket_method(
-            handle,
-            "listenerCount",
-            &[js_nanbox_string(event_name_ptr as i64)],
-        ),
-        EventHelperTarget::Stream(handle) => {
-            let event = js_nanbox_string(event_name_ptr as i64);
-            perry_runtime::node_stream::js_node_stream_method_listener_count(handle, event)
+        EventHelperTarget::Emitter(target) => {
+            call_with_event(target, "listenerCount", event_name_ptr)
         }
+        EventHelperTarget::EventTarget(target) => event_target_array_len(target, event_name_ptr),
     }
 }
 
@@ -205,15 +164,9 @@ pub unsafe extern "C" fn js_events_get_max_listeners(target_value: f64) -> f64 {
             target_value,
         ))
     }) {
-        EventHelperTarget::EventEmitter(handle) => js_event_emitter_get_max_listeners(handle),
+        EventHelperTarget::Emitter(target) => call_emitter_method(target, "getMaxListeners", &[]),
         EventHelperTarget::EventTarget(target) => {
             perry_runtime::event_target::js_event_target_get_max_listeners(target)
-        }
-        EventHelperTarget::NetSocket(handle) => {
-            call_net_socket_method(handle, "getMaxListeners", &[])
-        }
-        EventHelperTarget::Stream(handle) => {
-            perry_runtime::node_stream::js_node_stream_method_get_max_listeners(handle)
         }
     }
 }
@@ -250,22 +203,12 @@ pub unsafe extern "C" fn js_events_set_max_listeners(
                     value,
                 ))
             }) {
-                EventHelperTarget::EventEmitter(handle) => {
-                    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-                        emitter.max_listeners = n;
-                    }
+                EventHelperTarget::Emitter(target) => {
+                    let _ = call_emitter_method(target, "setMaxListeners", &[n]);
                 }
                 EventHelperTarget::EventTarget(target) => {
                     let _ =
                         perry_runtime::event_target::js_event_target_set_max_listeners(target, n);
-                }
-                EventHelperTarget::NetSocket(handle) => {
-                    let _ = call_net_socket_method(handle, "setMaxListeners", &[n]);
-                }
-                EventHelperTarget::Stream(handle) => {
-                    let _ = perry_runtime::node_stream::js_node_stream_method_set_max_listeners(
-                        handle, n,
-                    );
                 }
             }
         }

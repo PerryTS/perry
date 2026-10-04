@@ -125,8 +125,8 @@ def main() -> int:
         return 2
 
     # Two DIFFERENT names on one value is the bug. The SAME name on one value
-    # is a deliberate cross-crate mirror — `perry-ext-events` restates the
-    # runtime's `ABORT_SIGNAL_CLASS_ID` so it can recognise runtime AbortSignal
+    # is a deliberate cross-crate mirror — a crate restating a runtime class
+    # id (such as `ABORT_SIGNAL_CLASS_ID`) so it can recognise those runtime
     # objects, which is correct and must not be reported. Distinguishing them
     # by name is what makes this gate usable rather than permanently red.
     collisions = {

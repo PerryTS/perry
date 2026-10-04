@@ -47,6 +47,18 @@ pub(crate) unsafe fn try_data_get_by_name(
 /// it never builds a shape index, materializes a key, or resolves a builtin.
 #[inline]
 pub(crate) unsafe fn try_data_get_bytes(receiver: JSValue, key: &[u8]) -> Option<JSValue> {
+    try_data_lookup_bytes(receiver, key).flatten()
+}
+
+/// [`try_data_get_bytes`] that also answers a definite miss: `Some(None)`
+/// when the chain's shapes end at a null `[[Prototype]]` without the key (a
+/// `{ __proto__: null }` dictionary such as an emitter's `_events`). `None`
+/// when the shapes cannot answer and the caller must take the full `[[Get]]`.
+#[inline]
+pub(crate) unsafe fn try_data_lookup_bytes(
+    receiver: JSValue,
+    key: &[u8],
+) -> Option<Option<JSValue>> {
     #[cfg(test)]
     if FORCE_SLOW.with(|value| value.get()) {
         return None;
@@ -134,13 +146,19 @@ pub(crate) unsafe fn try_data_get_bytes(receiver: JSValue, key: &[u8]) -> Option
                     {
                         return None;
                     }
-                    return Some(value);
+                    return Some(Some(value));
                 }
             }
         } else {
             return None;
         }
         let recorded = crate::object::shapes::object_prototype_word(object);
+        if recorded == crate::value::TAG_NULL
+            || (recorded == 0 && header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0)
+        {
+            // The chain ends here, and no hop listed the key.
+            return Some(None);
+        }
         if recorded != 0 {
             let prototype = JSValue::from_bits(recorded);
             if !prototype.is_pointer() {

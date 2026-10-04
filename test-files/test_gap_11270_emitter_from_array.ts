@@ -1,8 +1,8 @@
 // #11270 / #11273: an EventEmitter read back out of an array (or any receiver whose
 // static type the compiler cannot prove) must dispatch to the same emitter.
-// Default `node:events` routes to perry-ext-events; the prebuilt stdlib's
-// dynamic dispatcher used to consult its own (empty) registry and silently
-// no-op every `.on` / `.emit`.
+// Default `node:events` routed to perry-ext-events, and the prebuilt stdlib's
+// dynamic dispatcher consulted its own (empty) registry and silently no-op'd
+// every `.on` / `.emit`. Emitters are ordinary objects now (#10508).
 import { EventEmitter } from "node:events";
 import * as events from "events";
 

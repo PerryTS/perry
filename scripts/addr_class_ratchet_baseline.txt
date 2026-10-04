@@ -22,7 +22,6 @@
 #
 # Regenerate: python3 scripts/addr_class_inventory.py --write-baseline
 
-handle-floor | crates/perry-ext-events/src/lib.rs | 3
 handle-floor | crates/perry-ext-http/src/agent.rs | 3
 handle-floor | crates/perry-ext-http/src/lib.rs | 2
 handle-floor | crates/perry-runtime/src/array/alloc.rs | 2

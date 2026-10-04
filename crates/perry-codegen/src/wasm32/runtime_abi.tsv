@@ -1122,34 +1122,10 @@ js_ethers_parse_ether	ptr	ptr
 js_ethers_parse_units	ptr	ptr,f64
 js_ethers_wallet_create_random	ptr	
 js_evalerror_new	ptr	ptr
-js_event_emitter_async_resource_async_id	f64	i64
-js_event_emitter_async_resource_async_resource	f64	i64
 js_event_emitter_async_resource_call	f64	f64
-js_event_emitter_async_resource_emit_destroy	f64	i64
-js_event_emitter_async_resource_new	i64	f64
-js_event_emitter_async_resource_subclass_backing	i64	i64
+js_event_emitter_async_resource_object_new	f64	f64
 js_event_emitter_async_resource_subclass_init	f64	f64,f64
-js_event_emitter_async_resource_trigger_async_id	f64	i64
-js_event_emitter_domain_value	f64	i64
-js_event_emitter_emit	f64	i64,i64,ptr
-js_event_emitter_emit0	f64	i64,i64
-js_event_emitter_event_names	ptr	i64
-js_event_emitter_get_domain	i64	i64
-js_event_emitter_get_max_listeners	f64	i64
-js_event_emitter_is_handle	bool	i64
-js_event_emitter_listener_count	f64	i64,i64,i64
-js_event_emitter_listeners	ptr	i64,i64
-js_event_emitter_new	i64	
-js_event_emitter_new_with_options	i64	f64
-js_event_emitter_on	i64	i64,i64,i64
-js_event_emitter_once	i64	i64,i64,i64
-js_event_emitter_prepend_listener	i64	i64,i64,i64
-js_event_emitter_prepend_once_listener	i64	i64,i64,i64
-js_event_emitter_raw_listeners	ptr	i64,i64
-js_event_emitter_remove_all_listeners	i64	i64,ptr
-js_event_emitter_remove_listener	i64	i64,i64,i64
-js_event_emitter_set_domain	i32s	i64,i64
-js_event_emitter_set_max_listeners	i64	i64,f64
+js_event_emitter_object_new	f64	f64
 js_event_emitter_subclass_init	f64	f64,f64
 js_event_loop_check_phase	i32s	
 js_event_loop_host_driven	i32s	
@@ -3247,14 +3223,6 @@ js_register_embedded_asset	void	ptr,usize,ptr,usize
 js_register_embedded_text_asset	void	ptr,usize,ptr,usize
 js_register_embedded_zstd_asset	i32s	ptr,usize,ptr,usize,usize,i32u
 js_register_embedded_zstd_asset_lazy	i32s	ptr,usize,ptr,usize,usize,i32u
-js_register_event_emitter_async_resource_dispatch	void	ptr
-js_register_event_emitter_async_resource_handle_probe	void	ptr
-js_register_event_emitter_get_domain	void	ptr
-js_register_event_emitter_handle_probe	void	ptr
-js_register_event_emitter_method_dispatch	void	ptr
-js_register_event_emitter_on	void	ptr
-js_register_event_emitter_property_dispatch	void	ptr
-js_register_event_emitter_set_domain	void	ptr
 js_register_ext_pump	void	ptr
 js_register_fetch_handle_kind_probe	void	ptr
 js_register_ffi_handle_exists_probe	void	ptr
@@ -3449,7 +3417,6 @@ js_set_native_async_local_storage_subclass_init	void	ptr
 js_set_native_bun_tcp_dispatch	void	ptr
 js_set_native_crypto_dispatch	void	ptr
 js_set_native_domain_dispatch	void	ptr
-js_set_native_events_construct	void	ptr
 js_set_native_events_dispatch	void	ptr
 js_set_native_http_dispatch	void	ptr
 js_set_native_module_js_loader	void	ptr

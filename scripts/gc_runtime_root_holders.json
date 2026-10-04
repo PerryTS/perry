@@ -787,6 +787,12 @@
       "why": "Queue entries contain a native addon function pointer plus the addon's opaque data and hint pointers. Node-API defines those as embedder-owned native pointers; no field is a Perry GC-heap address."
     },
     {
+      "file": "crates/perry-runtime/src/node_stream_constructors/event_emitter_new.rs",
+      "name": "PLAIN_PROTOTYPE",
+      "verdict": "not_a_gc_pointer",
+      "why": "#10508: `new EventEmitter()`'s site memo holds a prototype ShapeId (u32) and two inline-slot indexes (u32). It names no object: every use re-reads the prototype from the bound EventEmitter export and compares that object's current ShapeId with the memo's before trusting the slot."
+    },
+    {
       "file": "crates/perry-runtime/src/node_stream_readwrite.rs",
       "name": "HIDDEN_KEYS_SCANNER_REGISTERED",
       "verdict": "not_a_gc_pointer",
@@ -4213,10 +4219,6 @@
     {
       "file": "crates/perry-stdlib/src/domain.rs",
       "name": "DOMAIN_GC_REGISTERED"
-    },
-    {
-      "file": "crates/perry-stdlib/src/events.rs",
-      "name": "EVENTS_GC_REGISTERED"
     },
     {
       "file": "crates/perry-stdlib/src/fetch/gc.rs",

@@ -5,7 +5,6 @@ use crate::common::feature_hooks::{Hook, PropertyArm};
 
 // One slot per optional-feature position in `js_handle_property_dispatch`, in
 // hub order; see `method_dispatch.rs` for the scheme.
-static PROP_EVENTS: Hook<PropertyArm> = Hook::empty();
 static PROP_TLS: Hook<PropertyArm> = Hook::empty();
 static PROP_STREAMS: Hook<PropertyArm> = Hook::empty();
 static PROP_ZLIB: Hook<PropertyArm> = Hook::empty();
@@ -45,8 +44,6 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     {
         return value;
     }
-
-    try_arm!(PROP_EVENTS, handle, property_name);
 
     if let Some(value) = dispatch_async_local_storage_property(handle, property_name) {
         return value;
@@ -122,14 +119,6 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
 
     // Unknown handle type - return undefined
     f64::from_bits(0x7FFC_0000_0000_0001)
-}
-
-#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-unsafe fn prop_events(handle: i64, property_name: &str) -> Option<f64> {
-    if let Some(value) = dispatch_event_emitter_property(handle, property_name) {
-        return Some(value);
-    }
-    None
 }
 
 #[cfg(all(
@@ -762,10 +751,6 @@ unsafe fn prop_crypto(handle: i64, property_name: &str) -> Option<f64> {
 }
 
 // Per-feature slot fills, called from the owning feature's install.
-#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-pub(super) fn install_events() {
-    PROP_EVENTS.set(prop_events);
-}
 #[cfg(all(
     feature = "tls-runtime",
     not(target_os = "ios"),

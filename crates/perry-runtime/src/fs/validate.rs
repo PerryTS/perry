@@ -405,9 +405,9 @@ pub(crate) fn throw_invalid_path_arg_value(arg_name: &str, received: &str) -> ! 
 /// message — matching `EventEmitter#on/once/addListener/prependListener/
 /// prependOnceListener/removeListener/off`.
 ///
-/// Shared by both EventEmitter implementations (`perry-stdlib::events` and
-/// the out-of-tree `perry-ext-events`) so the validation, error class, code
-/// and message stay byte-identical regardless of which one is linked.
+/// Shared by every listener-taking surface (`EventEmitter.prototype`'s
+/// methods, `process.on`, `fs.watch`) so the validation, error class, code
+/// and message stay byte-identical across them.
 ///
 /// # Safety
 ///
