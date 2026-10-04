@@ -1,3 +1,18 @@
+ONCE-ADVICE ADOPTED INTO DRAFT, EXACT VALIDATED SOURCE
+All5011selected source inputs now match previously measured8e3013733d.
+Only its10delta paths copied; no header/shape/ABI/collection-frequency change.
+Runtime4877Mac/4863Linux and44linked22actualcopy/protect evidence applies
+to exactsource. Full17all306correct. Source-adoption proof published.
+Retain/release repeat27correct RSS executions (9perarm) independently verified:
+once median258678784 vsGC260583424bytes (-0.731%), ranges overlap.
+Original+1.338% three-sample result preserved; persistent increase not reproduced.
+All64repeat evidence files copiedlocally/rehashed. No instruction claim fromRSSrepeat.
+Learned-floor private3fb6cd50ed Linux4863/0/5 verified, exact5011inputs,
+3fresh products/build/test receipts. All11raw/proof files copied/rehashed.
+First verifier inherited a lazy-RSS scope label; originalproof retained and
+corrected scope reverified without rebuilding or rerunning tests.
+Query/floor experiments stillunapplied. Exactonce FFI/events willfollow.
+
 LEARNED-FLOOR ACCEPTANCE QUEUED AND OWN CACHE CLEANUP RECORDED
 Linux build wrapper2022343 now owns shared heavy lock and compiles its own
 source/target/export. Full17 comparison2037013 and moving validation2037014

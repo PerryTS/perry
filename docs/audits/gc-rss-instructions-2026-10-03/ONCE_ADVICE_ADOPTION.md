@@ -1,0 +1,9 @@
+# Once-per-idle-interval advice included in the draft
+
+The runtime now includes the exact candidate previously measured as `8e3013733d`. All 5,011 selected production source inputs match that candidate. Collection thresholds/frequency, object and GC headers, shape facts and ABI are unchanged. The policy advises only empty non-current Eden blocks whose prior idle interval is established, retains the recent reuse window, and records successful advice in existing ArenaBlock padding. Reuse clears the bit at reset without adding an allocation-path store. Failed advice remains retryable.
+
+The normal-auto full17 comparison has 306 correct fresh executions. Against the preceding GC proposal, TypeScript peak RSS falls 2.159%, instructions 1.474%; trees RSS falls 11.705%. Every signed case and its distributions remain in private-entry-once-main07-normal-auto-summary.json and the table. The original three-sample retain/release median rose 1.338%; nine fresh interleaved samples per policy on identical binaries instead show once-advice median 258,678,784 bytes versus GC 260,583,424 (-0.731%), with overlapping ranges. This does not prove an exact gain for that case; it does not reproduce a persistent increase. Both results remain preserved.
+
+Validation: 4,877 Mac and 4,863 Linux runtime tests, zero failures, five ignored on each platform; 44 linked correct executions, all 22 moving runs actually copying and protecting retired from-space. Residency/reuse and real-full-GC subjects check actual page state and preserve live payloads. FFI/event checks against this exact candidate are the next integration check.
+
+The deferred-RSS-query patch remains unapplied because its application comparison is mixed. The learned low-influx nursery floor also remains unapplied: Mac 4,879 and Linux 4,863 runtime tests pass, but full17 and moving acceptance are still pending.
