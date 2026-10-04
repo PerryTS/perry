@@ -92,6 +92,14 @@ pub(super) fn try_define_new_class_field(receiver: f64, key: f64, value: f64) ->
                 return false;
             }
         }
+        // The receiver shape answers the definition when it can: the key-add
+        // edge for a key the shape lacks, or the own data slot of a key it
+        // holds with default attributes (`define_own_data`). No byte compare.
+        if crate::object::define_own_data::define_own_data_from_shape(receiver, key, value)
+            .is_some()
+        {
+            return true;
+        }
         // The shape's key list names every own key, inline or overflow, data or
         // accessor. An absent key is created; a present one must be a data
         // property with the default attributes (the constructor allocated the
