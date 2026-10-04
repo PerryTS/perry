@@ -55,12 +55,14 @@ pub(crate) unsafe fn define_own_data_from_shape(
     {
         return None;
     }
+    let obj = addr as *mut ObjectHeader;
     // The word the lattice is keyed on: the interned string, found without
     // allocating (a pooled literal or an SSO immediate resolves to its
     // interned twin). Private names and canonical indices are refused there:
     // they are not ordinary named properties.
-    let key = super::chain_store::interned_key_for_store(key_value)?;
-    let obj = addr as *mut ObjectHeader;
+    let Some(key) = super::chain_store::interned_key_for_store(key_value) else {
+        return define_listed_key_by_content(obj, key_value, value);
+    };
     // 1. Creation. The chain-proven form is exactly the definition's append:
     // it vets the receiver kind, its flags and an own descriptor for the key,
     // and skips only the prototype-chain question a definition never asks.
@@ -85,4 +87,36 @@ pub(crate) unsafe fn define_own_data_from_shape(
         return Some(value);
     }
     None
+}
+
+/// Step 2 for a key whose content was never interned. No key-add edge names
+/// such a key (the lattice is keyed by interned words, and the first append
+/// of a key interns it), but the receiver's key list may already hold it: a
+/// list holds its keys by content, and a class's declared fields are listed
+/// under the module's literal strings, which are not interned. So the key is
+/// found the way the list is keyed, by its bytes, and a default-attribute
+/// data property is overwritten in place. `None` for anything else.
+///
+/// # Safety
+/// `obj` is a live heap object; `key_value` and `value` are live values.
+unsafe fn define_listed_key_by_content(
+    obj: *mut ObjectHeader,
+    key_value: f64,
+    value: f64,
+) -> Option<f64> {
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let bytes = crate::string::js_string_key_bytes(
+        crate::value::JSValue::from_bits(key_value.to_bits()),
+        &mut sso,
+    )?;
+    // Refused for the reason `interned_key_for_store` refuses them.
+    match bytes.first() {
+        Some(&first) if first != b'#' && !first.is_ascii_digit() => {}
+        _ => return None,
+    }
+    // A key list that carries attributes must give this key none.
+    if super::key_attrs::object_key_entry(obj, bytes) != 0 {
+        return None;
+    }
+    super::try_existing_own_data_overwrite_by_content(obj, key_value, bytes, value).then_some(value)
 }

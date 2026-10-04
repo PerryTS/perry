@@ -36,11 +36,54 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     key: *const crate::StringHeader,
     value: f64,
 ) -> bool {
-    let obj_addr = obj as usize;
-    let key_addr = key as usize;
-    if obj.is_null() || key.is_null() {
+    if key.is_null() {
         return false;
     }
+    existing_own_data_overwrite(obj, OverwriteKey::Interned(key), value)
+}
+
+/// [`try_existing_own_data_overwrite`] for a key that is not interned: a key
+/// list holds its keys by content, so a key it lists is found by the key's
+/// bytes as well as by the interned word. Nothing is interned and no read
+/// plan is recorded (a plan is keyed by the interned word). `key_value` is
+/// the key as a value, `key_bytes` its content.
+///
+/// # Safety
+/// As [`try_existing_own_data_overwrite`]; `key_value` is a live string value
+/// whose content is `key_bytes`.
+#[inline]
+pub(crate) unsafe fn try_existing_own_data_overwrite_by_content(
+    obj: *mut ObjectHeader,
+    key_value: f64,
+    key_bytes: &[u8],
+    value: f64,
+) -> bool {
+    existing_own_data_overwrite(obj, OverwriteKey::Content(key_value, key_bytes), value)
+}
+
+/// How an overwrite names its key.
+#[derive(Clone, Copy)]
+enum OverwriteKey<'a> {
+    /// The canonical interned heap string.
+    Interned(*const crate::StringHeader),
+    /// A key value and its content.
+    Content(f64, &'a [u8]),
+}
+
+#[inline(always)]
+unsafe fn existing_own_data_overwrite(
+    obj: *mut ObjectHeader,
+    key: OverwriteKey<'_>,
+    value: f64,
+) -> bool {
+    let obj_addr = obj as usize;
+    if obj.is_null() {
+        return false;
+    }
+    let key_value = match key {
+        OverwriteKey::Interned(key) => f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
+        OverwriteKey::Content(key_value, _) => key_value,
+    };
 
     let Some(obj_gc) = crate::value::addr_class::try_read_gc_header(obj_addr) else {
         return false;
@@ -57,10 +100,7 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
         // non-writable data property, which is what the object-wide flag
         // stood in for.
         || (obj_gc._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
-            && !crate::object::own_descriptors_skip_key(
-                obj_addr,
-                f64::from_bits(JSValue::string_ptr(key as *mut _).bits()),
-            ))
+            && !crate::object::own_descriptors_skip_key(obj_addr, key_value))
         // A per-evaluation class object can carry dynamic static accessors in
         // the class registry while retaining an ordinary backing slot with the
         // same key. Overwriting that slot directly bypasses the accessor
@@ -95,14 +135,16 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     }
     let live_slots = shape.live_inline_slot_count;
 
-    let Some(key_gc) = crate::value::addr_class::try_read_gc_header(key_addr) else {
-        return false;
-    };
-    if key_gc.obj_type != crate::gc::GC_TYPE_STRING
-        || key_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_INTERNED)
-            != crate::gc::GC_FLAG_INTERNED
-    {
-        return false;
+    if let OverwriteKey::Interned(key) = key {
+        let Some(key_gc) = crate::value::addr_class::try_read_gc_header(key as usize) else {
+            return false;
+        };
+        if key_gc.obj_type != crate::gc::GC_TYPE_STRING
+            || key_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_INTERNED)
+                != crate::gc::GC_FLAG_INTERNED
+        {
+            return false;
+        }
     }
 
     let keys_view = crate::object::object_keys(obj);
@@ -123,23 +165,40 @@ pub(crate) unsafe fn try_existing_own_data_overwrite(
     // A read plan is keyed by the keys ARRAY, which lists on one growth chain
     // share: a slot learned on a longer list is not this receiver's unless it
     // is below this receiver's count.
-    let mut own_idx = super::prop_plan::read_plan_lookup(keys_addr, key_addr, keys_view.count());
-    if own_idx.is_none() {
-        let key_count = keys_view.count() as usize;
-        if key_count > 4096 {
-            return false;
+    let own_idx = match key {
+        OverwriteKey::Interned(key) => {
+            let key_addr = key as usize;
+            let mut own_idx =
+                super::prop_plan::read_plan_lookup(keys_addr, key_addr, keys_view.count());
+            if own_idx.is_none() {
+                let key_count = keys_view.count() as usize;
+                if key_count > 4096 {
+                    return false;
+                }
+                // The write twin of the read lane's resolver: shape hash index
+                // first, raw dense-slot scan as its own fallback. The
+                // open-coded walk this replaces ran `js_array_get` (which
+                // additionally probes for per-index accessors) plus a string
+                // compare per key, in full, every time the epoch-guarded read
+                // plan was flushed — the same miss-path cost #8936 and #8950
+                // removed from their sides of the property paths.
+                own_idx = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key);
+                if let Some(i) = own_idx {
+                    super::prop_plan::read_plan_record(keys_addr, key_addr, i);
+                }
+            }
+            own_idx
         }
-        // The write twin of the read lane's resolver: shape hash index first,
-        // raw dense-slot scan as its own fallback. The open-coded walk this
-        // replaces ran `js_array_get` (which additionally probes for per-index
-        // accessors) plus a string compare per key, in full, every time the
-        // epoch-guarded read plan was flushed — the same miss-path cost #8936
-        // and #8950 removed from their sides of the property paths.
-        own_idx = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key);
-        if let Some(i) = own_idx {
-            super::prop_plan::read_plan_record(keys_addr, key_addr, i);
+        OverwriteKey::Content(_, bytes) => {
+            let key_count = keys_view.count();
+            if key_count > 4096 {
+                return false;
+            }
+            // The key list's own keying: content, most-derived declaration
+            // first (#10595), exactly as the interned lookup resolves it.
+            crate::object::keys_find_slot_by_bytes(keys, key_count, bytes)
         }
-    }
+    };
     let Some(idx) = own_idx else {
         return false;
     };
