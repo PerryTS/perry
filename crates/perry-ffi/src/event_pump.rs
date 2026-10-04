@@ -45,6 +45,7 @@ extern "C" {
     #[cfg(any(not(test), feature = "runtime-link"))]
     fn js_register_aux_tick_begin(f: extern "C" fn());
     fn js_register_aux_pump(f: extern "C" fn() -> i32);
+    fn js_register_agent_aux_pump(f: extern "C" fn() -> i32);
     fn js_register_aux_has_active(f: extern "C" fn() -> i32);
 }
 
@@ -69,6 +70,17 @@ pub fn register_aux_event_pump(pump: extern "C" fn() -> i32, has_active: extern 
     ensure_handle_tick_hook_registered();
     unsafe {
         js_register_aux_pump(pump);
+        js_register_aux_has_active(has_active);
+    }
+}
+
+/// Like [`register_aux_event_pump`], for a pump whose queue is keyed by
+/// [`crate::agent_post::current_agent`]: it drains only the calling agent's
+/// events, so a `worker_threads` worker's loop runs it too.
+pub fn register_agent_event_pump(pump: extern "C" fn() -> i32, has_active: extern "C" fn() -> i32) {
+    ensure_handle_tick_hook_registered();
+    unsafe {
+        js_register_agent_aux_pump(pump);
         js_register_aux_has_active(has_active);
     }
 }

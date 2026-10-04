@@ -703,6 +703,10 @@ fn string_coerce(value: f64) -> f64 {
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
 
+extern "C" {
+    fn js_run_agent_pumps() -> i32;
+}
+
 /// #10854: a worker must get event-loop turns, or an `async` `onmessage` handler
 /// never resumes after its first `await` and the reply is never posted.
 ///
@@ -744,6 +748,9 @@ fn pump_worker_microtasks() {
         // fetch's response lands here once a turn of the worker's own loop
         // collects it, and nothing else ever settles it.
         ran += crate::common::async_bridge::js_stdlib_process_pending();
+        // Extension events this worker made (its zlib streams): their queues
+        // are per agent, and only this thread may deliver them.
+        ran += unsafe { js_run_agent_pumps() };
         if ran == 0 {
             break;
         }

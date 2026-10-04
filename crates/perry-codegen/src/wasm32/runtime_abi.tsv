@@ -3210,6 +3210,7 @@ js_region_guard_pack	i64	i32u,i32u,i64,i64,i64,i64,i64
 js_region_guard_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64
 js_region_loop_pack	i64	i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u
 js_region_loop_prime	i64	ptr,i32u,i32u,i64,i64,i64,i64,i64,i32u,i32u,i32u,i32u
+js_register_agent_aux_pump	void	ptr
 js_register_anon_shape_class_id	void	i32u
 js_register_aux_has_active	void	ptr
 js_register_aux_pump	void	ptr
@@ -3365,6 +3366,7 @@ js_response_static_error	f64
 js_response_static_json	f64	f64,f64,ptr,f64
 js_response_static_redirect	f64	ptr,f64
 js_response_subclass_init	f64	f64,f64,f64
+js_run_agent_pumps	i32	
 js_run_ext_pump	void	
 js_run_module_init_catching	void	i64
 js_run_stdlib_pump	void	
