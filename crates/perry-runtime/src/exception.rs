@@ -305,6 +305,78 @@ pub fn catch_js_throw<R>(f: impl FnOnce() -> R) -> Result<R, f64> {
     }
 }
 
+crate::perry_thread_local! {
+    /// Try depth of this thread's worker base trap, while a worker body runs
+    /// under [`run_worker_body`].
+    static WORKER_BASE_DEPTH: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Run a worker thread's whole body under one base `try`. Everything the
+/// worker leaves unhandled lands here: a throw no `try` catches, an uncaught
+/// exception no `uncaughtException` listener takes (from a timer or a
+/// listener), and an unhandled rejection. `Err(value)` is that exception. The
+/// caller ends the worker; the process keeps running, as in Node.
+pub fn run_worker_body<R>(f: impl FnOnce() -> R) -> Result<R, f64> {
+    let env = js_try_push();
+    let outer = WORKER_BASE_DEPTH.with(|d| d.replace(Some(current_try_depth() - 1)));
+    let outcome = arm_trap_and_run(env, f);
+    WORKER_BASE_DEPTH.with(|d| d.set(outer));
+    js_try_end();
+    match outcome {
+        Some(r) => Ok(r),
+        None => {
+            let err = js_get_exception();
+            js_clear_exception();
+            Err(err)
+        }
+    }
+}
+
+/// On a worker thread, hand an uncaught exception to the worker's base trap
+/// (see [`run_worker_body`]); this does not return. On any other thread it
+/// returns and the caller ends the process.
+pub(crate) fn hand_to_worker_base(value: f64) {
+    let Some(depth) = WORKER_BASE_DEPTH.with(std::cell::Cell::get) else {
+        return;
+    };
+    #[cfg(not(target_os = "wasi"))]
+    {
+        // Like `js_throw`, but straight to the base trap: the traps between
+        // here and there belong to drains (microtasks, timers, rejection
+        // listeners) that would report the exception again or swallow it.
+        let jb_ptr: *mut i32 = with_exception_state(|s| unsafe {
+            crate::gc::runtime_store_root_nanbox_f64_raw_slot(
+                &raw mut (*s).current_exception,
+                value,
+            );
+            (*s).has_exception = true;
+            (*s).in_finally = false;
+            (*s).try_depth = depth + 1;
+            crate::async_context::unwind_context_guards(depth);
+            (*s).savepoints[depth].assume_init_read().restore();
+            (*s).jump_buffers[depth].as_mut_ptr()
+        });
+        // See `js_throw`: force the non-unwinding POSIX-style longjmp.
+        #[cfg(windows)]
+        unsafe {
+            // GC_STORE_AUDIT(STACK): native jmp_buf control word is not GC-managed storage.
+            (jb_ptr as *mut u64).write(0);
+        }
+        unsafe { longjmp(jb_ptr, 1) }
+    }
+    #[cfg(target_os = "wasi")]
+    let _ = depth;
+}
+
+/// End this thread's JS for an uncaught exception: a worker's base trap
+/// takes it, and anywhere else it is printed and the process exits with 1.
+pub(crate) fn exit_on_uncaught(value: f64) -> ! {
+    hand_to_worker_base(value);
+    print_uncaught(value);
+    crate::process::exit_after_current_thread_collection_teardown(1)
+}
+
 /// Invoke `f` — which may call into user JS and `js_throw` — inside a `try`
 /// trap, catching any JS exception. Returns `Ok(value)` on a normal return,
 /// or `Err(exception_bits)` if `f` threw. The armed jmp_buf lives in the C
