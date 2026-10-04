@@ -205,3 +205,142 @@ for (const entry of primitiveConstructors) {
   callbackError('primitive-second-' + entry[0], value);
   console.log('primitive-second-' + entry[0] + '-calls', calls);
 }
+
+// The third read uses GetV, unlike the second read's language in operator.
+for (const entry of [
+  ['null', null], ['undefined', undefined], ['object', { name: 'ThirdObject' }],
+  ['number', 0], ['boolean', false], ['string', ''], ['symbol', Symbol('third')], ['bigint', 0n],
+]) {
+  let calls = 0;
+  const value: any = {};
+  Object.defineProperty(value, 'constructor', {
+    get() { calls++; if (typeof gc === 'function') gc(); return calls < 3 ? { name: 'Second' } : entry[1]; },
+  });
+  callbackError('third-constructor-' + entry[0], value);
+  console.log('third-constructor-' + entry[0] + '-calls', calls);
+}
+for (const entry of [
+  ['number', Number.prototype, 0], ['boolean', Boolean.prototype, false],
+  ['string', String.prototype, ''], ['symbol', Symbol.prototype, Symbol('third')],
+  ['bigint', BigInt.prototype, 0n],
+]) {
+  const proto: any = entry[1];
+  const original = Object.getOwnPropertyDescriptor(proto, 'name');
+  let receiver = false;
+  let nameCalls = 0;
+  let calls = 0;
+  try {
+    Object.defineProperty(proto, 'name', {
+      get() { 'use strict'; nameCalls++; receiver = this === entry[2]; if (typeof gc === 'function') gc(); return 'PrimitiveName'; },
+      configurable: true,
+    });
+    const value: any = {};
+    Object.defineProperty(value, 'constructor', {
+      get() { calls++; return calls < 3 ? { name: 'Second' } : entry[2]; },
+    });
+    callbackError('third-primitive-name-' + entry[0], value);
+    console.log('third-primitive-name-' + entry[0] + '-reads', calls, nameCalls, receiver);
+  } finally {
+    if (original) Object.defineProperty(proto, 'name', original);
+    else delete proto.name;
+  }
+}
+
+const remainingNatives: any[] = [
+  ['arraybuffer', ArrayBuffer.prototype, new ArrayBuffer(1)],
+  ['sharedarraybuffer', SharedArrayBuffer.prototype, new SharedArrayBuffer(1)],
+  ['date', Date.prototype, new Date(0)],
+];
+for (const entry of remainingNatives) {
+  const label = entry[0], proto = entry[1], value = entry[2];
+  const original = Object.getOwnPropertyDescriptor(proto, 'constructor');
+  try {
+    Object.defineProperty(proto, 'constructor', { value: { name: 'PatchedNative' }, configurable: true });
+    callbackError('native-' + label + '-data', value);
+    for (const unit of [0xd800, 0xdc00]) {
+      Object.defineProperty(proto, 'constructor', { value: { name: String.fromCharCode(unit) }, configurable: true });
+      try { fs.exists('/received-diagnostic-unused', value); } catch (error: any) {
+        const start = error.message.indexOf('an instance of ') + 15;
+        console.log('native-' + label + '-unit', unit, error.name, error.code, error.message.charCodeAt(start));
+      }
+    }
+    for (const mode of ['getter', 'throw', 'collect']) {
+      let calls = 0;
+      let receiver = true;
+      Object.defineProperty(proto, 'constructor', {
+        get() {
+          calls++; receiver = receiver && this === value;
+          if (mode === 'throw') throw new Error('constructor sentinel');
+          if (mode === 'collect' && typeof gc === 'function') gc();
+          return { name: 'PatchedNative' };
+        }, configurable: true,
+      });
+      callbackError('native-' + label + '-' + mode, value);
+      console.log('native-' + label + '-' + mode + '-reads', calls, receiver);
+    }
+  } finally { Object.defineProperty(proto, 'constructor', original!); }
+  callbackError('native-' + label + '-restored', value);
+}
+const fallbackNatives: any[] = [
+  ...remainingNatives,
+  ['int16array', Int16Array.prototype, new Int16Array(1)],
+  ['dataview', DataView.prototype, new DataView(new ArrayBuffer(1))],
+  ['uint8array', Uint8Array.prototype, new Uint8Array(1)],
+];
+for (const entry of fallbackNatives) {
+  const label = entry[0], proto = entry[1], value = entry[2];
+  try {
+    Object.defineProperty(value, 'constructor', { value: undefined, configurable: true });
+    callbackError('fallback-' + label + '-own-undefined', value);
+    delete value.constructor;
+    Object.setPrototypeOf(value, null);
+    callbackError('fallback-' + label + '-null', value);
+    Object.setPrototypeOf(value, Object.create(null));
+    callbackError('fallback-' + label + '-custom-missing', value);
+  } finally { Object.setPrototypeOf(value, proto); }
+  callbackError('fallback-' + label + '-restored', value);
+}
+
+for (const entry of fallbackNatives) {
+  const value = entry[2], proto = entry[1];
+  try {
+    Object.setPrototypeOf(value, { constructor: undefined });
+    callbackError('fallback-' + entry[0] + '-ordinary-undefined', value);
+  } finally { Object.setPrototypeOf(value, proto); }
+}
+for (const value of [new Int16Array(0), new Uint8Array(0)]) {
+  const proto = Object.getPrototypeOf(value);
+  try {
+    Object.defineProperty(value, 'constructor', { value: undefined, configurable: true });
+    callbackError('fallback-empty-view-own-undefined', value);
+    delete value.constructor;
+    Object.setPrototypeOf(value, Object.create(null));
+    callbackError('fallback-empty-view-custom-missing', value);
+  } finally { Object.setPrototypeOf(value, proto); }
+}
+const int16CtorDescriptor = Object.getOwnPropertyDescriptor(Int16Array.prototype, 'constructor');
+try {
+  Object.defineProperty(Int16Array.prototype, 'constructor', { value: undefined, configurable: true });
+  callbackError('fallback-intrinsic-undefined', new Int16Array(1));
+  callbackError('fallback-empty-intrinsic-undefined', new Int16Array(0));
+  delete (Int16Array.prototype as any).constructor;
+  callbackError('fallback-intrinsic-deleted', new Int16Array(1));
+} finally { Object.defineProperty(Int16Array.prototype, 'constructor', int16CtorDescriptor!); }
+let proxyReads = 0;
+const proxyReceived = new Proxy({}, {
+  get(target, key, receiver) {
+    if (key === 'constructor') { proxyReads++; return { name: 'ProxyReceived' }; }
+    return Reflect.get(target, key, receiver);
+  },
+});
+callbackError('direct-proxy-constructor', proxyReceived);
+console.log('direct-proxy-constructor-reads', proxyReads);
+proxyReads = 0;
+const proxyNullish = new Proxy({}, {
+  get(target, key, receiver) {
+    if (key === 'constructor') { proxyReads++; return proxyReads === 3 ? null : { name: 'ProxyReceived' }; }
+    return Reflect.get(target, key, receiver);
+  },
+});
+callbackError('direct-proxy-third-null', proxyNullish);
+console.log('direct-proxy-third-null-reads', proxyReads);
