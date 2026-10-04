@@ -112,21 +112,22 @@ pub(super) unsafe fn try_stringify(
         let member = crate::proxy::js_proxy_get(receiver.get_nanbox_f64(), key.get_nanbox_f64());
         let member = super::replacer::apply_to_json_keyed(member, key.get_nanbox_f64());
         let member = member_scope.root_nanbox_f64(member);
-        let replacer = match replacer_root.as_ref() {
-            Some(root) => Replacer::Function(root.get_raw_const_ptr()),
-            None => replacer,
+        let member = match replacer_root.as_ref() {
+            Some(root) => root.with_const_ptr(|f: *const crate::ClosureHeader| {
+                super::replacer::call_replacer(
+                    f,
+                    key.get_nanbox_f64(),
+                    member.get_nanbox_f64(),
+                    receiver.get_nanbox_f64(),
+                )
+            }),
+            None => member.get_nanbox_f64(),
         };
-        let member = if let Replacer::Function(f) = replacer {
-            super::replacer::call_replacer(
-                f,
-                key.get_nanbox_f64(),
-                member.get_nanbox_f64(),
-                receiver.get_nanbox_f64(),
-            )
-        } else {
-            member.get_nanbox_f64()
-        };
-        if !is_array && omitted(member) {
+        // The replacer result is the value emitted below; keep it rooted across
+        // the key write and any allocation in the emit.
+        let member = member_scope.root_nanbox_f64(member);
+        let member_bits = member.get_nanbox_f64();
+        if !is_array && omitted(member_bits) {
             continue;
         }
         if !first {
@@ -141,11 +142,13 @@ pub(super) unsafe fn try_stringify(
                 buf.push(' ');
             }
         }
-        let replacer = match replacer_root.as_ref() {
-            Some(root) => Replacer::Function(root.get_raw_const_ptr()),
-            None => replacer,
-        };
-        emit_prepared(member, buf, indent, depth + 1, replacer);
+        let member = member.get_nanbox_f64();
+        match replacer_root.as_ref() {
+            Some(root) => root.with_const_ptr(|f: *const crate::ClosureHeader| {
+                emit_prepared(member, buf, indent, depth + 1, Replacer::Function(f))
+            }),
+            None => emit_prepared(member, buf, indent, depth + 1, replacer),
+        }
     }
     if !first {
         newline(buf, indent, depth);
