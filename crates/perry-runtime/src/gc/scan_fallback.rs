@@ -56,11 +56,11 @@ use std::cell::Cell;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ConservativeScanSite {
     /// `gc_check_trigger` old-gen reclaim, at an allocation point. Automatic.
-    /// Deliberately NOT deferred — #5476 requires a single `gc_check_trigger`
-    /// call to complete the reclaim, and delaying it would regress the RSS bug
-    /// that arm exists for. What #7148 added is a competing PRECISE path at
-    /// safepoints (`SafepointDrainKind::OldReclaim`); this counter is how often
-    /// the allocation point still got there first.
+    /// Since #11873 the allocation point defers the reclaim to the next precise
+    /// safepoint (`SafepointDrainKind::OldReclaim`) and collects itself only as
+    /// a valve: after old pressure grew another growth band past the deferral
+    /// point without reaching one, or with loop polls off. This counter is how
+    /// often the valve fired.
     OldReclaimAllocPoint,
     /// `gc_check_trigger` nursery-churn direct minor, at an allocation point,
     /// after the safepoint deferral ran out of slack. Automatic.

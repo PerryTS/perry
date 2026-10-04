@@ -8,7 +8,8 @@ use std::time::Duration;
 
 /// Larger than `LARGE_OBJECT_THRESHOLD_BYTES` (16 KiB), so the string goes
 /// through `gc_malloc`, whose `gc_check_trigger` runs a pending full trace
-/// synchronously at the allocation.
+/// synchronously at the allocation when the old-reclaim valve is forced
+/// ([`arm_full_trace`]).
 const BIG: usize = 64 * 1024;
 
 fn big(fill: char) -> String {
@@ -97,6 +98,10 @@ fn arm_full_trace() -> usize {
     // past its young epoch.
     perry_runtime::gc::js_gc_collect();
     request_full_trace();
+    // #11873: an allocation point defers an owed full to the next safepoint
+    // and runs it itself only as a valve. These cases test a full trace
+    // inside the reader's own allocation, so force the valve.
+    perry_runtime::gc::js_gc_old_reclaim_valve_test_override();
     full_traces()
 }
 
