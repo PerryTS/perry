@@ -8,12 +8,8 @@ use super::array_error::*;
 /// receiver, including a source-compiled subclass's stashed native handle.
 /// A real accessor lane must carry this body rather than a no-op placeholder.
 #[cfg(feature = "global-webfetch")]
-extern "C" fn fetch_prototype_getter(
-    closure: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-) -> f64 {
+fn fetch_prototype_getter(this: crate::closure::JsThis, name: &'static str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let closure = scope.root_raw_const_ptr(closure);
     let receiver = scope.root_nanbox_f64(this.as_f64());
     let value = crate::JSValue::from_bits(receiver.get_nanbox_f64().to_bits());
     let handle = if value.is_pointer() {
@@ -29,19 +25,59 @@ extern "C" fn fetch_prototype_getter(
     let Some(handle) = handle else {
         crate::object::object_ops::throw_object_type_error(b"Illegal invocation");
     };
-    let key = closure.with_const_ptr(|closure: *const crate::closure::ClosureHeader| {
-        let bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
-        (bits & crate::value::POINTER_MASK) as *const crate::StringHeader
-    });
-    let key = scope.root_string_ptr(key);
-    let result = key
-        .across_const::<crate::StringHeader, _>(|| {
-            key.with_const_ptr(|key| {
-                crate::object::js_object_get_field_by_name(handle as *const ObjectHeader, key)
-            })
-        })
-        .0;
-    f64::from_bits(result.bits())
+    // The native property dispatcher accepts bytes. The property name is a
+    // fact of the builtin body, so neither a captured JS string nor another
+    // generic prototype read is needed to reach its native storage.
+    match crate::object::handle_property_dispatch() {
+        Some(dispatch) => unsafe { dispatch(handle, name.as_ptr(), name.len()) },
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+#[cfg(feature = "global-webfetch")]
+macro_rules! fetch_getter_bodies {
+    ($($body:ident => $name:literal),+ $(,)?) => {
+        $(extern "C" fn $body(
+            _closure: *const crate::closure::ClosureHeader,
+            this: crate::closure::JsThis,
+        ) -> f64 {
+            fetch_prototype_getter(this, $name)
+        })+
+
+        fn fetch_getter_info(name: &str) -> *const crate::closure::JsFunctionInfo {
+            match name {
+                $($name => crate::fn_info!($body, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),)+
+                _ => unreachable!("unregistered Fetch prototype getter"),
+            }
+        }
+    };
+}
+
+// A separate body also gives each getter its own reflective function name.
+// These zero-capture closures retain the original bootstrap allocation shape.
+#[cfg(feature = "global-webfetch")]
+fetch_getter_bodies! {
+    fetch_body => "body",
+    fetch_body_used => "bodyUsed",
+    fetch_headers => "headers",
+    fetch_ok => "ok",
+    fetch_redirected => "redirected",
+    fetch_status => "status",
+    fetch_status_text => "statusText",
+    fetch_type => "type",
+    fetch_url => "url",
+    fetch_cache => "cache",
+    fetch_credentials => "credentials",
+    fetch_destination => "destination",
+    fetch_duplex => "duplex",
+    fetch_integrity => "integrity",
+    fetch_keepalive => "keepalive",
+    fetch_method => "method",
+    fetch_mode => "mode",
+    fetch_redirect => "redirect",
+    fetch_referrer => "referrer",
+    fetch_referrer_policy => "referrerPolicy",
+    fetch_signal => "signal",
 }
 
 #[cfg(feature = "global-webfetch")]
@@ -49,17 +85,8 @@ unsafe fn install_fetch_prototype_getter(proto: *mut ObjectHeader, name: &str) {
     // Realm installation runs no user code. Keep the receiver and the new
     // key/getter stable until the accessor pair roots them in the prototype.
     let _no_move = crate::gc::GcSuppressScope::new();
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(fetch_prototype_getter, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-        1,
-    );
+    let getter = crate::closure::js_closure_alloc(fetch_getter_info(name), 0);
     if !getter.is_null() {
-        crate::closure::js_closure_set_capture_ptr(
-            getter,
-            0,
-            crate::JSValue::string_ptr(key).bits() as i64,
-        );
         install_builtin_getter(
             proto,
             name,

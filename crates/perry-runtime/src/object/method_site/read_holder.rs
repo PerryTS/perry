@@ -1330,7 +1330,13 @@ pub(crate) unsafe fn prime_read_holder(
     materialize_class_prototype(obj);
     let name = crate::string::header_str_checked(key)?.as_bytes();
     let recv = ordinary_receiver(obj as usize)?;
-    // A latched site primes only class entries (below).
+    // The class lane already proves data or absence through holder shapes.
+    // Let it answer before doing a second walk looking for an accessor;
+    // its pre-walk declines accessor lanes without running their getters.
+    if let Some(value) = class_read::prime(recv, key, cache_slot, name) {
+        return Some(value);
+    }
+    // A latched holder site keeps accessor priming disabled.
     let acc = if latched {
         None
     } else {
@@ -1357,9 +1363,6 @@ pub(crate) unsafe fn prime_read_holder(
             }
         }
         return Some(invoke_getter(recv, acc.getter, acc.pair));
-    }
-    if let Some(value) = class_read::prime(recv, key, cache_slot, name) {
-        return Some(value);
     }
     if latched {
         return None;
