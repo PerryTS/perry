@@ -18,7 +18,8 @@
 //! Lifetime. The cell's finalizer is the monomorphized drop of `Box<T>`; it
 //! runs once per installed payload, at release ([`close`]), sweep or thread
 //! teardown. Close leaves a CLOSED cell and its traced owner edge alive;
-//! only sweep and teardown finalize it. [`attach`] reopens the same cell. After it runs the object stays a valid object:
+//! only sweep and teardown finalize it. [`attach`] reopens the same cell.
+//! After close the object stays a valid object:
 //! [`payload_mut`] answers [`PayloadMiss::Closed`] and the family reports its
 //! node-shaped "already finalized" error.
 //!
@@ -341,7 +342,7 @@ pub(crate) fn is_payload_state_word(word: u64) -> bool {
 ///
 /// `external_bytes` is the native memory the payload really retains (heap
 /// buffers it owns, not `size_of::<T>()` alone unless that is all it holds);
-/// it feeds GC pacing until the payload is finalized. `own` lists node's own
+/// it feeds GC pacing until the payload is released. `own` lists node's own
 /// enumerable data properties in node's order (`[("_options", undefined)]`
 /// for a `Hash`); values may be heap values, they are rooted here.
 pub fn alloc<T: 'static>(

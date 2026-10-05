@@ -79,7 +79,63 @@ sqlite/net behavioral and Node-oracle witnesses remain their family lanes.
 
 ## Recorded results
 
-Results will be filled after Linux validation.
+`cargo build --release -j 8 -p perry -p perry-runtime -p perry-runtime-static
+-p perry-stdlib-static` passed for each arm. Final combined validation:
+`cargo test --release -j 8 -p perry-runtime -p perry-stdlib -p perry-codegen
+-- --nocapture` exited 0.
+
+| Package | Unit | Integration | Doc | Failed | Ignored |
+|---|---:|---:|---:|---:|---:|
+| runtime | 5,019 | 1 | 0 | 0 | 13 |
+| stdlib | 247 | 0 | 0 | 0 | 0 |
+| codegen | 1,991 | 516 | 3 | 0 | 6 |
+| Total | 7,257 | 517 | 3 | 0 | 19 |
+
+Every T1–T12 witness passed; all 14 callback sabotages were RED. L4, L5,
+L8, L9, reopen identity, terminal-event tracing/late listener and churn passed;
+all four lifecycle sabotages were RED. The isolated lifecycle churn reported
+`created=finalized=drops=200000`, warmed RSS 45,883,392 bytes, peak 45,883,392,
+delta **0 bytes**. In the complete runtime process its warmed delta was
+24,576 bytes. The <4 MiB assertion is unchanged. Each batch runs a moving
+minor and full sweep: a full-only schedule protects recent nursery bump
+blocks and initially exceeded the RSS bound despite exact finalized/drop
+counts; the witness now exercises the production generational path.
+
+Program measurements use three alternating samples per arm, `instructions:u`
+from `perf stat`, task-clock converted from nanoseconds to milliseconds,
+`/usr/bin/time` peak RSS and separate GC diagnostic replays. Every sample
+compares stdout byte for byte with pinned Node 26.5.1. Results below are
+medians; GC columns are full/minor counts, identical between arms.
+
+| Program | Instructions main → head | Δ instructions | CPU ms main → head | RSS KiB main → head | GC full/minor | Node output |
+|---|---:|---:|---:|---:|---:|---|
+| hello | 1,338,162 → 1,338,237 | +0.0056% | 1.91 → 2.13 | 14,680 → 14,328 | 0/0 | equal |
+| tsc | 28,263,596,386 → 28,262,329,615 | -0.0045% | 2,086.65 → 2,067.22 | 258,220 → 261,724 | 1/4 | equal |
+| zod5k | 16,054,077,702 → 16,053,836,420 | -0.0015% | 931.96 → 935.72 | 55,828 → 56,096 | 0/97 | equal |
+| qsparse | 28,620,443,360 → 28,621,744,435 | +0.0045% | 1,886.07 → 1,882.21 | 58,876 → 58,900 | 0/119 | equal |
+| qsstr | 76,491,515,715 → 76,447,325,656 | -0.0578% | 4,376.35 → 5,053.81 | 58,508 → 58,660 | 0/439 | equal |
+| commander | 7,797,884,533 → 7,797,798,652 | -0.0011% | 571.04 → 574.23 | 51,572 → 51,892 | 0/33 | equal |
+
+The largest median RSS difference is tsc +3,504 KiB (+1.36%); the other
+programs differ by −352 to +320 KiB. Instruction changes are all within
+±0.058%. CPU timings varied between passes on the shared host (qs stringify
+was 5,228.78 → 5,085.54 ms in the first pass, 4,376.35 → 5,053.81 ms in the
+final pass); the requested instruction gate passes in both passes.
+
+| Gate | Final head / main comparison |
+|---|---|
+| native_handle_ledger | PASS: 202 tables / 188 producers; ceilings unchanged |
+| native_handle_ledger self-test | Same inherited failure: stale ext-zlib `__STATICS_HANDLE_TABLES` classification |
+| raw_handle_debt | Same 868 sites vs baseline 861; three inherited module violations, no new sites |
+| raw_handle_debt self-test / no-raise-vs | PASS; recorded baseline 861 and 107 module ceilings unchanged |
+| gc_runtime_root_holders / self-test | PASS / PASS; 1,542 declarations, 155 registered scanners; 92 planted shapes |
+| fmt / diff whitespace / file-size gate / Node-version consistency | PASS |
+
+Main and head outputs for the three census gates and their self-tests are
+byte-identical. Raw debt's inherited violations are `node_stream/async_iterator.rs`
+(10 vs ceiling 7), `node_submodules/zlib.rs` (1 unlisted) and
+`object/field_get_set/exotic_named_read_tests.rs` (3 unlisted). No ceilings,
+inventory verdicts or gate logic are changed by the lane.
 
 A pre-existing stdlib fixture, `streams::tests::pipe_through_pair_survives_a_moving_getter`,
 failed on both unmodified main and head with `Invalid transform writable`,
@@ -90,7 +146,9 @@ existing child-moved assertion remains intact. No stream production code is
 changed.
 
 The existing DOMException thread-exit fixture also initializes its observing
-heap before starting its worker. With the full runtime features (mimalloc),
+heap before starting its worker. The unchanged fixture failed in an isolated
+full-feature main run; the corrected fixture and combined head run pass.
+With the full runtime features (mimalloc),
 initializing that heap only after join can reuse the dead worker's arena block
 and classify its stale DOMException header as observer-owned. The fixture
 still requires the worker's live brand and rejects the dead worker's brand;
