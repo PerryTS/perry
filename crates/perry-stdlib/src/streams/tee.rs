@@ -53,6 +53,9 @@ pub(super) fn tee_source_of(branch: usize) -> Option<usize> {
 /// waiting, else queue it. Mirrors the default-reader path of
 /// `js_readable_stream_controller_enqueue`.
 pub(super) unsafe fn tee_deliver(branch: usize, chunk_bits: u64, is_byte: bool) {
+    if super::native::collect_chunk(branch, chunk_bits) {
+        return;
+    }
     // A parked BYOB read takes the bytes directly (mirrors the
     // default-reader-vs-BYOB order in `js_readable_stream_controller_enqueue`).
     if is_byte && byob::service_pending_with_chunk(branch, chunk_bits) {
@@ -78,8 +81,10 @@ pub(super) unsafe fn tee_deliver(branch: usize, chunk_bits: u64, is_byte: bool) 
         }
     };
     if let Some(p) = popped {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let promise = scope.root_raw_mut_ptr(p);
         let result = build_iter_result(chunk_bits, false);
-        js_promise_resolve(p, f64::from_bits(result));
+        js_promise_resolve(promise.get_raw_mut_ptr(), f64::from_bits(result));
     }
 }
 
@@ -89,7 +94,7 @@ unsafe fn tee_branch_demand(a: usize, b: usize) -> bool {
         let g = READABLE_STREAMS.lock().unwrap();
         if [a, b].iter().any(|id| {
             g.get(id)
-                .map(|s| !s.pending_reads.is_empty())
+                .map(|s| !s.pending_reads.is_empty() || s.body_consumer.is_some())
                 .unwrap_or(false)
         }) {
             return true;
@@ -121,11 +126,14 @@ pub(super) unsafe fn tee_close_branches(source: usize) {
             close_pending(branch);
         }
     }
+    settle_cancellations(a, b);
     tee_unlink(source, a, b);
 }
 
 /// The tee'd source errored — error both branches and drop the links.
 pub(super) unsafe fn tee_error_branches(source: usize, reason_bits: u64) {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let reason = scope.root_nanbox_u64(reason_bits);
     let Some((a, b)) = tee_branches_of(source) else {
         return;
     };
@@ -137,7 +145,7 @@ pub(super) unsafe fn tee_error_branches(source: usize, reason_bits: u64) {
         if let Some(s) = g.get_mut(&source) {
             if s.state == ReadableState::Readable {
                 s.state = ReadableState::Errored;
-                s.error_value = reason_bits;
+                s.error_value = reason.get_nanbox_u64();
             }
             s.clear_chunks();
         }
@@ -148,12 +156,14 @@ pub(super) unsafe fn tee_error_branches(source: usize, reason_bits: u64) {
             if let Some(s) = g.get_mut(&branch) {
                 if s.state == ReadableState::Readable {
                     s.state = ReadableState::Errored;
-                    s.error_value = reason_bits;
+                    s.error_value = reason.get_nanbox_u64();
+                    s.clear_chunks();
                 }
             }
         }
-        error_pending(branch, reason_bits);
+        error_pending(branch, reason.get_nanbox_u64());
     }
+    settle_cancellations(a, b);
     tee_unlink(source, a, b);
 }
 
@@ -392,7 +402,7 @@ extern "C" fn tee_pull_microtask(
                 Some(s) => (
                     s.pop_chunk(),
                     s.state == ReadableState::Closed,
-                    s.pull_cb != 0,
+                    s.pull_cb != 0 || s.native_source.is_some(),
                     s.is_byte_stream,
                 ),
                 None => (None, true, false, false),
@@ -547,6 +557,9 @@ pub(crate) unsafe fn tee_readable_stream_ids(id: usize) -> (usize, usize) {
             g.insert(
                 new_id,
                 ReadableStreamData {
+                    native_source: None,
+                    tee_cancel_promise: None,
+                    body_consumer: None,
                     state: branch_state,
                     chunks: VecDeque::new(),
                     chunk_sizes: VecDeque::new(),
@@ -599,4 +612,49 @@ pub unsafe extern "C" fn js_readable_stream_tee(stream_handle: f64) -> f64 {
     js_array_push(arr, JSValue::from_bits(f64::to_bits(id_a as f64)));
     js_array_push(arr, JSValue::from_bits(f64::to_bits(id_b as f64)));
     f64::from_bits(JSValue::object_ptr(arr as *mut u8).bits())
+}
+
+/// A cancelled branch leaves its sibling live. Only cancelling both branches
+/// cancels the underlying source and its native exchange.
+pub(super) unsafe fn tee_cancel_branch(branch: usize, promise: *mut super::Promise) -> bool {
+    let Some(source) = tee_source_of(branch) else {
+        return false;
+    };
+    let Some((a, b)) = tee_branches_of(source) else {
+        return false;
+    };
+    let both = {
+        let mut g = READABLE_STREAMS.lock().unwrap();
+        if let Some(s) = g.get_mut(&branch) {
+            s.tee_cancel_promise = Some(promise);
+        }
+        [a, b].iter().all(|id| g.get(id).is_none_or(|s| s.canceled))
+    };
+    if both {
+        {
+            let mut g = READABLE_STREAMS.lock().unwrap();
+            if let Some(s) = g.get_mut(&source) {
+                s.canceled = true;
+                s.state = ReadableState::Closed;
+                s.clear_chunks();
+            }
+        }
+        super::native::cancel_native(source);
+        tee_close_branches(source);
+    }
+    true
+}
+
+unsafe fn settle_cancellations(a: usize, b: usize) {
+    for id in [a, b] {
+        let promise = READABLE_STREAMS
+            .lock()
+            .unwrap()
+            .get_mut(&id)
+            .and_then(|s| s.tee_cancel_promise.take());
+        if let Some(promise) = promise {
+            js_promise_resolve(promise, f64::from_bits(super::TAG_UNDEFINED));
+            idalloc::retire_readable_terminal(id);
+        }
+    }
 }

@@ -79,6 +79,8 @@ pub(super) struct ContentDecoder {
 struct Stage {
     decoder: StreamingDecoder,
     carry: Vec<u8>,
+    waiting: bool,
+    finished: bool,
 }
 
 impl ContentDecoder {
@@ -109,6 +111,8 @@ impl ContentDecoder {
                 Ok(decoder) => stages.push(Stage {
                     decoder,
                     carry: Vec::new(),
+                    waiting: true,
+                    finished: false,
                 }),
                 Err(_) => return Ok(None),
             }
@@ -116,84 +120,98 @@ impl ContentDecoder {
         Ok(Some(Self { stages }))
     }
 
-    /// Decode one body chunk, handing every fully-decoded byte to `emit`.
+    /// Retain only transport input; decoded output is pulled in 8 KiB blocks.
+    pub(super) fn push_input(&mut self, input: &[u8]) {
+        if let Some(stage) = self.stages.first_mut() {
+            stage.carry.extend_from_slice(input);
+            stage.waiting = false;
+        }
+    }
+
+    pub(super) fn finished(&self) -> bool {
+        self.stages.iter().all(|s| s.finished)
+    }
+
+    /// Advance downstream stages first, so every intermediate window is at
+    /// most one output block. A full consumer queue can suspend a decoder even
+    /// when one compressed input block expands to megabytes.
+    pub(super) fn next_chunk(&mut self, end: bool) -> Result<Option<Vec<u8>>, ClientError> {
+        let mut out = [0u8; 8192];
+        loop {
+            let mut progress = false;
+            for i in (0..self.stages.len()).rev() {
+                let ending = if i == 0 {
+                    end
+                } else {
+                    self.stages[i - 1].finished
+                };
+                let stage = &mut self.stages[i];
+                if stage.finished || (stage.waiting && !ending) {
+                    continue;
+                }
+                // Undici uses a sync-flush finish: a missing compressed tail
+                // is tolerated, while malformed input/checksums still fail.
+                // Always process available input before asking for EOF so
+                // partial output is delivered and corrupt input isn't hidden.
+                let mut step = stage
+                    .decoder
+                    .process(&stage.carry, &mut out, false)
+                    .map_err(|e| ClientError::new(e.code, e.message))?;
+                if ending && step.consumed == 0 && step.written == 0 && !step.finished {
+                    match stage.decoder.process(&stage.carry, &mut out, true) {
+                        Ok(final_step) => step = final_step,
+                        Err(error) if error.code == "UND_ERR_SOCKET" => {
+                            stage.finished = true;
+                            stage.carry.clear();
+                            progress = true;
+                            continue;
+                        }
+                        Err(error) => return Err(ClientError::new(error.code, error.message)),
+                    }
+                }
+                stage.carry.drain(..step.consumed);
+                stage.finished = step.finished;
+                stage.waiting = step.consumed == 0 && step.written == 0;
+                progress |= step.consumed > 0 || step.written > 0 || step.finished;
+                if step.written > 0 {
+                    if i + 1 == self.stages.len() {
+                        return Ok(Some(out[..step.written].to_vec()));
+                    }
+                    self.stages[i + 1]
+                        .carry
+                        .extend_from_slice(&out[..step.written]);
+                    self.stages[i + 1].waiting = false;
+                    // Drain that stage before producing another block upstream.
+                    break;
+                }
+            }
+            if !progress {
+                return Ok(None);
+            }
+        }
+    }
+
+    #[cfg(test)]
     pub(super) fn feed(
         &mut self,
         input: &[u8],
         emit: &mut dyn FnMut(&[u8]) -> Result<(), ClientError>,
     ) -> Result<(), ClientError> {
-        pump(&mut self.stages, input, emit)
+        self.push_input(input);
+        while let Some(bytes) = self.next_chunk(false)? {
+            emit(&bytes)?;
+        }
+        Ok(())
     }
 
-    /// Flush every stage at end of body. Errors are swallowed stage by stage:
-    /// a decoder that has already produced everything answers an empty
-    /// `end = true` call with "incomplete body", and that must not turn a
-    /// complete response into a failed fetch (the single-decoder engine did
-    /// the same).
+    #[cfg(test)]
     pub(super) fn finish(&mut self, emit: &mut dyn FnMut(&[u8]) -> Result<(), ClientError>) {
-        let mut out = [0u8; 8192];
-        let mut stages = std::mem::take(&mut self.stages);
-        for i in 0..stages.len() {
-            let (stage, rest) = stages[i..].split_first_mut().unwrap();
-            let input = std::mem::take(&mut stage.carry);
-            let mut pos = 0;
-            loop {
-                match stage.decoder.process(&input[pos..], &mut out, true) {
-                    Ok(step) => {
-                        pos += step.consumed;
-                        if step.written > 0 && pump(rest, &out[..step.written], emit).is_err() {
-                            break;
-                        }
-                        if step.finished || (step.consumed == 0 && step.written == 0) {
-                            break;
-                        }
-                    }
-                    Err(_) => break,
-                }
+        while let Ok(Some(bytes)) = self.next_chunk(true) {
+            if emit(&bytes).is_err() {
+                break;
             }
         }
-    }
-}
-
-/// Feed `input` through `stages[0]`, recursively passing its output down the
-/// chain; bytes leaving the last stage go to `emit`. Input the stage could not
-/// consume yet is kept in its `carry` for the next call.
-fn pump(
-    stages: &mut [Stage],
-    input: &[u8],
-    emit: &mut dyn FnMut(&[u8]) -> Result<(), ClientError>,
-) -> Result<(), ClientError> {
-    let Some((stage, rest)) = stages.split_first_mut() else {
-        return emit(input);
-    };
-    let joined;
-    let input = if stage.carry.is_empty() {
-        input
-    } else {
-        let mut buf = std::mem::take(&mut stage.carry);
-        buf.extend_from_slice(input);
-        joined = buf;
-        &joined[..]
-    };
-    let mut pos = 0;
-    let mut out = [0u8; 8192];
-    loop {
-        let step = stage
-            .decoder
-            .process(&input[pos..], &mut out, false)
-            .map_err(|e| ClientError::new(e.code, e.message))?;
-        pos += step.consumed;
-        if step.written > 0 {
-            pump(rest, &out[..step.written], emit)?;
-        }
-        if step.finished || pos >= input.len() {
-            return Ok(());
-        }
-        if step.consumed == 0 && step.written == 0 {
-            // Needs more input than this chunk holds: retain the tail.
-            stage.carry = input[pos..].to_vec();
-            return Ok(());
-        }
+        self.stages.clear();
     }
 }
 
@@ -224,4 +242,61 @@ mod storage_tests {
             "finished codecs must release their workspace"
         );
     }
+}
+
+#[cfg(test)]
+#[test]
+fn high_expansion_decoder_yields_bounded_blocks_without_losing_output() {
+    let compressed = [
+        31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 237, 193, 49, 1, 0, 0, 0, 194, 160, 108, 235, 95, 202,
+        16, 190, 64, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        124, 6, 201, 190, 246, 129, 0, 0, 16, 0,
+    ];
+    let mut decoder = ContentDecoder::for_header("gzip", usize::MAX)
+        .unwrap()
+        .unwrap();
+    decoder.push_input(&compressed);
+    let mut total = 0;
+    while let Some(bytes) = decoder.next_chunk(false).unwrap() {
+        assert!(bytes.len() <= 8192);
+        assert!(bytes.iter().all(|b| *b == b'A'));
+        total += bytes.len();
+        assert!(decoder.stages.iter().all(|s| s.carry.len() <= 8192));
+    }
+    assert_eq!(total, 1024 * 1024);
+    assert!(decoder.next_chunk(true).unwrap().is_none());
+    assert!(decoder.finished());
 }

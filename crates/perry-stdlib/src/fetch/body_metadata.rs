@@ -85,7 +85,7 @@ pub(super) fn is_registered_form_data(id: usize) -> bool {
     FORM_DATA_REGISTRY.lock().unwrap().contains_key(&id)
 }
 
-fn alloc_form_data(store: FormDataStore) -> usize {
+pub(super) fn alloc_form_data(store: FormDataStore) -> usize {
     let id = alloc_fetch_handle_id();
     FORM_DATA_REGISTRY.lock().unwrap().insert(id, store);
     id
@@ -282,7 +282,10 @@ fn form_data_from_multipart(
     Ok(store)
 }
 
-fn form_data_from_body(body: &[u8], content_type: &str) -> Result<FormDataStore, &'static str> {
+pub(super) fn form_data_from_body(
+    body: &[u8],
+    content_type: &str,
+) -> Result<FormDataStore, &'static str> {
     let media_type = content_type.split(';').next().unwrap_or_default().trim();
     if media_type.eq_ignore_ascii_case("application/x-www-form-urlencoded") {
         Ok(form_data_from_urlencoded(body))
@@ -340,7 +343,7 @@ fn form_data_value_array(values: Vec<FormDataValue>) -> f64 {
     nanbox_array_pointer(arr_handle.get_raw_mut_ptr())
 }
 
-fn response_content_type(handle: f64) -> String {
+pub(super) fn response_content_type(handle: f64) -> String {
     let id = handle_id(handle);
     FETCH_RESPONSES
         .lock()
@@ -431,43 +434,12 @@ unsafe fn resolve_bytes_promise(promise: *mut perry_runtime::Promise, body: Vec<
 
 #[no_mangle]
 pub unsafe extern "C" fn js_response_bytes(handle: f64) -> *mut perry_runtime::Promise {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let promise = perry_runtime::js_promise_new();
-    match consume_response_body(handle) {
-        Ok(body) => resolve_bytes_promise(promise, body),
-        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
-            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
-        }
-        Err(err_msg) => {
-            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-            perry_runtime::js_promise_reject(promise, err_nan);
-        }
-    }
-    promise
+    super::body_read::read(handle, super::body_read::Kind::Bytes)
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_response_form_data(handle: f64) -> *mut perry_runtime::Promise {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let promise = perry_runtime::js_promise_new();
-    let content_type = response_content_type(handle);
-    match consume_response_body(handle) {
-        Ok(body) => match form_data_from_body(&body, &content_type) {
-            Ok(form) => {
-                let form_id = alloc_form_data(form);
-                perry_runtime::js_promise_resolve(promise, handle_to_f64(form_id));
-            }
-            Err(message) => reject_fetch_type_error(promise, message),
-        },
-        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
-            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
-        }
-        Err(err_msg) => {
-            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-            perry_runtime::js_promise_reject(promise, err_nan);
-        }
-    }
-    promise
+    super::body_read::read(handle, super::body_read::Kind::FormData)
 }
 
 fn request_string_field(handle: f64, f: impl FnOnce(&RequestRecord) -> &str) -> *mut StringHeader {

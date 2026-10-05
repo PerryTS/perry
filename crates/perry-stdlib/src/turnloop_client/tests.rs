@@ -856,6 +856,7 @@ fn a_thread_with_no_loop_posts_its_fetch_to_the_thread_that_owns_one() {
                 super::Sink {
                     ctx: 0,
                     on_head: None,
+                    capacity: None,
                     on_chunk: None,
                     on_done: p10_sink_done,
                 },
@@ -883,6 +884,7 @@ fn a_thread_with_no_loop_posts_its_fetch_to_the_thread_that_owns_one() {
         let sink = super::Sink {
             ctx: 0,
             on_head: None,
+            capacity: None,
             on_chunk: None,
             on_done: p10_sink_done,
         };

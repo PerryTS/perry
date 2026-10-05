@@ -30,7 +30,9 @@
 //!                    compression::StreamingDecoder ────────────┘
 //!                                            │
 //!                                            ▼
-//!                             Sink::on_done → queue_promise_resolution
+//!                  Sink::on_head → queue_promise_resolution
+//!                  Sink::on_chunk → readable stream + consumer credit
+//!                  Sink::on_done → close or error the body
 //! ```
 //!
 //! # What is refused
@@ -72,11 +74,11 @@
 //! # GC
 //!
 //! **No JS value reaches the driver**, exactly as in P1 and P5. A request
-//! carries owned `String`/`Vec<u8>` and the `usize` address of a promise created
-//! by `js_promise_new_cross_thread`, which pins it (#9552); reads land in
-//! turnloop's pooled buffers and are copied out inside the dispatch call. The
-//! one movable address is a bound `AbortSignal`'s cancellation key, which
-//! `scan_abort_key_roots_mut` roots and rewrites.
+//! carries owned `String`/`Vec<u8>` and the sink's numeric context: a stream
+//! id for ordinary fetch, or a pinned cross-thread promise for buffered
+//! callers. Reads land in turnloop's pooled buffers and are copied out inside
+//! dispatch. A bound AbortSignal's movable cancellation key is rooted and
+//! rewritten by `scan_abort_key_roots_mut`; body roots belong to Web Streams.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -98,6 +100,8 @@ mod tests;
 
 #[cfg(test)]
 mod blocked_port_tests;
+#[cfg(test)]
+mod streaming_tests;
 
 pub(crate) use exchange::ClientError;
 
@@ -113,16 +117,13 @@ const ID_BASE: i64 = 1 << 40;
 /// Ids wrap inside `[ID_BASE, ID_CEILING)`; `turnloop_net` tokens carry 56 bits.
 const ID_CEILING: i64 = 1 << 55;
 
-/// Matches the reqwest client `fetch` used to build:
-/// `pool_max_idle_per_host(16)`, `pool_idle_timeout(90s)`. Preserving those two numbers is what keeps the
-/// migration invisible to a long-running service's connection behaviour.
+/// Maximum total connecting, active and idle connections per origin.
+/// Idle sockets expire after 90 seconds.
 const POOL_MAX_PER_HOST: usize = 16;
 const POOL_IDLE: Duration = Duration::from_secs(90);
 
-/// A response body larger than this is refused rather than buffered. Sixteen
-/// megabytes of *decompressed* body is already beyond what the buffered
-/// `fetch` surface can usefully hand to JS, and an unbounded decoder is a
-/// decompression bomb.
+/// Existing limit for buffered bodies and compressed decoded output.
+/// Streaming identity bodies are bounded by consumer credit, not this total.
 pub(crate) const BODY_LIMIT: usize = 512 * 1024 * 1024;
 
 /// Lifetime counters. A "turnloop carried this fetch" claim is worth nothing if
@@ -228,12 +229,13 @@ pub(crate) struct RequestSpec {
     pub(crate) abort_key: Option<usize>,
 }
 
-/// The finished response, in the shape `fetch` stores in `FETCH_RESPONSES`.
+/// Final response metadata, plus bytes only for a buffered sink.
 pub(crate) struct ResponseOut {
     pub(crate) status: u16,
     pub(crate) status_text: String,
     pub(crate) headers: Vec<(String, String)>,
     pub(crate) body: Vec<u8>,
+    pub(crate) body_present: bool,
     pub(crate) final_url: String,
     pub(crate) redirected: bool,
     /// True once any followed redirect hop landed on an origin other than the
@@ -255,18 +257,64 @@ pub(crate) enum Outcome {
 ///
 /// Plain function pointers rather than a boxed closure: the engine is a
 /// thread-local table that must hold nothing a moving collector could
-/// invalidate, and a `fn` is exactly that. `ctx` is the caller's own key — for
-/// `fetch` it is the pinned promise address.
+/// invalidate, and a `fn` is exactly that. `ctx` is the caller's own key:
+/// a stream id for fetch bodies, or a pinned promise for buffered callers.
 #[derive(Clone, Copy)]
 pub(crate) struct Sink {
     pub(crate) ctx: usize,
     /// Called once, at the FINAL response's head (never for a followed
     /// redirect). Only set by a streaming caller.
-    pub(crate) on_head: Option<fn(usize, u16, &[(String, String)])>,
+    pub(crate) on_head: Option<fn(usize, &ResponseOut)>,
+    /// Available decoded-byte credit; None for unbounded/buffered callers.
+    pub(crate) capacity: Option<fn(usize) -> usize>,
     /// Called per decoded body chunk of the final response. Only set by a
     /// streaming caller; when set, `on_done` receives an empty body.
     pub(crate) on_chunk: Option<fn(usize, &[u8])>,
     pub(crate) on_done: fn(usize, Outcome),
+}
+
+enum Delivery {
+    Head(Box<ResponseOut>),
+    Chunk(Vec<u8>),
+    Done(Outcome),
+}
+
+fn flush_emissions(engine: &mut Engine, id: u64) {
+    if let Some(req) = engine.requests.get_mut(&id) {
+        for bytes in req.emissions.drain(..) {
+            engine.pending.push_back((req.sink, Delivery::Chunk(bytes)));
+        }
+    }
+}
+
+/// The source owns its exchange through its sink context, on this agent only.
+pub(crate) fn resume_source(ctx: usize) {
+    ENGINE.with(|e| {
+        let mut engine = e.borrow_mut();
+        let conn = engine
+            .requests
+            .values()
+            .find(|r| r.sink.ctx == ctx)
+            .and_then(|r| r.conn);
+        if let Some(conn) = conn {
+            exchange::resume(&mut engine, conn);
+        }
+    });
+    drain_pending();
+}
+
+pub(crate) fn cancel_source(ctx: usize) {
+    let id = ENGINE.with(|e| {
+        e.borrow()
+            .requests
+            .iter()
+            .find(|(_, r)| r.sink.ctx == ctx)
+            .map(|(id, _)| *id)
+    });
+    if let Some(id) = id {
+        exchange::abort(id);
+    }
+    drain_pending();
 }
 
 // ── Engine state ───────────────────────────────────────────────────────────
@@ -336,7 +384,7 @@ struct Req {
     conn: Option<i64>,
     /// Head of the response currently being decoded.
     head: Option<http1::Head>,
-    /// Accumulated body of the response currently being decoded, still encoded.
+    /// Accumulated identity body for buffered sinks; empty for streaming sinks.
     body: Vec<u8>,
     /// Decoder chain for a `Content-Encoding`d body; `None` when the body is
     /// delivered as received (no coding, or one undici would not decode).
@@ -344,6 +392,9 @@ struct Req {
     /// Decoded body. For a streaming sink this stays empty and chunks go out as
     /// they are produced.
     decoded: Vec<u8>,
+    emissions: VecDeque<Vec<u8>>,
+    queued_bytes: usize,
+    body_end: bool,
     /// True once a redirect has been followed, for `response.redirected`.
     redirected: bool,
     /// True once a followed redirect reached a different origin than
@@ -374,7 +425,7 @@ struct Engine {
     /// Sinks to run once the current dispatch has finished touching the tables.
     /// A sink may call back into `submit`, so it must never run while the
     /// `RefCell` is borrowed.
-    pending: Vec<(Sink, Outcome)>,
+    pending: VecDeque<(Sink, Delivery)>,
     /// Set while `drain_pending` is running, so a sink that submits a new
     /// request does not re-enter the drain.
     draining: bool,
@@ -510,14 +561,43 @@ fn drain_pending() {
     loop {
         let next = ENGINE.with(|e| {
             let mut engine = e.borrow_mut();
-            let next = engine.pending.pop();
+            let next = engine.pending.pop_front();
             if next.is_none() {
                 engine.draining = false;
             }
             next
         });
         let Some((sink, outcome)) = next else { break };
-        (sink.on_done)(sink.ctx, outcome);
+        match outcome {
+            Delivery::Head(head) => {
+                if let Some(cb) = sink.on_head {
+                    cb(sink.ctx, &head);
+                }
+            }
+            Delivery::Chunk(bytes) => {
+                ENGINE.with(|e| {
+                    if let Some(req) = e
+                        .borrow_mut()
+                        .requests
+                        .values_mut()
+                        .find(|r| r.sink.ctx == sink.ctx)
+                    {
+                        req.queued_bytes = req.queued_bytes.saturating_sub(bytes.len());
+                    }
+                });
+                if let Some(cb) = sink.on_chunk {
+                    cb(sink.ctx, &bytes);
+                }
+            }
+            Delivery::Done(outcome) => (sink.on_done)(sink.ctx, outcome),
+        }
+        ENGINE.with(|e| {
+            let mut engine = e.borrow_mut();
+            let conns: Vec<_> = engine.conns.keys().copied().collect();
+            for conn in conns {
+                exchange::resume(&mut engine, conn);
+            }
+        });
     }
 }
 
@@ -706,6 +786,9 @@ fn start_here(spec: RequestSpec, sink: Sink, prepared: Prepared) -> Result<(), D
                 body: Vec::new(),
                 decoder: None,
                 decoded: Vec::new(),
+                emissions: VecDeque::new(),
+                queued_bytes: 0,
+                body_end: false,
                 redirected: false,
                 cross_origin_redirect: false,
                 streaming: false,
@@ -862,6 +945,7 @@ fn deliver(engine: &mut Engine, id: u64, outcome: Outcome) {
             }
         }
     }
+    flush_emissions(engine, id);
     engine.requests.remove(&id);
-    engine.pending.push((sink, outcome));
+    engine.pending.push_back((sink, Delivery::Done(outcome)));
 }

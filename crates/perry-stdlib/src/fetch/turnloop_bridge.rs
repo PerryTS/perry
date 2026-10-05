@@ -26,11 +26,11 @@
 //!
 //! # GC
 //!
-//! `ctx` is the promise address from `js_promise_new_cross_thread`, which pins
-//! the promise across the crossing (#9552). Nothing else about a request is a JS value: url, method, headers and body
-//! are owned Rust data copied out on this thread before submission, and the
-//! response handle is built here, on the owning thread, inside the deferred
-//! resolution — never in the sink.
+//! Ordinary fetch uses a numeric stream id as `ctx`. The existing stream
+//! scanner owns and rewrites its promise and chunk roots. Buffered callers
+//! retain a pinned cross-thread promise as their context. Requests otherwise
+//! carry only owned Rust data; response metadata and chunk delivery run on
+//! the exchange's owning agent, never on a separate network worker.
 
 use crate::common::async_bridge::{queue_deferred_resolution, queue_promise_resolution};
 use crate::turnloop_client::{self, ClientError, Outcome, RequestSpec, ResponseOut, Sink};
@@ -111,6 +111,7 @@ pub(crate) fn dispatch_text(url: String, promise_ptr: usize) {
     let sink = Sink {
         ctx: promise_ptr,
         on_head: None,
+        capacity: None,
         on_chunk: None,
         on_done: settle_text,
     };
@@ -128,12 +129,10 @@ pub(crate) fn dispatch_text(url: String, promise_ptr: usize) {
 
 /// The `js_fetch_stream_start` form: Perry's line-oriented SSE poll surface.
 ///
-/// This is the only caller of the engine's `Sink::on_head` / `Sink::on_chunk`
-/// hooks. They were added by P6 and left unused, which by CLAUDE.md's
-/// kill-policy made them an unexercised mode — a green engine test said nothing
-/// about them. `ctx` is the stream id, not a promise: this surface resolves
-/// nothing and is polled from JS instead, so a refusal is reported the way a
-/// connection failure is — `status = 3` with the error text.
+/// This surface shares the engine's head/chunk hooks with ordinary fetch.
+/// Its context is an SSE stream id and its queue has no byte-credit hook.
+/// It resolves nothing and is polled from JS, so a refusal is reported as
+/// `status = 3` with the error text.
 pub(crate) fn dispatch_stream(
     stream_id: usize,
     url: String,
@@ -153,6 +152,7 @@ pub(crate) fn dispatch_stream(
     let sink = Sink {
         ctx: stream_id,
         on_head: Some(stream_head),
+        capacity: None,
         on_chunk: Some(stream_chunk),
         on_done: stream_done,
     };
@@ -167,9 +167,9 @@ pub(crate) fn dispatch_stream(
 }
 
 /// The FINAL response's head — the engine never reports a followed redirect's.
-fn stream_head(ctx: usize, status: u16, _headers: &[(String, String)]) {
+fn stream_head(ctx: usize, response: &ResponseOut) {
     super::with_stream(ctx, |state| {
-        state.http_status = status;
+        state.http_status = response.status;
         state.status = 1;
     });
 }
@@ -230,71 +230,106 @@ pub(crate) fn dispatch(dispatch: FetchDispatch, promise_ptr: usize) {
         abort_key: dispatch.abort_key,
     };
     let (url, method) = (spec.url.clone(), spec.method.clone());
+    let stream = crate::streams::alloc_native_readable(
+        promise_ptr as *mut perry_runtime::Promise,
+        turnloop_client::resume_source,
+        turnloop_client::cancel_source,
+    );
     let sink = Sink {
-        ctx: promise_ptr,
-        on_head: None,
-        on_chunk: None,
-        on_done: settle,
+        ctx: stream,
+        on_head: Some(response_head),
+        capacity: Some(crate::streams::native_capacity),
+        on_chunk: Some(response_chunk),
+        on_done: response_done,
     };
     if let Err(declined) = turnloop_client::submit(spec, sink) {
         turnloop_client::note_declined();
+        crate::streams::take_native_promise(stream);
         let rejection = Rejection::for_declined(declined, &url, &method);
         queue_deferred_resolution(promise_ptr, false, move || rejection.into_js_bits());
-    }
-}
-
-/// The engine's completion. Runs on the owning thread from `drain_pending`,
-/// after the dispatch has finished with the engine's tables, so it may touch
-/// the fetch registries — but it still settles the promise through the deferred
-/// queue rather than running JS itself.
-fn settle(ctx: usize, outcome: Outcome) {
-    match outcome {
-        Outcome::Ok(response) => {
-            let handle = store(*response);
-            queue_promise_resolution(ctx, true, handle_to_f64(handle).to_bits());
-        }
-        Outcome::Err(error) if error.aborted => {
-            queue_deferred_resolution(ctx, false, super::abort_bridge::abort_error_bits);
-        }
-        Outcome::Err(error) => {
-            let failure = failure_for(error);
-            queue_deferred_resolution(ctx, false, move || failure.into_js_bits());
+        unsafe {
+            crate::streams::js_readable_stream_controller_close(stream as f64);
         }
     }
 }
 
-fn store(response: ResponseOut) -> usize {
+fn response_head(stream: usize, response: &ResponseOut) {
+    let Some(promise) = crate::streams::take_native_promise(stream) else {
+        return;
+    };
     let mut headers = super::HeadersStore::default();
-    for (name, value) in response.headers {
-        headers.append(&name, &value);
+    for (name, value) in &response.headers {
+        headers.append(name, value);
     }
-    // `"cors"` exactly when a followed redirect hop left the request's first
-    // origin (see `ResponseOut::cross_origin_redirect`); `"basic"` otherwise.
-    let type_name = if response.cross_origin_redirect {
-        "cors"
-    } else {
-        "basic"
-    }
-    .to_string();
     let id = alloc_fetch_handle_id();
     FETCH_RESPONSES.lock().unwrap().insert(
         id,
         FetchResponse {
             status: response.status,
-            status_text: response.status_text,
+            status_text: response.status_text.clone(),
             headers,
-            body: response.body,
-            body_present: true,
+            body: Vec::new(),
+            body_present: response.body_present,
             body_used: false,
-            type_name,
-            url: response.final_url,
+            type_name: if response.cross_origin_redirect {
+                "cors"
+            } else {
+                "basic"
+            }
+            .into(),
+            url: response.final_url.clone(),
             redirected: response.redirected,
             cached_headers_id: None,
-            cached_body_stream_id: None,
-            body_stream_id: None,
+            cached_body_stream_id: response.body_present.then_some(stream),
+            body_stream_id: response.body_present.then_some(stream),
         },
     );
-    id
+    queue_promise_resolution(promise as usize, true, handle_to_f64(id).to_bits());
+}
+
+fn response_chunk(stream: usize, bytes: &[u8]) {
+    unsafe {
+        crate::streams::native_enqueue(stream, bytes);
+    }
+}
+
+fn response_done(stream: usize, outcome: Outcome) {
+    if let Some(promise) = crate::streams::take_native_promise(stream) {
+        match outcome {
+            Outcome::Err(error) if error.aborted => queue_deferred_resolution(
+                promise as usize,
+                false,
+                super::abort_bridge::abort_error_bits,
+            ),
+            Outcome::Err(error) => {
+                let failure = failure_for(error);
+                queue_deferred_resolution(promise as usize, false, move || failure.into_js_bits());
+            }
+            Outcome::Ok(_) => unreachable!("success requires a final head"),
+        }
+        unsafe {
+            crate::streams::js_readable_stream_controller_close(stream as f64);
+        }
+        return;
+    }
+    unsafe {
+        match outcome {
+            Outcome::Ok(_) => {
+                crate::streams::js_readable_stream_controller_close(stream as f64);
+            }
+            Outcome::Err(error) => {
+                let bits = if error.aborted {
+                    super::abort_bridge::abort_error_bits()
+                } else {
+                    failure_for(error).into_body_error_bits()
+                };
+                crate::streams::js_readable_stream_controller_error(
+                    stream as f64,
+                    f64::from_bits(bits),
+                );
+            }
+        }
+    }
 }
 
 fn failure_for(error: ClientError) -> FetchFailure {

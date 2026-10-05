@@ -138,6 +138,17 @@ pub(super) fn scan_stream_roots_with<V: StreamRootVisitor>(visitor: &mut V) {
     expando::scan_expando_roots(visitor);
     if let Ok(mut map) = READABLE_STREAMS.lock() {
         for stream in map.values_mut() {
+            if let Some(promise) = stream.tee_cancel_promise.as_mut() {
+                visitor.visit_raw_mut_ptr_slot(promise);
+            }
+            if let Some(source) = stream.native_source.as_mut() {
+                if let Some(promise) = source.promise.as_mut() {
+                    visitor.visit_raw_mut_ptr_slot(promise);
+                }
+            }
+            if let Some(consumer) = stream.body_consumer.as_mut() {
+                visitor.visit_raw_mut_ptr_slot(&mut consumer.promise);
+            }
             visitor.visit_i64_slot(&mut stream.start_cb);
             visitor.visit_i64_slot(&mut stream.pull_cb);
             visitor.visit_i64_slot(&mut stream.cancel_cb);
