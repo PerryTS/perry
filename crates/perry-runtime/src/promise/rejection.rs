@@ -58,14 +58,6 @@ struct RejectionTracker {
     /// `'rejectionHandled'` fires for them at the next checkpoint (Node defers
     /// it the same way: the `.catch` callback runs first, the event after).
     pending_handled: Vec<usize>,
-    /// Promises the runtime owns and observes through internal channels — a
-    /// WHATWG reader/writer `closed` promise, a `[[closeRequest]]`, etc. Node
-    /// marks these `markPromiseAsHandled` at creation so that an abort / error
-    /// / cancel that later rejects them is never surfaced as an unhandled
-    /// rejection. We mirror that with a persistent membership set consulted at
-    /// rejection-track time. Stays empty for non-stream programs, so the hot
-    /// reject path pays nothing (#1545).
-    internally_handled: std::collections::HashSet<usize>,
 }
 
 /// Cap on the reported (`warned`) set. Node keys this state off a
@@ -93,9 +85,11 @@ pub extern "C" fn js_promise_mark_internally_handled(promise: *mut Promise) {
     if promise.is_null() {
         return;
     }
-    REJECTIONS.with(|t| {
-        t.borrow_mut().internally_handled.insert(promise as usize);
-    });
+    // A bit on the promise, not a set of addresses: a collection that moves
+    // the promise carries the mark with it.
+    unsafe {
+        (*promise).internally_handled = 1;
+    }
     // If it already rejected before being marked, drop it from the set now.
     mark_rejection_handled(promise);
 }
@@ -109,10 +103,7 @@ static KEEP_PROMISE_MARK_INTERNALLY_HANDLED: extern "C" fn(*mut Promise) =
     js_promise_mark_internally_handled;
 
 pub(super) fn is_internally_handled(promise: *mut Promise) -> bool {
-    REJECTIONS.with(|t| {
-        let t = t.borrow();
-        !t.internally_handled.is_empty() && t.internally_handled.contains(&(promise as usize))
-    })
+    !promise.is_null() && unsafe { (*promise).internally_handled != 0 }
 }
 
 /// Record a rejection that has no reaction attached yet.

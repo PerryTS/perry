@@ -1779,4 +1779,4 @@ mod tests;
 
 #[cfg(test)]
 #[path = "combinators_gc_tests.rs"]
-mod gc_tests;
+pub(super) mod gc_tests;

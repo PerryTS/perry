@@ -13,14 +13,14 @@ thread_local! {
     static THEN_THIS: Cell<u64> = const { Cell::new(0) };
 }
 
-struct MovingGc {
+pub(in crate::promise) struct MovingGc {
     _nursery: crate::gc::CopyingNurseryTestGuard,
     _triggers: crate::gc::GcTriggerThresholdTestGuard,
     _evacuate: crate::gc::knob_overrides::ForcedEvacuationTestGuard,
     _poison: crate::arena::ProtectionModeGuard,
 }
 
-fn moving_gc() -> MovingGc {
+pub(in crate::promise) fn moving_gc() -> MovingGc {
     let guards = MovingGc {
         _nursery: crate::gc::CopyingNurseryTestGuard::new(0),
         _triggers: crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers(),
