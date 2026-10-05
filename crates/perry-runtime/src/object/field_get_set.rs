@@ -209,9 +209,8 @@ mod buffer_own_prop;
 mod class_object_props;
 mod class_object_template;
 pub(crate) use class_object_template::{
-    class_object_template_cell, is_evaluation_prototype_with_methods, record_instance_link,
-    static_method_value_runs, template_instance, TemplateCell, TemplateInstance,
-    CLASS_TEMPLATE_KEY,
+    class_object_template_cell, record_instance_link, static_method_value_runs, template_instance,
+    TemplateCell, TemplateInstance, CLASS_TEMPLATE_KEY,
 };
 mod crypto_key;
 pub(crate) mod entries_shape;

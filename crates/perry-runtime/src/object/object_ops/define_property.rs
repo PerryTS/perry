@@ -1304,14 +1304,15 @@ pub extern "C" fn js_object_define_property(
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             std::str::from_utf8(name_bytes).ok().map(|s| s.to_string())
         };
-        // #4949 / #2159 follow-up: `ClassExprFresh.prototype` now materializes
-        // the declared-class prototype object. Keep `Object.defineProperty` on
-        // that live object wired to the same prototype-method side tables used
-        // by the historical ClassRef path, so instances observe decorator/mixin
-        // method replacements.
-        if let Some(target_cid) =
-            super::super::class_registry::class_id_for_decl_prototype_object(obj as usize)
-        {
+        // A declaration prototype mirrors callable replacements into class-id
+        // dispatch. An evaluation prototype owns its properties alone: its
+        // instances read this object through their recorded chain (#12029).
+        if let Some(target_cid) = super::super::class_registry::class_id_for_decl_prototype_object(
+            obj as usize,
+        )
+        .filter(|_| {
+            super::super::field_get_set::class_evaluation_prototype_class_id(obj as usize).is_none()
+        }) {
             if let Some(ref name) = key_rust {
                 if across!(desc_has_field(descriptor_value, b"value")) {
                     let value_bits = across!(desc_read_field(descriptor_value, b"value").bits());

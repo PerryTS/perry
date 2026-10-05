@@ -16,10 +16,9 @@ pub(super) enum InheritedRead {
     Missed,
     /// No walk happened; the caller's fallbacks run unchanged.
     NotWalked,
-    /// #11391: the recorded chain was walked and does not carry the key, AND
-    /// it is not the chain the receiver's class id names any more, so the
-    /// class-id prototype arms must not answer either. See
-    /// `prototype_chain::class_default_prototype_superseded`.
+    /// The recorded chain missed, and replaces the class-id surface: an
+    /// evaluated class (#12029) or a displaced default prototype (#11391).
+    /// The class-id prototype arms must not answer either.
     Superseded,
 }
 
@@ -30,8 +29,7 @@ impl InheritedRead {
     }
 
     /// Whether the class-id prototype walk may still answer this read: false
-    /// once the receiver's own `[[Prototype]]` has replaced the object that
-    /// walk reads (#11391).
+    /// when the receiver's recorded chain owns the whole class surface.
     pub(super) fn class_prototype_answers(&self) -> bool {
         !matches!(self, InheritedRead::Superseded)
     }
@@ -57,8 +55,8 @@ impl InheritedRead {
 /// heritage can differ between evaluations of one template. Other internal
 /// runtime wiring retains its existing fallback behavior.
 ///
-/// A non-`Hit` answer means either no override, or an override that does not
-/// carry this key — in both cases the caller keeps its existing fallback.
+/// An evaluated class's recorded chain owns its whole surface: a miss disables
+/// class-id fallbacks too (#12029). Synthesized intrinsic fallbacks remain.
 ///
 /// #10877: the two non-`Hit` answers differ in whether the recorded chain was
 /// already walked. Both callers end in a `resolve_inherited_field` of their
@@ -108,7 +106,16 @@ pub(super) fn inherited_field_if_overridden(
     ) {
         return InheritedRead::Hit(JSValue::undefined());
     }
-    if superseded {
+    // #12029: a class evaluation owns its entire prototype surface. A miss
+    // on that chain must never fall through to the template's declaration
+    // prototype (the first evaluation), even for a newly added data property.
+    // ClassBody accessors, like methods, are physical keys on the prototype.
+    let evaluated = individual
+        && crate::object::private_evaluation_brand_value(crate::value::js_nanbox_pointer(
+            obj as i64,
+        ))
+        .is_some_and(crate::object::class_registry::is_class_object_value);
+    if superseded || evaluated {
         return InheritedRead::Superseded;
     }
     InheritedRead::Missed
