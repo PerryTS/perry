@@ -1031,6 +1031,15 @@ fn full_atomic_finalize_slices_barrier_seed_drain_with_tiny_budget() {
     let (parent, fields) = unsafe { alloc_old_test_object(SEEDS as u32) };
     js_shadow_slot_set(0, ptr_bits(parent as usize));
     let children = (0..SEEDS).map(|_| young_leaf()).collect::<Vec<_>>();
+    // Keep the late-store subjects outside recent-block persistence. Otherwise
+    // that pass marks the leaves before the stores and there are no real seeds;
+    // the former remembered rebuild alone supplied the test's extra steps.
+    let aged_from = crate::arena::general_block_count();
+    while crate::arena::general_block_count().saturating_sub(aged_from) < 7 {
+        for _ in 0..64 {
+            let _ = crate::arena::arena_alloc_gc(4096, 8, GC_TYPE_STRING);
+        }
+    }
 
     let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::Manual));
     run_cycle_until_phase(&mut state, GcCyclePhase::AtomicFinalize);
@@ -1041,6 +1050,11 @@ fn full_atomic_finalize_slices_barrier_seed_drain_with_tiny_budget() {
 
     for (slot, &child) in children.iter().enumerate() {
         unsafe {
+            assert_eq!(
+                (*header_from_user_ptr(child as *const u8)).gc_flags & GC_FLAG_MARKED,
+                0,
+                "premise: each late store must shade a genuinely white child"
+            );
             runtime_store_jsvalue_slot(
                 parent as usize,
                 fields.add(slot) as usize,
@@ -1057,8 +1071,8 @@ fn full_atomic_finalize_slices_barrier_seed_drain_with_tiny_budget() {
         assert!(atomic_steps < 100_000, "atomic finalize did not finish");
     }
     assert!(
-        atomic_steps > SEEDS,
-        "barrier seed drain and remembered rebuild should keep tiny steps in atomic_finalize"
+        atomic_steps >= SEEDS,
+        "the real barrier seeds must each consume a tiny-budget finalize step"
     );
     // The barrier must survive the AtomicFinalize->Sweep boundary: the sweep
     // state's per-block fill snapshot is only taken on the first step_sweep
