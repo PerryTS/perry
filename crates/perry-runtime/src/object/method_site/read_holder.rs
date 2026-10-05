@@ -532,13 +532,24 @@ unsafe fn read_name_admitted(recv: *const ObjectHeader, name: &[u8]) -> bool {
     holder_name_admitted(name)
 }
 
+/// The most intermediate hops a walk records: a class entry (`class_read`)
+/// describes a deeper chain than the site's own holder entry has words for.
+const WALK_HOPS: usize = class_read::CLASS_READ_MAX_DEPTH - 1;
+
+/// An intermediate hop: its address and the ShapeId it had when proved.
+type Hop = (usize, u32);
+
+/// A walk's hops before it records any. A constant, so a new walk clears
+/// them as one block rather than field by field around the padding.
+const NO_HOPS: [Hop; WALK_HOPS] = [(0, 0); WALK_HOPS];
+
 /// The answer the shapes give, found by a walk that allocates nothing.
 struct Walk {
     holder: usize,
     holder_shape: u32,
     /// `None` = absent.
     slot: Option<u32>,
-    hops: [(usize, u32); HOLDER_MAX_DEPTH - 1],
+    hops: [Hop; WALK_HOPS],
     depth: usize,
     /// An accessor entry's getter word (see [`HOLDER_HOP_SHAPES`]); 0 for
     /// data/absence. Its pair is `hops[0].0`.
@@ -867,18 +878,33 @@ unsafe fn accessor_entry_hit(
     Some(invoke_getter(recv, getter, c[HOLDER_HOPS] as usize))
 }
 
+/// [`walk_to`] bounded by the site's own holder entry.
+#[inline]
 unsafe fn walk(recv: *const ObjectHeader, name: &[u8], class_first: bool) -> Option<Walk> {
+    walk_to(recv, name, class_first, HOLDER_MAX_DEPTH)
+}
+
+/// The shapes' answer for `name` read off `recv`: at most `max_depth - 1`
+/// intermediate hops that lack it, then the holder (or the terminal object
+/// of an absent read). A longer chain is `None`.
+unsafe fn walk_to(
+    recv: *const ObjectHeader,
+    name: &[u8],
+    class_first: bool,
+    max_depth: usize,
+) -> Option<Walk> {
+    debug_assert!(max_depth <= WALK_HOPS + 1);
     let mut w = Walk {
         holder: 0,
         holder_shape: 0,
         slot: None,
-        hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+        hops: NO_HOPS,
         depth: 0,
         getter: 0,
     };
     let object_prototype = crate::array::object_prototype_addr_if_resolved();
     let mut current = recv;
-    for depth in 1..=HOLDER_MAX_DEPTH {
+    for depth in 1..=max_depth {
         // `%Object.prototype%` is an immutable-prototype exotic object: its
         // [[Prototype]] is null for its whole life, whatever its shape's
         // identity word says, so reaching it ends the chain.
@@ -956,8 +982,8 @@ unsafe fn walk(recv: *const ObjectHeader, name: &[u8], class_first: bool) -> Opt
                 return Some(w);
             }
         }
-        if depth == HOLDER_MAX_DEPTH {
-            // A fifth object would be needed: either the holder or the null
+        if depth == max_depth {
+            // One more object would be needed: either the holder or the null
             // link past the last hop.
             if next as usize != object_prototype && admitted_proto_id(next) != Some(PROTO_ID_NULL) {
                 return None;
@@ -1105,36 +1131,30 @@ unsafe fn function_walk(closure: usize, name: &[u8]) -> Option<Walk> {
     if !shape.object_kind.is_ordinary_layout() || fp_shape == 0 {
         return None;
     }
-    let mut w = Walk {
-        holder: fp,
-        holder_shape: fp_shape,
-        slot: None,
-        hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
-        getter: 0,
-        depth: 1,
-    };
     let keys = shape.keys as usize as *const crate::array::ArrayHeader;
     if !keys.is_null() {
         if let Some(s) =
             crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
         {
-            w.slot = Some(holder_slot_word(fp, s, shape.live_inline_slot_count)?);
-            return Some(w);
+            return Some(Walk {
+                holder: fp,
+                holder_shape: fp_shape,
+                slot: Some(holder_slot_word(fp, s, shape.live_inline_slot_count)?),
+                hops: NO_HOPS,
+                getter: 0,
+                depth: 1,
+            });
         }
     }
     // Absent on `%Function.prototype%`: the rest of the chain, one hop deeper.
-    let inner = walk(fp_obj, name, false)?;
+    let mut inner = walk(fp_obj, name, false)?;
     if inner.depth >= HOLDER_MAX_DEPTH {
         return None;
     }
-    w.holder = inner.holder;
-    w.holder_shape = inner.holder_shape;
-    w.slot = inner.slot;
-    w.depth = inner.depth + 1;
-    w.hops[0] = (fp, fp_shape);
-    w.hops[1] = inner.hops[0];
-    w.hops[2] = inner.hops[1];
-    Some(w)
+    inner.depth += 1;
+    inner.hops.copy_within(0..HOLDER_MAX_DEPTH - 2, 1);
+    inner.hops[0] = (fp, fp_shape);
+    Some(inner)
 }
 
 /// [`prime_read_holder`] for a function receiver (`f.k`, #10497): the site's
@@ -1239,8 +1259,12 @@ pub(crate) unsafe fn prime_read_holder(
         return None;
     }
     // A receiver the live entry answers is served from it: nothing to prime.
-    // A latched site keeps the caller's path.
+    // A latched site keeps the caller's path for its holder entry. The latch
+    // is that entry's: a site latched by one receiver's refusal still primes
+    // its class entries (`class_read`), which have ways and a latch of their
+    // own, for the declared-class receivers it reads.
     let existing = crate::object::field_get_set::pic_slot_peek::<PicCache>(cache_slot);
+    let mut latched = false;
     if !existing.is_null() {
         let stamp = object_shape_stamp(obj);
         if stamp != 0 {
@@ -1250,16 +1274,25 @@ pub(crate) unsafe fn prime_read_holder(
             }
         }
         if (*existing)[HOLDER_STATE] & STATE_LATCHED != 0 {
-            return None;
+            if !class_read::may_prime(&*existing) {
+                return None;
+            }
+            latched = true;
         }
     }
     materialize_class_prototype(obj);
     let name = crate::string::header_str_checked(key)?.as_bytes();
     let recv = ordinary_receiver(obj as usize)?;
-    if let Some(acc) = accessor_walk(recv, name) {
+    // A latched site primes only class entries (below).
+    let acc = if latched {
+        None
+    } else {
+        accessor_walk(recv, name)
+    };
+    if let Some(acc) = acc {
         let cache = crate::object::field_get_set::pic_slot_resolve::<PicCache>(cache_slot);
         if !cache.is_null() {
-            let mut hops = [(0, 0); HOLDER_MAX_DEPTH - 1];
+            let mut hops = NO_HOPS;
             hops[0].0 = acc.pair;
             let w = Walk {
                 holder: acc.holder,
@@ -1289,6 +1322,9 @@ pub(crate) unsafe fn prime_read_holder(
         if let Some(value) = class_read::prime(recv, key, cache_slot, name) {
             return Some(value);
         }
+    }
+    if latched {
+        return None;
     }
     // Cheap pre-walk: a receiver the entry could never describe keeps the
     // caller's path and pays nothing for the getter below. A site with no
@@ -1538,7 +1574,7 @@ mod tests {
 
     /// The entry an accessor prime publishes for `acc`.
     fn accessor_entry(acc: &HolderAccessor) -> Walk {
-        let mut hops = [(0, 0); HOLDER_MAX_DEPTH - 1];
+        let mut hops = NO_HOPS;
         hops[0].0 = acc.pair;
         Walk {
             holder: acc.holder,
@@ -1732,7 +1768,7 @@ mod tests {
             holder: (&*holder as *const ObjectHeader) as usize,
             holder_shape: base + 100,
             slot: None,
-            hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+            hops: NO_HOPS,
             depth: 1,
             getter: 0,
         };
