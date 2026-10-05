@@ -96,6 +96,7 @@ use crate::object::ObjectHeader;
 
 pub(crate) mod chain_memo;
 mod function_intrinsic;
+pub(crate) mod own_slot_memo;
 pub(crate) mod read_holder;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -455,15 +456,13 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
             argc,
         );
     }
-    // `emitter.emit(...)`: its body takes a rest parameter, which no site
-    // entry can call, so every call misses. The emitter machinery (armed by
-    // the events / stream installs) calls it directly instead of the tower.
+    // Resolve the requested property from the shapes/prototype. If its
+    // callable body consumes the original arguments directly, bypass its
+    // rest-array construction. Aliases qualify by body; overrides decline.
     if let MissReceiver::Ordinary = receiver {
-        if name == b"emit" {
-            if let Some(ops) = super::nm_ee_ops() {
-                if let Some(result) = (ops.emit_call)(recv, args_ptr, argc) {
-                    return result;
-                }
+        if let Some(ops) = super::nm_ee_ops() {
+            if let Some(result) = (ops.emit_call)(recv, method_id, name, args_ptr, argc) {
+                return result;
             }
         }
     }

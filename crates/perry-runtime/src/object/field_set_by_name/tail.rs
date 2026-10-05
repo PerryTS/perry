@@ -628,6 +628,19 @@ pub(crate) fn set_field_by_name_object_tail(
                 // objects), so from the SECOND class on the write lands
                 // here — the mirror must fire on this path too.
                 refresh_roots_after_alloc!();
+                // A generic pop can return to a canonical predecessor whose
+                // ordinary append edge is still cached after the tail cache
+                // was cleared. Relearn the tail pair on this hit as well.
+                if record_array_tail {
+                    super::super::array_tail_transition::record_numeric_tail_transition(
+                        obj,
+                        prev_shape_id,
+                        super::shapes::object_shape_stamp(obj),
+                        interned_key,
+                        crate::object::object_keys(obj).arr() as usize,
+                        slot_idx,
+                    );
+                }
                 mirror_class_object_static_write(obj, key, value);
                 return;
             }

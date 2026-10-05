@@ -78,8 +78,11 @@ pub(crate) use vtable_impls::vt_own_keys_array;
 pub(crate) use web_locks::{worker_threads_locks_value, WebLocksState};
 
 crate::perry_thread_local! {
-    pub(crate) static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
-        RefCell::new(HashMap::new());
+    /// Every minted bound export by `"<module>\0<property>"`. Read on hot
+    /// paths (`new EventEmitter()` resolves its prototype through it), so it
+    /// hashes with aHash, which keeps a random key without SipHash's rounds.
+    pub(crate) static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64, ahash::RandomState>> =
+        RefCell::new(HashMap::default());
     pub(crate) static NATIVE_MODULE_ACCESSOR_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
     static HANDLE_PROPERTY_BIND_REENTRY: Cell<bool> = const { Cell::new(false) };

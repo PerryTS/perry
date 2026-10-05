@@ -59,7 +59,7 @@ pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
     js_object_alloc_null_proto, js_object_alloc_with_parent, js_object_coerce,
 };
-pub(crate) use alloc_basic::{object_alloc_born, object_alloc_plain};
+pub(crate) use alloc_basic::{object_alloc_born, object_alloc_filled_birth, object_alloc_plain};
 #[allow(unused_imports)]
 pub(crate) use alloc_plain::mark_object_plain_ordinary;
 pub use assign::*;
@@ -110,6 +110,7 @@ mod collection_proto_thunks;
 mod data_view_registry;
 mod dataview_proto_thunks;
 pub(crate) mod date_proto_thunks;
+pub(crate) mod delete_last_key;
 mod delete_rest;
 pub(crate) mod descriptors;
 pub(crate) mod dictionary;
@@ -1343,8 +1344,7 @@ fn transition_cache_insert(
     if next_keys == 0 {
         return;
     }
-    // Generated transition hits store without the owner layout note. They
-    // must not learn an edge from a numeric-proof predecessor.
+    // Generated hits skip the layout note: never learn from a numeric proof.
     if shapes::shape_object_kind_by_id(prev_shape_id)
         == Some(shapes::ShapeObjectKind::OrdinaryNumericProof)
     {
@@ -1369,8 +1369,7 @@ fn transition_cache_insert(
             }
         }
     }
-    // #9754 rule 1: log the slot BEFORE the entry is published when either
-    // address can matter to a minor.
+    // #9754: log BEFORE publishing if either address can matter to a minor.
     arm_transition_cache_young(slot, next_keys, kid, len_marker);
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): TRANSITION_CACHE_GLOBAL entries are scanned by scan_transition_cache_roots_mut.
@@ -1395,6 +1394,7 @@ fn transition_cache_insert(
         entry.target_len = target_len;
     });
     if target_len != 0 {
+        shapes::note_last_key_parent(target_shape_id, prev_shape_id);
         shape_carriers::note_shape_id(target_shape_id);
     }
     if !array_tail_owner.is_null() {
@@ -1407,10 +1407,8 @@ fn transition_cache_insert(
             slot_idx,
         );
     }
-    // Small dynamic shapes are stabilized eagerly because otherwise
-    // the original builder can grow the cached target in place and
-    // force future lookups to reject it. Large one-off dictionaries
-    // stay lazy to avoid cloning every growing prefix.
+    // Eagerly stabilize small shapes so growth cannot invalidate a cached
+    // target. Large one-off dictionaries stay lazy to avoid prefix copies.
 }
 
 /// GC root scanner: mark all JSValues stored in OVERFLOW_FIELDS.
