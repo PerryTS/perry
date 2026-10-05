@@ -1547,10 +1547,36 @@ pub(super) fn drain_trace_worklist_step(
     minor_only: bool,
     budget: usize,
 ) -> bool {
-    drain_trace_worklist_step_remembering(worklist, cursor, valid_ptrs, minor_only, budget, None)
+    drain_trace_worklist_step_impl::<false>(worklist, cursor, valid_ptrs, minor_only, budget, None)
 }
 
 pub(super) fn drain_trace_worklist_step_remembering(
+    worklist: &mut Vec<*mut GcHeader>,
+    cursor: &mut usize,
+    valid_ptrs: &ValidPointerSet,
+    minor_only: bool,
+    budget: usize,
+    sticky: Option<&mut StickyRememberedSet>,
+) -> bool {
+    // Choose once per drain, rather than adding a remembering-mode branch to
+    // every young object in a minor's existing mark traversal.
+    if let Some(sticky) = sticky {
+        drain_trace_worklist_step_impl::<true>(
+            worklist,
+            cursor,
+            valid_ptrs,
+            minor_only,
+            budget,
+            Some(sticky),
+        )
+    } else {
+        drain_trace_worklist_step_impl::<false>(
+            worklist, cursor, valid_ptrs, minor_only, budget, None,
+        )
+    }
+}
+
+fn drain_trace_worklist_step_impl<const REMEMBER: bool>(
     worklist: &mut Vec<*mut GcHeader>,
     cursor: &mut usize,
     valid_ptrs: &ValidPointerSet,
@@ -1569,7 +1595,7 @@ pub(super) fn drain_trace_worklist_step_remembering(
             super::prefetch::prefetch_read(ahead as usize);
         }
         *cursor += 1;
-        trace_one_worklist_header(
+        trace_one_worklist_header::<REMEMBER>(
             header,
             valid_ptrs,
             worklist,
@@ -1581,7 +1607,7 @@ pub(super) fn drain_trace_worklist_step_remembering(
     *cursor >= worklist.len()
 }
 
-fn trace_one_worklist_header(
+fn trace_one_worklist_header<const REMEMBER: bool>(
     header: *mut GcHeader,
     valid_ptrs: &ValidPointerSet,
     worklist: &mut Vec<*mut GcHeader>,
@@ -1634,7 +1660,11 @@ fn trace_one_worklist_header(
                 return;
             }
         }
-        trace_heap_rewrite_slots_remembering(header, valid_ptrs, worklist, sticky);
+        if REMEMBER {
+            trace_heap_rewrite_slots_remembering(header, valid_ptrs, worklist, sticky);
+        } else {
+            trace_heap_rewrite_slots(header, valid_ptrs, worklist);
+        }
     }
 }
 
