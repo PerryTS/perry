@@ -44,6 +44,7 @@ FALLBACK_MARKERS = (
     "using prebuilt libraries",
     "Perry workspace source not found",
     "auto-optimize: cargo build failed",
+    "warning: auto-optimized runtime build failed",
 )
 
 
