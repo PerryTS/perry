@@ -951,10 +951,10 @@ fn abort_keys_follow_a_signal_moved_by_a_copying_minor() {
     // native stack (masked, dead stack zeroed): a conservative scan that saw
     // it would pin the signal and the minor would move nothing.
     const MASK: usize = 0x5A5A_0000_0000_0000;
-    const CLASS_ID: u32 = 0x5157;
+    const MOVED_SIGNAL_CLASS_ID: u32 = 0x5157;
     #[inline(never)]
     fn bind_fresh_signal() -> usize {
-        let signal = perry_runtime::object::js_object_alloc(CLASS_ID, 0) as usize;
+        let signal = perry_runtime::object::js_object_alloc(MOVED_SIGNAL_CLASS_ID, 0) as usize;
         super::ENGINE.with(|e| e.borrow_mut().aborts.insert(signal, vec![7]));
         std::hint::black_box(signal) ^ MASK
     }
@@ -992,7 +992,7 @@ fn abort_keys_follow_a_signal_moved_by_a_copying_minor() {
     );
     let class_id = unsafe { (*(after as *const perry_runtime::object::ObjectHeader)).class_id };
     assert_eq!(
-        class_id, CLASS_ID,
+        class_id, MOVED_SIGNAL_CLASS_ID,
         "the rewritten key must name the moved signal"
     );
     assert_eq!(aborts[&after], vec![7]);
