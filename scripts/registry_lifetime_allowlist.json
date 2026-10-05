@@ -121,7 +121,7 @@
       "name": "REGISTRY",
       "fn": "function_source_registry",
       "verdict": "bounded_by_program",
-      "why": "Keyed by compiled func_ptr, populated from module init by js_register_function_source_static once per function body"
+      "why": "Keyed by compiled func_ptr for raw method/accessor bodies and other callables without an ordinary per-body JsFunctionInfo source record; last write wins"
     },
     {
       "file": "crates/perry-runtime/src/bun_ffi/dlopen.rs",

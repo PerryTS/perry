@@ -22,8 +22,8 @@ const MAX_MATCHES: usize = 1_000_000;
 
 #[derive(Clone)]
 pub(super) struct SourceRange {
-    global: String,
-    offset: usize,
+    pub(super) global: String,
+    pub(super) offset: usize,
     pub(super) byte_len: usize,
 }
 
@@ -60,15 +60,24 @@ impl<'a> SourcePool<'a> {
                 unique.push(source);
             }
         }
+        if unique.is_empty() {
+            return Self(HashMap::new());
+        }
         let bytes: Vec<&[u8]> = unique.iter().map(|source| source.as_bytes()).collect();
         let plan = plan(&bytes, MIN_PATTERN_BYTES, MAX_PATTERN_BYTES, MAX_MATCHES);
-        let mut globals = HashMap::new();
-        // Keep physical constants in original first-use order as well.
+        // One physical blob per module. Maximal parents retain their stable
+        // first-use order; every contained source becomes a byte range inside
+        // that blob. This separates cold reflection text from hot literals and
+        // needs no terminators because every consumer carries a byte length.
+        let mut blob = String::new();
+        let mut parent_offsets = HashMap::new();
         for (idx, &(parent, _)) in plan.iter().enumerate() {
             if idx == parent {
-                globals.insert(idx, llmod.add_string_constant(unique[idx]).0);
+                parent_offsets.insert(idx, blob.len());
+                blob.push_str(unique[idx]);
             }
         }
+        let global = llmod.add_retained_source_constant(&blob).0;
         Self(
             unique
                 .into_iter()
@@ -78,8 +87,8 @@ impl<'a> SourcePool<'a> {
                     (
                         source,
                         SourceRange {
-                            global: globals[&parent].clone(),
-                            offset,
+                            global: global.clone(),
+                            offset: parent_offsets[&parent] + offset,
                             byte_len: source.len(),
                         },
                     )
@@ -263,22 +272,25 @@ mod tests {
     }
 
     #[test]
-    fn emitted_pool_deduplicates_small_sources_without_a_matcher() {
+    fn emitted_pool_puts_small_sources_in_one_cold_blob_without_a_matcher() {
         let mut module = LlModule::new("aarch64-apple-darwin");
         let pool = SourcePool::emit(&mut module, ["small", "other", "small", ""].into_iter());
-        assert_eq!(pool.get("small").global, ".str.0");
-        assert_eq!(pool.get("other").global, ".str.1");
-        assert_eq!(pool.get("").global, ".str.2");
+        assert_eq!(pool.get("small").global, ".perry.retained_source");
+        assert_eq!(pool.get("other").global, pool.get("small").global);
+        assert_eq!(pool.get("").global, pool.get("small").global);
+        assert_eq!(pool.get("small").offset, 0);
+        assert_eq!(pool.get("other").offset, 5);
+        assert_eq!(pool.get("").offset, 10);
         assert_eq!(pool.0.len(), 3);
         assert_eq!(pool.get("").byte_len, 0);
+        let ir = module.to_ir();
         assert_eq!(
-            module
-                .to_ir()
-                .lines()
-                .filter(|line| line.contains("private unnamed_addr constant"))
+            ir.lines()
+                .filter(|line| line.contains(".perry.retained_source = private constant"))
                 .count(),
-            3
+            1
         );
+        assert!(ir.contains("section \"__TEXT,__perry_src\""));
     }
 
     #[test]
@@ -295,7 +307,7 @@ mod tests {
             module
                 .to_ir()
                 .lines()
-                .filter(|line| line.contains("private unnamed_addr constant"))
+                .filter(|line| line.contains(".perry.retained_source = private constant"))
                 .count(),
             1
         );
