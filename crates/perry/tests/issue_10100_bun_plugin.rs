@@ -10,10 +10,6 @@ fn compile_and_run(source: &str) -> String {
         .join(if cfg!(windows) { "main.exe" } else { "main" });
     std::fs::write(&entry, source).unwrap();
     let mut compiler = Command::new(env!("CARGO_BIN_EXE_perry"));
-    // LLVM's statepoint pass rejects Windows exception funclets (#7354).
-    if cfg!(windows) {
-        compiler.env("PERRY_RS4GC", "0");
-    }
     let output = compiler
         .current_dir(dir.path())
         .args(["compile", "--no-cache"])

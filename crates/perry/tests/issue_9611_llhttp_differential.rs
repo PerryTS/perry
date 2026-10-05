@@ -129,7 +129,6 @@ fn llhttp_parses_identically_to_node() {
         .arg(&binary)
         .arg("--no-cache")
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
-        .env("PERRY_RS4GC", "0")
         .env("PERRY_RUNTIME_DIR", runtime_dir())
         .env("PERRY_WORKSPACE_ROOT", workspace_root())
         .output()

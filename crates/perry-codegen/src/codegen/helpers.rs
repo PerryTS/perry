@@ -149,7 +149,14 @@ pub(crate) fn set_native_roots_for_target(triple: &str) {
     // arch check and is COFF, but its CONTEXT layout and register model differ,
     // so no frame would ever be visited.
     let windows_ok = !triple.contains("windows") || triple.starts_with("x86_64");
-    NATIVE_ROOTS_TARGET_OK.with(|c| c.set(arch_ok && windows_ok));
+    // Match the runtime section locator and walker, not merely the ELF format.
+    // Android has a distinct target_os and no native map reader. OpenHarmony
+    // exposes target_os=linux and uses the Linux reader.
+    let reader_ok = triple.contains("apple")
+        || triple.contains("darwin")
+        || triple.contains("windows")
+        || (triple.contains("linux") && !triple.contains("android"));
+    NATIVE_ROOTS_TARGET_OK.with(|c| c.set(arch_ok && windows_ok && reader_ok));
 }
 
 thread_local! {

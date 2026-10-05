@@ -30,15 +30,15 @@ before they reach a crash.
 Usage
 -----
     # dump the IR (writes .perry-trace/llvm/*.ll)
-    PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_INLINE_SHADOW_SLOT=0 \
-        perry compile app.ts -o /tmp/app --trace llvm
+    PERRY_GC_MOVING_LOOP_POLLS=1 \
+        perry compile app.ts --target wasi --no-link -o /tmp/app --trace llvm
 
     python3 scripts/gc_root_dominance_check.py .perry-trace/llvm [-v]
     python3 scripts/gc_root_dominance_check.py .perry-trace/llvm --any-def
     python3 scripts/gc_root_dominance_check.py .perry-trace/llvm --moving-only
 
-`PERRY_INLINE_SHADOW_SLOT=0` makes every root store the `@js_shadow_slot_bind`
-call form; the inline #7088 diamond is equivalent but harder to anchor on.
+The WASI platform emits every root store in the `@js_shadow_slot_bind`
+call form; native targets use the statepoint mode.
 `PERRY_GC_MOVING_LOOP_POLLS=1` is what puts `js_gc_loop_safepoint` in the IR,
 which is what the `MOVING` classification keys on.
 
@@ -7111,7 +7111,7 @@ def main():
         # a `slotload` is a heap-value source by looking the pointer up in
         # `slot_of_alloca`, and that map is built from the same `BIND_RE`
         # (`stale_uses_in_function`). Compile the corpus with
-        # PERRY_INLINE_SHADOW_SLOT=1 (or with a broken `--trace llvm`) and
+        # a native target (or with a broken `--trace llvm`) and
         # every shadow-slot source vanishes: `run_stale` reports `total 0`,
         # exits 0, and looks exactly like a corpus with no stale registers in
         # it. That is hazard 4 -- the gate runs but its subject never did.
@@ -7120,7 +7120,7 @@ def main():
                   f"least {ns.min_binds}. The stale-register scan derives its "
                   "shadow-slot sources from those stores, so a clean verdict "
                   "here means the IR was not the IR you think it is "
-                  "(compile with PERRY_INLINE_SHADOW_SLOT=0).", file=sys.stderr)
+                  "(compile with --target wasi --no-link for shadow roots).", file=sys.stderr)
             return 2
         # Breadth, same as the bind-anchored path applies below. A corpus can
         # carry plenty of root stores and still be one module deep.
@@ -7254,7 +7254,7 @@ def main():
         print(f"error: {n_binds} root store(s) in the corpus, need at least "
               f"{ns.min_binds}. The subject of this check never ran — a clean "
               "verdict here means the IR was not the IR you think it is "
-              "(compile with PERRY_INLINE_SHADOW_SLOT=0).", file=sys.stderr)
+              "(compile with --target wasi --no-link for shadow roots).", file=sys.stderr)
         return 2
     if funcs_floor_violated():
         return 2

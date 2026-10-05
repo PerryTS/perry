@@ -13,11 +13,6 @@ fn compile_and_run(source: &str) -> String {
     );
     std::fs::write(&entry, source).unwrap();
     let mut compiler = Command::new(env!("CARGO_BIN_EXE_perry"));
-    // #7354: LLVM RS4GC does not support Windows exception funclets yet.
-    // Exercise the supported shadow-root path for async rejection tests.
-    if cfg!(windows) {
-        compiler.env("PERRY_RS4GC", "0");
-    }
     let compile = compiler
         .current_dir(directory.path())
         .args(["compile", "--no-cache"])

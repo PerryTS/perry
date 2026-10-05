@@ -74,7 +74,7 @@ function run(label, executable, args, timeout, extraEnv = {}) {
 try {
   const oracle = run('node', process.execPath, [source], 20000).stdout;
   assert(oracle.includes('inline-policy-native-complete'), 'Node must finish');
-  for (const roots of ['shadow', 'native']) {
+  for (const roots of ['native']) {
     for (const transport of ['1', 'native']) {
       for (const opt of ['s', 'z']) {
         const label = `${roots}-${transport}-O${opt}`;
@@ -84,7 +84,6 @@ try {
         const compileEnv = { PERRY_LL_OPT_LEVEL: opt, PERRY_LLVM_INPROCESS: transport,
           PERRY_FULL_OUTLINE_IC: '1', PERRY_KEEP_SYMBOLS: '1', PERRY_SAVE_LL: irDir,
           PERRY_MODULE_JOBS: '1', PERRY_CODEGEN_UNIT_JOBS: '1',
-          ...(roots === 'shadow' ? { PERRY_RS4GC: '0', PERRY_SHADOW_STACK: '1', PERRY_INLINE_SHADOW_SLOT: '0' } : {}),
         };
         run(`compile-${label}`, compiler, ['compile', source, '-o', output,
           '--cache-dir', path.join(work, `cache-${label}`), '--no-auto-optimize', '--no-color', ...wasmArgs],
@@ -98,11 +97,11 @@ try {
         for (const header of headers) {
           const attributes = functionAttributes(ir, header);
           assert.equal(attributes.has('minsize'), opt === 'z', header);
-          assert.equal(attributes.has('alwaysinline'), roots === 'shadow' && opt === 's', header);
-          assert.equal(attributes.has('inlinehint'), roots === 'native', header);
+          assert.equal(attributes.has('alwaysinline'), false, header);
+          assert.equal(attributes.has('inlinehint'), true, header);
         }
         const strategy = ir.includes('gc "statepoint-example"');
-        assert.equal(strategy, roots === 'native', 'requested root mode must actually be emitted');
+        assert.equal(strategy, true, 'native statepoint strategy must actually be emitted');
         // Native execution must not load the source to satisfy the oracle.
         fs.renameSync(source, source + '.hidden');
         try {
@@ -124,7 +123,7 @@ try {
       }
     }
   }
-  assert.equal(rows.length, 16);
+  assert.equal(rows.length, 8);
   assert.equal(hash(compiler), compilerHash, 'compiler must not change during validation');
   passed = true;
 } finally {
