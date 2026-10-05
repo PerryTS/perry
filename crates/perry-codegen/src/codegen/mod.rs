@@ -223,6 +223,8 @@ mod indexed_method_artifacts;
 #[cfg(test)]
 mod literal_method_this_tests;
 mod ordinary_method_artifacts;
+#[cfg(test)]
+mod string_accumulator_tests;
 mod tdz_names;
 // `pub(crate)` so `crate::linker` can read the inline-hot-small policy
 // (`inline_hot_small_enabled` / `inline_hot_small_hint_threshold`).
@@ -2777,6 +2779,7 @@ fn compile_module_impl(
         compiler_private_async_i32_control_locals,
         compiler_private_async_i1_control_locals,
         scope_map: Default::default(),
+        string_accumulator_locals: Default::default(),
         disable_buffer_fast_path,
         program_shadows_buffer_read_method:
             crate::lower_call::buffer_intrinsic::module_shadows_buffer_read_method(hir),
@@ -2987,6 +2990,7 @@ fn compile_module_impl(
     // globals. Every capture layout below is computed through this map.
     cross_module.scope_map =
         crate::scope_env::ScopeMap::build(hir, &module_boxed_vars, &module_globals);
+    cross_module.string_accumulator_locals = crate::collectors::string_accumulator_locals(hir);
     // #6369: the *receiver-type oracle* for closure bodies — every module-wide
     // `Stmt::Let` type, with NO representation-driven filtering. `FnCtx.
     // local_types` is what `static_type_of` / `is_array_expr` /

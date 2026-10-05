@@ -312,7 +312,9 @@ pub struct JsFunctionInfo {
     pub trusted_boxed_mask: u64,
     /// A compiler-private versioned-loop callback clone (null when none).
     pub versioned_code: *const u8,
-    /// Captures the versioned-loop clone was compiled for.
+    /// Captures the versioned-loop clone was compiled for. When
+    /// [`FN_HAS_SOURCE`] is set and `versioned_code` is null, this otherwise
+    /// idle word instead carries the source byte length.
     pub versioned_captures: u32,
     /// The JS-visible declared parameter count (valid with
     /// [`FN_HAS_DECLARED`]): what `.length` falls back to. It can differ
@@ -322,7 +324,9 @@ pub struct JsFunctionInfo {
     /// [`JsFunctionInfo::of`] (typed) or the `unsafe`
     /// [`JsFunctionInfo::from_code`].
     reserved: u16,
-    /// The versioned-loop clone's boxed-capture mask.
+    /// The versioned-loop clone's boxed-capture mask. When
+    /// [`FN_HAS_SOURCE`] is set and `versioned_code` is null, this otherwise
+    /// idle word instead carries the signed 64-bit source displacement.
     pub versioned_boxed_mask: u64,
 }
 
@@ -368,6 +372,14 @@ pub const FN_PERMANENT_IMAGE: u32 = 1 << 12;
 /// ordinary ones: the runtime decides that from this bit, once per body,
 /// instead of probing the callee against every built-in on each use.
 pub const FN_COMPILED_BODY: u32 = 1 << 13;
+/// A compiler-emitted info carries retained source. When `versioned_code` is
+/// null, its otherwise idle versioned-captures fields carry byte length and
+/// signed displacement; an info that also has a versioned clone is followed
+/// by two `i32`s. Runtime/native infos stay [`JS_FUNCTION_INFO_SIZE`] bytes.
+pub const FN_HAS_SOURCE: u32 = 1 << 14;
+/// The retained source describes an ordinary non-strict function. Methods,
+/// arrows and strict ordinary functions leave this clear.
+pub const FN_NON_STRICT_ORDINARY: u32 = 1 << 15;
 
 /// Byte offsets of the fields codegen emits and emitted code reads.
 pub const JS_FUNCTION_INFO_CODE_OFFSET: usize = 0;
