@@ -83,3 +83,24 @@ The first implementation uses that existing target record. Unseeded/worker recon
 | spread_assign | 26038.80 | 465.22 |
 
 Five interleaved main/Node trials use `(instructions(110000) - instructions(10000)) / 100000`, removing startup consistently. All outputs match Node at both counts. The added method-factory row directly exercises the primary fresh-profile mechanism; its measurements are pending.
+
+## Enumeration implementation milestone
+
+The receiver key/live-slot view now borrows the shape record and reads its three
+needed words in place. `ObjectKeys::get` reads internal dense storage with its
+logical prefix bound, forwarding/front resolution and hole normalization,
+rather than invoking the JS array getter. Object.keys reads the shape's
+non-enumerable summary, and classless keys use their existing per-slot attributes.
+Class declarations retain effective by-name descriptor resolution because
+ancestor and derived declarations can share a public name. Values/entries retain
+their existing snapshot and per-key descriptor rechecks. No storage is added.
+
+Five focused runtime tests pass on Linux (`--test-threads=1`). The three key-view
+fixtures establish shared backing versus logical prefix, a consumed front plus
+a hole, and dictionary ownership. Both gap files compile on main and match
+Node 26.5.1 after the getter's mutation uses a parameter receiver. A first
+literal-binding deletion variant exposed an unrelated main lowering defect and
+is not used as an enumeration proof. Final-head gap validation is pending.
+
+Origin/main advanced during this milestone; final validation will use a separate
+main arm at the refreshed origin and a lane head merged with that origin.
