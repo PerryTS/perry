@@ -26,11 +26,15 @@ object is the only owner of its payload, and the collector sees that edge.
 * `native_payload::alloc(&FAMILY, payload, external_bytes, own_props)` creates
   the object and its cell and reports `external_bytes` to GC pacing
   (`gc_note_external_side_alloc`).
+* `native_payload::alloc_closed(&FAMILY, own_props)` creates the same object
+  and cell in CLOSED state. `lifecycle` distinguishes Open, Closing and Closed.
 * `native_payload::payload_mut::<T>(this, &FAMILY)` is the receiver check and
   the payload borrow in one: `Ok(&mut T)`, `Err(Closed)` or `Err(Foreign)`.
 * `native_payload::close(this, &FAMILY)` is explicit close: it drops the
   `Box<T>` now (or after the outermost active C call) and releases the bytes. The object stays valid and later reads
-  as `Closed`.
+  as `Closed`. Release keeps `finalized = 0` and the owner edge traced.
+  Only sweep and worker teardown finalize the cell. `attach` reopens the
+  same cell; object identity, properties, prototype and links stay intact.
 * If nothing closes it, the sweep that finds the object (and so the cell)
   dead drops the payload; a worker's teardown drops what is left. The drop
   runs exactly once on every path.
@@ -47,7 +51,7 @@ object is the only owner of its payload, and the collector sees that edge.
 4. `external_bytes` counts memory the payload really retains (heap buffers it
    owns), re-stated when that changes. Do not count transient work buffers or
    bytes that were already handed to JS (#11549).
-5. Do not hold the `&mut T` from `payload_mut` across `close` of the same
+5. Do not hold the `&mut T` from `payload_mut` across `close` or `attach` of the same
    object or across a call that can re-enter the family on the same object. If
    the method allocates or calls JS while holding it, root the receiver first
    (`RuntimeHandleScope::root_nanbox_f64`) and return `this` from the root.
@@ -76,7 +80,12 @@ plus dispatch-hub arms):
 5. The creator returns `native_payload::alloc(&X_FAMILY, payload, bytes,
    &[(b"own", value), ...])`.
 6. Explicit close / end / final / digest calls `native_payload::close` (or
-   re-states bytes when node keeps the object usable afterwards).
+   re-states bytes when node keeps the object usable afterwards). Reopen is
+   `lifecycle` → open the C resource → `attach` into the same CLOSED cell.
+   `AttachMiss::{Open, Closing, Finalized, Foreign}` reject the install and
+   drop its input; never replace a live/busy payload or revive a finalized cell.
+   Reopenable families stamp `next_open_serial()` in the payload, every child
+   and resource completion; check `OpenSerial` equality before resource use.
 7. Add `("module", "Export") => class id` to
    `native_payload::export_class_id` so `instanceof` answers.
 8. Delete, in the same PR: the `register_*handle` producer, the dispatch-hub
@@ -93,7 +102,7 @@ plus dispatch-hub arms):
 
 ## Not this shape
 
-* Families with no native state (EventEmitter, AsyncLocalStorage, Headers
+* Families with no native state (EventEmitter, Headers
   metadata): plain fields on an ordinary object, no payload.
 * Families whose node objects are streams with JS-visible state
   (`Sign`/`Verify` are `Writable`s with `_events` / `_writableState`): the
@@ -147,15 +156,20 @@ S checklist:
    that can re-enter JS. Bracket every callback-capable call (step, exec,
    prepare, close, backup, changeset_apply) with `enter` and `finish`.
 5. Finish immediately when C returns, before result conversion or anything
-   that can throw. Save its `Err`, convert the native result, then throw that
-   saved exception outside C (root it if conversion can allocate). The guard is explicitly finished, not Drop
+   that can throw. `CallEnd::Threw(value)` throws that exact value outside C;
+   `CallEnd::Closed` throws the family's closed error without converting or
+   returning partial results. A callback throw takes priority over close.
+   The guard is explicitly finished, not Drop
    based. Nested entries consume their pending throw before returning to the
    outer callback's JS.
 6. `close` returns `Closed`, `Deferred`, `AlreadyClosed` or `Foreign`.
    While busy, it sets CLOSING; payload access and `link_owner` see closed
    immediately. The outermost finish drops the resource. Finalization marks
    the cell finalized **before** invoking its drop thunk, so C destruction
-   callbacks cannot read a dead owner or call JS.
+   callbacks cannot read a dead owner or call JS. Explicit release instead
+   keeps CLOSING set throughout its drop thunk. Clear the JS-state callbacks
+   array at close, so old registrations do not survive reopen. Every child
+   checks its `OpenSerial` against the current payload before entry.
 
 C checklist:
 
@@ -163,23 +177,31 @@ C checklist:
    by the catch savepoint. No current-owner TLS stack or latch.
 2. Use the owning payload's catch/pending/finish protocol for callbacks; keep
    decoding, conversion and the eventual rethrow outside the C guard span.
-3. Release payload borrows and locks before calling C, as for S.
+3. Release payload borrows and locks before calling C, as for S. Handle
+   `CallEnd::Closed` before result conversion, as for S.
 
 A checklist:
 
 1. Set `links_owner: true`. Queues carry `OwnerLink`, never an id. Native
    workers only send inert links; the owner thread dereferences them.
-2. Call `link_ref` once per outstanding operation and once per ref'ed native
-   handle. Its 0→1 transition pins the **cell** via `pin_object_non_young`;
+2. Call `link_ref` once per queued item from queueing until dispatch, plus
+   once per outstanding operation and once per ref'ed native handle. Its 0→1 transition pins the **cell** via `pin_object_non_young`;
    the pin traces the owner without arming the young-pin latch. Balance every
    ref with `link_unref`, including after explicit close. The last unref
    unpins the cell. A bare link is not a root.
-3. The pump uses `link_owner` and roots its result. `None` drops the event;
-   always unref afterwards. Listener throws follow the pump's normal
-   uncaught path because no C frames need protecting.
-4. Keep the cell alive until all queued links have been unref'ed. A token
-   cannot be used after the collector frees the cell. Worker teardown drops
-   remaining payloads with finalized already set and runs no JS.
+3. Terminal events use `link_event_owner` (OPEN, CLOSING or CLOSED) and root
+   its result. Read listeners from JS state at dispatch time, including
+   listeners added after destroy. Resource events also require OPEN and a
+   matching `OpenSerial`. `None` or a stale event drops the item; always unref
+   afterwards, including a throw through the pump's normal uncaught path.
+4. Before close, release the keep-alive ref recorded in T. Queue each terminal
+   end/error/close item under its own ref, then release the payload. For async
+   fd close, move the raw fd from T into the job; release T immediately and
+   deliver the job's completion under its own ref.
+5. Keep cells alive until queued links are unref'ed. Worker teardown stops
+   the pump, drops queued plain items without running them or unrefing from
+   Drop, then finalizes every cell including pinned ones. Never dispatch or
+   dereference queued links after heap teardown. Pending refs die with it.
 
 N checklist:
 

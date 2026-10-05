@@ -16,9 +16,9 @@
 //!   as long as the object and is finalized by the sweep that finds both dead.
 //!
 //! Lifetime. The cell's finalizer is the monomorphized drop of `Box<T>`; it
-//! runs exactly once, at whichever comes first of [`close`] (the family's
-//! explicit close/final/digest), the sweep that finds the cell dead, or the
-//! owning thread's teardown. After it runs the object stays a valid object:
+//! runs once per installed payload, at release ([`close`]), sweep or thread
+//! teardown. Close leaves a CLOSED cell and its traced owner edge alive;
+//! only sweep and teardown finalize it. [`attach`] reopens the same cell. After it runs the object stays a valid object:
 //! [`payload_mut`] answers [`PayloadMiss::Closed`] and the family reports its
 //! node-shaped "already finalized" error.
 //!
@@ -45,7 +45,7 @@
 //! The per-family conversion checklist is `docs/native-payload-pattern.md`.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 
 use crate::native_handle::NativeHandleHeader;
 use crate::object::ObjectHeader;
@@ -351,16 +351,31 @@ pub fn alloc<T: 'static>(
     own: &[(&[u8], f64)],
 ) -> f64 {
     let proto = family_prototype(family);
-    alloc_with_prototype(family, payload, external_bytes, own, proto)
+    alloc_cell(family, Some(payload), external_bytes, own, proto)
+}
+
+/// Allocate an ordinary instance with its permanent cell but no resource.
+/// The first attach establishes the family's payload layout and drop thunk.
+pub fn alloc_closed(family: &'static NativePayloadFamily, own: &[(&[u8], f64)]) -> f64 {
+    let proto = family_prototype(family);
+    alloc_cell::<()>(family, None, 0, own, proto)
 }
 
 /// Allocate a payload-family instance linked to an already-materialized
-/// constructor prototype. AsyncLocalStorage and AsyncResource predate the
-/// shared payload-prototype cache and their bound exports already own the
-/// canonical per-realm prototype used by source-compiled subclasses.
+/// constructor prototype, including AsyncLocalStorage and AsyncResource.
 pub fn alloc_with_prototype<T: 'static>(
     family: &'static NativePayloadFamily,
     payload: T,
+    external_bytes: usize,
+    own: &[(&[u8], f64)],
+    proto: *mut ObjectHeader,
+) -> f64 {
+    alloc_cell(family, Some(payload), external_bytes, own, proto)
+}
+
+fn alloc_cell<T: 'static>(
+    family: &'static NativePayloadFamily,
+    payload: Option<T>,
     external_bytes: usize,
     own: &[(&[u8], f64)],
     proto: *mut ObjectHeader,
@@ -389,7 +404,7 @@ pub fn alloc_with_prototype<T: 'static>(
 /// half of the pattern: a source-compiled subclass keeps its own class id and
 /// prototype, while its traced `native_state` owns the same typed cell as a
 /// direct instance.
-pub fn attach<T: 'static>(
+pub fn attach_to_object<T: 'static>(
     value: f64,
     family: &'static NativePayloadFamily,
     payload: T,
@@ -400,14 +415,14 @@ pub fn attach<T: 'static>(
     };
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
-    attach_rooted(&obj, family, payload, external_bytes);
+    attach_rooted(&obj, family, Some(payload), external_bytes);
     true
 }
 
 fn attach_rooted<T: 'static>(
     obj: &crate::gc::RuntimeHandle<'_>,
     family: &'static NativePayloadFamily,
-    payload: T,
+    payload: Option<T>,
     external_bytes: usize,
 ) {
     let meta = obj
@@ -419,14 +434,21 @@ fn attach_rooted<T: 'static>(
     if is_payload_state_word(previous) {
         let cell = (previous & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
         if unsafe { (*cell).type_id } == type_tag::<T>(family.class_id) {
-            unsafe { crate::native_handle::native_handle_dispose_rust_payload(cell) };
+            unsafe { crate::native_handle::native_handle_release_rust_payload(cell) };
         }
     }
-    let resource = Box::into_raw(Box::new(payload)) as *mut c_void;
+    // The cell allocation may collect; re-read meta through the rooted object.
+    let resource = payload.map_or(std::ptr::null_mut(), |p| {
+        Box::into_raw(Box::new(p)) as *mut c_void
+    });
     let cell = unsafe {
         crate::native_handle::native_handle_new_rust_payload(
             resource,
-            type_tag::<T>(family.class_id),
+            if resource.is_null() {
+                family.class_id as u64
+            } else {
+                type_tag::<T>(family.class_id)
+            },
             drop_payload::<T>,
             family.name,
         )
@@ -629,13 +651,106 @@ pub enum CloseOutcome {
 pub(crate) const PENDING: u8 = 1;
 pub(crate) const CLOSING: u8 = 2;
 
+/// The non-finalized cell states. Finalized cells answer PayloadMiss::Closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lifecycle {
+    Open,
+    Closing,
+    Closed,
+}
+
+pub fn lifecycle(value: f64, family: &NativePayloadFamily) -> Result<Lifecycle, PayloadMiss> {
+    let cell = payload_cell(value, family.class_id)?;
+    unsafe {
+        if (*cell).finalized != 0
+            || (*cell).creator_thread_id != crate::native_handle::current_thread_id()
+        {
+            return Err(PayloadMiss::Closed);
+        }
+        Ok(if (*cell).flags & CLOSING != 0 {
+            Lifecycle::Closing
+        } else if (*cell).resource_ptr.is_null() {
+            Lifecycle::Closed
+        } else {
+            Lifecycle::Open
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AttachMiss {
+    Foreign,
+    Open,
+    Closing,
+    Finalized,
+}
+
+/// CLOSED -> OPEN in the same cell. No JS or GC allocation before install.
+/// On rejection payload is dropped. Check lifecycle before opening a C resource.
+/// One payload type per family, including across reopen.
+pub fn attach<T: 'static>(
+    value: f64,
+    family: &'static NativePayloadFamily,
+    payload: T,
+    external_bytes: usize,
+) -> Result<(), AttachMiss> {
+    let cell = payload_cell(value, family.class_id).map_err(|_| AttachMiss::Foreign)?;
+    unsafe {
+        if (*cell).magic != crate::native_handle::NATIVE_HANDLE_MAGIC
+            || (*cell).creator_thread_id != crate::native_handle::current_thread_id()
+        {
+            return Err(AttachMiss::Foreign);
+        }
+        if (*cell).finalized != 0 && !lifecycle_sabotage("attach_finalized") {
+            return Err(AttachMiss::Finalized);
+        }
+        if (*cell).flags & CLOSING != 0 || (*cell).busy != 0 {
+            return Err(AttachMiss::Closing);
+        }
+        if !(*cell).resource_ptr.is_null() {
+            return Err(AttachMiss::Open);
+        }
+        let tag = type_tag::<T>(family.class_id);
+        if (*cell).type_id != family.class_id as u64 && (*cell).type_id != tag {
+            return Err(AttachMiss::Foreign);
+        }
+        // alloc_closed cannot know T. Establish the layout/thunk on first
+        // attach; subsequent opens keep both unchanged.
+        if (*cell).type_id == family.class_id as u64 {
+            (*cell).type_id = tag;
+            (*cell).finalizer = drop_payload::<T> as *mut c_void;
+        }
+        let resource = Box::into_raw(Box::new(payload)) as *mut c_void;
+        crate::native_handle::native_handle_attach_rust_payload(cell, resource);
+        // Root the owner before reporting bytes: pacing can collect. The
+        // payload is already installed and reachable through the owner.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let _owner = scope.root_nanbox_f64(value);
+        crate::native_handle::native_handle_set_external_bytes(cell, external_bytes);
+    }
+    Ok(())
+}
+
+/// A resource incarnation. Store it in reopenable payloads, children and data
+/// completions, and compare once before using the current resource.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenSerial(u64);
+static NEXT_OPEN_SERIAL: AtomicU64 = AtomicU64::new(1);
+
+pub fn next_open_serial() -> OpenSerial {
+    let serial = NEXT_OPEN_SERIAL.fetch_add(1, Ordering::Relaxed);
+    assert_ne!(serial, 0, "native open serial exhausted");
+    OpenSerial(serial)
+}
+
 /// Close immediately, or defer native destruction until the outer C call ends.
 pub fn close(value: f64, family: &NativePayloadFamily) -> CloseOutcome {
     let Ok(cell) = payload_cell(value, family.class_id) else {
         return CloseOutcome::Foreign;
     };
     unsafe {
-        if (*cell).finalized != 0 || (*cell).flags & CLOSING != 0 {
+        if (*cell).finalized != 0 || (*cell).flags & CLOSING != 0 || (*cell).resource_ptr.is_null()
+        {
             return CloseOutcome::AlreadyClosed;
         }
         // Preserve ordinary receiver thread validation (trampolines use link_owner).
@@ -644,14 +759,18 @@ pub fn close(value: f64, family: &NativePayloadFamily) -> CloseOutcome {
         }
         #[cfg(test)]
         if callback_sabotage("close") {
-            crate::native_handle::native_handle_dispose_rust_payload(cell);
+            crate::native_handle::native_handle_release_rust_payload(cell);
             return CloseOutcome::Closed;
         }
         if (*cell).busy != 0 {
             (*cell).flags |= CLOSING;
             return CloseOutcome::Deferred;
         }
-        crate::native_handle::native_handle_dispose_rust_payload(cell);
+        crate::native_handle::native_handle_release_rust_payload(cell);
+        #[cfg(test)]
+        if lifecycle_sabotage("close_pin") {
+            link_ref(OwnerLink(cell as usize));
+        }
         CloseOutcome::Closed
     }
 }
@@ -663,14 +782,17 @@ pub fn close(value: f64, family: &NativePayloadFamily) -> CloseOutcome {
 #[repr(transparent)]
 pub struct OwnerLink(pub(crate) usize);
 
-/// Obtain a link only for an open family with the traced owner edge enabled.
+/// Obtain a link in any non-finalized state with the traced owner edge enabled.
 pub fn owner_link(value: f64, family: &NativePayloadFamily) -> Result<OwnerLink, PayloadMiss> {
     if !family.links_owner {
         return Err(PayloadMiss::Foreign);
     }
     let cell = payload_cell(value, family.class_id)?;
     unsafe {
-        if crate::native_handle::rust_payload_ptr_on_owner_thread(cell).is_null() {
+        if (*cell).magic != crate::native_handle::NATIVE_HANDLE_MAGIC
+            || (*cell).finalized != 0
+            || (*cell).creator_thread_id != crate::native_handle::current_thread_id()
+        {
             return Err(PayloadMiss::Closed);
         }
         if (*cell).owner == 0 {
@@ -695,6 +817,23 @@ pub unsafe fn link_owner(link: OwnerLink) -> Option<f64> {
         crate::native_handle::native_handle_rust_payload_ptr(cell, (*cell).type_id);
     }
     if crate::native_handle::rust_payload_ptr_on_owner_thread(cell).is_null() {
+        return None;
+    }
+    ((*cell).owner != 0).then(|| f64::from_bits((*cell).owner))
+}
+
+/// Owner lookup for pump events, including terminal events after release.
+/// Never throws or allocates. Read listeners from JS state at dispatch time.
+///
+/// # Safety
+/// The cell must be alive on its creator thread, kept by one ref per queued
+/// item. Drop items before worker heap teardown; never dispatch after teardown.
+pub unsafe fn link_event_owner(link: OwnerLink) -> Option<f64> {
+    let cell = link.0 as *mut NativeHandleHeader;
+    if (*cell).magic != crate::native_handle::NATIVE_HANDLE_MAGIC
+        || (*cell).finalized != 0
+        || (*cell).creator_thread_id != crate::native_handle::current_thread_id()
+    {
         return None;
     }
     ((*cell).owner != 0).then(|| f64::from_bits((*cell).owner))
@@ -734,6 +873,9 @@ pub fn enter(value: f64, family: &NativePayloadFamily) -> Result<NativeCallGuard
     let link = owner_link(value, family)?;
     unsafe {
         let cell = link.0 as *mut NativeHandleHeader;
+        if crate::native_handle::rust_payload_ptr_on_owner_thread(cell).is_null() {
+            return Err(PayloadMiss::Closed);
+        }
         #[cfg(test)]
         if callback_sabotage("reentry") && (*cell).busy != 0 {
             return Err(PayloadMiss::Closed);
@@ -749,16 +891,24 @@ pub fn enter(value: f64, family: &NativePayloadFamily) -> Result<NativeCallGuard
     })
 }
 
+/// Finish outside C frames. A callback exception takes priority over close.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CallEnd {
+    Threw(f64),
+    Closed,
+}
+
 impl NativeCallGuard {
     /// Decrement busy, take the first pending exception, then complete a
     /// deferred close at zero. Return the exception to throw outside C frames.
-    pub fn finish(self) -> Result<(), f64> {
+    pub fn finish(self) -> Result<(), CallEnd> {
         unsafe {
             let cell = self.link.0 as *mut NativeHandleHeader;
             let scope = crate::gc::RuntimeHandleScope::new();
             let owner = scope.root_nanbox_f64(f64::from_bits((*cell).owner));
             assert_ne!((*cell).busy, 0, "unbalanced native call");
             (*cell).busy -= 1;
+            let closing = (*cell).flags & CLOSING != 0;
             let result = if (*cell).flags & PENDING != 0 {
                 let state = root_pointer::<ObjectHeader>(
                     &scope,
@@ -768,12 +918,18 @@ impl NativeCallGuard {
                 // No allocation follows this take: the existing plain slot is cleared.
                 set_state_field(&scope, &state, b"pendingException", undefined());
                 (*cell).flags &= !PENDING;
-                Err(err.get_nanbox_f64())
+                if closing && lifecycle_sabotage("closed_priority") {
+                    Err(CallEnd::Closed)
+                } else {
+                    Err(CallEnd::Threw(err.get_nanbox_f64()))
+                }
+            } else if closing {
+                Err(CallEnd::Closed)
             } else {
                 Ok(())
             };
             if (*cell).busy == 0 && (*cell).flags & CLOSING != 0 {
-                crate::native_handle::native_handle_dispose_rust_payload(cell);
+                crate::native_handle::native_handle_release_rust_payload(cell);
             }
             result
         }
@@ -1074,7 +1230,7 @@ pub fn close_attached<T: 'static>(value: f64, family: &NativePayloadFamily) -> b
     }
     let cell =
         (unsafe { (*meta).native_state } & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
-    unsafe { crate::native_handle::native_handle_dispose_rust_payload(cell) }
+    unsafe { crate::native_handle::native_handle_release_rust_payload(cell) }
 }
 
 /// Re-state the native bytes a live payload retains (after a buffer grew or
@@ -1271,6 +1427,19 @@ fn pending_sabotage() -> bool {
     }
     #[cfg(not(test))]
     {
+        false
+    }
+}
+
+#[inline]
+pub(crate) fn lifecycle_sabotage(fault: &str) -> bool {
+    #[cfg(test)]
+    {
+        std::env::var("PERRY_TEST_LIFECYCLE_SABOTAGE").as_deref() == Ok(fault)
+    }
+    #[cfg(not(test))]
+    {
+        let _ = fault;
         false
     }
 }

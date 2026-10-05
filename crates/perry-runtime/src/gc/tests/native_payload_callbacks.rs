@@ -3,7 +3,7 @@
 use super::super::*;
 use super::support::*;
 use crate::native_payload::{
-    self as np, CloseOutcome, NativePayloadFamily, OwnerLink, PayloadMiss,
+    self as np, CallEnd, CloseOutcome, NativePayloadFamily, OwnerLink, PayloadMiss,
 };
 use crate::value::TAG_UNDEFINED;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -269,7 +269,7 @@ fn t4_t5_throw_identity_first_throw_wins_and_c_returns() {
     });
     assert_eq!(returned, Ok(true), "throw must never cross C");
     assert_eq!(CALLS.load(Ordering::SeqCst), 1);
-    assert_eq!(guard.finish().unwrap_err().to_bits(), err_value.to_bits());
+    assert_eq!(thrown(guard.finish()).to_bits(), err_value.to_bits());
     assert_eq!(crate::exception::current_try_depth(), depth);
     assert_eq!(unsafe { (*cell(link)).busy }, 0);
     let guard = np::enter(value.get_nanbox_f64(), &FAMILY).unwrap();
@@ -313,7 +313,7 @@ fn t4_native_validation_parks_typeerror_without_a_throw() {
         np::set_pending_exception(value.get_nanbox_f64(), 99.0),
         Err(())
     );
-    assert_eq!(guard.finish().unwrap_err().to_bits(), error_bits.to_bits());
+    assert_eq!(thrown(guard.finish()).to_bits(), error_bits.to_bits());
 }
 
 #[test]
@@ -378,9 +378,9 @@ fn t7_t8_close_defers_until_reentrant_calls_return() {
     assert_eq!(unsafe { np::link_owner(link) }, None);
     assert_eq!(np::close(value, &FAMILY), CloseOutcome::AlreadyClosed);
     assert_eq!(DROPS.load(Ordering::SeqCst), 0);
-    assert_eq!(inner.finish(), Ok(()));
+    assert_eq!(inner.finish(), Err(CallEnd::Closed));
     assert_eq!(DROPS.load(Ordering::SeqCst), 0);
-    assert_eq!(outer.finish(), Ok(()));
+    assert_eq!(outer.finish(), Err(CallEnd::Closed));
     assert_eq!(DROPS.load(Ordering::SeqCst), 1);
     assert_eq!(unsafe { (*cell(link)).busy }, 0);
 }
@@ -467,7 +467,7 @@ extern "C" fn nested(_: *const crate::closure::ClosureHeader, this: crate::closu
         if np::callback_sabotage("conversion") {
             crate::exception::js_throw(43.0);
         }
-        if let Err(err) = guard.finish() {
+        if let Err(CallEnd::Threw(err)) = guard.finish() {
             crate::exception::js_throw(err);
         }
     });
@@ -556,3 +556,13 @@ fn every_sabotage_makes_its_runtime_witness_red() {
         eprintln!("callback sabotage {fault}: RED ({})", output.status);
     }
 }
+
+fn thrown(result: Result<(), CallEnd>) -> f64 {
+    match result {
+        Err(CallEnd::Threw(err)) => err,
+        other => panic!("expected callback throw, got {other:?}"),
+    }
+}
+
+#[path = "native_payload_lifecycle.rs"]
+mod lifecycle;

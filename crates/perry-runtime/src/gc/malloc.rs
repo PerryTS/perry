@@ -133,8 +133,9 @@ impl MallocState {
     /// tables) are out of scope for this mechanical fix. This also avoids the
     /// re-entrant `MALLOC_STATE.with(...)` the sweep bookkeeping performs.
     ///
-    /// Pinned objects are skipped, mirroring `process_sweep_header`, so a
-    /// cross-thread promise pinned for an in-flight result is never yanked.
+    /// Pinned non-native objects are skipped, so cross-thread promises stay
+    /// alive. Native cells belong to this thread; pending queue refs expire
+    /// with the worker and cannot prevent its payload cleanup.
     fn free_all_tracked_objects(&mut self) -> u64 {
         let mut freed_bytes: u64 = 0;
         for header in self.objects.drain(..) {
@@ -145,7 +146,9 @@ impl MallocState {
             // (GcHeader-prefixed block) until freed here; this loop frees each
             // exactly once and the thread is exiting, so no concurrent access.
             unsafe {
-                if (*header).gc_flags & GC_FLAG_PINNED != 0 {
+                if (*header).gc_flags & GC_FLAG_PINNED != 0
+                    && (*header).obj_type != GC_TYPE_NATIVE_HANDLE
+                {
                     continue;
                 }
                 let total_size = (*header).size as usize;
