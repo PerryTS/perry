@@ -94,6 +94,9 @@ NON_HANDLE_TABLES = {
     # A TLS option hash and a TCP port respectively.
     ("crates/perry-ext-http/src/client_turnloop/tls.rs", "CONFIGS"),
     ("crates/perry-ext-http/src/tls_client.rs", "INTERNAL_HTTPS_SERVERS"),
+    # Keyed by agent id: one state bundle per thread agent, not per resource.
+    ("crates/perry-ext-zlib/src/stream/agent_state.rs", "ALL"),
+    ("crates/perry-stdlib/src/zlib/tables.rs", "ALL_ZLIB_TABLES"),
 }
 
 # Numeric class registries are concentrated in these modules.  The one
