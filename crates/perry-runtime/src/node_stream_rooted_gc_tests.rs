@@ -647,3 +647,46 @@ fn readable_map_rereads_chunks_after_collecting_mapper() {
         "map must yield the live chunks"
     );
 }
+
+// ── settling a pipeline value ───────────────────────────────────────────
+
+/// A queued job that collects (once) and settles nothing.
+extern "C" fn collecting_job(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
+    collect_once();
+    undefined()
+}
+
+/// `settle_pipeline_value_with_origin` runs the queued jobs while it waits on
+/// a pending promise, and one of them collects. The wait must check the live
+/// promise, and the still-pending promise it hands back must be the promise at
+/// its new address.
+#[test]
+fn settling_a_pending_promise_rereads_it_after_a_collecting_job() {
+    let _gc = moving_gc();
+    let scope = RuntimeHandleScope::new();
+    let promise = scope.root_nanbox_f64(boxed(crate::promise::js_promise_new()));
+    let job = js_closure_alloc(crate::fn_info!(collecting_job, 0; with_declared(0)), 0);
+    crate::promise::enqueue_queue_microtask(job as i64);
+    let before = promise.get_nanbox_f64().to_bits();
+
+    let settled =
+        super::super::pipeline::settle_pipeline_value_with_origin(promise.get_nanbox_f64())
+            .unwrap_or_else(|_| panic!("a pending promise must not settle as rejected"));
+
+    assert_eq!(
+        COLLECTIONS.with(Cell::get),
+        1,
+        "the queued job must collect"
+    );
+    assert_ne!(
+        before,
+        promise.get_nanbox_f64().to_bits(),
+        "the promise must actually move in the collection"
+    );
+    assert!(!settled.fulfilled_promise);
+    assert_eq!(
+        settled.value.to_bits(),
+        promise.get_nanbox_f64().to_bits(),
+        "the pending promise handed back must be the live promise"
+    );
+}
