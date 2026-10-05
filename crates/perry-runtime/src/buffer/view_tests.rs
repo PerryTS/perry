@@ -5,7 +5,7 @@ fn value(buf: *const BufferHeader) -> f64 {
 }
 
 #[test]
-fn suffix_views_allocate_only_headers_and_share_native_bytes() {
+fn suffix_views_allocate_one_pointer_and_share_native_bytes() {
     let source = js_uint8array_alloc(4096);
     let scope = crate::gc::RuntimeHandleScope::new();
     let _source = scope.root_raw_mut_ptr(source);
@@ -13,13 +13,62 @@ fn suffix_views_allocate_only_headers_and_share_native_bytes() {
         let view = js_buffer_slice(source, start, 4096);
         unsafe {
             assert_eq!((*view).length, 4096 - start as u32);
-            assert_eq!((*view).capacity, 0, "a view must not allocate its payload");
+            assert_eq!((*view).capacity, std::mem::size_of::<usize>() as u32);
             let header = crate::value::addr_class::try_read_gc_header(view as usize).unwrap();
-            assert_eq!(header.size as usize, crate::gc::GC_HEADER_SIZE + 8);
+            assert_eq!(
+                header.size as usize,
+                crate::gc::GC_HEADER_SIZE + 8 + std::mem::size_of::<usize>()
+            );
+            assert_ne!(header._reserved & crate::gc::GC_BUFFER_VIEW_DATA, 0);
             assert_eq!(buffer_data(view), buffer_data(source).add(start as usize));
         }
         assert!(is_uint8array_buffer(view as usize));
     }
+}
+
+#[test]
+fn byte_views_resolve_once_and_never_enter_the_owning_cache() {
+    let owner = js_uint8array_alloc(32);
+    let sub = js_buffer_slice(owner, 4, 20);
+    let nested = js_buffer_slice(sub, 3, 9);
+    js_buffer_set(owner, 7, 91);
+    let expected = unsafe { buffer_data(owner).add(7) };
+    let before = view::lookup_count();
+    for _ in 0..128 {
+        assert_eq!(js_buffer_get(nested, 0), 91);
+        assert_eq!(js_buffer_index_get_value(nested, 0), 91.0);
+        assert_eq!(
+            js_buffer_index_get_value(nested, 6).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+        assert_eq!(buffer_data(nested), expected);
+    }
+    let after = view::lookup_count();
+    assert_eq!(
+        after - before,
+        0,
+        "byte reads must not look up view metadata"
+    );
+    header::u8_inline_cache_try_prime(nested as usize);
+    assert!(!header::test_u8_inline_cache_holds(nested as usize));
+}
+
+#[test]
+fn rewritten_view_backing_refreshes_the_derived_pointer() {
+    let owner = js_uint8array_alloc(32);
+    let replacement = js_uint8array_alloc(32);
+    js_buffer_set(owner, 5, 17);
+    js_buffer_set(replacement, 5, 29);
+    let sub = js_buffer_slice(owner, 5, 15);
+    assert_eq!(js_buffer_get(sub, 0), 17);
+    view::visit_backing_slot(sub as usize, |slot| unsafe {
+        *slot = replacement as u64;
+    });
+    assert_eq!(js_buffer_get(sub, 0), 29);
+    assert_eq!(buffer_data(sub), unsafe { buffer_data(replacement).add(5) });
+    view::visit_backing_slot(sub as usize, |slot| unsafe {
+        *slot = owner as u64;
+    });
 }
 
 #[test]
@@ -172,4 +221,37 @@ fn arraybuffer_and_uint8array_slice_copy_but_buffer_slice_shares() {
         js_buffer_set(result, 1, 11);
         assert_eq!(js_buffer_get(source, 2), if kind == 3 { 11 } else { 7 });
     }
+}
+
+#[test]
+fn hot_read_probe_detects_disabled_view_pointer_layout() {
+    let owner = js_uint8array_alloc(16);
+    js_buffer_set(owner, 3, 57);
+    let sub = js_buffer_slice(owner, 3, 11);
+    let gc = unsafe { crate::gc::header_from_trusted_user_ptr(sub.cast()).cast_mut() };
+    let original = unsafe { (*gc)._reserved };
+    let probe = || {
+        let before = view::lookup_count();
+        for _ in 0..16 {
+            assert_eq!(js_buffer_get(sub, 0), 57);
+            let _ = buffer_data(sub);
+        }
+        assert_eq!(
+            view::lookup_count() - before,
+            0,
+            "hot byte reads consulted view metadata"
+        );
+    };
+    probe();
+    // Sabotage the representation proof. Reads still return the correct byte,
+    // but re-enter the old registry path; the hot-path acceptance probe MUST
+    // reject that state, then accept the restored layout again.
+    unsafe { (*gc)._reserved &= !crate::gc::GC_BUFFER_VIEW_DATA };
+    let detected = std::panic::catch_unwind(std::panic::AssertUnwindSafe(probe));
+    unsafe { (*gc)._reserved = original };
+    assert!(
+        detected.is_err(),
+        "the hot-read probe could not detect sabotage"
+    );
+    probe();
 }

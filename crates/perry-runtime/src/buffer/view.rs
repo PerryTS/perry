@@ -1,13 +1,24 @@
 //! Shared Buffer/Uint8Array storage without changing the BufferHeader ABI.
 //!
-//! Views allocate only a header. All byte access resolves to the ultimate
-//! backing plus an offset; generated inline reads admit only non-view buffers.
+//! Views store a resolved byte pointer after their header. Indexed access
+//! bounds-checks the current length before using it; generated inline reads
+//! still admit only non-view buffers to the owning-storage cache.
 //! The GC traces the backing from a live view, never the reverse index, so dead
 //! views and otherwise unreachable backing/ArrayBuffer identity cycles die.
 
 use super::*;
 use crate::fast_hash::{new_ptr_hash_map, new_ptr_hash_set, PtrHashMap, PtrHashSet};
 use std::cell::RefCell;
+
+#[cfg(test)]
+thread_local! {
+    static TEST_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn lookup_count() -> usize {
+    TEST_LOOKUPS.with(|count| count.get())
+}
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct ViewInfo {
@@ -46,6 +57,8 @@ crate::perry_thread_local! {
 
 #[inline]
 pub(crate) fn lookup(view_ptr: usize) -> Option<ViewInfo> {
+    #[cfg(test)]
+    TEST_LOOKUPS.with(|count| count.set(count.get() + 1));
     VIEW_REGISTRY.with(|r| r.borrow().get(&view_ptr).map(|rec| rec.info))
 }
 
@@ -185,11 +198,11 @@ pub(crate) fn remove_entries_for_dead_buffer(addr: usize) {
     });
 }
 
-/// Allocate a header-only view, retaining its offset even when it is empty.
+/// Allocate a view with one native data pointer, retaining empty-view offsets.
 pub(crate) fn alloc(backing: *const BufferHeader, offset: u32, length: u32) -> *mut BufferHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_const_ptr(backing);
-    let view = buffer_alloc(0);
+    let view = buffer_alloc(std::mem::size_of::<usize>() as u32);
     unsafe {
         (*view).length = length;
         // capacity describes the physical inline allocation, not the span.
@@ -200,10 +213,9 @@ pub(crate) fn alloc(backing: *const BufferHeader, offset: u32, length: u32) -> *
     view
 }
 
-/// Allocate a DataView with one cached native data pointer after its
-/// `BufferHeader`. Unlike Buffer/Uint8Array views, DataView byte access always
-/// enters a runtime helper, so this private payload is never mistaken for
-/// indexed storage. The backing remains owned and traced by `VIEW_REGISTRY`.
+/// Allocate a DataView with the same cached native data pointer as byte views.
+/// Its non-indexed brand keeps it out of generated Uint8Array reads.
+/// The backing remains owned and traced by `VIEW_REGISTRY`.
 ///
 /// Buffer allocations and foreign/shared ArrayBuffer storage are non-moving:
 /// `buffer_alloc` uses the old arena because native callers retain byte
@@ -222,8 +234,6 @@ pub(crate) fn alloc_data_view(
         (*view).length = length;
         owner.with_const_ptr::<BufferHeader, _>(|backing| {
             register(view as usize, backing as usize, offset);
-            let data = buffer_data(backing).add(offset as usize);
-            data_view_cache_slot(view).write(data as usize);
         });
     }
     view
@@ -234,6 +244,15 @@ unsafe fn data_view_cache_slot(view: *mut BufferHeader) -> *mut usize {
     (view as *mut u8)
         .add(std::mem::size_of::<BufferHeader>())
         .cast::<usize>()
+}
+
+const _: () =
+    assert!(std::mem::size_of::<BufferHeader>() == crate::codegen_abi::BUFFER_VIEW_DATA_OFFSET);
+
+/// Read only after proving the buffer's GC_BUFFER_VIEW_DATA layout bit.
+#[inline(always)]
+pub(crate) unsafe fn cached_data_ptr(view: *const BufferHeader) -> *const u8 {
+    data_view_cache_slot(view as *mut BufferHeader).read() as *const u8
 }
 
 /// Load the stable byte pointer cached by [`alloc_data_view`]. The caller must
@@ -249,6 +268,19 @@ fn register(view_ptr: usize, backing_ptr: usize, offset: u32) {
         .map(|parent| (parent.backing, parent.offset + offset))
         .unwrap_or((backing_ptr, offset));
     super::header::u8_inline_cache_invalidate(view_ptr);
+    // Resolve once at construction. Old-arena buffers and process-global SAB
+    // blocks have stable addresses; resize reserves the full maximum span.
+    // Foreign wrappers can be rebound (e.g. wasm memory.grow), so their views
+    // keep resolving through the existing backing metadata on each access.
+    unsafe {
+        let view = view_ptr as *mut BufferHeader;
+        let data = buffer_data(backing as *const BufferHeader).wrapping_add(offset as usize);
+        data_view_cache_slot(view).write(data as usize);
+        if !super::header::is_foreign_backed_buffer(backing) {
+            let gc = crate::gc::header_from_trusted_user_ptr(view.cast()).cast_mut();
+            (*gc)._reserved |= crate::gc::GC_BUFFER_VIEW_DATA;
+        }
+    }
     // Every caller sets the view's header length before registering it.
     let fixed_len = unsafe { (*(view_ptr as *const BufferHeader)).length };
     let mut rec = Box::new(ViewRecord {
@@ -277,11 +309,23 @@ fn register(view_ptr: usize, backing_ptr: usize, offset: u32) {
 /// Backings are old/non-moving; exposing a stable slot also makes the edge
 /// visible to the collector's rewrite and verification walks.
 pub(crate) fn visit_backing_slot(addr: usize, mut visit: impl FnMut(*mut u64)) {
-    VIEW_REGISTRY.with(|r| {
-        if let Some(rec) = r.borrow_mut().get_mut(&addr) {
+    let updated = VIEW_REGISTRY.with(|r| {
+        r.borrow_mut().get_mut(&addr).and_then(|rec| {
+            let previous = rec.info.backing;
             visit(&mut rec.info.backing as *mut usize as *mut u64);
-        }
+            (rec.info.backing != previous).then_some(rec.info)
+        })
     });
+    // Release the registry borrow before resolving a possibly foreign owner.
+    // Buffers are currently non-moving, but a collector rewrite must never
+    // leave the derived interior pointer at the previous owner.
+    if let Some(info) = updated {
+        unsafe {
+            let data =
+                buffer_data(info.backing as *const BufferHeader).wrapping_add(info.offset as usize);
+            data_view_cache_slot(addr as *mut BufferHeader).write(data as usize);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -31,10 +31,10 @@
 //!
 //! READS ONLY. An inline **write** twin would bypass the `buffer/view.rs`
 //! write-propagation protocol and desynchronize slice/`new Uint8Array(ab)`
-//! aliases (#1205). Registered views are excluded from read admission too:
-//! their inline payload is only a snapshot, while runtime reads resolve to the
-//! authoritative backing, which sibling typed-array writes can change without
-//! refreshing that snapshot (#9360/#7219).
+//! aliases (#1205). Views stay excluded from owning-storage admission. A
+//! separate miss arm accepts their pointer-storage layout and loads from the
+//! authoritative backing. Sibling writes are immediately visible; the view
+//! does not contain a byte snapshot (#9360/#7219).
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -43,7 +43,7 @@ use super::index_get::numeric_index_has_integer_array_index_proof;
 use super::{lower_expr, lower_expr_as_i32, FnCtx};
 use crate::nanbox::{double_literal, i64_literal, TAG_UNDEFINED};
 use crate::native_value::{BoundsState, BufferAccessMode, LoweredValue};
-use crate::types::{DOUBLE, I1, I32, I64, I8};
+use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 
 /// `PERRY_U8_INLINE_READ=0` kill switch (default on).
 fn u8_inline_read_enabled() -> bool {
@@ -58,7 +58,7 @@ fn u8_inline_read_enabled() -> bool {
 /// runtime guard is the safety net — a stale proof merely misses the cache —
 /// but reassigned bindings are excluded anyway, mirroring
 /// `ta_param_f64_read::checked_typed_array_f64_kind`'s reasoning.
-fn u8_buffer_receiver_eligible(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+pub(crate) fn u8_buffer_receiver_eligible(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     let Expr::LocalGet(id) = object else {
         return false;
     };
@@ -135,6 +135,7 @@ fn lower_u8_buffer_checked_load(
     object: &Expr,
     index: &Expr,
 ) -> Result<String> {
+    let param_access = byte_view_param_for(ctx, object);
     let obj_box = lower_expr(ctx, object)?;
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
 
@@ -200,8 +201,21 @@ fn lower_u8_buffer_checked_load(
         (double_literal(f64::from_bits(TAG_UNDEFINED)), end)
     };
 
-    // ---- slow: cache miss / non-pointer → priming memory-safe helper ----
+    // A cache miss may be a pointer-backed byte view. Its cell carries the
+    // resolved data pointer; it must never enter the owning-storage cache.
     ctx.current_block = slow_idx;
+    let fallback_idx = ctx.new_block("u8b.get.fallback");
+    let fallback_label = ctx.block_label(fallback_idx);
+    let (view_val, view_end) = emit_u8_view_get_value(
+        ctx,
+        &obj_box,
+        &raw,
+        &idx_i32,
+        &fallback_label,
+        &merge_label,
+        param_access.as_ref(),
+    );
+    ctx.current_block = fallback_idx;
     let (slow_val, slow_end) = {
         let blk = ctx.block();
         let value = blk.call(
@@ -220,6 +234,7 @@ fn lower_u8_buffer_checked_load(
         DOUBLE,
         &[
             (load_val.as_str(), load_end.as_str()),
+            (view_val.as_str(), view_end.as_str()),
             (oob_val.as_str(), oob_end.as_str()),
             (slow_val.as_str(), slow_end.as_str()),
         ],
@@ -235,9 +250,9 @@ fn lower_u8_buffer_checked_load(
 // such a buffer is exactly `js_buffer_set`'s store: views over it resolve
 // their bytes through this backing rather than holding a copy (see
 // `buffer/view.rs`), so there is nothing to propagate. Every guard miss —
-// a view, a foreign span, an out-of-range index, a non-pointer, an
-// unadmitted buffer — takes the unchanged runtime accessor, which also primes
-// the cache for the next access.
+// a foreign span, an out-of-range index, a non-pointer, an unadmitted buffer —
+// takes the runtime accessor. JS-value reads also try the cell-local view
+// pointer on an owning-cache miss; writes retain their runtime fallback.
 // ---------------------------------------------------------------------------
 
 /// Pointer tag + full-address admission hit for `obj_box`. Returns
@@ -386,6 +401,18 @@ pub(crate) fn emit_u8_cached_get_value(
     };
 
     ctx.current_block = slow_idx;
+    let fallback_idx = ctx.new_block("u8c.getv.fallback");
+    let fallback_label = ctx.block_label(fallback_idx);
+    let (view_val, view_end) = emit_u8_view_get_value(
+        ctx,
+        obj_box,
+        &raw,
+        idx_i32,
+        &fallback_label,
+        &merge_label,
+        None,
+    );
+    ctx.current_block = fallback_idx;
     let (slow_val, slow_end) = {
         let blk = ctx.block();
         let val = blk.call(DOUBLE, slow_fn, &[(I64, &raw), (I32, idx_i32)]);
@@ -399,6 +426,7 @@ pub(crate) fn emit_u8_cached_get_value(
         DOUBLE,
         &[
             (fast_val.as_str(), fast_end.as_str()),
+            (view_val.as_str(), view_end.as_str()),
             (slow_val.as_str(), slow_end.as_str()),
         ],
     )
@@ -525,4 +553,200 @@ pub(crate) fn emit_u8_cached_set_i32(
         blk.br(&merge_label);
     }
     ctx.current_block = merge_idx;
+}
+
+/// The view miss arm. A POINTER-tagged, aligned heap receiver must carry a
+/// byte-view brand and the pointer-storage flag before its private payload is
+/// read. Symbols lack GC headers, so screen their payload magic as well.
+/// No calls, allocations or user expressions occur in this window.
+pub(crate) fn emit_u8_view_data_guard(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    raw: &str,
+    miss_label: &str,
+) -> String {
+    let header_idx = ctx.new_block("u8v.header");
+    let data_idx = ctx.new_block("u8v.data");
+    let header_label = ctx.block_label(header_idx);
+    let data_label = ctx.block_label(data_idx);
+    let floor =
+        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
+    let ceiling =
+        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(obj_box);
+        let tag = blk.and(I64, &bits, &i64_literal(crate::nanbox::TAG_MASK));
+        let is_ptr = blk.icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_I64);
+        let above = blk.icmp_uge(I64, raw, &floor);
+        let below = blk.icmp_ult(I64, raw, &ceiling);
+        let low = blk.and(I64, raw, "7");
+        let aligned = blk.icmp_eq(I64, &low, "0");
+        let ok = blk.and(I1, &is_ptr, &above);
+        let ok = blk.and(I1, &ok, &below);
+        let ok = blk.and(I1, &ok, &aligned);
+        blk.cond_br(&ok, &header_label, miss_label);
+    }
+    ctx.current_block = header_idx;
+    {
+        let blk = ctx.block();
+        let type_addr = blk.sub(I64, raw, &crate::runtime_abi::GC_HEADER_SIZE.to_string());
+        let type_ptr = blk.inttoptr(I64, &type_addr);
+        let kind = blk.load(I8, &type_ptr);
+        let node = blk.icmp_eq(I8, &kind, &crate::runtime_abi::GC_TYPE_BUFFER.to_string());
+        let u8 = blk.icmp_eq(
+            I8,
+            &kind,
+            &crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY.to_string(),
+        );
+        let byte_brand = blk.or(I1, &node, &u8);
+        let reserved_addr = blk.add(I64, &type_addr, "2");
+        let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
+        let reserved = blk.load(I16, &reserved_ptr);
+        let flag = blk.and(
+            I16,
+            &reserved,
+            &crate::runtime_abi::GC_BUFFER_VIEW_DATA.to_string(),
+        );
+        let pointer_layout = blk.icmp_ne(I16, &flag, "0");
+        let payload = blk.inttoptr(I64, raw);
+        let first = blk.load(I32, &payload);
+        let not_symbol = blk.icmp_ne(
+            I32,
+            &first,
+            &crate::runtime_abi::SYMBOL_HEADER_MAGIC.to_string(),
+        );
+        let ok = blk.and(I1, &byte_brand, &pointer_layout);
+        let ok = blk.and(I1, &ok, &not_symbol);
+        blk.cond_br(&ok, &data_label, miss_label);
+    }
+    ctx.current_block = data_idx;
+    emit_u8_view_data_load(ctx, raw)
+}
+
+/// Only called after the view-layout guard. Loading PTR keeps this native
+/// pointer slot correct on ILP32 targets too.
+pub(crate) fn emit_u8_view_data_load(ctx: &mut FnCtx<'_>, raw: &str) -> String {
+    let blk = ctx.block();
+    let slot = blk.add(
+        I64,
+        raw,
+        &crate::runtime_abi::BUFFER_VIEW_DATA_OFFSET.to_string(),
+    );
+    let slot = blk.inttoptr(I64, &slot);
+    let data = blk.load(PTR, &slot);
+    blk.ptrtoint(&data, I64)
+}
+
+fn emit_u8_view_get_value(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    raw: &str,
+    idx: &str,
+    miss_label: &str,
+    merge_label: &str,
+    param_access: Option<&crate::collectors::ByteViewParamAccess>,
+) -> (String, String) {
+    let data = emit_u8_view_param_or_guard(ctx, obj_box, raw, miss_label, param_access);
+    let load_idx = ctx.new_block("u8v.load");
+    let oob_idx = ctx.new_block("u8v.oob");
+    let done_idx = ctx.new_block("u8v.done");
+    let load_label = ctx.block_label(load_idx);
+    let oob_label = ctx.block_label(oob_idx);
+    let done_label = ctx.block_label(done_idx);
+    let bounds = emit_u8_in_bounds(ctx, raw, idx);
+    ctx.block().cond_br(&bounds, &load_label, &oob_label);
+    ctx.current_block = load_idx;
+    let offset = ctx.block().zext(I32, idx, I64);
+    let addr = ctx.block().add(I64, &data, &offset);
+    let ptr = ctx.block().inttoptr(I64, &addr);
+    let byte = ctx.block().load_atomic_monotonic(I8, &ptr, 1);
+    let val = ctx.block().uitofp(I8, &byte, DOUBLE);
+    let load_end = ctx.block().label.clone();
+    ctx.block().br(&done_label);
+    ctx.current_block = oob_idx;
+    let oob_end = ctx.block().label.clone();
+    ctx.block().br(&done_label);
+    ctx.current_block = done_idx;
+    let undef = double_literal(f64::from_bits(TAG_UNDEFINED));
+    let value = ctx
+        .block()
+        .phi(DOUBLE, &[(&val, &load_end), (&undef, &oob_end)]);
+    let end = ctx.block().label.clone();
+    ctx.block().br(merge_label);
+    (value, end)
+}
+
+pub(crate) fn byte_view_param_for(
+    ctx: &FnCtx<'_>,
+    object: &Expr,
+) -> Option<crate::collectors::ByteViewParamAccess> {
+    match object {
+        Expr::LocalGet(id) => ctx.receiver_descriptors.byte_view_param(*id).cloned(),
+        _ => None,
+    }
+}
+
+/// Do not add entry work to a parameter that has no indexed reads in this
+/// body. Nested closures get their own receiver guards when they are lowered.
+pub(crate) fn byte_view_param_is_read(body: &[perry_hir::Stmt], id: u32) -> bool {
+    fn reads(expr: &Expr, id: u32) -> bool {
+        if matches!(expr, Expr::Closure { .. }) {
+            return false;
+        }
+        if matches!(expr, Expr::IndexGet { object, .. } if matches!(object.as_ref(), Expr::LocalGet(receiver) if *receiver == id))
+        {
+            return true;
+        }
+        let mut found = false;
+        perry_hir::walker::walk_expr_children(expr, &mut |child| found |= reads(child, id));
+        found
+    }
+    u8_inline_read_enabled()
+        && body
+            .iter()
+            .any(|stmt| perry_hir::walker::stmt_any_expr(stmt, &mut |expr| reads(expr, id)))
+}
+
+pub(crate) fn materialize_byte_view_param(ctx: &mut FnCtx<'_>, id: u32, boxed: &str) {
+    let bits = ctx.block().bitcast_double_to_i64(boxed);
+    let raw = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let miss_idx = ctx.new_block("u8v.param.miss");
+    let done_idx = ctx.new_block("u8v.param.done");
+    let miss_label = ctx.block_label(miss_idx);
+    let done_label = ctx.block_label(done_idx);
+    let data = emit_u8_view_data_guard(ctx, boxed, &raw, &miss_label);
+    let hit_end = ctx.block().label.clone();
+    ctx.block().br(&done_label);
+    ctx.current_block = miss_idx;
+    let miss_end = ctx.block().label.clone();
+    ctx.block().br(&done_label);
+    ctx.current_block = done_idx;
+    let valid_i1 = ctx
+        .block()
+        .phi(I1, &[("true", &hit_end), ("false", &miss_end)]);
+    let data_i64 = ctx.block().phi(I64, &[(&data, &hit_end), ("0", &miss_end)]);
+    ctx.receiver_descriptors.materialize_byte_view_param(
+        id,
+        crate::collectors::ByteViewParamAccess { valid_i1, data_i64 },
+    );
+}
+
+pub(crate) fn emit_u8_view_param_or_guard(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    raw: &str,
+    miss_label: &str,
+    param_access: Option<&crate::collectors::ByteViewParamAccess>,
+) -> String {
+    if let Some(access) = param_access {
+        let hit_idx = ctx.new_block("u8v.param.hit");
+        let hit_label = ctx.block_label(hit_idx);
+        ctx.block()
+            .cond_br(&access.valid_i1, &hit_label, miss_label);
+        ctx.current_block = hit_idx;
+        access.data_i64.clone()
+    } else {
+        emit_u8_view_data_guard(ctx, obj_box, raw, miss_label)
+    }
 }

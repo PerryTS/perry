@@ -329,11 +329,21 @@ enum ActiveReceiverData {
 
 /// Active materialised receiver descriptors for one function lowering.
 ///
+/// Function-entry proof for an immutable byte-view parameter. The layout bit
+/// excludes rebindable foreign backing; Buffer-family GC cells and their native
+/// backing are non-moving. Current length is deliberately not cached here.
+#[derive(Clone, Debug)]
+pub(crate) struct ByteViewParamAccess {
+    pub valid_i1: String,
+    pub data_i64: String,
+}
+
 /// Entries are kept in installation order so refresh IR is deterministic.
 /// Nested packed clones reuse an outer entry for the same receiver; a scope
 /// removes only the entries it installed itself.
 #[derive(Debug, Default)]
 pub(crate) struct ReceiverDescriptorTable {
+    byte_view_params: std::collections::HashMap<u32, ByteViewParamAccess>,
     entries: Vec<ActiveReceiverDescriptor>,
     /// 5L (step5 DESIGN §4.1): the scoped Number-local sets, innermost last.
     /// Each is the set a guarded clone proved for its own body: the locals
@@ -347,6 +357,18 @@ pub(crate) struct ReceiverDescriptorTable {
 }
 
 impl ReceiverDescriptorTable {
+    pub(crate) fn materialize_byte_view_param(
+        &mut self,
+        receiver: u32,
+        access: ByteViewParamAccess,
+    ) {
+        self.byte_view_params.insert(receiver, access);
+    }
+
+    pub(crate) fn byte_view_param(&self, receiver: u32) -> Option<&ByteViewParamAccess> {
+        self.byte_view_params.get(&receiver)
+    }
+
     /// Whether an active scope has already materialised `receiver`.
     pub(crate) fn contains(&self, receiver: u32) -> bool {
         self.entries.iter().any(|entry| {

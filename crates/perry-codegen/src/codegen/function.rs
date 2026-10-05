@@ -1604,6 +1604,35 @@ pub(super) fn compile_function(
         super::helpers::emit_callee_binding_resolutions(&mut ctx, &f.body, &param_ids, None, false);
     }
 
+    // Stable byte-view parameters resolve their backing once. This proof
+    // never treats an owning buffer's +8 byte payload as a pointer, and does
+    // not cache length across detach or resize. Async/generator continuations
+    // and mutable boxes need their ordinary per-access receiver guards.
+    if f.is_strict
+        && !f.is_async
+        && !f.is_generator
+        && !f.was_plain_async
+        && !ctx.disable_buffer_fast_path
+    {
+        for param in &f.params {
+            if ctx.boxed_vars.contains(&param.id) || ctx.reassigned_locals.contains(&param.id) {
+                continue;
+            }
+            let object = perry_hir::Expr::LocalGet(param.id);
+            if !crate::expr::u8_buffer_read::u8_buffer_receiver_eligible(&ctx, &object)
+                || !crate::expr::u8_buffer_read::byte_view_param_is_read(&f.body, param.id)
+            {
+                continue;
+            }
+            if let Some(slot) = ctx.locals.get(&param.id).cloned() {
+                let boxed = ctx.block().load(DOUBLE, &slot);
+                crate::expr::u8_buffer_read::materialize_byte_view_param(
+                    &mut ctx, param.id, &boxed,
+                );
+            }
+        }
+    }
+
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::stack_guard::emit_stack_guard(&mut ctx);
     if f.is_async {

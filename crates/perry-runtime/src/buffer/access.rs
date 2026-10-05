@@ -222,6 +222,17 @@ unsafe fn read_buffer_byte(buf_ptr: *const BufferHeader, index: i32) -> Option<u
         return None;
     }
     let data = byte_access_data(buf_ptr);
+    let gc =
+        &*((buf_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    if gc._reserved & crate::gc::GC_BUFFER_VIEW_DATA != 0 {
+        // A pointer-backed view may alias a SAB on another agent. Relaxed
+        // atomic bytes preserve ordinary shared-memory reads without allowing
+        // the optimizer to treat their contents as loop-invariant.
+        return Some(
+            (*(data.add(index as usize) as *const std::sync::atomic::AtomicU8))
+                .load(std::sync::atomic::Ordering::Relaxed),
+        );
+    }
     Some(*data.add(index as usize))
 }
 
@@ -236,6 +247,11 @@ unsafe fn read_buffer_byte(buf_ptr: *const BufferHeader, index: i32) -> Option<u
 #[inline]
 pub(crate) unsafe fn byte_access_data(buf_ptr: *const BufferHeader) -> *mut u8 {
     let addr = buf_ptr as usize;
+    let gc =
+        &*((buf_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    if gc._reserved & crate::gc::GC_BUFFER_VIEW_DATA != 0 {
+        return super::view::cached_data_ptr(buf_ptr) as *mut u8;
+    }
     if let Some(info) = super::view::lookup(addr) {
         return (buffer_data(info.backing as *const BufferHeader) as *mut u8)
             .add(info.offset as usize);
@@ -327,6 +343,13 @@ pub extern "C" fn js_buffer_set(buf_ptr: *mut BufferHeader, index: i32, value: i
         }
         let byte = (value & 0xFF) as u8;
         let data = byte_access_data(buf_ptr);
+        let gc =
+            &*((buf_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+        if gc._reserved & crate::gc::GC_BUFFER_VIEW_DATA != 0 {
+            (*(data.add(index as usize) as *const std::sync::atomic::AtomicU8))
+                .store(byte, std::sync::atomic::Ordering::Relaxed);
+            return;
+        }
         *data.add(index as usize) = byte;
     }
 }

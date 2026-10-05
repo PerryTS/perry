@@ -127,7 +127,7 @@ pub(crate) fn symbol_property_ic_epoch_bump() {
 
 /// Magic number distinguishing SymbolHeader from other GC_TYPE_STRING objects.
 /// Placed at offset 0 so `js_is_symbol` can cheaply detect symbols.
-pub const SYMBOL_MAGIC: u32 = 0x5359_4D42; // "SYMB"
+pub const SYMBOL_MAGIC: u32 = crate::codegen_abi::SYMBOL_HEADER_MAGIC; // "SYMB"
 
 /// Symbol object header. Allocated via `gc_malloc` (or malloc for registered
 /// symbols that need to outlive GC cycles).

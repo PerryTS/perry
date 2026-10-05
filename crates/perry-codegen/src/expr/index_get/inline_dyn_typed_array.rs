@@ -83,6 +83,22 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get(
     idx_d: &str,
     coerce_slow_to_number: bool,
 ) -> String {
+    lower_inline_dyn_typed_array_get_with_byte_view_param(
+        ctx,
+        obj_box,
+        idx_d,
+        coerce_slow_to_number,
+        None,
+    )
+}
+
+pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_d: &str,
+    coerce_slow_to_number: bool,
+    param_access: Option<&crate::collectors::ByteViewParamAccess>,
+) -> String {
     // TAG_MASK / POINTER_TAG / POINTER_MASK as signed-i64 LLVM literals.
     let tag_mask = crate::nanbox::i64_literal(crate::nanbox::TAG_MASK);
     let pointer_tag = crate::nanbox::POINTER_TAG_I64;
@@ -101,9 +117,11 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get(
     let slot_ref = format!("@{cache_name}");
 
     let u8_brand_idx = ctx.new_block("arrlike.u8.brand");
+    let u8_view_idx = ctx.new_block("arrlike.u8.view");
     let u8_bounds_idx = ctx.new_block("arrlike.u8.bounds");
     let u8_load_idx = ctx.new_block("arrlike.u8.load");
     let u8_brand_label = ctx.block_label(u8_brand_idx);
+    let u8_view_label = ctx.block_label(u8_view_idx);
     let u8_bounds_label = ctx.block_label(u8_bounds_idx);
     let u8_load_label = ctx.block_label(u8_load_idx);
     let object_header_idx = ctx.new_block("arrlike.ic.header");
@@ -576,8 +594,8 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get(
     // receiver. Untyped `b[i]` over a Buffer used to leave through the exit
     // and the typed-array + buffer registry probes on every element. The
     // cache is primed by the runtime byte accessors on a miss, and anything
-    // it does not hold (views, ArrayBuffers, DataViews, foreign spans, an
-    // out-of-range index) still leaves through the exit.
+    // it does not hold is offered to the pointer-backed byte-view miss arm.
+    // ArrayBuffers, DataViews, foreign spans and out-of-range indices exit.
     ctx.current_block = u8_brand_idx;
     {
         let blk = ctx.block();
@@ -594,8 +612,34 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get(
         let is_buffer = blk.or(I1, &is_node_buffer, &is_uint8array);
         let admitted = crate::expr::u8_buffer_read::emit_u8_cache_holds(blk, &object_raw);
         let hit = blk.and(I1, &is_buffer, &admitted);
-        blk.cond_br(&hit, &u8_bounds_label, &object_miss_label);
+        blk.cond_br(&hit, &u8_bounds_label, &u8_view_label);
     }
+    // A live view has a native pointer at +8, never inline byte storage.
+    ctx.current_block = u8_view_idx;
+    let view_data = crate::expr::u8_buffer_read::emit_u8_view_param_or_guard(
+        ctx,
+        obj_box,
+        &object_raw,
+        &object_miss_label,
+        param_access,
+    );
+    let view_load_idx = ctx.new_block("arrlike.u8.view_load");
+    let view_load_label = ctx.block_label(view_load_idx);
+    let len_ptr = ctx.block().inttoptr(I64, &object_raw);
+    let view_len = ctx.block().load(I32, &len_ptr);
+    let view_len = ctx.block().zext(I32, &view_len, I64);
+    let view_in_bounds = ctx.block().icmp_ult(I64, &object_idx_i64, &view_len);
+    ctx.block()
+        .cond_br(&view_in_bounds, &view_load_label, &object_miss_label);
+    ctx.current_block = view_load_idx;
+    let view_addr = ctx.block().add(I64, &view_data, &object_idx_i64);
+    let view_ptr = ctx.block().inttoptr(I64, &view_addr);
+    // A view can alias a SAB shared with another agent. Atomic byte loads
+    // prevent LLVM from hoisting or merging reads of concurrently changed data.
+    let view_byte = ctx.block().load_atomic_monotonic(I8, &view_ptr, 1);
+    let view_value = ctx.block().uitofp(I8, &view_byte, DOUBLE);
+    let view_end_label = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
     ctx.current_block = u8_bounds_idx;
     {
         let blk = ctx.block();
@@ -736,6 +780,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get(
             (array_value.as_str(), array_end_label.as_str()),
             (elem_value.as_str(), elem_end_label.as_str()),
             (u8_value.as_str(), u8_end_label.as_str()),
+            (view_value.as_str(), view_end_label.as_str()),
             (slow_val.as_str(), slow_end_label.as_str()),
         ],
     )
