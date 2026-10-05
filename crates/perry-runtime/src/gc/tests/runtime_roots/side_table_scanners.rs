@@ -584,9 +584,11 @@ fn builtin_closure_length_bag_survives_a_copying_minor() {
     crate::object::set_builtin_closure_length(owner as usize, 3);
     let bag = unsafe { crate::closure::props::bag_of(owner as usize) };
 
-    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    let (trace, moved) = handle.across_const::<crate::closure::ClosureHeader, _>(|| {
+        collect_minor_trace(GcTriggerKind::Direct)
+    });
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
-    let moved = handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as usize;
+    let moved = moved as usize;
     assert_ne!(moved, owner as usize, "the function must have moved");
     assert_ne!(
         unsafe { crate::closure::props::bag_of(moved) },

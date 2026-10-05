@@ -30,7 +30,10 @@ def run_probe(root: Path, matrix: str, metadata: str | None = None) -> subproces
     if metadata is not None:
         (root / f"test-files/{TEST}.ts").write_text(metadata)
     env = {key: value for key, value in os.environ.items() if not key.startswith("PERRY_")}
-    env.update(PATH=str(root / "probes") + os.pathsep + env["PATH"],
+    # The routing probes own a fake compiler under this temporary target.
+    # A caller's Cargo target must never select the real compiler instead.
+    env.update(CARGO_TARGET_DIR=str(root / "target"),
+               PATH=str(root / "probes") + os.pathsep + env["PATH"],
                ROUTING_RECEIPTS=str(root / "receipts.jsonl"))
     receipts = root / "receipts.jsonl"
     receipts.unlink(missing_ok=True)
