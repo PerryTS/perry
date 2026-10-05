@@ -13,6 +13,10 @@ pub struct PerryInsetCellIvars {
     left: Cell<f64>,
     bottom: Cell<f64>,
     right: Cell<f64>,
+    /// The side margins that AppKit's label reports, which the cell draws
+    /// over so the text sits at the frame's edge.
+    margin_left: Cell<f64>,
+    margin_right: Cell<f64>,
 }
 
 impl PerryInsetCellIvars {
@@ -22,15 +26,17 @@ impl PerryInsetCellIvars {
             left: Cell::new(0.0),
             bottom: Cell::new(0.0),
             right: Cell::new(0.0),
+            margin_left: Cell::new(0.0),
+            margin_right: Cell::new(0.0),
         }
     }
 
     fn get(&self) -> NSEdgeInsets {
         NSEdgeInsets {
             top: self.top.get(),
-            left: self.left.get(),
+            left: self.left.get() - self.margin_left.get(),
             bottom: self.bottom.get(),
-            right: self.right.get(),
+            right: self.right.get() - self.margin_right.get(),
         }
     }
 
@@ -107,6 +113,17 @@ define_class!(
         }
     }
 );
+
+impl PerryInsetTextFieldCell {
+    /// Draws the text over `margins`, the alignment rect insets that AppKit
+    /// gives a label. A stock label's text sits at the edge of its alignment
+    /// rect, so with these drawn over, a label with zero insets keeps its
+    /// text and its intrinsic width where a stock label has them.
+    pub(crate) fn cover_label_margins(&self, margins: NSEdgeInsets) {
+        self.ivars().margin_left.set(margins.left);
+        self.ivars().margin_right.set(margins.right);
+    }
+}
 
 define_class!(
     #[unsafe(super(NSSecureTextFieldCell))]
