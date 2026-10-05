@@ -903,10 +903,9 @@ pub(super) struct GcCycleTrace {
     pub(super) malloc_before: usize,
     pub(super) remembered_set_before: usize,
     pub(super) remembered_set: RememberedSetTraceStats,
-    /// Objects visited by the whole-heap old→young remembered-set rebuild
-    /// (#6181). Full cycles walk every arena+malloc object here; minors skip
-    /// the walk entirely (0) — their RS is maintained by the barriers plus
-    /// evacuation_sticky + restore_surviving_dirty_coverage.
+    /// Legacy trace field for the separate old→young rebuild walk. Now zero
+    /// for both kinds: full cycles fold entries into mark visits; minors use
+    /// barriers, evacuation_sticky and restore_surviving_dirty_coverage.
     pub(super) old_to_young_rebuild_objects_scanned: usize,
     pub(super) old_young_edge_verifier: OldYoungEdgeVerifyStats,
     pub(super) old_pages: crate::arena::OldPageSummary,

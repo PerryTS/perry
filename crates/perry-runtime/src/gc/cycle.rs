@@ -87,14 +87,20 @@ impl TraceWorklistCycleState {
         }
     }
 
-    fn step(&mut self, valid_ptrs: &ValidPointerSet, budget: usize) -> bool {
+    fn step(
+        &mut self,
+        valid_ptrs: &ValidPointerSet,
+        budget: usize,
+        sticky: Option<&mut StickyRememberedSet>,
+    ) -> bool {
         self.absorb_mark_seeds();
-        let done = drain_trace_worklist_step(
+        let done = drain_trace_worklist_step_remembering(
             &mut self.worklist,
             &mut self.cursor,
             valid_ptrs,
             self.minor_only,
             budget,
+            sticky,
         );
         self.absorb_mark_seeds();
         done && self.cursor >= self.worklist.len()
@@ -144,7 +150,12 @@ impl BlockPersistCycleState {
         }
     }
 
-    fn step(&mut self, valid_ptrs: &ValidPointerSet, budget: usize) -> bool {
+    fn step(
+        &mut self,
+        valid_ptrs: &ValidPointerSet,
+        budget: usize,
+        mut sticky: Option<&mut StickyRememberedSet>,
+    ) -> bool {
         let mut remaining = budget;
         loop {
             match self.subphase {
@@ -181,12 +192,13 @@ impl BlockPersistCycleState {
                         return false;
                     }
                     let before = self.worklist_cursor;
-                    let done = drain_trace_worklist_step(
+                    let done = drain_trace_worklist_step_remembering(
                         &mut self.worklist,
                         &mut self.worklist_cursor,
                         valid_ptrs,
                         false,
                         remaining,
+                        sticky.as_deref_mut(),
                     );
                     let consumed = self.worklist_cursor.saturating_sub(before);
                     remaining = remaining.saturating_sub(consumed);
@@ -534,12 +546,12 @@ enum AtomicFinalizeSubphase {
     /// marks nearly final, then drain the resulting seeds, so WeakProcessing
     /// and Sweep read a complete mark set. Bounded by root-set size (shadow
     /// stack + globals + registered scanners), not heap size. This is the LAST
-    /// root observation of the cycle: everything after it (the full path's
-    /// sliced RememberedSetRebuild, and WeakProcessing on both paths) still
+    /// root observation of the cycle: everything after it (including
+    /// WeakProcessing on both paths) still
     /// opens mutator windows, so every white-to-strong transition there must be
     /// barrier-covered — stores, black births, and weak reads (#7900).
     FinalRootRemark,
-    RememberedSetRebuild,
+    RememberedSetReady,
     DisableBarrier,
     Done,
 }
@@ -547,7 +559,6 @@ enum AtomicFinalizeSubphase {
 struct AtomicFinalizeCycleState {
     subphase: AtomicFinalizeSubphase,
     barrier_drain: Option<TraceWorklistCycleState>,
-    remembered_rebuild: Option<OldToYoungRememberedRebuildState>,
     weak_processing: Option<crate::weakref::FullWeakProcessingState>,
     /// Budgeted cycles insert FinalRootRemark after BarrierSeedDrain;
     /// synchronous cycles have no mutator windows and skip it.
@@ -561,12 +572,12 @@ impl AtomicFinalizeCycleState {
         // and the drain must precede WeakProcessing so weak/finalization
         // decisions read the final marks. The post-drain order stays
         // kind-specific: Minor → WeakProcessing → MinorPrelude →
-        // RememberedSetRebuild(→Sweep); Full → RememberedSetRebuild →
-        // WeakProcessing → DisableBarrier(→Sweep).
+        // RememberedSetReady(→Sweep); Full → RememberedSetReady →
+        // WeakProcessing → DisableBarrier(→Sweep). Full entries have already
+        // been buffered by the mark drains when RememberedSetReady is reached.
         Self {
             subphase: AtomicFinalizeSubphase::BarrierSeedDrain,
             barrier_drain: None,
-            remembered_rebuild: None,
             weak_processing: None,
             remark,
         }
@@ -590,6 +601,9 @@ pub(super) struct GcCycleState {
     block_persist: Option<BlockPersistCycleState>,
     atomic_finalize: Option<AtomicFinalizeCycleState>,
     minor: Option<MinorCycleContext>,
+    /// Full mark drains accumulate here through sweep entry. Restored after
+    /// the remembered-set clear; stores into already-traced parents remain
+    /// covered by the existing pre-clear dirty snapshot repair.
     live_old_to_young_sticky: Option<StickyRememberedSet>,
     /// Dirty snapshot captured just before this cycle's remembered_set_clear
     /// begins, for the post-restore coverage repair (#5029).
@@ -659,7 +673,7 @@ impl GcCycleState {
             block_persist: None,
             atomic_finalize: None,
             minor: None,
-            live_old_to_young_sticky: None,
+            live_old_to_young_sticky: Some(StickyRememberedSet::default()),
             pre_clear_dirty_snapshot: None,
             sweep_state: None,
             reclaim_state: None,
@@ -730,6 +744,11 @@ impl GcCycleState {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn full_mark_remembered_for_tests(&self) -> Option<&StickyRememberedSet> {
+        self.live_old_to_young_sticky.as_ref()
+    }
+
     pub(super) fn phase(&self) -> GcCyclePhase {
         self.phase
     }
@@ -742,7 +761,7 @@ impl GcCycleState {
             AtomicFinalizeSubphase::MinorPrelude => "minor_prelude",
             AtomicFinalizeSubphase::BarrierSeedDrain => "barrier_seed_drain",
             AtomicFinalizeSubphase::FinalRootRemark => "final_root_remark",
-            AtomicFinalizeSubphase::RememberedSetRebuild => "remembered_set_rebuild",
+            AtomicFinalizeSubphase::RememberedSetReady => "remembered_set_ready",
             AtomicFinalizeSubphase::DisableBarrier => "disable_barrier",
             AtomicFinalizeSubphase::Done => "done",
         })
@@ -977,7 +996,11 @@ impl GcCycleState {
         let trace_worklist = self
             .trace_worklist
             .get_or_insert_with(|| TraceWorklistCycleState::new(minor_only));
-        if trace_worklist.step(valid_ptrs, budget.work_units) {
+        if trace_worklist.step(
+            valid_ptrs,
+            budget.work_units,
+            self.live_old_to_young_sticky.as_mut(),
+        ) {
             self.trace_worklist = None;
             self.phase = GcCyclePhase::BlockPersistence;
             // `PERRY_GC_CENSUS` pass 1: reachability is complete for a
@@ -1059,12 +1082,19 @@ impl GcCycleState {
         let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
         let phase_start = trace_phase_start(&self.trace);
         let block_persist = if budget.work_units == usize::MAX && self.block_persist.is_none() {
-            mark_block_persisting_arena_objects(valid_ptrs)
+            mark_block_persisting_arena_objects_remembering(
+                valid_ptrs,
+                self.live_old_to_young_sticky.as_mut(),
+            )
         } else {
             let block_persist = self
                 .block_persist
                 .get_or_insert_with(BlockPersistCycleState::new);
-            if !block_persist.step(valid_ptrs, budget.work_units) {
+            if !block_persist.step(
+                valid_ptrs,
+                budget.work_units,
+                self.live_old_to_young_sticky.as_mut(),
+            ) {
                 trace_phase_record(&mut self.trace, "block_persistence", phase_start);
                 return;
             }
@@ -1102,7 +1132,7 @@ impl GcCycleState {
             let sliced = matches!(
                 subphase,
                 AtomicFinalizeSubphase::BarrierSeedDrain
-                    | AtomicFinalizeSubphase::RememberedSetRebuild
+                    | AtomicFinalizeSubphase::RememberedSetReady
                     | AtomicFinalizeSubphase::WeakProcessing
             );
             let sub_budget = if sliced {
@@ -1165,16 +1195,20 @@ impl GcCycleState {
                         minor_only,
                     ) {}
                     self.root_scan = None;
-                    // Trace everything the remark newly discovered so
-                    // WeakProcessing (and the full path's RS rebuild) read a
-                    // COMPLETE mark set, not just remark-marked parents.
+                    // Trace everything the remark newly discovered so weak
+                    // processing sees a complete mark set and newly traced old
+                    // parents contribute their remembered entries.
                     let mut remark_drain = TraceWorklistCycleState::new(minor_only);
-                    while !remark_drain.step(valid_ptrs, usize::MAX) {}
+                    while !remark_drain.step(
+                        valid_ptrs,
+                        usize::MAX,
+                        self.live_old_to_young_sticky.as_mut(),
+                    ) {}
                 }
                 let next = if self.minor.is_some() {
                     AtomicFinalizeSubphase::WeakProcessing
                 } else {
-                    AtomicFinalizeSubphase::RememberedSetRebuild
+                    AtomicFinalizeSubphase::RememberedSetReady
                 };
                 self.atomic_finalize
                     .as_mut()
@@ -1226,7 +1260,7 @@ impl GcCycleState {
                 self.atomic_finalize
                     .as_mut()
                     .expect("atomic finalize state exists")
-                    .subphase = AtomicFinalizeSubphase::RememberedSetRebuild;
+                    .subphase = AtomicFinalizeSubphase::RememberedSetReady;
             }
             AtomicFinalizeSubphase::BarrierSeedDrain => {
                 let minor_only = self.minor.is_some();
@@ -1239,7 +1273,7 @@ impl GcCycleState {
                     let drain = state
                         .barrier_drain
                         .get_or_insert_with(|| TraceWorklistCycleState::new(minor_only));
-                    drain.step(valid_ptrs, budget)
+                    drain.step(valid_ptrs, budget, self.live_old_to_young_sticky.as_mut())
                 };
                 if done {
                     let state = self
@@ -1253,22 +1287,14 @@ impl GcCycleState {
                     } else if minor_only {
                         AtomicFinalizeSubphase::WeakProcessing
                     } else {
-                        AtomicFinalizeSubphase::RememberedSetRebuild
+                        AtomicFinalizeSubphase::RememberedSetReady
                     };
                 }
             }
-            AtomicFinalizeSubphase::RememberedSetRebuild => {
-                // Fix 2 (#6181): only FULL cycles rebuild the old→young
-                // remembered set from a whole-heap walk. A minor's old→young
-                // RS is maintained incrementally by the write barriers during
-                // mutation, plus this cycle's `evacuation_sticky` (edges the
-                // evacuation created — built in `atomic_finalize_minor_prelude`)
-                // and reclaim's `restore_surviving_dirty_coverage` snapshot
-                // repair (#5029). The from-scratch O(all-objects) walk is
-                // redundant for a minor — and, with `require_marked=false`, it
-                // even resurrects dead-but-unswept old parents. Skip it and
-                // leave `live_old_to_young_sticky` None; reclaim then restores
-                // only `evacuation_sticky` + the pre-clear dirty snapshot.
+            AtomicFinalizeSubphase::RememberedSetReady => {
+                // A minor keeps its incremental remembered set (#6181), plus
+                // evacuation entries and the pre-clear dirty snapshot repair.
+                // Only full mark drains populate live_old_to_young_sticky.
                 if self.minor.is_some() {
                     // Drain any seeds the barrier pushed since
                     // BarrierSeedDrain completed (late stores mark the child
@@ -1289,60 +1315,23 @@ impl GcCycleState {
                     // slice that takes the snapshot.
                     let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
                     let mut final_drain = TraceWorklistCycleState::new(true);
-                    while !final_drain.step(valid_ptrs, usize::MAX) {}
+                    while !final_drain.step(
+                        valid_ptrs,
+                        usize::MAX,
+                        self.live_old_to_young_sticky.as_mut(),
+                    ) {}
                     self.atomic_finalize = None;
                     self.phase = GcCyclePhase::Sweep;
                     return;
                 }
-                let done = {
-                    // #10182: a synchronous full's census knows which blocks
-                    // the trace never reached; the require-marked walk skips
-                    // them. A budgeted cycle has no census (and its mutator
-                    // windows can still shade), so it walks everything.
-                    let budgeted = self.progress_kind.is_budgeted();
-                    let valid_ptrs = self.valid_ptrs.as_ref();
-                    let state = self
-                        .atomic_finalize
-                        .as_mut()
-                        .expect("atomic finalize state exists");
-                    let rebuild = state.remembered_rebuild.get_or_insert_with(|| {
-                        // #10182: nothing young is marked and no malloc object
-                        // exists, so the walk could only insert nothing.
-                        if !budgeted
-                            && valid_ptrs.is_some_and(|ptrs| {
-                                full_remembered_rebuild_provably_empty(&ptrs.block_census)
-                            })
-                        {
-                            return OldToYoungRememberedRebuildState::provably_empty();
-                        }
-                        let skip = if budgeted {
-                            None
-                        } else {
-                            valid_ptrs.and_then(|ptrs| ptrs.block_census.unmarked_blocks())
-                        };
-                        OldToYoungRememberedRebuildState::new_skipping(
-                            /* require_marked = */ true, skip,
-                        )
-                    });
-                    rebuild.step(budget)
-                };
-                if done {
-                    let rebuild = self
-                        .atomic_finalize
-                        .as_mut()
-                        .expect("atomic finalize state exists")
-                        .remembered_rebuild
-                        .take()
-                        .expect("remembered rebuild state exists");
-                    if let Some(trace) = self.trace.as_mut() {
-                        trace.old_to_young_rebuild_objects_scanned = rebuild.objects_scanned();
-                    }
-                    self.live_old_to_young_sticky = Some(rebuild.finish());
-                    self.atomic_finalize
-                        .as_mut()
-                        .expect("atomic finalize state exists")
-                        .subphase = AtomicFinalizeSubphase::WeakProcessing;
-                }
+                // Full drains already remembered each live old parent's strong
+                // slots while tracing them. Keep that buffer in the cycle until
+                // reclaim, including entries from remark and sweep-gap seeds.
+                // Weak processing follows without another heap/descriptor walk.
+                self.atomic_finalize
+                    .as_mut()
+                    .expect("atomic finalize state exists")
+                    .subphase = AtomicFinalizeSubphase::WeakProcessing;
             }
             AtomicFinalizeSubphase::DisableBarrier => {
                 if budget == 0 {
@@ -1356,7 +1345,11 @@ impl GcCycleState {
                 {
                     let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
                     let mut final_drain = TraceWorklistCycleState::new(false);
-                    while !final_drain.step(valid_ptrs, usize::MAX) {}
+                    while !final_drain.step(
+                        valid_ptrs,
+                        usize::MAX,
+                        self.live_old_to_young_sticky.as_mut(),
+                    ) {}
                 }
                 if let Some(state) = self.atomic_finalize.as_mut() {
                     state.subphase = AtomicFinalizeSubphase::Done;
@@ -1497,7 +1490,11 @@ impl GcCycleState {
             if incremental_mark_barrier_active() {
                 let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
                 let mut gap_drain = TraceWorklistCycleState::new(!full_trace);
-                while !gap_drain.step(valid_ptrs, usize::MAX) {}
+                while !gap_drain.step(
+                    valid_ptrs,
+                    usize::MAX,
+                    self.live_old_to_young_sticky.as_mut(),
+                ) {}
                 incremental_mark_barrier_disable();
             }
             if full_trace {

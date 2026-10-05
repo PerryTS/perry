@@ -76,16 +76,19 @@ with the live set, and each has a cheaper exact form:
   alignment unit, allocated in 8 KiB chunks; oversized blocks keep a sorted
   start list). A traced pointer field costs a search over the block fences and
   one bit test.
-- *Remembered-set rebuild.* When no young object is marked or pinned after the
-  mark and the malloc registry is empty, the old→young rebuild could only
-  produce an empty set, so the full installs an empty set without walking the
-  old generation. `PERRY_GC_DIAG=1` prints `[gc-remembered-rebuild] full
-  skipped=young_generation_unmarked`.
+- *Remembered-set rebuild.* Full mark drains record live old parents' strong
+  old→young and old→malloc slots through the same descriptor visit that marks
+  their children. The cycle buffers these entries until the remembered-set
+  clear, including entries from final remark and the sweep-entry seed drain.
+  The pre-clear dirty snapshot repair still covers later stores into parents
+  already traced. No second old-generation walk is needed.
+<!-- gc-symbol: a_full_mark_remembers_an_unbarriered_young_edge in crates/perry-runtime/src/gc/tests/full_mark_remembered.rs -->
+<!-- gc-symbol: dropping_one_folded_entry_fails_young_edge_coverage in crates/perry-runtime/src/gc/tests/full_mark_remembered.rs -->
+
 - *Sweep page accounting.* Consecutive single-page old objects are summed and
   applied to their page's metadata once, before any page-index flush that
   could zero it.
 <!-- gc-symbol: start_bitmap_membership_and_floors_match_an_independent_arena_walk in crates/perry-runtime/src/gc/tests/start_bitmap.rs -->
-<!-- gc-symbol: sabotaged_skip_loses_an_unbarriered_young_edge in crates/perry-runtime/src/gc/tests/full_rebuild_skip.rs -->
 <!-- gc-symbol: full_sweep_page_accounting_matches_the_planted_liveness in crates/perry-runtime/src/gc/tests/sweep_page_tally.rs -->
 
 **Promoted-cohort fulls.** Old-reclaim pacing credits every promotion to its

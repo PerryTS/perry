@@ -1,8 +1,8 @@
 //! #7900: the post-remark weak-to-strong READ race.
 //!
 //! A budgeted cycle performs its one-time `FinalRootRemark` and then keeps
-//! opening mutator windows while weak processing (and, on the full path, the
-//! sliced remembered-set rebuild) is still incomplete. `WeakRef.deref()` and
+//! opening mutator windows while weak processing is still incomplete.
+//! `WeakRef.deref()` and
 //! `WeakMap.get()` turn an unmarked weak target into a STRONG compiled-code
 //! local through a **read** — a transition neither the incremental store
 //! barrier nor allocate-black birth accounting observes, and one that no later
@@ -177,7 +177,7 @@ fn mutator_weak_read(holders: u32) -> (u32, u64, usize) {
 }
 
 /// #7900, full budgeted cycle (BarrierSeedDrain → FinalRootRemark →
-/// RememberedSetRebuild → WeakProcessing): a target handed to the mutator by
+/// RememberedSetReady → WeakProcessing): a target handed to the mutator by
 /// `WeakRef.deref()` in a post-remark window must not be tombstoned or swept
 /// by the slices that follow.
 #[test]
@@ -228,9 +228,9 @@ fn weak_read_after_final_remark_survives_full_budgeted_cycle() {
 }
 
 /// #7900, budgeted MINOR ordering (BarrierSeedDrain → FinalRootRemark →
-/// WeakProcessing → MinorPrelude → RememberedSetRebuild). The full path's
-/// sliced remembered-set rebuild sits between the remark and the weak
-/// decisions; the minor path has no such phase, so it pins the other ordering.
+/// WeakProcessing → MinorPrelude → RememberedSetReady). The full path
+/// reaches RememberedSetReady before weak processing; this pins the minor
+/// ordering as well as the shared post-remark weak-read race.
 #[test]
 fn weak_read_after_final_remark_survives_budgeted_minor_cycle() {
     const HOLDERS: u32 = 8;

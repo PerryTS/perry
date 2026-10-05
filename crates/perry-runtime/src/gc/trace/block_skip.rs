@@ -63,8 +63,7 @@ pub(crate) struct CensusBlock {
     /// Some object in the block needs the per-object sweep path.
     pub(crate) obligation: bool,
     /// Some header in the block was already MARKED or PINNED when the census
-    /// read it (a subset of `obligation`, kept apart for
-    /// `young_generation_unmarked`).
+    /// read it (a subset of `obligation`, also checked by adopt-census audits).
     pub(crate) premarked: bool,
     /// The census parsed every header of the block itself, walkable or not
     /// (`ValidPointerSetBuilder::census_whole_block`), so `non_walkable` is a
@@ -240,68 +239,6 @@ impl BlockCensus {
         }
     }
 
-    /// Blocks a `require_marked` whole-heap walk may skip right now: censused,
-    /// not reached by the trace, free of obligations (which include every
-    /// pinned or pre-marked header), and not grown since the census. Such a
-    /// block holds no marked or pinned object, so the walk would visit each
-    /// of its objects only to reject it. `None` when nothing qualifies or the
-    /// census is disarmed.
-    pub(crate) fn unmarked_blocks(&self) -> Option<Vec<bool>> {
-        if !self.armed {
-            return None;
-        }
-        let snapshots = crate::arena::arena_block_snapshots();
-        let mut skip = vec![false; snapshots.len()];
-        let mut any = false;
-        for (block_idx, snapshot) in snapshots.iter().enumerate() {
-            let Some(block) = self.block(block_idx) else {
-                continue;
-            };
-            if block.obligation
-                || self.reached(block_idx)
-                || block.data != snapshot.data
-                || block.end != snapshot.data.saturating_add(snapshot.offset)
-            {
-                continue;
-            }
-            skip[block_idx] = true;
-            any = true;
-        }
-        any.then_some(skip)
-    }
-
-    /// After the mark of a synchronous full: does the young generation (Eden
-    /// and both survivor spaces) hold **no** marked or pinned object?
-    ///
-    /// Every in-use young block must be censused, unchanged since the census
-    /// (no allocate-black birth, no block created after it), free of headers
-    /// that were already marked or pinned when censused, and unreached by the
-    /// trace. An unreached block holds no object the trace marked (see this
-    /// module's doc: every census-built mark passes a membership query that
-    /// records its block), so every young object is then garbage. `false` when
-    /// the census is disarmed or anything is uncertain.
-    pub(crate) fn young_generation_unmarked(&self) -> bool {
-        if !self.armed {
-            return false;
-        }
-        let snapshots = crate::arena::arena_block_snapshots();
-        let young = crate::arena::young_block_count().min(snapshots.len());
-        snapshots[..young]
-            .iter()
-            .enumerate()
-            .all(|(block_idx, snapshot)| {
-                if snapshot.data == 0 || snapshot.offset == 0 {
-                    return true;
-                }
-                self.block(block_idx).is_some_and(|block| {
-                    !block.premarked
-                        && !self.reached(block_idx)
-                        && block.data == snapshot.data
-                        && block.end == snapshot.data.saturating_add(snapshot.offset)
-                })
-            })
-    }
-
     pub(crate) fn block(&self, block_idx: usize) -> Option<CensusBlock> {
         self.blocks.get(block_idx).copied().filter(|b| b.censused)
     }
@@ -320,9 +257,6 @@ pub(crate) mod sabotage {
 
     pub(crate) const FORGET_REACHED: u8 = 1;
     pub(crate) const FORGET_OBLIGATIONS: u8 = 2;
-    /// `verify::full_remembered_rebuild_provably_empty` answers true whatever
-    /// the heap holds.
-    pub(crate) const FORCE_REBUILD_SKIP: u8 = 4;
     /// The sweep never applies its per-page accounting tally before a page-index
     /// flush or a step end (it is applied only at page changes).
     pub(crate) const FORGET_PAGE_TALLY_ORDER: u8 = 8;
