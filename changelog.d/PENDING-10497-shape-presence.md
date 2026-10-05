@@ -1,4 +1,4 @@
-Ordinary string-key `in`/`[[HasProperty]]` queries walk each object's current shape keys and prototype edge without reading property values, allocating names, or invoking getters. Accessors and inherited data properties containing `undefined` remain present. Exotic receivers and class virtual surfaces retain generic dispatch.
+Ordinary string-key `in`/`[[HasProperty]]` queries walk each object's current shape keys and prototype edge without reading property values, allocating names, or invoking getters. Accessors and inherited data properties containing `undefined` remain present. Dictionary receivers and prototypes, exotic receivers, and class virtual surfaces retain generic dispatch; dictionary presence uses the object-owned key list through deletions and re-additions.
 
 Null-parent objects, including `Object.prototype`, publish the null edge in their birth shape. Prototype fallback distinguishes an explicit null before `Object.prototype` from the intrinsic's own null parent. `Object.getPrototypeOf` uses the existing owner/shape default-link proof before iterator-exposure probes.
 
