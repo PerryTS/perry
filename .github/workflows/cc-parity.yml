@@ -53,10 +53,28 @@ jobs:
       CARGO_BUILD_JOBS: '4'
       CARGO_INCREMENTAL: '0'
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Test the gate's failure paths
         run: python3 -m unittest discover -s tests -p test_cc_parity_gate.py -v
 
@@ -81,7 +99,7 @@ jobs:
           "$cc_llvm_prefix/bin/llvm-config" --version | grep -q '^22\.'
           echo "LLVM_SYS_221_PREFIX=$cc_llvm_prefix" >> "$GITHUB_ENV"
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: cc-parity-wasm-host
           save-if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
@@ -97,7 +115,7 @@ jobs:
 
       - name: Upload compiler logs and parity results
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: cc-parity-results
           path: ${{ runner.temp }}/cc-parity/logs/

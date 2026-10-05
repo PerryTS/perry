@@ -13,7 +13,10 @@
     "publish:brew": "node scripts/publish/brew/tap-publish.mts",
     "publish:ffi": "node scripts/publish/cargo/ffi-publish.mts",
     "prepublishOnly": "node scripts/publish/auth-posture.mts --guard",
-    "check": "node scripts/check/run.mts"
+    "check": "node scripts/check/run.mts",
+    "update": "node scripts/update.mts",
+    "actions:update": "node scripts/update-actions.mts --fix",
+    "actions:check": "node scripts/check/action-pins-are-current.mts"
   },
   "devDependencies": {
     "@socketsecurity/sdk": "4.1.4",

@@ -1,0 +1,121 @@
+name: "astral-sh/setup-uv"
+description:
+  "Set up your GitHub Actions workflow with a specific version of uv."
+author: "astral-sh"
+inputs:
+  version:
+    description: "The version of uv to install, e.g., `0.5.0`, `latest`, or `latest-known`. Defaults to the version in pyproject.toml or `latest`."
+    default: ""
+  version-file:
+    description: "Path to a file containing the version of uv to install, e.g., uv.toml, pyproject.toml, .tool-versions, requirements.txt or uv.lock. A selected .tool-versions file can also provide the Python version. Defaults to searching for uv.toml and if not found pyproject.toml."
+    default: ""
+  python-version:
+    description: "The version of Python to set UV_PYTHON to. Overrides the Python version from .tool-versions."
+    required: false
+  activate-environment:
+    description: "Use uv venv to activate a venv ready to be used by later steps. "
+    default: "false"
+  venv-path:
+    description: "Custom path for the virtual environment when using activate-environment. Defaults to '.venv' in the working directory."
+    default: ""
+  no-project:
+    description: "Pass --no-project when creating the venv with activate-environment."
+    default: "false"
+  working-directory:
+    description: "The directory to execute all commands in and look for files such as pyproject.toml"
+    default: ${{ github.workspace }}
+  checksum:
+    description: "The checksum of the uv version to install"
+    required: false
+  github-token:
+    description:
+      "Used when downloading uv from GitHub releases."
+    required: false
+    default: ${{ github.token }}
+  enable-cache:
+    description: "Enable the GitHub Actions cache for uv. 'auto' enables caching on GitHub-hosted runners except for release, tag push, pull_request_target, and workflow_run events."
+    default: "auto"
+  cache-dependency-glob:
+    description:
+      "Glob pattern to match files relative to the working directory to control
+      the cache."
+    default: |
+      **/*requirements*.txt
+      **/*requirements*.in
+      **/*constraints*.txt
+      **/*constraints*.in
+      **/pyproject.toml
+      **/uv.lock
+      **/*.py.lock
+  restore-cache:
+    description: "Whether to restore the cache if found."
+    default: "true"
+  save-cache:
+    description: "Whether to save the cache after the run. 'auto' disables saving for merge_group events."
+    default: "auto"
+  cache-suffix:
+    description: "Suffix for the cache key"
+    required: false
+  cache-local-path:
+    description: "Local path to store the cache."
+    default: ""
+  prune-cache:
+    description: "Prune cache before saving."
+    default: "false"
+  cache-python:
+    description: "Upload managed Python installations to the Github Actions cache."
+    default: "false"
+  ignore-nothing-to-cache:
+    description: "Ignore when nothing is found to cache."
+    default: "false"
+  ignore-empty-workdir:
+    description: "Ignore when the working directory is empty."
+    default: "false"
+  tool-dir:
+    description: "Custom path to set UV_TOOL_DIR to."
+    required: false
+  tool-bin-dir:
+    description: "Custom path to set UV_TOOL_BIN_DIR to."
+    required: false
+  manifest-file:
+    description: "URL to a custom manifest file in the astral-sh/versions format."
+    required: false
+  download-from-astral-mirror:
+    description: "Download uv from the Astral mirror instead of directly from GitHub Releases."
+    default: "true"
+  add-problem-matchers:
+    description: "Add problem matchers."
+    default: "true"
+  quiet:
+    description: "Suppress info-level log output. Only warnings and errors are shown."
+    default: "false"
+  resolution-strategy:
+    description: "Resolution strategy to use when resolving version ranges. 'highest' uses the latest compatible version, 'lowest' uses the oldest compatible version."
+    default: "highest"
+outputs:
+  uv-version:
+    description: "The installed uv version. Useful when using latest."
+  uv-path:
+    description: "The path to the installed uv binary."
+  uvx-path:
+    description: "The path to the installed uvx binary."
+  cache-hit:
+    description: "A boolean value to indicate a cache entry was found"
+  cache-key:
+    description: "The cache key used for storing/restoring the cache"
+  venv:
+    description: "Path to the activated venv if activate-environment is true"
+  python-version:
+    description: "The Python version that was set."
+  python-runtime-id:
+    description: "An opaque identifier reported by uv for the activated venv's Python runtime. Empty when activate-environment is false."
+  python-cache-hit:
+    description: "A boolean value to indicate the Python cache entry was found"
+runs:
+  using: "node24"
+  main: "dist/setup/index.cjs"
+  post: "dist/save-cache/index.cjs"
+  post-if: success()
+branding:
+  icon: "package"
+  color: "black"
