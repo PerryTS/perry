@@ -360,7 +360,10 @@ pub(super) fn settle_pipeline_value_with_origin(value: f64) -> Result<PipelineSe
         crate::promise::microtasks::js_promise_run_microtasks_await_loop();
         crate::stdlib_pump::js_run_stdlib_pump();
         let _ = crate::timer::js_await_loop_tick_timers();
-        // The steps above may have settled it: check before parking.
+        // The steps above run jobs and can collect, which moves the promise:
+        // re-read it from its handle before checking whether they settled it.
+        let promise = crate::value::js_nanbox_get_pointer(value_handle.get_nanbox_f64())
+            as *mut crate::promise::Promise;
         if crate::promise::js_promise_state(promise) != 0 {
             continue;
         }
@@ -395,7 +398,7 @@ pub(super) fn settle_pipeline_value_with_origin(value: f64) -> Result<PipelineSe
                 Err((*promise).reason)
             }
             crate::promise::PromiseState::Pending => Ok(PipelineSettledValue {
-                value,
+                value: current,
                 fulfilled_promise: false,
             }),
         }
