@@ -1,24 +1,17 @@
 //! A builtin's fixed-key throwing Set through the generated store site's
-//! cache and miss entries. The site has process lifetime, as emitted sites do;
-//! its words contain ShapeIds and its cache lives in the existing PIC arena.
-use crate::proxy::{PackedSetSite, PackedSetWays, PACKED_SET_EMPTY};
-use std::sync::atomic::{AtomicPtr, AtomicU64};
+//! cache and miss entries. This full-outline caller reads the existing PIC;
+//! it needs no compact words for a generated inline store. The site has process
+//! lifetime and its cache lives in the existing PIC arena.
+use crate::proxy::PackedSetWays;
+use std::sync::atomic::AtomicPtr;
 
 pub(crate) struct RuntimeStoreSite {
-    site: PackedSetSite,
     slot: AtomicPtr<PackedSetWays>,
 }
 
 impl RuntimeStoreSite {
     pub(crate) const fn new() -> Self {
         Self {
-            site: PackedSetSite {
-                set: AtomicU64::new(PACKED_SET_EMPTY),
-                add_shapes: AtomicU64::new(0),
-                add_guard: AtomicU64::new(0),
-                add_ways: AtomicU64::new(0),
-                constfn_info: AtomicU64::new(0),
-            },
             slot: AtomicPtr::new(std::ptr::null_mut()),
         }
     }
@@ -68,14 +61,8 @@ impl RuntimeStoreSite {
             None => crate::string::js_string_pool_atom(key.as_ptr(), key.len() as u32, hash, 0)
                 as *const crate::StringHeader,
         };
-        crate::proxy::js_put_value_set_packed_miss(
-            target.get_nanbox_f64(),
-            atom,
-            value.get_nanbox_f64(),
-            1,
-            slot,
-            &self.site.set,
-        );
+        let key = scope.root_string_ptr(atom);
+        crate::proxy::store_and_prime(&target, &key, &value, 1, slot, std::ptr::null());
     }
 }
 

@@ -1356,7 +1356,6 @@ pub(crate) unsafe fn rebuild_removing(
 /// see the module note on #6759 phase 3.
 pub fn scan_canonical_keys_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     let young = visitor.young_scope();
-    let mut moved: Vec<(usize, usize, u32)> = Vec::new();
     let _ = CANONICAL_KEYS.try_with(|t| {
         let mut t = t.borrow_mut();
         for id in 1..t.nodes.len() {
@@ -1374,16 +1373,16 @@ pub fn scan_canonical_keys_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor
             if visitor.visit_metadata_usize_slot(&mut next) && next != addr {
                 t.nodes[id].addr = next;
                 if t.nodes[id].published {
-                    moved.push((addr, next, id as u32));
+                    // The whole table is already exclusively borrowed, and a
+                    // metadata visit only rewrites this address. Re-key now;
+                    // staging every move allocated a temporary Vec each GC.
+                    let len = t.nodes[id].len;
+                    t.by_addr.remove(&(addr, len));
+                    t.by_addr.insert((next, len), id as u32);
+                    if t.last_created.2 == id as u32 {
+                        t.last_created.0 = next;
+                    }
                 }
-            }
-        }
-        for (old, new, id) in moved.drain(..) {
-            let len = t.nodes[id as usize].len;
-            t.by_addr.remove(&(old, len));
-            t.by_addr.insert((new, len), id);
-            if t.last_created.2 == id {
-                t.last_created.0 = new;
             }
         }
     });

@@ -1,99 +1,104 @@
 //! Dense page facts without a hash bucket per 4 KiB page.
 //!
-//! Old arena blocks register all their pages, so neighboring metadata entries
-//! are dense even when few objects are live. A 64-page chunk needs one hash
-//! entry and one presence bitmap. Missing pages remain missing; dropping the
-//! last registered page releases the chunk. Only the small chunk directory
-//! retains HashMap spare capacity after a large heap shrinks.
+//! Both page metadata and object indexes have neighboring entries. Share a
+//! chunk directory while choosing chunk widths for their respective density.
+//! Missing pages remain missing, and removing a page drops its payload.
 
 use super::compact::StoredPageMeta;
 
-const CHUNK_SHIFT: usize = 6;
-const CHUNK_PAGES: usize = 1 << CHUNK_SHIFT;
-const CHUNK_MASK: usize = CHUNK_PAGES - 1;
-
-struct PageChunk {
-    pages: [StoredPageMeta; CHUNK_PAGES],
+struct PageChunk<T, const N: usize> {
+    pages: [T; N],
     present: u64,
 }
 
-impl Default for PageChunk {
+impl<T: Default, const N: usize> Default for PageChunk<T, N> {
     fn default() -> Self {
+        assert!(N.is_power_of_two() && N <= 64);
         Self {
-            pages: [StoredPageMeta::default(); CHUNK_PAGES],
+            pages: std::array::from_fn(|_| T::default()),
             present: 0,
         }
     }
 }
 
-#[derive(Default)]
-pub(super) struct PageMetaMap {
-    chunks: crate::fast_hash::PtrHashMap<usize, Box<PageChunk>>,
+pub(super) struct PageMap<T, const N: usize> {
+    chunks: crate::fast_hash::PtrHashMap<usize, Box<PageChunk<T, N>>>,
     len: usize,
 }
 
-impl PageMetaMap {
-    pub(super) fn get_or_insert(&mut self, page: usize) -> &mut StoredPageMeta {
-        let chunk = self.chunks.entry(page >> CHUNK_SHIFT).or_default();
-        let slot = page & CHUNK_MASK;
+pub(super) type PageMetaMap = PageMap<StoredPageMeta, 64>;
+
+impl<T, const N: usize> Default for PageMap<T, N> {
+    fn default() -> Self {
+        Self {
+            chunks: crate::fast_hash::new_ptr_hash_map(),
+            len: 0,
+        }
+    }
+}
+
+impl<T: Default, const N: usize> PageMap<T, N> {
+    pub(super) fn get_or_insert(&mut self, page: usize) -> &mut T {
+        let chunk = self.chunks.entry(page / N).or_default();
+        let slot = page % N;
         let bit = 1u64 << slot;
         if chunk.present & bit == 0 {
-            chunk.pages[slot] = StoredPageMeta::default();
             chunk.present |= bit;
             self.len += 1;
         }
         &mut chunk.pages[slot]
     }
 
-    pub(super) fn get_mut(&mut self, page: &usize) -> Option<&mut StoredPageMeta> {
-        let chunk = self.chunks.get_mut(&(page >> CHUNK_SHIFT))?;
-        let slot = page & CHUNK_MASK;
+    pub(super) fn get_mut(&mut self, page: &usize) -> Option<&mut T> {
+        let chunk = self.chunks.get_mut(&(page / N))?;
+        let slot = page % N;
         if chunk.present & (1u64 << slot) == 0 {
             return None;
         }
         Some(&mut chunk.pages[slot])
     }
 
-    #[cfg(test)]
-    pub(super) fn get(&self, page: &usize) -> Option<&StoredPageMeta> {
-        let chunk = self.chunks.get(&(page >> CHUNK_SHIFT))?;
-        let slot = page & CHUNK_MASK;
+    pub(super) fn get(&self, page: &usize) -> Option<&T> {
+        let chunk = self.chunks.get(&(page / N))?;
+        let slot = page % N;
         (chunk.present & (1u64 << slot) != 0).then_some(&chunk.pages[slot])
     }
 
     pub(super) fn remove(&mut self, page: &usize) {
-        let key = page >> CHUNK_SHIFT;
+        let key = page / N;
         let Some(chunk) = self.chunks.get_mut(&key) else {
             return;
         };
-        let bit = 1u64 << (page & CHUNK_MASK);
+        let slot = page % N;
+        let bit = 1u64 << slot;
         if chunk.present & bit != 0 {
             chunk.present &= !bit;
             self.len -= 1;
+            // Release owned per-page buffers even while neighboring pages live.
+            chunk.pages[slot] = T::default();
         }
         if chunk.present == 0 {
             self.chunks.remove(&key);
         }
     }
 
-    pub(super) fn iter(&self) -> impl Iterator<Item = (usize, &StoredPageMeta)> {
+    pub(super) fn iter(&self) -> impl Iterator<Item = (usize, &T)> {
         self.chunks.iter().flat_map(|(&key, chunk)| {
             chunk
                 .pages
                 .iter()
                 .enumerate()
                 .filter_map(move |(slot, meta)| {
-                    (chunk.present & (1u64 << slot) != 0)
-                        .then_some(((key << CHUNK_SHIFT) + slot, meta))
+                    (chunk.present & (1u64 << slot) != 0).then_some((key * N + slot, meta))
                 })
         })
     }
 
-    pub(super) fn values(&self) -> impl Iterator<Item = &StoredPageMeta> {
+    pub(super) fn values(&self) -> impl Iterator<Item = &T> {
         self.iter().map(|(_, meta)| meta)
     }
 
-    pub(super) fn values_mut(&mut self) -> impl Iterator<Item = &mut StoredPageMeta> {
+    pub(super) fn values_mut(&mut self) -> impl Iterator<Item = &mut T> {
         self.chunks.values_mut().flat_map(|chunk| {
             let present = chunk.present;
             chunk
@@ -108,6 +113,12 @@ impl PageMetaMap {
         self.len
     }
 
+    #[cfg(test)]
+    pub(super) fn clear(&mut self) {
+        self.chunks.clear();
+        self.len = 0;
+    }
+
     pub(super) fn shrink_directory(&mut self) {
         super::maintenance::shrink_sparse_map(&mut self.chunks);
     }
@@ -115,8 +126,8 @@ impl PageMetaMap {
     pub(super) fn allocated_bytes(&self) -> usize {
         crate::gc::census::hash_table_bytes(
             self.chunks.capacity(),
-            size_of::<(usize, Box<PageChunk>)>(),
-        ) + self.chunks.len() * size_of::<PageChunk>()
+            size_of::<(usize, Box<PageChunk<T, N>>)>(),
+        ) + self.chunks.len() * size_of::<PageChunk<T, N>>()
     }
 }
 
@@ -124,6 +135,26 @@ impl PageMetaMap {
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn owned_payload_is_released_on_remove_and_clear() {
+        use std::sync::Arc;
+        let owner = Arc::new(());
+        let mut map = PageMap::<Option<Arc<()>>, 8>::default();
+        for page in [7, 8, 9, usize::MAX] {
+            *map.get_or_insert(page) = Some(owner.clone());
+        }
+        assert_eq!(Arc::strong_count(&owner), 5);
+        map.remove(&8);
+        assert_eq!(Arc::strong_count(&owner), 4);
+        assert!(map.get_or_insert(8).is_none());
+        assert!(map.get(&9).unwrap().is_some());
+        map.remove(&usize::MAX);
+        assert_eq!(Arc::strong_count(&owner), 3);
+        map.clear();
+        assert_eq!(Arc::strong_count(&owner), 1);
+        assert_eq!(map.len(), 0);
+    }
 
     #[test]
     fn distant_and_high_page_keys_do_not_alias() {
@@ -187,7 +218,10 @@ mod tests {
             map.remove(&page);
         }
         assert_eq!(map.chunks.len(), 1);
-        assert_eq!(before - map.allocated_bytes(), size_of::<PageChunk>());
+        assert_eq!(
+            before - map.allocated_bytes(),
+            size_of::<PageChunk<StoredPageMeta, 64>>()
+        );
         assert_eq!(map.get(&64).unwrap().pinned_bytes, 32);
         map.remove(&64);
         assert_eq!(map.get_or_insert(64).pinned_bytes, 0);

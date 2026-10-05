@@ -67,26 +67,30 @@ pub(crate) fn sort_by_key<T, K: Ord>(v: &mut [T], mut key: impl FnMut(&T) -> K) 
 /// indirect call per comparison (startup stack-map parsing, promise reaction
 /// order). Sorts `(key, position)` pairs with a direct comparison — one
 /// instantiation shared by every caller — then permutes `v`. Ties keep their
-/// original order.
+/// original order. The key is two ordered u32 words: three u32s use 12 bytes,
+/// whereas (u64, u32) needs 16 because of trailing alignment padding.
 pub(crate) fn sort_by_u64_key<T>(v: &mut [T], mut key: impl FnMut(&T) -> u64) {
     if v.len() < 2 {
         return;
     }
     debug_assert!(v.len() <= u32::MAX as usize);
-    let pairs: Vec<(u64, u32)> = v
+    let pairs: Vec<(u32, u32, u32)> = v
         .iter()
         .enumerate()
-        .map(|(i, item)| (key(item), i as u32))
+        .map(|(i, item)| {
+            let key = key(item);
+            ((key >> 32) as u32, key as u32, i as u32)
+        })
         .collect();
     let order = sorted_pair_positions(pairs);
     apply_order(v, order);
 }
 
 #[inline(never)]
-fn sorted_pair_positions(mut pairs: Vec<(u64, u32)>) -> Vec<u32> {
+fn sorted_pair_positions(mut pairs: Vec<(u32, u32, u32)>) -> Vec<u32> {
     // Positions are unique, so sorting the pair is a stable key sort.
     pairs.sort_unstable();
-    pairs.into_iter().map(|(_, position)| position).collect()
+    pairs.into_iter().map(|(_, _, position)| position).collect()
 }
 
 #[cfg(test)]
@@ -126,6 +130,25 @@ mod tests {
         expected.sort_by_key(|&(k, _)| k);
         let mut actual = items;
         sort_by_u64_key(&mut actual, |&(k, _)| k);
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn u64_key_sort_preserves_high_words_and_stable_ties() {
+        let keys = [
+            u64::MAX,
+            0,
+            1u64 << 32,
+            u32::MAX as u64,
+            (1u64 << 63) + 7,
+            1u64 << 32,
+            u64::MAX,
+            7,
+        ];
+        let mut actual: Vec<_> = keys.into_iter().enumerate().collect();
+        let mut expected = actual.clone();
+        expected.sort_by_key(|&(_, key)| key);
+        sort_by_u64_key(&mut actual, |&(_, key)| key);
         assert_eq!(actual, expected);
     }
 
