@@ -19,10 +19,12 @@ pub(crate) fn receiver_kind(ctx: &FnCtx<'_>, object: &Expr) -> Option<u8> {
     if ctx.reassigned_locals.contains(id) {
         return None;
     }
-    // Leave the stronger tracked native path alone while it can serve itself.
-    if ctx.receiver_descriptors.buffer_view(id).is_some_and(|v| {
-        v.alias.allows_noalias() && v.scope_idx.is_some() && v.pointer_state.is_stable()
-    }) {
+    // Tracked views own both their native accesses and their proof-aware
+    // fallback. Taking a demoted view here bypasses its invalidation evidence
+    // (and emits a managed-storage guard that can never admit a native arena).
+    // Keep those reads on the existing view/fallback path after an escape,
+    // disposal or backing-buffer exposure, too.
+    if ctx.receiver_descriptors.contains_buffer_view(id) {
         return None;
     }
     let class = crate::type_analysis::receiver_class_name(ctx, object)
