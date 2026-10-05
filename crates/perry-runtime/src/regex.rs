@@ -567,18 +567,18 @@ pub(crate) fn test_last_exec_groups() -> usize {
 /// Get regex.source — returns the pattern string
 #[no_mangle]
 pub extern "C" fn js_regexp_get_source(re: *const RegExpHeader) -> *mut StringHeader {
-    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some() {
-        return js_string_from_str("(?:)");
-    }
     #[cfg(feature = "regex-engine")]
     {
         return perex_api::finish(perex_display::source(re));
     }
     #[cfg(not(feature = "regex-engine"))]
     unsafe {
-        if is_valid_ptr((*crate::regex::regexp_data_ptr(re)).pattern_ptr) {
+        let Some(data) = regexp_data_of(crate::value::js_nanbox_pointer(re as i64)) else {
+            return js_string_from_str("(?:)");
+        };
+        if is_valid_ptr((*data).pattern_ptr) {
             // Return a copy of the pattern string
-            let pattern_str = string_as_str((*crate::regex::regexp_data_ptr(re)).pattern_ptr);
+            let pattern_str = string_as_str((*data).pattern_ptr);
             // Escaping only inserts ASCII into text that came from a `&str`, so
             // the result is UTF-8 and the lossy conversion never substitutes.
             let escaped = escape_regexp_source(pattern_str.as_bytes());

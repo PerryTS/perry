@@ -77,20 +77,16 @@ pub(super) fn to_string(re: *const RegExpHeader) -> Result<*mut StringHeader, En
 }
 
 fn render(re: *const RegExpHeader, delimited: bool) -> Result<*mut StringHeader, EngineError> {
-    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some() {
+    let Some(data) = crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(re as i64))
+    else {
         return Ok(super::js_string_from_str(if delimited {
             "/(?:)/"
         } else {
             "(?:)"
         }));
-    }
-    let scope = RuntimeHandleScope::new();
-    let (source, flags) = unsafe {
-        (
-            (*crate::regex::regexp_data_ptr(re)).pattern_ptr,
-            (*crate::regex::regexp_data_ptr(re)).flags_ptr,
-        )
     };
+    let scope = RuntimeHandleScope::new();
+    let (source, flags) = unsafe { ((*data).pattern_ptr, (*data).flags_ptr) };
     let source = scope.root_string_ptr(source);
     let flags = scope.root_string_ptr(flags);
     let source_len =

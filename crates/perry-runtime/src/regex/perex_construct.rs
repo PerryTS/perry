@@ -78,10 +78,8 @@ pub(crate) fn nonsticky_program<'s>(
     re: &RuntimeHandle<'_>,
 ) -> Result<GcProgram<'s>, EngineError> {
     let (source, flags) = re.with_const_ptr::<RegExpHeader, _>(|re| unsafe {
-        (
-            (*crate::regex::regexp_data_ptr(re)).pattern_ptr,
-            (*crate::regex::regexp_data_ptr(re)).flags_ptr,
-        )
+        let data = &*crate::regex::regexp_data_ptr(re);
+        (data.pattern_ptr, data.flags_ptr)
     });
     if source.is_null() || flags.is_null() {
         return Err(EngineError::InvalidFlags);
@@ -233,16 +231,6 @@ pub(super) fn new(
     Ok(super::instance::new(&scope, &data))
 }
 
-fn actual_regex(value: f64) -> Option<*mut RegExpHeader> {
-    let v = JSValue::from_bits(value.to_bits());
-    (v.is_pointer()
-        && crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
-            (v.as_pointer::<u8>() as usize) as i64,
-        ))
-        .is_some())
-    .then(|| v.as_pointer::<RegExpHeader>() as *mut RegExpHeader)
-}
-
 fn property(owner: &RuntimeHandle<'_>, name: &'static str) -> f64 {
     api::finish(super::perex_dispatch::get(owner, name.as_bytes()))
 }
@@ -266,15 +254,11 @@ pub(super) fn construct(pattern: f64, flags: f64, called: bool) -> *mut RegExpHe
                 as *mut RegExpHeader;
         }
     }
-    if let Some(re) = actual_regex(pattern.get_nanbox_f64()) {
+    if let Some(data) = super::regexp_data_of(pattern.get_nanbox_f64()) {
         unsafe {
-            pattern.set_nanbox_f64(js_nanbox_string(
-                (*crate::regex::regexp_data_ptr(re)).pattern_ptr as i64,
-            ));
+            pattern.set_nanbox_f64(js_nanbox_string((*data).pattern_ptr as i64));
             if flags.get_nanbox_f64().to_bits() == crate::value::TAG_UNDEFINED {
-                flags.set_nanbox_f64(js_nanbox_string(
-                    (*crate::regex::regexp_data_ptr(re)).flags_ptr as i64,
-                ));
+                flags.set_nanbox_f64(js_nanbox_string((*data).flags_ptr as i64));
             }
         }
     } else if regexp_like {
@@ -297,19 +281,15 @@ pub(super) fn recompile(re: *mut RegExpHeader, pattern: f64, flags: f64) -> f64 
     let receiver = scope.root_raw_mut_ptr(re);
     let pattern = scope.root_nanbox_f64(pattern);
     let flags = scope.root_nanbox_f64(flags);
-    if let Some(source_re) = actual_regex(pattern.get_nanbox_f64()) {
+    if let Some(data) = super::regexp_data_of(pattern.get_nanbox_f64()) {
         if flags.get_nanbox_f64().to_bits() != crate::value::TAG_UNDEFINED {
             crate::collection_iter::throw_type_error(
                 "Cannot supply flags when constructing one RegExp from another",
             );
         }
         unsafe {
-            flags.set_nanbox_f64(js_nanbox_string(
-                (*crate::regex::regexp_data_ptr(source_re)).flags_ptr as i64,
-            ));
-            pattern.set_nanbox_f64(js_nanbox_string(
-                (*crate::regex::regexp_data_ptr(source_re)).pattern_ptr as i64,
-            ));
+            flags.set_nanbox_f64(js_nanbox_string((*data).flags_ptr as i64));
+            pattern.set_nanbox_f64(js_nanbox_string((*data).pattern_ptr as i64));
         }
     }
     let source = string(&scope, &pattern);

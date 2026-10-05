@@ -55,13 +55,16 @@ pub(super) fn new(scope: &RuntimeHandleScope, data: &RuntimeHandle<'_>) -> *mut 
             }))
         });
     } else {
+        // Fresh ordinary birth: the existing newborn funnel checks the shape
+        // representation and publishes barriers, without retiring an Array
+        // subclass proof that this receiver has never carried.
         receiver.with_mut_ptr::<RegExpHeader, _>(|r| unsafe {
-            crate::object::store_object_field_slot(
+            crate::object::store_object_field_slot_layout_deferred(
                 r,
                 0,
                 data.with_const_ptr::<RegExpData, _>(|d| js_nanbox_pointer(d as i64).to_bits()),
             );
-            crate::object::store_object_field_slot(r, 1, 0.0f64.to_bits());
+            crate::object::store_object_field_slot_layout_deferred(r, 1, 0.0f64.to_bits());
         });
     }
     receiver.with_mut_ptr::<RegExpHeader, _>(|r| r)

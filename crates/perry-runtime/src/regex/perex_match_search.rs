@@ -89,17 +89,11 @@ pub(super) fn match_flags(
     budget: &mut Budget,
 ) -> Result<(bool, bool), EngineError> {
     let value = receiver.get_nanbox_f64();
-    let re = crate::value::js_nanbox_get_pointer(value) as *const super::RegExpHeader;
-    if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some()
-        && crate::object::regex_proto_thunks::regexp_view_flags_is_canonical(value)
-    {
-        // Nothing between the check and the read allocates or calls out.
-        return Ok(unsafe {
-            (
-                (*crate::regex::regexp_data_ptr(re)).global,
-                (*crate::regex::regexp_data_ptr(re)).unicode,
-            )
-        });
+    if let Some(data) = crate::regex::regexp_data_of(value) {
+        if crate::object::regex_proto_thunks::regexp_view_flags_is_canonical(value) {
+            // The canonicality check neither collects nor calls user code.
+            return Ok(unsafe { ((*data).global, (*data).unicode) });
+        }
     }
     let scope = RuntimeHandleScope::new();
     let flags = scope.root_nanbox_f64(dispatch::get(receiver, b"flags")?);
