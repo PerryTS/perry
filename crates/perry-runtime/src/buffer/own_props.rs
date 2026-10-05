@@ -97,6 +97,7 @@ pub fn buffer_define_own_data_prop(addr: usize, prop: &str, value: f64) {
     if addr == 0 {
         return;
     }
+    crate::typedarray_named::note_named_mutation(addr, prop.as_bytes());
     register_thread_exit_hook();
     BUFFER_OWN_PROPS_EVER.store(true, Ordering::Release);
     if let Ok(mut props) = buffer_props().lock() {

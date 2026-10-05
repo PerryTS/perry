@@ -100,12 +100,10 @@ fn declared_typed_array_length_reads_the_header_inline() {
         "the arm must test GC_TYPE_TYPED_ARRAY:\n{arm}"
     );
     assert!(
-        arm.lines()
-            .any(|l| l.contains("add i64") && l.trim_end().ends_with(", 10"))
-            && arm.contains("load i8")
-            && arm.contains("@PERRY_TA_OWN_PROPS_PRESENT"),
-        "a view (the receiver's storage byte at header + 10, #10516) or an own \
-         `length` property must keep the header read off:\n{arm}"
+        arm.contains("load atomic i8")
+            && arm.contains("@PERRY_TYPED_NAMED_PROPS_INVALIDATED")
+            && !arm.lines().any(|l| l.contains("add i64") && l.trim_end().ends_with(", 10")),
+        "the live length is valid for shared views, but metadata edits must withdraw the proof:\n{arm}"
     );
 }
 

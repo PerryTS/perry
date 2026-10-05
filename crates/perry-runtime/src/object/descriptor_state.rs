@@ -1206,6 +1206,7 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
+    crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     note_data_descriptor_target(obj, &key, attrs);
     let st = state();
@@ -1232,6 +1233,9 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
 /// The per-key guard, owner index, and GC bookkeeping still run for every key.
 #[cfg(test)]
 pub(crate) fn set_property_attrs_batch(obj: usize, entries: &[(&str, PropertyAttrs)]) {
+    for (key, _) in entries {
+        crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
+    }
     if entries.is_empty() {
         return;
     }
@@ -1560,6 +1564,7 @@ pub(crate) fn table_owner_has_accessors(obj: usize) -> bool {
 
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
+    crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     crate::closure::shape::note_function_own_state_changed(obj);
     let in_keys = unsafe { super::key_attrs::attrs_live_in_keys_for_install(obj) };

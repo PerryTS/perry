@@ -57,6 +57,7 @@ mod populate;
 mod proto_methods;
 mod proto_room;
 mod typed_array;
+pub(crate) use typed_array::typed_array_uint8_intrinsic_prototype_value;
 
 /// Is `func` the body of `%Object.prototype%.valueOf`? The dispatcher's
 /// `valueOf` arm answers that body natively instead of calling it.

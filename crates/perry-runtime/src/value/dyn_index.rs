@@ -203,6 +203,16 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     if unsafe { crate::symbol::js_is_symbol(index) } != 0 {
         return unsafe { crate::symbol::js_object_get_symbol_property(value, index) };
     }
+    if jsval.is_pointer() && JSValue::from_bits(index.to_bits()).is_any_string() {
+        let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
+        if let Some(bytes) = unsafe {
+            crate::string::js_string_key_bytes(JSValue::from_bits(index.to_bits()), &mut scratch)
+        } {
+            if let Some(value) = unsafe { crate::typedarray_named::try_get(jsval, bytes) } {
+                return value;
+            }
+        }
+    }
     // #5525 hot fast path: `obj[i]` where `obj` is dynamically an owning numeric
     // typed array and `i` a canonical index. bcryptjs's Blowfish core reaches
     // its `Int32Array` P/S boxes through untyped `Array.<number>` params, so

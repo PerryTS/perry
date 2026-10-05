@@ -72,6 +72,19 @@ pub extern "C" fn js_object_get_field_by_name(
         }
         return JSValue::undefined();
     }
+    if !key.is_null() {
+        let bits = obj as u64;
+        let receiver = match bits >> 48 {
+            0 => JSValue::pointer(obj as *mut u8),
+            0x7FFD => JSValue::from_bits(bits),
+            _ => JSValue::undefined(),
+        };
+        if let Some(value) =
+            unsafe { crate::typedarray_named::get(f64::from_bits(receiver.bits()), key) }
+        {
+            return JSValue::from_bits(value.to_bits());
+        }
+    }
     if let Some(value) = unsafe { super::super::native_get::try_data_get_by_name(obj, key) } {
         return value;
     }

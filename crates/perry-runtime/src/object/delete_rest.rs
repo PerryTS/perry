@@ -34,6 +34,16 @@ pub extern "C" fn js_object_delete_field(
     if obj.is_null() || key.is_null() {
         return 1;
     }
+    if !key.is_null() {
+        unsafe {
+            let bytes = std::slice::from_raw_parts(
+                crate::string::string_data(key),
+                (*key).byte_len as usize,
+            );
+            let owner = (obj as u64 & crate::value::POINTER_MASK) as usize;
+            crate::typedarray_named::note_named_mutation(owner, bytes);
+        }
+    }
     if let Some(result) = unsafe { super::delete_last_key::try_delete_last_added_field(obj, key) } {
         return result;
     }

@@ -235,6 +235,41 @@ pub extern "C" fn js_value_length_property_ic_f64(
     value_length_property_with_cache(value, cache_slot)
 }
 
+/// Pooled-key ABI for source-level length reads. The key global is rewritten
+/// by moving GC; root it before any array-subclass priming or user getter.
+#[no_mangle]
+pub extern "C" fn js_value_length_property_key_ic_f64(
+    value: f64,
+    cache_slot: *mut LengthPicCacheSlot,
+    key: *const crate::StringHeader,
+) -> f64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_undefined() || jsval.is_null() {
+        crate::error::js_throw_type_error_property_access(
+            jsval.is_null() as u32,
+            b"length".as_ptr(),
+            6,
+        );
+    }
+    if jsval.is_short_string() {
+        return jsval.short_string_utf16_len() as f64;
+    }
+    if let Some(length) = unsafe { crate::typedarray_named::try_get(jsval, b"length") } {
+        return length;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(value);
+    let key = scope.root_raw_const_ptr(key);
+    if let Some(length) = crate::array::array_subclass_fast_length_with_ic(value, cache_slot) {
+        return length;
+    }
+    let bits = receiver.get_nanbox_f64().to_bits();
+    crate::object::js_object_get_field_by_name_f64(
+        bits as *const crate::object::ObjectHeader,
+        key.get_raw_const_ptr(),
+    )
+}
+
 fn value_length_property_with_cache(value: f64, cache_slot: *mut LengthPicCacheSlot) -> f64 {
     let jsval = JSValue::from_bits(value.to_bits());
     if jsval.is_undefined() || jsval.is_null() {
@@ -275,6 +310,11 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
 ) -> f64 {
     if !property_name_ptr.is_null() && property_name_len != 0 {
         let name = std::slice::from_raw_parts(property_name_ptr as *const u8, property_name_len);
+        if let Some(value) =
+            crate::typedarray_named::try_get(JSValue::from_bits(obj_value.to_bits()), name)
+        {
+            return value;
+        }
         if let Some(value) = crate::object::native_get::try_data_get_bytes(
             JSValue::from_bits(obj_value.to_bits()),
             name,
@@ -307,10 +347,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
                     std::ffi::CStr::from_ptr(property_name_ptr as *const std::ffi::c_char)
                         .to_bytes()
                 };
-                let key = crate::string::js_string_from_bytes(
-                    name_slice.as_ptr(),
-                    name_slice.len() as u32,
-                );
+                let key = crate::string::intern_ascii_literal(name_slice);
                 let key_f64 = crate::value::js_nanbox_string(key as i64);
                 return crate::proxy::js_proxy_get(boxed, key_f64);
             }
@@ -385,7 +422,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
         } else {
             std::ffi::CStr::from_ptr(property_name_ptr as *const std::ffi::c_char).to_bytes()
         };
-        let key = crate::string::js_string_from_bytes(name_slice.as_ptr(), name_slice.len() as u32);
+        let key = crate::string::intern_ascii_literal(name_slice);
         let class_ref_obj = obj_value.to_bits() as *const crate::object::ObjectHeader;
         return crate::object::js_object_get_field_by_name_f64(class_ref_obj, key);
     }
@@ -415,6 +452,27 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
         std::ffi::CStr::from_ptr(property_name_ptr as *const std::ffi::c_char).to_bytes()
     };
 
+    if crate::typedarray_named::is_metadata_name(name_slice) {
+        if let Some(header) = crate::value::addr_class::try_read_gc_header(ptr as usize) {
+            if matches!(
+                header.obj_type,
+                crate::gc::GC_TYPE_BUFFER
+                    | crate::gc::GC_TYPE_BUFFER_UINT8ARRAY
+                    | crate::gc::GC_TYPE_TYPED_ARRAY
+                    | crate::gc::GC_TYPE_NATIVE_TYPED_VIEW
+            ) {
+                let scope = crate::gc::RuntimeHandleScope::new();
+                let receiver = scope.root_nanbox_f64(obj_value);
+                let key = crate::string::intern_ascii_literal(name_slice);
+                let bits = receiver.get_nanbox_f64().to_bits();
+                return crate::object::js_object_get_field_by_name_f64(
+                    bits as *const crate::object::ObjectHeader,
+                    key,
+                );
+            }
+        }
+    }
+
     let property_name = match std::str::from_utf8(name_slice) {
         Ok(s) => s,
         Err(_) => return f64::from_bits(TAG_UNDEFINED),
@@ -441,9 +499,8 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
     {
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver = scope.root_raw_const_ptr(ptr as *const crate::typedarray::TypedArrayHeader);
-        let (key, typed) = receiver.across_const(|| {
-            crate::string::js_string_from_bytes(name_slice.as_ptr(), name_slice.len() as u32)
-        });
+        let (key, typed) =
+            receiver.across_const(|| crate::string::intern_ascii_literal(name_slice));
         return crate::object::js_object_get_field_by_name_f64(
             typed as *const crate::object::ObjectHeader,
             key,
@@ -661,17 +718,16 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
 
     // #8220: root the receiver across the key-string allocation. `ptr` was
     // extracted at the top of this function from the NaN-boxed `obj_value` and
-    // is a raw `*const` to a nursery-eligible heap object. `js_string_from_bytes`
-    // allocates a fresh StringHeader on every call and can trigger a copying
+    // is a raw `*const` to a nursery-eligible heap object. An intern-cache miss
+    // allocates a StringHeader and can trigger a copying
     // minor that evacuates the receiver. Without rooting, `ptr` becomes a stale
     // from-space pointer and the `js_object_get_field_by_name_f64` call below
     // dereferences retired memory — the #8220 class (raw pointer in a Rust
     // frame local, invisible to the precise root map).
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_raw_const_ptr(ptr as *const crate::object::ObjectHeader);
-    let (key_ptr, obj_ptr) = receiver.across_const(|| {
-        crate::string::js_string_from_bytes(property_name.as_ptr(), property_name.len() as u32)
-    });
+    let (key_ptr, obj_ptr) =
+        receiver.across_const(|| crate::string::intern_ascii_literal(property_name.as_bytes()));
 
     // Call native object property access with the post-collection pointer.
 

@@ -112,6 +112,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // #9342: Uint8Array inline-read admission cache (buffer/header.rs).
     module.add_external_global("PERRY_U8_INLINE_CACHE", "[64 x i64]");
     module.add_external_global("PERRY_TA_OWN_PROPS_PRESENT", I8);
+    module.add_external_global("PERRY_TYPED_NAMED_PROPS_INVALIDATED", I8);
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
     module.declare_function("js_event_target_subclass_init", DOUBLE, &[DOUBLE, I32]);
     // #3149: `Object(value)` plain-call coercion. Takes & returns a NaN-boxed

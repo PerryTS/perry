@@ -281,6 +281,7 @@ pub static PERRY_TA_OWN_PROPS_PRESENT: std::sync::atomic::AtomicU8 =
     std::sync::atomic::AtomicU8::new(0);
 
 fn upsert_typed_array_own_prop(owner: usize, key: String, value: f64, is_data: bool) {
+    crate::typedarray_named::note_named_mutation(owner, key.as_bytes());
     // A constructor-created Uint8Array uses BufferHeader rather than
     // TypedArrayHeader. Store its ordinary properties in the existing GC-traced
     // Buffer table, so direct assignment, Reflect.set, descriptors, and

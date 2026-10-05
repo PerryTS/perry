@@ -553,6 +553,11 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             {
                 return f64::from_bits(proto_bits);
             }
+            if let Some(parent) =
+                crate::object::native_module::buffer_intrinsic_prototype_parent(raw_addr as usize)
+            {
+                return parent;
+            }
             unsafe {
                 let obj = raw_addr as *const ObjectHeader;
                 let gc = gc_header_for(obj);
@@ -812,6 +817,11 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             super::super::prototype_chain::object_static_prototype(bits as usize)
         {
             return f64::from_bits(proto_bits);
+        }
+        if let Some(parent) =
+            crate::object::native_module::buffer_intrinsic_prototype_parent(bits as usize)
+        {
+            return parent;
         }
         unsafe {
             let obj = bits as *const ObjectHeader;
