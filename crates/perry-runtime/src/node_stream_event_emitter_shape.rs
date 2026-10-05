@@ -525,8 +525,13 @@ mod method_body_tests {
         let _global = crate::gc::global_side_table_test_lock();
         let _no_move = crate::gc::GcSuppressScope::new();
         let target = crate::node_stream::js_event_emitter_object_new(undefined_value());
-        let proto = shape_prototype(ordinary_object(target).unwrap().0).unwrap();
-        let emit = get_named(proto, b"emit");
+        let builtin_proto = shape_prototype(ordinary_object(target).unwrap().0).unwrap();
+        let emit = get_named(builtin_proto, b"emit");
+        // Keep the aliases inline on a private prototype; the realm's
+        // shared prototype may already be full after another unit test.
+        let proto =
+            crate::value::js_nanbox_pointer(crate::object::js_object_alloc_null_proto(0, 4) as i64);
+        crate::object::js_object_set_prototype_of(target, proto);
         let alias_id = crate::value::JSValue::try_short_string(b"alias")
             .unwrap()
             .bits() as i64;
@@ -536,7 +541,7 @@ mod method_body_tests {
         set_named(proto, b"alias", emit);
         set_named(proto, b"other", 42.0);
         let args = [f64::from_bits(
-            crate::value::JSValue::try_short_string(b"absent")
+            crate::value::JSValue::try_short_string(b"none")
                 .unwrap()
                 .bits(),
         )];
@@ -547,10 +552,11 @@ mod method_body_tests {
             );
             assert_eq!(shape_method(target, other_id, b"other"), Some(42.0));
             let obj = ordinary_object(target).unwrap().0;
+            set_named(proto, b"non_static_method_id", emit);
             let holder = ordinary_object(proto).unwrap().0;
             let heap_key = crate::string::intern_ascii_literal(b"non_static_method_id") as i64;
             let memo = crate::object::method_site::own_slot_memo::ProtoSlotMemo::new();
-            memo.prime(obj, holder, heap_key, 0);
+            memo.prime(obj, holder, heap_key, 2);
             assert!(
                 memo.slot(obj, heap_key).is_none(),
                 "heap ids cannot enter the memo"
@@ -576,9 +582,5 @@ mod method_body_tests {
                 None
             );
         }
-        // The prototype is process-global test state; remove only our keys.
-        let obj = ordinary_object(proto).unwrap().0;
-        crate::object::js_object_delete_field(obj, crate::string::intern_ascii_literal(b"other"));
-        crate::object::js_object_delete_field(obj, crate::string::intern_ascii_literal(b"alias"));
     }
 }
