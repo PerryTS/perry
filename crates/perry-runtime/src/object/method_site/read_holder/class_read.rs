@@ -13,13 +13,33 @@
 //! the new generation.
 //! The entries belong to one PicCache site (word 2 points to its bounded
 //! process-lifetime record), never to a process-global `(shape, key)` table.
+//!
+//! A class hierarchy is often deeper than the site's own holder entry can
+//! name (babel's parser: a method on `Tokenizer.prototype` read through eight
+//! prototypes of mixin and subclass layers). An entry therefore describes up
+//! to [`CLASS_READ_MAX_DEPTH`] objects. Its intermediate hops live in one
+//! block, sized to the chain, that the entry owns. Every hop is still
+//! compared by ShapeId on every use; depth adds compares, never a different
+//! kind of fact.
 
 use super::*;
 
 const SITE_WORD: usize = 2; // the existing PIC's unused scratch word
 const SITE_TAG: u64 = 0xA2C1_0000_0000_0000;
 const STATE_CLASS_SITE: i64 = 4;
+/// The site's class entries refused a receiver's chain before its read (too
+/// deep, a hop that is not admitted, an accessor): no class prime from here
+/// on. The holder entry's own latch
+/// (`STATE_LATCHED`) does not stop class primes.
+const STATE_CLASS_LATCHED: i64 = 8;
+const _: () = assert!(STATE_CLASS_LATCHED < 1 << STATE_REPRIME_SHIFT);
+const _: () =
+    assert!(STATE_CLASS_LATCHED & (STATE_CLASS_SITE | STATE_LATCHED | STATE_REGISTERED) == 0);
 const WAYS: usize = 16;
+
+/// The most objects a class entry's chain may span, the holder (or the
+/// terminal object of an absent read) included.
+pub(super) const CLASS_READ_MAX_DEPTH: usize = 16;
 
 #[derive(Clone, Copy)]
 struct Entry {
@@ -31,7 +51,10 @@ struct Entry {
     slot: u32,
     holder: usize,
     holder_shape: u32,
-    hops: [(usize, u32); HOLDER_MAX_DEPTH - 1],
+    /// The entry's `depth - 1` intermediate hops, receiver side first: a
+    /// block the entry alone owns (null at depth 1). Allocated when the entry
+    /// is published, reused or freed when its way is overwritten.
+    hops: *mut Hop,
     /// The class lookup-surface generation under which the receiver's direct
     /// link was last proved to be `holder` (depth 1) or `hops[0]`.
     generation: u64,
@@ -49,10 +72,29 @@ const EMPTY: Entry = Entry {
     slot: 0,
     holder: 0,
     holder_shape: 0,
-    hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+    hops: std::ptr::null_mut(),
     generation: 0,
     pinned_hops: false,
 };
+
+impl Entry {
+    /// The entry's intermediate hops.
+    #[inline(always)]
+    unsafe fn hops(&self) -> &[Hop] {
+        hop_block(self.hops, self.depth)
+    }
+}
+
+/// The hop block of an entry of `depth` objects.
+#[inline(always)]
+unsafe fn hop_block<'a>(hops: *mut Hop, depth: u8) -> &'a mut [Hop] {
+    let len = (depth as usize).saturating_sub(1);
+    if len == 0 {
+        &mut []
+    } else {
+        std::slice::from_raw_parts_mut(hops, len)
+    }
+}
 
 struct Site {
     entries: [Entry; WAYS],
@@ -129,7 +171,7 @@ unsafe fn answer(e: &mut Entry, recv: *const ObjectHeader) -> Option<u64> {
     }
     let generation = crate::object::class_lookup_surface_generation();
     if e.generation != generation {
-        let direct = if e.depth == 1 { e.holder } else { e.hops[0].0 };
+        let direct = if e.depth == 1 { e.holder } else { (*e.hops).0 };
         if class_link(recv)? as usize != direct {
             return None;
         }
@@ -139,8 +181,7 @@ unsafe fn answer(e: &mut Entry, recv: *const ObjectHeader) -> Option<u64> {
         return pinned_answer(e);
     }
     let mut previous = 0usize;
-    for i in 0..(e.depth as usize).saturating_sub(1) {
-        let (addr, shape) = e.hops[i];
+    for (i, &(addr, shape)) in e.hops().iter().enumerate() {
         if addr == 0 || shape_word(addr) != shape {
             return None;
         }
@@ -163,8 +204,7 @@ unsafe fn answer(e: &mut Entry, recv: *const ObjectHeader) -> Option<u64> {
 /// identities), as `entry_answer_other` proves a site's own deep entry.
 #[inline]
 unsafe fn pinned_answer(e: &Entry) -> Option<u64> {
-    for i in 0..(e.depth as usize).saturating_sub(1) {
-        let (addr, shape) = e.hops[i];
+    for &(addr, shape) in e.hops() {
         if addr == 0 || shape_word(addr) != shape {
             return None;
         }
@@ -243,6 +283,20 @@ pub(super) unsafe fn try_hit(
     None
 }
 
+/// May the site prime a class entry? (Its class entries have not latched.)
+#[inline]
+pub(super) fn may_prime(c: &PicCache) -> bool {
+    c[HOLDER_STATE] & STATE_CLASS_LATCHED == 0
+}
+
+/// Latch the site's class entries (when it has a cache).
+#[inline]
+unsafe fn latch(cache: *mut PicCache) {
+    if !cache.is_null() {
+        (*cache)[HOLDER_STATE] |= STATE_CLASS_LATCHED;
+    }
+}
+
 /// Prime only after the generic getter's result has been compared with the
 /// same live chain and slot. Returns None if this receiver has no class link.
 pub(super) unsafe fn prime(
@@ -251,11 +305,15 @@ pub(super) unsafe fn prime(
     cache_slot: *mut PicCacheSlot,
     name: &[u8],
 ) -> Option<crate::value::JSValue> {
-    if class_link(obj).is_none()
-        || !holder_name_admitted(name)
-        || key_may_be_accessor(obj, name)
-        || walk(obj, name, true).is_none()
-    {
+    if class_link(obj).is_none() || !holder_name_admitted(name) {
+        return None;
+    }
+    let existing = crate::object::field_get_set::pic_slot_peek::<PicCache>(cache_slot);
+    if !existing.is_null() && !may_prime(&*existing) {
+        return None;
+    }
+    if key_may_be_accessor(obj, name) || walk_to(obj, name, true, CLASS_READ_MAX_DEPTH).is_none() {
+        latch(existing);
         return None;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -272,7 +330,7 @@ pub(super) unsafe fn prime(
         let Some(obj) = ordinary_receiver(obj as usize) else {
             return Some(value);
         };
-        let Some(w) = walk(obj, name, true) else {
+        let Some(w) = walk_to(obj, name, true, CLASS_READ_MAX_DEPTH) else {
             return Some(value);
         };
         let bits = value.bits();
@@ -332,9 +390,26 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
             s.next = (s.next + 1) % WAYS;
             i
         });
-    let pinned_hops = w.hops[..w.depth.saturating_sub(1)]
+    let walked = &w.hops[..w.depth.saturating_sub(1)];
+    let pinned_hops = walked
         .iter()
         .all(|&(_, shape)| shape_proto_id(shape).is_some_and(hop_identity_pins_link));
+    // The way's previous block is reused for a chain of the same depth and
+    // freed otherwise; the entry written below is its only owner.
+    let old = &s.entries[index];
+    let mut hops = old.hops;
+    if old.hops().len() != walked.len() {
+        if !hops.is_null() {
+            drop(Box::from_raw(hop_block(hops, old.depth) as *mut [Hop]));
+        }
+        hops = if walked.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            Box::into_raw(Box::<[Hop]>::from(walked)) as *mut Hop
+        };
+    } else {
+        hop_block(hops, w.depth as u8).copy_from_slice(walked);
+    }
     s.entries[index] = Entry {
         token,
         class_id: (*recv).class_id,
@@ -343,7 +418,7 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
         slot: w.slot.unwrap_or(0),
         holder: w.holder,
         holder_shape: w.holder_shape,
-        hops: w.hops,
+        hops,
         generation: crate::object::class_lookup_surface_generation(),
         pinned_hops,
     };
@@ -366,8 +441,8 @@ pub(super) fn scan_roots(c: &mut PicCache, visitor: &mut crate::gc::RuntimeRootV
         if visitor.visit_tagged_usize_slot(&mut e.holder, crate::value::POINTER_TAG) {
             ROOT_REWRITES.fetch_add(1, Ordering::Relaxed);
         }
-        for i in 0..(e.depth as usize).saturating_sub(1) {
-            if visitor.visit_tagged_usize_slot(&mut e.hops[i].0, crate::value::POINTER_TAG) {
+        for hop in unsafe { hop_block(e.hops, e.depth) } {
+            if visitor.visit_tagged_usize_slot(&mut hop.0, crate::value::POINTER_TAG) {
                 ROOT_REWRITES.fetch_add(1, Ordering::Relaxed);
             }
         }
@@ -377,6 +452,108 @@ pub(super) fn scan_roots(c: &mut PicCache, visitor: &mut crate::gc::RuntimeRootV
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Fake objects whose only meaningful word is their ShapeId.
+    fn shaped(shape: u32) -> Box<ObjectHeader> {
+        Box::new(ObjectHeader {
+            class_id: 0,
+            parent_class_id: shape,
+            meta: std::ptr::null_mut(),
+        })
+    }
+
+    fn deep_walk(chain: &[Box<ObjectHeader>], holder: &ObjectHeader) -> Walk {
+        let mut hops = NO_HOPS;
+        for (i, h) in chain.iter().enumerate() {
+            hops[i] = ((&**h as *const ObjectHeader) as usize, h.parent_class_id);
+        }
+        Walk {
+            holder: (holder as *const ObjectHeader) as usize,
+            holder_shape: holder.parent_class_id,
+            slot: None,
+            hops,
+            depth: chain.len() + 1,
+            getter: 0,
+        }
+    }
+
+    /// A chain deeper than the site's own holder words: every hop, the ones
+    /// past the holder entry's words included, is compared on every use, the
+    /// root scan reaches the deepest hop, and a way overwritten by a shallow
+    /// chain trades its block for one sized to the new chain.
+    #[test]
+    fn deep_entry_compares_every_hop() {
+        if !crate::object::method_site::run_with_fresh_worker_gate("deep_entry_compares_every_hop")
+        {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        let base = crate::object::shapes::SHAPE_ID_BASE;
+        let recv = shaped(base + 1);
+        let chain: Vec<Box<ObjectHeader>> = (0..CLASS_READ_MAX_DEPTH as u32 - 1)
+            .map(|i| shaped(base + 10 + i))
+            .collect();
+        let holder = shaped(base + 200);
+        let w = deep_walk(&chain, &holder);
+        assert_eq!(w.depth, CLASS_READ_MAX_DEPTH);
+        let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
+        // Skip registration: the stack cache is not a process-lifetime PIC
+        // allocation, and this test drives only the published words.
+        cache[HOLDER_STATE] = STATE_REGISTERED;
+        unsafe { publish(&mut cache, &*recv, &w) };
+        let token = (PIC_ID_TOKEN_BIT | u64::from(base + 1)) as i64;
+        let s = unsafe { site(&cache) }.expect("published site");
+        let e = s.entries.iter().find(|e| e.token == token).expect("entry");
+        assert_eq!(
+            unsafe { e.hops() }.len(),
+            CLASS_READ_MAX_DEPTH - 1,
+            "a deep chain's block holds every hop"
+        );
+        // These fake hops carry no registered prototype identity; the hop
+        // compares below are what a pinned entry's answer runs.
+        let mut e = *e;
+        e.pinned_hops = true;
+        e.generation = crate::object::class_lookup_surface_generation();
+        assert_eq!(
+            unsafe { pinned_answer(&e) },
+            Some(crate::value::TAG_UNDEFINED)
+        );
+        // Each hop's ShapeId is a fact the answer rests on, the deepest too.
+        for i in [
+            0,
+            HOLDER_MAX_DEPTH - 2,
+            HOLDER_MAX_DEPTH - 1,
+            CLASS_READ_MAX_DEPTH - 2,
+        ] {
+            let hop = &*chain[i] as *const ObjectHeader as *mut ObjectHeader;
+            unsafe { (*hop).parent_class_id = base + 300 };
+            assert_eq!(unsafe { pinned_answer(&e) }, None, "hop {i} moved");
+            unsafe { (*hop).parent_class_id = base + 10 + i as u32 };
+        }
+        // The root scan visits every hop, the deepest too.
+        let deepest = (&*chain[CLASS_READ_MAX_DEPTH - 2] as *const ObjectHeader) as usize;
+        let mut seen: Vec<u64> = Vec::new();
+        {
+            let mut mark = |v: f64| seen.push(v.to_bits() & crate::value::POINTER_MASK);
+            let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
+            scan_roots(&mut cache, &mut visitor);
+        }
+        assert!(
+            seen.contains(&(deepest as u64)),
+            "the root scan must visit the deepest hop"
+        );
+        // A shallow chain published over the same way gets a block its size.
+        let shallow = deep_walk(&chain[..1], &holder);
+        unsafe { publish(&mut cache, &*recv, &shallow) };
+        let s = unsafe { site(&cache) }.expect("published site");
+        let e = s.entries.iter().find(|e| e.token == token).expect("entry");
+        assert_eq!(e.depth, 2);
+        assert_eq!(unsafe { e.hops() }, &[w.hops[0]][..]);
+        let block = unsafe { hop_block(e.hops, e.depth) } as *mut [Hop];
+        unsafe { drop(Box::from_raw(block)) };
+        let record = (cache[SITE_WORD] as u64 & crate::value::POINTER_MASK) as usize as *mut Site;
+        unsafe { drop(Box::from_raw(record)) };
+    }
 
     #[test]
     fn foreign_scratch_word_is_not_a_site() {
@@ -446,7 +623,7 @@ mod tests {
             slot: 0,
             holder: a as usize,
             holder_shape: proto_shape,
-            hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+            hops: std::ptr::null_mut(),
             generation: 0,
             pinned_hops: true,
         };
