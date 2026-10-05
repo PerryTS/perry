@@ -140,3 +140,8 @@ Long-lived managed slots crossing at least 64 collecting sites use statepoint Di
 All non-platform shadow selectors and implementations are removed, including the size heuristic, 32M relocation ceiling, per-function retry, retired environment switches, machine O0 and TRE escapes. The actual post-RS4GC 1,572,864-instruction budget remains fail-closed for unrelated generated-IR expansion; it never changes rooting or optimization. Warn/off alter diagnostics only. Rust-owned callback cells use the existing RuntimeHandleScope/scanner, without a new registry or latch.
 
 The rooting/removal deliverable and linear target are achieved. Strict performance acceptance remains open: final-source commander RSS rises 3.33%, Zod RSS rises 0.34%, and TS CPU is 3.13 → 3.20 seconds despite −0.105% instructions. TS fulls are one in every base/head run; no TS instruction regression is claimed. Earlier padding-sweep TABLE was reviewed, but no lane sweep is claimed. Timing at the 0.00–0.01-second floor cannot establish a strict CPU decrease for hello/micro rows. Android runtime cross-build and a final linked full bundle are also unproved for the reasons above.
+
+
+## RSS follow-up and completed full-bundle retry
+
+The original table above is retained as the historical five-pair receipt. The follow-up [RSS audit](statepoints-only-12023-rss.md) records 15 pairs with THP on/off, file-backed residency attribution, equal-cache controls, rejected linker prototypes, and the successful full-bundle retry. All equal-cache separate-arm RSS medians are now at or below base; strict CPU acceptance remains unresolved. No compiler/runtime/linker change was promoted in the follow-up.
