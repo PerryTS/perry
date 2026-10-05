@@ -147,6 +147,7 @@ pub extern "C" fn js_object_delete_field(
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+                let obj = super::array_object_ops::array_header(obj) as *mut ObjectHeader;
                 if let Some(name) = super::has_own_helpers::str_from_string_header(key) {
                     // An Array's `length` is a non-configurable exotic own
                     // property with no descriptor-table entry, so the

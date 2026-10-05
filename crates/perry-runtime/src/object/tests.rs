@@ -1480,7 +1480,7 @@ fn stale_pre_grow_array_pointer_reads_the_real_length_in_object_ops() {
     unsafe {
         super::array_object_ops::mark_all_array_props(stale as *mut ObjectHeader, true, true);
     }
-    let addr = stale as usize;
+    let addr = resolved as usize;
     assert!(
         crate::object::get_property_attrs(addr, &(real_len - 1).to_string()).is_some(),
         "the freeze walk must reach the array's last real index"
@@ -1489,6 +1489,25 @@ fn stale_pre_grow_array_pointer_reads_the_real_length_in_object_ops() {
         crate::object::get_property_attrs(addr, &real_len.to_string()).is_none(),
         "the freeze walk must not run past the array's real length"
     );
+    // The old alias remains a valid JS receiver; descriptor reflection must
+    // observe the same non-writable/non-configurable live-owner attributes.
+    let descriptor = crate::object::js_object_get_own_property_descriptor(
+        crate::value::js_nanbox_pointer(stale as i64),
+        (real_len - 1) as f64,
+    );
+    assert_ne!(descriptor.to_bits(), crate::value::TAG_UNDEFINED);
+    let descriptor = crate::value::js_nanbox_get_pointer(descriptor) as *mut ObjectHeader;
+    for field in ["writable", "configurable"] {
+        assert_eq!(
+            crate::object::js_object_get_field_by_name(
+                descriptor,
+                crate::string::canonical_key(field.as_bytes()),
+            )
+            .bits(),
+            crate::value::JSValue::bool(false).bits(),
+            "{field}: reflection through a growth alias"
+        );
+    }
 }
 
 /// #7563: an ARRAY receiver must never be read back as a class instance.

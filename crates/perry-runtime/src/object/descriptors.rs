@@ -795,7 +795,9 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
-                let arr = obj as *const crate::array::ArrayHeader;
+                // Accessors and attributes follow array growth, just like reads.
+                let arr = super::array_object_ops::array_header(obj);
+                let obj = arr as *mut ObjectHeader;
                 let Some(ref name) = key_rust else {
                     return f64::from_bits(crate::value::TAG_UNDEFINED);
                 };

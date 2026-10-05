@@ -41,7 +41,9 @@ unsafe fn is_array_object(obj: *const ObjectHeader) -> bool {
 ///
 /// Numeric descriptor operations resolve this same owner for every side-table
 /// read and write; mixing an alias with the live header strands descriptor entries.
-#[inline]
+// Array descriptor operations share one forwarding resolver. Keeping the
+// cold owner walk out of line avoids duplicating clean_arr_ptr's full fallback.
+#[inline(never)]
 pub(super) unsafe fn array_header(obj: *const ObjectHeader) -> *const crate::array::ArrayHeader {
     let raw = obj as *const crate::array::ArrayHeader;
     let cleaned = crate::array::clean_arr_ptr(raw);
@@ -74,24 +76,10 @@ pub(crate) unsafe fn mark_all_array_props(
     if !is_array_object(obj) {
         return false;
     }
-    // Any explicit per-index/named attribute override makes the raw numeric
-    // fast paths ineligible — gate them on the descriptor flag so the recorded
-    // non-writable/non-configurable attrs are actually honored on read/write.
-    {
-        let gc = gc_header_for(obj);
-        (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
-    }
-    let arr = array_header(obj);
-    // NOTE: `addr` deliberately stays the CALLER's address, not `arr`'s. The
-    // attrs side table for arrays is keyed inconsistently across the runtime —
-    // `Object.getOwnPropertyDescriptor` reads at the caller's (possibly
-    // pre-grow) address while the element-write rejection path resolves through
-    // `clean_arr_ptr` first — so re-keying only this writer strands the entry
-    // for the reader that today finds it. Measured both ways under #7548;
-    // canonical keying regressed `getOwnPropertyDescriptor` on a grown frozen
-    // array without gaining the write rejection. Unifying the two is a separate
-    // change to the readers.
-    let addr = obj as usize;
+    let arr = array_header_mut(obj);
+    let gc = gc_header_for(arr.cast());
+    (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
+    let addr = arr as usize;
     let apply = |key: String| {
         let mut attrs =
             super::get_property_attrs(addr, &key).unwrap_or(PropertyAttrs::new(true, true, true));
@@ -103,6 +91,15 @@ pub(crate) unsafe fn mark_all_array_props(
         }
         super::set_property_attrs(addr, key, attrs);
     };
+    // The array's own length is non-enumerable/non-configurable and freeze
+    // also makes it non-writable. Store that explicit override on the live owner.
+    if drop_writable {
+        super::set_property_attrs(
+            addr,
+            "length".to_string(),
+            PropertyAttrs::new(false, false, false),
+        );
+    }
     let len = (*arr).length;
     for i in 0..len {
         apply(i.to_string());
@@ -135,7 +132,7 @@ pub(crate) unsafe fn array_property_is_enumerable(
     // `Object.defineProperty(arr, i, { enumerable: false })` carries a
     // side-table entry that must be honored (it previously hard-coded `true`
     // for canonical indices, so a non-enumerable index still reported `true`).
-    let enumerable = super::get_property_attrs(obj as usize, key_name)
+    let enumerable = super::get_property_attrs(arr as usize, key_name)
         .map(|attrs| attrs.enumerable())
         .unwrap_or(true);
     Some(f64::from_bits(if enumerable {
@@ -239,7 +236,7 @@ pub(crate) unsafe fn array_set_length_from_descriptor(
     // after every descriptor allocation and user coercion above (#8507).
     let (arr, owner, old_len) = obj_handle.with_mut_ptr(|obj: *mut ObjectHeader| {
         let arr = array_header_mut(obj);
-        (arr, obj as usize, (*arr).length)
+        (arr, arr as usize, (*arr).length)
     });
     // `length` is non-configurable, non-enumerable; writable defaults to true
     // until explicitly set otherwise via the side table.
@@ -393,6 +390,9 @@ pub(crate) unsafe fn define_array_property(
     let key_name_owned = key_name.to_string();
     let key_name = key_name_owned.as_str();
     let scope = crate::gc::RuntimeHandleScope::new();
+    // Named and indexed descriptors must share the live array owner. A growth
+    // alias retains GC_TYPE_ARRAY but is no longer the descriptor-table key.
+    let obj = array_header_mut(obj).cast::<ObjectHeader>();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let descriptor_handle = scope.root_nanbox_f64(descriptor_value);
     let key_handle = scope.root_string_ptr(key_str);
@@ -854,13 +854,9 @@ pub(crate) unsafe fn define_array_property(
         .unwrap_or_else(|| cur_attrs.map(|a| a.enumerable()).unwrap_or(false));
     let configurable = read_bool(b"configurable")
         .unwrap_or_else(|| cur_attrs.map(|a| a.configurable()).unwrap_or(false));
-    // Named descriptor readers use the caller's owner identity, which can be
-    // a pre-growth forwarding alias. Preserve that identity while reloading
-    // the handle after every allocating probe: GC moves update the handle,
-    // whereas resolving array growth here alone would strand the attributes
-    // from getOwnPropertyDescriptor's existing lookup.
+    // Attribute reads and installs share the live owner after growth/GC.
     set_property_attrs(
-        current_obj() as usize,
+        current_arr() as usize,
         key_name.to_string(),
         PropertyAttrs::new(writable, enumerable, configurable),
     );
@@ -889,3 +885,7 @@ pub(crate) fn array_get_prototype_of_addr(raw_addr: usize) -> Option<f64> {
     }
     builtin_constructor_prototype_value(b"Object")
 }
+
+#[cfg(test)]
+#[path = "array_annexb_tests.rs"]
+mod array_annexb_tests;
