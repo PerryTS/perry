@@ -109,12 +109,14 @@ pub(crate) fn module_literal_finals(
     module: &Module,
     prefix: &str,
     class_reps: &HashMap<String, u64>,
+    class_widths: &HashMap<String, u32>,
 ) -> Vec<ModuleBirth> {
     fn expr(
         e: &Expr,
         module: &Module,
         prefix: &str,
         reps: &HashMap<String, u64>,
+        widths: &HashMap<String, u32>,
         out: &mut BTreeSet<BirthShape>,
     ) {
         let shape = match e {
@@ -129,17 +131,21 @@ pub(crate) fn module_literal_finals(
                 .iter()
                 .find(|c| &c.name == class_name)
                 .and_then(|c| anon_props(c, args))
-                .and_then(|props| literal_final(prefix, &props, *reps.get(class_name)?)),
+                .and_then(|props| literal_final(prefix, &props, *reps.get(class_name)?))
+                .map(|mut shape| {
+                    shape.live = widths.get(class_name).copied().unwrap_or(shape.live);
+                    shape
+                }),
             _ => None,
         };
         if let Some(shape) = shape {
             out.insert(shape);
         }
         if let Expr::Closure { body, .. } = e {
-            stmts(body, module, prefix, reps, out);
+            stmts(body, module, prefix, reps, widths, out);
         }
         perry_hir::walker::walk_expr_children(e, &mut |child| {
-            expr(child, module, prefix, reps, out)
+            expr(child, module, prefix, reps, widths, out)
         });
     }
     fn stmts(
@@ -147,30 +153,31 @@ pub(crate) fn module_literal_finals(
         m: &Module,
         p: &str,
         r: &HashMap<String, u64>,
+        w: &HashMap<String, u32>,
         out: &mut BTreeSet<BirthShape>,
     ) {
         for stmt in body {
             match stmt {
                 Stmt::Let { init, .. } | Stmt::Return(init) => {
                     if let Some(e) = init {
-                        expr(e, m, p, r, out);
+                        expr(e, m, p, r, w, out);
                     }
                 }
-                Stmt::Expr(e) | Stmt::Throw(e) => expr(e, m, p, r, out),
+                Stmt::Expr(e) | Stmt::Throw(e) => expr(e, m, p, r, w, out),
                 Stmt::If {
                     condition,
                     then_branch,
                     else_branch,
                 } => {
-                    expr(condition, m, p, r, out);
-                    stmts(then_branch, m, p, r, out);
+                    expr(condition, m, p, r, w, out);
+                    stmts(then_branch, m, p, r, w, out);
                     if let Some(b) = else_branch {
-                        stmts(b, m, p, r, out);
+                        stmts(b, m, p, r, w, out);
                     }
                 }
                 Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
-                    expr(condition, m, p, r, out);
-                    stmts(body, m, p, r, out);
+                    expr(condition, m, p, r, w, out);
+                    stmts(body, m, p, r, w, out);
                 }
                 Stmt::For {
                     init,
@@ -179,37 +186,37 @@ pub(crate) fn module_literal_finals(
                     body,
                 } => {
                     if let Some(s) = init {
-                        stmts(std::slice::from_ref(s), m, p, r, out);
+                        stmts(std::slice::from_ref(s), m, p, r, w, out);
                     }
                     for e in [condition, update].into_iter().flatten() {
-                        expr(e, m, p, r, out);
+                        expr(e, m, p, r, w, out);
                     }
-                    stmts(body, m, p, r, out);
+                    stmts(body, m, p, r, w, out);
                 }
-                Stmt::Labeled { body, .. } => stmts(std::slice::from_ref(body), m, p, r, out),
+                Stmt::Labeled { body, .. } => stmts(std::slice::from_ref(body), m, p, r, w, out),
                 Stmt::Try {
                     body,
                     catch,
                     finally,
                 } => {
-                    stmts(body, m, p, r, out);
+                    stmts(body, m, p, r, w, out);
                     if let Some(c) = catch {
-                        stmts(&c.body, m, p, r, out);
+                        stmts(&c.body, m, p, r, w, out);
                     }
                     if let Some(b) = finally {
-                        stmts(b, m, p, r, out);
+                        stmts(b, m, p, r, w, out);
                     }
                 }
                 Stmt::Switch {
                     discriminant,
                     cases,
                 } => {
-                    expr(discriminant, m, p, r, out);
+                    expr(discriminant, m, p, r, w, out);
                     for c in cases {
                         if let Some(e) = &c.test {
-                            expr(e, m, p, r, out);
+                            expr(e, m, p, r, w, out);
                         }
-                        stmts(&c.body, m, p, r, out);
+                        stmts(&c.body, m, p, r, w, out);
                     }
                 }
                 Stmt::Break
@@ -223,14 +230,21 @@ pub(crate) fn module_literal_finals(
         }
     }
     let mut out = BTreeSet::new();
-    stmts(&module.init, module, prefix, class_reps, &mut out);
+    stmts(
+        &module.init,
+        module,
+        prefix,
+        class_reps,
+        class_widths,
+        &mut out,
+    );
     for global in &module.globals {
         if let Some(e) = &global.init {
-            expr(e, module, prefix, class_reps, &mut out);
+            expr(e, module, prefix, class_reps, class_widths, &mut out);
         }
     }
     for f in &module.functions {
-        stmts(&f.body, module, prefix, class_reps, &mut out);
+        stmts(&f.body, module, prefix, class_reps, class_widths, &mut out);
     }
     for c in &module.classes {
         for f in c
@@ -241,11 +255,11 @@ pub(crate) fn module_literal_finals(
             .chain(c.getters.iter().map(|(_, f)| f))
             .chain(c.setters.iter().map(|(_, f)| f))
         {
-            stmts(&f.body, module, prefix, class_reps, &mut out);
+            stmts(&f.body, module, prefix, class_reps, class_widths, &mut out);
         }
         for f in c.fields.iter().chain(&c.static_fields) {
             if let Some(e) = &f.init {
-                expr(e, module, prefix, class_reps, &mut out);
+                expr(e, module, prefix, class_reps, class_widths, &mut out);
             }
         }
     }
@@ -499,13 +513,17 @@ pub(crate) fn finalize_literal(
     props: &[(String, Expr)],
     base_rep: u64,
     object: &str,
+    live: u32,
 ) -> String {
     if !super::static_shape_ids::has_static_final_shapes() {
         return object.to_string();
     }
-    let Some(shape) = literal_final(ctx.strings.module_prefix(), props, base_rep) else {
+    let Some(mut shape) = literal_final(ctx.strings.module_prefix(), props, base_rep) else {
         return object.to_string();
     };
+    // Finalization validates the complete live bound. Keep the allocation
+    // capacity so widening a method literal does not retire its ConstFn lanes.
+    shape.live = live;
     finalize_shape(ctx, &shape, object)
 }
 

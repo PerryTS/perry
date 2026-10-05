@@ -201,7 +201,10 @@ fn assert_literal_width(module: &Module, width: u32) {
         .lines()
         .filter(|l| l.contains("call i64 @js_object_alloc_class_inline_keys_stamped("))
         .collect();
-    assert!(!allocations.is_empty(), "fixture must emit a literal birth");
+    assert!(
+        !allocations.is_empty(),
+        "fixture must emit a literal birth: {text}"
+    );
     for line in allocations {
         assert!(
             line.contains(&format!(", i32 0, i32 {width}, i64 ")),
@@ -295,8 +298,7 @@ fn born_wide_captured_literal() {
     assert_literal_width(&module, 3);
 }
 
-#[test]
-fn born_wide_literal_method_this() {
+fn method_fixture() -> Module {
     let mut module = fixture(1, 2);
     // The method is a dynamic-this closure in a literal constructor argument.
     let mut init = literal_new();
@@ -305,11 +307,49 @@ fn born_wide_literal_method_this() {
     }
     module.classes[0].fields[1].ty = Type::Any;
     module.classes[0].constructor.as_mut().unwrap().params[1].ty = Type::Any;
-    module.init = vec![
-        literal_binding(init),
-        added_store(Expr::LocalGet(1001), "k0"),
-    ];
-    assert_literal_width(&module, 3);
+    // An array element escapes scalar replacement; only method `this`
+    // supplies capacity evidence for this literal.
+    module.init = vec![Stmt::Expr(Expr::Array(vec![init]))];
+    module
+}
+
+#[test]
+fn born_wide_literal_method_this() {
+    assert_literal_width(&method_fixture(), 3);
+}
+
+#[test]
+fn born_wide_constfn_final_preserves_reserved_capacity() {
+    let module = method_fixture();
+    let mut options = super::super::class_field_barrier_tests::ir_opts();
+    options.output_type = "executable".into();
+    let births = crate::module_birth_shapes(&module, options.clone()).unwrap();
+    let finals: Vec<_> = births
+        .iter()
+        .filter(|birth| !birth.shape.constfn.is_empty())
+        .collect();
+    assert_eq!(
+        finals.len(),
+        1,
+        "method fixture must produce a ConstFn final shape"
+    );
+    assert_eq!(finals[0].shape.key_count, 2);
+    assert_eq!(finals[0].shape.live, 3);
+    options.static_shape_ids =
+        crate::assign_static_shape_ids(births.iter().map(|birth| &birth.shape))
+            .into_iter()
+            .collect();
+    let text = String::from_utf8(crate::compile_module(&module, options).unwrap()).unwrap();
+    let calls: Vec<_> = text
+        .lines()
+        .filter(|line| line.contains("call i64 @js_object_finalize_constfn_static("))
+        .collect();
+    assert_eq!(calls.len(), 1, "finalization must be emitted");
+    assert!(
+        calls[0].contains(", i32 2, i32 3, i32 0, i64 "),
+        "finalization must preserve live width: {}",
+        calls[0]
+    );
 }
 
 #[test]
