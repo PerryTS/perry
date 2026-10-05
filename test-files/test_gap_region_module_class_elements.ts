@@ -34,6 +34,21 @@ function quiet(n: number): number {
 }
 console.log("quiet", quiet(256), QUIET[0].touched, QUIET[255].touched);
 
+// This loop only tests the loaded element for undefined. Its body cannot
+// collect, so the region stays valid across the back-edge poll. The fresh
+// sliced array must move at that poll; a missing refresh must fault under
+// from-space protection. The fractional bound reaches the generic function.
+const POLL_ONLY: Cell[] = cells(256).slice();
+function pollOnly(n: number): number {
+    let missing = 0;
+    for (let i = 0; i < n; i++) {
+        const o: any = POLL_ONLY[i & 255];
+        if (o === undefined) missing++;
+    }
+    return missing;
+}
+console.log("pollOnly", pollOnly(255.5));
+
 // An allocating call in the body stales the region; later accesses and
 // the next iteration must re-check. All results still come from the objects.
 function churn(n: number): number {
