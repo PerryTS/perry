@@ -858,11 +858,13 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                             } else {
                                 Type::Any
                             };
-                            let already_in_scope = ctx
-                                .locals
-                                .lookup_index_in_scope(&name, outer_locals_len)
-                                .is_some();
-                            if !already_in_scope {
+                            let existing =
+                                ctx.locals.lookup_index_in_scope(&name, outer_locals_len);
+                            if let Some(pos) = existing {
+                                // A var redeclaration shares the parameter binding.
+                                // The declaration lowerer reuses hoisted ids.
+                                ctx.var_hoisted_ids.insert(ctx.locals[pos].1);
+                            } else {
                                 let id = ctx.define_local(name.clone(), ty.clone());
                                 // Mark as hoisted so closures created
                                 // before the var's init expression see
@@ -1040,11 +1042,10 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
             names.sort();
             names.dedup();
             for name in names {
-                let already_in_scope = ctx
-                    .locals
-                    .lookup_index_in_scope(&name, outer_locals_len)
-                    .is_some();
-                if !already_in_scope {
+                let existing = ctx.locals.lookup_index_in_scope(&name, outer_locals_len);
+                if let Some(pos) = existing {
+                    ctx.var_hoisted_ids.insert(ctx.locals[pos].1);
+                } else {
                     let id = ctx.define_local(name.clone(), Type::Any);
                     ctx.var_hoisted_ids.insert(id);
                     hoisted_id_set.insert(id);

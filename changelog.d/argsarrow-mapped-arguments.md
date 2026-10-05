@@ -2,3 +2,5 @@
 - Add Node-compared CommonJS coverage for both aliasing directions, nested and returned arrows, escaped arguments, compound receiver snapshots, strict and non-simple parameters, missing arguments, changed length, and deleted indices. Unit tests cover shared capture representation, preserved elision, and invalidation of every parameter's compound-assignment shortcut.
 
 - Apply ordinary function strictness and simple-parameter rules to object methods, bind their arguments before parameter defaults, and prevent scope grouping from replacing a parameter's prologue cell when a var declaration reuses its binding. Function-constructor bodies now begin with their own sloppy strict-mode context unless their source contains a strict directive.
+
+Function-expression var redeclarations now reuse their parameter bindings.
