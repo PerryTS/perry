@@ -204,6 +204,7 @@ unsafe fn prop_external_zlib(handle: i64, property_name: &str) -> Option<f64> {
         extern "C" {
             fn js_ext_zlib_is_stream_handle(handle: i64) -> i32;
             fn js_ext_zlib_stream_bytes_written(handle: i64) -> f64;
+            fn js_ext_zlib_stream_property(handle: i64, which: i32) -> f64;
             fn js_class_method_bind(
                 instance: f64,
                 method_name_ptr: *const u8,
@@ -215,6 +216,19 @@ unsafe fn prop_external_zlib(handle: i64, property_name: &str) -> Option<f64> {
             if property_name == "bytesWritten" {
                 return Some(js_ext_zlib_stream_bytes_written(handle));
             }
+            let property = match property_name {
+                "readableLength" => Some(0),
+                "readableHighWaterMark" => Some(1),
+                "writableLength" => Some(2),
+                "writableHighWaterMark" => Some(3),
+                "destroyed" => Some(4),
+                "readableEnded" => Some(5),
+                "writableFinished" => Some(6),
+                _ => None,
+            };
+            if let Some(which) = property {
+                return Some(js_ext_zlib_stream_property(handle, which));
+            }
             let method: Option<&'static [u8]> = match property_name {
                 "write" => Some(b"write"),
                 "end" => Some(b"end"),
@@ -222,16 +236,22 @@ unsafe fn prop_external_zlib(handle: i64, property_name: &str) -> Option<f64> {
                 "once" => Some(b"once"),
                 "addListener" => Some(b"addListener"),
                 "pipe" => Some(b"pipe"),
+                "iterator" => Some(b"iterator"),
+                "@@asyncIterator" => Some(b"@@asyncIterator"),
                 "flush" => Some(b"flush"),
                 "close" => Some(b"close"),
                 "destroy" => Some(b"destroy"),
                 "params" => Some(b"params"),
                 "reset" => Some(b"reset"),
+                "pause" => Some(b"pause"),
+                "resume" => Some(b"resume"),
+                "off" => Some(b"off"),
+                "removeListener" => Some(b"removeListener"),
                 _ => None,
             };
             if let Some(name_bytes) = method {
                 return Some(js_class_method_bind(
-                    f64::from_bits(handle as u64),
+                    nanbox_handle_value(handle),
                     name_bytes.as_ptr(),
                     name_bytes.len(),
                 ));

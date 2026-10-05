@@ -55,6 +55,18 @@ fn queue_destroy_events(stream: f64, err: f64) {
 }
 
 pub(super) fn destroy_stream(stream: f64, err: f64) {
+    if super::async_iterator::is_readable_handle(stream) {
+        unsafe {
+            crate::object::js_native_call_method(
+                stream,
+                b"destroy".as_ptr() as *const i8,
+                7,
+                &err,
+                1,
+            );
+        }
+        return;
+    }
     if has_truthy_hidden(stream, hidden_key(b"destroyed")) {
         return;
     }
