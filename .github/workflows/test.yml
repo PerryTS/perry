@@ -1255,9 +1255,9 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
-            sccache-${{ runner.os }}-perry-
+            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
@@ -1279,7 +1279,9 @@ jobs:
           done
           cargo check "${cargo_args[@]}"
 
-      # sccache SAVE is main-line only (restore above is unconditional). PR
+      # Cache generations include rust-toolchain.toml so a toolchain change
+      # does not restore a multi-gigabyte sccache snapshot that rustc cannot
+      # reuse. sccache SAVE is main-line only (restore above is unconditional). PR
       # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
       # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
       # useful entry (including rust-cache's) within the hour. Now only sweep /
@@ -1291,7 +1293,7 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
 
   # ---------------------------------------------------------------------------
   # Rust unit tests (266+ tests across all crates)
@@ -1388,9 +1390,9 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
-            sccache-${{ runner.os }}-perry-
+            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
@@ -1630,7 +1632,7 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
 
   # ---------------------------------------------------------------------------
   # Full-tier perry integration tests (#8914)
@@ -1700,9 +1702,9 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}-${{ matrix.shard }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}-${{ matrix.shard }}
           restore-keys: |
-            sccache-${{ runner.os }}-perry-
+            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
@@ -1924,9 +1926,9 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
-            sccache-${{ runner.os }}-perry-
+            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         if: steps.scope.outputs.rust_work == 'true'
@@ -2059,7 +2061,7 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
 
   # ---------------------------------------------------------------------------
   # Windows build gate
@@ -2679,9 +2681,9 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
-            sccache-${{ runner.os }}-perry-
+            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
@@ -2953,7 +2955,7 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
 
   # ---------------------------------------------------------------------------
   # Representation-selection promotion census (#7106)
@@ -3046,9 +3048,9 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
-            sccache-${{ runner.os }}-perry-
+            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
@@ -3179,7 +3181,7 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
 
   # ---------------------------------------------------------------------------
   # Native ABI evidence packet
@@ -3238,9 +3240,9 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-native-abi-evidence-${{ github.run_id }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-native-abi-evidence-${{ github.run_id }}
           restore-keys: |
-            sccache-${{ runner.os }}-perry-
+            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
@@ -3293,7 +3295,7 @@ jobs:
         uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-native-abi-evidence-${{ github.run_id }}
+          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-native-abi-evidence-${{ github.run_id }}
 
   # ---------------------------------------------------------------------------
   # gap-suite (was `conformance-smoke`): the gap suite, sharded. Runs in every
