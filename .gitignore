@@ -87,6 +87,7 @@ tests/test-*
 !tests/test_typed_feedback_runtime_evidence.py
 !tests/test_perf_frontier_report.py
 !tests/test_test262_focused_report.py
+!tests/test_zfs_build_storage.py
 !tests/test_npm_sweep.py
 !tests/test_repsel_census.py
 !tests/test_perf_frontier_gate_smoke.sh

@@ -197,3 +197,6 @@ perry/
 
 - [Architecture](architecture.md) — Crate map and pipeline overview
 - See `CLAUDE.md` for detailed implementation notes and pitfalls
+
+For dedicated Linux agent hosts, use [compressed ZFS build storage](build-storage.md)
+and `make build-agent` to check storage before building.
