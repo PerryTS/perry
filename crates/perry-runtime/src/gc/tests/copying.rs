@@ -6,6 +6,7 @@ mod latch;
 mod pointer_publish_7154;
 mod promise_side_tables;
 mod promoted_remembered_7803;
+mod regexp_matcher_edge;
 mod shift_queue;
 mod splice_unshift;
 mod survival_and_malloc;

@@ -234,6 +234,41 @@ mod tests {
         assert_eq!(map.get_or_insert(0).pinned_bytes, 0);
     }
 
+    /// `get_or_insert` does not reset a slot when it becomes present: it relies
+    /// on every non-present slot holding `T::default()`. `remove` is the only
+    /// path that clears a present bit, so it must leave the slot empty. A stale
+    /// object list here would hand the old-generation sweep the header offsets
+    /// of dead objects on a recycled page.
+    #[test]
+    fn reinserted_object_page_never_inherits_removed_headers() {
+        use super::super::{generation_page_base, PageObjects};
+        for keep_neighbor in [false, true] {
+            let mut map = PageMap::<PageObjects, 8>::default();
+            let page = 4100;
+            let base = generation_page_base(page);
+            if keep_neighbor {
+                // Keeps the chunk alive, so re-insertion reuses the same slot.
+                map.get_or_insert(page + 1)
+                    .push(page + 1, generation_page_base(page + 1) + 32);
+            }
+            let objects = map.get_or_insert(page);
+            objects.push(page, base - 48); // an object entering from below
+            objects.push(page, base + 16);
+            objects.push(page, base + 64);
+            assert_eq!(map.get(&page).unwrap().len(), 3);
+            map.remove(&page);
+            assert!(map.get(&page).is_none());
+            let objects = map.get_or_insert(page);
+            assert!(objects.is_empty(), "keep_neighbor={keep_neighbor}");
+            assert_eq!(objects.iter(page).count(), 0);
+            // A different object may now enter from below without tripping the
+            // one-entering-object invariant left behind by the dead one.
+            objects.push(page, base - 8);
+            assert_eq!(objects.iter(page).collect::<Vec<_>>(), [base - 8]);
+            assert_eq!(map.len(), 1 + keep_neighbor as usize);
+        }
+    }
+
     #[test]
     fn dense_pages_do_not_pay_per_page_hash_capacity() {
         let mut map = PageMetaMap::default();
