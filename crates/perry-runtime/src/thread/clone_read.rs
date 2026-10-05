@@ -250,13 +250,13 @@ impl<'s> Reader<'s> {
             let keys_handle = self.scope.root_raw_mut_ptr(keys_arr);
             for (i, name) in names.iter().enumerate() {
                 let key = string_bits(name);
-                let keys_arr = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
                 // GC_STORE_AUDIT(BARRIERED): deserialized key array slot uses the shared array slot-store helper.
-                store_thread_array_slot(keys_arr, i, key);
+                keys_handle.with_mut_ptr(|keys_arr| store_thread_array_slot(keys_arr, i, key));
             }
-            let keys_arr = keys_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-            (*keys_arr).length = names.len() as u32;
-            crate::object::js_object_set_keys(self.ptr(slot), keys_arr);
+            keys_handle.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys_arr| {
+                (*keys_arr).length = names.len() as u32;
+                crate::object::js_object_set_keys(self.ptr(slot), keys_arr);
+            });
         }
         if let (Some(facts), Some(names)) = (final_constfn, keys) {
             let obj = super::constfn_transfer::restore(
