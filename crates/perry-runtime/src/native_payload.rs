@@ -416,6 +416,23 @@ pub fn attach_to_object<T: 'static>(
     };
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
+    let meta = obj
+        .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe { crate::object::object_meta_ensure(obj) });
+    if meta.is_null() {
+        return false;
+    }
+    let previous = unsafe { (*meta).native_state };
+    if is_payload_state_word(previous) {
+        let cell = (previous & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
+        return attach_cell(
+            obj.with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64)),
+            cell,
+            family,
+            payload,
+            external_bytes,
+        )
+        .is_ok();
+    }
     attach_rooted(&obj, family, Some(payload), external_bytes);
     true
 }
@@ -430,13 +447,6 @@ fn attach_rooted<T: 'static>(
         .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe { crate::object::object_meta_ensure(obj) });
     if meta.is_null() {
         return;
-    }
-    let previous = unsafe { (*meta).native_state };
-    if is_payload_state_word(previous) {
-        let cell = (previous & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
-        if unsafe { (*cell).type_id } == type_tag::<T>(family.class_id) {
-            unsafe { crate::native_handle::native_handle_release_rust_payload(cell) };
-        }
     }
     // The cell allocation may collect; re-read meta through the rooted object.
     let resource = payload.map_or(std::ptr::null_mut(), |p| {
@@ -696,6 +706,16 @@ pub fn attach<T: 'static>(
     external_bytes: usize,
 ) -> Result<(), AttachMiss> {
     let cell = payload_cell(value, family.class_id).map_err(|_| AttachMiss::Foreign)?;
+    attach_cell(value, cell, family, payload, external_bytes)
+}
+
+fn attach_cell<T: 'static>(
+    value: f64,
+    cell: *mut NativeHandleHeader,
+    family: &'static NativePayloadFamily,
+    payload: T,
+    external_bytes: usize,
+) -> Result<(), AttachMiss> {
     unsafe {
         if (*cell).magic != crate::native_handle::NATIVE_HANDLE_MAGIC
             || (*cell).creator_thread_id != crate::native_handle::current_thread_id()
