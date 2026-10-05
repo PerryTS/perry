@@ -1310,7 +1310,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                     // Class accessors are properties of the class prototype
                     // (charter step 3), so keyless receivers need the same
                     // fallback as shaped receivers.
-                    if !chain_walked {
+                    if class_walk && !chain_walked {
                         if let Some((v, _)) =
                             super::super::class_registry::instance_chain_getter_value(
                                 obj,
@@ -1669,7 +1669,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         if class_id != 0 {
             // Class accessors (a base class's included) are accessor
             // properties of the class prototype chain (charter step 3).
-            if !chain_walked {
+            if class_walk && !chain_walked {
                 if let Ok(name) = std::str::from_utf8(key_bytes) {
                     if let Some((v, _)) =
                         super::super::class_registry::instance_chain_getter_value(obj, name, || {

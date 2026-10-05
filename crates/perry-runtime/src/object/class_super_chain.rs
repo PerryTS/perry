@@ -27,8 +27,7 @@ pub(crate) fn super_home_owner(home_cid: u32, this_value: f64) -> Option<f64> {
 /// the class prototype for an instance method and the class constructor for a
 /// static one.
 ///
-/// `None` when the declared-chain lookups must answer instead: the home is not
-/// this template's class value (a per-evaluation class object), or the home
+/// `None` when the declared-chain lookups must answer instead: the home
 /// still links to its declared parent and that parent's declared chain
 /// reaches a builtin, native or function-valued base, whose members this
 /// runtime does not model as properties of a prototype object.
@@ -43,6 +42,27 @@ pub(crate) unsafe fn class_super_base(
 ) -> Option<f64> {
     if home_cid == 0 || !super::is_class_id_registered(home_cid) {
         return None;
+    }
+    // #12029: the template's vtable is not an evaluation's property storage.
+    // In particular, a parent evaluation may have deleted or replaced a
+    // method while another evaluation of the same template still owns it.
+    if let Some(owner) = home_owner.filter(|owner| super::is_class_object_value(*owner)) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let owner = scope.root_nanbox_f64(owner);
+        let obj = crate::value::JSValue::from_bits(owner.get_nanbox_f64().to_bits())
+            .as_pointer::<super::ObjectHeader>();
+        let parent = super::class_registry::class_object_pinned_parent(obj);
+        if !parent.is_some_and(super::is_class_object_value)
+            && !declared_chain_is_user_classes(parent_cid)
+        {
+            return None;
+        }
+        let home = if is_static {
+            owner.get_nanbox_f64()
+        } else {
+            f64::from_bits(super::field_get_set::class_object_prototype_value(obj).bits())
+        };
+        return Some(super::js_object_get_prototype_of(home));
     }
     let class_value = super::class_value::class_value(home_cid);
     if home_owner.is_some_and(|owner| owner.to_bits() != class_value.to_bits()) {

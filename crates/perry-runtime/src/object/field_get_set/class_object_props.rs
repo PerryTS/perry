@@ -651,6 +651,59 @@ mod evaluation_owner_tests {
     use super::*;
 
     #[test]
+    fn evaluation_prototype_miss_never_reads_template_properties() {
+        unsafe {
+            const CID: u32 = 62_443;
+            crate::object::js_register_class_id(CID);
+            crate::object::js_register_class_name(CID, b"Ownership".as_ptr(), 9);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let declared = scope.root_nanbox_f64(
+                super::super::super::class_registry::class_decl_prototype_value(CID),
+            );
+            let key =
+                scope.root_string_ptr(crate::string::js_string_from_bytes(b"extra".as_ptr(), 5));
+            key.with_const_ptr(|key: *const crate::StringHeader| {
+                js_object_set_field_by_name(
+                    crate::value::js_nanbox_get_pointer(declared.get_nanbox_f64())
+                        as *mut ObjectHeader,
+                    key,
+                    1.0,
+                );
+            });
+            let class = scope.root_raw_mut_ptr(
+                super::super::class_object_template::js_class_evaluation_object(
+                    CID,
+                    0,
+                    0,
+                    std::ptr::null(),
+                ) as *mut ObjectHeader,
+            );
+            let prototype = class.with_const_ptr(|class: *const ObjectHeader| {
+                class_evaluation_prototype_value(class)
+            });
+            let prototype = scope.root_nanbox_f64(prototype);
+            key.with_const_ptr(|key: *const crate::StringHeader| {
+                let obj = crate::value::js_nanbox_get_pointer(prototype.get_nanbox_f64())
+                    as *const ObjectHeader;
+                assert_ne!(
+                    prototype.get_nanbox_f64().to_bits(),
+                    declared.get_nanbox_f64().to_bits()
+                );
+                assert!(js_object_get_field_by_name(obj, key).is_undefined());
+                assert_eq!(
+                    js_object_get_field_by_name(
+                        crate::value::js_nanbox_get_pointer(declared.get_nanbox_f64())
+                            as *const ObjectHeader,
+                        key,
+                    )
+                    .as_number(),
+                    1.0,
+                );
+            });
+        }
+    }
+
+    #[test]
     fn prototype_owner_survives_constructor_replacement_and_deletion() {
         unsafe {
             const CID: u32 = 62_442;

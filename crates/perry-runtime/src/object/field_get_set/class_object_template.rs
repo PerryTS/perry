@@ -922,26 +922,6 @@ pub(crate) unsafe fn record_prototype_template(
     cell.set(W_PROTO_SHAPE, final_shape as u64);
 }
 
-/// Is `obj` an evaluation prototype of template `class_id` built with the
-/// template's method entries, i.e. the sole owner of its declared methods?
-pub(crate) unsafe fn is_evaluation_prototype_with_methods(
-    obj: *const ObjectHeader,
-    class_id: u32,
-) -> bool {
-    super::class_object_props::class_evaluation_prototype_class_id(obj as usize) == Some(class_id)
-        && template_has_method_entries(class_id)
-}
-
-/// Does template `class_id` give its evaluations' prototypes their own method
-/// function objects (`<method>__eclo`)?
-fn template_has_method_entries(class_id: u32) -> bool {
-    super::super::class_registry::class_prototype_member_names(class_id)
-        .iter()
-        .any(|(name, accessor)| {
-            !accessor && super::super::class_registry::class_method_entry(class_id, name).is_some()
-        })
-}
-
 /// For an own-key miss on `obj` whose recorded chain was walked and does not
 /// carry `key`: was `key` a method of `obj`'s template that the chain's
 /// evaluation prototype no longer owns? Only an object linked through a class

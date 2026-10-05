@@ -330,11 +330,18 @@ pub extern "C" fn js_object_delete_field(
                         // evaluation's prototype (`ClassExprFresh`) owns its
                         // members alone: the template's records belong to
                         // every evaluation, so they stay.
-                        if !super::field_get_set::is_evaluation_prototype_with_methods(obj, cid) {
+                        if super::field_get_set::class_evaluation_prototype_class_id(obj as usize)
+                            .is_none()
+                        {
                             super::class_registry::class_prototype_method_root_remove(cid, name);
-                            super::class_registry::invalidate_class_string_member_order(
-                                cid, name, false,
-                            );
+                            // The shared class may itself be the first
+                            // evaluation (#11759 c′). Its live key is deleted,
+                            // but later evaluations still start from ClassBody.
+                            if !super::class_value::class_value_is_first_evaluation(cid) {
+                                super::class_registry::invalidate_class_string_member_order(
+                                    cid, name, false,
+                                );
+                            }
                         }
                         super::class_registry::invalidate_class_prototype_fast_guards_for_method(
                             name,
@@ -828,7 +835,9 @@ fn class_delete_own_key(class_id: u32, name: &str) -> i32 {
     }
     super::class_registry::class_delete_own_dynamic_prop(class_id, name);
     crate::object::class_value::note_static_key_deleted(class_id, name);
-    super::class_registry::invalidate_class_string_member_order(class_id, name, true);
+    if !super::class_value::class_value_is_first_evaluation(class_id) {
+        super::class_registry::invalidate_class_string_member_order(class_id, name, true);
+    }
     1
 }
 
