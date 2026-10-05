@@ -300,13 +300,30 @@ Curated shadow dominance and unrooted-alloca checks also pass: 7723 functions,
 299 modules, 36044 root stores, zero dominance/alloca violations, and 40/40 seeds
 caught. All CI breadth floors and budgets are preserved.
 
-The curated shadow stale-register scan and dependency corpus gates are still
-running at this measurement milestone. A private launcher forks the unchanged
-per-function stale checker across 16 processes, retaining the full parsed call
-graph, original CLI floors, budgets and aggregation. It compares 50 functions
-against serial results. The checker and lowering source are not changed;
-launcher and logs are retained as evidence. Final GC results follow in the
-completion commit.
+Curated shadow stale-register checks also report zero. The private launcher
+forks the unchanged per-function engine across 16 processes, retaining the full
+parsed call graph, original CLI floors, budgets and aggregation. It checks all
+7723 functions and agrees with serial results on 50 sampled functions. The
+original serial corpus scan also completed with zero stale uses. Its owned
+orchestrator was stopped by PID to avoid repeating dependency work already
+running independently; no checker or lowering source was edited.
+
+Dependency native covers 6410 functions / 81 modules, 37379 safepoints, 30435
+nonempty live bundles, 206634 relocates and 196868 (safepoint,root) pairs. It has
+one unrooted alloc result at `js_get_string_pointer_unified` (within the existing
+CI budget of three), zero stale uses and 40/40 caught planted violations.
+Dependency shadow has 6410 functions, 81 modules, 20237 root stores, zero
+dominance and unrooted-alloca violations, and 40/40 seeds caught. Its stale scan
+reports one alloc-source use at the same sink, within the existing budget of
+ten; serial agreement holds on 50 functions. No budget was raised. Remaining
+codegen debt is outside this runtime lane and statepoint lowering is excluded.
+
+All 18 required generation/audit/check operations have recorded successful
+statuses in `gc-final-statuses.json`, including original stages 0–10, the curated
+parallel stale check and independent dependency stages 12–17. Native, shadow,
+dependency, checker self-tests and seeded-violation checks are green at the CI
+floors and budgets. The launcher, both curated stale logs and complete commands
+are retained for review.
 
 ## Reproduction and retained evidence
 
