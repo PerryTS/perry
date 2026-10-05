@@ -77,6 +77,7 @@ pub(crate) fn try_lower(
         Expr::LocalGet(id) => ctx.receiver_descriptors.typed_read_param(*id).cloned(),
         _ => None,
     };
+    let integer_index = super::index_get::numeric_index_has_integer_array_index_proof(ctx, index);
     crate::rooting::with_operands_rooted(ctx, &[object, index], |ctx, values| {
         Ok(Some(emit_get(
             ctx,
@@ -85,6 +86,7 @@ pub(crate) fn try_lower(
             kind,
             proof.as_deref(),
             number_context,
+            integer_index,
         )))
     })
 }
@@ -96,6 +98,7 @@ fn emit_get(
     kind: u8,
     proof: Option<&str>,
     number_context: bool,
+    integer_index: bool,
 ) -> String {
     let guard = ctx.new_block("ta.read.guard");
     let index = ctx.new_block("ta.read.index");
@@ -146,27 +149,41 @@ fn emit_get(
     };
     ctx.block().cond_br(&ready, &guard_l, &slow_l);
     ctx.current_block = guard;
-    // Cache tags also admit native arena views. Reject their storage BEFORE
-    // bounds: a disposed view must reach the runtime even for an OOB key.
-    let storage_addr_guard = ctx.block().add(I64, &raw, "10");
-    let storage_ptr_guard = ctx.block().inttoptr(I64, &storage_addr_guard);
-    let storage_guard = ctx.block().load(I8, &storage_ptr_guard);
-    let inline_guard = ctx.block().icmp_eq(I8, &storage_guard, "0");
-    let resolved_guard = ctx.block().icmp_eq(
-        I8,
-        &storage_guard,
-        &crate::runtime_abi::TA_STORAGE_RESOLVED.to_string(),
-    );
-    let admitted_storage = ctx.block().or(I1, &inline_guard, &resolved_guard);
-    let ge = ctx.block().fcmp("oge", key, "0.0");
-    let lt = ctx.block().fcmp("olt", key, "4294967295.0");
-    let range = ctx.block().and(I1, &ge, &lt);
+    // The entry proof excludes native/foreign storage. A managed receiver
+    // can only transition from inline to resolved on `.buffer` exposure.
+    // Cache-only sites must still reject native storage before bounds, so a
+    // disposed arena reaches its runtime even for an OOB key.
+    let admitted_storage = if proof.is_some() {
+        "true".to_owned()
+    } else {
+        let storage_addr = ctx.block().add(I64, &raw, "10");
+        let storage_ptr = ctx.block().inttoptr(I64, &storage_addr);
+        let storage = ctx.block().load(I8, &storage_ptr);
+        let inline = ctx.block().icmp_eq(I8, &storage, "0");
+        let resolved = ctx.block().icmp_eq(
+            I8,
+            &storage,
+            &crate::runtime_abi::TA_STORAGE_RESOLVED.to_string(),
+        );
+        ctx.block().or(I1, &inline, &resolved)
+    };
+    let range = if integer_index {
+        "true".to_owned()
+    } else {
+        let ge = ctx.block().fcmp("oge", key, "0.0");
+        let lt = ctx.block().fcmp("olt", key, "4294967295.0");
+        ctx.block().and(I1, &ge, &lt)
+    };
     let range = ctx.block().and(I1, &range, &admitted_storage);
     ctx.block().cond_br(&range, &index_l, &slow_l);
     ctx.current_block = index;
     let idx = ctx.block().fptosi(DOUBLE, key, I64);
-    let back = ctx.block().sitofp(I64, &idx, DOUBLE);
-    let exact = ctx.block().fcmp("oeq", key, &back);
+    let exact = if integer_index {
+        "true".to_owned()
+    } else {
+        let back = ctx.block().sitofp(I64, &idx, DOUBLE);
+        ctx.block().fcmp("oeq", key, &back)
+    };
     ctx.block().cond_br(&exact, &bounds_l, &slow_l);
     ctx.current_block = bounds;
     let header = ctx.block().inttoptr(I64, &raw);
@@ -186,11 +203,15 @@ fn emit_get(
     let inline_end = ctx.block().label.clone();
     ctx.block().cond_br(&inline, &load_l, &external_l);
     ctx.current_block = external;
-    let resolved = ctx.block().icmp_eq(
-        I8,
-        &storage_byte,
-        &crate::runtime_abi::TA_STORAGE_RESOLVED.to_string(),
-    );
+    let resolved = if proof.is_some() {
+        "true".to_owned()
+    } else {
+        ctx.block().icmp_eq(
+            I8,
+            &storage_byte,
+            &crate::runtime_abi::TA_STORAGE_RESOLVED.to_string(),
+        )
+    };
     let pointer_block = ctx.new_block("ta.read.pointer");
     let pointer_l = ctx.block_label(pointer_block);
     ctx.block().cond_br(&resolved, &pointer_l, &slow_l);
@@ -227,11 +248,12 @@ fn emit_get(
     let oob_end = ctx.block().label.clone();
     ctx.block().br(&done_l);
     ctx.current_block = slow;
-    let handle = super::helpers::unbox_to_i64(ctx.block(), object);
+    // Preserve the boxed receiver on every miss. A lying annotation may
+    // supply an SSO string or a primitive whose masked bits are no address.
     let fallback = ctx.block().call(
         DOUBLE,
-        "js_typed_array_index_get_dynamic",
-        &[(I64, &handle), (DOUBLE, key)],
+        "js_dyn_index_get",
+        &[(DOUBLE, object), (DOUBLE, key)],
     );
     let fallback = if number_context {
         ctx.block()
@@ -381,11 +403,23 @@ mod tests {
                 .unwrap(),
             )
             .unwrap();
-            assert_eq!(
-                ir.matches("call i32 @js_ta_read_receiver_is_kind(").count(),
-                1,
-                "{name}: entry proof missing"
-            );
+            let bodies: Vec<_> = ir
+                .split("\ndefine")
+                .filter(|body| {
+                    body.lines().next().is_some_and(|head| {
+                        head.contains("double @perry_fn") && head.contains("scan")
+                    })
+                })
+                .collect();
+            assert!(!bodies.is_empty());
+            for body in bodies {
+                assert_eq!(
+                    body.matches("call i32 @js_ta_read_receiver_is_kind(")
+                        .count(),
+                    1,
+                    "{name}: exactly one proof per normal/specialized body"
+                );
+            }
             assert!(
                 ir.contains("ta.read.pointer") && ir.contains("ta.read.oob"),
                 "{name}: live storage/bounds missing"

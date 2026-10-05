@@ -369,14 +369,14 @@ fn typed_array_runtime_key_read_roots_receiver_only_when_key_collects() {
     let inert = compile("ta_runtime_key_inert", Expr::Undefined);
     // The runtime-key read takes the guarded inline typed-array arm, whose
     // single out-of-line exit is the complete dynamic `[[Get]]`.
-    let callee = "@js_packed_arraylike_index_get(";
+    let callee = "@js_dyn_index_get(";
     assert!(
         collecting.contains(callee) && inert.contains(callee),
         "both fixtures must reach the typed-array runtime-key arm:\n{collecting}\n{inert}"
     );
     assert_call_operand_rooted_across_operand(
         &collecting,
-        "js_packed_arraylike_index_get",
+        "js_dyn_index_get",
         0,
         1,
         "the typed-array receiver",

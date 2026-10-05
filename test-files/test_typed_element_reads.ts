@@ -25,3 +25,5 @@ readI8(new Uint16Array([300,65535]) as any,[0,1,2]);
 // Raw NaN payloads must never forge NaN-boxed pointers.
 const raw = new Uint32Array(4); raw[0]=0xffffffff; raw[1]=0x7fffffff; raw[2]=0xffffffff; raw[3]=0x7ffdffff;
 readF64(new Float64Array(raw.buffer),[0,1]); readF32(new Float32Array(raw.buffer),[0,1,2,3]);
+
+readF64('ab' as any,[0,1,2]); readI32(42 as any,[0,1]);
