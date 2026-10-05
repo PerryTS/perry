@@ -3998,3 +3998,4 @@ perry_updater_verify_signature_v2	Reenters
 perry_updater_write_sentinel	Reenters
 redirect_lazy_to_materialized	Reenters
 setInterval	Reenters
+js_ta_read_receiver_is_kind	Leaf

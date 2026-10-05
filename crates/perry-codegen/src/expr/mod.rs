@@ -3111,6 +3111,7 @@ pub(crate) mod suffix_cursor;
 #[cfg(test)]
 mod bigint_bitwise_tests;
 mod ptr_numarray_access;
+pub(crate) mod ta_element_read;
 mod ta_param_f64_read;
 mod toint32;
 #[cfg(test)]

@@ -791,3 +791,35 @@ pub extern "C" fn js_uint8array_set(target: *mut TypedArrayHeader, index: i32, v
         }
     }
 }
+
+/// Entry proof for an immutable typed-array parameter. This is a receiver
+/// proof, not a cached data address: `.buffer` can move inline elements to an
+/// ArrayBuffer while the parameter remains live. Generated reads reload the
+/// storage byte/pointer and length. Native disposable arenas are excluded.
+#[no_mangle]
+pub extern "C" fn js_ta_read_receiver_is_kind(boxed: f64, kind: i32) -> i32 {
+    let value = crate::value::JSValue::from_bits(boxed.to_bits());
+    if !value.is_pointer() {
+        return 0;
+    }
+    let addr = value.as_pointer::<TypedArrayHeader>() as usize;
+    if !crate::buffer::header_is_owned(addr) {
+        return 0;
+    }
+    let header = unsafe { crate::gc::header_from_trusted_user_ptr(addr as *const u8) };
+    if unsafe { (*header).obj_type } != crate::gc::GC_TYPE_TYPED_ARRAY {
+        return 0;
+    }
+    let ta = addr as *const TypedArrayHeader;
+    unsafe {
+        i32::from(
+            (*ta).kind == kind as u8
+                && matches!((*ta).storage, TA_STORAGE_INLINE | TA_STORAGE_RESOLVED),
+        )
+    }
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_TA_READ_RECEIVER_IS_KIND: extern "C" fn(f64, i32) -> i32 =
+    js_ta_read_receiver_is_kind;

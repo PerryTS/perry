@@ -723,3 +723,7 @@ pub const PACKED_ADD_CONSTFN_SLOT: u64 = 1 << 14;
 /// claim (`field_rep_store::constfn_store_info`).
 pub const CLOSURE_CAPTURES_THIS_FLAG: u32 = 0x8000_0000;
 pub const CLOSURE_NO_THIS_REBIND_FLAG: u32 = 0x4000_0000;
+
+/// Numeric typed-array resolved ArrayBuffer storage contract.
+pub const TA_STORAGE_RESOLVED: u8 = 2;
+pub const TA_DATA_OFFSET: usize = 16;

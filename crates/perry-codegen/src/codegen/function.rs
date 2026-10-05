@@ -1622,6 +1622,16 @@ pub(super) fn compile_function(
                 continue;
             }
             let object = perry_hir::Expr::LocalGet(param.id);
+            if crate::expr::u8_buffer_read::loop_param_is_read(&f.body, param.id) {
+                if let Some(kind) = crate::expr::ta_element_read::receiver_kind(&ctx, &object) {
+                    if let Some(slot) = ctx.locals.get(&param.id).cloned() {
+                        let boxed = ctx.block().load(DOUBLE, &slot);
+                        crate::expr::ta_element_read::materialize_param(
+                            &mut ctx, param.id, &boxed, kind,
+                        );
+                    }
+                }
+            }
             if !crate::expr::u8_buffer_read::u8_buffer_receiver_eligible(&ctx, &object)
                 || !crate::expr::u8_buffer_read::byte_view_param_is_read(&f.body, param.id)
             {

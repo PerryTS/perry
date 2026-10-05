@@ -314,6 +314,15 @@ pub(crate) fn register_view_meta(ta: *const TypedArrayHeader, backing: usize, by
     // every inline element path checks that byte (or the kind-cache tag
     // derived from it) instead of a process-wide count of live views.
     crate::typedarray::note_external_storage(ta as *mut TypedArrayHeader);
+    // Foreign wrappers can rebind; they keep metadata resolution per access.
+    if !crate::buffer::is_foreign_backed_buffer(backing) {
+        unsafe {
+            let data = crate::buffer::buffer_data_mut(backing as *mut crate::buffer::BufferHeader)
+                .add(byte_offset as usize);
+            crate::typedarray::set_resolved_data(ta as *mut TypedArrayHeader, data);
+            (*(ta as *mut TypedArrayHeader)).storage = crate::typedarray::TA_STORAGE_RESOLVED;
+        }
+    }
     TYPED_ARRAY_VIEW_META.with(|r| {
         let prev = r.borrow_mut().insert(
             ta as usize,
@@ -373,10 +382,19 @@ pub(crate) fn scan_typed_array_view_meta_roots_mut(
         return;
     }
     TYPED_ARRAY_VIEW_META.with(|r| {
-        for rec in r.borrow_mut().values_mut() {
+        for (&ta, rec) in r.borrow_mut().iter_mut() {
             let mut backing = rec.meta.backing as *mut crate::buffer::BufferHeader;
             visitor.visit_raw_mut_ptr_slot(&mut backing);
             rec.meta.backing = backing as usize;
+            unsafe {
+                if (*(ta as *const TypedArrayHeader)).storage
+                    == crate::typedarray::TA_STORAGE_RESOLVED
+                {
+                    let data =
+                        crate::buffer::buffer_data_mut(backing).add(rec.meta.byte_offset as usize);
+                    crate::typedarray::set_resolved_data(ta as *mut TypedArrayHeader, data);
+                }
+            }
         }
     });
 }
