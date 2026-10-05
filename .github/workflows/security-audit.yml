@@ -130,9 +130,9 @@ jobs:
       - name: Install script test dependencies
         run: npm ci --ignore-scripts --no-audit --no-fund
       - name: Soak window parity (npm run soak)
-        run: node scripts/soak/soak.mts --check
+        run: node scripts/check/dependency-soak-is-current.mts
       - name: External-tool pins valid (npm run tools:check)
-        run: node scripts/soak/external-tools.mts --check
+        run: node scripts/check/external-tools-are-valid.mts
       - name: Soak + publish script unit tests (npm run test:scripts)
         # `test:scripts` in package.json covers BOTH globs; this step ran only
         # the soak half, so every scripts/publish/*.test.mts case -- 31 of

@@ -7,10 +7,7 @@
  *     package.json) rewrites ranges, then the repo's own installer refreshes
  *     the lockfile.
  *   - cargo: `cargo update` via rustup's shim. `.cargo/config.toml` carries
- *     min-publish-age for the same window — an [unstable] cargo feature, so
- *     it bites only under a nightly toolchain; on perry's stable toolchain
- *     the automated window rides dependabot's cooldown and this path is a
- *     plain update.
+ *     Cargo's stabilized global-min-publish-age setting for the same window.
  *
  *   Usage: node scripts/soak/update-deps.mts [--npm|--cargo] [--dry-run]
  *   (no ecosystem flag = both)
@@ -57,12 +54,8 @@ function updateNpm(dryRun: boolean): number {
 }
 
 function updateCargo(dryRun: boolean): number {
-  // The min-publish-age soak is an [unstable] cargo feature: only a
-  // nightly honors it, and only rustup's cargo shim reads a
-  // rust-toolchain.toml pin. Requiring the rustup shim keeps every
-  // updater on the toolchain the repo actually pins (a Homebrew cargo
-  // ignores toolchain files entirely) and makes the soak automatic the
-  // day the repo moves to a dated nightly.
+  // Require rustup's cargo shim so updates use the toolchain pinned by this
+  // checkout's rust-toolchain.toml rather than an unrelated system Cargo.
   if (!existsSync(RUSTUP_CARGO)) {
     console.error('[update-deps] rustup cargo shim not found — refusing a cargo that cannot follow the repo toolchain')
     return 1

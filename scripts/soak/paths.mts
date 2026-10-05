@@ -19,10 +19,8 @@ export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url
 // minimumReleaseAge, taze) is anchored in tools/ so the workspace yaml
 // never marks the npm-managed repo root as a pnpm workspace.
 //
-// toolchainToml is null: perry rides stable rust (CI installs
-// dtolnay/rust-toolchain@stable; there is no rust-toolchain.toml). The
-// dated-nightly soak check activates automatically if the repo ever pins
-// one — set the path here and the surface joins the gate.
+// Rust toolchain selection is governed by Perry's explicit toolchain update
+// policy; its nightly pin is not part of the package release-age window.
 export const SURFACES: {
   cargoConfig: string
   npmrc: string

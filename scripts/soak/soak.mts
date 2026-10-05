@@ -5,13 +5,13 @@
  *   asserts every data surface matches it and that soak exclusions carry a
  *   valid, unexpired `# published: | removable:` annotation:
  *
- *   - `.cargo/config.toml`        `global-min-publish-age` + `[unstable] min-publish-age`
+ *   - `.cargo/config.toml`        `[registry] global-min-publish-age`
  *   - `tools/pnpm-workspace.yaml`  `minimumReleaseAge` (minutes) + annotated excludes
  *   - `.npmrc`               `min-release-age` (days)
  *   - `tools/taze.config.mts`      imports SOAK_DAYS (existence + import check)
  *   - `.github/dependabot.yml`    `cooldown: default-days` per update block
  *   - `rust-toolchain.toml`       nightly channel vs `# adopted:` — only when
- *     the repo pins one (SURFACES.toolchainToml; perry rides stable, so null)
+ *     the repo opts into this policy via SURFACES.toolchainToml
  *
  *   `--check` (default) fails loud with What / Saw / Wanted / Fix on drift.
  *   `--fix` rewrites window values in place and prunes excludes whose
@@ -57,15 +57,6 @@ export function checkCargoConfig(body: string, file: string): Finding[] {
       saw: age ?? '(missing)',
       wanted,
       fix: `set [registry] global-min-publish-age = "${wanted}" (or run --fix)`,
-    })
-  }
-  if (!/^\[unstable\][^[]*^min-publish-age\s*=\s*true/ms.test(body)) {
-    out.push({
-      file,
-      what: 'cargo unstable feature gate',
-      saw: '[unstable] min-publish-age missing or false',
-      wanted: 'min-publish-age = true under [unstable]',
-      fix: 'add `[unstable]\\nmin-publish-age = true` (nightly-only; the pinned toolchain provides it)',
     })
   }
   return out
@@ -488,9 +479,12 @@ function report(findings: Finding[], quiet: boolean): void {
   }
 }
 
-export function main(argv: string[] = process.argv.slice(2)): number {
-  const fix = argv.includes('--fix')
-  const quiet = argv.includes('--quiet')
+export function checkSoakSurfaces(): number {
+  return runSoak({ fix: false, quiet: false })
+}
+
+function runSoak(options: { fix: boolean; quiet: boolean }): number {
+  const { fix, quiet } = options
   const findings: Finding[] = []
 
   const surfaces: Array<{
@@ -502,7 +496,7 @@ export function main(argv: string[] = process.argv.slice(2)): number {
     { rel: SURFACES.npmrc, check: checkNpmrc, fixer: fixNpmrc },
     { rel: SURFACES.workspaceYaml, check: checkWorkspaceYaml, fixer: fixWorkspaceYaml },
     { rel: SURFACES.tazeConfig, check: checkTazeConfig },
-    // Only when the repo pins a toolchain file (perry rides stable — null).
+    // Only when the repo explicitly includes toolchain updates in the soak.
     ...(SURFACES.toolchainToml
       ? [{ rel: SURFACES.toolchainToml, check: checkToolchainSoak }]
       : []),
@@ -555,6 +549,10 @@ export function main(argv: string[] = process.argv.slice(2)): number {
 
   report(findings, quiet)
   return findings.length === 0 ? 0 : 1
+}
+
+export function main(argv: string[] = process.argv.slice(2)): number {
+  return runSoak({ fix: argv.includes('--fix'), quiet: argv.includes('--quiet') })
 }
 
 // realpath + pathToFileURL so symlinked checkouts and paths needing URL

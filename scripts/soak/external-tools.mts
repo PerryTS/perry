@@ -600,6 +600,37 @@ exec sfw '${cmd}' "$@"
   console.log(`[external-tools] prepend ${BIN_DIR} to PATH to activate`)
 }
 
+export function checkExternalToolPins(): number {
+  const tools = loadTools()
+  const problems = checkPins(tools)
+  if (DOCKER_PREBAKE) {
+    const dockerAbs = path.join(REPO_ROOT, DOCKER_PREBAKE)
+    const toolchainAbs = SURFACES.toolchainToml
+      ? path.join(REPO_ROOT, SURFACES.toolchainToml)
+      : ''
+    if (existsSync(dockerAbs)) {
+      problems.push(
+        ...checkDockerPrebake(
+          readFileSync(dockerAbs, 'utf8'),
+          tools,
+          existsSync(toolchainAbs) ? readFileSync(toolchainAbs, 'utf8') : '',
+          /^rust-version\s*=\s*"([^"]+)"/m.exec(
+            readFileSync(path.join(REPO_ROOT, 'Cargo.toml'), 'utf8'),
+          )?.[1] ?? '',
+        ),
+      )
+    }
+  }
+  for (const p of problems) console.error(`[external-tools] ${p}`)
+  for (const name of staleBypasses(tools)) {
+    console.warn(
+      `[external-tools] warn: ${name} soakBypass has cleared — stale annotation, pruned by --fix / the soak-autofix workflow`,
+    )
+  }
+  if (problems.length === 0) console.log(`[external-tools] ${Object.keys(tools).length} pins valid`)
+  return problems.length === 0 ? 0 : 1
+}
+
 export async function main(argv: string[] = process.argv.slice(2)): Promise<number> {
   if (argv.includes('--print-bin')) {
     console.log(BIN_DIR)
@@ -613,40 +644,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       console.log(`[external-tools] pruned expired soakBypass: ${pruned.join(', ')}`)
     }
   }
-  const tools = loadTools()
   if (argv.includes('--check') || argv.includes('--fix') || argv.length === 0) {
-    const problems = checkPins(tools)
-    if (DOCKER_PREBAKE) {
-      const dockerAbs = path.join(REPO_ROOT, DOCKER_PREBAKE)
-      const toolchainAbs = SURFACES.toolchainToml
-        ? path.join(REPO_ROOT, SURFACES.toolchainToml)
-        : ''
-      if (existsSync(dockerAbs)) {
-        problems.push(
-          ...checkDockerPrebake(
-            readFileSync(dockerAbs, 'utf8'),
-            tools,
-            existsSync(toolchainAbs) ? readFileSync(toolchainAbs, 'utf8') : '',
-            /^rust-version\s*=\s*"([^"]+)"/m.exec(
-              readFileSync(path.join(REPO_ROOT, 'Cargo.toml'), 'utf8'),
-            )?.[1] ?? '',
-          ),
-        )
-      }
-    }
-    for (const p of problems) {
-      console.error(`[external-tools] ${p}`)
-    }
-    for (const name of staleBypasses(tools)) {
-      console.warn(
-        `[external-tools] warn: ${name} soakBypass has cleared — stale annotation, pruned by --fix / the soak-autofix workflow`,
-      )
-    }
-    if (problems.length === 0) {
-      console.log(`[external-tools] ${Object.keys(tools).length} pins valid`)
-    }
-    return problems.length === 0 ? 0 : 1
+    return checkExternalToolPins()
   }
+  const tools = loadTools()
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--install') {
       await installTool(argv[++i]!, tools)
