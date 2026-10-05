@@ -967,6 +967,12 @@ test_gap_11743_class_field_array_push
 # still walking; the walk freed the live buffer born there.
 test_gap_gc_11842_sweep_window_hole_reuse
 
+# #11862: a local read out of an array element (`const x = a[0]` after an
+# in-place `a[0] = obj`) took its type from the array literal, so it got no
+# shadow slot and held a from-space address. Also the one-element owner box HIR
+# builds for a repeatable class declaration whose members name the class.
+test_gap_gc_11862_array_cell_element_root
+
 # --- worker message clone: reader roots and the parentPort callback ---------
 # The message reader allocates every object of a message while earlier ones
 # must stay reachable for later references (shared objects, cycles, Map keys,
