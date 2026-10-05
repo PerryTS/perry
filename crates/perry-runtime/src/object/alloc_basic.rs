@@ -115,11 +115,44 @@ fn object_alloc_with_parent_impl(
         if premark_plain {
             crate::object::shapes::store_kind::premark_plain_ordinary(ptr);
         }
+        // A class-less newborn's birth shape is a function of its slot count
+        // and kind alone: replay the one this site last published while its
+        // record still names those facts (ShapeIds are never reused).
+        let memo = class_id == 0 && parent_class_id == 0;
+        if memo {
+            let id = KEYLESS_BIRTH.with(std::cell::Cell::get);
+            if id != 0
+                && crate::object::shapes::shape_is_keyless_birth_of(
+                    id,
+                    crate::object::shapes::object_proto_id(ptr),
+                    field_count,
+                    crate::object::shapes::store_kind::receiver_ordinary_kind(ptr),
+                )
+            {
+                if crate::arena::pointer_in_nursery(ptr as usize) {
+                    // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
+                    (*ptr).parent_class_id = id;
+                } else {
+                    crate::object::shapes::stamp_object_shape_id_with_carrier_note(ptr, id);
+                }
+                return ptr;
+            }
+        }
         // #8113: the birth live-slot bound is published here and nowhere else.
-        crate::object::shapes::birth_publish_object_shape(ptr, field_count);
+        let id = crate::object::shapes::birth_publish_object_shape(ptr, field_count);
+        if memo {
+            KEYLESS_BIRTH.with(|birth| birth.set(id));
+        }
 
         ptr
     }
+}
+
+thread_local! {
+    /// One memo at this allocation site, validated against all birth facts
+    /// on every use. A polymorphic allocation misses and replaces the memo;
+    /// there is no count/kind-indexed table.
+    static KEYLESS_BIRTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// An object born on a known birth shape: `class_id`, `field_count` live
@@ -156,6 +189,56 @@ pub(crate) fn object_alloc_born(
         }
     }
     ptr
+}
+
+/// A fresh class-less object born on `shape_id`, a construction's recorded
+/// FINAL shape (`shapes::shape_is_filled_birth`): `count` own keys at inline
+/// slots `0..count`, linked to the prototype `proto_bits` names. One
+/// allocation and one stamp stand in for the key-add and prototype
+/// transitions the construction's first run took. `None`, leaving nothing
+/// reachable, when the record no longer names those facts for this object
+/// (the caller then takes its full sequence).
+///
+/// Every slot reads `undefined` until the caller fills it: the caller stores
+/// each of the `count` slots through [`store_object_field_slot`] before
+/// anything else can allocate.
+pub(crate) fn object_alloc_filled_birth(
+    shape_id: u32,
+    proto_bits: u64,
+    count: u32,
+) -> Option<*mut ObjectHeader> {
+    // Resolve the prototype identity BEFORE the allocating call. The caller
+    // roots the prototype, but its copied word here would not be rewritten
+    // if the allocation moved it. Only scalar identities cross the call.
+    // SAFETY: the caller holds the live prototype through its root.
+    let proto_id = unsafe { crate::object::shapes::stable_linked_proto_id(0, proto_bits) }?;
+    let obj = object_alloc_unpublished(0, count);
+    unsafe {
+        // This allocator creates an unmarked class-less object. Recheck the
+        // record AFTER allocation: the collector may have pruned the memo.
+        let kind = crate::object::shapes::ShapeObjectKind::OrdinaryUnmarked;
+        debug_assert_eq!(
+            crate::object::shapes::store_kind::receiver_ordinary_kind(obj),
+            kind
+        );
+        if !crate::object::shapes::shape_is_filled_birth(shape_id, proto_id, count, kind) {
+            return None;
+        }
+        // The construction fills a pointer in its first slot. Refuse a
+        // recorded typed lane before using the newborn store shortcut.
+        if crate::object::field_rep::slot_rep(crate::object::shapes::shape_rep_by_id(shape_id), 0)
+            != crate::object::field_rep::REP_ANY
+        {
+            return None;
+        }
+        if crate::arena::pointer_in_nursery(obj as usize) {
+            // GC_STORE_AUDIT(POINTER_FREE): a ShapeId, never a heap reference.
+            (*obj).parent_class_id = shape_id;
+        } else {
+            crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, shape_id);
+        }
+    }
+    Some(obj)
 }
 
 /// The storage `js_object_alloc(class_id, field_count)` allocates (header,

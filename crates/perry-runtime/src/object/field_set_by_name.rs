@@ -27,7 +27,7 @@ pub use attr_variants::{
 };
 pub use fast_paths::js_object_set_field_by_name_transition_fast;
 pub(crate) use fast_paths::{
-    object_set_field_by_name_transition_chain_proven_value,
+    add_absent_key_to_null_proto_object, object_set_field_by_name_transition_chain_proven_value,
     object_set_field_by_name_transition_only_fast_value, try_existing_own_data_overwrite,
     try_existing_own_data_overwrite_by_content, try_readd_stable_tombstone,
 };
