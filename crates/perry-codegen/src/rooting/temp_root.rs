@@ -149,8 +149,7 @@ fn temp_pool_acquire(ctx: &mut FnCtx<'_>) -> Option<String> {
 }
 
 /// Root-store for an alloca-mode handle: plain store, then the same
-/// root binding every named-local store uses. FinalRootRemark rescans this
-/// generated root, so its bind needs no per-store shading. The bind must
+/// bind + root-shading emission every named-local store uses. The bind must
 /// be emitted here — after the store, before whatever collects — so the
 /// rooted location dominates the collection point (#7192's invariant).
 fn temp_slot_store(ctx: &mut FnCtx<'_>, handle: &str, value_i64: &str) {
