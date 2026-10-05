@@ -44,6 +44,10 @@ pub(crate) fn ensure_object_intrinsics() -> ObjectPair {
     if ctor != 0 && proto != 0 {
         return (ctor as *mut _, proto as *mut _);
     }
+    // This bootstrap can precede globalThis (and js_gc_init on a worker or
+    // native caller). Register the intrinsic and runtime-handle scanners
+    // before publishing roots, just as the realm-global bootstrap does.
+    crate::gc::ensure_gc_initialized();
     if OBJECT_INTRINSICS_BUILDING.with(|b| b.swap(true, Ordering::AcqRel)) {
         return (std::ptr::null_mut(), std::ptr::null_mut());
     }
@@ -81,6 +85,8 @@ pub(crate) fn ensure_object_prototype_shape() -> *mut ObjectHeader {
     if current != 0 {
         return current as *mut ObjectHeader;
     }
+    // The shape-only sentinel also lives in the intrinsic root cache.
+    crate::gc::ensure_gc_initialized();
     if OBJECT_INTRINSICS_BUILDING.with(|b| b.swap(true, Ordering::AcqRel)) {
         return std::ptr::null_mut();
     }
