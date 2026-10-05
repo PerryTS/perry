@@ -8361,6 +8361,16 @@ fn classify_for_length_hoist_rejection(
 }
 
 fn array_length_receiver_is_loop_local(ctx: &crate::expr::FnCtx<'_>, arr_id: u32) -> bool {
+    // A typed-array annotation can name a getter-bearing object. Only an
+    // owned sealed binding or a proven native view licenses a header length;
+    // the generic path must evaluate a possibly observable getter each time.
+    let object = perry_hir::Expr::LocalGet(arr_id);
+    if crate::type_analysis::is_typed_array_expr(ctx, &object)
+        && !ctx.sealed_buffer_locals.contains(&arr_id)
+        && crate::expr::proven_view_receiver(ctx, &object).is_none()
+    {
+        return false;
+    }
     ctx.locals.contains_key(&arr_id)
         && !ctx.boxed_vars.contains(&arr_id)
         && !ctx.module_globals.contains_key(&arr_id)

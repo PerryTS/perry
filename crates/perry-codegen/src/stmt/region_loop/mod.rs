@@ -577,7 +577,7 @@ fn begin_with(
                         // compare a non-Number `B` fails).
                         || matches!(
                             (u.view_sym, env.counter),
-                            (Some((b, _)), Some(arrays::Counter {
+                            (Some((arrays::Symbol::Local(b), _)), Some(arrays::Counter {
                                 bound: arrays::Bound::Local(cb),
                                 ..
                             })) if b == cb

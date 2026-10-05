@@ -266,6 +266,9 @@ impl Planner<'_, '_> {
     fn prim(&self, e: &Expr) -> bool {
         match e {
             Expr::PropertyGet { .. } => {
+                if arrays::native_view_length(self.ctx, e) {
+                    return true;
+                }
                 let ptr = e as *const Expr as usize;
                 self.bare.contains(&ptr) && self.proof_reads.contains(&ptr)
             }
@@ -452,6 +455,9 @@ impl Planner<'_, '_> {
                 object, property, ..
             } => {
                 st = self.expr(object, st);
+                if arrays::native_view_length(self.ctx, e) {
+                    return st;
+                }
                 match Recv::of(object) {
                     Some(r) => self.access(e, r, property, false, false, &mut st),
                     None => self.stale(e, &mut st),
