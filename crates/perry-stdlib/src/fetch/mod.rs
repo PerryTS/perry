@@ -919,27 +919,7 @@ fn consume_response_body(handle: f64) -> Result<Vec<u8>, &'static str> {
 /// `Expr::Await` for the rationale).
 #[no_mangle]
 pub unsafe extern "C" fn js_fetch_response_text(handle: f64) -> *mut perry_runtime::Promise {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let promise = perry_runtime::js_promise_new_cross_thread();
-    let body = match consume_response_body(handle) {
-        Ok(body) => body,
-        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
-            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
-            return promise;
-        }
-        Err(err_msg) => {
-            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-            perry_runtime::js_promise_reject(promise, err_nan);
-            return promise;
-        }
-    };
-
-    // Convert body to string and resolve synchronously.
-    let text = String::from_utf8_lossy(&body).to_string();
-    let result_str = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    let result_nan = f64::from_bits(JSValue::string_ptr(result_str).bits());
-    perry_runtime::js_promise_resolve(promise, result_nan);
-    promise
+    body_read::read(handle, body_read::Kind::Text)
 }
 
 /// Parse a Fetch body with the runtime's `JSON.parse` implementation. Besides
@@ -956,34 +936,7 @@ unsafe fn parse_json_body(body: &[u8]) -> Result<JSValue, f64> {
 /// response.json() -> Promise<object>
 #[no_mangle]
 pub unsafe extern "C" fn js_fetch_response_json(handle: f64) -> *mut perry_runtime::Promise {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let promise = perry_runtime::js_promise_new_cross_thread();
-    let body = match consume_response_body(handle) {
-        Ok(body) => body,
-        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
-            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
-            return promise;
-        }
-        Err(err_msg) => {
-            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-            perry_runtime::js_promise_reject(promise, err_nan);
-            return promise;
-        }
-    };
-
-    // Parse and resolve synchronously — see comment on
-    // `js_fetch_response_text`.
-    match parse_json_body(&body) {
-        Ok(js_value) => {
-            let result_nan = f64::from_bits(js_value.bits());
-            perry_runtime::js_promise_resolve(promise, result_nan);
-        }
-        Err(error) => {
-            perry_runtime::js_promise_reject(promise, error);
-        }
-    }
-
-    promise
+    body_read::read(handle, body_read::Kind::Json)
 }
 
 /// Simple fetch that returns text directly (convenience function)
@@ -1192,32 +1145,7 @@ fn alloc_headers(store: HeadersStore) -> usize {
 /// doesn't hang. See `js_fetch_response_text` for rationale.
 #[no_mangle]
 pub unsafe extern "C" fn js_response_array_buffer(handle: f64) -> *mut perry_runtime::Promise {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let promise = perry_runtime::js_promise_new_cross_thread();
-    let body = match consume_response_body(handle) {
-        Ok(body) => body,
-        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
-            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
-            return promise;
-        }
-        Err(err_msg) => {
-            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-            perry_runtime::js_promise_reject(promise, err_nan);
-            return promise;
-        }
-    };
-    let buf = perry_runtime::buffer::buffer_alloc(body.len() as u32);
-    (*buf).length = body.len() as u32;
-    if !body.is_empty() {
-        std::ptr::copy_nonoverlapping(
-            body.as_ptr(),
-            perry_runtime::buffer::buffer_data_mut(buf),
-            body.len(),
-        );
-    }
-    let val = JSValue::object_ptr(buf as *mut u8);
-    perry_runtime::js_promise_resolve(promise, f64::from_bits(val.bits()));
-    promise
+    body_read::read(handle, body_read::Kind::ArrayBuffer)
 }
 
 /// response.blob() — registers a real Blob in BLOB_REGISTRY (cloning body
@@ -1231,32 +1159,7 @@ pub unsafe extern "C" fn js_response_array_buffer(handle: f64) -> *mut perry_run
 /// `.slice()` / `.size` / `.type` to the FFIs below.
 #[no_mangle]
 pub unsafe extern "C" fn js_response_blob(handle: f64) -> *mut perry_runtime::Promise {
-    let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let promise = perry_runtime::js_promise_new_cross_thread();
-    let id = handle_id(handle);
-    let content_type = {
-        let guard = FETCH_RESPONSES.lock().unwrap();
-        guard
-            .get(&id)
-            .and_then(|resp| response_headers_snapshot(resp).get("content-type"))
-            .unwrap_or_default()
-    };
-    let body = match consume_response_body(handle) {
-        Ok(body) => body,
-        Err(err_msg) if err_msg == BODY_ALREADY_USED_MESSAGE => {
-            reject_fetch_type_error(promise, BODY_ALREADY_USED_MESSAGE);
-            return promise;
-        }
-        Err(err_msg) => {
-            let err_nan = f64::from_bits(fetch_error_bits(err_msg));
-            perry_runtime::js_promise_reject(promise, err_nan);
-            return promise;
-        }
-    };
-    let data = BlobData::blob(body, content_type);
-    let blob_id = alloc_blob(data);
-    perry_runtime::js_promise_resolve(promise, handle_to_f64(blob_id));
-    promise
+    body_read::read(handle, body_read::Kind::Blob)
 }
 
 // ----------------- Blob FFI -----------------
@@ -1431,6 +1334,7 @@ pub unsafe extern "C" fn js_blob_slice(
 // `streams.rs`) keeps the registry types private to fetch.rs.
 
 mod body_clone;
+mod body_read;
 pub use body_clone::*;
 
 /// Shared `request.headers` resolver used by both the typed codegen path
