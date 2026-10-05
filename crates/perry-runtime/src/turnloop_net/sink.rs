@@ -20,7 +20,7 @@
 //! allocate JS values.
 
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
 use super::NodeError;
 
@@ -84,6 +84,9 @@ pub const NET_SHUTDOWN: i32 = 6;
 pub const NET_CLOSED: i32 = 7;
 /// An operation failed; `code`/`errno`/`syscall` carry Node's triple.
 pub const NET_ERROR: i32 = 8;
+/// `NetCompletion::flags`: the completion comes from a link route, so `id` is
+/// the payload's owner link and an accept's `conn` is its install slot.
+pub const NET_FLAG_LINK: i32 = 1;
 /// A subsystem-owned deadline expired (P5). `id` names the deadline, which is
 /// the caller's own id — a connection's, not a socket handle's.
 pub const NET_TIMER: i32 = 9;
@@ -107,12 +110,17 @@ pub struct NetCompletion {
     /// terminal, and Node does not tear the server down for one — the tokio
     /// accept loop deliberately did not break on an accept error either.
     pub terminal: i32,
-    /// Padding, so the struct's layout is identical on both sides of the ABI
-    /// without depending on how the compiler packs two trailing i32s.
-    pub _reserved: i32,
-    /// The Perry-side id of the socket or listener this concerns.
+    /// [`NET_FLAG_LINK`] when this completion comes from a link route; zero
+    /// otherwise. Also keeps the layout independent of how a compiler packs
+    /// two trailing i32s.
+    pub flags: i32,
+    /// The Perry-side id of the socket or listener this concerns. On a link
+    /// route ([`NET_FLAG_LINK`]): the payload's owner link (its cell address).
     pub id: i64,
-    /// For [`NET_ACCEPT`], the newly allocated connection id; else zero.
+    /// For [`NET_ACCEPT`], the newly allocated connection id; else zero. On a
+    /// link route: the accepted connection's slot, which the sink hands to
+    /// `install_accepted` while this call is on the stack (or leaves alone,
+    /// and the runtime closes the connection).
     pub conn: i64,
     /// The caller's write/end completion token, echoed back; zero if none.
     pub user: u64,
@@ -138,7 +146,7 @@ impl NetCompletion {
             kind,
             errno: 0,
             terminal: 0,
-            _reserved: 0,
+            flags: 0,
             id,
             conn: 0,
             user: 0,
@@ -150,6 +158,12 @@ impl NetCompletion {
             syscall: std::ptr::null(),
             syscall_len: 0,
         }
+    }
+
+    /// Mark a completion as coming from a link route.
+    pub(super) fn linked(mut self) -> Self {
+        self.flags |= NET_FLAG_LINK;
+        self
     }
 
     pub(super) fn connect(id: i64) -> Self {
@@ -258,6 +272,10 @@ static SINKS: [AtomicPtr<()>; MAX_SUBSYSTEMS] =
     [const { AtomicPtr::new(std::ptr::null_mut()) }; MAX_SUBSYSTEMS];
 static ALLOCS: [AtomicPtr<()>; MAX_SUBSYSTEMS] =
     [const { AtomicPtr::new(std::ptr::null_mut()) }; MAX_SUBSYSTEMS];
+/// Whether each slot's sink declared `links`: its sockets are transport cores
+/// in payloads, named in tokens by their cell (`transport.rs`), and its
+/// completions carry that cell in `id`. Set once, at registration.
+static LINKS: [AtomicBool; MAX_SUBSYSTEMS] = [const { AtomicBool::new(false) }; MAX_SUBSYSTEMS];
 
 /// Install a binding's completion sink and accepted-connection id allocator.
 ///
@@ -281,7 +299,7 @@ pub fn register_sink(subsystem: u8, sink: SinkFn, alloc: AllocFn) -> bool {
     // Re-registering the same sink stays idempotent, which is the documented
     // contract and what a binding whose module is initialised twice relies on.
     let held = SINKS[slot].load(Ordering::Acquire);
-    if !held.is_null() && held != sink as *mut () {
+    if !held.is_null() && (held != sink as *mut () || LINKS[slot].load(Ordering::Acquire)) {
         return false;
     }
     // Publish the allocator first: an accept completion needs it, and a sink
@@ -289,6 +307,34 @@ pub fn register_sink(subsystem: u8, sink: SinkFn, alloc: AllocFn) -> bool {
     ALLOCS[slot].store(alloc as *mut (), Ordering::Release);
     SINKS[slot].store(sink as *mut (), Ordering::Release);
     true
+}
+
+/// Install a link-routed binding's completion sink (NET-TRANSPORT-DESIGN P0).
+///
+/// The binding declares `links`: its sockets are [`super::TransportCore`]s
+/// inside native payloads, every completion's `id` is the payload's owner link
+/// (the cell address), and an accepted connection is installed by the sink
+/// into a payload it allocates (`transport::install_accepted`), so there is no
+/// id allocator. Refused, like [`register_sink`], for a slot another sink
+/// holds, and for a slot already registered without `links`.
+pub fn register_link_sink(subsystem: u8, sink: SinkFn) -> bool {
+    let slot = subsystem as usize;
+    if slot >= MAX_SUBSYSTEMS {
+        return false;
+    }
+    let held = SINKS[slot].load(Ordering::Acquire);
+    if !held.is_null() && (held != sink as *mut () || !LINKS[slot].load(Ordering::Acquire)) {
+        return false;
+    }
+    LINKS[slot].store(true, Ordering::Release);
+    SINKS[slot].store(sink as *mut (), Ordering::Release);
+    true
+}
+
+/// Whether `subsystem`'s sink was registered with `links`.
+#[inline]
+pub(super) fn is_link_route(subsystem: u8) -> bool {
+    (subsystem as usize) < MAX_SUBSYSTEMS && LINKS[subsystem as usize].load(Ordering::Acquire)
 }
 
 pub(super) fn emit(subsystem: u8, completion: NetCompletion) {
