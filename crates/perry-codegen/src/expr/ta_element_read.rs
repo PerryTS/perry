@@ -139,12 +139,14 @@ fn emit_get(
             &[(I64, "0"), (I64, &slot)],
         );
         let entry = ctx.block().load(I64, &entry);
+        let populated = ctx.block().icmp_ne(I64, &entry, "0");
         // Both inline and external cache tags prove kind; the storage guard
         // below distinguishes resolved ArrayBuffer slots from native arenas.
         let entry = ctx.block().and(I64, &entry, "-129");
         let expected = ctx.block().shl(I64, &raw, "8");
         let expected = ctx.block().or(I64, &expected, &kind.to_string());
         let hit = ctx.block().icmp_eq(I64, &entry, &expected);
+        let hit = ctx.block().and(I1, &populated, &hit);
         ctx.block().and(I1, &ptr, &hit)
     };
     ctx.block().cond_br(&ready, &guard_l, &slow_l);
@@ -407,7 +409,9 @@ mod tests {
                 .split("\ndefine")
                 .filter(|body| {
                     body.lines().next().is_some_and(|head| {
-                        head.contains("double @perry_fn") && head.contains("scan")
+                        head.contains("double @perry_fn")
+                            && head.contains("scan")
+                            && body.contains("ta.read.load")
                     })
                 })
                 .collect();
@@ -419,15 +423,16 @@ mod tests {
                     1,
                     "{name}: exactly one proof per normal/specialized body"
                 );
+                assert!(
+                    body.contains("ta.read.pointer") && body.contains("ta.read.oob"),
+                    "{name}: live storage/bounds missing"
+                );
+                assert!(
+                    !body.contains("tav.width")
+                        && !body.contains("call double @js_typed_array_get("),
+                    "{name}: per-element dispatch returned"
+                );
             }
-            assert!(
-                ir.contains("ta.read.pointer") && ir.contains("ta.read.oob"),
-                "{name}: live storage/bounds missing"
-            );
-            assert!(
-                !ir.contains("tav.width") && !ir.contains("call double @js_typed_array_get("),
-                "{name}: per-element dispatch returned"
-            );
         }
     }
 
