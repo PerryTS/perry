@@ -121,15 +121,6 @@ fn block<'a>(ir: &'a str, prefix: &str) -> &'a str {
     &rest[..rest.find("\n\n").unwrap_or(rest.len())]
 }
 
-/// The instructions that end with the branch into the block named `label`.
-fn predecessor_of<'a>(ir: &'a str, label: &str) -> &'a str {
-    let at = ir
-        .find(&format!("label %{label}"))
-        .unwrap_or_else(|| panic!("premise: no branch to `{label}` in\n{ir}"));
-    let start = ir[..at].rfind("\n\n").map_or(0, |p| p + 2);
-    &ir[start..at]
-}
-
 fn label_of(block_text: &str) -> &str {
     block_text.split(':').next().expect("block label")
 }

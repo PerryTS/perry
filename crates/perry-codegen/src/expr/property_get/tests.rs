@@ -640,7 +640,7 @@ fn pic_miss_reuses_the_token_blocks_values_instead_of_re_deriving_them() {
     let ir = emit(false, None);
     let blocks = tower_blocks(&ir);
     let (front_label, _) = tower_block(&blocks, "pic.miss.front");
-    let (token_label, token) = tower_block(&blocks, "pic.token");
+    let (_, token) = tower_block(&blocks, "pic.token");
     let preds: Vec<&str> = blocks
         .iter()
         .filter(|(_, body)| {
