@@ -1055,6 +1055,8 @@ pub(crate) struct CrossModuleCtx {
     /// instead of recomputing via the name-keyed `ctx.classes` walk (which
     /// mis-resolves same-named cross-module parents like effect's `Type`).
     pub class_field_counts: std::collections::HashMap<String, u32>,
+    /// Literal receiver key-add capacity, normalized over shared keys globals.
+    pub anon_key_adds: std::collections::HashMap<String, std::collections::BTreeSet<String>>,
     /// Issue #26 / #321: authoritative, source-prefix-disambiguated ancestor
     /// chain per class (root → leaf, `(class_name, fields)`), matching the
     /// keys-global layout. `apply_field_initializers_recursive` walks this

@@ -6,6 +6,7 @@
 //! hub — public-API shape (`crate::collectors::*`) is preserved.
 
 mod all_pointer_arrays;
+pub(crate) mod anon_key_adds;
 mod byte_read_key;
 #[cfg(test)]
 mod byte_read_key_tests;
