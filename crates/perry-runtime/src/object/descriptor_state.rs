@@ -48,11 +48,9 @@ impl PropertyAttrs {
     }
 }
 
-/// #6759 Phase A: the descriptor side tables and their per-thread fast-path
-/// gates, grouped as the `descriptors` field of
-/// [`crate::state::RuntimeState`]. Previously four separate `thread_local!`s;
-/// reach them via `crate::state::state().descriptors` (one TLS fetch for the
-/// whole group).
+/// #6759 Phase A: descriptor side tables and their per-thread fast-path gates, grouped
+/// in [`crate::state::RuntimeState`]::descriptors. Replaces four `thread_local!`s,
+/// accessed through `crate::state::state().descriptors` with one TLS fetch.
 pub(crate) struct DescriptorTables {
     /// Per-property attribute flags set by `Object.defineProperty` /
     /// `Object.freeze` / `Object.seal`, keyed `(owner_addr, key_string)`.
