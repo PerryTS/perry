@@ -718,7 +718,13 @@ impl ShapeRecord {
             summary: self.summary(),
             rep: self.rep,
             special_constfn_mask: self.special_constfn_mask,
-            extras: self.extras,
+            // A descriptor borrows only extension metadata. The scalar
+            // reverse edge stays on its record and is never a pointer.
+            extras: if self.has_boxed_extras() {
+                self.extras
+            } else {
+                0
+            },
         }
     }
 }

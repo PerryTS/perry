@@ -10,6 +10,12 @@ fn scalar_reverse_edges_do_not_allocate_or_masquerade_as_owned_extensions() {
         assert!(record.constfn_infos().is_empty());
         assert!(record.brands().is_empty());
         assert_eq!(record.deprecation_targets(), (0, 0));
+        let at = std::ptr::addr_of_mut!(record);
+        let descriptor = record.lift(at);
+        assert_eq!(descriptor.extras, 0);
+        assert!(descriptor.constfn_infos().is_empty());
+        assert!(descriptor.brands().is_empty());
+        assert_eq!(descriptor.deprecation_targets(), (0, 0));
     }
     // Retiring an integer edge must never try to free it as a pointer.
     unsafe { record.release_extras() };
@@ -21,6 +27,8 @@ fn scalar_reverse_edges_do_not_allocate_or_masquerade_as_owned_extensions() {
     assert_eq!(branded.rollback_parent(), SHAPE_ID_BASE);
     assert_eq!(branded.brands(), &[17]);
     assert!(branded.constfn_infos().is_empty());
+    let at = std::ptr::addr_of_mut!(branded);
+    assert_eq!(branded.lift(at).brands(), &[17]);
     unsafe { branded.release_extras() };
 }
 
