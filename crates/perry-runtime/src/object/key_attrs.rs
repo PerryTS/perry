@@ -321,6 +321,42 @@ pub(crate) unsafe fn keys_entry(keys: *const ArrayHeader, pos: u32) -> u8 {
     }
 }
 
+/// Find an accessor candidate in a live shape's key prefix. Data names need
+/// not be decoded on a negative accessor walk. A positive candidate still
+/// checks the complete lookup: a later duplicate data key shadows it.
+///
+/// # Safety
+/// `keys` belongs to a live shape, with no intervening allocation or safepoint.
+pub(crate) unsafe fn keys_find_accessor_slot_resolved(
+    keys: *const ArrayHeader,
+    count: u32,
+    key: &[u8],
+) -> Option<u32> {
+    let attrs = keys_attrs(keys);
+    if attrs.is_null() {
+        return None;
+    }
+    let (entries, entry_len) = words(attrs);
+    let (slots, slot_len) = crate::object::keys_array_dense_slots_resolved(keys);
+    if slots.is_null() {
+        return None;
+    }
+    let n = (count as usize).min(entry_len).min(slot_len);
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    for i in (0..n).rev() {
+        if Word::decode(*entries.add(i)).entry & ENTRY_ACCESSOR == 0 {
+            continue;
+        }
+        let value = crate::JSValue::from_bits((*slots.add(i)).to_bits());
+        if crate::string::js_string_key_bytes(value, &mut sso) == Some(key) {
+            return (crate::object::keys_find_slot_by_bytes_resolved(keys, count, key)
+                == Some(i as u32))
+            .then_some(i as u32);
+        }
+    }
+    None
+}
+
 /// Is key position `pos` of `keys` an accessor — does its value slot hold an
 /// accessor PAIR rather than a data value (`accessor_pair.rs`)? Every reader
 /// that walks an object's slots by position must ask before treating a slot
