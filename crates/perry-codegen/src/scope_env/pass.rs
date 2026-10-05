@@ -9,7 +9,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use perry_hir::{Expr, Module as HirModule, Stmt};
+use perry_hir::{Expr, Module as HirModule, Param, Stmt};
 
 use super::analysis::{self, DeclKind};
 
@@ -34,13 +34,20 @@ pub fn group_scope_boxes(hir: &mut HirModule) {
     let mut edits: HashMap<usize, ListEdits> = HashMap::new();
     let mut grouped: HashSet<u32> = HashSet::new();
     let init_ptr = hir.init.as_ptr() as usize;
-    super::for_each_body(hir, &mut |stmts: &[Stmt]| {
+    super::for_each_body(hir, &mut |params: &[Param], stmts: &[Stmt]| {
         // Module-scope bindings that closures capture are globalized by
         // codegen and already have shared storage; leave the init body alone.
         if stmts.as_ptr() as usize == init_ptr {
             return;
         }
-        plan_body(stmts, &module_boxed, &counts, &mut edits, &mut grouped);
+        plan_body(
+            params,
+            stmts,
+            &module_boxed,
+            &counts,
+            &mut edits,
+            &mut grouped,
+        );
     });
     if grouped.is_empty() {
         return;
@@ -49,6 +56,7 @@ pub fn group_scope_boxes(hir: &mut HirModule) {
 }
 
 fn plan_body(
+    params: &[Param],
     stmts: &[Stmt],
     module_boxed: &HashSet<u32>,
     counts: &HashMap<u32, u32>,
@@ -58,7 +66,11 @@ fn plan_body(
     let mut declared = HashSet::new();
     crate::collectors::collect_let_ids(stmts, &mut declared);
     analysis::collect_shallow_prealloc_ids(stmts, &mut declared);
-    declared.retain(|id| module_boxed.contains(id) && counts.get(id).copied().unwrap_or(0) <= 1);
+    declared.retain(|id| {
+        module_boxed.contains(id)
+            && counts.get(id).copied().unwrap_or(0) <= 1
+            && !params.iter().any(|p| p.id == *id)
+    });
     if declared.is_empty() {
         return;
     }

@@ -395,7 +395,11 @@ pub(crate) fn try_const_fold_function_construct_kind(
 
     let outer_strict = ctx.current_strict;
     ctx.current_strict = false;
+    // A Function constructor body has its own strict context; it does not
+    // inherit the enclosing source's strict-mode stack or module default.
+    ctx.enter_strict_mode(false);
     let lowered_result = lower_fn_expr(ctx, fn_expr);
+    ctx.exit_strict_mode();
     ctx.current_strict = outer_strict;
     let lowered = match lowered_result {
         Ok(l) => l,

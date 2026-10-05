@@ -258,3 +258,77 @@ fn arguments_mentions_invalidate_every_parameter_not_just_index_zero() {
         }
     }
 }
+
+#[test]
+fn object_methods_use_their_own_arguments_mapping_rules() {
+    let m = lower(
+        r#"const o = {
+            mapped(a, b) { (() => { arguments[0] = b; })(); return a; },
+            strict(a) { "use strict"; return arguments; },
+            defaulted(a = arguments[0]) { return a; },
+            rest(a, ...r) { return arguments; },
+            destructured({a}) { return arguments; }
+        };"#,
+        "object_method_arguments.cts",
+    );
+    for (name, strict, simple) in [
+        ("mapped", false, true),
+        ("strict", true, true),
+        ("defaulted", false, false),
+        ("rest", false, false),
+        ("destructured", false, false),
+    ] {
+        let f = m
+            .functions
+            .iter()
+            .find(|f| f.name.starts_with(&format!("__obj_method_{name}_")))
+            .unwrap_or_else(|| panic!("missing method {name}"));
+        assert_eq!(f.is_strict, strict, "{name}");
+        let meta = f
+            .params
+            .iter()
+            .find_map(|p| p.arguments_object.as_ref())
+            .unwrap_or_else(|| panic!("{name} needs its own arguments binding"));
+        assert_eq!(meta.strict, strict, "{name}");
+        assert_eq!(meta.simple_parameters, simple, "{name}");
+        assert_eq!(meta.restricted_callee, strict || !simple, "{name}");
+        if name == "mapped" {
+            assert_eq!(
+                meta.mapped_parameter_ids,
+                vec![(0, f.params[0].id), (1, f.params[1].id)]
+            );
+        } else {
+            assert!(meta.mapped_parameter_ids.is_empty(), "{name}");
+        }
+    }
+}
+
+#[test]
+fn function_constructor_arguments_do_not_inherit_source_strictness() {
+    let m = lower(
+        r#"const loose = new Function("a", "arguments[0] = 7; return a;");
+           const strict = new Function("a", '"use strict"; arguments[0] = 7; return a;');"#,
+        "function_constructor_arguments.ts",
+    );
+    fn visit(expr: &Expr, seen: &mut Vec<(bool, usize)>) {
+        if let Expr::Closure {
+            params, is_strict, ..
+        } = expr
+        {
+            if let Some(meta) = params.iter().find_map(|p| p.arguments_object.as_ref()) {
+                assert_eq!(meta.strict, *is_strict);
+                seen.push((meta.strict, meta.mapped_parameter_ids.len()));
+            }
+        }
+        crate::walker::walk_expr_children(expr, &mut |child| visit(child, seen));
+    }
+    let mut seen = Vec::new();
+    for stmt in &m.init {
+        crate::walker::stmt_any_expr(stmt, &mut |expr| {
+            visit(expr, &mut seen);
+            false
+        });
+    }
+    seen.sort();
+    assert_eq!(seen, vec![(false, 1), (true, 0)]);
+}
