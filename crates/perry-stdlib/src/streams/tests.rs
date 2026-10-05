@@ -497,6 +497,9 @@ extern "C" fn collecting_pair_getter(
 #[test]
 fn pipe_through_pair_survives_a_moving_getter() {
     let _serial = serial_guard();
+    // Rust unit tests bypass the generated program's startup. Register the
+    // handle/accessor roots before the getters deliberately collect.
+    perry_runtime::gc::gc_init();
     struct RestoreGc(i32);
     impl Drop for RestoreGc {
         fn drop(&mut self) {

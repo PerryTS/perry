@@ -711,7 +711,9 @@ pub fn attach<T: 'static>(
             return Err(AttachMiss::Open);
         }
         let tag = type_tag::<T>(family.class_id);
-        if (*cell).type_id != family.class_id as u64 && (*cell).type_id != tag {
+        if (*cell).type_id != family.class_id as u64
+            && ((*cell).type_id != tag || (*cell).finalizer != drop_payload::<T> as *mut c_void)
+        {
             return Err(AttachMiss::Foreign);
         }
         // alloc_closed cannot know T. Establish the layout/thunk on first

@@ -56,6 +56,15 @@ fn l5_teardown_finalized_cell_cannot_attach() {
     assert!(unsafe { (*cell(link)).resource_ptr.is_null() });
 }
 
+// Same size/alignment as Probe, but a different destructor. A safe attach
+// must never install this under Probe's retained drop thunk.
+struct OtherProbe([usize; 2]);
+impl Drop for OtherProbe {
+    fn drop(&mut self) {
+        CALLS.fetch_add(self.0[0], Ordering::SeqCst);
+    }
+}
+
 #[test]
 fn reopen_preserves_object_cell_properties_and_serial_identity() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -132,6 +141,23 @@ fn reopen_preserves_object_cell_properties_and_serial_identity() {
             123.0f64.to_bits()
         );
     }
+    assert_eq!(
+        std::mem::size_of::<OtherProbe>(),
+        std::mem::size_of::<Probe>()
+    );
+    assert_eq!(
+        std::mem::align_of::<OtherProbe>(),
+        std::mem::align_of::<Probe>()
+    );
+    assert_eq!(
+        np::attach(value.get_nanbox_f64(), &FAMILY, OtherProbe([1, 0]), 0),
+        Err(AttachMiss::Foreign)
+    );
+    assert_eq!(
+        CALLS.load(Ordering::SeqCst),
+        1,
+        "rejected payload uses its own destructor"
+    );
     let trace = collect_minor_trace(GcTriggerKind::MallocCount);
     assert!(trace.copying_nursery.eligible);
     assert_ne!(before, value.get_nanbox_f64().to_bits());
@@ -295,7 +321,8 @@ fn two_hundred_thousand_released_cells_have_flat_rss_and_exact_counts() {
     let _reset = Reset::new();
     let _no_stack = ConservativeScanDisabledGuard::new();
     let before = finalized();
-    let mut rss = Vec::new();
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut rss: Vec<usize> = Vec::new();
     for batch in 0..20 {
         for _ in 0..10_000 {
             let scope = RuntimeHandleScope::new();
