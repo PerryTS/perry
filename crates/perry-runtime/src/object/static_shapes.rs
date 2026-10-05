@@ -591,11 +591,12 @@ unsafe fn finalized_constfn_facts(
 }
 
 #[cfg(test)]
-static CONSTFN_BOOTSTRAP_NAME_SCANS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-#[cfg(test)]
-static CONSTFN_NATIVE_ADMISSION_PROBES: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+per_test_global! {
+    static CONSTFN_BOOTSTRAP_NAME_SCANS: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+    static CONSTFN_NATIVE_ADMISSION_PROBES: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+}
 
 fn checked_constfn_static_entries(
     entries: *const ConstFnStaticEntry,
