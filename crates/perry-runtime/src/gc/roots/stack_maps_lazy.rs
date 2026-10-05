@@ -198,6 +198,7 @@ pub(super) struct SlotIter<'a> {
     end: usize,
     remaining: u32,
     last: Option<i32>,
+    range: Option<(u16, i32, u32)>,
 }
 
 impl<'a> SlotIter<'a> {
@@ -208,6 +209,7 @@ impl<'a> SlotIter<'a> {
             end,
             remaining: count,
             last: None,
+            range: None,
         }
     }
 
@@ -223,6 +225,18 @@ impl<'a> SlotIter<'a> {
             return None;
         }
         self.remaining -= 1;
+        if let Some((reg, offset, words)) = self.range {
+            self.last = Some(offset);
+            self.range = if words > 1 {
+                Some((reg, offset + 8, words - 1))
+            } else {
+                None
+            };
+            return Some(Some(StackMapLocation {
+                dwarf_reg: reg,
+                offset,
+            }));
+        }
         let Some((value, next)) = read_varint(self.bytes, self.cursor, self.end) else {
             return Some(None);
         };
@@ -239,6 +253,40 @@ impl<'a> SlotIter<'a> {
                     Ok(reg) => reg,
                     Err(_) => return Some(None),
                 }
+            }
+            3 => {
+                let Some((reg, next)) = read_varint(self.bytes, self.cursor, self.end) else {
+                    return Some(None);
+                };
+                let Some((words, after)) = read_varint(self.bytes, next, self.end) else {
+                    return Some(None);
+                };
+                let (Ok(reg), Ok(words)) = (u16::try_from(reg), u32::try_from(words)) else {
+                    return Some(None);
+                };
+                if words == 0 || words - 1 > self.remaining {
+                    return Some(None);
+                }
+                self.cursor = after;
+                let delta = unzigzag((value >> 2) as u32);
+                let offset = self.last.map_or(delta, |last| last.wrapping_add(delta));
+                let Some(extent) = (words - 1)
+                    .checked_mul(8)
+                    .and_then(|n| i32::try_from(n).ok())
+                else {
+                    return Some(None);
+                };
+                if offset.checked_add(extent).is_none() {
+                    return Some(None);
+                }
+                self.last = Some(offset);
+                if words > 1 {
+                    self.range = Some((reg, offset + 8, words - 1));
+                }
+                return Some(Some(StackMapLocation {
+                    dwarf_reg: reg,
+                    offset,
+                }));
             }
             _ => return Some(None),
         };
@@ -303,16 +351,30 @@ pub(super) fn derived_slots_at(bytes: &[u8], payload: &Payload, end: usize) -> O
     Some(cursor)
 }
 
-fn skip_slots(bytes: &[u8], mut cursor: usize, end: usize, count: u32) -> Option<usize> {
-    for _ in 0..count {
+fn skip_slots(bytes: &[u8], mut cursor: usize, end: usize, mut count: u32) -> Option<usize> {
+    let mut last: Option<i32> = None;
+    while count != 0 {
         let (value, next) = read_varint(bytes, cursor, end)?;
         cursor = next;
-        if value & 3 == 2 {
-            let (_, next) = read_varint(bytes, cursor, end)?;
+        let mut words = 1;
+        if value & 3 >= 2 {
+            let (reg, next) = read_varint(bytes, cursor, end)?;
+            u16::try_from(reg).ok()?;
             cursor = next;
-        } else if value & 3 == 3 {
+            if value & 3 == 3 {
+                let (n, next) = read_varint(bytes, cursor, end)?;
+                words = u32::try_from(n).ok()?;
+                cursor = next;
+            }
+        }
+        if words == 0 || words > count {
             return None;
         }
+        let delta = unzigzag((value >> 2) as u32);
+        let offset = last.map_or(delta, |old| old.wrapping_add(delta));
+        let extent = i32::try_from((words - 1).checked_mul(8)?).ok()?;
+        last = Some(offset.checked_add(extent)?);
+        count -= words;
     }
     Some(cursor)
 }
@@ -795,4 +857,44 @@ pub(super) fn test_blob_multi_at(origin: u64, functions: &[TestFunction]) -> Vec
         bytes.push(0);
     }
     bytes
+}
+
+#[cfg(test)]
+mod native_range_tests {
+    use super::*;
+
+    #[test]
+    fn native_range_walks_without_materializing_slots() {
+        // Range of three x86-64 RBP homes at -24, -16, -8.
+        let bytes = [191, 1, 6, 3];
+        assert_eq!(skip_slots(&bytes, 0, bytes.len(), 3), Some(bytes.len()));
+        let mut iter = SlotIter::new(&bytes, 0, bytes.len(), 3);
+        for offset in [-24, -16, -8] {
+            assert_eq!(
+                iter.next().unwrap().unwrap(),
+                StackMapLocation {
+                    dwarf_reg: 6,
+                    offset
+                }
+            );
+        }
+        assert!(iter.next().is_none());
+        assert_eq!(iter.cursor(), bytes.len());
+    }
+
+    #[test]
+    fn malformed_native_ranges_fail_closed() {
+        for (bytes, count) in [
+            (vec![3, 6, 0], 1),           // empty
+            (vec![3, 6, 3], 2),           // exceeds declared live set
+            (vec![3, 6], 1),              // missing size
+            (vec![3, 128, 128, 4, 1], 1), // register exceeds u16
+        ] {
+            assert!(skip_slots(&bytes, 0, bytes.len(), count).is_none());
+            assert!(SlotIter::new(&bytes, 0, bytes.len(), count)
+                .next()
+                .unwrap()
+                .is_none());
+        }
+    }
 }

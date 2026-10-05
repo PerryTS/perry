@@ -57,7 +57,10 @@ def main():
         if result != str(n * (n - 1) // 2):
             raise AssertionError(f"q{n}: output {result!r}")
         user, system, wall, rss = (directory / "time").read_text().split()
-        rows.append(dict(n=n, symbol_bytes=sizes[0], binary_bytes=binary.stat().st_size,
+        sections = subprocess.check_output(["size", "-A", str(binary)], text=True)
+        gcmap = next(int(line.split()[1]) for line in sections.splitlines()
+                     if line.startswith(".perry_gcmap"))
+        rows.append(dict(n=n, symbol_bytes=sizes[0], gcmap_bytes=gcmap, binary_bytes=binary.stat().st_size,
                          cpu_seconds=float(user) + float(system), wall_seconds=float(wall),
                          compile_rss_kib=int(rss)))
         (out / "results.json").write_text(json.dumps(rows, indent=2) + "\n")
@@ -70,8 +73,9 @@ def main():
     if rows[-1]["symbol_bytes"] > 248_858:
         failures.append(f"q200 {rows[-1]['symbol_bytes']} bytes exceeds 248858")
     for smaller, larger in zip(rows, rows[1:]):
-        if larger["symbol_bytes"] > smaller["symbol_bytes"] * 2.5:
-            failures.append(f"q{larger['n']} exceeds 2.5 times q{smaller['n']}")
+        for metric in ("symbol_bytes", "gcmap_bytes"):
+            if larger[metric] > smaller[metric] * 2.5:
+                failures.append(f"q{larger['n']} {metric} exceeds 2.5 times q{smaller['n']}")
     if failures:
         raise AssertionError("; ".join(failures))
     print("Linear statepoint size gate passed.")

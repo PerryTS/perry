@@ -17,6 +17,7 @@
 //! IR and flags this pipeline produces objects byte-identical to Homebrew
 //! clang 22's `clang -c`.
 
+mod native_homes;
 mod optimize_emit;
 mod split_emit;
 use optimize_emit::optimize_and_emit;
@@ -858,6 +859,28 @@ fn rs4gc_functions(module: &inkwell::module::Module<'_>) -> std::collections::Ha
 /// safepoint can leave one additional pointer result live across later calls —
 /// but it observes the calls codegen actually emitted. That closes estimator
 /// holes where one source expression expands into several collecting helpers.
+fn rs4gc_call_may_collect(i: inkwell::values::InstructionValue<'_>) -> bool {
+    if !matches!(
+        i.get_opcode(),
+        inkwell::values::InstructionOpcode::Call
+            | inkwell::values::InstructionOpcode::CallBr
+            | inkwell::values::InstructionOpcode::Invoke
+    ) {
+        return false;
+    }
+    let call = unsafe { inkwell::values::CallSiteValue::new(i.as_value_ref()) };
+    let leaf = call
+        .get_string_attribute(
+            inkwell::attributes::AttributeLoc::Function,
+            "gc-leaf-function",
+        )
+        .is_some();
+    let intrinsic = call
+        .get_called_fn_value()
+        .is_some_and(|callee| callee.get_intrinsic_id() != 0);
+    !leaf && !intrinsic
+}
+
 fn rs4gc_preflight_factors(function: inkwell::values::FunctionValue<'_>) -> (usize, usize) {
     let mut root_allocas = 0usize;
     let mut safepoints = 0usize;
@@ -879,17 +902,7 @@ fn rs4gc_preflight_factors(function: inkwell::values::FunctionValue<'_>) -> (usi
                 | inkwell::values::InstructionOpcode::Invoke => {
                     // Call, invoke and callbr are all LLVM CallBase values, so
                     // the call-site attribute API is valid for each opcode.
-                    let call = unsafe { inkwell::values::CallSiteValue::new(i.as_value_ref()) };
-                    let gc_leaf = call
-                        .get_string_attribute(
-                            inkwell::attributes::AttributeLoc::Function,
-                            "gc-leaf-function",
-                        )
-                        .is_some();
-                    let intrinsic = call
-                        .get_called_fn_value()
-                        .map_or(false, |callee| callee.get_intrinsic_id() != 0);
-                    if !gc_leaf && !intrinsic {
+                    if rs4gc_call_may_collect(i) {
                         safepoints += 1;
                     }
                 }

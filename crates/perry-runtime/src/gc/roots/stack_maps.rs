@@ -56,7 +56,7 @@ const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
 /// after a move. Version mismatch still fails closed (the parser returns
 /// None and `stack_maps()` panics), so an older binary cannot run on this
 /// runtime half-understood.
-const GC_MAP_VERSION: u8 = 6;
+const GC_MAP_VERSION: u8 = 7;
 const MAX_SAFEPOINT_RETURN_DELTA: usize = 16;
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
 struct StackMapLocation {
