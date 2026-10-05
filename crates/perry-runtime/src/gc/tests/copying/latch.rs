@@ -340,6 +340,23 @@ fn pin_object_non_young_call_sites_are_never_young() {
              young, pin_object_non_young there would be memory corruption"
         );
 
+        // native_payload::link_ref pins the CELL, allocated by gc_malloc.
+        // Its owner is young, but the pin itself must never arm the latch.
+        let cell = crate::native_handle::native_handle_new_rust_payload(
+            Box::into_raw(Box::new(1u8)) as *mut std::ffi::c_void,
+            0x11919,
+            drop_latch_probe,
+            "latch callback probe",
+        );
+        let cell_header = header_from_user_ptr(cell as *const u8);
+        assert_eq!((*cell_header).gc_flags & GC_FLAG_ARENA, 0);
+        assert!(!crate::gc::pin::pin_constrains_copying_minor_for_tests(
+            cell_header
+        ));
+        crate::gc::pin_object_non_young(cell_header);
+        crate::gc::unpin_object(cell_header);
+        crate::native_handle::native_handle_dispose_rust_payload(cell);
+
         // Control: a plain nursery object IS young, so the predicate the two
         // assertions above rely on is not vacuously false for everything.
         let young = young_leaf();
@@ -350,4 +367,54 @@ fn pin_object_non_young_call_sites_are_never_young() {
              proves nothing about the two assertions above"
         );
     }
+}
+
+unsafe extern "C" fn drop_latch_probe(resource: *mut std::ffi::c_void, _: *mut std::ffi::c_void) {
+    drop(Box::from_raw(resource as *mut u8));
+}
+
+/// The actual link_ref path retains a movable owner without bringing back the
+/// preflight walk. T2 separately proves that its pin is a traced root.
+#[test]
+fn callback_cell_ref_does_not_arm_the_young_pin_latch() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::native_payload::reset_payload_prototypes_for_tests();
+    gc_register_mutable_root_scanner(crate::native_payload::scan_payload_prototype_roots_mut);
+    gc_register_named_mutable_root_scanner("pinned", crate::gc::pin::scan_pinned_object_roots_mut);
+    gc_register_named_mutable_root_scanner(
+        "shape_table",
+        crate::object::shapes::scan_shape_table_rekey_mut,
+    );
+    fn install(_: &mut crate::native_payload::PayloadPrototype) {}
+    static FAMILY: crate::native_payload::NativePayloadFamily =
+        crate::native_payload::NativePayloadFamily {
+            class_id: crate::native_class_ids::CRYPTO_HASH,
+            name: "LatchProbe",
+            constructor_export: None,
+            constructor_length: 0,
+            links_owner: true,
+            install_prototype: install,
+        };
+    let value = crate::native_payload::alloc(&FAMILY, 1u8, 0, &[]);
+    let link = crate::native_payload::owner_link(value, &FAMILY).unwrap();
+    unsafe {
+        crate::native_payload::link_ref(link);
+    }
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert!(
+        preflight_skipped(&trace),
+        "cell ref must leave the young-pin latch disarmed"
+    );
+    let moved = unsafe { crate::native_payload::link_owner(link) }.unwrap();
+    assert_ne!(
+        moved.to_bits(),
+        value.to_bits(),
+        "the owner must remain movable"
+    );
+    unsafe {
+        crate::native_payload::link_unref(link);
+    }
+    crate::native_payload::reset_payload_prototypes_for_tests();
 }

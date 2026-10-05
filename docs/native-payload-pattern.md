@@ -29,7 +29,7 @@ object is the only owner of its payload, and the collector sees that edge.
 * `native_payload::payload_mut::<T>(this, &FAMILY)` is the receiver check and
   the payload borrow in one: `Ok(&mut T)`, `Err(Closed)` or `Err(Foreign)`.
 * `native_payload::close(this, &FAMILY)` is explicit close: it drops the
-  `Box<T>` now and releases the bytes. The object stays valid and later reads
+  `Box<T>` now (or after the outermost active C call) and releases the bytes. The object stays valid and later reads
   as `Closed`.
 * If nothing closes it, the sweep that finds the object (and so the cell)
   dead drops the payload; a worker's teardown drops what is left. The drop
@@ -100,3 +100,96 @@ plus dispatch-hub arms):
   stream object model first, then the payload for the native part.
 * Values with a typed-receiver codegen path that passes the handle as an
   `i64` (`StringDecoder`): retarget the codegen rows in the same PR.
+
+## Families whose native side calls JS
+
+Classify the family before conversion. The shape and object remain the
+source of truth: no owner registries, address maps or per-family latches.
+`NativePayloadFamily::links_owner` opts into one traced, NaN-boxed owner slot
+on the stable malloc cell. Both marking and relocation visit it. The owner store uses
+`runtime_write_barrier_external_slot`, the exact-slot barrier that recognizes
+malloc parents (`runtime_write_barrier_slot` only remembers old arena parents). The cell
+remains 136 bytes; families without callbacks keep the slot zero.
+
+| Class | Native callback lifetime | Examples | Owner edge |
+|---|---|---|---|
+| S | Registered synchronous C callback, through userdata | node:sqlite DatabaseSync UDF, aggregate/window, authorizer | `links_owner: true` |
+| A | Completion delivered later by the event pump | net/tls, http/ws, zlib/fs streams, fs.watch, child_process, readline, MessagePort | `links_owner: true` |
+| C | Callback arguments live for one call | sqlite Session/applyChangeset filter and onConflict | stack userdata with runtime handles |
+| N | No JS callbacks | crypto, StringDecoder, sync zlib, rustls verifier; bun:sqlite/better-sqlite3 today | `links_owner: false` |
+
+Statements, SQLTagStore and iterators are S entries through their database
+owner, held in their own JS state. A one-shot zlib callback has no payload
+owner; its parked root callback keeps its existing lifetime.
+
+For every class, keep JS values in own properties or the hidden JS state,
+never in `Box<T>` or C memory. Registered callbacks use `set_callback` with
+a fixed index into `callbacks`. Per-invocation JS values (aggregate
+accumulators) live in JS-state arrays; C stores only a `u32` slot index.
+
+S checklist:
+
+1. Set `links_owner: true`. Obtain `owner_link` and pass
+   `sites.site(link, index)` as userdata. Never pass a runtime handle, moving
+   object address, or a Box registered in a set. Declare the C resource
+   before `CallbackSites`, so it closes first. C xDestroy does not free sites.
+2. A trampoline calls `link_owner`; `None` returns the C error or no-op
+   without JS. Root the owner immediately, and read it only through that
+   handle after allocation or JS. Read the callback from the owner's array.
+3. Call JS only through `call_from_native`. It catches a throw, parks the
+   exact value in `pendingException`, sets PENDING and returns `Err(())`.
+   Further callbacks return the error without running JS: the first throw
+   wins. Never throw through C or use throwing thread-validation helpers.
+   Park validation errors with `set_pending_exception`; it never calls JS and
+   preserves the first pending value.
+4. Root the receiver, copy the raw C resource out of the payload, and release
+   the borrow before calling C. Hold neither `&mut T` nor a mutex over a call
+   that can re-enter JS. Bracket every callback-capable call (step, exec,
+   prepare, close, backup, changeset_apply) with `enter` and `finish`.
+5. Finish immediately when C returns, before result conversion or anything
+   that can throw. Save its `Err`, convert the native result, then throw that
+   saved exception outside C (root it if conversion can allocate). The guard is explicitly finished, not Drop
+   based. Nested entries consume their pending throw before returning to the
+   outer callback's JS.
+6. `close` returns `Closed`, `Deferred`, `AlreadyClosed` or `Foreign`.
+   While busy, it sets CLOSING; payload access and `link_owner` see closed
+   immediately. The outermost finish drops the resource. Finalization marks
+   the cell finalized **before** invoking its drop thunk, so C destruction
+   callbacks cannot read a dead owner or call JS.
+
+C checklist:
+
+1. Use per-call stack userdata whose JS values are `RuntimeHandle`s, covered
+   by the catch savepoint. No current-owner TLS stack or latch.
+2. Use the owning payload's catch/pending/finish protocol for callbacks; keep
+   decoding, conversion and the eventual rethrow outside the C guard span.
+3. Release payload borrows and locks before calling C, as for S.
+
+A checklist:
+
+1. Set `links_owner: true`. Queues carry `OwnerLink`, never an id. Native
+   workers only send inert links; the owner thread dereferences them.
+2. Call `link_ref` once per outstanding operation and once per ref'ed native
+   handle. Its 0→1 transition pins the **cell** via `pin_object_non_young`;
+   the pin traces the owner without arming the young-pin latch. Balance every
+   ref with `link_unref`, including after explicit close. The last unref
+   unpins the cell. A bare link is not a root.
+3. The pump uses `link_owner` and roots its result. `None` drops the event;
+   always unref afterwards. Listener throws follow the pump's normal
+   uncaught path because no C frames need protecting.
+4. Keep the cell alive until all queued links have been unref'ed. A token
+   cannot be used after the collector frees the cell. Worker teardown drops
+   remaining payloads with finalized already set and runs no JS.
+
+N checklist:
+
+1. Set `links_owner: false`; leave the cell's owner zero.
+2. Use the ordinary payload conversion checklist. Add no callback sites,
+   keep-alive pins or pending-exception machinery.
+
+In each family conversion PR, delete its callback id registries and scanners,
+`js_write_barrier_root_nanbox` callback "rooting", and listener/pipe tables
+keyed by id. For sqlite this includes NODE_SQLITE_CUSTOM_FUNCTIONS,
+NODE_SQLITE_CUSTOM_AGGREGATES, NODE_SQLITE_ACTIVE_AGGREGATES,
+scan_node_sqlite_roots_mut and release_node_sqlite_authorizer_in_freed_ranges.
+These deletions belong to the family lanes; the runtime API adds none of them.

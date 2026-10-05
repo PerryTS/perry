@@ -30,6 +30,7 @@ static FAMILY: NativePayloadFamily = NativePayloadFamily {
     name: "Probe",
     constructor_export: None,
     constructor_length: 0,
+    links_owner: false,
     install_prototype: install,
 };
 
@@ -66,15 +67,15 @@ fn native_payload_close_then_collection_drops_exactly_once() {
             .ok(),
         Some(7)
     );
-    assert!(
+    assert_eq!(
         native_payload::close(value, &FAMILY),
-        "the first close drops"
+        native_payload::CloseOutcome::Closed
     );
     assert_eq!(DROPS.load(Ordering::SeqCst), 1);
     assert_eq!(policy::external_side_live_bytes(), live_before);
-    assert!(
-        !native_payload::close(value, &FAMILY),
-        "a second close is a no-op"
+    assert_eq!(
+        native_payload::close(value, &FAMILY),
+        native_payload::CloseOutcome::AlreadyClosed
     );
     assert_eq!(
         unsafe { native_payload::payload_mut::<Probe>(value, &FAMILY) }.err(),

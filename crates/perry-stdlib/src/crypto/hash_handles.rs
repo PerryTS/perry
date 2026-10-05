@@ -326,6 +326,7 @@ pub(super) static HASH_FAMILY: NativePayloadFamily = NativePayloadFamily {
     name: "Hash",
     constructor_export: None,
     constructor_length: 2,
+    links_owner: false,
     install_prototype: install_hash_prototype,
 };
 
@@ -334,6 +335,7 @@ pub(super) static HMAC_FAMILY: NativePayloadFamily = NativePayloadFamily {
     name: "Hmac",
     constructor_export: None,
     constructor_length: 3,
+    links_owner: false,
     install_prototype: install_hmac_prototype,
 };
 
