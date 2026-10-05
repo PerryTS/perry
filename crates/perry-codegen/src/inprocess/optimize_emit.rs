@@ -82,6 +82,11 @@ pub(super) fn optimize_and_emit(
     // `try` is one — 26% of the gap suite (128 of 479 files) contains a `try`,
     // which the explicit bridge refuses outright (#7327/#7330).
     if native_roots {
+        // Remove unused pure reload chains before deciding which memory homes
+        // survive. DCE does not promote an alloca or forward a live root load.
+        module
+            .run_passes("function(dce)", &tm, PassBuilderOptions::create())
+            .map_err(|e| anyhow!("native-home dead-code cleanup failed: {e}"))?;
         native_homes::retain(module);
         // Sizes before the rewrite: the budget message below names them, and
         // the per-unit report compares them with the post-rewrite census.

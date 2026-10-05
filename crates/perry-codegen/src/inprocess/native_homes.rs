@@ -23,7 +23,10 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
         // Representation choice only: a root that is read after multiple
         // intervening calls benefits from a stable home. Short lifetimes keep
         // ordinary SSA statepoints. Both are lowered by this one backend.
-        // Source-order spans need not be precise CFG liveness: a false positive
+        // Loads in collecting loop components also retain their home. One
+        // linear CFG walk covers loop carries without per-root dataflow.
+        // Source-order
+        // spans need not be precise CFG liveness: a false positive
         // merely retains a home; a false negative remains fully rooted SSA.
         let mut slots = std::collections::HashMap::new();
         for bb in function.get_basic_blocks() {
@@ -40,6 +43,7 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
             }
         }
         let mut retained = std::collections::HashSet::new();
+        let collecting_loops = collecting_loop_blocks(function);
         let mut ordinal = 0usize;
         for bb in function.get_basic_blocks() {
             let mut next = bb.get_first_instruction();
@@ -48,14 +52,19 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
                 unsafe {
                     match inst.get_opcode() {
                         inkwell::values::InstructionOpcode::Store => {
-                            if let Some(last) =
-                                slots.get_mut(&LLVMGetOperand(inst.as_value_ref(), 1))
-                            {
+                            let slot = LLVMGetOperand(inst.as_value_ref(), 1);
+                            if let Some(last) = slots.get_mut(&slot) {
                                 *last = ordinal;
                             }
                         }
                         inkwell::values::InstructionOpcode::Load => {
                             let slot = LLVMGetOperand(inst.as_value_ref(), 0);
+                            if slots.contains_key(&slot) {
+                                let block = LLVMGetInstructionParent(inst.as_value_ref());
+                                if collecting_loops.contains(&block) {
+                                    retained.insert(slot);
+                                }
+                            }
                             if slots
                                 .get(&slot)
                                 .is_some_and(|last| ordinal.saturating_sub(*last) >= 2)
@@ -71,6 +80,11 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
         }
         for slot in retained {
             unsafe {
+                let context = LLVMGetModuleContext(module.as_mut_ptr());
+                let kind =
+                    LLVMGetMDKindIDInContext(context, b"perry.native.home".as_ptr().cast(), 17);
+                let node = LLVMMDNodeInContext2(context, std::ptr::null_mut(), 0);
+                LLVMSetMetadata(slot, kind, LLVMMetadataAsValue(context, node));
                 let mut use_ = LLVMGetFirstUse(slot);
                 while !use_.is_null() {
                     let user = LLVMGetUser(use_);
@@ -83,6 +97,89 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
             }
         }
     }
+}
+
+// Kosaraju's algorithm visits each block/edge once. A load in a cyclic
+// component containing two collecting calls can cross them on a later
+// iteration even when source order places the load before either call.
+fn collecting_loop_blocks(
+    function: inkwell::values::FunctionValue<'_>,
+) -> std::collections::HashSet<LLVMBasicBlockRef> {
+    let blocks = function.get_basic_blocks();
+    let indices: std::collections::HashMap<_, _> = blocks
+        .iter()
+        .enumerate()
+        .map(|(i, block)| (block.as_mut_ptr(), i))
+        .collect();
+    let mut edges = vec![Vec::new(); blocks.len()];
+    let mut reverse = vec![Vec::new(); blocks.len()];
+    let mut calls = vec![0usize; blocks.len()];
+    for (i, block) in blocks.iter().enumerate() {
+        let mut instruction = block.get_first_instruction();
+        while let Some(inst) = instruction {
+            calls[i] += usize::from(rs4gc_call_may_collect(inst));
+            instruction = inst.get_next_instruction();
+        }
+        if let Some(term) = block.get_terminator() {
+            unsafe {
+                for n in 0..LLVMGetNumSuccessors(term.as_value_ref()) {
+                    let successor = LLVMGetSuccessor(term.as_value_ref(), n);
+                    if let Some(&j) = indices.get(&successor) {
+                        edges[i].push(j);
+                        reverse[j].push(i);
+                    }
+                }
+            }
+        }
+    }
+    let mut seen = vec![false; blocks.len()];
+    let mut order = Vec::with_capacity(blocks.len());
+    for start in 0..blocks.len() {
+        if seen[start] {
+            continue;
+        }
+        seen[start] = true;
+        let mut pending = vec![(start, 0)];
+        while let Some((block, next)) = pending.last_mut() {
+            if *next == edges[*block].len() {
+                order.push(*block);
+                pending.pop();
+                continue;
+            }
+            let successor = edges[*block][*next];
+            *next += 1;
+            if !seen[successor] {
+                seen[successor] = true;
+                pending.push((successor, 0));
+            }
+        }
+    }
+    seen.fill(false);
+    let mut retained = std::collections::HashSet::new();
+    for start in order.into_iter().rev() {
+        if seen[start] {
+            continue;
+        }
+        seen[start] = true;
+        let mut pending = vec![start];
+        let mut component = Vec::new();
+        let mut sites = 0;
+        while let Some(block) = pending.pop() {
+            component.push(block);
+            sites += calls[block];
+            for &predecessor in &reverse[block] {
+                if !seen[predecessor] {
+                    seen[predecessor] = true;
+                    pending.push(predecessor);
+                }
+            }
+        }
+        let cyclic = component.len() > 1 || edges[start].contains(&start);
+        if cyclic && sites >= 2 {
+            retained.extend(component.into_iter().map(|i| blocks[i].as_mut_ptr()));
+        }
+    }
+    retained
 }
 
 /// Publish a single native range on every statepoint. Combining storage late
@@ -105,6 +202,7 @@ unsafe fn publish_with_builder(
     builder: LLVMBuilderRef,
 ) -> Result<()> {
     unsafe {
+        let home_kind = LLVMGetMDKindIDInContext(context, b"perry.native.home".as_ptr().cast(), 17);
         for function in module.get_functions() {
             let mut slots = Vec::new();
             let mut points = Vec::new();
@@ -115,6 +213,9 @@ unsafe fn publish_with_builder(
                     let raw = inst.as_value_ref();
                     match inst.get_opcode() {
                         inkwell::values::InstructionOpcode::Alloca => {
+                            if LLVMGetMetadata(raw, home_kind).is_null() {
+                                continue;
+                            }
                             let ty = LLVMGetAllocatedType(raw);
                             let (element, words) = match LLVMGetTypeKind(ty) {
                                 LLVMTypeKind::LLVMPointerTypeKind => (ty, 1),
@@ -159,6 +260,30 @@ unsafe fn publish_with_builder(
             LLVMSetAlignment(home, 8);
             let mut offset = 0;
             for &(slot, size) in &slots {
+                // Inlining may add lifetime markers for an individual home.
+                // This storage now lives with the frame range; an interior GEP
+                // is not a valid LLVM 22 lifetime operand, and ending the full
+                // range at one child's end would invalidate its other homes.
+                let mut lifetime_ends = Vec::new();
+                let mut use_ = LLVMGetFirstUse(slot);
+                while !use_.is_null() {
+                    let user = LLVMGetUser(use_);
+                    if LLVMGetInstructionOpcode(user) == LLVMOpcode::LLVMCall {
+                        let callee = LLVMGetCalledValue(user);
+                        let mut length = 0;
+                        let name = LLVMGetValueName2(callee, &mut length);
+                        if !name.is_null() {
+                            let name = std::slice::from_raw_parts(name.cast::<u8>(), length);
+                            if name.starts_with(b"llvm.lifetime.") {
+                                lifetime_ends.push(user);
+                            }
+                        }
+                    }
+                    use_ = LLVMGetNextUse(use_);
+                }
+                for marker in lifetime_ends {
+                    LLVMInstructionEraseFromParent(marker);
+                }
                 let mut indices = [
                     LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0),
                     LLVMConstInt(LLVMInt64TypeInContext(context), offset, 0),

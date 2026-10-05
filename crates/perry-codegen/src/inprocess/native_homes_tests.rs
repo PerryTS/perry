@@ -126,3 +126,54 @@ fn sabotage_without_native_homes_restores_relocation_fanout() {
         "without native homes the relocation count must be quadratic"
     );
 }
+
+#[test]
+fn loop_carried_homes_are_retained_before_source_order_sees_a_call() {
+    let context = Context::create();
+    let ir = r#"declare void @collect()
+declare void @read(i64) "gc-leaf-function"
+define void @loop(ptr addrspace(1) %arg, i1 %again) gc "statepoint-example" {
+entry:
+  %slot = alloca ptr addrspace(1)
+  store ptr addrspace(1) %arg, ptr %slot
+  br label %header
+header:
+  %loaded = load ptr addrspace(1), ptr %slot
+  %bits = ptrtoint ptr addrspace(1) %loaded to i64
+  call void @read(i64 %bits)
+  br label %body
+body:
+  call void @collect()
+  call void @collect()
+  br i1 %again, label %header, label %exit
+exit:
+  ret void
+}"#;
+    let module = parse_ir_text(&context, ir, "loop_homes").unwrap();
+    retain(&module);
+    let text = module.print_to_string().to_string();
+    assert!(
+        text.contains("load volatile ptr addrspace(1)"),
+        "loop carries must not fan out through SSA: {text}"
+    );
+}
+
+#[test]
+fn a_cross_block_read_without_intervening_calls_stays_ssa() {
+    let context = Context::create();
+    let ir = r#"declare void @collect()
+define ptr addrspace(1) @short(ptr addrspace(1) %arg) gc "statepoint-example" {
+entry:
+  %slot = alloca ptr addrspace(1)
+  call void @collect()
+  call void @collect()
+  store ptr addrspace(1) %arg, ptr %slot
+  br label %exit
+exit:
+  %result = load ptr addrspace(1), ptr %slot
+  ret ptr addrspace(1) %result
+}"#;
+    let module = parse_ir_text(&context, ir, "short_home").unwrap();
+    retain(&module);
+    assert!(!module.print_to_string().to_string().contains("volatile"));
+}
