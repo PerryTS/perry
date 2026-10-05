@@ -617,12 +617,6 @@
       "why": "#[cfg(test)] Cell<u64> count of fast-path answers the trigger watermark gave on this thread, so a test can assert the fast path was taken. It stores only a count and is absent from shipped binaries."
     },
     {
-      "file": "crates/perry-runtime/src/gc/verify.rs",
-      "name": "FULL_REMEMBERED_REBUILDS_SKIPPED",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10182 live-subject counter: a `Cell<u64>` count of synchronous full collections whose old-to-young remembered-set rebuild was replaced by an exact clear (`OldToYoungRememberedRebuildState::provably_empty`). A tally, never an address."
-    },
-    {
       "file": "crates/perry-runtime/src/gc/verify_diag.rs",
       "name": "LAST_VERIFY_BUDGETED_COMPLETIONS",
       "verdict": "not_a_gc_pointer",

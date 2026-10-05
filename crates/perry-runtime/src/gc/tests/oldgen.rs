@@ -1261,9 +1261,8 @@ fn test_old_gen_in_use_bytes_delta_matches_recompute_across_alloc_and_reclaim() 
 /// whole-heap old→young remembered-set rebuild. A minor's old→young RS is
 /// maintained by the write barriers plus this cycle's `evacuation_sticky`
 /// and reclaim's `restore_surviving_dirty_coverage`, so the from-scratch
-/// O(all-objects) walk is skipped. A FULL cycle still runs it. Proven via
-/// the trace's `remembered_set.rebuild_objects_scanned` object-visit counter,
-/// which scales with the heap for a full cycle and is 0 for a minor.
+/// O(all-objects) walk is skipped. Full cycles now fold the rebuild into marking
+/// too; their separate rebuild object-visit counter stays zero.
 #[test]
 fn test_minor_skips_whole_heap_old_to_young_rebuild() {
     let _isolation = copying_nursery_isolation_lock();
@@ -1303,11 +1302,8 @@ fn test_minor_skips_whole_heap_old_to_young_rebuild() {
         "minor RS rebuild object-visit count must be 0 in the trace JSON"
     );
 
-    // A full cycle DOES run the rebuild — the counter proves it is wired and
-    // scales with the (now-large) heap, so the minor's 0 is a genuine skip
-    // rather than the counter being dead. #10182: a full whose young generation
-    // holds nothing live replaces the rebuild by an exact clear, so keep one
-    // pinned young object alive across it.
+    // A full traces every pinned old parent, but now folds remembered entries
+    // into that mark visit instead of running a second whole-heap walk.
     let (young, _young_fields) = unsafe { alloc_nursery_test_object(1) };
     let young_header = unsafe { header_from_user_ptr(young as *const u8) };
     unsafe {
@@ -1318,11 +1314,7 @@ fn test_minor_skips_whole_heap_old_to_young_rebuild() {
         steps_before: Some(GcStepSnapshot::current()),
     });
     let full_trace = full_outcome.trace.expect("full GC trace requested");
-    assert!(
-        full_trace.old_to_young_rebuild_objects_scanned >= OLD_OBJECTS,
-        "a full cycle must walk the whole heap for the RS rebuild (got {}, expected >= {OLD_OBJECTS})",
-        full_trace.old_to_young_rebuild_objects_scanned,
-    );
+    assert_eq!(full_trace.old_to_young_rebuild_objects_scanned, 0);
     unsafe {
         crate::gc::unpin_object(young_header);
     }

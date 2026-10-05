@@ -1,16 +1,12 @@
-//! #10182: a synchronous full replaces its old→young remembered-set rebuild by
-//! an exact clear when the rebuild could only produce an empty set — no marked
-//! or pinned young object, and no malloc object.
+//! Full marking rebuilds remembered entries through the same descriptor visit.
 //!
-//! Each case runs on a fresh thread (empty arenas, empty malloc registry). The
-//! protective cases plant an old→young or old→malloc edge that ONLY the rebuild
-//! can recover — a raw store with no write barrier, so the pre-cycle dirty
-//! snapshot does not cover it — and check the remembered set covers it after
-//! the full. Their sabotaged twins force the skip and show the edge is lost.
+//! Unbarriered old→young and old→malloc edges have no dirty-snapshot repair to
+//! rescue them: only the fold can recover their coverage. Dropping one entry
+//! while still marking its child must fail the same coverage assertion.
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::block_skip::sabotage;
+use crate::gc::trace::remembered_mark_sabotage;
 
 fn run_isolated(test: fn()) {
     std::thread::spawn(move || {
@@ -23,7 +19,7 @@ fn run_isolated(test: fn()) {
         test();
     })
     .join()
-    .expect("full-rebuild-skip test thread must not panic");
+    .expect("full-mark-remembered test thread must not panic");
 }
 
 fn synchronous_full() -> GcCycleTrace {
@@ -68,7 +64,7 @@ fn raw_store(parent: usize, fields: *mut u64, child_bits: u64) {
 }
 
 #[test]
-fn a_full_with_no_live_young_object_skips_the_rebuild() {
+fn a_full_with_no_live_young_object_leaves_no_remembered_entries() {
     run_isolated(|| {
         let (parent, fields) = rooted_old_parent();
         let (old_child, _) = unsafe { alloc_old_test_object(0) };
@@ -77,20 +73,14 @@ fn a_full_with_no_live_young_object_skips_the_rebuild() {
         for _ in 0..512 {
             let _ = unsafe { alloc_nursery_test_object(2) };
         }
-        let skips = crate::gc::full_remembered_rebuilds_skipped();
 
         let trace = synchronous_full();
 
-        assert_eq!(
-            crate::gc::full_remembered_rebuilds_skipped(),
-            skips + 1,
-            "a full with an unmarked young generation must skip the rebuild"
-        );
         assert_eq!(trace.old_to_young_rebuild_objects_scanned, 0);
         assert_eq!(
             remembered_set_size(),
             0,
-            "the skipped rebuild leaves an empty set"
+            "the fold leaves an empty set when every child is old"
         );
         let verify = verify_live_parent(parent);
         assert_eq!(verify.missing_edges, 0, "{verify:?}");
@@ -112,7 +102,7 @@ fn a_full_with_no_live_young_object_skips_the_rebuild() {
 }
 
 /// The young child is reachable only through an old parent, stored without a
-/// barrier: the rebuild is the only thing that can remember it.
+/// barrier: the mark fold is the only thing that can remember it.
 fn plant_unbarriered_young_edge() -> (usize, *mut u64, usize) {
     let (parent, fields) = rooted_old_parent();
     let child = crate::arena::arena_alloc_gc(40, 8, GC_TYPE_OBJECT) as usize;
@@ -127,43 +117,43 @@ fn plant_unbarriered_young_edge() -> (usize, *mut u64, usize) {
 }
 
 #[test]
-fn a_live_young_child_keeps_the_rebuild_and_its_edge() {
+fn a_full_mark_remembers_an_unbarriered_young_edge() {
     run_isolated(|| {
         let (parent, fields, child) = plant_unbarriered_young_edge();
-        let skips = crate::gc::full_remembered_rebuilds_skipped();
 
         let trace = synchronous_full();
 
-        assert_eq!(crate::gc::full_remembered_rebuilds_skipped(), skips);
-        assert!(trace.old_to_young_rebuild_objects_scanned > 0);
+        assert_eq!(trace.old_to_young_rebuild_objects_scanned, 0);
         let verify = verify_live_parent(parent);
         assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
         assert_eq!(
             verify.missing_edges, 0,
-            "the rebuild must remember the edge"
+            "the mark pass must remember the edge"
         );
         assert_eq!(unsafe { *fields } & POINTER_MASK, child as u64);
     });
 }
 
 #[test]
-fn sabotaged_skip_loses_an_unbarriered_young_edge() {
+fn dropping_one_folded_entry_fails_young_edge_coverage() {
     run_isolated(|| {
         let (parent, _, _) = plant_unbarriered_young_edge();
         {
-            let _sabotage = sabotage::Guard::arm(sabotage::FORCE_REBUILD_SKIP);
+            let _sabotage = remembered_mark_sabotage::Guard::arm();
             let _ = synchronous_full();
         }
         let verify = verify_live_parent(parent);
+        assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
+        let red = std::panic::catch_unwind(|| assert_eq!(verify.missing_edges, 0, "{verify:?}"));
         assert!(
-            verify.missing_edges > 0,
-            "a wrongly skipped rebuild must leave the young edge unremembered: {verify:?}"
+            red.is_err(),
+            "dropping one folded entry must turn coverage red"
         );
     });
 }
 
-/// A malloc-registry child of an old parent, stored without a barrier, with an
-/// empty young generation: only the malloc guard stops the skip.
+/// A malloc-registry child of an old parent, stored without a barrier and
+/// with an empty young generation: the fold must keep malloc edges too.
 fn plant_unbarriered_malloc_edge() -> usize {
     activate_malloc_registry_for_tests();
     let (parent, fields) = rooted_old_parent();
@@ -179,35 +169,35 @@ fn plant_unbarriered_malloc_edge() -> usize {
 }
 
 #[test]
-fn a_live_malloc_child_keeps_the_rebuild_and_its_edge() {
+fn a_full_mark_remembers_an_unbarriered_malloc_edge() {
     run_isolated(|| {
         let parent = plant_unbarriered_malloc_edge();
-        let skips = crate::gc::full_remembered_rebuilds_skipped();
 
         let _ = synchronous_full();
 
-        assert_eq!(crate::gc::full_remembered_rebuilds_skipped(), skips);
         let verify = verify_live_parent(parent);
         assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
         assert_eq!(
             verify.missing_edges, 0,
-            "the rebuild must remember the malloc edge"
+            "the mark pass must remember the malloc edge"
         );
     });
 }
 
 #[test]
-fn sabotaged_skip_loses_an_unbarriered_malloc_edge() {
+fn dropping_one_folded_entry_fails_malloc_edge_coverage() {
     run_isolated(|| {
         let parent = plant_unbarriered_malloc_edge();
         {
-            let _sabotage = sabotage::Guard::arm(sabotage::FORCE_REBUILD_SKIP);
+            let _sabotage = remembered_mark_sabotage::Guard::arm();
             let _ = synchronous_full();
         }
         let verify = verify_live_parent(parent);
+        assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
+        let red = std::panic::catch_unwind(|| assert_eq!(verify.missing_edges, 0, "{verify:?}"));
         assert!(
-            verify.missing_edges > 0,
-            "a wrongly skipped rebuild must leave the malloc edge unremembered: {verify:?}"
+            red.is_err(),
+            "dropping one folded entry must turn coverage red"
         );
     });
 }
@@ -309,5 +299,162 @@ fn remembered_rebuild_keeps_parents_during_in_place_promotion() {
             crate::arena::PromotionLiveness::AssumeAllLive,
         );
         assert!(finished.objects > 0);
+    });
+}
+
+fn step_to(state: &mut GcCycleState, target: GcCyclePhase) {
+    for _ in 0..100_000 {
+        if state.phase() == target {
+            return;
+        }
+        state.step(GcWorkBudget::bounded(1));
+    }
+    panic!("full mark did not reach {target:?}");
+}
+
+#[test]
+fn an_old_edge_is_already_buffered_when_full_mark_propagation_finishes() {
+    run_isolated(|| {
+        let (_parent, fields, _child) = plant_unbarriered_young_edge();
+        let mut state =
+            GcCycleState::new_full(GcTriggerSnapshot::capture(GcTriggerKind::ArenaBytes));
+        step_to(&mut state, GcCyclePhase::BlockPersistence);
+        let sticky = state.full_mark_remembered_for_tests().unwrap();
+        assert!(
+            sticky
+                .old_pages
+                .contains(&crate::arena::generation_page_for_addr(fields as usize)),
+            "the mark pass must buffer the old edge before finalization starts"
+        );
+        step_to(&mut state, GcCyclePhase::Complete);
+    });
+}
+
+#[test]
+fn a_later_store_into_a_traced_old_parent_keeps_dirty_snapshot_coverage() {
+    run_isolated(|| {
+        let (parent, fields) = rooted_old_parent();
+        let (old_child, _) = unsafe { alloc_old_test_object(0) };
+        raw_store(parent, fields, ptr_bits(old_child as usize));
+        let mut state =
+            GcCycleState::new_full(GcTriggerSnapshot::capture(GcTriggerKind::ArenaBytes));
+        step_to(&mut state, GcCyclePhase::BlockPersistence);
+        let page = crate::arena::generation_page_for_addr(fields as usize);
+        assert!(
+            !state
+                .full_mark_remembered_for_tests()
+                .unwrap()
+                .old_pages
+                .contains(&page),
+            "premise: the mark visit recorded no young edge on this page"
+        );
+        let child = young_leaf();
+        raw_store(parent, fields, string_bits(child));
+        js_write_barrier_slot(ptr_bits(parent), fields as u64, string_bits(child));
+        step_to(&mut state, GcCyclePhase::Complete);
+        let verify = verify_live_parent(parent);
+        assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
+        assert_eq!(
+            verify.missing_edges, 0,
+            "late store lost coverage: {verify:?}"
+        );
+        assert_eq!(unsafe { *fields }, string_bits(child));
+    });
+}
+
+/// Compare the folded trace with the retained reference rebuild, including
+/// inline old-arena slots and the external slots of a malloc-backed owner.
+#[test]
+fn folded_full_mark_matches_the_reference_for_arena_and_malloc_parents() {
+    run_isolated(|| {
+        activate_malloc_registry_for_tests();
+        let (parent, fields) = rooted_old_parent();
+        let child = young_leaf();
+        raw_store(parent, fields, string_bits(child));
+        let shape = unsafe { (*(parent as *const crate::object::ObjectHeader)).parent_class_id };
+        let size = std::mem::size_of::<crate::object::ObjectHeader>();
+        let malloc_parent = gc_malloc(size + 16, GC_TYPE_OBJECT);
+        unsafe {
+            let object = malloc_parent.cast::<crate::object::ObjectHeader>();
+            (*object).class_id = 0;
+            crate::object::shapes::store_kind::premark_plain_ordinary(object);
+            (*object).parent_class_id = shape;
+            (*object).meta = std::ptr::null_mut();
+            let slots = malloc_parent.add(size).cast::<u64>();
+            *slots = string_bits(child);
+            *slots.add(1) = crate::value::TAG_UNDEFINED;
+            layout_note_slot(malloc_parent as usize, 0, string_bits(child));
+            (*header_from_user_ptr(parent as *const u8)).gc_flags |= GC_FLAG_MARKED;
+            (*header_from_user_ptr(malloc_parent)).gc_flags |= GC_FLAG_MARKED;
+        }
+        let valid = build_valid_pointer_set();
+        let mut worklist = vec![
+            unsafe { header_from_user_ptr(parent as *const u8) },
+            unsafe { header_from_user_ptr(malloc_parent) },
+        ];
+        let mut cursor = 0;
+        let mut folded = StickyRememberedSet::default();
+        while !drain_trace_worklist_step_remembering(
+            &mut worklist,
+            &mut cursor,
+            &valid,
+            false,
+            1,
+            Some(&mut folded),
+        ) {}
+        let mut reference = OldToYoungRememberedRebuildState::new(true).finish_unbounded();
+        folded.external_pages.sort_unstable();
+        folded.external_pages.dedup();
+        reference.external_pages.sort_unstable();
+        reference.external_pages.dedup();
+        assert!(
+            !folded.old_pages.is_empty(),
+            "old arena edge must be exercised"
+        );
+        assert!(
+            !folded.external_pages.is_empty(),
+            "malloc owner must be exercised"
+        );
+        assert_eq!(folded.old_pages, reference.old_pages);
+        assert_eq!(folded.external_pages, reference.external_pages);
+        clear_marks();
+        clear_mark_seeds();
+    });
+}
+
+#[test]
+fn the_fold_neither_marks_nor_remembers_an_old_weak_holders_target() {
+    run_isolated(|| {
+        let (parent, fields) = rooted_old_parent();
+        let child = unsafe { alloc_nursery_test_object(0).0 as usize };
+        raw_store(parent, fields, ptr_bits(child));
+        let header = unsafe { header_from_user_ptr(parent as *const u8) };
+        unsafe {
+            (*(parent as *mut crate::object::ObjectHeader)).class_id =
+                crate::weakref::CLASS_ID_WEAKREF;
+            (*header).gc_flags |= GC_FLAG_MARKED;
+            assert!(crate::weakref::is_weak_holder_header(header));
+            assert!(crate::weakref::is_weak_target_trace_slot(header, fields));
+        }
+        let valid = build_valid_pointer_set();
+        let mut worklist = vec![header];
+        let mut cursor = 0;
+        let mut sticky = StickyRememberedSet::default();
+        while !drain_trace_worklist_step_remembering(
+            &mut worklist,
+            &mut cursor,
+            &valid,
+            false,
+            1,
+            Some(&mut sticky),
+        ) {}
+        assert!(sticky.old_pages.is_empty());
+        assert!(sticky.external_pages.is_empty());
+        assert_eq!(
+            unsafe { (*header_from_user_ptr(child as *const u8)).gc_flags } & GC_FLAG_MARKED,
+            0
+        );
+        clear_marks();
+        clear_mark_seeds();
     });
 }

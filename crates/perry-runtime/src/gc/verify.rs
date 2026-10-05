@@ -580,48 +580,6 @@ unsafe fn remember_retained_old_to_young_slots(
     });
 }
 
-crate::perry_thread_local! {
-    /// Synchronous full collections whose old→young remembered-set rebuild was
-    /// replaced by an exact clear because the young generation held no marked
-    /// object (#10182). Live-subject counter for the tests and the diag line.
-    static FULL_REMEMBERED_REBUILDS_SKIPPED: std::cell::Cell<u64> =
-        const { std::cell::Cell::new(0) };
-}
-
-/// Running count of [`FULL_REMEMBERED_REBUILDS_SKIPPED`] on this thread.
-pub(crate) fn full_remembered_rebuilds_skipped() -> u64 {
-    FULL_REMEMBERED_REBUILDS_SKIPPED.with(std::cell::Cell::get)
-}
-
-/// #10182: after a synchronous full's mark, can the old→young remembered-set
-/// rebuild only produce an empty set?
-///
-/// The rebuild remembers a slot of a marked (or pinned) old parent exactly when
-/// its child classifies as young (nursery) or is a registered malloc object
-/// (`remembered_child_needs_tracking`). A marked parent's strong child is
-/// marked too, and the rebuild skips weak slots exactly as the trace does. So:
-///
-/// * if no young object is marked or pinned (`young_generation_unmarked`),
-///   every young child a marked parent could name is garbage the sweep is
-///   about to reclaim, and no mutator runs in between to make one live; and
-/// * if the malloc registry is empty — the same premise the copying minor's
-///   `skip_remembering` uses — there is no malloc child at all,
-///
-/// then the walk can insert nothing that names a live object, and the
-/// remembered set this full leaves behind is exactly empty. The pre-cycle
-/// dirty snapshot repair (`restore_surviving_dirty_coverage`) still runs in
-/// reclaim as before. A budgeted cycle has no census, so it never qualifies.
-pub(super) fn full_remembered_rebuild_provably_empty(census: &super::trace::BlockCensus) -> bool {
-    #[cfg(test)]
-    if super::trace::block_skip::sabotage::get()
-        & super::trace::block_skip::sabotage::FORCE_REBUILD_SKIP
-        != 0
-    {
-        return census.is_armed();
-    }
-    census.young_generation_unmarked() && MALLOC_STATE.with(|s| s.borrow().objects.is_empty())
-}
-
 pub(super) struct OldToYoungRememberedRebuildState {
     require_marked: bool,
     sticky: StickyRememberedSet,
@@ -634,22 +592,11 @@ pub(super) struct OldToYoungRememberedRebuildState {
 
 impl OldToYoungRememberedRebuildState {
     pub(super) fn new(require_marked: bool) -> Self {
-        Self::new_skipping(require_marked, None)
-    }
-
-    /// #10182: a `require_marked` rebuild that never enters `skip`'s blocks —
-    /// blocks the synchronous full's census proved hold no marked or pinned
-    /// object (`BlockCensus::unmarked_blocks`), whose every object this walk
-    /// would reject anyway.
-    pub(super) fn new_skipping(require_marked: bool, skip: Option<Vec<bool>>) -> Self {
         // Arena parents on uniformly young or longlived blocks cannot pass
         // barrier_parent_needs_remembering. Keep every other range, including
         // blocks retagged old before in-place promotion changes their owner.
         // Malloc parents retain their separate walk below.
-        let mut arena_cursor = crate::arena::ArenaObjectCursor::new_remembered_parents();
-        if let Some(skip) = skip.filter(|_| require_marked) {
-            arena_cursor.set_skip_blocks(skip);
-        }
+        let arena_cursor = crate::arena::ArenaObjectCursor::new_remembered_parents();
         Self {
             require_marked,
             sticky: StickyRememberedSet::default(),
@@ -671,30 +618,9 @@ impl OldToYoungRememberedRebuildState {
         state
     }
 
-    /// The rebuild of a full whose result is provably empty
-    /// (`full_remembered_rebuild_provably_empty`): no walk, an empty set.
-    pub(super) fn provably_empty() -> Self {
-        FULL_REMEMBERED_REBUILDS_SKIPPED.with(|c| c.set(c.get().saturating_add(1)));
-        if crate::gc::gc_diag_enabled() {
-            eprintln!(
-                "[gc-remembered-rebuild] full skipped=young_generation_unmarked skips_total={}",
-                full_remembered_rebuilds_skipped()
-            );
-        }
-        Self {
-            require_marked: true,
-            sticky: StickyRememberedSet::default(),
-            arena_cursor: None,
-            arena_done: true,
-            malloc_index: 0,
-            objects_scanned: 0,
-            done: true,
-        }
-    }
-
-    /// Number of candidate arena and malloc objects this rebuild has visited. Used
-    /// by the GC trace to prove that minors do NOT run this O(all-objects)
-    /// walk (#6181): full cycles report the walked object count, minors 0.
+    /// Candidate arena and malloc objects visited by the arming reconstruct
+    /// or the test reference walk. Full cycles fold their entries into marking
+    /// and no longer construct this state.
     pub(super) fn objects_scanned(&self) -> usize {
         self.objects_scanned
     }
