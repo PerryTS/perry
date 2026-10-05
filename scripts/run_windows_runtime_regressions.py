@@ -26,8 +26,8 @@ def run(command, env, timeout):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--compiler", type=Path, default=ROOT / "target/perry-dev/perry.exe")
-    parser.add_argument("--runtime-dir", type=Path, default=ROOT / "target/perry-dev")
+    parser.add_argument("--compiler", type=Path, default=ROOT / "target/debug/perry.exe")
+    parser.add_argument("--runtime-dir", type=Path, default=ROOT / "target/debug")
     args = parser.parse_args()
     if os.name != "nt":
         parser.error("These regressions require a native Windows host")

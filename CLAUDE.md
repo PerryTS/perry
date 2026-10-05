@@ -80,13 +80,15 @@ PRs from outside contributors should **not** touch `[workspace.package] version`
 
 ### Which profile to use
 
-- **Local dev / testing (default choice)**: `cargo check -p perry` for fastest feedback, then `cargo build --profile perry-dev -p perry` (opt-level=1, codegen-units=16, incremental, no LTO — minutes instead of ~30). Use this for iterating on the compiler, running gap/parity tests, and reproducing bugs. Only fall back to `--release` if a bug is optimization-sensitive.
-- **Shipping / official artifacts**: `--profile dist` (mirrors `release`: thin LTO, codegen-units=1, opt-level=3, strip). Slow by design — LLVM codegen runs single-threaded per crate at codegen-units=1, and the giant crates (perry-runtime ~340k lines, perry-codegen, perry-hir) serialize the build regardless of core count. Don't use it for iteration.
-- **Local release-ish build when you need release perf**: override the compile-time killer, keep the optimization: `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo build --release` (2–4× faster, ~1–3% runtime cost).
+- **Local dev / testing (default choice)**: `cargo check -p perry` for type-check feedback, `make build-dev` for a fast debuggable binary, or `cargo build --profile perry-dev -p perry` when a specialized CI job expects `target/perry-dev`. The `dev` profile emits the debug build under `target/debug`, includes debug info/assertions, and keeps Perry's panic=abort runtime contract. Use `make build-prod` for an optimized local binary (opt-level 3, ThinLTO, parallel codegen). Both Make targets use Mr Boxington's cache; `prod` is for release-sensitive reproduction.
+- **Shipping / official artifacts**: `--profile prod` (ThinLTO, 16 codegen units, opt-level 3, strip). The extra codegen units parallelize initial code generation while ThinLTO keeps cross-unit optimization. `make build-prod` uses Mr Boxington's shared compilation cache; use `make build-dev` for iteration.
+- **Compatibility profiles**: `release`, `dist`, and `perry-dev` remain for existing tools and investigations. Prefer `dev` or `prod` for new commands.
 
 ```bash
 cargo build --release                          # Build all crates
-cargo build --profile perry-dev -p perry       # Fast local dev build (#5422; perry-dev profile)
+cargo build -p perry                           # Fast debug build (target/debug)
+cargo build --profile perry-dev -p perry       # Optimized dev compatibility build
+cargo build --profile prod -p perry            # Fully optimized local build
 cargo build --release -p perry-runtime -p perry-stdlib  # Rebuild runtime (MUST rebuild stdlib too!)
 cargo build --release -p perry-runtime-static -p perry-stdlib-static  # Emit libperry_{runtime,stdlib}.a (#5422: runtime/stdlib are now rlib-only; the .a comes from these wrapper crates)
 RUST_TEST_THREADS=1 cargo test --release -p perry-runtime   # MUST be single-threaded (see below)

@@ -34,6 +34,7 @@
     "nanoid": "^6.0.1",
     "rate-limiter-flexible": "^11.2.0",
     "redis": "6.1.0",
+    "run-local-ci": "0.18.1",
     "slugify": "^1.6.9",
     "uuid": "^14.0.2",
     "validator": "^13.15.35",

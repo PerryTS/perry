@@ -54,7 +54,7 @@ test('prepared mode requires an explicit runtime directory', t => {
   assert.match(result.stderr, /needs an explicit PERRY_RUNTIME_DIR/);
 });
 
-test('unwind-enabled debug profiles remain rejected', t => {
+test('debug is an output directory, not a Cargo profile', t => {
   const result = run(fixture(t), { PERRY_TEST_RUNTIME_PROFILE: 'debug' });
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /panic=abort runtime profile/);

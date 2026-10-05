@@ -58,15 +58,21 @@ command -v rustup >/dev/null || {
 
 rustup target add "$target"
 
-cargo build --profile dist --target "$target" -p perry
-cargo build --profile dist --target "$target" -p perry-runtime -p perry-runtime-static
-cargo build --profile dist --target "$target" -p perry-stdlib -p perry-stdlib-static
+if command -v mbx >/dev/null 2>&1; then
+  cargo_build=(mbx build)
+else
+  cargo_build=(cargo build)
+fi
+
+"${cargo_build[@]}" --profile prod --target "$target" -p perry
+"${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
+"${cargo_build[@]}" --profile prod --target "$target" -p perry-stdlib -p perry-stdlib-static
 
 # Ship the panic=abort runtime variant from the same old sysroot.
-CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_DIST_PANIC=abort \
-  cargo build --profile dist --target "$target" -p perry-runtime -p perry-runtime-static
-cp "$abort_target_dir/$target/dist/libperry_runtime.a" \
-   "$target_dir/$target/dist/libperry_runtime_abort.a"
+CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_PROD_PANIC=abort \
+  "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
+cp "$abort_target_dir/$target/prod/libperry_runtime.a" \
+   "$target_dir/$target/prod/libperry_runtime_abort.a"
 
 # Build the optional feature subset inside the same glibc 2.31 sysroot.
 bash scripts/build_core_runtime.sh "$target"
@@ -78,13 +84,13 @@ bash scripts/build_core_runtime.sh "$target"
 governed_ext_packages=$(./scripts/release_ext_packages.sh)
 while IFS= read -r package; do
   echo "::group::build $package"
-  cargo build --profile dist --target "$target" \
+  "${cargo_build[@]}" --profile prod --target "$target" \
     -p perry -p perry-runtime-static -p perry-stdlib-static -p "$package" \
     || echo "  (skipped $package -- failed to build on the glibc 2.31 sysroot)"
   echo "::endgroup::"
 done <<< "$governed_ext_packages"
 
-compiler="$target_dir/$target/dist/perry"
+compiler="$target_dir/$target/prod/perry"
 max_glibc=$(
   readelf --version-info "$compiler" \
     | grep -oE 'GLIBC_[0-9]+(\.[0-9]+)+' \

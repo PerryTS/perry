@@ -8,7 +8,7 @@ import { prepareRequireRuntime } from './test-require-runtime.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 prepareRequireRuntime(root);
-const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/perry-dev/perry');
+const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/debug/perry');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-async-own-bind-'));
 const env = { ...process.env };
 if (env.PERRY_TEST_WASM === '1' && env.PERRY_RUNTIME_DIR) delete env.PERRY_WORKSPACE_ROOT;

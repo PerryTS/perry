@@ -26,7 +26,9 @@ THE THREE TIERS
   sweep  every push to `main`, coalesced (at most one running + one pending, so
          a burst of merges is tested at its tip). The PR tier unscoped, plus the
          medium-weight jobs that do not fit the PR budget (Windows builds,
-         compiler-output gates, the full GC x repsel matrix, ...).
+         compiler-output gates, the full GC x repsel matrix, ...). Perry's
+         large integration inventory stays in the nightly/release full tier;
+         PR diffs still run their selected integration suites via e2e-scoped.
   full   nightly, release tags, `workflow_dispatch` (the release pipeline's
          `await-tests` dispatches this and waits for the `full-suite-gate` job),
          and PRs carrying the `run-extended-tests` label. The sweep plus the

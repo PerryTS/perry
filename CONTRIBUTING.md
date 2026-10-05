@@ -55,12 +55,13 @@ under `crates/*/tests/`; CI runs those through its scoped and nightly jobs.
 Never replace it with `cargo test --workspace`: Perry's per-crate feature sets
 must remain isolated.
 
-For a faster inner loop, `cargo check -p perry` (correctness only) or
-`cargo build --profile perry-dev -p perry` (optimized local dev build). The
+For a faster inner loop, use `cargo check -p perry` (correctness only),
+`make build-dev` (fast debug build), or `make build-prod` (opt-level 3 with
+ThinLTO and parallel codegen). The
 `.a` static archives now come from dedicated wrapper crates — build them with
-`cargo build --release -p perry-runtime-static -p perry-stdlib-static` when you
+`cargo build --profile prod -p perry-runtime-static -p perry-stdlib-static` when you
 need `libperry_{runtime,stdlib}.a`. See `docs/src/contributing/building.md` for
-the full dev/release/dist taxonomy and the slim `--features dev-cli` CLI (#5422).
+the full dev/prod profile guide and the slim `--features dev-cli` CLI (#5422).
 
 The full README [Development](README.md#development) section has more `cargo run` recipes (HIR dumps, per-crate rebuilds).
 

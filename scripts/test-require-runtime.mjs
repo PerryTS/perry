@@ -13,10 +13,10 @@ export function prepareRequireRuntime(root) {
   if (prepared && !process.env.PERRY_RUNTIME_DIR) {
     throw new Error('Prepared require runtime needs an explicit PERRY_RUNTIME_DIR');
   }
-  // perry-dev keeps panic=abort and avoids a second thin-LTO build inside
-  // cargo test. Release/dist remain available for optimization-sensitive runs.
+  // dev and perry-dev keep panic=abort without thin-LTO. Prod/release/dist
+  // remain available for fully optimized runtime checks.
   const profile = process.env.PERRY_TEST_RUNTIME_PROFILE ?? 'perry-dev';
-  if (!['release', 'perry-dev', 'dist'].includes(profile)) {
+  if (!['dev', 'release', 'prod', 'perry-dev', 'dist'].includes(profile)) {
     throw new Error('Native require tests need a panic=abort runtime profile');
   }
   const packages = [
@@ -58,7 +58,9 @@ export function prepareRequireRuntime(root) {
     }
   }
   const target = path.resolve(root, process.env.CARGO_TARGET_DIR ?? 'target');
-  const runtime = prepared ? path.resolve(process.env.PERRY_RUNTIME_DIR) : path.join(target, profile);
+  // Cargo names the built-in `dev` profile's output directory `debug`.
+  const profileDir = profile === 'dev' ? 'debug' : profile;
+  const runtime = prepared ? path.resolve(process.env.PERRY_RUNTIME_DIR) : path.join(target, profileDir);
   // Refuse a misleading successful Cargo invocation (e.g. a cross-target
   // override) rather than falling back to an unrelated installed archive.
   for (const name of ['runtime', 'stdlib', 'ext_events', 'ext_http', 'ext_net',
