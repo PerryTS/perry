@@ -332,6 +332,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "crates/perry-runtime/src/gc/types.rs",
         "crates/perry-runtime/src/regex.rs",
         "crates/perry-runtime/src/regex/perex_construct.rs",
+        "crates/perry-runtime/src/regex/instance.rs",
+        "crates/perry-runtime/src/object/alloc_basic.rs",
         "crates/perry-codegen/src/expr/class_field_inline_guard.rs",
         "crates/perry-codegen/src/expr/element_shape_guard.rs",
         "crates/perry-codegen/src/expr/property_get/generic_dispatch.rs",
@@ -710,65 +712,68 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             f"{name} exact logical key count",
         )
 
-    # RegExp identity lives in the GcHeader kind. No ObjectHeader payload word
-    # or registry/magic conjunction may decide these ordinary-object forks.
+    # S2: RegExp receivers use the ordinary shape authority. Their private
+    # matcher points at a separately traced data cell, never an exotic receiver.
     for name in ("object_is_regular", "object_is_shaped"):
         body = function_body(object_mod, name)
         require_code(body, r"obj_type\s*==\s*crate::gc::GC_TYPE_OBJECT", f"{name} GC kind")
         if re.search(r"regex_header_has_magic|object_type", body):
             raise CensusError(f"{name} reintroduced an old payload discriminator")
-    # #9845 moved the header off the malloc arm into the nursery, so the birth
-    # site is now `arena_alloc_gc`. What this asserts is unchanged and is the
-    # point of the check: whichever allocator RegExp is born from, it is born
-    # with its OWN GcHeader kind, never as a generic object that something later
-    # has to re-identify by payload magic.
-    # #9892 split construction into a thin `js_regexp_new` / `js_regexp_new_site`
-    # pair over a shared `js_regexp_new_impl`. Under the single engine that impl
-    # delegates to `perex_construct::new`, which is where the allocation now
-    # lives. Follow the birth site rather than the entry point's name, and pin
-    # the delegation too, so a second construction path cannot pass unseen.
     require_code(
         function_body(regex_runtime, "js_regexp_new_impl"),
         r"perex_construct::new\s*\(",
         "RegExp construction delegates to its single birth site",
     )
     regexp_alloc = function_body(regex_construct, "new")
+    require_code(regexp_alloc, r"new_data\s*\(", "RegExp construction roots immutable data")
+    require_code(regexp_alloc, r"super::instance::new\s*\(", "RegExp ordinary receiver birth")
     require_code(
-        regexp_alloc,
-        r"(?:gc_malloc|arena_alloc_gc)\s*\([^;]*crate::gc::GC_TYPE_REGEXP",
-        "RegExp dedicated GC birth kind",
+        function_body(regex_construct, "new_data"),
+        r"arena_alloc_gc\s*\(\s*std::mem::size_of::<RegExpData>\(\),\s*"
+        r"std::mem::align_of::<RegExpData>\(\),\s*crate::gc::GC_TYPE_REGEXP",
+        "RegExpData dedicated traced GC birth kind",
     )
-    # `exotic_expando_kind` reads the header and forwards its type to
-    # `exotic_kind_of_gc_type`, which holds the type -> kind table.
+    instance_path = "crates/perry-runtime/src/regex/instance.rs"
+    instance = function_body(clean[instance_path], "new")
+    for pattern, label in (
+        (r"object_alloc_plain_born\s*\(\s*2\s*,\s*shape\s*\)", "cached ordinary birth"),
+        (r"object_alloc_plain\s*\(\s*2\s*\)", "cold ordinary birth"),
+        (r"intrinsic_private_add\s*\([\s\S]*?REGEXP_MATCHER", "intrinsic matcher entry"),
+        (r"object_link_created_prototype\s*\(", "ordinary prototype link"),
+        (r"recorded_regexp_prototype\s*\(", "real RegExp prototype"),
+    ):
+        require_code(instance, pattern, "RegExp " + label)
+    require_code(
+        function_body(sources[instance_path], "new"),
+        r'AttrsEdit::Data\(b"lastIndex",\s*1\)',
+        "RegExp own writable-only lastIndex descriptor",
+    )
+    require_code(
+        function_body(regex_runtime, "regexp_data_of"),
+        r"MATCHER_READ\.with\(\|site\|\s*site\.read\(value\)\)",
+        "RegExp brand uses the intrinsic private read site",
+    )
+    alloc_basic = clean["crates/perry-runtime/src/object/alloc_basic.rs"]
+    for name, pattern in (
+        ("object_alloc_plain", r"object_alloc_with_parent_impl::<true,\s*false>\(0,\s*0,\s*field_count\)"),
+        ("object_alloc_plain_born", r"object_alloc_born_impl\(0,\s*field_count,\s*shape_id,\s*true\)"),
+    ):
+        require_code(function_body(alloc_basic, name), pattern, "base RegExp has no special class id")
+    for name in ("object_alloc_with_parent_impl", "object_alloc_born_impl"):
+        require_code(function_body(alloc_basic, name), r"arena_alloc_gc\([^;]*GC_TYPE_OBJECT", "ordinary receiver GC birth")
     require_code(
         function_body(exotic_expando, "exotic_expando_kind"),
         r"\bexotic_kind_of_gc_type\s*\(",
         "exotic_expando_kind delegates to the type -> kind table",
     )
-    expando_kind = function_body(exotic_expando, "exotic_kind_of_gc_type")
-    require_code(
-        expando_kind,
-        r"crate::gc::GC_TYPE_REGEXP\s*=>\s*Some\s*\(\s*ExoticKind::RegExp",
-        "RegExp expando dedicated kind",
-    )
-    # The exported tail forwards to its `_with_kind` body (which callers that
-    # already hold the cell's kind enter directly); that body dispatches.
     require_code(
         function_body(get_field_tail, "get_field_by_name_object_tail"),
         r"\bget_field_by_name_object_tail_with_kind\s*\(",
         "get_field_by_name_object_tail delegates to its _with_kind body",
     )
-    regexp_get = function_body(get_field_tail, "get_field_by_name_object_tail_with_kind")
-    require_code(
-        regexp_get,
-        r"gc_type\s*==\s*crate::gc::GC_TYPE_REGEXP",
-        "RegExp property dispatch dedicated kind",
-    )
-    if re.search(
-        r"GC_TYPE_OBJECT[^{};]*is_regex_pointer|is_regex_pointer[^{};]*GC_TYPE_OBJECT",
-        expando_kind + regexp_get,
-    ):
-        raise CensusError("RegExp dispatch reintroduced the former object-kind probe")
+    for body in (instance, regexp_alloc, exotic_expando, get_field_tail):
+        if re.search(r"GC_TYPE_REGEXP|ExoticKind::RegExp|regex_header_has_magic|is_regex_pointer", body):
+            raise CensusError("RegExp receiver reintroduced an exotic/magic property path")
 
     # Both exported read entries tail-call the shared implementation. Follow
     # that implementation, and prove the wrappers cannot bypass its authority.
@@ -1011,7 +1016,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             f"{name} reads the authoritative ShapeId at header offset 4",
         )
 
-    require_code(gc_types, r"GC_TYPE_REGEXP\s*:\s*u8", "RegExp external discriminator")
+    require_code(gc_types, r"GC_TYPE_REGEXP\s*:\s*u8", "RegExpData GC discriminator")
     regexp_info_match = re.search(
         r"gc_type_info_entry\(\s*GC_TYPE_REGEXP\b[\s\S]*?\n\s*\)\s*\)",
         gc_types,
@@ -1019,20 +1024,18 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     if not regexp_info_match:
         raise CensusError("shape descriptor authority surface missing: RegExp type metadata")
     regexp_info = regexp_info_match.group(0)
-    # #11503: a RegExp's only address-keyed state is its exotic expando entry,
-    # rekeyed by the shared expando-owner move hook and dropped on death by the
-    # dead-owner fan-out. Identity is the GcHeader kind plus header magic, so no
-    # RegExp-specific registry may be reintroduced behind a bespoke hook.
-    require_code(
-        regexp_info,
-        r"GcMoveHookKind::ExoticExpandoOwner",
-        "RegExp expando-owner relocation hook",
-    )
-    require_code(
-        regexp_info,
-        r"GcFinalizeHookKind::None",
-        "RegExp needs no per-object finalize hook",
-    )
+    # Data has only traced strings/program edges. It has no receiver identity,
+    # expando owner, relocation registry or per-object finalization work.
+    for pattern, label in (
+        (r"GcMoveHookKind::None", "no RegExpData move hook"),
+        (r"GcRewriteHookKind::None", "no RegExpData address registry"),
+        (r"GcFinalizeHookKind::None", "no RegExpData finalize hook"),
+        (r"GcLayoutSlotKind::RegExpFields", "RegExpData traced field layout"),
+    ):
+        require_code(regexp_info, pattern, label)
+    require_code(function_body(regex_runtime, "regex_gc_slot_ptrs"), r"pattern_ptr", "RegExpData traced source")
+    require_code(function_body(regex_runtime, "regex_gc_slot_ptrs"), r"flags_ptr", "RegExpData traced flags")
+    require_code(function_body(regex_runtime, "regex_program_slot"), r"perex_program", "RegExpData traced program")
     if "OBJ_FLAG_CLASS_OBJECT" in gc_types + class_guard + element_guard + write_pics:
         raise CensusError("class kind reintroduced a GcHeader layout-bit alias")
     assert_header_fields(object_mod)
@@ -1105,6 +1108,44 @@ def expect_rejected(label: str, check: Callable[[], None]) -> None:
 
 
 def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object]) -> None:
+    # These source-only mutations must fail the new representation contract;
+    # replacing the retired exotic checks must not erase the authority gate.
+    for path, before, after, label in (
+        ("crates/perry-runtime/src/regex/instance.rs", "object_alloc_plain(2)", "object_alloc_plain(3)", "ordinary RegExp birth removed"),
+        ("crates/perry-runtime/src/regex/instance.rs", "intrinsic_private_add(", "intrinsic_private_set(", "matcher entry not defined"),
+        ("crates/perry-runtime/src/regex/instance.rs", 'AttrsEdit::Data(b"lastIndex", 1)', 'AttrsEdit::Data(b"lastIndex", 7)', "lastIndex attributes widened"),
+        ("crates/perry-runtime/src/regex.rs", "MATCHER_READ.with(|site| site.read(value))", "Some(value)", "RegExp brand accepts every value"),
+        ("crates/perry-runtime/src/object/alloc_basic.rs", "object_alloc_born_impl(0, field_count, shape_id, true)", "object_alloc_born_impl(0xFFFF0021, field_count, shape_id, true)", "special RegExp class id restored"),
+    ):
+        broken = dict(sources)
+        if broken[path].count(before) != 1:
+            raise CensusError("RegExp authority sabotage fixture missing: " + label)
+        broken[path] = broken[path].replace(before, after, 1)
+        expect_rejected(label, lambda: assert_authority_surfaces(broken))
+    path = "crates/perry-runtime/src/regex/perex_construct.rs"
+    broken = dict(sources)
+    body = function_body(broken[path], "new_data")
+    broken[path] = broken[path].replace(body, body.replace("crate::gc::GC_TYPE_REGEXP", "crate::gc::GC_TYPE_OBJECT"), 1)
+    expect_rejected("data born as a receiver", lambda: assert_authority_surfaces(broken))
+    path = "crates/perry-runtime/src/object/exotic_expando.rs"
+    broken = dict(sources)
+    broken[path] += "\nfn regexp_exotic_sabotage() { let _ = ExoticKind::RegExp; }\n"
+    expect_rejected("exotic RegExp property path restored", lambda: assert_authority_surfaces(broken))
+
+    path = "crates/perry-runtime/src/gc/types.rs"
+    broken = dict(sources)
+    match = re.search(r"gc_type_info_entry\(\s*GC_TYPE_REGEXP\b[\s\S]*?\n\s*\)\s*\)", broken[path])
+    if match is None:
+        raise CensusError("RegExpData move-hook sabotage fixture missing")
+    body = match.group(0)
+    broken[path] = broken[path].replace(body, body.replace("GcMoveHookKind::None", "GcMoveHookKind::ExoticExpandoOwner"), 1)
+    expect_rejected("data given an expando move hook", lambda: assert_authority_surfaces(broken))
+    path = "crates/perry-runtime/src/regex.rs"
+    broken = dict(sources)
+    body = function_body(broken[path], "regex_program_slot")
+    broken[path] = broken[path].replace(body, "None", 1)
+    expect_rejected("data program edge untraced", lambda: assert_authority_surfaces(broken))
+
     packed_path = "crates/perry-runtime/src/object/field_get_set/ic_miss/packed_get.rs"
     for entry in ("js_object_get_field_ic_miss", "js_object_get_field_ic_miss_packed"):
         bypassed = dict(sources)

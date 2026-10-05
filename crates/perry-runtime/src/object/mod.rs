@@ -1783,11 +1783,8 @@ pub(crate) use meta_flags::{OBJECT_META_FLAG_EXOTIC_READ_RECEIVER, OBJECT_META_F
 pub(crate) mod meta_record;
 pub use meta_record::ObjectMeta;
 
-/// Ordinary-object discriminator. Class expressions carry their kind in the
-/// ShapeId descriptor; #8113 deleted the `ObjectHeader::object_type` mirror,
-/// so this is the ONLY spelling of "is an ordinary object" — note it is FALSE
-/// for a class object (`ShapeObjectKind::Class`), which is exactly what the
-/// retired `object_type == OBJECT_TYPE_REGULAR` test meant (#6595).
+/// True when the receiver's ShapeId describes an ordinary layout.
+/// Class-expression objects carry `ShapeObjectKind::Class` and return false.
 #[inline]
 pub(crate) unsafe fn object_is_regular(obj: *const ObjectHeader) -> bool {
     if obj.is_null() {
