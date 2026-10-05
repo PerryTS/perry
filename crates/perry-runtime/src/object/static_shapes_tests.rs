@@ -57,6 +57,155 @@ extern "C" fn seeded_constfn_body_b(
     22.0
 }
 
+#[test]
+fn metadata_12015_seeded_constfn_uses_shape_facts_without_bootstrap_or_native_probes() {
+    use std::sync::atomic::Ordering;
+    let _lock = crate::gc::global_side_table_test_lock();
+    let info = crate::fn_info!(seeded_constfn_body_a, 0; with_flags(
+        crate::codegen_abi::FN_PERMANENT_IMAGE | crate::codegen_abi::FN_COMPILED_BODY
+    ));
+    let entries = [ConstFnStaticEntry { slot: 0, info }];
+    let packed = b"meta12015_seeded_method\0";
+    let requested = SHAPE_ID_BASE + 0x78a0;
+    assert_eq!(
+        js_shape_seed_plain_constfn(
+            requested,
+            packed.as_ptr(),
+            packed.len() as u32,
+            1,
+            1,
+            3,
+            entries.as_ptr(),
+            1
+        ),
+        requested
+    );
+    let scans = CONSTFN_BOOTSTRAP_NAME_SCANS.load(Ordering::Relaxed);
+    let probes = CONSTFN_NATIVE_ADMISSION_PROBES.load(Ordering::Relaxed);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    for capture in [11.0f64, 22.0] {
+        let object =
+            scope.root_raw_mut_ptr(alloc_constfn_plain_fixture(&[b"meta12015_seeded_method"]));
+        let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 1));
+        unsafe {
+            closure.with_mut_ptr(|p| {
+                crate::closure::js_closure_set_capture_bits(p, 0, capture.to_bits())
+            });
+            object.with_mut_ptr(|p| store_seeded_method(p, &closure));
+        }
+        let result = object.with_mut_ptr::<crate::object::ObjectHeader, _>(|p| {
+            js_object_finalize_constfn_static(
+                p as usize as u64,
+                requested,
+                packed.as_ptr(),
+                packed.len() as u32,
+                1,
+                1,
+                0,
+                3,
+                entries.as_ptr(),
+                1,
+            )
+        });
+        assert_eq!(
+            unsafe { shapes::object_shape_stamp(result as usize as *const _) },
+            requested,
+            "premise: the optimized promotion must actually succeed"
+        );
+        let value = object.with_const_ptr(|p| crate::object::js_object_get_field(p, 0));
+        closure.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| {
+            assert_eq!(
+                value.bits() & crate::value::POINTER_MASK,
+                p as usize as u64,
+                "the shape owns the body, the receiver owns this closure"
+            );
+            assert_eq!(
+                crate::closure::js_closure_get_capture_bits(p, 0),
+                capture.to_bits()
+            );
+        });
+    }
+    assert_eq!(
+        CONSTFN_BOOTSTRAP_NAME_SCANS.load(Ordering::Relaxed),
+        scans,
+        "a seeded shape must not reparse key names"
+    );
+    assert_eq!(
+        CONSTFN_NATIVE_ADMISSION_PROBES.load(Ordering::Relaxed),
+        probes,
+        "a compiled body must not ask native registries"
+    );
+}
+
+unsafe fn store_seeded_method(
+    object: *mut crate::object::ObjectHeader,
+    closure: &crate::gc::RuntimeHandle<'_>,
+) {
+    crate::object::store_object_field_slot(
+        object,
+        0,
+        closure.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| {
+            crate::JSValue::object_ptr(p as *mut u8).bits()
+        }),
+    );
+}
+
+#[test]
+fn metadata_12015_seeded_constfn_refuses_a_different_shape_key_prefix() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let info = crate::fn_info!(seeded_constfn_body_a, 0; with_flags(
+        crate::codegen_abi::FN_PERMANENT_IMAGE | crate::codegen_abi::FN_COMPILED_BODY
+    ));
+    let entries = [ConstFnStaticEntry { slot: 0, info }];
+    let packed = b"meta12015_expected_method\0";
+    let requested = SHAPE_ID_BASE + 0x78a1;
+    assert_eq!(
+        js_shape_seed_plain_constfn(
+            requested,
+            packed.as_ptr(),
+            packed.len() as u32,
+            1,
+            1,
+            3,
+            entries.as_ptr(),
+            1
+        ),
+        requested
+    );
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(alloc_constfn_plain_fixture(&[b"meta12015_other_method"]));
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 0));
+    let before = object.with_mut_ptr(|p| unsafe {
+        store_seeded_method(p, &closure);
+        let current = shapes::object_shape_descriptor(p).unwrap();
+        assert_ne!(
+            current.keys,
+            shapes::shape_descriptor_by_id(requested).unwrap().keys,
+            "premise: distinct key identity, with every other fact admitted"
+        );
+        shapes::object_shape_stamp(p)
+    });
+    let result = object.with_mut_ptr::<crate::object::ObjectHeader, _>(|p| {
+        js_object_finalize_constfn_static(
+            p as usize as u64,
+            requested,
+            packed.as_ptr(),
+            packed.len() as u32,
+            1,
+            1,
+            0,
+            3,
+            entries.as_ptr(),
+            1,
+        )
+    });
+    assert_eq!(
+        unsafe { shapes::object_shape_stamp(result as usize as *const _) },
+        before,
+        "another key prefix cannot adopt the seeded method shape"
+    );
+}
+
 /// The seed and module-init class mint must use exactly the same body-aware
 /// interner. Production literal finalization uses the same final facts.
 #[test]
