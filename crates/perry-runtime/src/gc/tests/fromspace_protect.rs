@@ -187,8 +187,8 @@ fn protection_poisons_the_from_space_an_object_moved_out_of() {
 }
 
 /// The memory bound. Long runs must not OOM: the quarantine is a ring, and
-/// evicted blocks go back into Eden rather than being freed (nothing that was
-/// ever `mprotect`ed is handed to `dealloc`).
+/// evicted blocks regain permissions and go back into Eden for its ordinary
+/// reuse window (nothing still under `mprotect` is handed to `dealloc`).
 #[test]
 fn quarantine_is_bounded_and_recycles_expired_blocks() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -222,6 +222,40 @@ fn quarantine_is_bounded_and_recycles_expired_blocks() {
          (before={}, after={})",
         before.blocks_recycled,
         after.blocks_recycled
+    );
+}
+
+/// The ring alone does not bound memory: survivor copies must not leave a
+/// fresh expired block in Eden on every collection. Hold a new leaf across
+/// each moving minor so survivor space is live, then compare two equal batches
+/// after the ring and Eden reuse window have warmed up.
+#[test]
+fn protected_minors_reclaim_expired_idle_eden_blocks() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _mode = crate::arena::ProtectionModeGuard::set(FromSpaceProtection::ProtectPages);
+    let depth = crate::arena::quarantine_depth();
+    let batch = depth * 4 + 32;
+    let collect_batch = || {
+        for _ in 0..batch {
+            let live = young_leaf();
+            js_shadow_slot_set(0, string_bits(live));
+            let _ = gc_collect_minor();
+            assert_ne!(
+                (js_shadow_slot_get(0) & POINTER_MASK) as usize,
+                live,
+                "test premise: each collection must move the rooted leaf"
+            );
+        }
+    };
+    collect_batch();
+    let warm = crate::arena::arena_total_bytes();
+    let before = crate::arena::quarantine_stats();
+    collect_batch();
+    let after = crate::arena::quarantine_stats();
+    assert!(after.blocks_recycled > before.blocks_recycled);
+    assert!(
+        crate::arena::arena_total_bytes() <= warm + crate::arena::BLOCK_SIZE * 4,
+        "expired survivor blocks must not accumulate as idle Eden capacity"
     );
 }
 
