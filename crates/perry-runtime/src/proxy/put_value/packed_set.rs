@@ -232,24 +232,15 @@ pub extern "C" fn js_put_value_set_packed_miss(
     let target_handle = scope.root_nanbox_f64(target);
     let key_handle = scope.root_string_ptr(key);
     let value_handle = scope.root_nanbox_f64(value);
-    let key_value = if key.is_null() {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
-    } else {
-        f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits())
-    };
-    // #7341: the allocating call and the re-read are paired, so the pre-call
-    // `key` address is never nameable afterwards.
-    let (result, key) = key_handle.across_const::<crate::StringHeader, _>(|| {
-        js_put_value_set(
-            target_handle.get_nanbox_f64(),
-            key_value,
-            value_handle.get_nanbox_f64(),
-            target_handle.get_nanbox_f64(),
-            strict,
-        )
-    });
+    let (result, key) = store_and_prime(
+        &target_handle,
+        &key_handle,
+        &value_handle,
+        strict,
+        cache_slot,
+        packed,
+    );
     unsafe {
-        prime_packed_set(target_handle.get_nanbox_f64(), key, cache_slot, packed);
         // Re-resolved after the store: the slow path may have interned the key.
         let chain_key = if key.is_null() {
             std::ptr::null()
@@ -268,6 +259,42 @@ pub extern "C" fn js_put_value_set_packed_miss(
         super::packed_add::packed_add_prime(site, target_handle.get_nanbox_f64(), key, pre_shape);
     }
     result
+}
+
+/// Shared full Set and shape-validated PIC publication. Generated miss sites
+/// surround this with their key-add/setter memos; runtime fixed-key sites use
+/// the same operation and PIC directly, without retaining those extra memos.
+/// The caller owns all three roots across this operation and subsequent uses
+/// of the returned (post-collection) key address.
+pub(crate) fn store_and_prime(
+    target: &crate::gc::RuntimeHandle<'_>,
+    key: &crate::gc::RuntimeHandle<'_>,
+    value: &crate::gc::RuntimeHandle<'_>,
+    strict: i32,
+    cache_slot: *mut PackedSetWaysSlot,
+    packed: *const AtomicU64,
+) -> (f64, *const crate::StringHeader) {
+    let key_value = key.with_const_ptr::<crate::StringHeader, _>(|key| {
+        if key.is_null() {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        } else {
+            crate::value::js_nanbox_string(key as i64)
+        }
+    });
+    // Pair the collecting Set with its post-call key reload (#7341).
+    let (result, key_ptr) = key.across_const::<crate::StringHeader, _>(|| {
+        js_put_value_set(
+            target.get_nanbox_f64(),
+            key_value,
+            value.get_nanbox_f64(),
+            target.get_nanbox_f64(),
+            strict,
+        )
+    });
+    unsafe {
+        prime_packed_set(target.get_nanbox_f64(), key_ptr, cache_slot, packed);
+    }
+    (result, key_ptr)
 }
 
 /// S2 of the deferred-collection RFC: the GC-leaf hit of a full-outline

@@ -144,7 +144,7 @@ const PAGE_GENERATION_CACHE_WAYS: usize = 4;
 mod compact;
 use compact::{page_count, PageObjects};
 mod storage;
-use storage::PageMetaMap;
+use storage::{PageMap, PageMetaMap};
 mod page_class;
 mod sweep_tally;
 pub(crate) use page_class::*;
@@ -172,7 +172,7 @@ mod tests;
 /// `first_key..=last_key` loops walk key *ranges*, not the map), so iteration
 /// order is not observable and this carries no determinism exposure.
 type PageGenerationMap = crate::fast_hash::PtrHashMap<usize, PageGenerationSlot>;
-type OldGenPageObjectMap = crate::fast_hash::PtrHashMap<usize, PageObjects>;
+type OldGenPageObjectMap = PageMap<PageObjects, 8>;
 type OldGenPageMetaMap = PageMetaMap;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -243,7 +243,7 @@ thread_local! {
 
 crate::perry_thread_local! {
     static OLD_GEN_PAGE_OBJECTS: RefCell<OldGenPageObjectMap> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
+        RefCell::new(OldGenPageObjectMap::default());
 
     static OLD_GEN_PAGE_META: RefCell<OldGenPageMetaMap> =
         RefCell::new(OldGenPageMetaMap::default());
@@ -680,7 +680,7 @@ fn expand_promoted_run(page: usize, run: PromotedPageRun) {
     );
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
-        let slot = index.entry(page).or_default();
+        let slot = index.get_or_insert(page);
         if slot.is_empty() {
             *slot = headers;
         } else {
@@ -762,7 +762,7 @@ pub(crate) fn register_promoted_page_headers(page: usize, headers: &[usize], byt
     }
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
-        index.entry(page).or_default().extend(page, headers);
+        index.get_or_insert(page).extend(page, headers);
     });
     OLD_GEN_PAGE_META.with(|meta| {
         let mut meta = meta.borrow_mut();
@@ -1067,7 +1067,7 @@ pub(crate) fn register_old_object_pages(header_addr: usize, total_size: usize) {
     OLD_GEN_PAGE_OBJECTS.with(|index| {
         let mut index = index.borrow_mut();
         for &(page, bytes) in &overlaps {
-            let headers = index.entry(page).or_default();
+            let headers = index.get_or_insert(page);
             if !headers.contains_prefix(page, header_addr, headers.len()) {
                 headers.push(page, header_addr);
                 added_pages.push((page, bytes));
@@ -1216,7 +1216,7 @@ fn flush_deferred_old_page_registrations_batch() {
                     if overlap_start >= overlap_end {
                         continue;
                     }
-                    let headers = index.entry(page).or_default();
+                    let headers = index.get_or_insert(page);
                     if run_page != Some(page) {
                         run_page = Some(page);
                         run_base_len = headers.len();
@@ -1878,7 +1878,7 @@ pub(crate) fn page_meta_census() -> Vec<crate::gc::census::SideTableRow> {
         rows.push((
             "arena.old_gen_page_objects",
             m.len(),
-            hash_table_bytes(m.capacity(), std::mem::size_of::<(usize, PageObjects)>()) + inner,
+            m.allocated_bytes() + inner,
         ));
     });
     OLD_GEN_PAGE_META.with(|m| {
