@@ -889,8 +889,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         object.as_ref(),
                         property,
                     );
-                    let raw_f64_field =
-                        crate::type_analysis::scalar_replaced_field_raw_f64_store_state(
+                    let raw_f64_field = crate::type_analysis::scalar_replaced_field_is_number(
+                        ctx,
+                        object.as_ref(),
+                        property,
+                    )
+                        || crate::type_analysis::scalar_replaced_field_raw_f64_store_state(
                             ctx,
                             Some(*id),
                             property,

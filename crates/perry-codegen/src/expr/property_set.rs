@@ -617,7 +617,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                     // field. The helper checks the runtime tag, so apply it to
                     // every local source: an erased non-string annotation is
                     // not proof that the current value cannot be a string.
-                    if matches!(&**value, Expr::LocalGet(_)) {
+                    if !numeric_store && matches!(&**value, Expr::LocalGet(_)) {
                         super::helpers::emit_string_addref_if_heap_string(ctx, &val_double);
                     }
                     let lowered_js = LoweredValue {

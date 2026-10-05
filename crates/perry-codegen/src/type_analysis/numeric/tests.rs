@@ -11,6 +11,9 @@ use perry_hir::{
     BinaryOp, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt, UpdateOp,
 };
 
+#[path = "scalar_own_read_tests.rs"]
+mod scalar_own_read_tests;
+
 fn ir_opts() -> CompileOptions {
     CompileOptions {
         static_shape_ids: Vec::new(),

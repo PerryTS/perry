@@ -7831,6 +7831,11 @@ pub(crate) fn emit_gc_loop_safepoint(
     // mutably.
     let needs_poll = {
         let is_inert = |e: &perry_hir::Expr| crate::rooting::expr_is_inert_primitive(ctx, e);
+        let body = if region_loop::body_cannot_collect(ctx, body) {
+            &[][..]
+        } else {
+            body
+        };
         crate::loop_purity::loop_may_allocate(body, controls, &is_inert)
     };
     if !needs_poll {
