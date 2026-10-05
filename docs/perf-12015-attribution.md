@@ -1,6 +1,6 @@
 # Object metadata and enumeration attribution (#12015)
 
-Base and fetched origin/main: `2ebeca0e8d9fe6e47b9d30a478bbb7a122c9bcbd`.
+Initial base: `2ebeca0e8d9fe6e47b9d30a478bbb7a122c9bcbd`. Refreshed validation main: `3028a94186379cafb4c4101c9bb747cc9b6f85a4`; the lane is merged with it.
 
 Issue [#12015](https://github.com/PerryTS/perry/issues/12015) was read without changes. The owner charter requires the shape to own receiver facts; a call site may memoize a ShapeId and slot, validated on every use. No new registry, side table, latch, or property-name special case is admissible. RegExp, object/private*, statepoint lowering, and Function.call/apply/bind implementations are excluded.
 
@@ -10,17 +10,11 @@ The supplied attribution is from `aef2f031910b7df14b80e893e4471c5439c9f909`, not
 
 | Program | Bucket share | Leading functions (bucket self-time) |
 |---|---:|---|
-
 | commander | 4.679% | `class_registry::class_meta::is_anon_shape_class_id` 0.393%; `exotic_expando::expando_clear_on_alloc` 0.270%; `prop_plan::read_plan_lookup` 0.225%; `shapes::shape_descriptor_intern_with_special_mode` 0.224%; `dictionary::is_dictionary` 0.203% |
-
 | fastify | 8.566% | `class_registry::class_meta::is_anon_shape_class_id` 0.569%; `key_attrs::object_key_entry_filtered` 0.451%; `descriptor_state::class_instance_set_may_intercept` 0.371%; `iterator_prototypes::note_iterator_prototype_exposed` 0.333%; `shapes::shape_descriptor_intern_with_special_mode` 0.318% |
-
 | qsparse | 7.596% | `exotic_expando::expando_lookup` 0.659%; `class_registry::class_meta::is_anon_shape_class_id` 0.544%; `native_module::callable_exports::bound_native_callable_module_and_method` 0.369%; `key_attrs::object_key_entry_filtered` 0.288%; `shapes::stamp_object_shape_id_with_carrier_note` 0.267% |
-
 | qsstr | 8.979% | `static_shapes::finalized_constfn_facts` 1.211%; `shapes::shape_descriptor_intern_with_special_mode` 0.852%; `class_registry::parent_static::is_class_object_ptr` 0.841%; `native_module::callable_exports::bound_native_callable_module_and_method` 0.547%; `shapes::birth_stamp_object_shape` 0.474% |
-
 | tsc | 6.654% | `shapes::shape_descriptor_intern_with_special_mode` 0.597%; `class_registry::class_meta::is_anon_shape_class_id` 0.403%; `key_attrs::object_key_entry_filtered` 0.356%; `field_rep_store::checked_slot_bits` 0.326%; `canonical_keys::probe_node` 0.224% |
-
 | zod5k | 9.197% | `shapes::shape_descriptor_intern_with_special_mode` 0.906%; `class_registry::class_meta::is_anon_shape_class_id` 0.751%; `field_rep_store::checked_slot_bits` 0.579%; `live_slots::object_live_slot_count` 0.446%; `native_module::bound_native_method_length` 0.403% |
 
 
@@ -32,17 +26,11 @@ Offsets refer to the historical binaries and must be remapped in fresh profiles.
 
 | Program | Leading compiled sites (bucket whole-program share) |
 |---|---|
-
 | commander | `node_modules_commander_lib_command_js__Command_constructor+0xa6` 0.547%; `perry_method_node_modules_commander_lib_command_js__Command__addOption+0x2253` 0.459%; `node_modules_commander_lib_command_js__Command_constructor+0x553b` 0.360% |
-
 | fastify | `perry_closure_node_modules_light_my_request_lib_request_js__17+0x467` 1.014%; `perry_closure_node_modules_light_my_request_lib_response_js__43+0x1dc` 0.630%; `perry_closure_node_modules_light_my_request_lib_request_js__17+0x7abe` 0.431% |
-
 | qsparse | `perry_closure_node_modules_qs_lib_utils_js__20+0x6a0` 1.106%; `perry_closure_node_modules_qs_lib_utils_js__30+0xd1` 0.947%; `perry_closure_node_modules_qs_lib_parse_js__18+0x6997` 0.695% |
-
 | qsstr | `perry_closure_node_modules_side_channel_weakmap_index_js__16+0x60e` 1.912%; `perry_closure_node_modules_side_channel_weakmap_index_js__16+0x40a` 1.515%; `perry_closure_node_modules_side_channel_index_js__11+0x4d7` 1.452% |
-
 | tsc | `perry_closure_node_modules_typescript_lib_typescript_js__5860+0x22cc` 0.296%; `perry_closure_node_modules_typescript_lib_typescript_js__3109+0x1c0` 0.279%; `perry_closure_node_modules_typescript_lib_typescript_js__5246+0x85` 0.274% |
-
 | zod5k | `perry_method_node_modules_zod_lib_index_mjs__ZodString___parse+0x10df` 0.567%; `perry_method_node_modules_zod_lib_index_mjs__ZodString___parse+0x10b8` 0.455%; `perry_closure_node_modules_zod_lib_index_mjs__39+0x1325` 0.413% |
 
 
@@ -104,3 +92,28 @@ is not used as an enumeration proof. Final-head gap validation is pending.
 
 Origin/main advanced during this milestone; final validation will use a separate
 main arm at the refreshed origin and a lane head merged with that origin.
+
+All four temporary sabotage variants were observed red on Linux and restored:
+bootstrap parsing and native admission each fail the zero-probe promotion test;
+removing both key-identity guards fails the distinct-prefix refusal; corrupted
+shape-prefix count, front offset and dictionary fallback fail all three
+key-view tests. These are actual production-path mutations, with no permanent
+sabotage switch. Debug sabotage runs and the five focused release tests use
+`--test-threads=1`. Full validation after the origin merge remains pending.
+
+## Merged-head validation milestone
+
+Implementation head `07a6670882f24a9eea3df8c740714f73f6f925da` is merged with
+validation main `3028a94186379cafb4c4101c9bb747cc9b6f85a4`. Its release runtime
+suite passes (5118 passed, five ignored in the main test process, plus isolated
+and integration tests); stdlib has the same two thread-exit failures observed
+on the initial main arm. Codegen and refreshed-main suites are still running.
+All seven head programs match Node; both gap programs match stdout and stderr.
+The strict final interleaved runner checks both streams for every trial.
+
+A third, separate source/target arm contains refreshed main plus only the two
+ConstFn implementation/test files from the lane. It will isolate the first
+fix's factory and qs stringify instruction effects from the key-view changes.
+The primary acceptance table remains refreshed-main versus combined head, with
+five interleaved trials per program and six micro rows including the factory.
+No new shape storage is retained by either change.

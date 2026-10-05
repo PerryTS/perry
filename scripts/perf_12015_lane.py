@@ -25,21 +25,24 @@ MICROS = ["keys", "values_entries", "descriptors", "for_in", "spread_assign", "m
 
 
 def environment(root, arm):
-    source = root / ("main-src" if arm == "main" else "src")
-    target = root / ("main-target" if arm == "main" else "target")
+    source_name, target_name = {"main": ("main-src", "main-target"),
+                                "fix1": ("fix1-src", "fix1-target")}.get(arm, ("src", "target"))
+    source, target = root / source_name, root / target_name
     env = dict(os.environ)
     env.update(CARGO_TARGET_DIR=str(target), PERRY_RUNTIME_DIR=str(target / "release"),
-               PERRY_WORKSPACE_ROOT=str(source), RUST_TEST_THREADS="1",
+               PERRY_WORKSPACE_ROOT=str(source), RUST_TEST_THREADS="1", CARGO_BUILD_JOBS="16",
                PERRY_KEEP_SYMBOLS="1", PERRY_NO_AUTO_OPTIMIZE="1", PERRY_NO_CACHE="1",
                PERRY_SKIP_BUILD="1", PERRY_ALLOW_PERRY_FEATURES="1", TMPDIR=str(root / "tmp"))
     return source, target, env
 
 
-def run(cmd, cwd, env, log=None):
+def run(cmd, cwd, env, log=None, stderr_file=None):
     result = subprocess.run(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, timeout=1800)
     if log:
         log.write_bytes(result.stdout + result.stderr)
+    if stderr_file:
+        stderr_file.write_bytes(result.stderr)
     if result.returncode:
         raise RuntimeError(f"exit {result.returncode}: {cmd}\n{result.stderr.decode(errors='replace')[-4000:]}")
     return result.stdout
@@ -50,15 +53,19 @@ def compile_arm(root, arm):
     out = root / "measure" / arm
     out.mkdir(parents=True, exist_ok=True)
     for name, (relative, args, package) in PROGRAMS.items():
+        if arm == "fix1" and name != "qsstr":
+            continue
         cwd = root / "realprog" / ("pk" if package else "")
         binary = out / name
         run([str(target / "release/perry"), "compile", relative, "-o", str(binary)],
             cwd, env, out / f"{name}.compile.log")
-        expected = run(["node", "--experimental-strip-types", relative, *args], cwd, env)
-        actual = run([str(binary), *args], cwd, env)
+        expected = run(["node", "--experimental-strip-types", relative, *args], cwd, env,
+                       stderr_file=out / f"{name}.node.err")
+        actual = run([str(binary), *args], cwd, env, stderr_file=out / f"{name}.perry.err")
         (out / f"{name}.node.out").write_bytes(expected)
         (out / f"{name}.perry.out").write_bytes(actual)
-        if actual != expected:
+        if (actual != expected or (out / f"{name}.node.err").read_bytes()
+                != (out / f"{name}.perry.err").read_bytes()):
             raise RuntimeError(f"{arm}/{name}: Node output differs")
         print(f"{arm}/{name}: compiled, Node output matches", flush=True)
     microdir = source / "benchmarks/object_metadata_12015"
@@ -72,7 +79,8 @@ def stat(root, label, cmd, cwd, env):
     out.mkdir(parents=True, exist_ok=True)
     counters, rss = out / f"{label}.stat", out / f"{label}.rss"
     stdout = run(["perf", "stat", "-x", ";", "-e", "instructions:u", "-o", str(counters),
-                  "/usr/bin/time", "-f", "%M", "-o", str(rss), *cmd], cwd, env)
+                  "/usr/bin/time", "-f", "%M", "-o", str(rss), *cmd], cwd, env,
+                 stderr_file=out / f"{label}.err")
     (out / f"{label}.out").write_bytes(stdout)
     instructions = next(int(line.split(";")[0]) for line in counters.read_text().splitlines()
                         if ";instructions:u;" in line)
@@ -107,6 +115,10 @@ def compare(root):
     for name, (relative, args, package) in PROGRAMS.items():
         cwd = root / "realprog" / ("pk" if package else "")
         trials = {arm: [] for arm in ["main", "head"]}
+        _, _, node_env = environment(root, "main")
+        node_err = root / "measure/main" / f"{name}.node.err"
+        run(["node", "--experimental-strip-types", relative, *args], cwd, node_env,
+            stderr_file=node_err)
         for trial in range(5):
             for arm in (["main", "head"] if trial % 2 == 0 else ["head", "main"]):
                 _, _, env = environment(root, arm)
@@ -116,6 +128,8 @@ def compare(root):
                 expected = (root / "measure/main" / f"{name}.node.out").read_bytes()
                 if (root / "measure/trials" / f"{name}.{trial}.{arm}.out").read_bytes() != expected:
                     raise RuntimeError(f"{name}/{arm}/{trial}: output differs")
+                if (root / "measure/trials" / f"{name}.{trial}.{arm}.err").read_bytes() != node_err.read_bytes():
+                    raise RuntimeError(f"{name}/{arm}/{trial}: stderr differs")
         summary = {arm: {field: statistics.median(row[field] for row in rows)
                          for field in ["instructions", "rss_kb"]} for arm, rows in trials.items()}
         results["programs"][name] = {"trials": trials, "medians": summary}
@@ -140,6 +154,10 @@ def compare(root):
                     actual = (root / "measure/trials" / f"micro.{name}.{trial}.{arm}.{size}.out").read_bytes()
                     if actual != expected:
                         raise RuntimeError(f"micro/{name}/{trial}/{arm}/{size}: output differs")
+                    node_err = root / "measure/trials" / f"micro.{name}.{trial}.node.{size}.err"
+                    actual_err = root / "measure/trials" / f"micro.{name}.{trial}.{arm}.{size}.err"
+                    if actual_err.read_bytes() != node_err.read_bytes():
+                        raise RuntimeError(f"micro/{name}/{trial}/{arm}/{size}: stderr differs")
         results["micros"][name] = {"trials": rows, "instructions_per_op":
                                   {arm: statistics.median(values) for arm, values in rows.items()}}
         (root / "measure/results.json").write_text(json.dumps(results, indent=2))
@@ -149,7 +167,7 @@ def compare(root):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hostdir", type=Path, required=True)
-    parser.add_argument("action", choices=["compile-main", "compile-head", "profiles", "compare"])
+    parser.add_argument("action", choices=["compile-main", "compile-head", "compile-fix1", "profiles", "compare"])
     args = parser.parse_args()
     (args.hostdir / "tmp").mkdir(parents=True, exist_ok=True)
     if args.action.startswith("compile-"):
