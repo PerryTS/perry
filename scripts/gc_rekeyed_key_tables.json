@@ -99,7 +99,7 @@
     },
     {
       "site": "crates/perry-runtime/src/object/native_module/callable_exports/builtin_closure_metadata.rs::visit_owner",
-      "table": "BUILTIN_CLOSURE_LENGTH / BUILTIN_CLOSURE_NON_CONSTRUCTABLE",
+      "table": "BUILTIN_CLOSURE_NON_CONSTRUCTABLE",
       "death": "dead_owner:prune_dead_builtin_closure_metadata_owners",
       "why": "#8393: both tables are retained on the GC_TYPE_CLOSURE-narrowed predicate over their closure-address keys. The extracted visit_owner helper is the shared rekey path for the full and young-log walks."
     },

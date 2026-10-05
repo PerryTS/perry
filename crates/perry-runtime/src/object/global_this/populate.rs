@@ -106,9 +106,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let singleton_handle = scope.root_raw_mut_ptr(singleton_at_entry);
     let singleton = || singleton_handle.get_raw_mut_ptr::<ObjectHeader>();
-    let proto_key_bytes = b"prototype";
-    let proto_key =
-        crate::string::js_string_from_bytes(proto_key_bytes.as_ptr(), proto_key_bytes.len() as u32);
     {
         let name = b"globalThis";
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -294,7 +291,18 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         // #2889: install static methods (`Object.keys`, `Array.isArray`, ...)
         // on the constructor closure so rebound usage like
         // `const O = Object; O.keys(x)` dispatches through the real helpers.
-        install_builtin_constructor_statics(name, closure_ptr);
+        // The prototype is an own static data property too. Include it in
+        // the initial attributed layout so adding name/length cannot spill it.
+        let proto_obj = if name == "Array" {
+            crate::array::js_array_alloc(0) as *mut ObjectHeader
+        } else {
+            super::proto_room::alloc_builtin_prototype()
+        };
+        install_builtin_constructor_statics(
+            name,
+            closure_ptr,
+            (!proto_obj.is_null()).then(|| crate::value::js_nanbox_pointer(proto_obj as i64)),
+        );
         // #11193: `C[Symbol.species]` getter returning `this`.
         if matches!(
             name,
@@ -302,31 +310,6 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
         ) {
             install_builtin_species_accessor(closure_ptr);
         }
-        if name == "Number" {
-            install_number_static_data_properties(closure_ptr);
-        }
-        // #3655: every constructor carries spec-correct own `name`/`length`
-        // data properties (`{ writable:false, enumerable:false,
-        // configurable:true }`). The shared no-op thunk can't carry a name via
-        // the func-ptr registry (every constructor would read the same one),
-        // so record both per-closure. Without this, a rebound constructor read
-        // `Date.name === ""` / `Date.length === 0` and test262's
-        // `verifyProperty(Ctor, 'name'|'length', …)` failed "should be an own
-        // property".
-        super::super::native_module::set_bound_native_closure_name(closure_ptr, name);
-        if let Some(len) = builtin_constructor_spec_length(name) {
-            super::super::native_module::set_builtin_closure_length(closure_ptr as usize, len);
-        }
-        super::super::set_builtin_property_attrs(
-            closure_ptr as usize,
-            "name".to_string(),
-            super::super::PropertyAttrs::new(false, false, true),
-        );
-        super::super::set_builtin_property_attrs(
-            closure_ptr as usize,
-            "length".to_string(),
-            super::super::PropertyAttrs::new(false, false, true),
-        );
         if name == "Error" {
             install_error_static_methods(closure_ptr);
         }
@@ -340,24 +323,7 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                 crate::closure::closure_set_static_prototype(closure_ptr as usize, proto_bits);
             }
         }
-        // Stash `prototype` on the closure's dynamic-prop side table.
-        // `js_object_set_field_by_name` detects the CLOSURE_MAGIC tag
-        // at offset 12 and dispatches into `closure_set_dynamic_prop`
-        // for us; both reads and writes share that side table.
-        let proto_obj = if name == "Array" {
-            crate::array::js_array_alloc(0) as *mut ObjectHeader
-        } else {
-            super::proto_room::alloc_builtin_prototype()
-        };
         if !proto_obj.is_null() {
-            let proto_value = crate::value::js_nanbox_pointer(proto_obj as i64);
-            super::super::define_builtin_data_property(
-                closure_ptr as *mut ObjectHeader,
-                proto_key,
-                proto_value,
-                "prototype".to_string(),
-                super::super::PropertyAttrs::new(false, false, false),
-            );
             let ctor_key = crate::string::js_string_from_bytes(
                 b"constructor".as_ptr(),
                 "constructor".len() as u32,

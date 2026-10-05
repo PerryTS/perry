@@ -28,13 +28,12 @@ pub extern "C" fn js_promise_static_function_value(name_ptr: *const u8, name_len
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    super::super::native_module::set_bound_native_closure_name(closure, name);
-    super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
+    super::super::native_module::set_bound_native_closure_metadata(closure, name, spec_length);
     super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
 
     let value = crate::value::js_nanbox_pointer(closure as i64);
     if !ctor_ptr.is_null() {
-        crate::closure::closure_set_dynamic_prop(ctor_ptr as usize, name, value);
+        crate::closure::closure_define_dynamic_prop(ctor_ptr as usize, name, value);
         super::super::set_builtin_property_attrs(
             ctor_ptr as usize,
             name.to_string(),
@@ -285,8 +284,7 @@ fn builtin_static_function(
     if closure.is_null() {
         return None;
     }
-    super::super::native_module::set_bound_native_closure_name(closure, name);
-    super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
+    super::super::native_module::set_bound_native_closure_metadata(closure, name, spec_length);
     super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
     Some(crate::value::js_nanbox_pointer(closure as i64))
 }
@@ -319,7 +317,7 @@ fn define_constructor_static(
 pub(crate) struct ConstructorStatics {
     ctor: *mut crate::closure::ClosureHeader,
     entries: Vec<(&'static str, f64)>,
-    attrs: Vec<super::super::PropertyAttrs>,
+    attrs: Vec<u8>,
     _no_move: crate::gc::GcSuppressScope,
 }
 
@@ -364,7 +362,8 @@ impl ConstructorStatics {
         attrs: super::super::PropertyAttrs,
     ) {
         self.entries.push((name, value));
-        self.attrs.push(attrs);
+        self.attrs
+            .push(super::super::key_attrs::attr_bits_to_entry(attrs.bits));
     }
 
     /// Define everything collected on the constructor.
@@ -373,51 +372,38 @@ impl ConstructorStatics {
         if self.entries.is_empty() {
             return;
         }
-        if crate::closure::closure_define_first_props(ctor, &self.entries) {
+        if crate::closure::closure_define_first_props_with_attrs(ctor, &self.entries, &self.attrs) {
             // What the per-key define's store does besides storing: a
             // function taking a named property arms the own-override guard
             // (builtin form), and each key gets its attributes.
             super::super::own_override::as_builtin_definition(|| {
                 super::super::own_override::note_exotic_named_prop_install(ctor)
             });
-            for (&(name, _), &attrs) in self.entries.iter().zip(&self.attrs) {
-                super::super::set_builtin_property_attrs(ctor, name.to_string(), attrs);
-            }
             return;
         }
-        for (&(name, value), &attrs) in self.entries.iter().zip(&self.attrs) {
+        for (&(name, value), &entry) in self.entries.iter().zip(&self.attrs) {
+            let attrs = super::super::PropertyAttrs {
+                bits: super::super::key_attrs::entry_to_attr_bits(entry),
+            };
             define_constructor_static(self.ctor, name, value, attrs);
         }
     }
 }
 
-pub(crate) fn install_number_static_data_properties(ctor: *mut crate::closure::ClosureHeader) {
-    if ctor.is_null() {
-        return;
-    }
-    let props = [
-        ("NaN", f64::NAN),
-        ("POSITIVE_INFINITY", f64::INFINITY),
-        ("NEGATIVE_INFINITY", f64::NEG_INFINITY),
-        ("MAX_VALUE", f64::MAX),
-        // ECMAScript Number.MIN_VALUE is the smallest *denormal* (5e-324 =
-        // 2^-1074 = bit pattern 1), NOT f64::MIN_POSITIVE (smallest *normal*).
-        ("MIN_VALUE", f64::from_bits(1)),
-        ("EPSILON", f64::EPSILON),
-        ("MAX_SAFE_INTEGER", 9007199254740991.0),
-        ("MIN_SAFE_INTEGER", -9007199254740991.0),
-    ];
-    for (name, value) in props {
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        super::super::define_builtin_data_property(
-            ctor as *mut ObjectHeader,
-            key,
-            value,
-            name.to_string(),
-            super::super::PropertyAttrs::new(false, false, false),
-        );
-    }
-}
+/// `Number`'s constant statics (`{ !writable, !enumerable, !configurable }`),
+/// born in the constructor's one attributed layout with its methods.
+const NUMBER_STATIC_DATA: [(&str, f64); 8] = [
+    ("NaN", f64::NAN),
+    ("POSITIVE_INFINITY", f64::INFINITY),
+    ("NEGATIVE_INFINITY", f64::NEG_INFINITY),
+    ("MAX_VALUE", f64::MAX),
+    // ECMAScript Number.MIN_VALUE is the smallest *denormal* (5e-324 =
+    // 2^-1074 = bit pattern 1), NOT f64::MIN_POSITIVE (smallest *normal*).
+    ("MIN_VALUE", f64::from_bits(1)),
+    ("EPSILON", f64::EPSILON),
+    ("MAX_SAFE_INTEGER", 9007199254740991.0),
+    ("MIN_SAFE_INTEGER", -9007199254740991.0),
+];
 
 /// #2889: install the common static methods on the `Object` / `Array`
 /// constructor closures so rebound usage (`const O = Object; O.keys(x)`)
@@ -428,11 +414,27 @@ pub(crate) fn install_number_static_data_properties(ctor: *mut crate::closure::C
 pub(crate) fn install_builtin_constructor_statics(
     name: &str,
     ctor: *mut crate::closure::ClosureHeader,
+    prototype: Option<f64>,
 ) {
     if ctor.is_null() {
         return;
     }
     let mut statics = ConstructorStatics::new(ctor);
+    // Intrinsics and statics belong to the same final own-property layout.
+    let length = builtin_constructor_spec_length(name)
+        .or_else(|| crate::closure::closure_length(ctor))
+        .unwrap_or(0);
+    statics.data(
+        "length",
+        length as f64,
+        super::super::PropertyAttrs::new(false, false, true),
+    );
+    let name_ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    statics.data(
+        "name",
+        crate::value::js_nanbox_string(name_ptr as i64),
+        super::super::PropertyAttrs::new(false, false, true),
+    );
     let s = &mut statics;
     match name {
         "Object" => {
@@ -671,6 +673,13 @@ pub(crate) fn install_builtin_constructor_statics(
                 crate::fn_info!(number_parse_int_thunk, 2; with_declared(2)),
                 2,
             );
+            for (name, value) in NUMBER_STATIC_DATA {
+                s.data(
+                    name,
+                    value,
+                    super::super::PropertyAttrs::new(false, false, false),
+                );
+            }
         }
         "BigInt" => {
             // BigInt.asIntN(bits, bigint) / asUintN(bits, bigint) — spec length 2.
@@ -826,6 +835,15 @@ pub(crate) fn install_builtin_constructor_statics(
         }
         _ => {}
     }
+    // Keep the existing insertion order: prototype is last. The generic
+    // small-key lookup scans backwards, so it remains a one-key probe.
+    if let Some(prototype) = prototype {
+        statics.data(
+            "prototype",
+            prototype,
+            super::super::PropertyAttrs::new(false, false, false),
+        );
+    }
     statics.finish();
 }
 
@@ -854,11 +872,7 @@ pub(crate) fn install_proto_method(
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    super::super::native_module::set_bound_native_closure_name(closure, method_name);
-    // #3143: record this method's spec `.length` per closure instance — many
-    // methods share the noop body. Read back by the `.length` value-accessor
-    // and `getOwnPropertyDescriptor`.
-    super::super::native_module::set_builtin_closure_length(closure as usize, arity);
+    super::super::native_module::set_bound_native_closure_metadata(closure, method_name, arity);
     // The allocation's body record already owns this immutable capability.
     // Shared bodies without the bit still need an instance-specific entry.
     if info.is_null() || unsafe { (*info).flags & crate::closure::FN_NON_CONSTRUCTOR == 0 } {
@@ -877,22 +891,6 @@ pub(crate) fn install_proto_method(
         value,
         method_name.to_string(),
         super::super::PropertyAttrs::new(true, false, true),
-    );
-    // #3143: the method's own `.name` / `.length` data properties are
-    // `{ writable: false, enumerable: false, configurable: true }` per spec.
-    // Register those on the closure itself so `getOwnPropertyDescriptor(
-    // Array.prototype.map, "name")` reports `writable: false` (it previously
-    // read the dynamic-prop slot and defaulted to writable). Reflection-only —
-    // no hot-path gate flip.
-    super::super::set_builtin_property_attrs(
-        closure as usize,
-        "name".to_string(),
-        super::super::PropertyAttrs::new(false, false, true),
-    );
-    super::super::set_builtin_property_attrs(
-        closure as usize,
-        "length".to_string(),
-        super::super::PropertyAttrs::new(false, false, true),
     );
     value
 }
@@ -944,8 +942,11 @@ pub(crate) fn install_proto_method_rest_with_length(
     if closure.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    super::super::native_module::set_bound_native_closure_name(closure, method_name);
-    super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
+    super::super::native_module::set_bound_native_closure_metadata(
+        closure,
+        method_name,
+        spec_length,
+    );
     // The allocation's body record already owns this immutable capability.
     // Shared bodies without the bit still need an instance-specific entry.
     if info.is_null() || unsafe { (*info).flags & crate::closure::FN_NON_CONSTRUCTOR == 0 } {
@@ -959,16 +960,6 @@ pub(crate) fn install_proto_method_rest_with_length(
         value,
         method_name.to_string(),
         super::super::PropertyAttrs::new(true, false, true),
-    );
-    super::super::set_builtin_property_attrs(
-        closure as usize,
-        "name".to_string(),
-        super::super::PropertyAttrs::new(false, false, true),
-    );
-    super::super::set_builtin_property_attrs(
-        closure as usize,
-        "length".to_string(),
-        super::super::PropertyAttrs::new(false, false, true),
     );
     value
 }
@@ -1265,8 +1256,11 @@ pub(crate) fn install_builtin_species_accessor(ctor: *mut crate::closure::Closur
     if getter.is_null() {
         return;
     }
-    super::super::native_module::set_bound_native_closure_name(getter, "get [Symbol.species]");
-    super::super::native_module::set_builtin_closure_length(getter as usize, 0);
+    super::super::native_module::set_bound_native_closure_metadata(
+        getter,
+        "get [Symbol.species]",
+        0,
+    );
     let get_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
     let ctor_value = crate::value::js_nanbox_pointer(ctor as i64);
     let sym_value = f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits());

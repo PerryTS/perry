@@ -1,8 +1,6 @@
 //! Young-scoped GC maintenance for per-instance built-in closure metadata.
 
 thread_local! {
-    static BUILTIN_CLOSURE_LENGTH: std::cell::RefCell<crate::fast_hash::PtrHashMap<usize, u32>> =
-        std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_map());
     static BUILTIN_CLOSURE_NON_CONSTRUCTABLE: std::cell::RefCell<crate::fast_hash::PtrHashSet<usize>> =
         std::cell::RefCell::new(crate::fast_hash::new_ptr_hash_set());
 }
@@ -32,21 +30,73 @@ fn note(closure: usize) {
     BUILTIN_CLOSURE_YOUNG.with(|log| log.borrow_mut().note(closure));
 }
 
-pub(crate) fn set_builtin_closure_length(closure: usize, length: u32) {
-    note(closure);
-    BUILTIN_CLOSURE_LENGTH.with(|m| {
-        m.borrow_mut().insert(closure, length);
-    });
+pub(crate) fn set_bound_native_closure_name(
+    closure: *mut crate::closure::ClosureHeader,
+    name: &str,
+) {
+    define_bound_native_closure_metadata(closure, name, None);
 }
 
-/// The recorded spec `.length` of the closure at `closure` — an address the
-/// caller has already proven is a closure (every reader asks from inside its
-/// closure arm; the bind-capture fallback re-checks only the header byte).
-pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
-    if let Some(len) = BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&closure).copied()) {
-        return Some(len);
+/// A native function's name and spec length share one attributed birth.
+pub(crate) fn set_bound_native_closure_metadata(
+    closure: *mut crate::closure::ClosureHeader,
+    name: &str,
+    length: u32,
+) {
+    define_bound_native_closure_metadata(closure, name, Some(length));
+}
+
+fn define_bound_native_closure_metadata(
+    closure: *mut crate::closure::ClosureHeader,
+    name: &str,
+    length: Option<u32>,
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure_handle = scope.root_raw_mut_ptr(closure);
+    let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let name_handle = scope.root_string_ptr(ptr);
+    let name_value =
+        f64::from_bits(crate::value::JSValue::string_ptr(name_handle.get_raw_mut_ptr()).bits());
+    let closure = closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize;
+    let attrs = crate::object::PropertyAttrs::new(false, false, true);
+    let entries = [("name", name_value), ("length", length.unwrap_or(0) as f64)];
+    let count = if length.is_some() { 2 } else { 1 };
+    let entries_attrs = [crate::object::key_attrs::attr_bits_to_entry(attrs.bits); 2];
+    if crate::closure::closure_define_first_props_with_attrs(
+        closure,
+        &entries[..count],
+        &entries_attrs[..count],
+    ) {
+        return;
     }
-    // A bind result carries its length in a capture, not in this table.
+    crate::closure::closure_define_data_with_attrs(closure, "name", name_value, attrs);
+    if let Some(length) = length {
+        set_builtin_closure_length(closure, length);
+    }
+}
+
+/// The spec length is an own data property, including its attributes.
+pub(crate) fn set_builtin_closure_length(closure: usize, length: u32) {
+    let attrs = crate::object::PropertyAttrs::new(false, false, true);
+    if crate::closure::closure_define_first_props_with_attrs(
+        closure,
+        &[("length", length as f64)],
+        &[crate::object::key_attrs::attr_bits_to_entry(attrs.bits)],
+    ) {
+        return;
+    }
+    crate::closure::closure_define_data_with_attrs(closure, "length", length as f64, attrs);
+}
+
+/// A recorded length is read from the function bag; an unmaterialized bound
+/// length remains in its capture, as before.
+pub(crate) fn builtin_closure_length(closure: usize) -> Option<u32> {
+    if let Some(length) = crate::closure::closure_get_own_dynamic_prop(closure, "length") {
+        if length.is_finite() && length >= 0.0 && length <= u32::MAX as f64 {
+            return Some(length as u32);
+        }
+        return None;
+    }
     unsafe { crate::closure::bound_function_length(closure) }
 }
 
@@ -70,14 +120,6 @@ pub(crate) fn builtin_closure_is_non_constructable(closure: usize) -> bool {
 #[cfg(any(debug_assertions, test))]
 fn relevant_owners() -> Vec<usize> {
     let mut owners = Vec::new();
-    BUILTIN_CLOSURE_LENGTH.with(|m| {
-        owners.extend(
-            m.borrow()
-                .keys()
-                .copied()
-                .filter(|owner| crate::gc::young_log::addr_is_minor_collectible(*owner)),
-        );
-    });
     BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| {
         owners.extend(
             m.borrow()
@@ -94,14 +136,6 @@ fn relevant_owners() -> Vec<usize> {
 fn visit_owner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>, owner: usize) -> Option<usize> {
     let mut new_owner = owner;
     visitor.visit_metadata_usize_slot(&mut new_owner);
-    BUILTIN_CLOSURE_LENGTH.with(|lengths| {
-        let mut lengths = lengths.borrow_mut();
-        if new_owner != owner {
-            if let Some(length) = lengths.remove(&owner) {
-                lengths.insert(new_owner, length);
-            }
-        }
-    });
     BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|set| {
         let mut set = set.borrow_mut();
         if new_owner != owner && set.remove(&owner) {
@@ -114,8 +148,7 @@ fn visit_owner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>, owner: usize) ->
 pub(crate) fn scan_builtin_closure_metadata_roots_mut(
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
 ) {
-    let table_len = BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().len())
-        + BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow().len());
+    let table_len = BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow().len());
     if visitor.young_scope() {
         #[cfg(any(debug_assertions, test))]
         BUILTIN_CLOSURE_YOUNG.with(|log| {
@@ -154,7 +187,6 @@ pub(crate) fn scan_builtin_closure_metadata_roots_mut(
     }
 
     let mut owners = Vec::new();
-    BUILTIN_CLOSURE_LENGTH.with(|m| owners.extend(m.borrow().keys().copied()));
     BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| owners.extend(m.borrow().iter().copied()));
     owners.sort_unstable();
     owners.dedup();
@@ -181,11 +213,6 @@ pub(crate) fn scan_builtin_closure_metadata_roots_mut(
 }
 
 pub(crate) fn prune_dead_builtin_closure_metadata_owners(is_dead_owner: &dyn Fn(usize) -> bool) {
-    BUILTIN_CLOSURE_LENGTH.with(|lengths| {
-        lengths
-            .borrow_mut()
-            .retain(|owner, _| !is_dead_owner(*owner));
-    });
     BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|non_constructable| {
         non_constructable
             .borrow_mut()
@@ -198,8 +225,8 @@ pub(crate) fn prune_dead_builtin_closure_metadata_owners(is_dead_owner: &dyn Fn(
 /// `BUILTIN_CLOSURE_YOUNG`: its writers note it (rule 1) and the minor's
 /// young-scoped scan re-logs every owner that is still collectible, which a
 /// dead owner (never moved, still in from-space) is. So the log is the
-/// candidate set, and the full `retain` over both maps -- ~275k instructions
-/// per copying minor on dotenv, where the maps hold every built-in closure
+/// candidate set, and the full `retain` over the set -- ~275k instructions
+/// per copying minor on dotenv, where the set holds every built-in closure
 /// the program ever made -- is only needed on a full collection.
 pub(crate) fn prune_dead_builtin_closure_metadata_owners_young(
     is_dead_owner: &dyn Fn(usize) -> bool,
@@ -213,9 +240,6 @@ pub(crate) fn prune_dead_builtin_closure_metadata_owners_young(
     let mut kept = Vec::with_capacity(candidates.len());
     for owner in candidates {
         if is_dead_owner(owner) {
-            BUILTIN_CLOSURE_LENGTH.with(|m| {
-                m.borrow_mut().remove(&owner);
-            });
             BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| {
                 m.borrow_mut().remove(&owner);
             });
@@ -235,7 +259,7 @@ mod tests {
         let _lock = crate::gc::global_side_table_test_lock();
         let closure = crate::closure::js_closure_alloc(std::ptr::null(), 0) as usize;
         TEST_SUPPRESS_BUILTIN_CLOSURE_YOUNG_NOTE.with(|flag| flag.set(true));
-        set_builtin_closure_length(closure, 3);
+        set_builtin_closure_non_constructable(closure);
         TEST_SUPPRESS_BUILTIN_CLOSURE_YOUNG_NOTE.with(|flag| flag.set(false));
         let missed = std::panic::catch_unwind(|| {
             BUILTIN_CLOSURE_YOUNG.with(|log| {
@@ -243,7 +267,7 @@ mod tests {
                     .debug_assert_logged(LOG_NAME, &relevant_owners())
             });
         });
-        BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow_mut().remove(&closure));
+        BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow_mut().remove(&closure));
         BUILTIN_CLOSURE_YOUNG.with(|log| log.borrow_mut().clear());
         assert!(
             missed.is_err(),
@@ -260,7 +284,6 @@ mod tests {
     }
 
     fn clear_all() {
-        BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow_mut().clear());
         BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow_mut().clear());
         BUILTIN_CLOSURE_YOUNG.with(|log| log.borrow_mut().clear());
     }
@@ -276,30 +299,18 @@ mod tests {
         let old = old_closure();
         assert!(crate::gc::young_log::addr_is_minor_collectible(young));
         assert!(!crate::gc::young_log::addr_is_minor_collectible(old));
-        set_builtin_closure_length(young, 2);
         set_builtin_closure_non_constructable(young);
-        set_builtin_closure_length(old, 5);
         set_builtin_closure_non_constructable(old);
 
         prune_dead_builtin_closure_metadata_owners_young(&|_| true);
 
-        let (young_len, young_nc, old_len, old_nc) = (
-            BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&young).copied()),
+        let (young_nc, old_nc) = (
             BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow().contains(&young)),
-            BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&old).copied()),
             BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow().contains(&old)),
         );
         clear_all();
-        assert_eq!(
-            (young_len, young_nc),
-            (None, false),
-            "dead young owner kept"
-        );
-        assert_eq!(
-            (old_len, old_nc),
-            (Some(5), true),
-            "old owner pruned by a minor"
-        );
+        assert!(!young_nc, "dead young owner kept");
+        assert!(old_nc, "old owner pruned by a minor");
     }
 
     /// A live young owner stays in the maps AND in the log, so the next minor
@@ -309,12 +320,12 @@ mod tests {
         let _lock = crate::gc::global_side_table_test_lock();
         clear_all();
         let young = crate::closure::js_closure_alloc(std::ptr::null(), 0) as usize;
-        set_builtin_closure_length(young, 1);
+        set_builtin_closure_non_constructable(young);
         prune_dead_builtin_closure_metadata_owners_young(&|_| false);
-        let still = BUILTIN_CLOSURE_LENGTH.with(|m| m.borrow().get(&young).copied());
+        let still = BUILTIN_CLOSURE_NON_CONSTRUCTABLE.with(|m| m.borrow().contains(&young));
         let logged = BUILTIN_CLOSURE_YOUNG.with(|log| log.borrow_mut().take_sorted());
         clear_all();
-        assert_eq!(still, Some(1));
+        assert!(still);
         assert_eq!(logged, vec![young]);
     }
 

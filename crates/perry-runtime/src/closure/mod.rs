@@ -92,12 +92,15 @@ pub(crate) use dynamic_props::{
     function_prototype_inherited_get, prune_dead_closure_side_table_owners,
     prune_dead_closure_side_table_owners_young, release_closure_side_table_owners_in_ranges,
 };
+pub(crate) use dynamic_props::{
+    closure_define_data_with_attrs, closure_define_first_props_with_attrs,
+};
 pub use dynamic_props::{
-    closure_define_first_props, closure_delete_own_dynamic_prop, closure_dynamic_props_snapshot,
-    closure_get_dynamic_prop, closure_get_own_dynamic_prop, closure_has_own_dynamic_prop,
-    closure_is_key_deleted, closure_mark_key_deleted, closure_set_dynamic_prop,
-    closure_set_static_prototype, closure_static_prototype, is_closure_ptr,
-    scan_closure_dynamic_props_roots_mut,
+    closure_define_dynamic_prop, closure_define_first_props, closure_delete_own_dynamic_prop,
+    closure_dynamic_props_snapshot, closure_get_dynamic_prop, closure_get_own_dynamic_prop,
+    closure_has_own_dynamic_prop, closure_is_key_deleted, closure_mark_key_deleted,
+    closure_set_dynamic_prop, closure_set_static_prototype, closure_static_prototype,
+    is_closure_ptr, scan_closure_dynamic_props_roots_mut,
 };
 
 // v8_stubs re-exports the AOT stubs + non-macOS Rust V8-interop stubs.

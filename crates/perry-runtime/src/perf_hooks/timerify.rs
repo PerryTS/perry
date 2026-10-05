@@ -200,7 +200,7 @@ pub extern "C" fn js_perf_timerify(fn_value: f64, options: f64) -> f64 {
             format!("timerified {name}")
         };
         let wrapper_name_value = str_value(&wrapper_name);
-        crate::closure::closure_set_dynamic_prop(
+        crate::closure::closure_define_dynamic_prop(
             closure as usize,
             "name",
             f64::from_bits(wrapper_name_value.bits()),

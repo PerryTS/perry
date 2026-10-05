@@ -217,7 +217,7 @@ pub(crate) unsafe fn sql_tag_store_constructor_value() -> f64 {
         return undefined_f64();
     }
     let ptr = js_string_from_bytes(b"SQLTagStore".as_ptr(), "SQLTagStore".len() as u32);
-    perry_runtime::closure::closure_set_dynamic_prop(
+    perry_runtime::closure::closure_define_dynamic_prop(
         closure as usize,
         "name",
         f64_from_jsvalue(JSValue::string_ptr(ptr)),

@@ -175,7 +175,11 @@ unsafe fn define_accessor_property(
 
 unsafe fn function_value(info: *const perry_runtime::closure::JsFunctionInfo, name: &str) -> f64 {
     let closure = perry_runtime::closure::js_closure_alloc(info, 0);
-    perry_runtime::closure::closure_set_dynamic_prop(closure as usize, "name", string_value(name));
+    perry_runtime::closure::closure_define_dynamic_prop(
+        closure as usize,
+        "name",
+        string_value(name),
+    );
     boxed_ptr(closure as *const u8)
 }
 

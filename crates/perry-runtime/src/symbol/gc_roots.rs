@@ -386,11 +386,7 @@ pub(crate) fn test_class_static_symbol_root_bits(class_id: u32, sym_key: usize) 
 #[cfg(test)]
 pub(crate) fn test_class_static_symbol_roots_for_class(class_id: u32) -> Vec<(usize, u64)> {
     let owner = crate::object::class_value::class_value_ptr(class_id) as usize;
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    guard
-        .as_ref()
-        .and_then(|map| map.get(&owner).cloned())
-        .unwrap_or_default()
+    super::clone_symbol_entries_for_obj_ptr(owner)
 }
 
 #[cfg(test)]

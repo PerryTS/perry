@@ -214,7 +214,7 @@ fn create_process_once_raw_wrapper(
     let name = "bound onceWrapper";
     let name_ptr = js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let name_value = f64::from_bits(crate::value::JSValue::string_ptr(name_ptr).bits());
-    crate::closure::closure_set_dynamic_prop(wrapper as usize, "name", name_value);
+    crate::closure::closure_define_dynamic_prop(wrapper as usize, "name", name_value);
     wrapper
 }
 

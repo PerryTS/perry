@@ -58,7 +58,12 @@ pub fn closure_mark_key_deleted(ptr: usize, key: &str) {
     if ptr == 0 || !is_closure_ptr(ptr) {
         return;
     }
-    unsafe { super::props::state_mark_deleted(ptr, key) };
+    unsafe {
+        super::props::state_mark_deleted(ptr, key);
+        // Recording the intrinsic deletion may have materialized its bag.
+        // The bag must reflect the deletion before any own-value reader runs.
+        super::props::bag_remove(ptr, key);
+    };
     super::shape::note_function_own_state_changed(ptr);
 }
 
@@ -419,6 +424,15 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
             return unsafe { crate::closure::bound_function_lazy_name(ptr) };
         }
     }
+    // An unmaterialized intrinsic name is still an OWN data property.
+    // Resolve its birth value before any inherited property lookup; once a
+    // bag key exists, its value (including undefined) already won above.
+    if prop == "name" && crate::object::has_own_helpers::closure_own_key_present(ptr, prop) {
+        let code = unsafe { (*(ptr as *const ClosureHeader)).code() } as usize;
+        let name = crate::builtins::function_name_for_ptr(code).unwrap_or_default();
+        let name = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        return crate::value::js_nanbox_string(name as i64);
+    }
     // #36 / #321: own prop miss — walk the closure's static prototype chain
     // (`Object.setPrototypeOf(closure, protoObj)`). Reads a string-keyed field
     // off the proto object. Lets effect's `TagClass._op` resolve to "Tag" on
@@ -704,15 +718,57 @@ pub fn closure_set_dynamic_prop(ptr: usize, prop: &str, value: f64) {
     super::shape::refresh_closure_shape(ptr);
 }
 
+/// Define an own data value, preserving its current attributes. The caller
+/// has validated the descriptor; a configurable read-only key can be replaced.
+pub fn closure_define_dynamic_prop(ptr: usize, prop: &str, value: f64) {
+    if !is_closure_ptr(ptr) {
+        return;
+    }
+    unsafe {
+        super::props::bag_define_value(ptr, prop, value);
+        super::props::state_clear_deleted(ptr, prop);
+    }
+    super::shape::refresh_closure_shape(ptr);
+}
+
+/// Define an own data property with its value and attributes in one step
+/// (`props::bag_define_data_with_attrs`): the builtin-install form of a
+/// validated [[DefineOwnProperty]]. One shape refresh.
+pub(crate) fn closure_define_data_with_attrs(
+    ptr: usize,
+    prop: &str,
+    value: f64,
+    attrs: crate::object::PropertyAttrs,
+) {
+    if !is_closure_ptr(ptr) {
+        return;
+    }
+    crate::object::prop_plan::prop_plan_epoch_bump_for_owner(ptr);
+    unsafe {
+        super::props::bag_define_data_with_attrs(ptr, prop, value, attrs.bits);
+        super::props::state_clear_deleted(ptr, prop);
+    }
+    super::shape::refresh_closure_shape(ptr);
+}
+
 /// A function's first own data properties, defined at once: its bag is born
 /// holding `entries` in one shape (`props::bag_born_with`). False, with
 /// nothing done, when the function already has own properties; the caller
 /// then sets them one at a time ([`closure_set_dynamic_prop`]).
 pub fn closure_define_first_props(ptr: usize, entries: &[(&str, f64)]) -> bool {
+    closure_define_first_props_with_attrs(ptr, entries, &[])
+}
+
+/// Birth the function bag with the final attributes as well as its values.
+pub(crate) fn closure_define_first_props_with_attrs(
+    ptr: usize,
+    entries: &[(&str, f64)],
+    attrs: &[u8],
+) -> bool {
     if ptr == 0 || !is_closure_ptr(ptr) {
         return false;
     }
-    if !unsafe { super::props::bag_born_with(ptr, entries) } {
+    if !unsafe { super::props::bag_born_with_attrs(ptr, entries, attrs) } {
         return false;
     }
     super::shape::refresh_closure_shape(ptr);

@@ -204,17 +204,39 @@ impl Word {
 
     /// This position's word: `entry` for `key`, after the cumulative `prev`.
     #[inline(always)]
-    unsafe fn after(prev: Word, entry: u8, key: crate::JSValue) -> Word {
+    unsafe fn after(prev: Word, entry: u8, key: impl AttributeKey) -> Word {
         let mut w = Word { entry, ..prev };
         if entry != 0 {
             w.summary |= entry_summary(entry);
-            let bit = key_bloom_bit(key);
+            let bit = key.bloom_bit();
             w.entry_bloom |= bit;
             if entry & ENTRY_ACCESSOR != 0 {
                 w.accessor_bloom |= bit;
             }
         }
         w
+    }
+}
+
+/// The key whose attribute word is being written. A builder that has just
+/// stored a string key can pass its original text; both forms feed the same
+/// cumulative word, without rereading a fresh array's key slot.
+pub(crate) trait AttributeKey {
+    fn bloom_bit(self) -> u16;
+}
+
+impl AttributeKey for crate::JSValue {
+    #[inline]
+    fn bloom_bit(self) -> u16 {
+        // SAFETY: the writer's key is live, as required by attrs_write.
+        unsafe { key_bloom_bit(self) }
+    }
+}
+
+impl AttributeKey for &str {
+    #[inline]
+    fn bloom_bit(self) -> u16 {
+        bloom_bit_of_bytes(self.as_bytes())
     }
 }
 
@@ -510,7 +532,7 @@ pub(crate) unsafe fn attrs_write(
     attrs: *mut ArrayHeader,
     pos: u32,
     entry: u8,
-    key: crate::JSValue,
+    key: impl AttributeKey,
 ) {
     let (w, len) = words(attrs);
     debug_assert!((pos as usize) <= len && pos < (*attrs).capacity);

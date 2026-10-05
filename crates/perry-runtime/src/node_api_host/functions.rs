@@ -195,7 +195,7 @@ pub unsafe extern "C" fn napi_create_function(
             Err(status) => return status,
         };
         let closure_ptr = JSValue::from_bits(closure_bits).as_pointer::<u8>() as usize;
-        crate::closure::closure_set_dynamic_prop(closure_ptr, "name", name_value);
+        crate::closure::closure_define_dynamic_prop(closure_ptr, "name", name_value);
     }
     *result = handle;
     ok(env)

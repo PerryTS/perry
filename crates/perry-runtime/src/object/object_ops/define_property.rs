@@ -507,126 +507,14 @@ pub extern "C" fn js_object_define_property(
             // Symbol keys stay Symbols; string coercion would create an
             // unrelated `"Symbol(...)"` expando that symbol lookup cannot see.
             if crate::symbol::js_is_symbol(current_key()) != 0 {
-                let current_owner = || crate::symbol::obj_key_from_f64(current_obj());
-                let current_sym = || crate::symbol::sym_key_from_f64(current_key());
-                let existing_accessor_bits =
-                    crate::symbol::symbol_accessor_descriptor_bits(current_owner(), current_sym());
-                let existing_data_bits = existing_accessor_bits
-                    .is_none()
-                    .then(|| {
-                        crate::symbol::symbol_property_root_bits(current_owner(), current_sym())
-                    })
-                    .flatten();
-                let existing_get =
-                    scope.root_nanbox_u64(existing_accessor_bits.map(|(get, _)| get).unwrap_or(0));
-                let existing_set =
-                    scope.root_nanbox_u64(existing_accessor_bits.map(|(_, set)| set).unwrap_or(0));
-                let existing_data = scope
-                    .root_nanbox_u64(existing_data_bits.unwrap_or(crate::value::TAG_UNDEFINED));
-                let existed = existing_accessor_bits.is_some() || existing_data_bits.is_some();
-                // A symbol installed by ordinary assignment has no explicit
-                // attrs side-table entry and therefore has the ordinary
-                // writable/enumerable/configurable defaults.
-                let existing_attrs = existed.then(|| {
-                    crate::symbol::get_symbol_property_attrs(current_owner(), current_sym())
-                        .unwrap_or(PropertyAttrs::new(true, true, true))
-                });
-                if let Some(attrs) = existing_attrs {
-                    if !attrs.configurable() {
-                        validate_nonconfigurable_redefine(
-                            "symbol",
-                            attrs,
-                            existing_accessor_bits.map(|_| super::super::AccessorDescriptor {
-                                get: existing_get.get_nanbox_u64(),
-                                set: existing_set.get_nanbox_u64(),
-                            }),
-                            existing_data.get_nanbox_f64(),
-                            current_desc(),
-                            desc_view.as_ref(),
-                        );
-                    }
-                }
-
-                let has_get = desc_has_field(current_desc(), b"get");
-                let has_set = desc_has_field(current_desc(), b"set");
-                let has_value = desc_has_field(current_desc(), b"value");
-                let has_writable = desc_has_field(current_desc(), b"writable");
-                if has_get || has_set {
-                    let get = scope.root_nanbox_u64(if has_get {
-                        let field = desc_read_field(current_desc(), b"get");
-                        (!field.is_undefined())
-                            .then(|| {
-                                crate::closure::clone_closure_rebind_this(
-                                    field.bits(),
-                                    current_obj(),
-                                )
-                            })
-                            .unwrap_or(0)
-                    } else {
-                        existing_get.get_nanbox_u64()
-                    });
-                    let set = if has_set {
-                        let field = desc_read_field(current_desc(), b"set");
-                        (!field.is_undefined())
-                            .then(|| {
-                                crate::closure::clone_closure_rebind_this(
-                                    field.bits(),
-                                    current_obj(),
-                                )
-                            })
-                            .unwrap_or(0)
-                    } else {
-                        existing_set.get_nanbox_u64()
-                    };
-                    crate::symbol::set_symbol_accessor_property(
-                        current_obj(),
-                        current_key(),
-                        get.get_nanbox_u64(),
-                        set,
-                    );
-                } else if has_value || has_writable || !existed {
-                    let value = if has_value {
-                        f64::from_bits(desc_read_field(current_desc(), b"value").bits())
-                    } else if existing_accessor_bits.is_some() || existing_data_bits.is_none() {
-                        f64::from_bits(crate::value::TAG_UNDEFINED)
-                    } else {
-                        existing_data.get_nanbox_f64()
-                    };
-                    crate::symbol::define_symbol_data_property(current_obj(), current_key(), value);
-                }
-                let read_flag = |name: &[u8]| -> Option<bool> {
-                    desc_has_field(current_desc(), name).then(|| {
-                        crate::value::js_is_truthy(f64::from_bits(
-                            desc_read_field(current_desc(), name).bits(),
-                        )) != 0
-                    })
-                };
-                crate::symbol::set_symbol_property_attrs(
-                    current_owner(),
-                    current_sym(),
-                    PropertyAttrs::new(
-                        if has_get || has_set {
-                            false
-                        } else {
-                            read_flag(b"writable").unwrap_or_else(|| {
-                                existing_attrs
-                                    .map(|attrs| attrs.writable())
-                                    .unwrap_or(false)
-                            })
-                        },
-                        read_flag(b"enumerable").unwrap_or_else(|| {
-                            existing_attrs
-                                .map(|attrs| attrs.enumerable())
-                                .unwrap_or(false)
-                        }),
-                        read_flag(b"configurable").unwrap_or_else(|| {
-                            existing_attrs
-                                .map(|attrs| attrs.configurable())
-                                .unwrap_or(false)
-                        }),
-                    ),
+                return super::define_symbol_property::define_symbol_property(
+                    &scope,
+                    current_obj(),
+                    current_obj(),
+                    current_key(),
+                    current_desc(),
+                    desc_view.as_ref(),
                 );
-                return current_obj();
             }
 
             if let Some(name) = super::super::metadata_key_to_string(current_key()) {
@@ -793,56 +681,18 @@ pub extern "C" fn js_object_define_property(
         // db.select().from(x)` saw `instance.then === undefined` and `await`
         // unwrapped the builder unchanged.
         if let Some(target_cid) = super::super::class_ref_id(obj_value) {
-            // `Object.defineProperty(C, Symbol.hasInstance, { value: fn })` (and
-            // any symbol-keyed static define on a class): `metadata_key_to_string`
-            // can't stringify a Symbol, so the value would be silently dropped.
-            // Route it into the class static symbols (the class function object's own symbol properties) —
-            // the same table `static [Symbol.hasInstance]` registers into and that
-            // `js_instanceof` consults — so `x instanceof C` honors the user hook
-            // (zod 4 installs its brand-check `@@hasInstance` exactly this way).
             if crate::symbol::js_is_symbol(key_value) != 0 {
-                // Gate on descriptor-field *presence*, not on the value being
-                // non-`undefined`: `Object.defineProperty(C, sym, { value: undefined })`
-                // must still register an own entry. A generic redefine like
-                // `{ enumerable: true }` (no `value`) leaves any existing entry intact.
-                let existed =
-                    crate::symbol::class_static_symbol_lookup(target_cid, key_value).is_some();
-                if desc_has_field(descriptor_value, b"value") {
-                    let value_field = desc_read_field(descriptor_value, b"value");
-                    crate::symbol::js_class_register_static_symbol(
-                        target_cid,
-                        key_value,
-                        f64::from_bits(value_field.bits()),
-                    );
-                }
-                // ValidateAndApplyPropertyDescriptor: omitted attributes are
-                // false on a new property and retained on an existing one.
-                let owner = crate::object::class_value::class_value_ptr(target_cid) as usize;
-                let sym_key = crate::symbol::sym_key_from_f64(key_value);
-                if crate::symbol::class_static_symbol_lookup(target_cid, key_value).is_some() {
-                    let prior = crate::symbol::get_symbol_property_attrs(owner, sym_key)
-                        .unwrap_or(crate::object::PropertyAttrs::new(existed, existed, existed));
-                    let descriptor_value = desc_handle.get_nanbox_f64();
-                    let pick = |field: &[u8], cur: bool| {
-                        if desc_has_field(descriptor_value, field) {
-                            crate::value::js_is_truthy(f64::from_bits(
-                                desc_read_field(descriptor_value, field).bits(),
-                            )) != 0
-                        } else {
-                            cur
-                        }
-                    };
-                    crate::symbol::set_symbol_property_attrs(
-                        owner,
-                        sym_key,
-                        crate::object::PropertyAttrs::new(
-                            pick(b"writable", prior.writable()),
-                            pick(b"enumerable", prior.enumerable()),
-                            pick(b"configurable", prior.configurable()),
-                        ),
-                    );
-                }
-                return obj_value;
+                crate::symbol::CLASS_STATIC_SYMBOLS_LATCH.arm();
+                let owner = super::super::class_value::class_value_ptr(target_cid);
+                super::define_symbol_property::define_symbol_property(
+                    &scope,
+                    f64::from_bits(crate::JSValue::pointer(owner.cast()).bits()),
+                    obj_value,
+                    key_value,
+                    descriptor_value,
+                    desc_view.as_ref(),
+                );
+                return f64::from_bits(obj_value_handle.get_heap_word_u64());
             }
             if let Some(name) = super::super::metadata_key_to_string(key_value) {
                 // #10480: a declared accessor — instance on the prototype ref,
@@ -1037,51 +887,15 @@ pub extern "C" fn js_object_define_property(
             }
         };
         if let Some(closure_ptr) = target_closure_ptr {
-            // A Symbol key on a function value (zod 4 installs its `instanceof`
-            // brand check via `Object.defineProperty(ZodTypeFn, Symbol.hasInstance,
-            // { value })`). Route into the SAME symbol side table
-            // (`SYMBOL_PROPERTIES`, keyed by the closure pointer) that
-            // `js_object_has_own_symbol` / `js_object_get_symbol_property` read —
-            // string-coercing the symbol (below) would file it under a
-            // "Symbol(...)" STRING key, unreachable by the symbol-keyed reader and
-            // breaking the function-RHS `@@hasInstance` instanceof hook. Mirrors
-            // the typed-array symbol-define branch below.
             if crate::symbol::js_is_symbol(key_value) != 0 {
-                let desc_ptr = extract_obj_ptr(descriptor_value);
-                if !desc_ptr.is_null() {
-                    let has_get = desc_has_field(descriptor_value, b"get");
-                    let has_set = desc_has_field(descriptor_value, b"set");
-                    if has_get || has_set {
-                        let get_field = desc_read_field(descriptor_value, b"get");
-                        let set_field = desc_read_field(descriptor_value, b"set");
-                        let get_bits = if !has_get || get_field.is_undefined() {
-                            0
-                        } else {
-                            crate::closure::clone_closure_rebind_this(get_field.bits(), obj_value)
-                        };
-                        let set_bits = if !has_set || set_field.is_undefined() {
-                            0
-                        } else {
-                            crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
-                        };
-                        crate::symbol::set_symbol_accessor_property(
-                            obj_value, key_value, get_bits, set_bits,
-                        );
-                    } else if desc_has_field(descriptor_value, b"value") {
-                        // Only write a value when the descriptor actually carries
-                        // one. A generic redefine like `{ enumerable: true }` must
-                        // preserve the existing `fn[sym]` rather than clobber it
-                        // with `undefined`. (`value: undefined` is honored — it is
-                        // a present field.)
-                        let value_field = desc_read_field(descriptor_value, b"value");
-                        crate::symbol::js_object_set_symbol_property(
-                            obj_value,
-                            key_value,
-                            f64::from_bits(value_field.bits()),
-                        );
-                    }
-                }
-                return obj_value;
+                return super::define_symbol_property::define_symbol_property(
+                    &scope,
+                    obj_value,
+                    obj_value,
+                    key_value,
+                    descriptor_value,
+                    desc_view.as_ref(),
+                );
             }
             // #6943: `js_string_coerce` on an object key runs a user
             // `toString` / `valueOf`, and allocates the stringified form for
@@ -1144,6 +958,11 @@ pub extern "C" fn js_object_define_property(
                     None
                 };
 
+            if existing_attrs.is_none()
+                && crate::value::js_is_truthy(js_object_is_extensible(obj_value)) == 0
+            {
+                throw_object_type_error_with_suffix("Cannot define property: ", &key_rust);
+            }
             // ValidateAndApplyPropertyDescriptor: a non-configurable existing own
             // property of a function object can only be redefined within the
             // spec-permitted bounds (#2843). The built-in `name`/`length` slots
@@ -1173,15 +992,26 @@ pub extern "C" fn js_object_define_property(
             let set_key = crate::string::js_string_from_bytes(b"set".as_ptr(), 3);
             let get_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, get_key);
             let set_field = js_object_get_field_by_name(desc_ptr as *const ObjectHeader, set_key);
-            let has_accessor = !get_field.is_undefined() || !set_field.is_undefined();
+            let has_get = desc_has_field(descriptor_value, b"get");
+            let has_set = desc_has_field(descriptor_value, b"set");
+            let current_accessor = get_accessor_descriptor(closure_ptr, &key_rust);
+            let has_accessor = has_get
+                || has_set
+                || (current_accessor.is_some()
+                    && !desc_has_field(descriptor_value, b"value")
+                    && !desc_has_field(descriptor_value, b"writable"));
 
             if has_accessor {
-                let get_bits = if get_field.is_undefined() {
+                let get_bits = if !has_get {
+                    current_accessor.map_or(0, |acc| acc.get)
+                } else if get_field.is_undefined() {
                     0
                 } else {
                     crate::closure::clone_closure_rebind_this(get_field.bits(), obj_value)
                 };
-                let set_bits = if set_field.is_undefined() {
+                let set_bits = if !has_set {
+                    current_accessor.map_or(0, |acc| acc.set)
+                } else if set_field.is_undefined() {
                     0
                 } else {
                     crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
@@ -1199,11 +1029,17 @@ pub extern "C" fn js_object_define_property(
                 let value_field =
                     js_object_get_field_by_name(desc_ptr as *const ObjectHeader, value_key);
                 clear_accessor_descriptor(closure_ptr, &key_rust);
-                if !value_field.is_undefined() {
-                    crate::closure::closure_set_dynamic_prop(
+                if desc_has_field(descriptor_value, b"value") {
+                    crate::closure::closure_define_dynamic_prop(
                         closure_ptr,
                         &key_rust,
                         f64::from_bits(value_field.bits()),
+                    );
+                } else if current_accessor.is_some() || existing_attrs.is_none() {
+                    crate::closure::closure_define_dynamic_prop(
+                        closure_ptr,
+                        &key_rust,
+                        f64::from_bits(crate::value::TAG_UNDEFINED),
                     );
                 }
             }
@@ -1217,8 +1053,9 @@ pub extern "C" fn js_object_define_property(
                     Some(crate::value::js_is_truthy(f64::from_bits(v.bits())) != 0)
                 }
             };
-            let writable = read_bool(b"writable")
-                .unwrap_or_else(|| existing_attrs.map(|a| a.writable()).unwrap_or(has_accessor));
+            let writable = !has_accessor
+                && read_bool(b"writable")
+                    .unwrap_or_else(|| existing_attrs.map(|a| a.writable()).unwrap_or(false));
             let enumerable = read_bool(b"enumerable")
                 .unwrap_or_else(|| existing_attrs.map(|a| a.enumerable()).unwrap_or(false));
             let configurable = read_bool(b"configurable")

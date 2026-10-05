@@ -9,7 +9,7 @@ use super::*;
 #[derive(Clone, Copy)]
 pub(super) enum DescriptorRoute {
     /// An ordinary object: its keys carry every key's attributes (charter step 3).
-    Keys,
+    Keys(*const ObjectHeader),
     /// A cell with a meta edge: its summary words filter the tables (null = none).
     Meta(*mut ObjectMeta),
     /// Anything else: probe the tables.
@@ -25,7 +25,12 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && crate::typedarray::lookup_typed_array_kind(owner).is_none()
     {
-        return DescriptorRoute::Keys;
+        return DescriptorRoute::Keys(owner as *const ObjectHeader);
+    }
+    if header.obj_type == crate::gc::GC_TYPE_CLOSURE
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+    {
+        return DescriptorRoute::Keys(crate::closure::props::bag_of(owner));
     }
     match super::cell_meta_slot_for_header(owner, header) {
         Some(slot) => DescriptorRoute::Meta(*slot),
@@ -56,8 +61,10 @@ pub(crate) fn may_have_descriptor_entry(owner: usize, key: &str, accessor: bool)
         let answer = match descriptor_route(owner) {
             // Charter step 3: exact for an ordinary object — its keys record
             // both halves of every key's descriptor.
-            DescriptorRoute::Keys => {
-                let owner = owner as *const ObjectHeader;
+            DescriptorRoute::Keys(owner) => {
+                if owner.is_null() {
+                    return false;
+                }
                 return if accessor {
                     super::key_attrs::object_key_is_accessor(owner, key.as_bytes())
                 } else {
