@@ -242,7 +242,7 @@ fn object_hot_for_owner(
                 if std::ptr::eq(cached, hot) {
                     return &*cached;
                 }
-                // GC_STORE_AUDIT(NATIVE_POINTER): RuntimeState storage, not a
+                // GC_STORE_AUDIT(POINTER_FREE): RuntimeState storage, not a
                 // managed heap edge; ObjectMeta's GC descriptors intentionally
                 // visit only prototype, spill, and private brand.
                 (*meta).array_tail_object_hot = hot as *const _ as usize as u64;
