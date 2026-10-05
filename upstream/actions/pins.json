@@ -1,0 +1,131 @@
+{
+  "schema": 1,
+  "policy": "Upstream action sources are shallow sparse reference snapshots at immutable commit SHAs. Perry workflows never call into upstream/. Perry-maintained workflow implementations live under .github/actions/perry/ or directly inline as run steps.",
+  "actions": {
+    "Swatinem/rust-cache": {
+      "path": "upstream/actions/Swatinem/rust-cache",
+      "version": "2.9.2",
+      "sha": "6323deb102c322ba6fcbdcafc7e3dddab59af2b6",
+      "source": "https://github.com/Swatinem/rust-cache",
+      "implementationPath": ".github/actions/perry/Swatinem/rust-cache",
+      "tag": "v2"
+    },
+    "actions/cache": {
+      "path": "upstream/actions/actions/cache",
+      "version": "6",
+      "sha": "55cc8345863c7cc4c66a329aec7e433d2d1c52a9",
+      "source": "https://github.com/actions/cache",
+      "implementationPath": ".github/actions/perry/actions/cache",
+      "tag": "v6"
+    },
+    "actions/checkout": {
+      "path": "upstream/actions/actions/checkout",
+      "version": "7.0.1",
+      "sha": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+      "usage": "Inline git bootstrap; vendored source retained for comparison only.",
+      "source": "https://github.com/actions/checkout",
+      "implementationPath": ".github/actions/perry/actions/checkout",
+      "tag": "v7.0.1"
+    },
+    "actions/configure-pages": {
+      "path": "upstream/actions/actions/configure-pages",
+      "version": "6",
+      "sha": "45bfe0192ca1faeb007ade9deae92b16b8254a0d",
+      "source": "https://github.com/actions/configure-pages",
+      "implementationPath": ".github/actions/perry/actions/configure-pages",
+      "tag": "v6"
+    },
+    "actions/deploy-pages": {
+      "path": "upstream/actions/actions/deploy-pages",
+      "version": "5",
+      "sha": "368f82528645a54fb793d4d04e342629a3f51346",
+      "source": "https://github.com/actions/deploy-pages",
+      "implementationPath": ".github/actions/perry/actions/deploy-pages",
+      "tag": "v5"
+    },
+    "actions/download-artifact": {
+      "path": "upstream/actions/actions/download-artifact",
+      "version": "8",
+      "sha": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+      "source": "https://github.com/actions/download-artifact",
+      "implementationPath": ".github/actions/perry/actions/download-artifact",
+      "tag": "v8"
+    },
+    "actions/setup-node": {
+      "path": "upstream/actions/actions/setup-node",
+      "version": "7",
+      "sha": "820762786026740c76f36085b0efc47a31fe5020",
+      "source": "https://github.com/actions/setup-node",
+      "implementationPath": ".github/actions/perry/actions/setup-node",
+      "tag": "v7"
+    },
+    "actions/upload-artifact": {
+      "path": "upstream/actions/actions/upload-artifact",
+      "version": "7",
+      "sha": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      "source": "https://github.com/actions/upload-artifact",
+      "implementationPath": ".github/actions/perry/actions/upload-artifact",
+      "tag": "v7"
+    },
+    "actions/upload-pages-artifact": {
+      "path": "upstream/actions/actions/upload-pages-artifact",
+      "version": "5",
+      "sha": "fc324d3547104276b827a68afc52ff2a11cc49c9",
+      "patches": [
+        "The nested upload-artifact reference resolves to Perry's pinned local v7 snapshot."
+      ],
+      "source": "https://github.com/actions/upload-pages-artifact",
+      "implementationPath": ".github/actions/perry/actions/upload-pages-artifact",
+      "tag": "v5"
+    },
+    "astral-sh/setup-uv": {
+      "path": "upstream/actions/astral-sh/setup-uv",
+      "version": "10.2.0",
+      "sha": "c18668ad3cf93ea998bef934396af7bb5c839dc7",
+      "source": "https://github.com/astral-sh/setup-uv",
+      "implementationPath": ".github/actions/perry/astral-sh/setup-uv",
+      "tag": "v10.2.0"
+    },
+    "ilammy/msvc-dev-cmd": {
+      "path": "upstream/actions/ilammy/msvc-dev-cmd",
+      "version": "1",
+      "sha": "0b201ec74fa43914dc39ae48a89fd1d8cb592756",
+      "source": "https://github.com/ilammy/msvc-dev-cmd",
+      "implementationPath": ".github/actions/perry/ilammy/msvc-dev-cmd",
+      "tag": "v1"
+    },
+    "jdx/mr-boxington-action": {
+      "path": "upstream/actions/jdx/mr-boxington-action",
+      "version": "1.7.1",
+      "sha": "d0825fbaf3cc36ca2609aa38e71046265a1f1e37",
+      "usage": "Wrapped by .github/actions/perry-mbx-cache with Perry release-cache defaults.",
+      "source": "https://github.com/jdx/mr-boxington-action",
+      "implementationPath": ".github/actions/perry/jdx/mr-boxington-action",
+      "tag": "v1.7.1"
+    },
+    "mozilla-actions/sccache-action": {
+      "path": "upstream/actions/mozilla-actions/sccache-action",
+      "version": "0.0.11",
+      "sha": "fc920bf0ec8de6ee65d409111f7ec508035751ba",
+      "source": "https://github.com/mozilla-actions/sccache-action",
+      "implementationPath": ".github/actions/perry/mozilla-actions/sccache-action",
+      "tag": "v0.0.11"
+    },
+    "oven-sh/setup-bun": {
+      "path": "upstream/actions/oven-sh/setup-bun",
+      "version": "2",
+      "sha": "0c5077e51419868618aeaa5fe8019c62421857d6",
+      "source": "https://github.com/oven-sh/setup-bun",
+      "implementationPath": ".github/actions/perry/oven-sh/setup-bun",
+      "tag": "v2"
+    },
+    "taiki-e/install-action": {
+      "path": "upstream/actions/taiki-e/install-action",
+      "version": "2.87.18",
+      "sha": "dfae9bf3d6f6c6f20ef4ebb3486c01a51341ff12",
+      "source": "https://github.com/taiki-e/install-action",
+      "implementationPath": ".github/actions/perry/taiki-e/install-action",
+      "tag": "v2.87.18"
+    }
+  }
+}

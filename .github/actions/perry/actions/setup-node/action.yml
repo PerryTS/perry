@@ -1,0 +1,47 @@
+name: 'Setup Node.js environment'
+description: 'Setup a Node.js environment by adding problem matchers and optionally downloading and adding it to the PATH.'
+author: 'GitHub'
+inputs:
+  node-version:
+    description: 'Version Spec of the version to use. Examples: 12.x, 10.15.1, >=10.15.0.'
+  node-version-file:
+    description: 'File containing the version Spec of the version to use.  Examples: package.json, .nvmrc, .node-version, .tool-versions.'
+  architecture:
+    description: 'Target architecture for Node to use. Examples: x86, x64. Will use system architecture by default.'
+  check-latest:
+    description: 'Set this option if you want the action to check for the latest available version that satisfies the version spec.'
+    default: false
+  registry-url:
+    description: 'Optional registry to set up for auth. Will set the registry in a project level .npmrc and .yarnrc file, and set up auth to read in from env.NODE_AUTH_TOKEN.'
+  scope:
+    description: 'Optional scope for authenticating against scoped registries. Will fall back to the repository owner when using the GitHub Packages registry (https://npm.pkg.github.com/).'
+  token:
+    description: Used to pull node distributions from node-versions. Since there's a default, this is typically not supplied by the user. When running this action on github.com, the default value is sufficient. When running on GHES, you can pass a personal access token for github.com if you are experiencing rate limiting.
+    default: ${{ github.server_url == 'https://github.com' && github.token || '' }}
+  cache:
+    description: 'Used to specify a package manager for caching in the default directory. Supported values: npm, yarn, pnpm.'
+  package-manager-cache:
+    description: 'Set to false to disable automatic caching. By default, caching is enabled when either devEngines.packageManager or the top-level packageManager field in package.json specifies npm as the package manager.'
+    default: true
+  cache-dependency-path:
+    description: 'Used to specify the path to a dependency file: package-lock.json, yarn.lock, etc. Supports wildcards or a list of file names for caching multiple dependencies.'
+  mirror:
+    description: 'Used to specify an alternative mirror to download Node.js binaries from'
+  mirror-token:
+    description: 'The token used as Authorization header when fetching from the mirror'
+# TODO: add input to control forcing to pull from cloud or dist.
+#       escape valve for someone having issues or needing the absolute latest which isn't cached yet
+outputs:
+  cache-hit:
+    description: 'A boolean value to indicate if a cache was hit.'
+  cache-primary-key:
+    description: 'The key used to restore and save the cache.'
+  cache-matched-key:
+    description: 'The key of the cache that was restored. Empty when no cache is found.'
+  node-version:
+    description: 'The installed node version.'
+runs:
+  using: 'node24'
+  main: 'dist/setup/index.js'
+  post: 'dist/cache-save/index.js'
+  post-if: success()

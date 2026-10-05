@@ -1,0 +1,5 @@
+# Immutable upstream references and locally invoked action distributions keep
+# their published bytes; upstream bundles may contain intentional trailing
+# whitespace, so diff --check must not rewrite or reject those generated files.
+upstream/** whitespace=-trailing-space,-space-before-tab
+.github/actions/perry/** whitespace=-trailing-space,-space-before-tab

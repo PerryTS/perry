@@ -1,0 +1,22 @@
+name: Enable Developer Command Prompt
+description: Configure Microsoft Visual C++ command line
+inputs:
+  arch:
+    description: Target architecture
+    default: x64
+  sdk:
+    description: Windows SDK number to build for
+  spectre:
+    description: Enable Specre mitigations
+  toolset:
+    description: VC++ compiler toolset version
+  uwp:
+    description: Build for Universal Windows Platform
+  vsversion:
+    description: The Visual Studio version to use. This can be the version number (e.g. 16.0 for 2019) or the year (e.g. "2019").
+runs:
+  using: node20
+  main: index.js
+branding:
+  icon: terminal
+  color: purple

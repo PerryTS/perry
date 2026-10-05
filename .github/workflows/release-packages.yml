@@ -97,10 +97,28 @@ jobs:
       # label (#confirmed republish version-drift finding).
       checkout-ref: ${{ steps.resolve.outputs.checkout-ref }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0   # republish mode needs `git show <tag>:Cargo.toml` below
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "0"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Resolve run mode + tag
         id: resolve
         env:
@@ -505,11 +523,34 @@ jobs:
     timeout-minutes: 330
     continue-on-error: true
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal --target x86_64-apple-darwin
       - uses: ./.github/actions/setup-llvm22
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      # Keep the proven partial-failure cache for this exceptionally slow
+      # Intel leg. mbx's object bundle is saved only after a successful job.
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           # MUST match the build job's key for this target, or this warms a
           # cache nothing reads.
@@ -544,6 +585,10 @@ jobs:
       # binaries that did build — partial publish beats no publish.
       fail-fast: false
       matrix:
+      - uses: ./.github/actions/perry-mbx-cache
+        with:
+          cache-generation: perry-release-x86_64-apple-darwin
+          save-on-workflow-dispatch: true
         include:
           - os: macos-14
             target: aarch64-apple-darwin
@@ -606,10 +651,28 @@ jobs:
       # version (15.x) than being linked (14.x)` across every stdlib .o.
       MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ needs.preflight.outputs.checkout-ref }}
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal --target ${{ matrix.target }}
       # The old-sysroot image carries LLVM 22 under /usr/lib/llvm-22.
@@ -618,12 +681,9 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
         if: matrix.old_glibc_image == '' && matrix.musl_image == ''
 
-      # Cache cargo registry + target/ per (matrix.target, Cargo.lock).
-      # First run on a target is still a cold build, but every subsequent
-      # release-tag on the same Cargo.lock reuses the compiled crates —
-      # webkit6/gstreamer/swc/etc. dominate cold cargo and recompile takes
-      # 10-15 min per matrix entry. Cache hit drops that to ~30s.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      # Preserve the current third-party dependency cache during the mbx
+      # rollout. Workspace fingerprints are evicted below for #4856 safety.
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "release-${{ matrix.target }}"
           workspaces: |
@@ -633,16 +693,15 @@ jobs:
             . -> target-musl
             . -> target-musl-abort
 
-      # #4856 — evict workspace-crate fingerprints from the restored cache.
-      # rust-cache's own workspace cleanup misses cross-target dirs, so a
-      # restored target/ can make cargo treat perry-runtime & co. as
-      # up-to-date and silently reuse a staticlib built from older sources
-      # (v0.5.1150 shipped Apple cross runtimes missing
-      # perry_macos_bundle_chdir that way). Deleting the .fingerprint
-      # entries forces every workspace crate to rebuild from the checkout
-      # while keeping the expensive external-dependency precompiles cached.
-      # Note `cargo clean -p` is NOT equivalent: it only covers the host
-      # layout, not target/<triple>/ dirs (verified on cargo 1.8x).
+      # Content-addressed object caches are separated by target so concurrent
+      # matrix legs do not race to save the same immutable cache entry.
+      - uses: ./.github/actions/perry-mbx-cache
+        with:
+          cache-generation: perry-release-${{ matrix.target }}
+          save-on-workflow-dispatch: true
+
+      # Cached workspace fingerprints once allowed stale runtime archives to
+      # ship (#4856). Keep the established eviction while using mbx objects.
       - name: Evict workspace crates from restored cache (#4856)
         shell: bash
         run: |
@@ -1271,7 +1330,7 @@ jobs:
       # artifact instead.
       - name: Upload packaged archive (Unix, for publish-assets job)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: release-archive-${{ matrix.artifact }}
           # update.json only exists when a tag was resolved (not on stage-only
@@ -1283,7 +1342,7 @@ jobs:
 
       - name: Upload packaged archive (Windows, for publish-assets job)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: release-archive-${{ matrix.artifact }}
           path: |
@@ -1293,14 +1352,14 @@ jobs:
 
       - name: Upload build artifact (Unix, for deb + npm-publish jobs)
         if: runner.os != 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: ${{ matrix.artifact }}
           path: staging/
 
       - name: Upload build artifact (Windows, for npm-publish job)
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: ${{ matrix.artifact }}
           path: staging/
@@ -1392,29 +1451,44 @@ jobs:
       # users on macOS 13.
       MACOSX_DEPLOYMENT_TARGET: "13.0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          ref: ${{ needs.preflight.outputs.checkout-ref }}
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain + cross target
         run: rustup toolchain install nightly-2026-08-20 --profile minimal --target ${{ matrix.target }}
       - uses: ./.github/actions/setup-llvm22
 
-      # Same cache shape as `build:` so the cross legs share crate compiles
-      # across release cycles. Keyed on (target, Cargo.lock) — first run on a
-      # new target is cold, but every subsequent release-tag reuses the
-      # SWC/llvm-sys/webkit etc. precompile from the prior cycle.
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "release-cross-${{ matrix.target }}"
 
-      # #4856 — evict workspace-crate fingerprints from the restored cache
-      # so perry-runtime/stdlib/UI always rebuild from the checkout. The
-      # v0.5.1150 Apple cross bundles shipped a stale pre-#4833
-      # libperry_runtime.a (missing perry_macos_bundle_chdir) because the
-      # restored cache let cargo skip the rebuild. Mirrors the eviction
-      # step in `build:` — see the comment there for why `cargo clean -p`
-      # doesn't work (host layout only, misses target/<triple>/).
+      # Keep cross-target caches isolated from native release builds.
+      - uses: ./.github/actions/perry-mbx-cache
+        with:
+          cache-generation: perry-release-cross-${{ matrix.target }}
+          save-on-workflow-dispatch: true
+
+      # Keep workspace crates fresh while the legacy Cargo target cache is
+      # still enabled; mbx's content-addressed objects remain reusable.
       - name: Evict workspace crates from restored cache (#4856)
         shell: bash
         run: |
@@ -1643,7 +1717,7 @@ jobs:
       # dispatches onto the PREVIOUS release. The artifact also lets a
       # maintainer pull the bundle off a stage-only run directly.
       - name: Upload cross build artifact (for publish-assets job + inspection)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: perry-cross-${{ matrix.target }}
           path: |
@@ -1671,8 +1745,28 @@ jobs:
       needs.npm-publish.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Create tag + GitHub Release (notes from changelog.d)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -1856,7 +1950,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download packaged host archives
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           pattern: release-archive-*
           merge-multiple: true
@@ -1866,7 +1960,7 @@ jobs:
         # continue-on-error: a fully-red build-cross (legacy modes) must not
         # stop the host archives from shipping.
         continue-on-error: true
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           pattern: perry-cross-*
           merge-multiple: true
@@ -2041,7 +2135,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download build artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: ${{ matrix.artifact }}
           path: staging/
@@ -2214,7 +2308,7 @@ jobs:
           done
 
       - name: Upload .deb artifacts (for apt-repo job)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: deb-${{ matrix.arch }}
           path: "*.deb"
@@ -2237,7 +2331,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
 
       - name: Download .deb packages
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           pattern: deb-*
           merge-multiple: true
@@ -2434,27 +2528,29 @@ jobs:
       DIST_TAG: ${{ inputs.dist_tag || 'latest' }}
       SOCKET_SCAN: ${{ inputs.socket_scan || false }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          # republish mode pins this to the tag's exact commit (see
-          # preflight's checkout-ref) — without it, npm publishes whatever
-          # Cargo.toml reads on the dispatch ref, which can have drifted past
-          # the tag being republished.
-          ref: ${{ needs.preflight.outputs.checkout-ref }}
-
-      # DELIBERATE EXEMPTION from the repo-wide .node-version pin: this Node is a
-      # *publishing* toolchain (npm registry auth), not a test oracle — it never
-      # runs a parity diff, so the gap suite's Node version is irrelevant here.
-      # Pinned to a MAJOR literal on purpose, not `node-version-file`: an oracle
-      # bump made for gap-suite reasons must never be able to move the runtime
-      # that publishes releases. Registered in
-      # scripts/check_node_version_consistency.py, which keeps this major in
-      # step with .node-version's major.
-      #
-      # Was "20" until the Node-26 sweep. Node 20 reached end-of-life on
-      # 2026-04-30, and this is the repo's most privileged job (`id-token: write`,
-      # OIDC-publishes every platform package) — an EOL runtime is a defect there.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ needs.preflight.outputs.checkout-ref }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           node-version: "26"
           registry-url: "https://registry.npmjs.org"
@@ -2468,7 +2564,7 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Download all build artifacts
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           path: release-artifacts/
 
@@ -2690,7 +2786,7 @@ jobs:
 
       - name: Retain exact npm publication proofs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: npm-publish-package-proofs
           path: npm-publish-package-proofs.tar

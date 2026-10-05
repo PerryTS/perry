@@ -105,10 +105,28 @@ jobs:
       plan: ${{ steps.plan.outputs.plan }}
       tier: ${{ steps.plan.outputs.tier }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Self-test the planner
         run: |
           python3 scripts/ci_plan.py --self-test
@@ -175,18 +193,28 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      # Changeset gate (was its own job): PRs touching crates/ must ship
-      # changelog.d/<PR>-<slug>.md (see changelog.d/README.md; fragments fold
-      # into GitHub Release notes at tag time via scripts/cut_release_notes.sh
-      # -- CHANGELOG.md is frozen). The `skip-changelog` label skips it (the
-      # `labeled` trigger refires the workflow). Lives in `lint` now because
-      # `pr-gate` is the single required context, so a red step here is as
-      # blocking as a red job was -- and one fewer job is one fewer runner
-      # slot on a 20-slot org.
-      # Runs on every tier, not just PRs, so the gate's own logic is exercised
-      # even when the enforcement step below is inapplicable.
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Changeset gate self-test
         if: ${{ !cancelled() }}
         run: ./scripts/check_changeset_fragment.sh --self-test
@@ -204,7 +232,7 @@ jobs:
         run: ./scripts/check_changeset_fragment.sh "${{ github.repository }}" "${{ github.event.pull_request.number }}"
 
       - name: Setup Node.js for benchmark harness tests
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           # Kept in lockstep with benchmark.yml's peer-comparison Node via the
           # shared .node-version pin — these harness tests exercise the same
@@ -238,7 +266,7 @@ jobs:
         run: rustup toolchain install nightly-2026-08-20 --profile minimal --component rustfmt --component clippy
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           # PRs read from cache; only main writes new entries.
@@ -263,7 +291,7 @@ jobs:
 
       - name: Restore cargo-xwin MSVC sysroot
         if: ${{ !cancelled() }}
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ~/.cache/cargo-xwin
           key: cargo-xwin-${{ runner.os }}-0.23.0
@@ -280,7 +308,7 @@ jobs:
 
       - name: Save cargo-xwin MSVC sysroot (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ~/.cache/cargo-xwin
           key: cargo-xwin-${{ runner.os }}-0.23.0
@@ -1076,13 +1104,33 @@ jobs:
     # a perf budget — margin costs nothing on healthy runs.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal --component clippy
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1174,24 +1222,44 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
 
       - name: Restore sccache objects
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1220,7 +1288,7 @@ jobs:
       # branched from.
       - name: Save sccache objects (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -1286,14 +1354,34 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
 
       # Persist the sccache disk cache across runs. The github.job +
       # github.run_id key makes every run (including PRs) save its own fresh
@@ -1302,14 +1390,14 @@ jobs:
       # cache from ANY of them. The object cache therefore warms continuously
       # and cross-pollinates instead of starting cold each run.
       - name: Restore sccache objects
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -1338,7 +1426,7 @@ jobs:
       # step) requires every literal `node-version:` to be a registered
       # exemption, and this is not one.
       - name: Setup Node.js for the node-backed integration tests
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           node-version-file: .node-version
 
@@ -1550,7 +1638,7 @@ jobs:
       # branched from.
       - name: Save sccache objects (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -1587,27 +1675,47 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
 
       # Every shard starts from the same most-recent compiler-object cache.
       # Shards deliberately do not save eight near-duplicate 12G archives:
       # cargo-test remains the single main-line writer for this shared prefix.
       - name: Restore sccache objects
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}-${{ matrix.shard }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: false
@@ -1624,7 +1732,7 @@ jobs:
       # rather than stay fixed. From the FILE, not a literal — see
       # check_node_version_consistency.py.
       - name: Setup Node.js for the node-backed integration tests
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           node-version-file: .node-version
 
@@ -1735,13 +1843,28 @@ jobs:
     steps:
       # Nothing here pushes back to the repo, and the job compiles third-party
       # crates (build scripts run), so don't leave a git credential on disk.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
-      # Cheap gate: no toolchain, no cargo, no cache restore. Rust setup below
-      # is skipped when the diff names no suite and there are no exclusions to
-      # validate. The whole job is absent on docs-only PRs via ci_plan.py.
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Compute e2e suite scope
         id: scope
         env:
@@ -1783,7 +1906,7 @@ jobs:
 
       - name: Setup pinned Node.js for scoped native oracles
         if: steps.scope.outputs.rust_work == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           node-version-file: .node-version
 
@@ -1805,18 +1928,18 @@ jobs:
 
       - name: Install sccache
         if: steps.scope.outputs.rust_work == 'true'
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
 
       - name: Restore sccache objects
         if: steps.scope.outputs.rust_work == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         if: steps.scope.outputs.rust_work == 'true'
         with:
           shared-key: "${{ runner.os }}-perry"
@@ -1831,7 +1954,7 @@ jobs:
 
       - name: Install the pinned integration-test Node oracle
         if: steps.scope.outputs.suites != ''
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           node-version-file: .node-version
 
@@ -1944,7 +2067,7 @@ jobs:
       # branched from.
       - name: Save sccache objects (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -1978,13 +2101,28 @@ jobs:
     # timeout on a required-path job is a deterministic PR blocker).
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          # This job compiles PR-controlled build scripts / proc macros;
-          # don't leave the workflow token in .git/config for them to read
-          # (zizmor "artipacked", flagged by review on #6610).
-          persist-credentials: false
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: GC structural audits (Windows)
         shell: bash
         env:
@@ -2012,11 +2150,11 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           node-version-file: .node-version
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -2109,10 +2247,28 @@ jobs:
     runs-on: windows-11-arm
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
@@ -2122,11 +2278,11 @@ jobs:
         # PowerShell environment does not include the SDK's ARM64 library
         # directories. Populate LIB / INCLUDE / PATH so the final PE link can
         # resolve system import libraries such as user32.lib.
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        uses: ./.github/actions/perry/ilammy/msvc-dev-cmd # v1
         with:
           arch: amd64_arm64
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-${{ runner.arch }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -2184,11 +2340,32 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -2218,7 +2395,7 @@ jobs:
             -p perry -p perry-runtime -p perry-stdlib \
             -p perry-runtime-static -p perry-stdlib-static
       - name: Upload shared GC matrix build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gc-repsel-release-build
           path: |
@@ -2246,13 +2423,32 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.plan).gc_stress.shards }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-      # Per-shard auto-optimize archives are compile-environment-specific and
-      # stay local; the shared artifact supplies the base release build.
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: false
@@ -2275,13 +2471,13 @@ jobs:
           sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
           sudo apt-get install -y clang
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           # Node is the byte-exact oracle; the script refuses a version that
           # differs from the repository's single source of truth.
           node-version-file: .node-version
       - name: Download shared GC matrix build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: gc-repsel-release-build
           path: target/release
@@ -2308,7 +2504,7 @@ jobs:
               --json "gc-repsel-matrix-$SHARD.json"
       - name: Upload shard report and interruption progress
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gc-repsel-matrix-shard-${{ matrix.shard }}
           path: gc-repsel-matrix-${{ matrix.shard }}.json*
@@ -2323,9 +2519,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Download GC matrix shard evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           pattern: gc-repsel-matrix-shard-*
           merge-multiple: true
@@ -2348,7 +2565,7 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: false
@@ -2371,7 +2588,7 @@ jobs:
           sudo apt-get update || echo "::warning::apt-get update reported errors; the install below is the real gate"
           sudo apt-get install -y clang
       - name: Download shared GC matrix build
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: gc-repsel-release-build
           path: target/release
@@ -2394,7 +2611,7 @@ jobs:
 
       - name: Upload merged matrix report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gc-repsel-matrix
           path: gc-repsel-matrix.json
@@ -2434,14 +2651,34 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
 
       # Persist the sccache disk cache across runs. The github.job +
       # github.run_id key makes every run (including PRs) save its own fresh
@@ -2450,14 +2687,14 @@ jobs:
       # cache from ANY of them. The object cache therefore warms continuously
       # and cross-pollinates instead of starting cold each run.
       - name: Restore sccache objects
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -2710,7 +2947,7 @@ jobs:
 
       - name: Upload compiler-output artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: compiler-output-regression
           path: target/compiler-output-regression/
@@ -2724,7 +2961,7 @@ jobs:
       # branched from.
       - name: Save sccache objects (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -2787,24 +3024,44 @@ jobs:
       # because it rebuilds runtime libs the census never links.
       PERRY_NO_AUTO_OPTIMIZE: "1"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
 
       - name: Restore sccache objects
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -2916,7 +3173,7 @@ jobs:
 
       - name: Upload census reports
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: repsel-census
           path: target/repsel-census/
@@ -2930,7 +3187,7 @@ jobs:
       # branched from.
       - name: Save sccache objects (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
@@ -2959,24 +3216,44 @@ jobs:
       SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
 
       - name: Restore sccache objects
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-native-abi-evidence-${{ github.run_id }}
           restore-keys: |
             sccache-${{ runner.os }}-perry-
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -3010,7 +3287,7 @@ jobs:
 
       - name: Upload native ABI evidence packet
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: native-abi-evidence-packet
           path: target/native-abi-evidence-packet/
@@ -3024,7 +3301,7 @@ jobs:
       # branched from.
       - name: Save sccache objects (main-line runs only)
         if: always() && github.event_name != 'pull_request'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/save # v6
         with:
           path: ${{ github.workspace }}/.sccache
           key: sccache-${{ runner.os }}-perry-native-abi-evidence-${{ github.run_id }}
@@ -3047,13 +3324,33 @@ jobs:
     if: fromJSON(needs.plan.outputs.plan).jobs.gap_suite && fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -3067,7 +3364,7 @@ jobs:
       # (PERRY_BIN / PERRY_RUNTIME_DIR below) -- not the rest of target/release,
       # which is Rust-internal build state the downloading shard doesn't need.
       - name: Upload the shared fast-mode build
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gap-suite-fast-build
           path: |
@@ -3137,19 +3434,39 @@ jobs:
     # the #6456 reshard lands.
     timeout-minutes: 110
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -3180,7 +3497,7 @@ jobs:
       # between them is a real auto-optimize-specific finding, not noise.
       - name: Download the shared fast-mode build
         if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: gap-suite-fast-build
           path: target/release
@@ -3215,14 +3532,14 @@ jobs:
       # gap_snapshot.json -- see docs/src/testing/ci-tiers.md "Re-baselining".
       - name: Upload re-baselined gap snapshot
         if: fromJSON(needs.plan.outputs.plan).gap.update_snapshot
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gap-snapshot-update
           path: test-parity/gap_snapshot.json
 
       - name: Upload gap report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gap-suite-report-${{ fromJSON(needs.plan.outputs.plan).gap.mode }}-shard-${{ matrix.shard }}
           path: test-parity/reports/
@@ -3271,20 +3588,39 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - uses: ./.github/actions/setup-llvm22
       - name: Download the shared fast-mode build
         if: fromJSON(needs.plan.outputs.plan).gap.mode == 'fast'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           name: gap-suite-fast-build
           path: target/release
       - name: Install Rust toolchain
         if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast'
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         if: fromJSON(needs.plan.outputs.plan).gap.mode != 'fast'
         with:
           shared-key: "${{ runner.os }}-perry"
@@ -3305,7 +3641,7 @@ jobs:
           scripts/gc_call_effects/regen.sh linux-x86_64 --check
       - name: Upload the regenerated table
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gc-effects-linux-x86_64
           path: gc-effects/
@@ -3329,13 +3665,32 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-gc-effects-${{ matrix.target }}"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -3354,7 +3709,7 @@ jobs:
           rustup target add x86_64-pc-windows-msvc
       - name: Restore cargo-xwin MSVC sysroot
         if: matrix.target == 'windows-x86_64'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        uses: ./.github/actions/perry/actions/cache/restore # v6
         with:
           path: ~/.cache/cargo-xwin
           key: cargo-xwin-${{ runner.os }}-0.23.0
@@ -3367,7 +3722,7 @@ jobs:
           scripts/gc_call_effects/regen.sh "${{ matrix.target }}" --check
       - name: Upload the regenerated table
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gc-effects-${{ matrix.target }}
           path: gc-effects/
@@ -3395,16 +3750,37 @@ jobs:
     # lever; this cap only keeps a slow-but-healthy shard from being cancelled.
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -3429,7 +3805,7 @@ jobs:
           --known test-parity/known_failures.json
       - name: Upload shard report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: parity-shard-${{ matrix.shard }}
           path: |
@@ -3444,7 +3820,7 @@ jobs:
       # error message rather than inferring from the test family.
       - name: Upload compile-error logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: parity-compile-errors-${{ runner.os }}-shard-${{ matrix.shard }}
           path: test-parity/output/*.compile_error.log
@@ -3473,9 +3849,30 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Download shard reports
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: ./.github/actions/perry/actions/download-artifact # v8
         with:
           pattern: parity-shard-*
           path: parity-shards
@@ -3518,7 +3915,7 @@ jobs:
           cat test-parity/reports/parity_matrix_latest.md >> "$GITHUB_STEP_SUMMARY"
       - name: Upload merged parity report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: parity-report
           path: |
@@ -3568,13 +3965,33 @@ jobs:
     # `run_extended_tests=true` runs this job on demand.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -3856,7 +4273,7 @@ jobs:
 
       - name: Upload compile-smoke error logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: compile-smoke-error-logs-${{ matrix.shard }}
           path: /tmp/perry_smoke_logs/*.compile_error.log
@@ -3919,7 +4336,7 @@ jobs:
 
       - name: Upload GC evidence artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gc-evidence-${{ runner.os }}
           path: ${{ runner.temp }}/gc-evidence
@@ -3968,13 +4385,33 @@ jobs:
     # (cargo-test/lint/api-docs-drift/compiler-output-regression) still gate.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -4030,19 +4467,39 @@ jobs:
           --health-timeout=3s
           --health-retries=20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -4111,19 +4568,39 @@ jobs:
     # Aspirational smoke (informational) — see harmonyos-smoke. Does not block publish.
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -4141,7 +4618,7 @@ jobs:
 
       - name: Upload Ink fixture logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: ink-link-smoke-logs
           path: |
@@ -4165,19 +4642,39 @@ jobs:
     if: fromJSON(needs.plan.outputs.plan).jobs.effect_basic_smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           # Single source of truth: .node-version at the repo root. Node is the
           # gap/parity oracle (we byte-diff against it), so the version is a
@@ -4195,7 +4692,7 @@ jobs:
 
       - name: Upload Effect fixture logs
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: effect-basic-smoke-logs
           path: |
@@ -4317,16 +4814,28 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
-      # macos-14 ships with ~14 GB free disk after the preinstalled Xcode +
-      # iOS/tvOS/watchOS simulator runtime images. Several `cargo build
-      # --release` jobs in this workflow consistently OOM'd at the cache
-      # restore step (`No space left on device` from the runner's own
-      # diagnostic writer, before cargo even started). Wiping the simulator
-      # runtime IMAGES — not the SDKs — reclaims ~15-25 GB without
-      # affecting cross-compile to `aarch64-apple-ios-sim` (that only needs
-      # the SDK, which lives inside the active Xcode app).
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Free up disk space (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -4346,7 +4855,7 @@ jobs:
         # shell session has no clue where, and perry's LNK1181 fatal
         # errors looking for Windows SDK libs.
         if: matrix.os == 'windows-2022'
-        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1
+        uses: ./.github/actions/perry/ilammy/msvc-dev-cmd # v1
 
       - name: Install GTK4 + GStreamer + Xvfb + PulseAudio headers (Linux)
         if: matrix.os == 'ubuntu-24.04'
@@ -4436,7 +4945,7 @@ jobs:
         if: matrix.os == 'macos-14' || matrix.os == 'ubuntu-24.04'
         run: rustup target add aarch64-linux-android
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -4473,7 +4982,7 @@ jobs:
       # the imports are unresolved and the link fails on `_fastify` /
       # `_nanoid` / `_uuidv4` (every full run since 09-20).
       - name: Setup Node.js for the doc examples' npm packages
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           node-version-file: .node-version
 
@@ -4502,14 +5011,14 @@ jobs:
 
       - name: Upload doc-tests report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: doc-tests-report-${{ matrix.os }}
           path: docs/examples/_reports/latest.json
 
       - name: Upload gallery screenshot + diff artifacts
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gallery-screenshots-${{ matrix.os }}
           path: |
@@ -4527,13 +5036,33 @@ jobs:
     if: fromJSON(needs.plan.outputs.plan).jobs.binary_size
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -4559,7 +5088,7 @@ jobs:
           cat /tmp/sizes.md
 
       - name: Upload size report
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: binary-sizes
           path: /tmp/sizes.md

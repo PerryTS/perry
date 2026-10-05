@@ -1,0 +1,96 @@
+name: mr boxington
+description: Set up mbx with local storage, GitHub Actions cache, or a remote cache server or bucket
+author: jdx
+
+branding:
+  icon: archive
+  color: orange
+
+inputs:
+  backend:
+    description: Cache backend, either "local", "github", or "remote" ("server" is an alias for "remote")
+    default: github
+  version:
+    description: mbx release version to install, such as "0.4.0", or "latest"; when omitted, use mbx from PATH or install latest
+    required: false
+  github-token:
+    description: GitHub token used to resolve mbx release metadata
+    default: ${{ github.token }}
+  cache-key:
+    description: Complete primary key for the GitHub cache backend
+    required: false
+  cache-key-suffix:
+    description: Safe suffix appended to the generated primary key; cannot be used with cache-key
+    required: false
+  restore-keys:
+    description: Newline-separated restore key prefixes for the GitHub cache backend
+    required: false
+  cache-generation:
+    description: Value included in generated GitHub cache keys; change it to start fresh
+    default: v1
+  github-cache-mode:
+    description: GitHub cache payload, either the warm Cargo "target" tree or portable mbx "objects"
+    default: target
+  isolate-objects-cache:
+    description: Use a private RUNNER_TEMP mbx store and bundle for GitHub objects caching; intended for disposable hosted runners
+    default: "false"
+  save-on-workflow-dispatch:
+    description: Save the GitHub cache after a successful workflow_dispatch run; enable only in trusted workflows
+    default: "false"
+  save-on-pull-request:
+    description: Save the GitHub cache after a successful same-repository pull_request run, scoped to that pull request; fork pull requests never save
+    default: "false"
+  save-on-protected-branch:
+    description: Save the GitHub cache after a successful push to a protected non-default branch
+    default: "false"
+  toolchain:
+    description: Rust toolchain the build names on its own command line, such as "1.91"; the generated cache key follows it instead of the default rustc
+    required: false
+  working-directory:
+    description: Cargo workspace directory, relative to the job's working directory; the "target" payload caches its target tree and prunes it against that workspace
+    default: .
+  cache-links:
+    description: Cache native links; "auto" enables this on Linux
+    default: auto
+  remote-url:
+    description: Remote cache URL for the remote backend, either a cache server or an s3:// bucket; when omitted, MBX_REMOTE_URL from an earlier step is kept
+    required: false
+  server-url:
+    description: Alias for remote-url
+    required: false
+  namespace:
+    description: Cache namespace for the remote backend; when omitted, MBX_REMOTE_NAMESPACE from an earlier step is kept
+    required: false
+  token:
+    description: Bearer token for a remote cache server
+    required: false
+  token-file:
+    description: File containing a bearer token for a remote cache server
+    required: false
+  oidc-audience:
+    description: OIDC audience for a remote cache server; the job needs id-token write permission
+    required: false
+  remote-mode:
+    description: Requested remote mode (read-write, read-only, or write-only); when omitted, MBX_REMOTE_MODE from an earlier step is kept, and mbx defaults to read-write
+    required: false
+  server-mode:
+    description: Alias for remote-mode
+    required: false
+
+outputs:
+  cache-hit:
+    description: Whether the exact GitHub cache key was restored
+  cache-primary-key:
+    description: Primary GitHub cache key used by the action
+  cache-save-eligible:
+    description: Whether the GitHub backend may attempt a save after a successful job; an exact cache hit or an empty payload still skips it
+  cache-save-reason:
+    description: Why the GitHub backend may or may not save, such as "fork pull request"
+  mbx-version:
+    description: Installed mbx version
+
+runs:
+  using: node24
+  main: dist/index.js
+  post: dist/index.js
+  post-if: success()

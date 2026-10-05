@@ -189,10 +189,28 @@ jobs:
       # avoids a `fetch-depth: 0` clone of a large history.
       pull-requests: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
       - name: Decide whether this change can affect the moving collector
         id: relevance
         env:
@@ -227,7 +245,7 @@ jobs:
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         if: steps.relevance.outputs.run == 'true'
         with:
           # Same key as `gc-stress`, which builds the identical package set, so
@@ -244,7 +262,7 @@ jobs:
 
       - name: Setup Node oracle
         if: steps.relevance.outputs.run == 'true'
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: ./.github/actions/perry/actions/setup-node # v7
         with:
           # Single source of truth: .node-version. Node is a correctness input,
           # not a peer benchmark — every witness's stdout is byte-diffed against
@@ -415,7 +433,7 @@ jobs:
 
       - name: Upload the witness report
         if: always() && steps.relevance.outputs.run == 'true'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
         with:
           name: gc-moving-witnesses-${{ github.sha }}
           path: gc-moving-witnesses.json

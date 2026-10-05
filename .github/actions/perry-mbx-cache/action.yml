@@ -1,0 +1,20 @@
+name: Perry Mr Boxington cache
+description: Configure Perry's pinned mbx version and shared release object cache
+inputs:
+  cache-generation:
+    description: Cache generation; bump to invalidate Perry's cache series
+    required: true
+  save-on-workflow-dispatch:
+    description: Allow trusted manual workflow runs to save cache entries
+    required: false
+    default: "false"
+runs:
+  using: composite
+  steps:
+    - name: Configure Mr Boxington
+      uses: ./.github/actions/perry/jdx/mr-boxington-action
+      with:
+        version: "1.22.0"
+        github-cache-mode: objects
+        cache-generation: ${{ inputs.cache-generation }}
+        save-on-workflow-dispatch: ${{ inputs.save-on-workflow-dispatch }}

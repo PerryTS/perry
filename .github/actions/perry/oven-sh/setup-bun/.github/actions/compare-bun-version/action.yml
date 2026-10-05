@@ -1,0 +1,86 @@
+name: ⚖️ Compare Bun Version
+description: Compare the installed Bun version against a version specification.
+
+inputs:
+  bun-version:
+    description: The version spec to compare against (e.g., '1.1.0', 'canary', '>1.2.0', '1.x').
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: 🛠️ Get installed Bun version and revision
+      id: bun
+      shell: bash
+      run: |
+        echo "version=$(bun --version | tr -d '\r\n')" >> $GITHUB_OUTPUT
+        echo "revision=$(bun --revision 2>/dev/null || true)" >> $GITHUB_OUTPUT
+
+    - name: ⚖️ Compare versions
+      shell: bash
+      env:
+        REQUESTED_SPEC: ${{ inputs.bun-version }}
+        ACTUAL_VERSION: ${{ steps.bun.outputs.version }}
+        ACTUAL_REVISION: ${{ steps.bun.outputs.revision }}
+      run: |
+        set -euo pipefail
+
+        # Function to compare two semantic versions (e.g., version_compare 1.2.3 1.10.0)
+        # Returns: 0 if v1 == v2, 1 if v1 > v2, 2 if v1 < v2
+        version_compare() {
+          if [[ "$1" == "$2" ]]; then return 0; fi
+          local lowest=$(printf '%s\n' "$1" "$2" | sort -V | head -n1)
+          if [[ "$1" == "$lowest" ]]; then return 2; else return 1; fi
+        }
+
+        echo "Requested spec: ${REQUESTED_SPEC}"
+        echo "Actual version: ${ACTUAL_VERSION}"
+
+        # Case 1: 'latest' - always passes
+        if [[ "${REQUESTED_SPEC}" == "latest" ]]; then
+          echo "OK: Skipping explicit version check for 'latest'."
+          exit 0
+        fi
+
+        # Case 2: 'canary' - check for 'canary' in revision or version string
+        if [[ "${REQUESTED_SPEC}" == "canary" ]]; then
+          if [[ "${ACTUAL_REVISION}" == *canary* ]] || [[ "${ACTUAL_VERSION}" == *canary* ]]; then
+            echo "OK: Detected canary build (version: ${ACTUAL_VERSION}, revision: ${ACTUAL_REVISION:-n/a})."
+            exit 0
+          else
+            echo "Error: Expected a canary build, but got ${ACTUAL_VERSION} (revision: ${ACTUAL_REVISION:-n/a})."
+            exit 1
+          fi
+        fi
+
+        # Case 3: Semver ranges (e.g., >1.0.0, <2, 1.x, 1.1.0)
+        op_part=$(echo "${REQUESTED_SPEC}" | sed -E 's/^([><=]*).*/\1/')
+        version_part=$(echo "${REQUESTED_SPEC}" | sed -E 's/^[><= ]*//')
+
+        op="${op_part:-==}"
+        version_base="${version_part//.x/}"
+
+        # Handle wildcards like '1.x' or '1'
+        if [[ "${version_part}" == *.x* ]] || { [[ ! "${version_part}" == *.* ]] && [[ "${op}" == "==" ]]; }; then
+           if [[ "${ACTUAL_VERSION}" == "${version_base}" || "${ACTUAL_VERSION}" == "${version_base}".* ]]; then
+              echo "OK: Version ${ACTUAL_VERSION} matches wildcard spec '${REQUESTED_SPEC}'."
+              exit 0
+           else
+              echo "Error: Version ${ACTUAL_VERSION} does not match wildcard spec '${REQUESTED_SPEC}'."
+              exit 1
+           fi
+        fi
+
+        # Perform comparison for >, <, >=, <=, ==
+        version_compare "${ACTUAL_VERSION}" "${version_part}" && result=0 || result=$?
+
+        case "${op}" in
+          '==') if [[ ${result} -ne 0 ]]; then echo "Error: Expected version ${version_part}, but got ${ACTUAL_VERSION}." && exit 1; fi ;;
+          '>')  if [[ ${result} -ne 1 ]]; then echo "Error: Expected version > ${version_part}, but got ${ACTUAL_VERSION}." && exit 1; fi ;;
+          '<')  if [[ ${result} -ne 2 ]]; then echo "Error: Expected version < ${version_part}, but got ${ACTUAL_VERSION}." && exit 1; fi ;;
+          '>=') if [[ ${result} -eq 2 ]]; then echo "Error: Expected version >= ${version_part}, but got ${ACTUAL_VERSION}." && exit 1; fi ;;
+          '<=') if [[ ${result} -eq 1 ]]; then echo "Error: Expected version <= ${version_part}, but got ${ACTUAL_VERSION}." && exit 1; fi ;;
+          *)    echo "Error: Unsupported operator '${op}' in spec '${REQUESTED_SPEC}'." && exit 1 ;;
+        esac
+
+        echo "OK: Version ${ACTUAL_VERSION} satisfies spec '${REQUESTED_SPEC}'."

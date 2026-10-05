@@ -40,16 +40,29 @@ jobs:
       pull-requests: write
     steps:
       # persist-credentials stays on: this job pushes its own fix branch.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 # zizmor: ignore[artipacked]
-        with:
-          # Optional PAT: PRs opened with the default github.token do NOT
-          # trigger CI on the PR (GitHub drops workflow events from
-          # token-created refs), so checks stay pending until a human
-          # closes/reopens the PR. Set the SOAK_AUTOFIX_TOKEN repo secret
-          # (a fine-grained PAT with contents+pull-requests write) to make
-          # the autofix PRs run CI like any other PR.
-          token: ${{ secrets.SOAK_AUTOFIX_TOKEN || github.token }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ secrets.SOAK_AUTOFIX_TOKEN || github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - uses: ./.github/actions/perry/actions/setup-node # v7.0.0
         with:
           node-version-file: .node-version
       - name: Run the soak fixers
