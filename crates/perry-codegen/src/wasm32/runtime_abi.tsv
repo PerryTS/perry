@@ -4718,3 +4718,5 @@ perry_updater_record_response	i64	f64
 perry_updater_refresh_due	i64	
 perry_watchos_classes_registered	void	
 setInterval	i64	i64,f64
+js_net_socket_address_parse_value	f64	f64
+js_net_validate_socket_address_parse_input	i64	f64

@@ -1091,6 +1091,15 @@ fn statics2_readable_from_installed_on_constructor_shapes() {
             b"ReadableStream".as_ptr(),
             14,
         );
+        assert_eq!(
+            crate::object::get_property_attrs(
+                crate::value::js_nanbox_get_pointer(ctor) as usize,
+                "from"
+            )
+            .expect("own descriptor")
+            .bits,
+            7
+        );
         let method = crate::closure::closure_get_own_dynamic_prop(
             crate::value::js_nanbox_get_pointer(ctor) as usize,
             "from",

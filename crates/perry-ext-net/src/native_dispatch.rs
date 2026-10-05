@@ -127,9 +127,7 @@ unsafe extern "C" fn js_ext_net_native_dispatch(
                 0x7FFC_0000_0000_0003
             })
         }
-        "SocketAddress.parse" => {
-            crate::js_net_socket_address_parse(js_value_to_str_ptr_for_ffi(arg(0)))
-        }
+        "SocketAddress.parse" => crate::js_net_socket_address_parse_value(arg(0)),
         "BlockList" => handle_value(crate::js_net_block_list_new()),
         "SocketAddress" => handle_value(crate::js_net_socket_address_new(arg(0))),
         _ => undefined,
@@ -164,5 +162,20 @@ mod statics2_tests {
                 0x7FFC_0000_0000_0003
             );
         }
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn statics2_parse_value_and_dispatch_preserve_argument_types() {
+    for value in [f64::from_bits(TAG_UNDEFINED), 1.0] {
+        assert!(perry_runtime::exception::catch_js_throw(|| unsafe {
+            crate::js_net_socket_address_parse_value(value)
+        })
+        .is_err());
+        assert!(perry_runtime::exception::catch_js_throw(|| unsafe {
+            js_ext_net_native_dispatch(b"SocketAddress.parse".as_ptr(), 19, &value, 1)
+        })
+        .is_err());
     }
 }

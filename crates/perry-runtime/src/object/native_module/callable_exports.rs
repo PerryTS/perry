@@ -245,6 +245,9 @@ fn async_hooks_static_method_value(
         closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
         length,
     );
+    set_builtin_closure_non_constructable(
+        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
+    );
     crate::value::js_nanbox_pointer(
         closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
     )
@@ -1879,6 +1882,11 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             "bind",
             bind.get_nanbox_f64(),
         );
+        super::set_builtin_property_attrs(
+            crate::value::js_nanbox_get_pointer(constructor_handle.get_nanbox_f64()) as usize,
+            "bind".to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        );
         let snapshot = scope.root_nanbox_f64(async_hooks_static_method_value(
             crate::fn_info!(crate::async_hooks::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
             "snapshot",
@@ -1888,6 +1896,11 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             crate::value::js_nanbox_get_pointer(constructor_handle.get_nanbox_f64()) as usize,
             "snapshot",
             snapshot.get_nanbox_f64(),
+        );
+        super::set_builtin_property_attrs(
+            crate::value::js_nanbox_get_pointer(constructor_handle.get_nanbox_f64()) as usize,
+            "snapshot".to_string(),
+            super::PropertyAttrs::new(true, false, true),
         );
     }
 
@@ -1906,6 +1919,11 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             crate::value::js_nanbox_get_pointer(constructor_handle.get_nanbox_f64()) as usize,
             "bind",
             bind.get_nanbox_f64(),
+        );
+        super::set_builtin_property_attrs(
+            crate::value::js_nanbox_get_pointer(constructor_handle.get_nanbox_f64()) as usize,
+            "bind".to_string(),
+            super::PropertyAttrs::new(true, false, true),
         );
     }
     value = constructor_handle.get_nanbox_f64();

@@ -52,35 +52,36 @@ fn native_parent(module: &str, name: &str) -> Option<(&'static str, &'static str
     })
 }
 
+fn finish_prototype(constructor: f64, proto: f64) -> f64 {
+    // Minted function prototypes and internal aliases use Node's data
+    // descriptors. Repeated parent visits reuse the attributes on the shape.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor = scope.root_nanbox_f64(constructor);
+    let proto = scope.root_nanbox_f64(proto);
+    for (is_constructor, key, bits) in [(true, "prototype", 1), (false, "constructor", 5)] {
+        let value = if is_constructor {
+            constructor.get_nanbox_f64()
+        } else {
+            proto.get_nanbox_f64()
+        };
+        let addr = crate::value::js_nanbox_get_pointer(value) as usize;
+        if crate::object::get_property_attrs(addr, key).is_none_or(|attrs| attrs.bits != bits) {
+            crate::object::set_builtin_property_attrs(
+                addr,
+                key.to_string(),
+                crate::object::PropertyAttrs { bits },
+            );
+        }
+    }
+    proto.get_nanbox_f64()
+}
+
 fn prototype(constructor: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor = scope.root_nanbox_f64(constructor);
-    // Node's deprecated exports wrap the original constructor while sharing
-    // its instance prototype. Resolve that alias through the real shapes.
-    if let Some((module, method)) =
-        unsafe { callable_exports::bound_native_callable_module_and_method(ctor.get_nanbox_f64()) }
-    {
-        if module == "crypto" && matches!(method.as_str(), "#Hash" | "#Hmac") {
-            let public =
-                scope.root_nanbox_f64(bound_native_callable_export_value("crypto", &method[1..]));
-            let proto = scope.root_nanbox_f64(prototype(public.get_nanbox_f64()));
-            crate::closure::closure_set_dynamic_prop(
-                crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize,
-                "prototype",
-                proto.get_nanbox_f64(),
-            );
-            let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-            crate::object::js_object_set_field_by_name(
-                crate::value::js_nanbox_get_pointer(proto.get_nanbox_f64()) as *mut ObjectHeader,
-                key,
-                ctor.get_nanbox_f64(),
-            );
-            return proto.get_nanbox_f64();
-        }
-    }
     let proto = crate::object::js_function_prototype_value_for_read(ctor.get_nanbox_f64());
     if proto.to_bits() != crate::value::TAG_UNDEFINED {
-        return proto;
+        return finish_prototype(ctor.get_nanbox_f64(), proto);
     }
     // Internal Node constructors have no public module export. Their actual
     // prototype shapes still participate in the same chain.
@@ -98,17 +99,7 @@ fn prototype(constructor: f64) -> f64 {
         "prototype",
         value,
     );
-    crate::object::set_builtin_property_attrs(
-        proto.with_mut_ptr(|p: *mut ObjectHeader| p as usize),
-        "constructor".to_string(),
-        crate::object::PropertyAttrs::new(true, false, true),
-    );
-    crate::object::set_builtin_property_attrs(
-        crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize,
-        "prototype".to_string(),
-        crate::object::PropertyAttrs::new(true, false, false),
-    );
-    value
+    finish_prototype(ctor.get_nanbox_f64(), value)
 }
 
 pub(crate) fn link_parent(value: f64, parent: f64) -> f64 {
@@ -175,6 +166,16 @@ unsafe fn attach(module: &str, name: &str, value: f64) -> f64 {
             parent_module,
             parent_name,
         ));
+        if module == "crypto" && matches!(name, "Hash" | "Hmac") {
+            // Deprecated wrappers share the original constructor's prototype.
+            // Store the alias once; prototype reads use the actual own field.
+            let proto = scope.root_nanbox_f64(prototype(parent.get_nanbox_f64()));
+            crate::closure::closure_set_dynamic_prop(
+                crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize,
+                "prototype",
+                proto.get_nanbox_f64(),
+            );
+        }
         link_parent(ctor.get_nanbox_f64(), parent.get_nanbox_f64());
     }
     ctor.get_nanbox_f64()
@@ -312,7 +313,7 @@ fn own_static(ctor: f64, name: &str, kind: u8, length: u32) -> f64 {
     crate::object::set_builtin_property_attrs(
         crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize,
         name.to_string(),
-        crate::object::PropertyAttrs::new(true, false, true),
+        crate::object::PropertyAttrs::new(true, kind == 3, true),
     );
     ctor.get_nanbox_f64()
 }
@@ -459,6 +460,136 @@ mod tests {
                 )
                 .bits(),
                 parent.get_nanbox_u64()
+            );
+        }
+    }
+    #[test]
+    fn constructor_statics2_prototype_descriptors_match_node() {
+        crate::object::native_module_registry::js_nm_install_crypto();
+        crate::object::native_module_registry::js_nm_install_stream();
+        for (module, name, parent) in [
+            ("crypto", "Hash", false),
+            ("crypto", "Hash", true),
+            ("crypto", "Hmac", false),
+            ("crypto", "Hmac", true),
+            ("stream", "Transform", false),
+        ] {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let ctor = scope.root_nanbox_f64(bound_native_callable_export_value(module, name));
+            let ctor = scope.root_nanbox_f64(if parent {
+                crate::object::js_object_get_prototype_of(ctor.get_nanbox_f64())
+            } else {
+                ctor.get_nanbox_f64()
+            });
+            let proto = scope.root_nanbox_f64(prototype(ctor.get_nanbox_f64()));
+            for (value, key, bits) in [
+                (ctor.get_nanbox_f64(), "prototype", 1),
+                (proto.get_nanbox_f64(), "constructor", 5),
+            ] {
+                assert_eq!(
+                    crate::object::get_property_attrs(
+                        crate::value::js_nanbox_get_pointer(value) as usize,
+                        key
+                    )
+                    .expect("Node descriptor")
+                    .bits,
+                    bits
+                );
+            }
+        }
+    }
+    #[test]
+    fn constructor_statics2_own_static_descriptors_match_node() {
+        crate::object::native_module_registry::js_nm_install_net();
+        crate::object::native_module_registry::js_nm_install_crypto();
+        for (module, name, method, bits) in [
+            ("net", "BlockList", "isBlockList", 5),
+            ("net", "SocketAddress", "isSocketAddress", 5),
+            ("net", "SocketAddress", "parse", 5),
+            ("crypto", "ECDH", "convertKey", 7),
+        ] {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let ctor = scope.root_nanbox_f64(bound_native_callable_export_value(module, name));
+            assert_eq!(
+                crate::object::get_property_attrs(
+                    crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize,
+                    method
+                )
+                .expect("own descriptor")
+                .bits,
+                bits
+            );
+        }
+    }
+    #[test]
+    fn constructor_statics2_assignments_follow_constructor_setters() {
+        crate::object::native_module_registry::js_nm_install_stream();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let ee =
+            scope.root_nanbox_f64(bound_native_callable_export_value("events", "EventEmitter"));
+        let child = scope.root_nanbox_f64(bound_native_callable_export_value("stream", "Readable"));
+        let before = crate::closure::closure_get_dynamic_prop(
+            crate::value::js_nanbox_get_pointer(ee.get_nanbox_f64()) as usize,
+            "defaultMaxListeners",
+        );
+        let key = scope.root_raw_mut_ptr(crate::string::js_string_from_bytes(
+            b"defaultMaxListeners".as_ptr(),
+            19,
+        ));
+        crate::object::js_object_set_field_by_name(
+            crate::value::js_nanbox_get_pointer(child.get_nanbox_f64()) as *mut ObjectHeader,
+            key.get_raw_mut_ptr(),
+            23.0,
+        );
+        assert_eq!(
+            crate::closure::closure_get_dynamic_prop(
+                crate::value::js_nanbox_get_pointer(ee.get_nanbox_f64()) as usize,
+                "defaultMaxListeners"
+            ),
+            23.0
+        );
+        assert!(!crate::closure::closure_has_own_dynamic_prop(
+            crate::value::js_nanbox_get_pointer(child.get_nanbox_f64()) as usize,
+            "defaultMaxListeners"
+        ));
+        crate::object::js_object_set_field_by_name(
+            crate::value::js_nanbox_get_pointer(ee.get_nanbox_f64()) as *mut ObjectHeader,
+            key.get_raw_mut_ptr(),
+            before,
+        );
+        assert_eq!(
+            crate::closure::closure_get_dynamic_prop(
+                crate::value::js_nanbox_get_pointer(ee.get_nanbox_f64()) as usize,
+                "defaultMaxListeners"
+            ),
+            before
+        );
+    }
+    #[test]
+    fn constructor_statics2_async_statics_are_class_methods() {
+        crate::object::native_module_registry::js_nm_install_async_hooks();
+        for (name, method) in [
+            ("AsyncResource", "bind"),
+            ("AsyncLocalStorage", "bind"),
+            ("AsyncLocalStorage", "snapshot"),
+        ] {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let ctor =
+                scope.root_nanbox_f64(bound_native_callable_export_value("async_hooks", name));
+            let addr = crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize;
+            assert_eq!(
+                crate::object::get_property_attrs(addr, method)
+                    .expect("class static descriptor")
+                    .bits,
+                5
+            );
+            let value = scope.root_nanbox_f64(
+                crate::closure::closure_get_own_dynamic_prop(addr, method).expect("own static"),
+            );
+            assert_eq!(
+                crate::object::js_function_prototype_value_for_read(value.get_nanbox_f64())
+                    .to_bits(),
+                crate::value::TAG_UNDEFINED
             );
         }
     }

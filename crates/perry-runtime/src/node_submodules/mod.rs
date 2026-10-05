@@ -1924,6 +1924,6 @@ pub unsafe extern "C" fn js_install_readable_stream_from(info: *const JsFunction
     crate::object::set_builtin_property_attrs(
         addr,
         "from".to_string(),
-        crate::object::PropertyAttrs::new(true, false, true),
+        crate::object::PropertyAttrs::new(true, true, true),
     );
 }

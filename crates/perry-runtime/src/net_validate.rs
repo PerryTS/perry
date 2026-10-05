@@ -399,3 +399,30 @@ pub extern "C" fn js_net_create_server_handle_stub(
 ) -> f64 {
     f64::from_bits(JSValue::undefined().bits())
 }
+
+/// Preserve the original JS argument through validation before the parser FFI.
+#[no_mangle]
+pub extern "C" fn js_net_validate_socket_address_parse_input(value: f64) -> i64 {
+    if !JSValue::from_bits(value.to_bits()).is_any_string() {
+        crate::fs::validate::throw_received_type_error(
+            "The \"input\" argument must be of type string. Received ",
+            value,
+        );
+    }
+    crate::value::js_value_to_str_ptr_for_ffi(value)
+}
+
+#[cfg(test)]
+#[test]
+fn statics2_socket_address_parse_rejects_non_strings() {
+    for value in [
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+        f64::from_bits(crate::value::TAG_NULL),
+        1.0,
+    ] {
+        assert!(
+            crate::exception::catch_js_throw(|| js_net_validate_socket_address_parse_input(value))
+                .is_err()
+        );
+    }
+}
