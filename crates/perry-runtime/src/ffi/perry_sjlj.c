@@ -45,6 +45,7 @@
  */
 
 #include <setjmp.h>
+#include <stdint.h>
 
 typedef void (*perry_sjlj_body)(void *ctx);
 
@@ -59,7 +60,31 @@ extern int _setjmp(jmp_buf) __attribute__((returns_twice));
 
 int perry_sjlj_try(void *env, perry_sjlj_body body, void *ctx) {
     int rc = PERRY_SETJMP(*(jmp_buf *)env);
-    if (rc == 0)
+    if (rc == 0) {
+#if defined(__linux__) && defined(__x86_64__) && defined(__GLIBC__) && __SIZEOF_POINTER__ == 8
+        /* Rust owns 256 bytes; glibc's jmp_buf uses 200. Cleanup landing
+         * pads must run before this trap, never bypass it to a caller. */
+        _Static_assert(sizeof(jmp_buf) <= 248, "trap boundary overlaps jmp_buf");
+        ((uintptr_t *)env)[31] = (uintptr_t)__builtin_dwarf_cfa();
+#endif
         body(ctx);
+    }
     return rc;
 }
+
+#if defined(__linux__) && defined(__x86_64__) && defined(__GLIBC__) && __SIZEOF_POINTER__ == 8
+/* No native cleanup pads means no personality reference in the generated
+ * program. Keep the cold search from pulling an otherwise unused personality
+ * (and its diagnostics) into such programs. */
+extern void perry_iterator_eh_personality(void) __attribute__((weak));
+void *perry_sjlj_personality_addr(void) {
+    return (void *)perry_iterator_eh_personality;
+}
+#endif
+
+#if defined(__linux__) && defined(__x86_64__) && defined(__GLIBC__) && __SIZEOF_POINTER__ == 8
+extern int perry_iterator_cleanup_query(void) __attribute__((weak));
+int perry_sjlj_native_cleanup_present(void) {
+    return perry_iterator_cleanup_query ? perry_iterator_cleanup_query() : 0;
+}
+#endif

@@ -109,9 +109,10 @@ fn iterator_next_value_stmts(
     iter_id: LocalId,
     done_id: LocalId,
     value_id: LocalId,
+    track_step_failure: bool,
 ) -> Vec<Stmt> {
     let (step_id, step_name) = fresh_destruct_local(ctx, Type::Any);
-    let pull_next = vec![
+    let mut pull_next = vec![
         Stmt::Let {
             id: step_id,
             name: step_name,
@@ -142,6 +143,25 @@ fn iterator_next_value_stmts(
             ))]),
         },
     ];
+
+    // IteratorStepValue marks [[Done]] on a next/done/value failure. Only
+    // a successfully obtained value leaves the iterator open for binding errors.
+    if track_step_failure {
+        pull_next.insert(
+            0,
+            Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+        );
+        if let Stmt::If {
+            else_branch: Some(value_body),
+            ..
+        } = pull_next.last_mut().unwrap()
+        {
+            value_body.push(Stmt::Expr(Expr::LocalSet(
+                done_id,
+                Box::new(Expr::Bool(false)),
+            )));
+        }
+    }
 
     vec![Stmt::If {
         condition: Expr::LocalGet(done_id),
@@ -186,6 +206,7 @@ fn lower_array_pattern_binding(
         init: Some(Expr::Bool(false)),
     });
 
+    let track_step_failure = array_pattern_body_can_complete_abruptly(arr_pat);
     let mut body: Vec<Stmt> = Vec::new();
     for (idx, elem) in arr_pat.elems.iter().enumerate() {
         match elem {
@@ -199,12 +220,29 @@ fn lower_array_pattern_binding(
                     mutable: true,
                     init: Some(Expr::Undefined),
                 });
-                let pull = iterator_next_value_stmts(ctx, iter_id, done_id, value_id);
+                let pull =
+                    iterator_next_value_stmts(ctx, iter_id, done_id, value_id, track_step_failure);
                 body.extend(source.pull(idx, value_id, pull));
             }
             // Rest element (`[...rest]`) — drain the remainder into an array.
             Some(ast::Pat::Rest(rest_pat)) => {
                 let (rest_id, rest_name) = fresh_destruct_local(ctx, Type::Any);
+                let mut rest_done_id = done_id;
+                if track_step_failure {
+                    let (saved_done_id, rest_done_name) = fresh_destruct_local(ctx, Type::Boolean);
+                    body.push(Stmt::Let {
+                        id: saved_done_id,
+                        name: rest_done_name,
+                        ty: Type::Boolean,
+                        mutable: false,
+                        init: Some(Expr::LocalGet(done_id)),
+                    });
+                    body.push(Stmt::Expr(Expr::LocalSet(
+                        done_id,
+                        Box::new(Expr::Bool(true)),
+                    )));
+                    rest_done_id = saved_done_id;
+                }
                 body.push(Stmt::Let {
                     id: rest_id,
                     name: rest_name,
@@ -212,7 +250,7 @@ fn lower_array_pattern_binding(
                     mutable: false,
                     init: Some(runtime_iterator_call(
                         "iteratorRestToArray",
-                        vec![Expr::LocalGet(iter_id), Expr::LocalGet(done_id)],
+                        vec![Expr::LocalGet(iter_id), Expr::LocalGet(rest_done_id)],
                     )),
                 });
                 // Draining exhausts the iterator, so it is now done.
@@ -239,7 +277,8 @@ fn lower_array_pattern_binding(
                     mutable: true,
                     init: Some(Expr::Undefined),
                 });
-                let pull = iterator_next_value_stmts(ctx, iter_id, done_id, value_id);
+                let pull =
+                    iterator_next_value_stmts(ctx, iter_id, done_id, value_id, track_step_failure);
                 body.extend(source.pull(idx, value_id, pull));
 
                 // A `Pat::Assign` element carries a default initializer that is
@@ -284,7 +323,7 @@ fn lower_array_pattern_binding(
         "iteratorCloseIfNotDone",
         vec![Expr::LocalGet(iter_id), Expr::LocalGet(done_id)],
     )));
-    if !array_pattern_body_can_complete_abruptly(arr_pat) {
+    if !track_step_failure {
         // Every element is a hole or a plain binding identifier (possibly as
         // the rest target). The only abrupt completions left in the body come
         // from IteratorStep/IteratorValue themselves (`next()`, or the result's
@@ -303,14 +342,14 @@ fn lower_array_pattern_binding(
         catch: Some(CatchClause {
             param: Some((exc_id, exc_name)),
             body: vec![
-                Stmt::Try {
-                    body: vec![close_stmt.clone()],
-                    catch: Some(CatchClause {
-                        param: None,
-                        body: Vec::new(),
-                    }),
-                    finally: None,
-                },
+                source.close(Stmt::Expr(runtime_iterator_call(
+                    "iteratorCloseOnThrow",
+                    vec![
+                        Expr::LocalGet(iter_id),
+                        Expr::LocalGet(done_id),
+                        Expr::LocalGet(exc_id),
+                    ],
+                ))),
                 Stmt::Throw(Expr::LocalGet(exc_id)),
             ],
         }),
@@ -856,5 +895,103 @@ pub(crate) fn lower_pattern_binding_into(
             "Expression patterns are not supported in binding destructuring"
         )),
         ast::Pat::Invalid(_) => Err(anyhow!("Invalid binding pattern")),
+    }
+}
+
+#[cfg(test)]
+mod iterator_close_tests {
+    use super::*;
+
+    #[test]
+    fn iterator_step_failure_marks_done_before_next() {
+        let source = r#"function iter(): any { return null; } const [x = missing()] = iter();"#;
+        let parsed = perry_parser::parse_typescript(source, "destruct_close.ts").unwrap();
+        let hir = crate::lower_module(&parsed, "destruct_close", "destruct_close.ts").unwrap();
+        fn check(stmts: &[Stmt]) -> bool {
+            for stmt in stmts {
+                match stmt {
+                    Stmt::If {
+                        then_branch,
+                        else_branch,
+                        ..
+                    } => {
+                        if let Some(branch) = else_branch {
+                            let next = branch.iter().position(|s| matches!(
+                                s, Stmt::Let { init: Some(Expr::NativeMethodCall { method, .. }), .. }
+                                if method == "iteratorNextResult"
+                            ));
+                            if let Some(next) = next {
+                                assert!(next > 0, "IteratorNext must be preceded by marking done");
+                                assert!(matches!(&branch[next - 1],
+                                    Stmt::Expr(Expr::LocalSet(_, value)) if matches!(**value, Expr::Bool(true))));
+                                if let Stmt::If {
+                                    else_branch: Some(value_body),
+                                    ..
+                                } = branch.last().unwrap()
+                                {
+                                    assert!(matches!(value_body.last().unwrap(),
+                                        Stmt::Expr(Expr::LocalSet(_, value)) if matches!(**value, Expr::Bool(false))));
+                                } else {
+                                    panic!("expected value branch");
+                                }
+                                return true;
+                            }
+                            if check(branch) {
+                                return true;
+                            }
+                        }
+                        if check(then_branch) {
+                            return true;
+                        }
+                    }
+                    Stmt::Try { body, .. } => {
+                        if check(body) {
+                            return true;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            false
+        }
+        assert!(check(&hir.init), "test must reach the iterator pull branch");
+    }
+    #[test]
+    fn iterator_rest_failure_is_already_done() {
+        let source = r#"function iter(): any { return null; } const [{x}, ...rest] = iter();"#;
+        let parsed = perry_parser::parse_typescript(source, "rest_close.ts").unwrap();
+        let hir = crate::lower_module(&parsed, "rest_close", "rest_close.ts").unwrap();
+        let body = match hir
+            .init
+            .iter()
+            .find(|s| matches!(s, Stmt::Try { .. }))
+            .unwrap()
+        {
+            Stmt::Try { body, .. } => body,
+            _ => unreachable!(),
+        };
+        let rest = body
+            .iter()
+            .position(|s| {
+                matches!(s,
+                    Stmt::Let { init: Some(Expr::NativeMethodCall { method, .. }), .. }
+                    if method == "iteratorRestToArray"
+                )
+            })
+            .unwrap();
+        let done_id = match &body[rest - 1] {
+            Stmt::Expr(Expr::LocalSet(id, value)) if matches!(**value, Expr::Bool(true)) => *id,
+            _ => panic!("draining must mark done before any iterator step"),
+        };
+        if let Stmt::Let {
+            init: Some(Expr::NativeMethodCall { args, .. }),
+            ..
+        } = &body[rest]
+        {
+            assert!(
+                matches!(args[1], Expr::LocalGet(id) if id != done_id),
+                "rest must receive the saved pre-drain done bit"
+            );
+        }
     }
 }

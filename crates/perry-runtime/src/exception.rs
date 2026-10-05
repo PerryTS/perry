@@ -184,6 +184,30 @@ pub(crate) fn current_try_depth() -> usize {
     with_exception_state(|s| unsafe { (*s).try_depth })
 }
 
+/// A generated iterator-cleanup pad may precede a Rust-side trap without
+/// pushing an exception savepoint on every loop iteration. The existing C
+/// trampoline publishes its CFA in reserved tail bytes of its own buffer.
+#[cfg(all(
+    target_os = "linux",
+    target_arch = "x86_64",
+    target_env = "gnu",
+    target_pointer_width = "64"
+))]
+pub(crate) fn current_setjmp_stack_limit() -> Option<usize> {
+    with_exception_state(|s| unsafe {
+        if (*s).try_depth == 0 {
+            return None;
+        }
+        let depth = (*s).try_depth - 1;
+        if (*s).handler_kinds[depth] != HandlerKind::Setjmp {
+            return None;
+        }
+        // GC_STORE_AUDIT(STACK): C trampoline CFA, not a managed heap pointer.
+        let buf = (*s).jump_buffers[depth].data.as_ptr() as *const usize;
+        Some(buf.add(31).read())
+    })
+}
+
 // ---------------------------------------------------------------------------
 // setjmp trampoline (#9305): no Rust frame is ever a longjmp target.
 // ---------------------------------------------------------------------------
@@ -481,6 +505,23 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
     }
     #[cfg(not(target_os = "wasi"))]
     {
+        // Zero-cost iterator cleanup may be inside the pending Rust trap (or
+        // ahead of an uncaught exit). The personality respects that trap's
+        // CFA boundary, so a nested catch_js_throw still owns close failures.
+        #[cfg(all(
+            target_os = "linux",
+            target_arch = "x86_64",
+            target_env = "gnu",
+            target_pointer_width = "64"
+        ))]
+        if (fatal || !jb_ptr.is_null()) && crate::eh::native_cleanup_before_trap() {
+            let reason = crate::eh::raise_perry_exception();
+            // _URC_END_OF_STACK: no native cleanup before the trap/exit.
+            if reason != 5 {
+                eprintln!("perry: FATAL: cleanup unwind failed (reason={reason})");
+                std::process::abort();
+            }
+        }
         if fatal {
             // No open `try`: this throw ends the process. Run the `exit`
             // listeners first (Node emits `exit` before writing its
@@ -973,6 +1014,34 @@ mod tests {
             js_try_end();
         }
         assert_eq!(current_try_depth(), base);
+    }
+
+    #[test]
+    #[cfg(all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "gnu",
+        target_pointer_width = "64"
+    ))]
+    fn iterator_cleanup_trap_boundary_is_the_nearest_trampoline() {
+        let env = js_try_push();
+        let landed = arm_trap_and_run(env, || {
+            let outer = current_setjmp_stack_limit().unwrap_or(0);
+            let nested = js_try_push();
+            let inner = arm_trap_and_run(nested, || current_setjmp_stack_limit().unwrap_or(0));
+            js_try_end();
+            let restored = current_setjmp_stack_limit().unwrap_or(0);
+            (outer, inner, restored)
+        });
+        js_try_end();
+        let (outer, inner, restored) = landed.expect("outer trap returned");
+        assert_ne!(outer, 0, "the trampoline must publish its boundary");
+        let inner = inner.expect("inner trap returned");
+        assert!(
+            inner < outer,
+            "the nested trap must precede an older cleanup pad"
+        );
+        assert_eq!(restored, outer);
     }
 
     /// #9305: the C-trampoline transport round-trips a throw. A real

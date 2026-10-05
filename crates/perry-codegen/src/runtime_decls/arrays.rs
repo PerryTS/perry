@@ -328,6 +328,13 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     module.declare_function("js_iterator_to_array", I64, &[DOUBLE]);
     module.declare_function("js_iterator_next_result", DOUBLE, &[DOUBLE]);
     module.declare_function("js_iterator_close_if_not_done", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_iterator_close_on_throw",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_iterator_delegate_return", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_iterator_delegate_throw", DOUBLE, &[DOUBLE, DOUBLE]);
     // #10524: `const [a, b] = <untyped>` — 0 when the source is an ordinary
     // Array whose iteration is unobservable (read it by index), 1 otherwise.
     module.declare_function("js_array_destructure_needs_iterator", I32, &[DOUBLE]);

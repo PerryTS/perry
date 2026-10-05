@@ -195,6 +195,60 @@ unsafe fn read_encoded_pointer(
     Ok(ptr)
 }
 
+/// Read the personality directly from a live ELF FDE's CIE. No image index
+/// or registry is needed: libgcc supplies the FDE covering the stack IP.
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+pub(crate) unsafe fn fde_has_personality(fde: *const u8, personality: usize) -> bool {
+    let mut r = DwarfReader::new(fde);
+    let length = r.read_unaligned::<u32>();
+    if length == u32::MAX || length < 4 {
+        return false;
+    }
+    let cie_field = r.ptr;
+    let cie_offset = r.read_unaligned::<u32>() as usize;
+    let mut cie = DwarfReader::new(cie_field.sub(cie_offset));
+    let cie_length = cie.read_unaligned::<u32>();
+    if cie_length == u32::MAX || cie_length < 8 {
+        return false;
+    }
+    let cie_end = cie.ptr.add(cie_length as usize);
+    if cie.read_unaligned::<u32>() != 0 {
+        return false;
+    }
+    let version = cie.read_u8();
+    if version != 1 && version != 3 {
+        return false;
+    }
+    let aug_start = cie.ptr;
+    while cie.ptr < cie_end && cie.read_u8() != 0 {}
+    let aug_len = cie.ptr.offset_from(aug_start) as usize - 1;
+    if aug_len == 0 || *aug_start != b'z' {
+        return false;
+    }
+    cie.read_uleb128();
+    cie.read_sleb128();
+    if version == 1 {
+        cie.read_u8();
+    } else {
+        cie.read_uleb128();
+    }
+    cie.read_uleb128(); // augmentation byte count
+    for index in 1..aug_len {
+        match *aug_start.add(index) {
+            b'L' | b'R' => {
+                cie.read_u8();
+            }
+            b'P' => {
+                let encoding = cie.read_u8();
+                return read_encoded_pointer(&mut cie, encoding, 0).ok() == Some(personality);
+            }
+            b'S' => {}
+            _ => return false,
+        }
+    }
+    false
+}
+
 // Moved here with the decoder (#7354). The `not(target_os = "windows")` the
 // guard used to carry was belt-and-braces — `eh.rs` is itself
 // `cfg(not(windows))` — and this module is compiled on every target, so the
@@ -287,6 +341,35 @@ mod tests {
         let lsda = synth_lsda(&[]);
         let got = unsafe { find_landing_pad_in_lsda(lsda.as_ptr(), 0x3000, 0x3000) };
         assert_eq!(got.unwrap(), None);
+    }
+
+    #[test]
+    #[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+    fn cleanup_scan_recognizes_only_the_perry_personality() {
+        let mut bytes = vec![0; 4];
+        bytes.extend_from_slice(&0u32.to_ne_bytes()); // CIE id
+        bytes.extend_from_slice(&[1, b'z', b'P', 0, 1, 0x78, 16, 9, 0]);
+        bytes.extend_from_slice(
+            &(crate::eh::perry_eh_personality as *const () as usize).to_ne_bytes(),
+        );
+        let cie_len = (bytes.len() - 4) as u32;
+        bytes[0..4].copy_from_slice(&cie_len.to_ne_bytes());
+        let fde = bytes.len();
+        bytes.extend_from_slice(&4u32.to_ne_bytes());
+        bytes.extend_from_slice(&((fde + 4) as u32).to_ne_bytes());
+        assert!(unsafe {
+            fde_has_personality(
+                bytes.as_ptr().add(fde),
+                crate::eh::perry_eh_personality as *const () as usize,
+            )
+        });
+        bytes[17..25].copy_from_slice(&0usize.to_ne_bytes());
+        assert!(!unsafe {
+            fde_has_personality(
+                bytes.as_ptr().add(fde),
+                crate::eh::perry_eh_personality as *const () as usize,
+            )
+        });
     }
 
     #[test]

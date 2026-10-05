@@ -43,16 +43,13 @@
                 );
                 return Ok(crate::expr::i32_bool_to_nanbox(blk, &needs));
             }
-            "iteratorCloseIfNotDone" => {
-                let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(2)])?;
-                let iter = arg_values.first().cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                let done = arg_values.get(1).cloned().unwrap_or_else(|| double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
-                let result = ctx.block().call(
-                    DOUBLE,
-                    "js_iterator_close_if_not_done",
-                    &[(DOUBLE, &iter), (DOUBLE, &done)],
-                );
-                arg_group.release(ctx);
+            "iteratorCloseIfNotDone" | "iteratorCloseOnThrow" => {
+                let count = if method == "iteratorCloseOnThrow" { 3 } else { 2 };
+                let (values, roots) = super::lower_call_args_rooted(ctx, &args[..args.len().min(count)])?;
+                let values = values.iter().map(|v| (DOUBLE, v.as_str())).collect::<Vec<_>>();
+                let name = if count == 3 { "js_iterator_close_on_throw" } else { "js_iterator_close_if_not_done" };
+                let result = ctx.block().call(DOUBLE, name, &values);
+                roots.release(ctx);
                 return Ok(result);
             }
             "requireObjectCoercible" => {
