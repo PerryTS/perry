@@ -40,6 +40,8 @@ const alternate = { get score() { return this.value + 300; } };
 Object.setPrototypeOf(deep, alternate);
 console.log('relinked', read(deep));
 Object.defineProperty(alternate, 'score', { value: 7, writable: true, configurable: true });
+// A holder with another accessor still has to respect this data shadow.
+Object.defineProperty(alternate, 'other', { get() { return 99; } });
 console.log('data replacement', read(deep));
 write(deep, 8);
 console.log('own data', read(deep), Object.hasOwn(deep, 'score'));

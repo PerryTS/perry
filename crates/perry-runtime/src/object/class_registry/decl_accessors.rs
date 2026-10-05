@@ -198,7 +198,7 @@ fn prototype_accessor(start: f64, name: &str) -> Option<(usize, Accessor)> {
         // these skipped data holders shadows it.
         let slot = (shape.summary() & ka::SUMMARY_ACCESSOR != 0)
             .then(|| unsafe {
-                crate::object::keys_find_slot_by_bytes_resolved(
+                ka::keys_find_accessor_slot_resolved(
                     keys,
                     shape.logical_key_count(),
                     name.as_bytes(),

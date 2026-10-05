@@ -758,14 +758,29 @@ pub(crate) unsafe fn accessor_walk(
             return None;
         }
         let keys = shape.keys as usize as *const crate::array::ArrayHeader;
-        if let Some(slot) =
-            crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
-        {
-            if crate::object::key_attrs::keys_entry(keys, slot)
-                & crate::object::key_attrs::ENTRY_ACCESSOR
-                == 0
-            {
-                return None;
+        let candidate = (shape.summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0)
+            .then(|| {
+                crate::object::key_attrs::keys_find_accessor_slot_resolved(
+                    keys,
+                    shape.logical_key_count,
+                    name,
+                )
+            })
+            .flatten();
+        if let Some(slot) = candidate {
+            // No getter ran while walking. Only a positive accessor needs
+            // name lookups in the nearer holders to prove it is unshadowed.
+            for &(hop, _) in &hops[..depth - 1] {
+                let nearer = object_shape_descriptor(hop as *const ObjectHeader)?;
+                if crate::object::keys_find_slot_by_bytes_resolved(
+                    nearer.keys as usize as *const crate::array::ArrayHeader,
+                    nearer.logical_key_count,
+                    name,
+                )
+                .is_some()
+                {
+                    return None;
+                }
             }
             let slot = holder_slot_word(addr, slot, shape.live_inline_slot_count)?;
             let lane = holder_slot_value(addr, slot)?;
