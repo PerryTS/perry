@@ -552,7 +552,11 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
         assert_eq!(
             source_globals.len(),
             1,
-            "nested sources must share one physical parent constant"
+            "all retained text must share one physical module blob"
+        );
+        assert!(
+            source_globals[0].contains("perry_src"),
+            "retained text must live outside the ordinary literal section"
         );
         let base = source_globals[0].split_whitespace().next().unwrap();
         let pointer = |source: &str| {
@@ -562,59 +566,73 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
             }
             format!("getelementptr (i8, ptr {base}, i64 {offset})")
         };
-        let expected = [
-            ("__outer", outer.as_str(), 1),
-            ("__inner", inner, 0),
-            ("__C__m", method, 0),
-        ];
+        let calls: Vec<_> = emitted
+            .lines()
+            .filter(|line| line.contains("call void @js_register_function_source"))
+            .collect();
         if output_type == "executable" {
-            let calls: Vec<_> = emitted
-                .lines()
-                .filter(|line| line.contains("call void @js_register_function_sources_static"))
-                .collect();
             assert_eq!(
                 calls.len(),
                 1,
-                "all retained function sources must use one batch call"
+                "ordinary functions use their info records; raw methods use one batch call"
             );
+            assert!(calls[0].contains("@js_register_function_sources_static("));
+            assert!(!emitted.contains("call void @js_register_function_source_static("));
             let table = emitted
                 .lines()
                 .find(|line| line.starts_with("@__perry_function_source_descriptors_"))
-                .expect("source descriptor table");
+                .expect("raw method source descriptor table");
             let entries: Vec<_> = table
                 .split("{ i32, i32, i32, i32 } { i32 trunc (i64 sub (i64 ptrtoint (ptr @")
                 .skip(1)
                 .collect();
-            assert_eq!(
-                entries.len(),
-                expected.len(),
-                "two functions and one materialized method must be registered"
+            assert_eq!(entries.len(), 1, "only the raw method needs registration");
+            assert!(entries[0].contains("__C__m to i64)"), "{}", entries[0]);
+            assert!(calls[0].contains("ptr @__perry_function_source_descriptors_"));
+            assert!(
+                entries[0].contains(&format!("ptrtoint (ptr {} to i64)", pointer(method))),
+                "raw method source range changed: {}",
+                entries[0]
             );
-            for (entry, (symbol, source, flag)) in entries.iter().zip(expected) {
+            assert!(
+                entries[0].contains(&format!("i32 {}, i32 0", method.len())),
+                "raw method source metadata changed: {}",
+                entries[0]
+            );
+            for (symbol, source) in [("__outer$info", outer.as_str()), ("__inner$info", inner)] {
+                let info = emitted
+                    .lines()
+                    .find(|line| line.starts_with('@') && line.contains(symbol))
+                    .expect("ordinary retained function must have an info definition");
                 assert!(
-                    entry.contains(&format!("{symbol} to i64)")),
-                    "registration order/symbol changed: {entry}"
+                    info.contains("ptrtoint"),
+                    "source range must be relative: {info}"
                 );
                 assert!(
-                    entry.contains(&format!("ptrtoint (ptr {} to i64)", pointer(source))),
-                    "source range changed: {entry}"
+                    info.contains(&format!("ptr null, i32 {}, i16", source.len())),
+                    "source length must reuse the idle versioned-captures field: {info}"
                 );
                 assert!(
-                    entry.contains(&format!("i32 {}, i32 {flag}", source.len())),
-                    "source length/strictness changed: {entry}"
+                    !info.contains("constant { { ptr"),
+                    "ordinary source info must stay at the common ABI size: {info}"
                 );
             }
         } else {
-            let calls: Vec<_> = emitted
-                .lines()
-                .filter(|line| line.contains("call void @js_register_function_source("))
-                .collect();
             assert_eq!(
                 calls.len(),
-                expected.len(),
-                "unloadable images retain one copying call per source"
+                3,
+                "unloadable images must copy all three sources"
             );
-            for (call, (symbol, source, flag)) in calls.iter().zip(expected) {
+            for (call, (symbol, source, flag)) in calls.iter().zip([
+                ("__outer", outer.as_str(), 1),
+                ("__inner", inner, 0),
+                ("__C__m", method, 0),
+            ]) {
+                assert!(call.contains("@js_register_function_source("), "{call}");
+                assert!(
+                    call.contains(&format!("{symbol},")),
+                    "registration order/symbol changed: {call}"
+                );
                 let offset = outer.find(source).unwrap();
                 let source_pointer = if offset == 0 {
                     base.to_owned()
@@ -632,7 +650,6 @@ fn retained_source_ranges_preserve_registrations_and_ownership() {
                         .unwrap()
                         .to_owned()
                 };
-                assert!(call.contains(&format!("{symbol},")), "{call}");
                 assert!(
                     call.contains(&format!(
                         "ptr {source_pointer}, i32 {}, i32 {flag})",
