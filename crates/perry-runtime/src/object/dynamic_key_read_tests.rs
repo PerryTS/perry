@@ -171,11 +171,10 @@ fn a_null_prototype_receiver_files_its_absence_without_a_terminal() {
     assert_eq!(read(&obj, &a), 3.0f64.to_bits());
 }
 
-/// A receiver whose ShapeId does not record its null link (an
-/// `Object.create(null)` object today) is refused: the shape cannot vouch for
-/// the prototype, so nothing is filed for it.
+/// A born-null receiver publishes its null edge in the birth shape. Its
+/// shape therefore proves absence just like a receiver re-prototyped to null.
 #[test]
-fn a_receiver_whose_shape_does_not_record_its_prototype_is_refused() {
+fn a_born_null_receiver_files_its_absence_from_its_birth_shape() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _global = crate::object::js_get_global_this();
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -193,21 +192,19 @@ fn a_receiver_whose_shape_does_not_record_its_prototype_is_refused() {
             crate::object::shapes::object_proto_id(o),
         )
     });
-    assert_ne!(
-        recorded,
-        Some(actual),
-        "premise: this shape does not record the null link; once it does, fold \
-         this case into the positive one above"
-    );
+    assert_eq!(actual, crate::object::shapes::PROTO_ID_NULL);
+    assert_eq!(recorded, Some(actual), "the birth shape owns the null link");
     let terminal = obj.with_mut_ptr(|o: *mut ObjectHeader| unsafe {
         crate::object::method_site::read_holder::dynamic_absent_terminal(o, b"Zqb")
     });
     assert_eq!(
-        terminal, None,
-        "an unvouched prototype must not be called absent"
+        terminal,
+        Some(0),
+        "the receiver needs no prototype terminal"
     );
     assert_eq!(read(&obj, &missing), crate::value::TAG_UNDEFINED);
-    assert_eq!(answer(&obj, &missing), None, "nothing was filed");
+    assert_eq!(answer(&obj, &missing), Some(crate::value::TAG_UNDEFINED));
+    assert_eq!(read(&obj, &a), 3.0f64.to_bits());
 }
 
 /// What the shapes must never call absent: an own key whose VALUE is

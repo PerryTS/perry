@@ -859,7 +859,11 @@ pub(crate) fn install_proto_method(
     // methods share the noop body. Read back by the `.length` value-accessor
     // and `getOwnPropertyDescriptor`.
     super::super::native_module::set_builtin_closure_length(closure as usize, arity);
-    super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    // The allocation's body record already owns this immutable capability.
+    // Shared bodies without the bit still need an instance-specific entry.
+    if info.is_null() || unsafe { (*info).flags & crate::closure::FN_NON_CONSTRUCTOR == 0 } {
+        super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    }
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     // Built-in prototype methods are `{ writable: true, enumerable: false,
@@ -942,7 +946,11 @@ pub(crate) fn install_proto_method_rest_with_length(
     }
     super::super::native_module::set_bound_native_closure_name(closure, method_name);
     super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
-    super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    // The allocation's body record already owns this immutable capability.
+    // Shared bodies without the bit still need an instance-specific entry.
+    if info.is_null() || unsafe { (*info).flags & crate::closure::FN_NON_CONSTRUCTOR == 0 } {
+        super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    }
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
     let value = crate::value::js_nanbox_pointer(closure as i64);
     super::super::define_builtin_data_property(

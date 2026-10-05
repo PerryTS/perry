@@ -143,6 +143,25 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
 /// Refs #420 / #618 followup.
 #[no_mangle]
 pub extern "C" fn js_object_get_prototype_of(obj_value: f64) -> f64 {
+    // A default-link proof returns the realm's Object.prototype. It cannot
+    // expose an iterator-family prototype, so it needs no exposure probes.
+    // The intrinsic must already be complete: this arm cannot collect.
+    let value = crate::JSValue::from_bits(obj_value.to_bits());
+    if value.is_pointer() {
+        let addr = value.as_pointer::<u8>() as usize;
+        unsafe {
+            if let Some(header) = crate::value::addr_class::try_read_gc_header(addr) {
+                if header.obj_type == crate::gc::GC_TYPE_OBJECT
+                    && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                    && header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO == 0
+                {
+                    if let Some(proto) = default_link_prototype(addr as *const ObjectHeader) {
+                        return proto;
+                    }
+                }
+            }
+        }
+    }
     let proto = get_prototype_of_resolved(obj_value);
     // #10086: this is the ONE place a prototype object reaches user code, so
     // it is also the only place the array-iterator prototype can escape to be

@@ -342,13 +342,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "slice",
-                crate::fn_info!(array_prototype_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(array_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_noop_proto_methods(
@@ -367,7 +367,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "flat",
-                crate::fn_info!(array_prototype_flat_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_flat_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             // Generic mutators get REAL thunks (vs the noop above) so a borrowed
@@ -384,44 +384,44 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             let values_value = install_proto_method(
                 proto_obj,
                 "values",
-                crate::fn_info!(array_prototype_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_builtin_iterator_symbol(proto_obj, values_value);
             install_proto_method(
                 proto_obj,
                 "pop",
-                crate::fn_info!(array_prototype_pop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_pop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "shift",
-                crate::fn_info!(array_prototype_shift_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_shift_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "reverse",
-                crate::fn_info!(array_prototype_reverse_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_reverse_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "push",
-                crate::fn_info!(array_prototype_push_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_push_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "unshift",
-                crate::fn_info!(array_prototype_unshift_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_unshift_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "splice",
-                crate::fn_info!(array_prototype_splice_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_splice_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             // #6908: `fill` / `copyWithin` get real thunks too — a Proxy
@@ -431,13 +431,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method_rest_with_length(
                 proto_obj,
                 "fill",
-                crate::fn_info!(array_prototype_fill_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_fill_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "copyWithin",
-                crate::fn_info!(array_prototype_copy_within_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_copy_within_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             // `sort` / `concat` get real thunks too: a borrowed
@@ -448,7 +448,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "sort",
-                crate::fn_info!(array_prototype_sort_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_sort_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // Iteration / search methods: real generic-engine thunks (rest
@@ -456,72 +456,72 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             let arraylike_thunks: [(&str, *const crate::closure::JsFunctionInfo, u32); 14] = [
                 (
                     "forEach",
-                    crate::fn_info!(array_proto_forEach_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_forEach_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "map",
-                    crate::fn_info!(array_proto_map_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_map_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "filter",
-                    crate::fn_info!(array_proto_filter_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_filter_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "some",
-                    crate::fn_info!(array_proto_some_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_some_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "every",
-                    crate::fn_info!(array_proto_every_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_every_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "find",
-                    crate::fn_info!(array_proto_find_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_find_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "findIndex",
-                    crate::fn_info!(array_proto_findIndex_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_findIndex_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "findLast",
-                    crate::fn_info!(array_proto_findLast_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_findLast_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "findLastIndex",
-                    crate::fn_info!(array_proto_findLastIndex_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_findLastIndex_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "reduce",
-                    crate::fn_info!(array_proto_reduce_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_reduce_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "reduceRight",
-                    crate::fn_info!(array_proto_reduceRight_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_reduceRight_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "indexOf",
-                    crate::fn_info!(array_proto_indexOf_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_indexOf_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "lastIndexOf",
-                    crate::fn_info!(array_proto_lastIndexOf_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_lastIndexOf_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "includes",
-                    crate::fn_info!(array_proto_includes_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_proto_includes_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
             ];
@@ -531,19 +531,19 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "at",
-                crate::fn_info!(array_proto_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_proto_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "join",
-                crate::fn_info!(array_proto_join_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_proto_join_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "concat",
-                crate::fn_info!(array_prototype_concat_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_prototype_concat_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
@@ -552,14 +552,14 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "slice",
-                crate::fn_info!(array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             // ES2024 (#10873): `resize`, `transfer`, `transferToFixedLength`.
             install_proto_method(
                 proto_obj,
                 "resize",
-                crate::fn_info!(array_buffer_resize_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(array_buffer_resize_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // The thunks take the optional `newLength` (call arity 1); the
@@ -567,11 +567,11 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             let transfers: [(&str, *const crate::closure::JsFunctionInfo); 2] = [
                 (
                     "transfer",
-                    crate::fn_info!(array_buffer_transfer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_buffer_transfer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 ),
                 (
                     "transferToFixedLength",
-                    crate::fn_info!(array_buffer_transfer_to_fixed_length_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(array_buffer_transfer_to_fixed_length_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 ),
             ];
             for (name, thunk) in transfers {
@@ -619,7 +619,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "slice",
-                crate::fn_info!(shared_array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(shared_array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             unsafe {
@@ -649,49 +649,49 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(object_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(object_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "isPrototypeOf",
-                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "hasOwnProperty",
-                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "propertyIsEnumerable",
-                crate::fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "toLocaleString",
-                crate::fn_info!(object_prototype_to_locale_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(object_prototype_to_locale_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(object_prototype_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(object_prototype_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "hasOwnProperty",
-                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "propertyIsEnumerable",
-                crate::fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_object_prototype_dunder_proto(proto_obj);
@@ -724,13 +724,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "apply",
-                crate::fn_info!(function_prototype_apply_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(function_prototype_apply_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             install_proto_method_rest(
                 proto_obj,
                 "bind",
-                crate::fn_info!(function_prototype_bind_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(function_prototype_bind_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // #4101: dedicated toString thunk (source reconstruction + brand
@@ -738,13 +738,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(function_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(function_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method_rest(
                 proto_obj,
                 "call",
-                crate::fn_info!(function_prototype_call_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(function_prototype_call_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
@@ -765,13 +765,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(primitive_proto_thunks::string_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(primitive_proto_thunks::string_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(primitive_proto_thunks::string_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(primitive_proto_thunks::string_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
         }
@@ -795,13 +795,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(primitive_proto_thunks::number_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(primitive_proto_thunks::number_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "toLocaleString",
-                crate::fn_info!(primitive_proto_thunks::number_proto_to_locale_string_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(primitive_proto_thunks::number_proto_to_locale_string_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
         }
@@ -812,13 +812,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(primitive_proto_thunks::boolean_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(primitive_proto_thunks::boolean_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(primitive_proto_thunks::boolean_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(primitive_proto_thunks::boolean_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
         }
@@ -834,13 +834,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(primitive_proto_thunks::symbol_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(primitive_proto_thunks::symbol_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(primitive_proto_thunks::symbol_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(primitive_proto_thunks::symbol_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
         }
@@ -852,7 +852,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             let to_string = install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(primitive_proto_thunks::bigint_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(primitive_proto_thunks::bigint_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             super::super::native_module::set_builtin_closure_length(
@@ -862,7 +862,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(primitive_proto_thunks::bigint_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(primitive_proto_thunks::bigint_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
         }
@@ -933,13 +933,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "isPrototypeOf",
-                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(date_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(date_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             // `Date.prototype[Symbol.toPrimitive]` — a generic `OrdinaryToPrimitive`
@@ -966,13 +966,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method_rest(
                 proto_obj,
                 "exec",
-                crate::fn_info!(url_pattern_exec_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(url_pattern_exec_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest(
                 proto_obj,
                 "test",
-                crate::fn_info!(url_pattern_test_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(url_pattern_test_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             for name in [
@@ -1050,19 +1050,19 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "catch",
-                crate::fn_info!(crate::promise::promise_prototype_catch_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(crate::promise::promise_prototype_catch_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "finally",
-                crate::fn_info!(crate::promise::promise_prototype_finally_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(crate::promise::promise_prototype_finally_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "then",
-                crate::fn_info!(crate::promise::promise_prototype_then_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(crate::promise::promise_prototype_then_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             set_intrinsic_to_string_tag(proto_obj, "Promise");
@@ -1078,13 +1078,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "encode",
-                crate::fn_info!(crate::text::text_encoder_encode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(crate::text::text_encoder_encode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "encodeInto",
-                crate::fn_info!(crate::text::text_encoder_encode_into_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(crate::text::text_encoder_encode_into_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             install_text_accessor(
@@ -1103,7 +1103,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "decode",
-                crate::fn_info!(crate::text::text_decoder_decode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(crate::text::text_decoder_decode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_text_accessor(
@@ -1134,7 +1134,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             let entries_value = install_proto_method(
                 proto_obj,
                 "entries",
-                crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_builtin_iterator_symbol(proto_obj, entries_value);
@@ -1274,13 +1274,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_webcrypto_proto_method(
                 proto_obj,
                 "getRandomValues",
-                crate::fn_info!(webcrypto_get_random_values_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(webcrypto_get_random_values_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_webcrypto_proto_method(
                 proto_obj,
                 "randomUUID",
-                crate::fn_info!(webcrypto_random_uuid_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(webcrypto_random_uuid_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
@@ -1314,22 +1314,22 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             for (name, func_ptr, length) in [
                 (
                     "encapsulateBits",
-                    crate::fn_info!(subtle_crypto_encapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(subtle_crypto_encapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     2,
                 ),
                 (
                     "decapsulateBits",
-                    crate::fn_info!(subtle_crypto_decapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(subtle_crypto_decapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     3,
                 ),
                 (
                     "encapsulateKey",
-                    crate::fn_info!(subtle_crypto_encapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(subtle_crypto_encapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     5,
                 ),
                 (
                     "decapsulateKey",
-                    crate::fn_info!(subtle_crypto_decapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN)),
+                    crate::fn_info!(subtle_crypto_decapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     6,
                 ),
             ] {
@@ -1343,19 +1343,19 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(error_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(error_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "isPrototypeOf",
-                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "hasOwnProperty",
-                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
         }
@@ -1426,7 +1426,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto(),
                 "toString",
-                crate::fn_info!(url_prototype_href_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(url_prototype_href_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             web_method_enumerable(proto(), "toString");
@@ -1438,7 +1438,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto(),
                 "toJSON",
-                crate::fn_info!(url_prototype_href_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(url_prototype_href_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             web_method_enumerable(proto(), "toJSON");

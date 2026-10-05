@@ -721,37 +721,39 @@ pub(crate) fn object_static_prototype_known_non_meta(obj_ptr: usize) -> Option<u
 /// Cost is paid only on a MISS, and only walks hops that carry a record: an
 /// ordinary receiver answers `false` from one absent meta record plus one
 /// header bit.
+#[cfg(test)]
 pub(crate) fn prototype_chain_ends_in_explicit_null(obj_ptr: usize) -> bool {
-    chain_ends_in_explicit_null_before(obj_ptr, 0)
+    chain_ends_in_explicit_null_before::<false>(obj_ptr)
 }
 
 /// `x instanceof Object` for a shaped receiver: OrdinaryHasInstance finds
 /// `Object.prototype` on the chain unless the chain ends in an explicit null
 /// first (`Object.create(null)`, `__proto__: null`, a hop re-prototyped to
 /// null).
+/// A recorded link cannot name an intrinsic that has never been built, so
+/// observe the existing root without allocating it just to classify a miss.
 pub(crate) fn prototype_chain_ends_in_null_before_object_prototype(obj_ptr: usize) -> bool {
-    let object_prototype = default_object_prototype_bits()
-        .map(|bits| crate::value::JSValue::from_bits(bits))
-        .filter(|value| value.is_pointer())
-        .map_or(0, |value| value.as_pointer::<u8>() as usize);
-    chain_ends_in_explicit_null_before(obj_ptr, object_prototype)
+    chain_ends_in_explicit_null_before::<true>(obj_ptr)
 }
 
-/// [`prototype_chain_ends_in_explicit_null`], answering `false` as soon as
-/// the walk reaches `stop` (0 = never).
-fn chain_ends_in_explicit_null_before(obj_ptr: usize, stop: usize) -> bool {
+/// Walk recorded/class links. The canonical intrinsic is itself born null;
+/// distinguish its edge only when a null edge is actually reached. An
+/// ordinary unrecorded miss needs no intrinsic lookup or bootstrap work.
+fn chain_ends_in_explicit_null_before<const STOP_AT_OBJECT_PROTOTYPE: bool>(
+    obj_ptr: usize,
+) -> bool {
     let mut current = obj_ptr;
     // The same bound the generic chain walk uses. A cycle cannot be built
     // through `setPrototypeOf` (it refuses one), but a bound is cheaper than
     // trusting that from here.
     for _ in 0..32 {
-        if stop != 0 && current == stop {
-            return false;
-        }
         match object_static_prototype(current) {
             // A cell born with no prototype ends the chain unless a later
             // link recorded one (the born-null header bit is sticky).
-            None if unsafe { cell_is_born_null_proto(current) } => return true,
+            None if unsafe { cell_is_born_null_proto(current) } => {
+                return !STOP_AT_OBJECT_PROTOTYPE
+                    || current != crate::array::object_prototype_addr_if_resolved();
+            }
             // No per-instance record on this hop. The chain does not stop
             // here: it continues through the hop's CLASS, which is where a
             // `class K {}` instance keeps `K.prototype`. Following it is what
@@ -765,7 +767,10 @@ fn chain_ends_in_explicit_null_before(obj_ptr: usize, stop: usize) -> bool {
                 }
                 current = next;
             }
-            Some(TAG_NULL) => return true,
+            Some(TAG_NULL) => {
+                return !STOP_AT_OBJECT_PROTOTYPE
+                    || current != crate::array::object_prototype_addr_if_resolved();
+            }
             Some(bits) => {
                 let top16 = bits >> 48;
                 let next = if top16 == 0x7FFD {
@@ -824,7 +829,7 @@ unsafe fn class_link_prototype(obj_ptr: usize) -> usize {
 /// Was this cell allocated with no prototype (`Object.create(null)`,
 /// `querystring.parse`)? That is `OBJ_FLAG_NULL_PROTO`, the header bit #1175
 /// added, and it is the born-null half of the question
-/// [`prototype_chain_ends_in_explicit_null`] asks.
+/// [`chain_ends_in_explicit_null_before`] asks.
 #[inline]
 unsafe fn cell_is_born_null_proto(obj_ptr: usize) -> bool {
     if obj_ptr == 0 || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8) {

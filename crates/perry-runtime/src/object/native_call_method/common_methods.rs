@@ -421,6 +421,13 @@ pub(crate) unsafe fn dispatch_function_proto_method(
             }
             let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
             if crate::closure::is_closure_ptr(raw_ptr) {
+                // Constructor-export alias shims only recognize the native
+                // bound-method representation. The callee's own body record
+                // decides this once, before any shim probes its captures.
+                // An unknown body keeps the conservative dispatch path.
+                let construction_alias =
+                    crate::closure::closure_info(raw_ptr as *const crate::closure::ClosureHeader)
+                        .is_none_or(|info| info.code == crate::closure::BOUND_METHOD_FUNC_PTR);
                 let this_arg = if args_len >= 1 && !args_ptr.is_null() {
                     crate::closure::coerce_call_this(object, *args_ptr)
                 } else {
@@ -432,25 +439,29 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                     std::ptr::null()
                 };
                 let rest_len = args_len.saturating_sub(1);
-                // #10454: `Readable.call(this, opts)` (util.inherits' classic
-                // explicit-this construction) must mutate `this` in place via
-                // the same subclass-init shim `super()` uses, not run the
-                // ordinary call below — see
-                // `maybe_run_stream_subclass_init_via_this`'s doc comment.
-                if let Some(result) =
-                    super::native_this_alias::maybe_run_stream_subclass_init_via_this(
-                        object, this_arg, rest_ptr, rest_len,
-                    )
-                {
-                    return Some(result);
-                }
-                // #10454: `http.ServerResponse.call(this, req)` reached
-                // through an aliased heritage — see
-                // `maybe_construct_http_class_with_this`'s doc comment.
-                if let Some(result) = super::native_this_alias::maybe_construct_http_class_with_this(
-                    object, this_arg, rest_ptr, rest_len,
-                ) {
-                    return Some(result);
+                if construction_alias {
+                    // #10454: `Readable.call(this, opts)` (util.inherits' classic
+                    // explicit-this construction) must mutate `this` in place via
+                    // the same subclass-init shim `super()` uses, not run the
+                    // ordinary call below — see
+                    // `maybe_run_stream_subclass_init_via_this`'s doc comment.
+                    if let Some(result) =
+                        super::native_this_alias::maybe_run_stream_subclass_init_via_this(
+                            object, this_arg, rest_ptr, rest_len,
+                        )
+                    {
+                        return Some(result);
+                    }
+                    // #10454: `http.ServerResponse.call(this, req)` reached
+                    // through an aliased heritage — see
+                    // `maybe_construct_http_class_with_this`'s doc comment.
+                    if let Some(result) =
+                        super::native_this_alias::maybe_construct_http_class_with_this(
+                            object, this_arg, rest_ptr, rest_len,
+                        )
+                    {
+                        return Some(result);
+                    }
                 }
                 // The callee and the explicit `this` both cross the
                 // invocation — a moving
@@ -486,11 +497,13 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                 // #4973: `http.Server.call(this, handler)` — the inherits
                 // pattern. Alias the explicit `this` object to the handle the
                 // native class export constructed.
-                super::native_this_alias::maybe_alias_explicit_this_construction(
-                    callee_h.get_nanbox_f64(),
-                    this_h.get_nanbox_f64(),
-                    result,
-                );
+                if construction_alias {
+                    super::native_this_alias::maybe_alias_explicit_this_construction(
+                        callee_h.get_nanbox_f64(),
+                        this_h.get_nanbox_f64(),
+                        result,
+                    );
+                }
                 return Some(result);
             }
             // #3662: `Function.prototype.call.call(x, …)` on a non-callable
@@ -522,6 +535,13 @@ pub(crate) unsafe fn dispatch_function_proto_method(
             }
             let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
             if crate::closure::is_closure_ptr(raw_ptr) {
+                // Constructor-export alias shims only recognize the native
+                // bound-method representation. The callee's own body record
+                // decides this once, before any shim probes its captures.
+                // An unknown body keeps the conservative dispatch path.
+                let construction_alias =
+                    crate::closure::closure_info(raw_ptr as *const crate::closure::ClosureHeader)
+                        .is_none_or(|info| info.code == crate::closure::BOUND_METHOD_FUNC_PTR);
                 let this_arg = if args_len >= 1 && !args_ptr.is_null() {
                     crate::closure::coerce_call_this(object, *args_ptr)
                 } else {
@@ -598,27 +618,31 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                 } else {
                     (buf.as_ptr(), buf.len())
                 };
-                // #10454: `Readable.apply(this, [opts])` twin of the `call`
-                // arm's stream-subclass-init hook above.
-                if let Some(result) =
-                    super::native_this_alias::maybe_run_stream_subclass_init_via_this(
-                        object,
-                        this_arg,
-                        call_args_ptr,
-                        call_args_len,
-                    )
-                {
-                    return Some(result);
-                }
-                // #10454: `http.ServerResponse.apply(this, [req])` twin of
-                // the `call` arm's hook above.
-                if let Some(result) = super::native_this_alias::maybe_construct_http_class_with_this(
-                    object,
-                    this_arg,
-                    call_args_ptr,
-                    call_args_len,
-                ) {
-                    return Some(result);
+                if construction_alias {
+                    // #10454: `Readable.apply(this, [opts])` twin of the `call`
+                    // arm's stream-subclass-init hook above.
+                    if let Some(result) =
+                        super::native_this_alias::maybe_run_stream_subclass_init_via_this(
+                            object,
+                            this_arg,
+                            call_args_ptr,
+                            call_args_len,
+                        )
+                    {
+                        return Some(result);
+                    }
+                    // #10454: `http.ServerResponse.apply(this, [req])` twin of
+                    // the `call` arm's hook above.
+                    if let Some(result) =
+                        super::native_this_alias::maybe_construct_http_class_with_this(
+                            object,
+                            this_arg,
+                            call_args_ptr,
+                            call_args_len,
+                        )
+                    {
+                        return Some(result);
+                    }
                 }
                 // Same rooting discipline as the `call` arm (#8082): callee
                 // and explicit `this` cross the invocation and must survive a moving collection inside it.
@@ -648,11 +672,13 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                 }
                 // #4973: `http.Server.apply(this, args)` — same inherits
                 // pattern as the `call` arm above.
-                super::native_this_alias::maybe_alias_explicit_this_construction(
-                    callee_h.get_nanbox_f64(),
-                    this_h.get_nanbox_f64(),
-                    result,
-                );
+                if construction_alias {
+                    super::native_this_alias::maybe_alias_explicit_this_construction(
+                        callee_h.get_nanbox_f64(),
+                        this_h.get_nanbox_f64(),
+                        result,
+                    );
+                }
                 return Some(result);
             }
             // #3662: `Function.prototype.apply.call(x, …)` on a non-callable
