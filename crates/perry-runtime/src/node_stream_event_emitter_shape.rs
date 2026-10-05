@@ -527,8 +527,14 @@ mod method_body_tests {
         let target = crate::node_stream::js_event_emitter_object_new(undefined_value());
         let proto = shape_prototype(ordinary_object(target).unwrap().0).unwrap();
         let emit = get_named(proto, b"emit");
-        set_named(proto, b"dispatchAlias", emit);
-        set_named(proto, b"otherBody", 42.0);
+        let alias_id = crate::value::JSValue::try_short_string(b"alias")
+            .unwrap()
+            .bits() as i64;
+        let other_id = crate::value::JSValue::try_short_string(b"other")
+            .unwrap()
+            .bits() as i64;
+        set_named(proto, b"alias", emit);
+        set_named(proto, b"other", 42.0);
         let args = [f64::from_bits(
             crate::value::JSValue::try_short_string(b"absent")
                 .unwrap()
@@ -536,56 +542,43 @@ mod method_body_tests {
         )];
         unsafe {
             assert_eq!(
-                shape_method(target, 901, b"dispatchAlias")
-                    .unwrap()
-                    .to_bits(),
+                shape_method(target, alias_id, b"alias").unwrap().to_bits(),
                 emit.to_bits()
             );
-            assert_eq!(shape_method(target, 902, b"otherBody"), Some(42.0));
+            assert_eq!(shape_method(target, other_id, b"other"), Some(42.0));
+            let obj = ordinary_object(target).unwrap().0;
+            let holder = ordinary_object(proto).unwrap().0;
+            let heap_key = crate::string::intern_ascii_literal(b"non_static_method_id") as i64;
+            let memo = crate::object::method_site::own_slot_memo::ProtoSlotMemo::new();
+            memo.prime(obj, holder, heap_key, 0);
+            assert!(
+                memo.slot(obj, heap_key).is_none(),
+                "heap ids cannot enter the memo"
+            );
             // The same receiver/holder words cannot answer another method
             // from the memo's previous slot. The method id is part of each way.
             assert_eq!(
-                shape_method(target, 901, b"dispatchAlias")
-                    .unwrap()
-                    .to_bits(),
+                shape_method(target, alias_id, b"alias").unwrap().to_bits(),
                 emit.to_bits()
             );
             assert_eq!(
-                crate::node_stream::emitter_emit_call(
-                    target,
-                    901,
-                    b"dispatchAlias",
-                    args.as_ptr(),
-                    1
-                )
-                .map(f64::to_bits),
+                crate::node_stream::emitter_emit_call(target, alias_id, b"alias", args.as_ptr(), 1)
+                    .map(f64::to_bits),
                 Some(crate::value::TAG_FALSE)
             );
             assert_eq!(
-                crate::node_stream::emitter_emit_call(target, 902, b"otherBody", args.as_ptr(), 1),
+                crate::node_stream::emitter_emit_call(target, other_id, b"other", args.as_ptr(), 1),
                 None
             );
-            set_named(target, b"dispatchAlias", 13.0);
+            set_named(target, b"alias", 13.0);
             assert_eq!(
-                crate::node_stream::emitter_emit_call(
-                    target,
-                    901,
-                    b"dispatchAlias",
-                    args.as_ptr(),
-                    1
-                ),
+                crate::node_stream::emitter_emit_call(target, alias_id, b"alias", args.as_ptr(), 1),
                 None
             );
         }
         // The prototype is process-global test state; remove only our keys.
         let obj = ordinary_object(proto).unwrap().0;
-        crate::object::js_object_delete_field(
-            obj,
-            crate::string::intern_ascii_literal(b"otherBody"),
-        );
-        crate::object::js_object_delete_field(
-            obj,
-            crate::string::intern_ascii_literal(b"dispatchAlias"),
-        );
+        crate::object::js_object_delete_field(obj, crate::string::intern_ascii_literal(b"other"));
+        crate::object::js_object_delete_field(obj, crate::string::intern_ascii_literal(b"alias"));
     }
 }

@@ -2854,7 +2854,7 @@
       "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
       "name": "EMIT_METHOD",
       "verdict": "not_a_gc_pointer",
-      "why": "#11992: Fixed method-resolver site memo. Its two ways hold pooled method ids, receiver and prototype holder identity words (class id and ShapeId), and u32 slots. Hits re-resolve the current prototype through the receiver shape and validate both identity words before loading; no object address or JS value is retained."
+      "why": "#11992: Fixed method-resolver site memo. Its two ways admit only static image dispatch descriptors or inline short-string words as method ids (heap/raw string addresses are refused), plus receiver and prototype holder identity words (class id and ShapeId), and u32 slots. Hits re-resolve the current prototype through the receiver shape and validate both identity words before loading; no object address or JS value is retained."
     },
     {
       "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",

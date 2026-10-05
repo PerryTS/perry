@@ -116,6 +116,16 @@ pub(crate) struct ProtoSlotMemo {
 }
 
 impl ProtoSlotMemo {
+    /// Only image descriptors and inline bytes have immutable, non-GC ids.
+    /// A heap-string address can move or be reused for another name.
+    #[inline]
+    fn cacheable_key(key: i64) -> bool {
+        matches!(
+            key as u64 & crate::value::TAG_MASK,
+            crate::string::STATIC_DISPATCH_TAG | crate::value::SHORT_STRING_TAG
+        )
+    }
+
     pub(crate) const fn new() -> Self {
         const W: ProtoWay = ProtoWay {
             key: 0,
@@ -140,6 +150,9 @@ impl ProtoSlotMemo {
         obj: *const ObjectHeader,
         key: i64,
     ) -> Option<(*const ObjectHeader, u32)> {
+        if !Self::cacheable_key(key) {
+            return None;
+        }
         let word = std::ptr::read(obj as *const u64);
         let way = self
             .ways
@@ -170,7 +183,8 @@ impl ProtoSlotMemo {
         key: i64,
         slot: u32,
     ) {
-        if !crate::object::shapes::is_site_matchable_shape_id((*obj).parent_class_id)
+        if !Self::cacheable_key(key)
+            || !crate::object::shapes::is_site_matchable_shape_id((*obj).parent_class_id)
             || !crate::object::shapes::is_site_matchable_shape_id((*holder).parent_class_id)
         {
             return;
