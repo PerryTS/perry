@@ -34,6 +34,10 @@
 use crate::array::ArrayHeader;
 use std::cell::RefCell;
 
+#[path = "shapes_own_data.rs"]
+mod shapes_own_data;
+pub(crate) use shapes_own_data::own_data_shape;
+
 #[path = "shapes_birth_width.rs"]
 mod shapes_birth_width;
 #[path = "shapes_last_key_rollback.rs"]

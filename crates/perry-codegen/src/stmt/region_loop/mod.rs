@@ -256,6 +256,8 @@ pub(crate) fn is_f64_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 #[derive(Clone)]
 pub(crate) struct Pending {
     body_ptr: usize,
+    /// Emitted F clones cannot collect, and the split loop cannot enter G.
+    fast_body_cannot_collect: bool,
     body_len: usize,
     /// First statement of the split tail (0 for a loop region).
     split_at: usize,
@@ -589,10 +591,35 @@ fn begin_with(
             ctx.receiver_descriptors.dematerialize_scope(sc);
         }
     }
-    let bound_scope = bound_scope.filter(|_| nested.is_some());
+    let mut bound_scope = bound_scope.filter(|_| nested.is_some());
     if nested.is_none() && admit != Admit::Any {
         return Ok(None);
     }
+    // A receiver-only loop can establish the same bound fact with a strict
+    // Number entry test. loop_env requires a plain, uncaptured local with no
+    // writes in the body, condition or update (mapped arguments are boxed).
+    // A bound used as a receiver is excluded: its guard must not consume a
+    // Number fact before the entry test. The scope belongs only to the
+    // guarded split loop, and is closed before
+    // the generic copy. A nonnumber bound keeps its ordinary coercions.
+    let control_bound = if nested.is_none() {
+        match env.counter {
+            Some(arrays::Counter {
+                bound: arrays::Bound::Local(b),
+                ..
+            }) if !cands.contains(&Recv::Local(b))
+                && !crate::type_analysis::is_numeric_expr(ctx, &Expr::LocalGet(b)) =>
+            {
+                let sc = ctx.next_loop_proof_scope_id();
+                ctx.receiver_descriptors.materialize_number_locals(sc, &[b]);
+                bound_scope = Some(sc);
+                Some(b)
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
     let (first, inner) = match nested {
         Some((p, inner)) => (Some(p), inner),
         None => (
@@ -736,7 +763,7 @@ fn begin_with(
             arrs.push(a);
         }
         let loop_control: Vec<&Expr> = cond.into_iter().chain(update).collect();
-        let (number_locals, entry_tests) = number_facts(
+        let (number_locals, mut entry_tests) = number_facts(
             ctx,
             body,
             &loop_control,
@@ -746,6 +773,11 @@ fn begin_with(
             &p.number_local_uses,
             &p.declared_locals,
         );
+        if let Some(b) = control_bound {
+            entry_tests.push(b);
+            entry_tests.sort_unstable();
+            entry_tests.dedup();
+        }
         if !entry_tests.is_empty() {
             let number_ok = emit_number_entry_tests(ctx, &entry_tests)?;
             all = ctx.block().and(I1, &all, &number_ok);
@@ -764,6 +796,7 @@ fn begin_with(
         });
         ctx.region_loops.push(Pending {
             body_ptr: body.as_ptr() as usize,
+            fast_body_cannot_collect: false,
             body_len: body.len(),
             split_at: 0,
             valid_slot: Some(valid_slot),
@@ -1082,6 +1115,7 @@ fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
         .collect();
     Pending {
         body_ptr: body.as_ptr() as usize,
+        fast_body_cannot_collect: false,
         body_len: body.len(),
         split_at,
         valid_slot: None,
@@ -1270,6 +1304,19 @@ pub(crate) fn pending_for(ctx: &FnCtx<'_>, stmts: &[Stmt]) -> Option<usize> {
         .position(|p| p.body_ptr == ptr && p.body_len == stmts.len())
 }
 
+/// The loop's emitted body has a stronger effect proof than its generic HIR.
+/// The existing plan identifies this lowering occurrence; no runtime state is
+/// added, and the plain clone removes its plan before lowering its own poll.
+/// Loop controls are deliberately excluded and must still be checked by the
+/// caller after the body-local Number scope has ended.
+pub(crate) fn body_cannot_collect(ctx: &FnCtx<'_>, body: &[Stmt]) -> bool {
+    ctx.region_loops.iter().any(|p| {
+        p.body_ptr == body.as_ptr() as usize
+            && p.body_len == body.len()
+            && p.fast_body_cannot_collect
+    })
+}
+
 /// Lower a registered body: the prefix (body regions) once, then the split.
 pub(crate) fn lower_split(
     ctx: &mut FnCtx<'_>,
@@ -1277,6 +1324,7 @@ pub(crate) fn lower_split(
     idx: usize,
     lower_list: fn(&mut FnCtx<'_>, &[Stmt]) -> Result<()>,
 ) -> Result<()> {
+    ctx.region_loops[idx].fast_body_cannot_collect = false;
     let split_at = ctx.region_loops[idx].split_at;
     let token = ctx.region_loops[idx].token;
     if split_at > 0 {
@@ -1489,6 +1537,7 @@ pub(crate) fn lower_split(
 
     // F-body, once per layout; each copy is verified on its own IR.
     let mut copies: Vec<(String, bool)> = Vec::with_capacity(modes.len());
+    let mut noncollecting_copies = Vec::with_capacity(modes.len());
     for (ci, &mode) in modes.iter().enumerate() {
         let fb = if ci == 0 {
             fast
@@ -1582,6 +1631,7 @@ pub(crate) fn lower_split(
                 );
             }
         }
+        noncollecting_copies.push(verify::cannot_collect(ctx, fb, scan_start, scan_end));
         copies.push((fl, ok));
     }
     let ok = copies[0].1;
@@ -1593,6 +1643,9 @@ pub(crate) fn lower_split(
     // so the split loop carries no G copy. A nested body region's G-tail
     // leaves the loop region, so that loop keeps its G.
     let g_dead = ok && valid_slot.is_some() && recheck == Recheck::None && inner.is_none();
+    ctx.region_loops[idx].fast_body_cannot_collect = g_dead
+        && copies.iter().all(|(_, verified)| *verified)
+        && noncollecting_copies.iter().all(|verified| *verified);
     ctx.current_block = slow;
     if g_dead {
         ctx.block().unreachable();

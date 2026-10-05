@@ -35,6 +35,48 @@ fn get(object: f64, name: &str) -> f64 {
     unsafe { get_by_canonical_key(object, key(name)) }
 }
 
+#[test]
+fn own_data_slot_proof_comes_from_live_shape_and_retires_on_accessor() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let object = object("value", 7.0);
+    let key = key("value");
+    let slot = || unsafe {
+        shapes::own_data_shape(shapes::ordinary_dir_addr(), (*object).parent_class_id)
+            .flatten()
+            .and_then(|shape| {
+                shape.plain_slot(crate::value::nanbox_string_key(key).to_bits(), b"value")
+            })
+    };
+    assert_eq!(slot().map(|(slot, _)| slot), Some(0));
+    let byte_reads = crate::string::test_key_byte_reads();
+    assert_eq!(
+        unsafe { try_data_get_by_name(object, key) }.unwrap().bits(),
+        7.0f64.to_bits()
+    );
+    assert_eq!(
+        crate::string::test_key_byte_reads(),
+        byte_reads,
+        "the named read must preserve the key word through the shape lookup"
+    );
+    assert_eq!(
+        unsafe { try_data_get_bytes(JSValue::from_bits(boxed(object).to_bits()), b"value") }
+            .unwrap()
+            .bits(),
+        7.0f64.to_bits()
+    );
+    assert!(
+        crate::string::test_key_byte_reads() > byte_reads,
+        "the byte-only sibling must exercise the byte-read counter"
+    );
+    install_getter(object, "value", true);
+    assert_eq!(
+        slot(),
+        None,
+        "the successor shape must retire the plain-data proof"
+    );
+    differential(boxed(object), "value", 47.0);
+}
+
 fn differential(object: f64, name: &str, expected: f64) {
     assert_eq!(get(object, name).to_bits(), expected.to_bits());
     let _slow = Slow::enter();

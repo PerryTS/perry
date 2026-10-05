@@ -2,6 +2,23 @@
 
 use super::*;
 
+/// Judge the emitted clone, after representation-specific lowering, using
+/// the same collection effects as bare-address verification. Unknown calls
+/// refuse the proof, including calls in conservatively unreachable blocks.
+pub(super) fn cannot_collect(
+    ctx: &FnCtx<'_>,
+    entry: usize,
+    scan_start: usize,
+    scan_end: usize,
+) -> bool {
+    std::iter::once(entry).chain(scan_start..scan_end).all(|b| {
+        ctx.func.blocks()[b]
+            .insts()
+            .iter()
+            .all(|inst| !bare::inst_may_collect(inst))
+    })
+}
+
 // ---------------------------------------------------------------- verify
 
 /// Callees that cannot run JavaScript (they may allocate or collect — the

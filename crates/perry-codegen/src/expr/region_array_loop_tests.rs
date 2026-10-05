@@ -596,9 +596,13 @@ fn a_const_module_array_forms_an_element_region_and_refreshes_after_poll() {
             else_branch: None,
         },
     ];
-    for mutable in [false, true] {
+    for (mutable, allocating) in [(false, false), (false, true), (true, false)] {
+        let mut body = body.clone();
+        if allocating {
+            body.push(Stmt::Expr(Expr::Array(Vec::new())));
+        }
         let ty = Type::Array(Box::new(Type::Any));
-        let mut m = probe_module("rarr_module_elements", ty.clone(), body.clone(), None);
+        let mut m = probe_module("rarr_module_elements", ty.clone(), body, None);
         m.functions[0].params.retain(|p| p.id != A);
         m.init = vec![Stmt::Let {
             id: A,
@@ -627,6 +631,7 @@ fn a_const_module_array_forms_an_element_region_and_refreshes_after_poll() {
             !admitted.is_empty(),
             "the const's element-only loop formed no region:\n{ir}"
         );
+        let mut omitted_refresh = false;
         // Labels repeat across specialised and generic clones; inspect each
         // function on its own so a successor never resolves in another clone.
         for function in admitted {
@@ -641,9 +646,13 @@ fn a_const_module_array_forms_an_element_region_and_refreshes_after_poll() {
                 .into_iter()
                 .filter(|(label, _)| label.starts_with("rloop.arr.refresh."))
                 .collect();
+            if !allocating && refreshes.is_empty() {
+                omitted_refresh = true;
+                continue;
+            }
             assert!(
                 !refreshes.is_empty(),
-                "the region needs a poll refresh:\n{function}"
+                "a collecting region needs a poll refresh:\n{function}"
             );
             for (_, lines) in refreshes {
                 let text = lines.join("\n");
@@ -658,5 +667,9 @@ fn a_const_module_array_forms_an_element_region_and_refreshes_after_poll() {
                 );
             }
         }
+        assert!(
+            allocating || omitted_refresh,
+            "a clone with noncollecting controls must omit its poll refresh:\n{ir}"
+        );
     }
 }

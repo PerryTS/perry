@@ -16,7 +16,7 @@ pub(crate) unsafe fn try_data_get(receiver: JSValue, key: JSValue) -> Option<JSV
     }
     let mut scratch = [0; crate::value::SHORT_STRING_MAX_LEN];
     let bytes = crate::string::js_string_key_bytes(key, &mut scratch)?;
-    try_data_get_bytes(receiver, bytes)
+    try_data_lookup_key(receiver, key.bits(), bytes).flatten()
 }
 
 /// Raw-pointer sibling for the named-field ABI, which accepts both raw and
@@ -40,7 +40,8 @@ pub(crate) unsafe fn try_data_get_by_name(
     };
     let bytes =
         std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
-    try_data_get_bytes(receiver, bytes)
+    let key_bits = crate::value::nanbox_string_key(key).to_bits();
+    try_data_lookup_key(receiver, key_bits, bytes).flatten()
 }
 
 /// Borrowed-name API for native callers. The keys lookup is consult-only:
@@ -59,12 +60,64 @@ pub(crate) unsafe fn try_data_lookup_bytes(
     receiver: JSValue,
     key: &[u8],
 ) -> Option<Option<JSValue>> {
+    try_data_lookup_key(receiver, 0, key)
+}
+
+#[inline]
+unsafe fn try_data_lookup_key(
+    receiver: JSValue,
+    key_bits: u64,
+    key: &[u8],
+) -> Option<Option<JSValue>> {
     #[cfg(test)]
     if FORCE_SLOW.with(|value| value.get()) {
         return None;
     }
     if !receiver.is_pointer() || key.first() == Some(&b'#') || key == b"constructor" {
         return None;
+    }
+    let object = receiver.as_pointer::<ObjectHeader>();
+    let addr = object as usize;
+    let mut first_shape = None;
+    if crate::value::addr_class::is_plausible_heap_addr(addr)
+        && addr.is_multiple_of(std::mem::align_of::<ObjectHeader>())
+    {
+        let shape_id = (*object).parent_class_id;
+        // Non-object cells, unstamped receivers and dictionary/exotic shapes
+        // cannot supply this proof. Decline from the owner word before paying
+        // for the agent directory; no registry determines this classification.
+        let ordinary_id = shape_id.wrapping_sub(shapes::SHAPE_ID_BASE)
+            < shapes::DICTIONARY_SHAPE_ID_BASE - shapes::SHAPE_ID_BASE;
+        if !ordinary_id {
+            // The data walk needs an ordinary-band descriptor. Unstamped
+            // cells have none; dictionary and function namespaces never
+            // describe this layout. Their generic callers still own Get.
+            return None;
+        }
+        let own_shape = shapes::own_data_shape(shapes::ordinary_dir_addr(), shape_id);
+        if let Some(own_shape) = own_shape {
+            // A live nonordinary shape cannot use this data lane. Its caller
+            // still handles class getters and other special receiver reads.
+            let shape = own_shape?;
+            first_shape = Some(shape);
+            if let Some((slot, live)) = shape.plain_slot(key_bits, key) {
+                // The live shape proves a shaped ObjectHeader. Owner-local state
+                // still controls forwarding and indexed/exotic receiver layouts.
+                let header = &*crate::gc::header_from_trusted_user_ptr(object.cast());
+                let meta = (*object).meta;
+                if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                    && header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO == 0
+                    && (meta.is_null() || (*meta).elements == 0)
+                {
+                    let value = super::field_get_set::object_field_at_with_live(object, slot, live);
+                    if value.bits() != crate::value::TAG_HOLE
+                        && !(value.is_undefined() && super::native_this_alias::alias_active())
+                    {
+                        return Some(Some(value));
+                    }
+                }
+            }
+        }
     }
     // Descriptor summaries use the same byte hash. Invalid UTF-8 stays on
     // the WTF-8-aware slow path; no String is allocated for ordinary keys.
@@ -74,26 +127,46 @@ pub(crate) unsafe fn try_data_lookup_bytes(
     let mut inherited = false;
     for _ in 0..32 {
         let addr = object as usize;
-        // Headerless Buffer/TypedArray/foreign handles must never be read as
-        // GcHeader-bearing objects. As in the existing own-field fast lane,
-        // require positive arena membership before inspecting the header.
-        if !crate::value::addr_class::is_plausible_heap_addr(addr)
-            || crate::arena::classify_heap_generation(addr) == crate::arena::HeapGeneration::Unknown
-        {
-            return None;
-        }
-        // `is_plausible_heap_addr(addr)` was just proven true above; skip
-        // `try_read_gc_header`'s own re-derivation of it (see
-        // `try_read_gc_header_known_plausible`'s doc comment).
-        let header = crate::value::addr_class::try_read_gc_header_known_plausible(addr)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
-            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        let (header, keys, key_count, live) = if let Some(shape) = first_shape.take() {
+            // The receiver's live ordinary shape already proved ObjectHeader
+            // layout. Reuse it on wide, semantic and absent-key reads too;
+            // these facts are consumed without allocation or user code.
+            (
+                &*crate::gc::header_from_trusted_user_ptr(object.cast()),
+                shape.keys,
+                shape.logical_key_count,
+                shape.live_inline_slot_count,
+            )
+        } else {
+            // An inherited hop or unproved cell still needs positive arena
+            // membership before inspecting a possibly headerless handle.
+            if !crate::value::addr_class::is_plausible_heap_addr(addr)
+                || crate::arena::classify_heap_generation(addr)
+                    == crate::arena::HeapGeneration::Unknown
+            {
+                return None;
+            }
+            let header = crate::value::addr_class::try_read_gc_header_known_plausible(addr)?;
+            if header.obj_type != crate::gc::GC_TYPE_OBJECT
+                || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+                || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
+            {
+                return None;
+            }
+            let descriptor = shapes::object_shape_descriptor(object)?;
+            if !descriptor.object_kind.is_ordinary_layout() {
+                return None;
+            }
+            (
+                header,
+                descriptor.keys,
+                descriptor.logical_key_count,
+                descriptor.live_inline_slot_count,
+            )
+        };
+        if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
         {
-            return None;
-        }
-        let descriptor = shapes::object_shape_descriptor(object)?;
-        if !descriptor.object_kind.is_ordinary_layout() {
             return None;
         }
         let class_id = (*object).class_id;
@@ -120,24 +193,16 @@ pub(crate) unsafe fn try_data_lookup_bytes(
         // Same summary as descriptor_state::may_have_descriptor_entry; the
         // receiver has already been classified, so do not classify it again.
         if meta.is_null() || (*meta).accessor_key_bits & accessor_bit == 0 {
-            let keys = descriptor.keys as usize as *const crate::array::ArrayHeader;
+            let keys = keys as usize as *const crate::array::ArrayHeader;
             if !keys.is_null() {
                 if let Some(slot) =
-                    // `keys` came straight out of `descriptor` above with no
+                    // `keys` came straight out of the live shape above with no
                     // allocation in between, and the collector maintains that
                     // field — so the resolved entry skips a `clean_arr_ptr`
                     // that re-derives it.
-                    super::keys_find_slot_by_bytes_resolved(
-                        keys,
-                        descriptor.logical_key_count,
-                        key,
-                    )
+                    super::keys_find_slot_by_bytes_resolved(keys, key_count, key)
                 {
-                    let value = super::field_get_set::object_field_at_with_live(
-                        object,
-                        slot,
-                        descriptor.live_inline_slot_count,
-                    );
+                    let value = super::field_get_set::object_field_at_with_live(object, slot, live);
                     // Legacy inherited resolution treats undefined/null as
                     // misses at some class edges. Preserve that fallback, and
                     // the f64 entry's native-handle alias on undefined reads.
