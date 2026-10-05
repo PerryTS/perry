@@ -300,10 +300,10 @@ pub(crate) use scalar_slot_root::{
     root_scalar_replaced_slot_unconditional,
 };
 pub(crate) use shadow_slot::{
-    current_closure_ptr_value, emit_persistent_shadow_root_barrier,
-    emit_shadow_slot_bind_for_local, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
-    enable_persistent_shadow_slot_for_array_alias, expr_is_known_non_pointer_shadow_value,
-    root_inlined_ctor_pointer_locals, try_current_closure_ptr_value,
+    current_closure_ptr_value, emit_shadow_slot_bind_for_local, emit_shadow_slot_clear,
+    emit_shadow_slot_update_for_expr, enable_persistent_shadow_slot_for_array_alias,
+    expr_is_known_non_pointer_shadow_value, root_inlined_ctor_pointer_locals,
+    try_current_closure_ptr_value,
 };
 
 /// One in-flight inline-constructor return target. See
@@ -3136,8 +3136,6 @@ mod index_set_packed_loop;
 mod index_set_typed_array;
 mod instance_misc1;
 mod member_update;
-#[cfg(test)]
-mod packed_loop_shadow_barrier_tests;
 mod typed_array_rmw;
 mod typed_array_update;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;

@@ -104,12 +104,16 @@ fn scalar_global_stores_keep_the_store_without_root_shading() {
 }
 
 #[test]
-fn unknown_and_declared_number_globals_keep_root_shading() {
+fn every_registered_global_store_omits_redundant_root_shading() {
     for ty in [Type::Any, Type::Number] {
         let ir = global_store_ir(Expr::LocalGet(1), ty);
         assert!(
-            ir.contains("call void @js_write_barrier_root_nanbox("),
-            "annotation must not suppress the barrier:\n{ir}"
+            ir.contains("store double") && ir.contains("@perry_global_cost_test__99"),
+            "registered-global store disappeared:\n{ir}"
+        );
+        assert!(
+            !ir.contains("call void @js_write_barrier_root_nanbox("),
+            "generated roots are fully rescanned at FinalRootRemark:\n{ir}"
         );
     }
     for value in [
@@ -119,8 +123,8 @@ fn unknown_and_declared_number_globals_keep_root_shading() {
     ] {
         let ir = global_store_ir(value, Type::Any);
         assert!(
-            ir.contains("call void @js_write_barrier_root_nanbox("),
-            "heap barrier missing:\n{ir}"
+            !ir.contains("call void @js_write_barrier_root_nanbox("),
+            "heap-valued registered roots must use the final remark, not per-store shading:\n{ir}"
         );
     }
 }
