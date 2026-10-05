@@ -96,6 +96,18 @@ pub(crate) fn check_derived_this_initialized(ctx: &mut FnCtx<'_>) {
     }
 }
 
+/// Private-member guards use the receiver slot to recover the lexical class
+/// evaluation. This is compiler bookkeeping, not a JavaScript `this` access:
+/// `C.#x`, `other.#x`, and `#x in other` are legal before `super()`. The actual
+/// receiver expression still goes through the ordinary `this` TDZ check.
+pub(crate) fn load_private_brand_owner(ctx: &mut FnCtx<'_>) -> String {
+    if let Some(slot) = ctx.this_stack.last().cloned() {
+        ctx.block().load(DOUBLE, &slot)
+    } else {
+        super::body_call::unbound_this_value(ctx)
+    }
+}
+
 /// Bind derived `this` after a successful parent-constructor return. The
 /// parent is deliberately invoked before this check: a second `super()` runs
 /// the base constructor, then throws `ReferenceError` while binding `this`,
