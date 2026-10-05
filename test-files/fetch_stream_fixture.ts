@@ -41,9 +41,23 @@ export async function fixture(secure = false) {
       const state = states[path] = { sent:0, closed:false, complete:false };
       let timer;
       res.on('close', () => { state.closed = true; clearTimeout(timer); });
-      const coding = path === '/gzip' ? 'gzip' : path === '/br' ? 'br' : path === '/deflate' ? 'deflate' : '';
+      if (path === '/rawgzip-large') {
+        const data=Buffer.alloc(1048576); let seed=1;
+        for(let i=0;i<data.length;i++) { seed=(Math.imul(seed,1664525)+1013904223)>>>0; data[i]=seed>>>24; }
+        const bytes=z.gzipSync(data); let offset=0;
+        res.writeHead(200,{'content-type':'application/octet-stream'}); res.flushHeaders();
+        function sendLarge() {
+          if(res.destroyed)return;
+          if(offset===bytes.length){state.complete=true;res.end();return;}
+          const end=Math.min(offset+65536,bytes.length);
+          state.sent+=end-offset; const ready=res.write(bytes.subarray(offset,end));offset=end;
+          if(ready)timer=setTimeout(sendLarge,40);else res.once('drain',()=>{timer=setTimeout(sendLarge,40);});
+        }
+        timer=setTimeout(sendLarge,200);return;
+      }
+      const coding = (path === '/gzip' || path === '/rawgzip') ? 'gzip' : path === '/br' ? 'br' : path === '/deflate' ? 'deflate' : '';
       const headers = {'content-type':'application/json'};
-      if (coding) headers['content-encoding'] = coding;
+      if (coding && path !== '/rawgzip') headers['content-encoding'] = coding;
       if (path === '/form') headers['content-type']='application/x-www-form-urlencoded';
       if (path === '/error') headers['content-length'] = '99999';
       res.writeHead(200, headers); res.flushHeaders();

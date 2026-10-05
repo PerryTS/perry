@@ -534,17 +534,28 @@ pub(super) fn add_pipe_no_end_destination(stream: f64, dest: f64) {
 }
 
 pub(super) fn pipe_stream_to_destination(stream: f64, dest: f64, end_dest: bool) -> f64 {
-    add_pipe_destination(stream, dest);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let dest = scope.root_nanbox_f64(dest);
+    add_pipe_destination(stream.get_nanbox_f64(), dest.get_nanbox_f64());
     if !end_dest {
-        add_pipe_no_end_destination(stream, dest);
+        add_pipe_no_end_destination(stream.get_nanbox_f64(), dest.get_nanbox_f64());
     }
-    install_pipe_destination_listeners(stream, dest);
-    let _ = emit_stream_event(dest, literal_string_value(b"pipe"), &[stream]);
-    set_readable_flowing(stream, f64::from_bits(TAG_TRUE));
-    let _ = emit_stream_event(stream, literal_string_value(b"resume"), &[]);
-    flush_pending_readable_chunks(stream);
-    schedule_readable_from_drain(stream);
-    dest
+    install_pipe_destination_listeners(stream.get_nanbox_f64(), dest.get_nanbox_f64());
+    let _ = emit_stream_event(
+        dest.get_nanbox_f64(),
+        literal_string_value(b"pipe"),
+        &[stream.get_nanbox_f64()],
+    );
+    set_readable_flowing(stream.get_nanbox_f64(), f64::from_bits(TAG_TRUE));
+    let _ = emit_stream_event(
+        stream.get_nanbox_f64(),
+        literal_string_value(b"resume"),
+        &[],
+    );
+    flush_pending_readable_chunks(stream.get_nanbox_f64());
+    schedule_readable_from_drain(stream.get_nanbox_f64());
+    dest.get_nanbox_f64()
 }
 
 fn is_small_native_handle_destination(value: f64) -> bool {
@@ -889,23 +900,8 @@ pub(super) fn drain_readable_from_events(stream: f64) {
     {
         return;
     }
-    if !readable_chunks_nonempty(s()) {
-        if let Some(source_iterator) =
-            get_hidden_value(s(), hidden_key(READABLE_SOURCE_ITERATOR_KEY))
-        {
-            match collect_pipeline_iterator_chunks(source_iterator) {
-                Ok(Some(chunks)) => {
-                    let chunks = scope.root_nanbox_f64(chunks);
-                    set_hidden_value(s(), hidden_chunks_key(), chunks.get_nanbox_f64());
-                    initialize_readable_from_buffered_length(s(), chunks.get_nanbox_f64());
-                }
-                Ok(None) => {}
-                Err(err) => {
-                    destroy_stream(s(), err);
-                    return;
-                }
-            }
-        }
+    if !readable_chunks_nonempty(s()) && super::readable_from_iterator::pull(s()) {
+        return;
     }
     if let Some(chunks) = readable_hidden_chunks(s()) {
         let mut found = Vec::new();
@@ -955,6 +951,9 @@ pub(super) fn drain_readable_from_events(stream: f64) {
                 emit_destroyed_tail = true;
             }
         }
+    }
+    if !readable_chunks_nonempty(s()) && super::readable_from_iterator::pull(s()) {
+        return;
     }
     if !stream_destroyed(s())
         && !has_truthy_hidden(s(), hidden_transform_finishing_key())
