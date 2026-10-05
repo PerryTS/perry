@@ -50,6 +50,7 @@ unsafe fn try_dispatch_external_zlib_stream(
             | "addListener"
             | "off"
             | "removeListener"
+            | "listenerCount"
             | "pipe"
             | "iterator"
             | "@@asyncIterator"
