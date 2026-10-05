@@ -486,7 +486,7 @@ fn build_clang_compile_plan(
 /// are left behind for debugging — the caller can `grep /tmp/perry_llvm_*`.
 /// #7174 research pipe: run `opt -passes='function(mem2reg),
 /// rewrite-statepoints-for-gc'` over the module before clang when
-/// `PERRY_RS4GC=1`. mem2reg promotes the retyped `ptr addrspace(1)` root
+/// mandatory native statepoints. mem2reg promotes the retyped `ptr addrspace(1)` root
 /// allocas into SSA (their only uses are the surgery's loads/stores, so
 /// promotion always succeeds), and RS4GC then owns every statepoint,
 /// relocation, and downstream-use rewrite. Fails the compile loudly when no
@@ -515,12 +515,12 @@ pub(crate) fn rs4gc_funclet_refusal(ll_text: &str) -> Option<String> {
     .iter()
     .any(|needle| ll_text.contains(needle))
     .then(|| {
-        "PERRY_RS4GC: this module contains a `try`/`catch` that lowered to \
+        "native statepoints: this module contains a `try`/`catch` that lowered to \
              WinEH funclet pads (catchswitch/catchpad — the windows-msvc EH \
              shape), and LLVM's rewrite-statepoints-for-gc pass does not \
              support funclet EH: it crashes with an access violation rather \
              than reporting anything. Refusing before the pass runs. \
-             Compile without PERRY_RS4GC, or keep `try` out of RS4GC-compiled \
+             This WinEH shape cannot currently be compiled for native \
              modules on Windows. Tracked in #7354."
             .to_string()
     })
@@ -538,7 +538,7 @@ fn maybe_rs4gc_preprocess(ll_text: &str, native_roots: bool) -> Result<Option<St
     // separate `opt` here as well would both duplicate the rewrite and
     // reintroduce the version skew the in-process path exists to remove.
     #[cfg(feature = "llvm-inprocess")]
-    if inprocess_requested() {
+    if inprocess_requested(native_roots) {
         return Ok(None);
     }
     let opt = std::env::var("PERRY_LLVM_OPT")
@@ -556,7 +556,7 @@ fn maybe_rs4gc_preprocess(ll_text: &str, native_roots: bool) -> Result<Option<St
         })
         .or_else(|| which_in_path("opt"))
         .context(
-            "PERRY_RS4GC=1 requires an LLVM `opt` binary: set PERRY_LLVM_OPT, \
+            "native statepoints require an LLVM `opt` binary: set PERRY_LLVM_OPT, \
              install Homebrew LLVM, or put `opt` on PATH",
         )?;
     let passes_arg = format!("-passes={STATEPOINT_REWRITE_PASSES}");
@@ -588,7 +588,7 @@ fn maybe_rs4gc_preprocess(ll_text: &str, native_roots: bool) -> Result<Option<St
             Err(error) => format!("(could not write input IR: {error})"),
         };
         return Err(anyhow!(
-            "PERRY_RS4GC: opt pipeline failed ({}).\n{}\n\
+            "native statepoints: opt pipeline failed ({}).\n{}\n\
              reproduce: {} -passes='{}' -S {}\n\
              \n\
              stderr:\n{}",
@@ -767,8 +767,8 @@ pub(crate) fn finish_native_pieces(
 /// cannot round-trip its IR through an external `opt` + a different clang
 /// (#7339).
 ///
-/// `PERRY_LLVM_INPROCESS=0`/`off`/`false` reverts to the clang subprocess for
-/// bisection. Large codegen-unit-split modules default to direct C-API native
+/// `PERRY_LLVM_INPROCESS=0`/`off`/`false` selects the clang subprocess on
+/// platforms without native statepoints. Large codegen-unit-split modules default to direct C-API native
 /// construction because materializing their textual IR is itself a dominant
 /// serial cost; `=1` selects the legacy in-process text transport, while
 /// `=diff` builds both arms and compares them. Small modules retain the mature
@@ -776,7 +776,12 @@ pub(crate) fn finish_native_pieces(
 ///
 /// The value participates in both the build cache and the object cache keys,
 /// so the backends can never share a cached object.
-fn inprocess_requested() -> bool {
+fn inprocess_requested(native_roots: bool) -> bool {
+    // Native rooting requires the same LLVM pipeline that publishes frame homes.
+    // Transport preferences cannot bypass the linear statepoint lowering.
+    if native_roots {
+        return true;
+    }
     match env::var("PERRY_LLVM_INPROCESS").as_deref() {
         Ok("0") | Ok("off") | Ok("false") => false,
         // Explicitly asked for: honour it even without the feature, so the
@@ -934,27 +939,13 @@ fn compile_ll_inprocess_in(
             Ok(bytes)
         }
         Err(e) => {
-            // Preserve typed backend errors through this diagnostic layer.
-            // In particular, #8679's codegen caller must be able to recover
-            // an `Rs4gcBudgetExceeded` and re-lower the named functions; a
-            // freshly formatted anyhow string would turn that retry request
-            // back into the old hard refusal.
+            // Preserve the detailed backend error and its source chain.
             let error = e.context(format!(
                 "in-process LLVM compile failed (PERRY_LLVM_INPROCESS).\n\
                  requested -target: {}",
                 plan.effective_target
             ));
-            if crate::inprocess::rs4gc_budget_retry(&error).is_some() {
-                // This is expected control flow, not a failed compile: the
-                // lowering owner will rebuild the named functions. Do not
-                // consume the process-wide "retain the first LLVM failure"
-                // slot or leave an intermediate behind unless the user
-                // explicitly requested all IR via PERRY_LLVM_KEEP_IR.
-                if !policy.keep {
-                    let _ = fs::remove_dir_all(&paths.scratch_dir);
-                }
-                return Err(error);
-            }
+
             Err(failed_scratch.finish_with_ir(error, ll_text))
         }
     }
@@ -976,7 +967,7 @@ fn compile_ll_inprocess_in(
          `llvm-inprocess` cargo feature. Rebuild with \
          `cargo build -p perry --features llvm-inprocess` (needs LLVM 22: \
          `brew install llvm`, and LLVM_SYS_221_PREFIX if llvm-config is not \
-         on PATH), or unset PERRY_LLVM_INPROCESS."
+         on PATH). Native targets require this backend."
     )
 }
 
@@ -988,7 +979,7 @@ fn compile_ll_to_object_in_with_retention(
     native_roots: bool,
     failure_retention: &FailureRetention,
 ) -> Result<Vec<u8>> {
-    if inprocess_requested() {
+    if inprocess_requested(native_roots) {
         return compile_ll_inprocess_in(
             tmp_dir,
             ll_text,

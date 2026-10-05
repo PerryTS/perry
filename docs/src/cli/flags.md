@@ -304,7 +304,7 @@ the generating asset module where applicable.
 | `--disable-buffer-fast-path` | Disable native Buffer/Uint8Array load/store lowering for A/B diagnosis. |
 | `--explain-lowering` | Emit a type-lowering evidence report; implies native-region verification. |
 | `--opt-report[=json]` | Report which values Perry could **not** statically type, why, and whether you can fix it. Text by default; `--opt-report=json` emits a stable schema for tooling. Also settable via `PERRY_OPT_REPORT=1` |
-| `--statepoint-report[=json]` | Report native-stack GC root pressure: calls with live roots, audited non-collecting calls omitted, relocations, plain-map fallbacks, and live-root widths. Research-only; requires `PERRY_RS4GC=1`, the one native-root backend (the plain stack-map and explicit-bridge modes it also named are gone) |
+| `--statepoint-report[=json]` | Report native-stack GC root pressure: calls with live roots, audited non-collecting calls omitted, relocations, plain-map fallbacks, and live-root widths. Research-only; reports the mandatory native statepoint backend (the plain stack-map and explicit-bridge modes it also named are gone) |
 
 The `--trace`/`--focus` pair localizes "compiled to the wrong thing" bugs:
 `perry compile foo.ts --trace hir,llvm --focus parseRow` dumps just the

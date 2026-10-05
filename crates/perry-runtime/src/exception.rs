@@ -40,11 +40,11 @@ impl JmpBuf {
 // `setjmp` before it is ever jumped through.
 unsafe impl crate::zeroed_cache::ZeroEmpty for JmpBuf {}
 
+#[cfg(any(test, not(perry_native_stack_maps)))]
+pub(crate) use savepoints::catch_subsystem_used;
 mod savepoints;
 use savepoints::CatchSavepoint;
-pub(crate) use savepoints::{
-    catch_subsystem, catch_subsystem_used, note_catch_subsystem_used, CatchStack,
-};
+pub(crate) use savepoints::{catch_subsystem, note_catch_subsystem_used, CatchStack};
 
 #[cfg(not(target_os = "wasi"))]
 extern "C" {

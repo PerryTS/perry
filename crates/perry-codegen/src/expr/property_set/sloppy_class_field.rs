@@ -87,7 +87,7 @@ pub(crate) fn try_lower_sloppy_class_field_store(
     //    that load (plus any pure `bitcast`/`ptrtoint`/`and`/… derived from
     //    it) below any collection point it doesn't dominate. Unconditional
     //    on RS4GC — it runs before either root lowering sees the IR, so it
-    //    protects shadow (`PERRY_RS4GC=0`) and native (`=1`, default)
+    //    protects platform shadow rooting and native statepoint rooting
     //    identically. Verified: `scripts/gc_root_dominance_check.py
     //    --stale-registers`/`--statepoints`, both lowerings, on
     //    `test-files/test_gap_gc_class_field_receiver_rooting.ts`'s

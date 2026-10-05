@@ -196,7 +196,7 @@ arms below and a *dependency-scale* workload — #7280 records 25 curated corpus
 files passing while 20 lines of stock zod fail.
 
 **A fourth class was on this list until #7663 and is now covered: the lowering
-that actually ships.** The corpus used to be compiled under `PERRY_RS4GC=0` —
+that actually ships.** The corpus used to be compiled under a forced shadow lowering —
 the shadow stack — because the checker anchored on `@js_shadow_slot_bind` and
 the native lowering emits zero of them. That made a green `gc-root-dominance` a
 statement about a lowering that has not been the default on any walkable-frame
@@ -205,13 +205,13 @@ target since #7370. **Run both**, and know which one you ran:
 ```bash
 cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
 
-# SHADOW (PERRY_RS4GC=0): still the lowering on arm64_32 watchOS and ARM64
-# Windows. Anchors on root stores.
+# SHADOW: the actual WASI platform lowering. Anchors on root stores.
+# Build the compiler with --features target-wasi for this corpus.
 ./scripts/gc_root_dominance_corpus.sh ir-corpus
 python3 scripts/gc_root_dominance_check.py ir-corpus --moving-only \
   --allowlist scripts/gc_root_dominance_allowlist.json -v
 
-# NATIVE (PERRY_RS4GC=1): the default everywhere else. Anchors on
+# NATIVE: mandatory on supported native targets. Anchors on
 # `gc.statepoint` `"gc-live"` bundles. Needs an LLVM `opt` -- codegen emits
 # `ptr addrspace(1)` root allocas and LLVM inserts the safepoints later, so the
 # corpus is `--trace llvm` output plus the production statepoint rewrite.
@@ -282,7 +282,7 @@ dependency-scale corpus had been at 457 on `main`, and no step reported it.
 For a single file you are iterating on:
 
 ```bash
-PERRY_GC_MOVING_LOOP_POLLS=1 PERRY_INLINE_SHADOW_SLOT=0 \
+PERRY_GC_MOVING_LOOP_POLLS=1 \
   ./target/release/perry compile mycase.ts -o /tmp/mycase --trace llvm
 python3 scripts/gc_root_dominance_check.py .perry-trace/llvm -v
 ```
@@ -413,8 +413,8 @@ grep -ho 'call [^@]*@js_[A-Za-z0-9_.$]*(' ir-corpus/*.ll \
   | sed -E 's/.*@([A-Za-z0-9_.$]+)\($/\1/' | sort | uniq -c | sort -rn
 ```
 
-`PERRY_INLINE_SHADOW_SLOT=0` makes every root store the `js_shadow_slot_bind`
-call form the checker anchors on.
+The WASI platform uses the `js_shadow_slot_bind` call form the
+shadow-root checker anchors on.
 
 `--stale-registers` (#7206) additionally catches values that are *never* rooted
 — read out of a root and held in a register across a collection point. That is

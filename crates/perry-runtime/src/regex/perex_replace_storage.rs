@@ -127,15 +127,11 @@ pub(super) fn call(
     for i in 0..args.len() {
         slots.push(std::cell::UnsafeCell::new(args.get(i)));
     }
-    struct Frame(u64);
-    impl Drop for Frame {
-        fn drop(&mut self) {
-            crate::gc::js_shadow_frame_pop(self.0);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    for cell in &slots {
+        unsafe {
+            scope.root_heap_word_cell(cell);
         }
-    }
-    let frame = Frame(crate::gc::js_shadow_frame_push(args.len() as u32));
-    for (i, value) in slots.iter().enumerate() {
-        crate::gc::js_shadow_slot_bind(i as u32, value.get().cast());
     }
     let reservation = Reservation::new(
         memory,
@@ -150,7 +146,7 @@ pub(super) fn call(
         )
     });
     drop(reservation);
-    drop(frame);
+    drop(scope);
     drop(slots);
     result
 }
@@ -200,24 +196,22 @@ pub(super) fn call_native(
     memory: &MemoryBudget,
     fill: impl FnOnce(&mut dyn FnMut(usize, f64)) -> Result<(), EngineError>,
 ) -> Result<f64, EngineError> {
-    struct Frame(u64);
-    impl Drop for Frame {
-        fn drop(&mut self) {
-            crate::gc::js_shadow_frame_pop(self.0);
-        }
-    }
     let slots = &args.slots;
     for slot in slots {
-        // SAFETY: nothing else holds a reference to these cells, and the
-        // shadow stack is not yet bound to them.
         unsafe { *slot.get() = f64::from_bits(crate::value::TAG_UNDEFINED) };
     }
-    let frame = Frame(crate::gc::js_shadow_frame_push(slots.len() as u32));
-    for (i, slot) in slots.iter().enumerate() {
-        crate::gc::js_shadow_slot_bind(i as u32, slot.get().cast());
+    let scope = crate::gc::RuntimeHandleScope::new();
+    for cell in slots {
+        unsafe {
+            scope.root_heap_word_cell(cell);
+        }
     }
-    // SAFETY as above; the slots are bound, so a write publishes a root.
-    let mut set = |i: usize, value: f64| unsafe { *slots[i].get() = value };
+    let mut set = |i: usize, value: f64| {
+        unsafe {
+            *slots[i].get() = value;
+        }
+        crate::gc::runtime_write_barrier_root_heap_word(value.to_bits());
+    };
     fill(&mut set)?;
     let reservation = Reservation::new(
         memory,
@@ -232,7 +226,7 @@ pub(super) fn call_native(
         )
     });
     drop(reservation);
-    drop(frame);
+    drop(scope);
     result
 }
 

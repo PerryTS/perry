@@ -263,7 +263,7 @@ jobs:
           # the -static wrapper crates. The package set is fixed so cargo
           # feature unification matches every other job that builds the
           # compiler.
-          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          cargo build --release --features target-wasi -p perry -p perry-runtime-static -p perry-stdlib-static
           for artifact in perry libperry_runtime.a libperry_stdlib.a; do
             test -s "target/release/$artifact" \
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
@@ -469,7 +469,7 @@ jobs:
 
   # ★★★ THE LOWERING THAT ACTUALLY SHIPS (#7663).
   #
-  # Everything in the job above compiles its corpus under `PERRY_RS4GC=0` — the
+  # Everything in the job above compiles its corpus under the WASI target — the
   # SHADOW-STACK lowering — and since #7370 that is not the default on any
   # target whose frames the runtime can walk. The reason was sound and is
   # stated inline in `gc_root_dominance_corpus.sh`: the checker anchored on
@@ -583,7 +583,7 @@ jobs:
       - name: Build perry and the runtime archives
         run: |
           set -euo pipefail
-          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          cargo build --release --features target-wasi -p perry -p perry-runtime-static -p perry-stdlib-static
           for artifact in perry libperry_runtime.a libperry_stdlib.a; do
             test -s "target/release/$artifact" \
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }

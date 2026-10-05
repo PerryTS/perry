@@ -41,7 +41,7 @@
 //!
 //! `js_gc_temp_root_truncate(base)` drops `base` and everything above it, so a
 //! missed truncate is bounded by the next one rather than leaking forever.
-//! Non-local exits are covered too: [`super::shadow_stack::ShadowSavepoint`]
+//! Non-local exits are covered too: [`super::shadow_stack::FrameRootSavepoint`]
 //! carries the temp-root depth, so the `longjmp` unwind that already restores
 //! the shadow stack (`crate::exception`) restores this stack with it.
 
@@ -182,7 +182,7 @@ pub(crate) fn temp_root_depth() -> usize {
 }
 
 /// Restore a previously-recorded depth. Used by the exception unwind path via
-/// [`super::shadow_stack::ShadowSavepoint`]; a `longjmp` can only have added
+/// [`super::shadow_stack::FrameRootSavepoint`]; a `longjmp` can only have added
 /// slots relative to the savepoint, so the `<=` guard is defensive.
 pub(crate) fn temp_roots_restore(depth: usize) {
     TEMP_ROOTS.with(|cell| unsafe {

@@ -4074,7 +4074,7 @@ fn compile_module_impl(
             progress.phase(3, "object ready; releasing generated IR");
             return result;
         }
-        loop {
+        {
             let units = llmod.render_codegen_units(n_units);
             log::debug!(
                 "perry-codegen: split '{}' into {} codegen units",
@@ -4094,7 +4094,6 @@ fn compile_module_impl(
             }
             match crate::linker::compile_units_to_object(&units, opts.target.as_deref()) {
                 Ok(object) => return Ok(object),
-                Err(error) if apply_rs4gc_budget_retry(&mut llmod, &error)? => continue,
                 Err(error) => return Err(error),
             }
         }
@@ -4113,7 +4112,7 @@ fn compile_module_impl(
         }
     }
 
-    loop {
+    {
         let ll_text = llmod.to_ir();
         #[cfg(feature = "target-wasi")]
         let ll_text = if wasm32 {
@@ -4139,34 +4138,9 @@ fn compile_module_impl(
             #[cfg(feature = "target-wasi")]
             Ok(object) if wasm32 => return Ok(crate::wasm32::trim_object(object)),
             Ok(object) => return Ok(object),
-            Err(error) if apply_rs4gc_budget_retry(&mut llmod, &error)? => continue,
             Err(error) => return Err(error),
         }
     }
-}
-
-/// Consume the typed post-RS4GC budget signal on text-transport paths. The
-/// native constructors have the same loop closer to their LLVM modules; text
-/// compilation returns through `linker`, so its retry belongs at the last
-/// point where the lowering-owned `LlModule` is still available.
-#[cfg(feature = "llvm-inprocess")]
-fn apply_rs4gc_budget_retry(
-    llmod: &mut crate::module::LlModule,
-    error: &anyhow::Error,
-) -> Result<bool> {
-    let Some(violations) = crate::inprocess::rs4gc_budget_retry(error) else {
-        return Ok(false);
-    };
-    crate::native_emit::apply_budget_spill_retry(llmod.functions_mut(), &violations)?;
-    Ok(true)
-}
-
-#[cfg(not(feature = "llvm-inprocess"))]
-fn apply_rs4gc_budget_retry(
-    _llmod: &mut crate::module::LlModule,
-    _error: &anyhow::Error,
-) -> Result<bool> {
-    Ok(false)
 }
 
 /// exp/llvm-inprocess: unit-split twin of [`try_native_construction`].

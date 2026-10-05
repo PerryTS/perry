@@ -105,7 +105,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 /// How many root slots the module's code reserves.
 ///
 /// Counted under BOTH root lowerings on purpose, because which one runs is an
-/// env decision (`PERRY_RS4GC`) and a test that silently measured zero under the
+/// platform decision, and a test that silently measured zero under the
 /// other would be a gate that cannot fail. Under the statepoint lowering — the
 /// default since #7370 — a root slot is an `alloca ptr addrspace(1)`; under the
 /// shadow-stack lowering it is a `js_shadow_slot_bind`. Both arms of each

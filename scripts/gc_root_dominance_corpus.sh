@@ -24,13 +24,12 @@
 #
 # TWO LOWERINGS, and the corpus is not the same corpus for both (#7663)
 # ---------------------------------------------------------------------
-#   --lowering shadow   PERRY_RS4GC=0: roots are `@js_shadow_slot_bind` calls.
+#   --lowering shadow   --target wasi: roots are `@js_shadow_slot_bind` calls.
 #                       This is what `gc_root_dominance_check.py`'s default,
 #                       `--stale-registers` and `--unrooted-allocas` modes read.
-#                       Still the lowering that SHIPS on arm64_32 watchOS and
-#                       ARM64 Windows -- the targets whose frames the runtime
-#                       cannot walk.
-#   --lowering native   PERRY_RS4GC=1: roots are `gc.statepoint` relocation
+#                       The actual WASI platform lowering; native targets
+#                       cannot select shadow frames.
+#   --lowering native   native target: roots are `gc.statepoint` relocation
 #                       bundles. The default on every other target since #7370.
 #                       Read by `--statepoints`.
 #
@@ -303,30 +302,16 @@ for src in "${sources[@]}"; do
   # PERRY_GC_MOVING_LOOP_POLLS=1 is what puts `js_gc_loop_safepoint` in the IR,
   # which is what the MOVING classification keys on. It is off by default
   # (#7161), so without it this corpus cannot express the bug at all.
-  # PERRY_INLINE_SHADOW_SLOT=0 makes every root store the @js_shadow_slot_bind
-  # call form; the #7088 inline diamond is equivalent but harder to anchor on.
-  # PERRY_RS4GC selects the ROOT LOWERING, and both values are spelled
-  # explicitly rather than left to the default. Statepoints became the default
-  # in #7370; a corpus that inherits "whatever the default is today" changes
-  # subject silently the next time that flips, which is how `gc-root-dominance`
-  # came to be reading a lowering that does not ship.
-  #
-  #   shadow (=0)  roots are `@js_shadow_slot_bind` calls. The `--min-binds`
-  #                floor is about these.
-  #   native (=1)  roots are `ptr addrspace(1)` values that
-  #                `rewrite-statepoints-for-gc` turns into `gc.statepoint`
-  #                relocation bundles below. Zero binds by construction, which
-  #                is why `--statepoints` has its own floors.
-  #
+  # Select the actual platform backend. WASI uses ILP32 bind calls.
+  # Native targets have mandatory statepoints.
   # `--no-link` stops after codegen, which is where `--trace llvm` writes. See
   # the header: linking made this corpus depend on the ext-wrapper/link stack,
   # and that dependency deleted two subjects from it (#8810).
-  if [ "$LOWERING" = "native" ]; then rs4gc=1; else rs4gc=0; fi
-  if ! env PERRY_RS4GC="$rs4gc" \
-           PERRY_GC_MOVING_LOOP_POLLS=1 \
-           PERRY_INLINE_SHADOW_SLOT=0 \
+  target_args=()
+  if [ "$LOWERING" = "shadow" ]; then target_args=(--target wasi); fi
+  if ! env PERRY_GC_MOVING_LOOP_POLLS=1 \
            PERRY_NO_AUTO_OPTIMIZE=1 \
-       "$PERRY_BIN" compile "$src" -o "$scratch/$name.o" --no-link --trace llvm \
+       "$PERRY_BIN" compile "$src" "${target_args[@]}" -o "$scratch/$name.o" --no-link --trace llvm \
        >"$scratch/compile.log" 2>&1; then
     skipped=$((skipped + 1))
     skipped_names+=("$name -- $(first_error_line "$scratch/compile.log")")
@@ -389,7 +374,7 @@ if [ "$LOWERING" = "native" ]; then
     echo "::error::the native corpus contains $sp statepoint(s) and $live live" >&2
     echo "bundle(s). The rewrite ran and produced nothing to check. Either" >&2
     echo "codegen stopped marking functions gc \"statepoint-example\", or" >&2
-    echo "PERRY_RS4GC=1 no longer selects native roots for this target." >&2
+    echo "The native target did not select mandatory statepoints." >&2
     exit 1
   fi
 fi

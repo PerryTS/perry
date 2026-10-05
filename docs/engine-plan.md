@@ -622,7 +622,7 @@ already working, on a workload that happens to reach it through `JSON.parse`.
    throughout), 12 ratchet probes x 7 repeats x **3 interleaved rotations**,
    every probe byte-identical to the pinned Node oracle in all 72 probe-runs:
 
-   | | statepoint (default) | shadow stack (`PERRY_RS4GC=0`) | ratio |
+   | | statepoint (default) | historical forced shadow stack | ratio |
    |---|--:|--:|--:|
    | peak RSS, 12 probes | 544.2 MB | 545.1 MB | **1.002** |
    | retained heap after `gc()` | 114,594,904 B | 114,596,520 B | **1.000** |
@@ -635,7 +635,7 @@ already working, on a workload that happens to reach it through `JSON.parse`.
    **0.000%**, peak RSS max 0.621% (median 0.000%), wall max 2.779%. The arms
    were shown to differ before they were compared, per probe, not per suite:
    `statepoint-example` + `addrspace(1)` roots present on 12/12 under the
-   default and **0 of both** under `PERRY_RS4GC=0`, with `js_shadow_frame_enter`
+   default and **0 of both** under the historical forced shadow lowering, with `js_shadow_frame_enter`
    rising to match.
 
    So #7056's RSS numbers were not invalidated by #7370. What *did* invalidate

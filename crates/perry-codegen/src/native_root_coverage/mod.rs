@@ -337,9 +337,7 @@ pub(crate) fn console_log(args: Vec<Expr>) -> Stmt {
 
 /// Compile `module` under the native-roots lowering for `target`.
 ///
-/// The pin is not redundant with the default: it also overrides `PERRY_RS4GC`
-/// from the environment, so these assertions mean the same thing during a
-/// `PERRY_RS4GC=0` bisection as they do in CI.
+/// The test-only pin isolates shared platform-rooting fixture state.
 pub(crate) fn native_ir(module: &Module, target: &str, is_entry: bool) -> String {
     let _pin = NativeRootsPin::native();
     let bytes = compile_module(module, ir_opts(target, is_entry))

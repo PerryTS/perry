@@ -242,6 +242,9 @@ fn bound_slot_survives_and_is_rewritten_by_a_copying_minor() {
 #[test]
 fn native_stack_roots_survive_nested_frame_growth_and_real_evacuation() {
     let _guard = CopyingNurseryTestGuard::new(0);
+    // This guard deliberately clears scanner registrations. Native runtime
+    // helpers now use the existing handle scanner, so install it explicitly.
+    register_runtime_handle_root_scanner_for_tests();
     let tagged_child = young_leaf();
     let bare_child = young_leaf();
     let before = shadow_stack_depth();
@@ -455,14 +458,14 @@ fn savepoint_restore_drops_orphaned_frames_without_leaving_stale_roots() {
     let outer = js_shadow_frame_push(2);
     js_shadow_slot_set(0, 0x7FFD_0000_0000_00AA);
 
-    let sp = shadow_stack_savepoint();
+    let sp = frame_root_savepoint();
     let mut orphan_storage: u64 = 0x7FFD_0000_0000_00BB;
     let _inner = js_shadow_frame_push(3);
     js_shadow_slot_bind(0, &mut orphan_storage as *mut u64);
     js_shadow_slot_set(1, 0x7FFD_0000_0000_00CC);
     assert_eq!(shadow_stack_depth(), 2);
 
-    shadow_stack_restore(sp);
+    frame_root_restore(sp);
     assert_eq!(shadow_stack_depth(), 1);
     assert_eq!(scanner_slot_values(), vec![0x7FFD_0000_0000_00AA]);
 

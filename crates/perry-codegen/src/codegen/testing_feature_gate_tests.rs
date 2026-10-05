@@ -259,12 +259,6 @@ fn host_target_lowering_default_is_native_roots() {
     use super::helpers::{rs4gc_enabled, set_native_roots_for_target};
     use crate::testing::NativeRootsPin;
 
-    // `PERRY_RS4GC` is an explicit, process-global override cached in a
-    // `OnceLock`; under it the DEFAULT is not what is being measured.
-    if std::env::var("PERRY_RS4GC").is_ok() {
-        return;
-    }
-
     for triple in [
         "aarch64-apple-darwin",
         "arm64-apple-macosx15.0.0",
@@ -317,7 +311,7 @@ fn host_target_lowering_default_is_native_roots() {
          back to the shadow stack there"
     );
     // …and an explicit pin still outranks it, which is what lets a test assert
-    // native-roots IR while a `PERRY_RS4GC=0` sweep is in progress.
+    // native-roots IR while a an unsupported platform is selected.
     {
         let _pin = NativeRootsPin::native();
         assert!(

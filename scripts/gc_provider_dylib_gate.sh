@@ -154,7 +154,6 @@ env \
   PERRY_ISSUE_8075_REAL_CC="$real_cc" \
   PERRY_ISSUE_8075_RUNTIME_LIBRARY="$runtime_library" \
   PERRY_ISSUE_8075_STDLIB_LIBRARY="$stdlib_library" \
-  PERRY_RS4GC=1 \
   PERRY_RUNTIME_DIR="$target_dir/$profile" \
   "$perry" compile \
     --no-codegen --no-auto-optimize --march generic \
@@ -212,7 +211,6 @@ env \
   PERRY_ISSUE_8075_REAL_CC="$real_cc" \
   PERRY_ISSUE_8075_RUNTIME_LIBRARY="$runtime_library" \
   PERRY_ISSUE_8075_STDLIB_LIBRARY="$stdlib_library" \
-  PERRY_RS4GC=1 \
   PERRY_RUNTIME_DIR="$target_dir/$profile" \
   "$perry" compile \
     --no-codegen --no-auto-optimize --march generic \

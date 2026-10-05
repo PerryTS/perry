@@ -812,6 +812,7 @@ fn root_count(record: &Record) -> usize {
             .map_or(0, |(_, _, words)| words as usize)
 }
 
+#[cfg(all(test, feature = "llvm-inprocess"))]
 fn root_slots(record: &Record) -> impl Iterator<Item = (u16, i32)> + '_ {
     record.roots.iter().copied().chain(
         record
@@ -1463,7 +1464,7 @@ pub fn compact_and_assemble(
     // same blob as LP64 — a narrow pointer is not a separate case at all.
     if !arch_supported {
         return Err(anyhow!(
-            "perry: native GC roots (PERRY_RS4GC) are not supported for target \
+            "perry: statepoint GC roots are not supported for target \
              `{target}` — its roots are recorded against frame bases this \
              runtime cannot resolve, and the collector would segfault rather \
              than report anything. Tracked for #7173."
@@ -1482,7 +1483,7 @@ pub fn compact_and_assemble(
     // collector cannot find, with no diagnostic.
     if matches!(format_for(target), ObjectFormat::Coff) && !target.starts_with("x86_64") {
         return Err(anyhow!(
-            "perry: native GC roots (PERRY_RS4GC) are not enabled for target \
+            "perry: statepoint GC roots are not enabled for target \
              `{target}` yet — the COFF section and its PE lookup exist, but the \
              runtime's Windows stack walker is x86-64 only, so no frame would \
              ever be visited and the collector would free live objects. \

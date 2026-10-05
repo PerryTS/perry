@@ -5,7 +5,7 @@
 //! hot TLS cache. No live subsystem state is mirrored or journaled, and the
 //! cold restore path continues to use each subsystem's own cleanup rules.
 
-use crate::gc::ShadowSavepoint;
+use crate::gc::FrameRootSavepoint;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Subsystems whose savepoint is skipped until they first hold state.
@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 pub(crate) mod catch_subsystem {
     /// Always captured; folded to a constant `true` test.
     pub(crate) const ALWAYS: u32 = 1 << 31;
+    #[cfg(any(test, not(perry_native_stack_maps)))]
     pub(crate) const SHADOW_FRAMES: u32 = 1 << 0;
     pub(crate) const PUMP: u32 = 1 << 1;
     pub(crate) const SET_FOREACH: u32 = 1 << 2;
@@ -52,6 +53,7 @@ fn note_catch_subsystem_used_slow(bit: u32) {
 }
 
 #[inline(always)]
+#[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) fn catch_subsystem_used(bit: u32) -> bool {
     (CATCH_SUBSYSTEMS_USED.load(Ordering::Relaxed) | catch_subsystem::ALWAYS) & bit != 0
 }
@@ -163,10 +165,10 @@ macro_rules! catch_savepoints {
 catch_savepoints! {
     // #1830, #6951: both shadow frames and expression temp roots. The frame
     // half latches inside the provider; temp roots are always read.
-    shadow: ShadowSavepoint,
-    capture: crate::gc::shadow_stack_savepoint,
-    restore: crate::gc::shadow_stack_restore,
-    latch: catch_subsystem::ALWAYS, idle: crate::gc::shadow_stack_savepoint();
+    shadow: FrameRootSavepoint,
+    capture: crate::gc::frame_root_savepoint,
+    restore: crate::gc::frame_root_restore,
+    latch: catch_subsystem::ALWAYS, idle: crate::gc::frame_root_savepoint();
     // Longjmp skips RuntimeHandleScope drops.
     runtime_handles: usize,
     capture: crate::gc::runtime_handle_stack_savepoint,
