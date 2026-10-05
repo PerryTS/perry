@@ -523,19 +523,6 @@ pub(super) fn candidates(
         if !dense && !element_loads_enabled() {
             continue;
         }
-        // An element-only use of a module-level binding is not admitted. The
-        // region keeps the element base in a slot across the loop's poll and
-        // re-derives it on the poll arm while the region is valid
-        // (`emit_poll_refresh`). For a base derived from a module global,
-        // gc-root-dominance's unrooted-alloca check treats the global's load
-        // as a movable source and does not correlate that refresh with the
-        // valid flag, so it reports the slot; the dense regions main already
-        // forms over module globals trip it the same way outside its corpus.
-        // Until the check can see the refresh, element regions stay off
-        // module-level arrays.
-        if !dense && ctx.module_globals.contains_key(&id) {
-            continue;
-        }
         let u = out.entry(r).or_default();
         match ix {
             Some(c) => u.max_index = u.max_index.max(c),
