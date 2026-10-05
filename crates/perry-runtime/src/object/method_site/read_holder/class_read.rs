@@ -262,17 +262,25 @@ fn prototype_identity(shape: u32) -> Option<u64> {
     shape_proto_id(shape)
 }
 
-/// Does a hop whose ShapeId records `pid` link to one fixed object for as
-/// long as the ShapeId matches? The realm's `%Object.prototype%`, null, a
-/// serial, and a MIXED identity (a class id plus the serial of the explicit
-/// prototype object) do: a serial names one prototype object, and any
-/// `setPrototypeOf` on the hop moves its ShapeId. A bare CLASS identity
-/// resolves through the class registry and is not pinned by the hop's shape.
-fn hop_identity_pins_link(pid: u64) -> bool {
-    pid == PROTO_ID_DEFAULT
-        || pid == PROTO_ID_NULL
-        || pid < crate::object::shapes::PROTO_ID_CLASS
-        || (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid)
+/// The current link from an intermediate hop, computed by the same admitted
+/// shape/prototype rule the prime walk used. A changed or exotic link declines.
+unsafe fn admitted_next(hop: *const ObjectHeader) -> Option<usize> {
+    let pid = shape_proto_id(object_shape_stamp(hop))?;
+    let (stated, word) = super::stated_link(hop);
+    if stated != pid {
+        return None;
+    }
+    if !hop_identity_pins_link(pid) {
+        return None;
+    }
+    let next = if pid == PROTO_ID_DEFAULT {
+        crate::array::object_prototype_addr_if_resolved()
+    } else if pid == PROTO_ID_NULL {
+        0
+    } else {
+        super::next_from_word(hop, word) as usize
+    };
+    (next != 0).then_some(next)
 }
 
 #[inline(always)]

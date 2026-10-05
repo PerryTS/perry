@@ -618,11 +618,21 @@ pub(super) unsafe fn next_from_word(obj: *const ObjectHeader, word: u64) -> *con
     }
 }
 
+/// Shape identities that pin the next object while the shape is unchanged.
+/// MIXED carries the explicit prototype's serial. Bare CLASS still requires
+/// the class generation/live-link guards; PER_OBJECT and UNIQUE are refused.
+#[inline]
+fn hop_identity_pins_link(pid: u64) -> bool {
+    pid == PROTO_ID_DEFAULT
+        || pid == PROTO_ID_NULL
+        || pid < PROTO_ID_CLASS
+        || (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid)
+}
+
 /// [`admitted_proto_id`], with `obj`'s recorded word.
 unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64)> {
     let pid = shape_proto_id(object_shape_stamp(obj))?;
-    let serial = pid != PROTO_ID_DEFAULT && pid < crate::object::shapes::PROTO_ID_CLASS;
-    if !(serial || pid == PROTO_ID_DEFAULT || pid == PROTO_ID_NULL) {
+    if !hop_identity_pins_link(pid) {
         return None;
     }
     let (stated, word) = stated_link(obj);
@@ -630,7 +640,7 @@ unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64)> {
 }
 
 /// The prototype identity `obj`'s shape records, if it admits: a serial, the
-/// default link or null — and equal to what the object says it is.
+/// default link, null or MIXED explicit link — and equal to what the object says it is.
 pub(super) unsafe fn admitted_proto_id(obj: *const ObjectHeader) -> Option<u64> {
     admitted_link(obj).map(|(pid, _)| pid)
 }
@@ -981,26 +991,9 @@ unsafe fn walk_to(
             // pointer on every use; this walk records it as the first hop.
             crate::object::shapes::PROTO_ID_CLASS
         } else {
-            let mixed = if class_first {
-                let pid = shape_proto_id(object_shape_stamp(current))?;
-                if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
-                    let (stated, w) = stated_link(current);
-                    word = Some(w);
-                    (stated == pid).then_some(pid)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            match mixed {
-                Some(pid) => pid,
-                None => {
-                    let (pid, w) = admitted_link(current)?;
-                    word = Some(w);
-                    pid
-                }
-            }
+            let (pid, w) = admitted_link(current)?;
+            word = Some(w);
+            pid
         };
         if pid == PROTO_ID_NULL {
             // `current` is the terminal object, and it lacks `name`.
@@ -1636,6 +1629,28 @@ pub(crate) fn scan_read_holder_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_link_admission_keeps_registry_and_unproved_links_out() {
+        for pid in [
+            PROTO_ID_DEFAULT,
+            PROTO_ID_NULL,
+            1,
+            PROTO_ID_CLASS - 1,
+            PROTO_ID_MIXED | 1,
+            PROTO_ID_UNIQUE - 1,
+        ] {
+            assert!(hop_identity_pins_link(pid), "pinning identity {pid:#x}");
+        }
+        for pid in [
+            PROTO_ID_CLASS,
+            PROTO_ID_MIXED - 1,
+            PROTO_ID_UNIQUE,
+            PROTO_ID_UNIQUE | 1,
+        ] {
+            assert!(!hop_identity_pins_link(pid), "unproved identity {pid:#x}");
+        }
+    }
 
     extern "C" fn getter_two(_this: f64) -> f64 {
         2.0
