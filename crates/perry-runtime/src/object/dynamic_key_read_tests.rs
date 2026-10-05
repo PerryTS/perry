@@ -171,10 +171,10 @@ fn a_null_prototype_receiver_files_its_absence_without_a_terminal() {
     assert_eq!(read(&obj, &a), 3.0f64.to_bits());
 }
 
-/// A born-null receiver publishes its null edge in the birth shape. Its
-/// shape therefore proves absence just like a receiver re-prototyped to null.
+/// A born-null receiver publishes its null edge in the birth shape. The
+/// shape proves absence, while the read stub still refuses class-zero owners.
 #[test]
-fn a_born_null_receiver_files_its_absence_from_its_birth_shape() {
+fn a_born_null_receiver_records_its_edge_while_the_stub_refuses_class_zero() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _global = crate::object::js_get_global_this();
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -203,7 +203,7 @@ fn a_born_null_receiver_files_its_absence_from_its_birth_shape() {
         "the receiver needs no prototype terminal"
     );
     assert_eq!(read(&obj, &missing), crate::value::TAG_UNDEFINED);
-    assert_eq!(answer(&obj, &missing), Some(crate::value::TAG_UNDEFINED));
+    assert_eq!(answer(&obj, &missing), None, "class zero is not cacheable");
     assert_eq!(read(&obj, &a), 3.0f64.to_bits());
 }
 
