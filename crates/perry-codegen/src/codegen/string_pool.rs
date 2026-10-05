@@ -341,6 +341,11 @@ pub(super) fn emit_string_pool(
     class_sources.sort_by_key(|entry| entry.0);
     class_sources.dedup_by_key(|(cid, _)| *cid);
 
+    // An image that can be unloaded cannot leave borrowed source metadata in
+    // either a registry or a function-info record. Executables are permanent;
+    // dylibs/staticlibs retain the copying registration path below.
+    let strings_outlive_registry = output_type != "dylib" && output_type != "staticlib";
+
     // #4101/#9413: mint source globals BEFORE `init_fn` borrows `llmod`.
     // Sharing changes only the backing bytes, never registration order, source
     // lengths, strictness flags, or the copying/static ownership contract.
@@ -357,11 +362,19 @@ pub(super) fn emit_string_pool(
         if wrapper_sym.is_empty() || source_text.is_empty() {
             continue;
         }
-        user_fn_source_constants.push((
-            wrapper_sym.clone(),
-            source_pool.get(source_text),
-            *is_non_strict_ordinary,
-        ));
+        let source = source_pool.get(source_text);
+        if strings_outlive_registry
+            && llmod.attach_fn_source(
+                wrapper_sym,
+                &source.global,
+                source.offset,
+                source.byte_len,
+                *is_non_strict_ordinary,
+            )
+        {
+            continue;
+        }
+        user_fn_source_constants.push((wrapper_sym.clone(), source, *is_non_strict_ordinary));
     }
 
     // Pre-allocate string constants for class-name registration. We need
@@ -552,7 +565,6 @@ pub(super) fn emit_string_pool(
     // `staticlib` is included because its objects are linked into whatever
     // consumes them, which may itself be a plugin. Executables keep the
     // borrow, which is where all the volume is.
-    let strings_outlive_registry = output_type != "dylib" && output_type != "staticlib";
     let register_name_fn = if strings_outlive_registry {
         "js_register_function_name_static"
     } else {
