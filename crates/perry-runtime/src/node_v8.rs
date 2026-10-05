@@ -183,7 +183,12 @@ fn default_heap_snapshot_path() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let name = format!("Heap-{}-{}.heapsnapshot", std::process::id(), millis);
+    let name = format!(
+        "Heap-{}-{}-{}.heapsnapshot",
+        std::process::id(),
+        crate::agent::current_thread_native_id(),
+        millis
+    );
     std::env::current_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("."))
         .join(name)
@@ -776,6 +781,24 @@ mod heap_snapshot_options_tests {
     fn undefined_is_still_accepted() {
         assert!(is_valid_heap_snapshot_options(f64::from_bits(
             crate::value::TAG_UNDEFINED
+        )));
+    }
+}
+
+#[cfg(test)]
+mod snapshot_thread_name_tests {
+    #[test]
+    fn default_snapshot_filename_names_its_native_thread() {
+        let path = super::default_heap_snapshot_path();
+        let name = std::path::Path::new(&path)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(name.starts_with(&format!(
+            "Heap-{}-{}-",
+            std::process::id(),
+            crate::agent::current_thread_native_id()
         )));
     }
 }

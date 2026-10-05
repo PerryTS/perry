@@ -1,0 +1,33 @@
+import { Worker } from "node:worker_threads";
+const size = 4 * 1024 * 1024;
+const before = process.memoryUsage();
+const ab = new ArrayBuffer(size);
+const bytes = new Uint8Array(ab);
+const slice = bytes.subarray(1, 100);
+const dv = new DataView(ab, 16, 100);
+bytes[1] = 42;
+const after = process.memoryUsage();
+const delta = after.arrayBuffers - before.arrayBuffers;
+console.log("backing counted once", delta >= size && delta < size + 1024 * 1024);
+console.log("external includes backing once", after.external >= after.arrayBuffers && after.external - before.external >= size && after.external - before.external < size + 1024 * 1024);
+console.log("aliases", slice[0] === 42, dv.byteLength === 100);
+const own = new Float64Array(1024 * 1024);
+own[0] = 3;
+const floats = process.memoryUsage();
+console.log("typed backing", floats.arrayBuffers - after.arrayBuffers >= own.byteLength);
+const buf = Buffer.alloc(size);
+buf[0] = 5;
+const buffers = process.memoryUsage();
+console.log("Buffer backing", buffers.arrayBuffers - floats.arrayBuffers >= size);
+console.log("heap plausible", buffers.heapUsed > 0 && buffers.heapTotal >= buffers.heapUsed && buffers.rss > 0);
+const mainBeforeWorker = process.memoryUsage();
+const guard = setTimeout(() => { console.log("timeout"); process.exit(2); }, 10000);
+const w = new Worker(new URL("./_helpers/profiling_api_worker.ts", import.meta.url));
+w.once("message", (reply: any) => {
+  const main = process.memoryUsage();
+  console.log("worker memory", reply.memory, reply.used > 0 && reply.total >= reply.used, reply.byte === 17);
+  console.log("per-thread backing", main.arrayBuffers - mainBeforeWorker.arrayBuffers < size);
+  // Keep all storage live across the samples.
+  console.log("retained", bytes[1] === 42 && own[0] === 3 && buf[0] === 5);
+  clearTimeout(guard);
+});

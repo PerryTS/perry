@@ -167,7 +167,7 @@ pub(crate) fn lower_member_tail(
                 // `global.window.requestAnimationFrame = …`, which threw
                 // "Cannot set properties of null or undefined".
                 if obj_ident.sym.as_ref() == property.as_str()
-                    && !matches!(property.as_str(), "globalThis" | "global")
+                    && !matches!(property.as_str(), "globalThis" | "global" | "performance")
                 {
                     // #2060 / #2142 / #2145: `<Ctor>.prototype` and
                     // `<Ctor>.__proto__` must keep reading the constructor
