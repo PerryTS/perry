@@ -457,6 +457,7 @@ struct ReadableStreamData {
     pending_error_after_chunks: Option<u64>,
     /// Per-controller cancel reason captured when `cancel()` is called.
     canceled: bool,
+    disturbed: bool,
 }
 
 impl ReadableStreamData {
@@ -477,12 +478,6 @@ impl ReadableStreamData {
         self.chunks.clear();
         self.chunk_sizes.clear();
         self.queue_total_size = 0.0;
-    }
-
-    fn drain_chunks(&mut self) -> Vec<u64> {
-        self.chunk_sizes.clear();
-        self.queue_total_size = 0.0;
-        self.chunks.drain(..).collect()
     }
 }
 
@@ -1019,6 +1014,7 @@ fn alloc_readable_with_strategy(
             error_value: 0,
             pending_error_after_chunks: None,
             canceled: false,
+            disturbed: false,
         },
     );
     id
@@ -1454,8 +1450,9 @@ pub fn alloc_readable_from_bytes(bytes: Vec<u8>) -> usize {
         let mut g = READABLE_STREAMS.lock().unwrap();
         if let Some(s) = g.get_mut(&id) {
             s.started = true;
+            s.is_byte_stream = true;
             if !bytes.is_empty() {
-                s.push_chunk(chunk_bits, 1.0);
+                s.push_chunk(chunk_bits, bytes.len() as f64);
             }
             s.state = ReadableState::Closed;
         }
@@ -1612,6 +1609,7 @@ unsafe fn js_readable_stream_cancel_inner(
                     0
                 } else {
                     s.canceled = true;
+                    s.disturbed = true;
                     s.state = ReadableState::Closed;
                     s.clear_chunks();
                     s.cancel_cb
@@ -1673,8 +1671,7 @@ pub unsafe extern "C" fn js_readable_stream_from_blob(_blob_id: f64) -> f64 {
 #[cfg(feature = "web-fetch")]
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_from_response(resp_id: f64) -> f64 {
-    let bytes = crate::fetch::response_bytes_clone(resp_id as usize).unwrap_or_default();
-    alloc_readable_from_bytes(bytes) as f64
+    crate::fetch::response_body_stream(resp_id as usize)
 }
 
 #[cfg(not(feature = "web-fetch"))]
@@ -2289,6 +2286,7 @@ pub unsafe extern "C" fn js_reader_read(reader_handle: f64) -> *mut Promise {
         let mut g = READABLE_STREAMS.lock().unwrap();
         match g.get_mut(&stream_id) {
             Some(s) => {
+                s.disturbed = true;
                 if let Some(c) = s.pop_chunk() {
                     if s.chunks.is_empty() {
                         if let Some(error) = s.pending_error_after_chunks.take() {
@@ -2681,3 +2679,5 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
     js_promise_mark_internally_handled(pipe);
     output
 }
+
+pub(crate) use self::subclass::readable_body_state;

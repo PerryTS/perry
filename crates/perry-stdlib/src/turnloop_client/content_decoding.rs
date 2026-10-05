@@ -132,8 +132,9 @@ impl ContentDecoder {
     /// the same).
     pub(super) fn finish(&mut self, emit: &mut dyn FnMut(&[u8]) -> Result<(), ClientError>) {
         let mut out = [0u8; 8192];
-        for i in 0..self.stages.len() {
-            let (stage, rest) = self.stages[i..].split_first_mut().unwrap();
+        let mut stages = std::mem::take(&mut self.stages);
+        for i in 0..stages.len() {
+            let (stage, rest) = stages[i..].split_first_mut().unwrap();
             let input = std::mem::take(&mut stage.carry);
             let mut pos = 0;
             loop {
@@ -190,8 +191,37 @@ fn pump(
         }
         if step.consumed == 0 && step.written == 0 {
             // Needs more input than this chunk holds: retain the tail.
-            stage.carry.extend_from_slice(&input[pos..]);
+            stage.carry = input[pos..].to_vec();
             return Ok(());
         }
+    }
+}
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+    #[test]
+    fn completion_releases_decoder_stages() {
+        let mut decoder = ContentDecoder::for_header("gzip", 4096).unwrap().unwrap();
+        let mut output = Vec::new();
+        let mut emit = |bytes: &[u8]| {
+            output.extend_from_slice(bytes);
+            Ok(())
+        };
+        decoder
+            .feed(
+                &[
+                    31, 139, 8, 0, 0, 0, 0, 0, 2, 255, 75, 73, 77, 206, 79, 73, 45, 82, 40, 207,
+                    47, 202, 46, 46, 72, 76, 78, 5, 0, 45, 146, 37, 255, 17, 0, 0, 0,
+                ],
+                &mut emit,
+            )
+            .unwrap();
+        decoder.finish(&mut emit);
+        assert_eq!(output, b"decoder workspace");
+        assert!(
+            decoder.stages.is_empty(),
+            "finished codecs must release their workspace"
+        );
     }
 }

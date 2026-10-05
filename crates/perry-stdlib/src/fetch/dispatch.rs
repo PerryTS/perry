@@ -492,6 +492,9 @@ pub fn dispatch_request_method(req_id: usize, method: &str, _args: &[f64]) -> Op
 /// Returns `None` if the id isn't a known Response or the property is unknown.
 #[doc(hidden)]
 pub fn dispatch_response_property(resp_id: usize, prop: &str) -> Option<f64> {
+    if prop == "bodyUsed" {
+        return Some(tagged_bool(response_body_is_used(resp_id)));
+    }
     let _fetch_roots = lifecycle::pin_handles(&[handle_to_f64(resp_id)]);
     // `response.headers` — use the same backing handle as the typed accessor.
     // This preserves both object identity and mutations (notably
