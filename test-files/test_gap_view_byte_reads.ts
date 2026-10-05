@@ -4,7 +4,11 @@ function scan(bytes: Uint8Array): number {
   for (let i = 0; i < bytes.length; i++) sum += bytes[i]!;
   return sum;
 }
-function get(bytes: Uint8Array, key: any): any { return bytes[key]; }
+function get(bytes: Uint8Array, key: any, rounds: number = 1): any {
+  let result: any = undefined;
+  for (let r = 0; r < rounds; r++) result = bytes[key];
+  return result;
+}
 const owner = new Uint8Array(32);
 for (let i = 0; i < owner.length; i++) owner[i] = i + 1;
 const view = new Uint8Array(owner.buffer, 5, 12);
@@ -58,7 +62,8 @@ function churn(): number {
 console.log('gc holders', churn());
 
 // Exercise detach and resize inside the lifetime of one entry proof.
-function mutateDuringReads(bytes: Uint8Array, backing: ArrayBuffer): void {
+function mutateDuringReads(bytes: Uint8Array, backing: ArrayBuffer, rounds: number): void {
+  for (let r = 0; r < rounds; r++) {
   console.log("live before", bytes[0], bytes.length);
   backing.resize(2);
   console.log("live shrink", bytes[0], bytes.length);
@@ -66,7 +71,18 @@ function mutateDuringReads(bytes: Uint8Array, backing: ArrayBuffer): void {
   console.log("live grow", bytes[0], bytes[7], bytes.length);
   backing.transfer();
   console.log("live detach", bytes[0], bytes.length);
+  }
 }
 const liveBacking = new ArrayBuffer(16, {maxByteLength: 32});
 const liveView = new Uint8Array(liveBacking, 4, 8); liveView.fill(13);
-mutateDuringReads(liveView, liveBacking);
+mutateDuringReads(liveView, liveBacking, 1);
+
+function detachOwnerDuringReads(bytes: Uint8Array, rounds: number): void {
+  for (let r = 0; r < rounds; r++) {
+  console.log('owner before', bytes[0], bytes.length);
+  bytes.buffer.transfer();
+  console.log('owner detach', bytes[0], bytes.length);
+  }
+}
+const liveOwner = new Uint8Array(8); liveOwner.fill(15);
+detachOwnerDuringReads(liveOwner, 1);

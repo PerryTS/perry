@@ -50,7 +50,7 @@ use foreign_counter::{affine_packed_loop_read, emit_affine_index_i64, foreign_pa
 pub(crate) use guarded_array::{
     emit_array_region_guard, emit_typed_f64_region_guard, ArrayRegionDense,
 };
-mod inline_dyn_typed_array;
+pub(super) mod inline_dyn_typed_array;
 
 use guarded_array::{
     lower_guarded_array_index_get, lower_packed_f64_loop_index_get,

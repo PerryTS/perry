@@ -640,6 +640,38 @@ pub(crate) fn u8_inline_cache_hit(addr: usize) -> bool {
             || PERRY_U8_INLINE_CACHE[pair + 1].load(Relaxed) == addr as u64)
 }
 
+/// Resolve an immutable byte receiver once for generated synchronous code.
+/// Buffer-family cells and their native backing are nonmoving. Length remains
+/// live at each access: detach and resize invalidate bounds, not this pointer.
+/// Foreign wrappers can rebind and therefore never receive this proof.
+#[no_mangle]
+pub extern "C" fn js_u8_resolve_read_data(boxed: f64) -> usize {
+    let value = crate::value::JSValue::from_bits(boxed.to_bits());
+    if !value.is_pointer() {
+        return 0;
+    }
+    let addr = value.as_pointer::<u8>() as usize;
+    if !buffer_family_type_owned(addr)
+        .is_some_and(|kind| kind == crate::gc::GC_TYPE_BUFFER || kind == GC_TYPE_BUFFER_UINT8ARRAY)
+    {
+        return 0;
+    }
+    let header = unsafe { crate::gc::header_from_trusted_user_ptr(addr as *const u8) };
+    if unsafe { (*header)._reserved } & crate::gc::GC_BUFFER_VIEW_DATA != 0 {
+        return unsafe { super::view::cached_data_ptr(addr as *const BufferHeader) } as usize;
+    }
+    u8_inline_cache_try_prime(addr);
+    if u8_inline_cache_hit(addr) {
+        addr + std::mem::size_of::<BufferHeader>()
+    } else {
+        0
+    }
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_U8_RESOLVE_READ_DATA: extern "C" fn(f64) -> usize = js_u8_resolve_read_data;
+
 /// Admit `addr` to the inline-access cache iff it satisfies the cache
 /// contract above. Called from the codegen slow arms (`js_u8_buffer_read_f64`
 /// and the #10515 i32 get/set twins) and from the runtime byte accessors'
@@ -652,6 +684,10 @@ pub(crate) fn u8_inline_cache_try_prime(addr: usize) {
         return;
     }
     if super::exotic_view::is_uint8_view_buffer(addr)
+        // View metadata is thread-local; its absence on a different agent
+        // cannot admit a pointer-slot allocation as owning inline storage.
+        && unsafe { (*crate::gc::header_from_trusted_user_ptr(addr as *const u8))._reserved }
+            & crate::gc::GC_BUFFER_VIEW_DATA == 0
         && foreign_backing(addr).is_none()
         && super::view::lookup(addr).is_none()
     {

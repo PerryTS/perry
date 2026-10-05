@@ -329,8 +329,8 @@ enum ActiveReceiverData {
 
 /// Active materialised receiver descriptors for one function lowering.
 ///
-/// Function-entry proof for an immutable byte-view parameter. The layout bit
-/// excludes rebindable foreign backing; Buffer-family GC cells and their native
+/// Function-entry proof for an immutable byte parameter. Runtime validation
+/// resolves owning or view storage and excludes rebindable foreign backing; Buffer-family GC cells and their native
 /// backing are non-moving. Current length is deliberately not cached here.
 #[derive(Clone, Debug)]
 pub(crate) struct ByteViewParamAccess {

@@ -241,8 +241,8 @@ unsafe fn read_buffer_byte(buf_ptr: *const BufferHeader, index: i32) -> Option<u
 /// owning buffer, admitting it to the inline-access cache (#10515) so the next
 /// access through ANY site (the emitted guards, and the cache test at the top
 /// of the runtime accessors) skips the registry probes entirely. A view is
-/// answered from its one registry lookup and never pays for the admission
-/// attempt; only the (rare) non-admissible owning buffers — foreign-backed
+/// answered from its pointer slot (or metadata for a rebindable backing)
+/// and never pays for the admission attempt; only non-admissible owners — foreign-backed
 /// spans, a stale-hint ArrayBuffer — retry it on each access.
 #[inline]
 pub(crate) unsafe fn byte_access_data(buf_ptr: *const BufferHeader) -> *mut u8 {

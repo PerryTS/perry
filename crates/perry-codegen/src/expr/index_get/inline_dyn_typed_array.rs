@@ -99,6 +99,10 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     coerce_slow_to_number: bool,
     param_access: Option<&crate::collectors::ByteViewParamAccess>,
 ) -> String {
+    if let Some(access) = param_access {
+        return lower_resolved_byte_param_get(ctx, obj_box, idx_d, coerce_slow_to_number, access);
+    }
+
     // TAG_MASK / POINTER_TAG / POINTER_MASK as signed-i64 LLVM literals.
     let tag_mask = crate::nanbox::i64_literal(crate::nanbox::TAG_MASK);
     let pointer_tag = crate::nanbox::POINTER_TAG_I64;
@@ -636,8 +640,9 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     let view_ptr = ctx.block().inttoptr(I64, &view_addr);
     // A view can alias a SAB shared with another agent. Atomic byte loads
     // prevent LLVM from hoisting or merging reads of concurrently changed data.
-    let view_byte = ctx.block().load_atomic_monotonic(I8, &view_ptr, 1);
-    let view_value = ctx.block().uitofp(I8, &view_byte, DOUBLE);
+    let target = ctx.target_triple.to_owned();
+    let view_value =
+        super::super::u8_buffer_read::emit_u8_atomic_load_f64(ctx.block(), &target, &view_ptr);
     let view_end_label = ctx.block().label.clone();
     ctx.block().br(&merge_label);
     ctx.current_block = u8_bounds_idx;
@@ -784,4 +789,75 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
             (slow_val.as_str(), slow_end_label.as_str()),
         ],
     )
+}
+
+/// An entry-proved byte parameter needs only canonical-index and current
+/// bounds checks. Keep other receiver types on their existing dispatch path.
+fn lower_resolved_byte_param_get(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    idx_d: &str,
+    coerce_slow_to_number: bool,
+    access: &crate::collectors::ByteViewParamAccess,
+) -> String {
+    let index_idx = ctx.new_block("u8p.index");
+    let bounds_idx = ctx.new_block("u8p.bounds");
+    let load_idx = ctx.new_block("u8p.load");
+    let slow_idx = ctx.new_block("u8p.slow");
+    let done_idx = ctx.new_block("u8p.done");
+    let index_label = ctx.block_label(index_idx);
+    let bounds_label = ctx.block_label(bounds_idx);
+    let load_label = ctx.block_label(load_idx);
+    let slow_label = ctx.block_label(slow_idx);
+    let done_label = ctx.block_label(done_idx);
+    let ge0 = ctx.block().fcmp("oge", idx_d, "0.0");
+    let lt_max = ctx.block().fcmp("olt", idx_d, "4294967295.0");
+    let range = ctx.block().and(I1, &ge0, &lt_max);
+    let ready = ctx.block().and(I1, &access.valid_i1, &range);
+    ctx.block().cond_br(&ready, &index_label, &slow_label);
+
+    ctx.current_block = index_idx;
+    let index = ctx.block().fptosi(DOUBLE, idx_d, I64);
+    let back = ctx.block().sitofp(I64, &index, DOUBLE);
+    let integer = ctx.block().fcmp("oeq", idx_d, &back);
+    ctx.block().cond_br(&integer, &bounds_label, &slow_label);
+
+    ctx.current_block = bounds_idx;
+    let bits = ctx.block().bitcast_double_to_i64(obj_box);
+    let raw = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let header = ctx.block().inttoptr(I64, &raw);
+    let length = ctx.block().load(I32, &header);
+    let length = ctx.block().zext(I32, &length, I64);
+    let in_bounds = ctx.block().icmp_ult(I64, &index, &length);
+    ctx.block().cond_br(&in_bounds, &load_label, &slow_label);
+
+    ctx.current_block = load_idx;
+    let address = ctx.block().add(I64, &access.data_i64, &index);
+    let pointer = ctx.block().inttoptr(I64, &address);
+    let target = ctx.target_triple.to_owned();
+    let value =
+        super::super::u8_buffer_read::emit_u8_atomic_load_f64(ctx.block(), &target, &pointer);
+    let load_end = ctx.block().label.clone();
+    ctx.block().br(&done_label);
+
+    // An invalid annotation, noncanonical key or out-of-range access keeps
+    // the complete boxed semantics, including property-key coercion.
+    ctx.current_block = slow_idx;
+    let handle = super::super::helpers::unbox_to_i64(ctx.block(), obj_box);
+    let fallback = ctx.block().call(
+        DOUBLE,
+        "js_typed_array_index_get_dynamic",
+        &[(I64, &handle), (DOUBLE, idx_d)],
+    );
+    let fallback = if coerce_slow_to_number {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &fallback)])
+    } else {
+        fallback
+    };
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&done_label);
+    ctx.current_block = done_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(&value, &load_end), (&fallback, &slow_end)])
 }
