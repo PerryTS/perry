@@ -174,8 +174,10 @@ fn received_function_and_constructor_names() {
     let function = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
         crate::closure::js_closure_alloc(crate::fn_info!(received_function, 0), 0) as i64,
     ));
+    // Function name is configurable but non-writable: build the fixture with
+    // [[DefineOwnProperty]], preserving its intrinsic attributes.
     let name = text("namedReceived");
-    crate::closure::closure_set_dynamic_prop(
+    crate::closure::closure_define_dynamic_prop(
         (function.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
         "name",
         name,
@@ -262,7 +264,7 @@ fn received_symbol_names_reject_implicit_coercion() {
     let function = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
         crate::closure::js_closure_alloc(crate::fn_info!(received_function, 0), 0) as i64,
     ));
-    crate::closure::closure_set_dynamic_prop(
+    crate::closure::closure_define_dynamic_prop(
         (function.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
         "name",
         symbol.get_nanbox_f64(),
@@ -321,7 +323,7 @@ fn received_abi_preserves_surrogate_names() {
         let name = scope.root_string_ptr(crate::string::js_string_from_char_code(unit as f64));
         let name =
             name.with_const_ptr(|s: *const StringHeader| crate::value::js_nanbox_string(s as i64));
-        crate::closure::closure_set_dynamic_prop(
+        crate::closure::closure_define_dynamic_prop(
             (function.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
             "name",
             name,
