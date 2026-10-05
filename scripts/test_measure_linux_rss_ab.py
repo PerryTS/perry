@@ -61,6 +61,21 @@ class RssScopeTest(unittest.TestCase):
             self.assertTrue((output / "done").exists())
             self.assertLess(max(row["rss_kib"] for row in rows), 32 * 1024,
                             "RSS included the profiler's 64 MiB allocation")
+            # Interrupt after only the base half of a pair. Resuming must
+            # repeat both arms together and preserve earlier raw receipts.
+            (output / "done").unlink()
+            (output / "runs.json").write_text(json.dumps(rows[:-1]))
+            with patch.object(sys, "argv", argv + ["--resume"]), \
+                    patch.object(harness.subprocess, "run", substitute_profiler), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                harness.main()
+            resumed = json.loads((output / "runs.json").read_text())
+            self.assertEqual(len(resumed), 40)
+            repeated = [r for r in resumed if r["round"] == 9 and r["mode"] == rows[-1]["mode"]]
+            self.assertEqual({r["arm"] for r in repeated}, {"base", "head"})
+            self.assertEqual({r["attempt"] for r in repeated}, {1})
+            self.assertTrue(Path(rows[-2]["receipt"] + ".perf").exists())
+            self.assertTrue((output / "done").exists())
 
 
 if __name__ == "__main__":

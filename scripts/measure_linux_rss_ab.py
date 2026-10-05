@@ -165,6 +165,8 @@ def main():
     parser.add_argument("--cpu", type=int, required=True)
     parser.add_argument("--timeout", type=int, default=240)
     parser.add_argument("--cycles", action="store_true")
+    parser.add_argument("--resume", action="store_true",
+                        help="resume complete pairs after a rejected quiet-core window")
     parser.add_argument("--extra-events", default="", help="optional PMU events; unsupported events are recorded")
     args = parser.parse_args()
     if args.runs < 10:
@@ -193,40 +195,76 @@ def main():
     if any(not Path(p).is_absolute() for p in paths):
         parser.error("all manifest paths must be absolute")
     args.output.mkdir(parents=True, exist_ok=True)
-    if (args.output / "runs.json").exists():
-        parser.error("output already contains runs; choose a fresh directory")
-    write_json(args.output / "manifest.json", manifest)
+    previous = []
     ids = {w["name"]: {a: identity(Path(w["binaries"][a])) for a in arms}
            for w in workloads}
+    saved_manifest = args.output / "manifest.json"
+    attempt = 0
+    if saved_manifest.exists():
+        if not args.resume:
+            parser.error("output already exists; choose a fresh directory or --resume")
+        if json.loads(saved_manifest.read_text()) != manifest:
+            parser.error("resume manifest changed")
+        if json.loads((args.output / "identity.json").read_text()) != ids:
+            parser.error("resume binary identity changed")
+        old_host = json.loads((args.output / "host.json").read_text())
+        if (old_host["cpu"], old_host["runs"], old_host["require_quiet_physical_core"]) != (args.cpu, args.runs, args.cycles):
+            parser.error("resume measurement configuration changed")
+        if old_host.get("harness_sha256") != identity(Path(__file__))["sha256"]:
+            parser.error("resume harness changed")
+        attempt = old_host.get("attempt", 0) + 1
+        saved_runs = args.output / "runs.json"
+        if saved_runs.exists():
+            previous = json.loads(saved_runs.read_text())
+        # Reject an interrupted half-pair; never combine arms from different
+        # windows. Raw files survive under their unique attempt suffix.
+        pairs = {}
+        for row in previous:
+            pairs.setdefault((row["round"], row["name"], row["mode"]), []).append(row)
+        previous = [row for pair in pairs.values()
+                    if len(pair) == 2 and {r["arm"] for r in pair} == set(arms)
+                    for row in pair]
+    write_json(saved_manifest, manifest)
     write_json(args.output / "identity.json", ids)
-    write_json(args.output / "oracle_identity.json",
-               {w["name"]: identity(Path(w["oracle"])) for w in workloads})
+    oracle_ids = {w["name"]: identity(Path(w["oracle"])) for w in workloads}
+    oracle_path = args.output / "oracle_identity.json"
+    if args.resume and oracle_path.exists() and json.loads(oracle_path.read_text()) != oracle_ids:
+        parser.error("resume oracle identity changed")
+    write_json(oracle_path, oracle_ids)
     events = counter_probe(args.output, args.extra_events) if args.cycles else ["instructions:u"]
+    if args.resume and saved_manifest.exists() and attempt > 0:
+        if old_host["perf_events"] != events:
+            parser.error("resume counter configuration changed")
     write_json(args.output / "host.json",
                dict(uname=list(os.uname()), cpu=args.cpu,
                     affinity=sorted(os.sched_getaffinity(0)),
                     cache_protocol="read both complete ELF files before each pair",
                     perf_events=events, runs=args.runs,
                     rss_protocol="separate direct execution; separate GC receipts",
-                    require_quiet_physical_core=args.cycles))
+                    require_quiet_physical_core=args.cycles, attempt=attempt,
+                    harness_sha256=identity(Path(__file__))["sha256"]))
     if args.cycles:
-        require_quiet(args.cpu, args.output, "initial", 10)
-    rows = []
+        require_quiet(args.cpu, args.output, f"initial.attempt{attempt}", 10)
+    rows = previous
+    completed = {(r["round"], r["name"], r["mode"]) for r in rows}
+    write_json(args.output / "runs.json", rows)
     for round_number in range(args.runs):
         modes = ["on", "off"] if round_number % 2 == 0 else ["off", "on"]
         order = workloads if round_number % 2 == 0 else workloads[::-1]
         for mode in modes:
             for work in order:
+                if (round_number, work["name"], mode) in completed:
+                    continue
                 # Do not flush the shared host's page cache or change global THP.
                 for binary in work["binaries"].values():
                     warm(Path(binary))
                 oracle = Path(work["oracle"]).read_bytes()
                 if args.cycles:
-                    require_quiet(args.cpu, args.output, f"{work["name"]}.{mode}.{round_number}.before", 1)
+                    require_quiet(args.cpu, args.output, f"{work["name"]}.{mode}.{round_number}.attempt{attempt}.before", 1)
                 arm_order = ["base", "head"] if args.cycles or round_number % 2 == 0 else ["head", "base"]
                 for arm_name in arm_order:
                     arm = arms[arm_name]
-                    stem = args.output / f'{work["name"]}.{mode}.{round_number}.{arm_name}'
+                    stem = args.output / f'{work["name"]}.{mode}.{round_number}.{arm_name}.attempt{attempt}'
                     env = dict(PATH="/usr/local/bin:/usr/bin:/bin",
                                LANG="C.UTF-8", LC_ALL="C.UTF-8",
                                PERRY_NO_TELEMETRY="1", PERRY_GC_DIAG="1",
@@ -285,6 +323,7 @@ def main():
                         raise AssertionError(f"{stem}: RSS run differs from Node oracle")
                     user, system, wall, rss = Path(str(stem) + ".time").read_text().split()
                     row = dict(round=round_number, name=work["name"], mode=mode,
+                               attempt=attempt, receipt=str(stem),
                                arm=arm_name, instructions=int(counts["instructions:u"]),
                                cpu_seconds=float(user) + float(system),
                                wall_seconds=float(wall), rss_kib=int(rss),
