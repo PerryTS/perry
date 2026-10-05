@@ -1,6 +1,9 @@
 # Native payload lifecycle runtime validation (#11919)
 
-Base: `51a20469efd7bf418e3a52b9b6aa887eef4f2290`. Builds and tests run on
+Lane base: `51a20469efd7bf418e3a52b9b6aa887eef4f2290`. Final verification and
+A/B code base: `014f3e553d574e9e136b57b8ac57c89519755459`. Final head includes current
+main `a6c147b7b00b51f18f56ce2e056cf190deca893d`; the two intervening commits
+change only root-holder inventory and changelog metadata. Builds and tests run on
 `perrymaster` in `/root/codex-lanes/cx-lifecycle`, with separate `target` and
 `main-target` directories, Node 26.5.1 and `RUST_TEST_THREADS=1`. No builds ran
 on macOS. The exact raw results are also delivered beside `lifecycle.bundle`.
@@ -30,7 +33,8 @@ other pinned objects retain their existing teardown behavior.
 
 The requested non-generic `alloc_closed` cannot know `T`. Its first attach
 therefore establishes the existing type-layout tag and drop thunk. Subsequent
-attaches preserve them; a different layout is rejected as Foreign. This is the
+attaches preserve them; a different layout or drop thunk is rejected as
+Foreign, including a distinct payload type with the same size and alignment. This is the
 only additional first-install metadata write, and avoids changing the family
 API, growing the cell or changing payload access. Reporting external bytes
 can collect **after** installation, so attach roots the owner for that report.
@@ -76,3 +80,18 @@ sqlite/net behavioral and Node-oracle witnesses remain their family lanes.
 ## Recorded results
 
 Results will be filled after Linux validation.
+
+A pre-existing stdlib fixture, `streams::tests::pipe_through_pair_survives_a_moving_getter`,
+failed on both unmodified main and head with `Invalid transform writable`,
+including an isolated main run. It bypassed program startup and collected
+without registering the runtime handle/accessor root scanners. This lane adds
+`gc_init()` to that fixture before its deliberate moving collections; its
+existing child-moved assertion remains intact. No stream production code is
+changed.
+
+The existing DOMException thread-exit fixture also initializes its observing
+heap before starting its worker. With the full runtime features (mimalloc),
+initializing that heap only after join can reuse the dead worker's arena block
+and classify its stale DOMException header as observer-owned. The fixture
+still requires the worker's live brand and rejects the dead worker's brand;
+this removes allocator reuse from that ownership observation.

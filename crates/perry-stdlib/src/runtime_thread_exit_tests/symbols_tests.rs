@@ -465,6 +465,12 @@ fn external_buffer_verdict_is_taken_at_release_not_by_address() {
 
 #[test]
 fn thread_exit_releases_the_threads_dom_exceptions() {
+    // Initialize the observing heap before the worker releases its blocks.
+    // The brand is now in the cell, not an address registry: initializing
+    // this heap after join can reuse the worker's block and register its
+    // stale bytes as our own arena (notably with alloc-mimalloc enabled).
+    let scope = RuntimeHandleScope::new();
+    let _observer = scope.root_raw_mut_ptr(perry_runtime::js_array_alloc(0));
     let (err, alive) = std::thread::spawn(|| {
         let err =
             perry_runtime::event_target::js_dom_exception_new(undefined(), undefined()) as usize;

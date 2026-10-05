@@ -17,3 +17,10 @@ Runtime witnesses cover release/sweep, finalized attach rejection, worker queue
 discard, throw-before-close priority, same-cell reopen, moving closed owners,
 and 200,000 release cycles. The existing T1–T12 callback witnesses retain all
 14 sabotage checks; lifecycle witnesses add four sabotage checks.
+
+The moving-getter stream unit fixture now initializes the GC root scanners
+before deliberately collecting, matching generated-program startup. This
+fixes its inherited failure on main without changing stream production code.
+The DOMException worker-exit fixture initializes its observing heap before
+the worker runs, so allocator reuse cannot make the dead worker's stale
+header look like a new allocation owned by the observer.
