@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/perry-dev/perry');
+const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/debug/perry');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-string-static-spread-'));
 let passed = false;
 try {

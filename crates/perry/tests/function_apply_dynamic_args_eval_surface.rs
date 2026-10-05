@@ -42,9 +42,9 @@ fn workspace_root() -> PathBuf {
 }
 
 /// #8479: `release`, not `debug`. `panic` is a PROFILE-level setting and only
-/// `release`/`dist`/`perry-dev` set `panic = "abort"`. A debug archive is
-/// `panic = "unwind"`, and under that strategy rustc plants an RFC-2945
-/// abort-on-unwind guard in every `extern "C"` helper — which a JS throw
+/// `dev`/`release`/`prod`/`dist`/`perry-dev` set `panic = "abort"`. An unwind
+/// archive makes rustc plant an RFC-2945 abort-on-unwind guard in every
+/// `extern "C"` helper — which a JS throw
 /// crossing that helper trips ("panic in a function that cannot unwind").
 /// Perry never ships such a runtime, so linking one here tested unwind
 /// semantics that do not exist in production and made this test and

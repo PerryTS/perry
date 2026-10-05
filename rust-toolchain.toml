@@ -2,11 +2,9 @@
 # dtolnay/rust-toolchain (#8550). Keep the three in sync: this file,
 # those workflows, and `external-tools.json`'s `rust` entry.
 #
-# Why a dated nightly rather than stable: `.cargo/config.toml` sets
-# `[unstable] min-publish-age`, cargo's dependency-resolution soak gate,
-# which is nightly-only (rust-lang/cargo#17009). On stable, cargo silently
-# ignores it with `warning: ignoring registry.global-min-publish-age
-# without -Zmin-publish-age`, so the soak gate is inert.
+# Why a dated nightly rather than stable: `.cargo/config.toml` uses the
+# nightly-only rustc flag `-Z use-sync-unwind` for compact synchronous unwind
+# tables. Pinning also keeps local builds aligned with CI.
 #
 # Why this file has to exist as well as the workflow inputs: those inputs
 # only govern jobs that go through the action. Nothing else does — a
@@ -15,5 +13,5 @@
 # `float_algebraic` methods, so without this file those builds fail with
 # E0658 while CI stays green.
 [toolchain]
-channel = "nightly-2026-08-20"
+channel = "nightly-2026-10-04"
 components = ["rustfmt", "clippy"]

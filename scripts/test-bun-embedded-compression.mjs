@@ -9,7 +9,7 @@ import { prepareRequireRuntime } from './test-require-runtime.mjs';
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 assert.equal(process.versions.node, fs.readFileSync(path.join(repo, '.node-version'), 'utf8').trim().replace(/^v/, ''));
 prepareRequireRuntime(repo);
-const compiler = process.env.PERRY_BIN ?? path.join(repo, 'target/perry-dev/perry');
+const compiler = process.env.PERRY_BIN ?? path.join(repo, 'target/debug/perry');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-bun-embedded-compression-'));
 const source = path.join(work, 'source');
 fs.mkdirSync(source);

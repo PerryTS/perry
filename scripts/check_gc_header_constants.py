@@ -29,7 +29,7 @@ The things that LOOK like they enforce it do not:
 That compares codegen's constant to a string literal — a tautology. It is a
 useful "you edited the const, now fix the mask arithmetic below" pin, but it
 never references the runtime, so it cannot detect a renumbering there; and per
-CLAUDE.md's profile note it is compiled out of `release` AND `perry-dev`
+CLAUDE.md's profile note it is compiled out of `release`, `prod`, AND `perry-dev`
 anyway. Every codegen test naming these bits asserts codegen's own constant
 appears in the emitted IR, so they pin codegen to itself and would all stay
 green.

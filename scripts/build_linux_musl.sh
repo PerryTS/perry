@@ -98,22 +98,28 @@ test -s /opt/perry-musl/lib/libstdc++.a || {
 
 rustup target add "$target"
 
-cargo build --profile dist --target "$target" -p perry
-cargo build --profile dist --target "$target" -p perry-runtime -p perry-runtime-static
-cargo build --profile dist --target "$target" -p perry-stdlib -p perry-stdlib-static
+if command -v mbx >/dev/null 2>&1; then
+  cargo_build=(mbx build)
+else
+  cargo_build=(cargo build)
+fi
+
+"${cargo_build[@]}" --profile prod --target "$target" -p perry
+"${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
+"${cargo_build[@]}" --profile prod --target "$target" -p perry-stdlib -p perry-stdlib-static
 
 # Ship the panic=abort runtime variant from the same sysroot.
-CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_DIST_PANIC=abort \
-  cargo build --profile dist --target "$target" -p perry-runtime -p perry-runtime-static
-cp "$abort_target_dir/$target/dist/libperry_runtime.a" \
-   "$target_dir/$target/dist/libperry_runtime_abort.a"
+env CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_PROD_PANIC=abort \
+  "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
+cp "$abort_target_dir/$target/prod/libperry_runtime.a" \
+   "$target_dir/$target/prod/libperry_runtime_abort.a"
 
 bash scripts/build_core_runtime.sh "$target"
 
 # A dynamically linked binary can run on the glibc build host and still fail
 # immediately for users on Alpine. Gate the artifact itself, not just the
 # Cargo exit status.
-compiler="$target_dir/$target/dist/perry"
+compiler="$target_dir/$target/prod/perry"
 # `file` 5.39 (Debian 11) calls static PIE "dynamically linked" merely because
 # it has a PT_DYNAMIC relocation table. Log its summary, but use the ELF
 # interpreter and dependency tables below as the portable pass/fail criteria.

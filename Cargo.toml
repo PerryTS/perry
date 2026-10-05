@@ -206,29 +206,67 @@ codegen-units = 1
 [profile.release.package.perry-ext-ws]
 codegen-units = 1
 
-# Fast developer profile (#5422). Optimized enough for realistic local runs but
-# without the distribution-grade settings that dominate compile time, so the
-# edit/build loop stays short. Intended local loop:
-#   cargo check -p perry                       # fastest correctness feedback
-#   cargo build --profile perry-dev -p perry   # optimized local development
+# Fast developer profile. Keep Cargo's standard `dev` profile genuinely quick
+# and debuggable; `perry-dev` remains as a compatibility profile for CI and
+# scripts that rely on its established target/perry-dev artifact directory.
+# Debug info and assertions stay enabled, but panic=abort keeps compiled Perry
+# runtime archives on the same exception-transport strategy as production.
+[profile.dev]
+lto = false
+codegen-units = 256
+incremental = true
+debug = true
+debug-assertions = true
+strip = false
+opt-level = 0
+panic = "abort"
+
+[profile.dev.package.perry-runtime]
+opt-level = 0
+codegen-units = 256
+
+[profile.dev.package.perry-stdlib]
+opt-level = 0
+
+# Optimized local developer profile retained for existing tests and CI.
 [profile.perry-dev]
 inherits = "release"
 lto = false
-codegen-units = 1
+codegen-units = 16
 incremental = true
 strip = false
 opt-level = 1
 
-# Official distribution profile (#5422). The explicit, named home for the
-# release-grade optimization Perry ships. Mirrors [profile.release] exactly —
-# including every per-package override below — so official artifacts stay
-# equivalent while being selected via `--profile dist`. Keep these blocks in
+# The release profile raises the large runtime crate back to opt-level 3 and
+# one codegen unit. Restore the fast developer settings for local compiler
+# iteration; `prod`, `dist`, and `release` retain shipping optimizations.
+[profile.perry-dev.package.perry-runtime]
+opt-level = 1
+codegen-units = 16
+
+# Optimized production build. It inherits release/distribution settings and
+# package overrides except for its parallel codegen-unit count, while writing
+# to target/prod/ to keep artifacts distinct. Official release workflows and
+# local builds use this profile;
+# `dist` remains as a compatibility name for existing scripts.
+[profile.prod]
+inherits = "dist"
+# Keep opt-level 3 and ThinLTO, but split initial code generation so rustc can
+# compile LLVM modules in parallel. ThinLTO still optimizes across codegen
+# units; using one unit was measurably expensive on large crates.
+codegen-units = 16
+
+# Production base profile (#5422). The explicit, named home for the release-
+# grade optimization Perry ships. `prod` inherits these exact settings and
+# package overrides under its standard name. It retains [profile.release]'s
+# optimization level, ThinLTO, panic strategy, and package overrides; prod
+# overrides codegen-units to parallelize compilation. Keep package blocks in
 # sync with their [profile.release.*] counterparts above.
 [profile.dist]
 inherits = "release"
 lto = "thin"
 codegen-units = 1
-# MUST match [profile.release] (#7302). `dist` is what release-packages.yml
+# MUST match [profile.release] (#7302). `prod` is what release-packages.yml
 # builds the SHIPPED libperry_{runtime,stdlib}.a with, and the exception
 # transport requires the unwinder to step runtime Rust frames with
 # longjmp-equivalent semantics. Under panic="unwind" rustc plants RFC-2945

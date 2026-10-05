@@ -48,7 +48,7 @@ if (process.argv.includes('--self-test')) {
   process.exit(0);
 }
 prepareRequireRuntime(root);
-const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/perry-dev/perry');
+const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/debug/perry');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-minsize-inline-'));
 const source = path.join(work, 'fixture.ts');
 fs.copyFileSync(path.join(root, 'test-files/test_gap_minsize_inline_policy.ts'), source);

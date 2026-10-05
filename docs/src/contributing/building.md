@@ -2,10 +2,10 @@
 
 ## Prerequisites
 
-- Rust toolchain (stable, **≥ 1.94**): [rustup.rs](https://rustup.rs/). The
-  workspace pins no toolchain file, so an older `stable` fails with a
-  `sqlx@0.9.0 requires rustc 1.94.0` MSRV error from deep in the dependency
-  graph. `rustup update stable` resolves it.
+- Rust toolchain: install [rustup](https://rustup.rs/); the workspace pins
+  `nightly-2026-10-04` in `rust-toolchain.toml` because its exception transport
+  needs nightly unwind-table flags. Running Cargo from the checkout installs
+  or selects the pinned toolchain automatically.
 - System C compiler (`cc` on macOS/Linux, MSVC on Windows)
 - **libclang** — the `libsqlite3-sys` build script runs `bindgen`. Missing it
   aborts the build with `Unable to find libclang`. Install `libclang-dev`
@@ -18,6 +18,8 @@
   `llvm-config` is not on `PATH`, set `LLVM_SYS_221_PREFIX` to the LLVM 22
   prefix. On Windows this variable is mandatory and must point at the
   extracted LLVM 22 development archive used by the build.
+- For the cached Make targets, install the pinned Mr Boxington once with
+  `make mbx-deps`.
 
 An external clang is not part of the normal in-process codegen path. Install a
 matching clang only when working on a path that explicitly invokes it (for
@@ -30,35 +32,50 @@ example Windows host `--embed`) or when building with
 git clone https://github.com/PerryTS/perry.git
 cd perry
 
-# Build the default product and its dependency closure
-cargo build --release
+# Build the fully optimized product and its dependency closure
+make build-prod
 ```
 
-The binary is at `target/release/perry`.
+The binary is at `target/prod/perry`.
 
 The workspace deliberately defaults to the `perry` CLI. Bindings, platform
 adapters, test support, and release-only archives are selected explicitly by
 their CI/release jobs. Workspace-wide host commands must use the centralized
 platform exclusions described in the [crate policy](crate-policy.md).
 
-## Build taxonomy (dev / release / dist)
+## Build taxonomy (dev / prod, with compatibility profiles)
 
-Perry has three build profiles, each tuned for a different job (#5422):
+Use `dev` and `prod` for new builds. Cargo's `debug` output directory is the
+artifact directory for the `dev` profile; it is not a separate Cargo profile.
+The legacy `perry-dev`, `release`, and `dist` profile names remain for existing
+CI, tooling, and reproducible investigations.
 
 | Goal | Command | Profile |
 |------|---------|---------|
 | Fastest correctness feedback | `cargo check -p perry` | — |
-| Optimized **local** development | `cargo build --profile perry-dev -p perry` | `perry-dev` |
+| Fast, debuggable local development | `make build-dev` (or `cargo build --profile dev -p perry`) | `dev` |
+| Optimized local development / CI | `cargo build --profile perry-dev -p perry` | `perry-dev` |
+| Fully optimized local production build | `make build-prod` | `prod` |
 | Release-compatible build | `cargo build --release` | `release` |
-| Official distribution artifacts | `cargo build --profile dist ...` | `dist` |
+| Official distribution artifacts | `cargo build --profile prod ...` | `prod` |
 
+- **`dev`** keeps debug info and prioritizes compilation speed (`opt-level = 0`,
+  `codegen-units = 256`, debug assertions on, and no LTO). Direct Cargo builds
+  use Cargo incremental compilation; `make build-dev` lets mbx manage learned
+  incremental state while preserving shared-cache reuse for matching outputs.
+  It keeps `panic = "abort"` so locally built Perry runtime archives preserve
+  the production exception transport contract. `make build-dev`
+  routes through Mr Boxington. Output is at `target/debug/perry`.
 - **`perry-dev`** inherits `release` but disables the expensive distribution
   settings (`lto = false`, `codegen-units = 16`, `opt-level = 1`,
   `incremental = true`, no strip) so the edit/build loop stays short. Output is
   at `target/perry-dev/perry`.
-- **`dist`** mirrors `release` exactly (ThinLTO, `codegen-units = 1`,
-  `opt-level = 3`, strip) and is the explicit, named profile the release
-  workflows use for shipped artifacts. Output is at `target/dist/`.
+- **`prod`** inherits the optimized distribution settings (ThinLTO,
+  `opt-level = 3`, strip) and uses 16 codegen units to parallelize compilation.
+  ThinLTO still optimizes across those units. Release workflows and
+  `make build-prod` use Mr Boxington and write to `target/prod/`.
+- **`dist`** is retained as a compatibility profile with the same optimized
+  settings. New build commands should use `prod`.
 
 After a `--timings` build, `scripts/cargo_timing_summary.py` prints the slowest
 units so build-time regressions are visible.
@@ -91,16 +108,16 @@ flags, dependencies, and how much prior work the cache can reuse.
 
 ```bash
 # Runtime only (must rebuild stdlib too!)
-cargo build --release -p perry-runtime -p perry-stdlib
+cargo build --profile prod -p perry-runtime -p perry-stdlib
 
 # The .a static archives are emitted by separate wrapper crates (#5422), so a
 # plain `cargo build` no longer produces them as a side effect. Build them
 # explicitly when you need libperry_runtime.a / libperry_stdlib.a (e.g. to link
 # compiled programs without the auto-optimize rebuild):
-cargo build --release -p perry-runtime-static -p perry-stdlib-static
+cargo build --profile prod -p perry-runtime-static -p perry-stdlib-static
 
 # Codegen only
-cargo build --release -p perry-codegen
+cargo build --profile prod -p perry-codegen
 ```
 
 > **Important**: When rebuilding `perry-runtime`, you must also rebuild `perry-stdlib` because `libperry_stdlib.a` embeds perry-runtime as a static dependency.

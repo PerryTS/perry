@@ -85,12 +85,9 @@ const MANIFEST_ENTRIES = path.join(
   'src',
   'entries.rs',
 )
-// The compiler binary. Two things the hardcoded `target/release/perry` got
-// wrong on Windows (#10385): the executable is `perry.exe` there, so the
-// matrix could never find it and died in its own precondition check; and
-// Windows CI builds `--profile perry-dev`, not `--release`, so even a correct
-// suffix would point at a path that job never produces. `PERRY_BIN` overrides
-// both, matching the env the parity harness already honours.
+// The standalone node-compat workflow builds the release profile. Include the
+// platform executable suffix so local Windows runs resolve the same artifact;
+// `PERRY_BIN` can point at another profile's build when needed.
 const PERRY_BIN =
   process.env.PERRY_BIN ||
   path.join(
@@ -463,7 +460,7 @@ async function runMatrix(args) {
     throw new Error(
       `perry release binary missing at ${PERRY_BIN}\n` +
         `  build it: cargo build --release -p perry\n` +
-        `  or point at an existing build: PERRY_BIN=<path-to-perry> (e.g. target/perry-dev/perry.exe)`,
+        `  or point at an existing build: PERRY_BIN=<path-to-perry> (e.g. target/debug/perry.exe)`,
     )
   }
   const pin = loadNodePin()

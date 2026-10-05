@@ -508,12 +508,8 @@ jobs:
   # `rust-cache` saved nothing, leaving that leg unable to warm its own cache:
   # it cannot finish without a cache and cannot cache without finishing.
   #
-  # This job breaks the loop. `rust-cache` caches THIRD-PARTY dependencies only
-  # (it deliberately evicts workspace-crate fingerprints -- see #4856 in the
-  # build job), and those are the bulk of a cold build. Compiling them here
-  # under a timeout safely inside the ceiling, with `cache-on-failure`, saves
-  # the cache even if this job does not finish, so `build` starts from
-  # compiled dependencies.
+  # This job breaks the loop. Compile with mbx and save completed
+  # content-addressed objects so `build` can reuse dependency work.
   #
   # `continue-on-error` is deliberate: this is an optimization, never a gate.
   # If it fails or times out, `build` runs exactly as it would have.
@@ -546,7 +542,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal --target x86_64-apple-darwin
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal --target x86_64-apple-darwin
       - uses: ./.github/actions/setup-llvm22
       # Keep the proven partial-failure cache for this exceptionally slow
       # Intel leg. mbx's object bundle is saved only after a successful job.
@@ -559,7 +555,7 @@ jobs:
           workspaces: |
             . -> target
       - name: Compile dependencies for x86_64-apple-darwin
-        run: cargo build --profile dist --target x86_64-apple-darwin -p perry
+        run: mbx build --profile prod --target x86_64-apple-darwin -p perry
 
   # ---------------------------------------------------------------------------
   # Build release binaries for all platforms
@@ -674,7 +670,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal --target ${{ matrix.target }}
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal --target ${{ matrix.target }}
       # The old-sysroot image carries LLVM 22 under /usr/lib/llvm-22.
       # Its host-side GTK4 build does not depend on perry-codegen, so avoid
       # installing a second LLVM copy on the noble runner for these two legs.
@@ -707,16 +703,16 @@ jobs:
         run: |
           set -euo pipefail
           while IFS= read -r pkg; do
-            rm -rf target/dist/.fingerprint/"$pkg"-* \
-                   target/*/dist/.fingerprint/"$pkg"-* \
-                   target-glibc231/dist/.fingerprint/"$pkg"-* \
-                   target-glibc231/*/dist/.fingerprint/"$pkg"-* \
-                   target-glibc231-abort/dist/.fingerprint/"$pkg"-* \
-                   target-glibc231-abort/*/dist/.fingerprint/"$pkg"-* \
-                   target-musl/dist/.fingerprint/"$pkg"-* \
-                   target-musl/*/dist/.fingerprint/"$pkg"-* \
-                   target-musl-abort/dist/.fingerprint/"$pkg"-* \
-                   target-musl-abort/*/dist/.fingerprint/"$pkg"-*
+            rm -rf target/prod/.fingerprint/"$pkg"-* \
+                   target/*/prod/.fingerprint/"$pkg"-* \
+                   target-glibc231/prod/.fingerprint/"$pkg"-* \
+                   target-glibc231/*/prod/.fingerprint/"$pkg"-* \
+                   target-glibc231-abort/prod/.fingerprint/"$pkg"-* \
+                   target-glibc231-abort/*/prod/.fingerprint/"$pkg"-* \
+                   target-musl/prod/.fingerprint/"$pkg"-* \
+                   target-musl/*/prod/.fingerprint/"$pkg"-* \
+                   target-musl-abort/prod/.fingerprint/"$pkg"-* \
+                   target-musl-abort/*/prod/.fingerprint/"$pkg"-*
           done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
 
       # Closes #394: Homebrew bottle was missing libperry_ui_ios.a so
@@ -781,13 +777,13 @@ jobs:
         # crate, which downloaded a prebuilt V8 that 404'd on musl, was
         # removed.)
         if: matrix.old_glibc_image == '' && matrix.musl_image == ''
-        run: cargo build --profile dist --target ${{ matrix.target }} -p perry
+        run: mbx build --profile prod --target ${{ matrix.target }} -p perry
 
       - name: Build runtime libraries
         if: matrix.old_glibc_image == '' && matrix.musl_image == ''
         run: |
-          cargo build --profile dist --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
-          cargo build --profile dist --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
+          mbx build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
+          mbx build --profile prod --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
 
       - name: Build panic=abort runtime variant (Unix)
         # Out-of-tree installs can't rebuild the runtime, so ship the
@@ -799,10 +795,10 @@ jobs:
         # invalidate the main build's incremental cache.
         if: runner.os != 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
         run: |
-          CARGO_TARGET_DIR=target-abort CARGO_PROFILE_DIST_PANIC=abort \
-            cargo build --profile dist --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
-          cp "target-abort/${{ matrix.target }}/dist/libperry_runtime.a" \
-             "target/${{ matrix.target }}/dist/libperry_runtime_abort.a"
+          CARGO_TARGET_DIR=target-abort CARGO_PROFILE_PROD_PANIC=abort \
+            mbx build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
+          cp "target-abort/${{ matrix.target }}/prod/libperry_runtime.a" \
+             "target/${{ matrix.target }}/prod/libperry_runtime_abort.a"
 
       - name: Build core runtime profile (Unix)
         if: runner.os != 'Windows' && matrix.old_glibc_image == '' && matrix.musl_image == ''
@@ -832,7 +828,7 @@ jobs:
           governed_ext_packages=$(./scripts/release_ext_packages.sh)
           while IFS= read -r name; do
             echo "::group::build $name"
-            cargo build --profile dist --target ${{ matrix.target }} \
+            mbx build --profile prod --target ${{ matrix.target }} \
               -p perry -p perry-runtime-static -p perry-stdlib-static -p "$name" \
               || echo "  (skipped $name — failed to build on this host)"
             echo "::endgroup::"
@@ -931,7 +927,7 @@ jobs:
 
       - name: Build UI library (macOS)
         if: runner.os == 'macOS'
-        run: cargo build --profile dist --target ${{ matrix.target }} -p perry-ui-macos
+        run: mbx build --profile prod --target ${{ matrix.target }} -p perry-ui-macos
 
       # Closes #394: cross-compile the runtime + stdlib + UI for both the
       # iOS device and simulator triples (both Tier-2 stable). Library
@@ -950,18 +946,18 @@ jobs:
         if: runner.os == 'macOS' && matrix.target == 'aarch64-apple-darwin'
         run: |
           for triple in aarch64-apple-ios aarch64-apple-ios-sim; do
-            cargo build --profile dist --target "$triple" -p perry-runtime -p perry-runtime-static
-            cargo build --profile dist --target "$triple" -p perry-stdlib -p perry-stdlib-static
-            cargo build --profile dist --target "$triple" -p perry-ui-ios
+            mbx build --profile prod --target "$triple" -p perry-runtime -p perry-runtime-static
+            mbx build --profile prod --target "$triple" -p perry-stdlib -p perry-stdlib-static
+            mbx build --profile prod --target "$triple" -p perry-ui-ios
           done
 
       - name: Build UI library (Linux glibc)
         if: runner.os == 'Linux' && !endsWith(matrix.target, '-musl')
-        run: cargo build --profile dist --target ${{ matrix.target }} -p perry-ui-gtk4
+        run: mbx build --profile prod --target ${{ matrix.target }} -p perry-ui-gtk4
 
       - name: Build UI library (Windows)
         if: runner.os == 'Windows'
-        run: cargo build --profile dist --target ${{ matrix.target }} -p perry-ui-windows
+        run: mbx build --profile prod --target ${{ matrix.target }} -p perry-ui-windows
 
       # Closes #872 / #4823: cross-compile the Android runtime libs (and the
       # perry-ui-android UI backend) on the Windows leg so the WinGet zip
@@ -1023,19 +1019,19 @@ jobs:
           # pwsh has no `set -e`; these two are mandatory, so fail the step on a
           # non-zero exit (otherwise the best-effort UI build below, which resets
           # $LASTEXITCODE, could mask a runtime/stdlib failure).
-          cargo build --profile dist --target aarch64-linux-android -p perry-runtime -p perry-runtime-static
+          mbx build --profile prod --target aarch64-linux-android -p perry-runtime -p perry-runtime-static
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo build --profile dist --target aarch64-linux-android -p perry-stdlib -p perry-stdlib-static
+          mbx build --profile prod --target aarch64-linux-android -p perry-stdlib -p perry-stdlib-static
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # #4823 (option 1): the Android UI backend so a WinGet/Scoop-installed
           # perry can link `perry/ui` apps for android without a source tree.
           # This is mandatory for every Windows archive: matrix legs package
           # independently, so another leg cannot backfill a missing library.
-          # Mirrors the ubuntu cross-bundle leg: `--profile dist` build for the
+          # Mirrors the ubuntu cross-bundle leg: `--profile prod` build for the
           # staticlib (UI crates are already staticlib — no -static wrapper); the
           # global-dynamic TLS rustflag only matters at the consumer's final
           # cdylib link, not here.
-          cargo build --profile dist --target aarch64-linux-android -p perry-ui-android
+          mbx build --profile prod --target aarch64-linux-android -p perry-ui-android
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # #4856 — defense in depth behind the cache eviction above: assert
@@ -1474,7 +1470,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain + cross target
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal --target ${{ matrix.target }}
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal --target ${{ matrix.target }}
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -1494,8 +1490,8 @@ jobs:
         run: |
           set -euo pipefail
           while IFS= read -r pkg; do
-            rm -rf target/dist/.fingerprint/"$pkg"-* \
-                   target/*/dist/.fingerprint/"$pkg"-*
+            rm -rf target/prod/.fingerprint/"$pkg"-* \
+                   target/*/prod/.fingerprint/"$pkg"-*
           done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[].name')
 
       # --- Per-runner toolchain wiring --------------------------------------
@@ -1558,12 +1554,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cargo build --profile dist --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
-          cargo build --profile dist --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
+          mbx build --profile prod --target ${{ matrix.target }} -p perry-runtime -p perry-runtime-static
+          mbx build --profile prod --target ${{ matrix.target }} -p perry-stdlib -p perry-stdlib-static
           # UI crate is matrix-driven. perry-ui-android needs the NDK env
           # we wired above; perry-ui-windows builds against the MSVC SDK
           # already on windows-latest. Both go through plain `cargo build`.
-          cargo build --profile dist --target ${{ matrix.target }} -p ${{ matrix.ui_crate }}
+          mbx build --profile prod --target ${{ matrix.target }} -p ${{ matrix.ui_crate }}
 
       # #4856 — defense in depth behind the cache eviction above: a stale
       # cached runtime archive fails the release here instead of breaking
@@ -1662,7 +1658,7 @@ jobs:
           # behavior at line ~448 above.
           $libs = @("perry_runtime.lib", "perry_stdlib.lib", $uiLib)
           foreach ($lib in $libs) {
-            $src = "target/$target/dist/$lib"
+            $src = "target/$target/prod/$lib"
             if (-not (Test-Path $src)) {
               Write-Error "Expected $src after build but it's missing — aborting bundle."
               exit 1
@@ -2063,10 +2059,10 @@ jobs:
                 bin.install "perry"
                 lib.install Dir["libperry_*.a"]
               else
-                system "cargo", "build", "--release"
-                system "cargo", "build", "--release", "-p", "perry-runtime", "-p", "perry-stdlib", "-p", "perry-runtime-static", "-p", "perry-stdlib-static"
-                bin.install "target/release/perry"
-                lib.install Dir["target/release/libperry_*.a"]
+                system "cargo", "build", "--profile", "prod"
+                system "cargo", "build", "--profile", "prod", "-p", "perry-runtime", "-p", "perry-stdlib", "-p", "perry-runtime-static", "-p", "perry-stdlib-static"
+                bin.install "target/prod/perry"
+                lib.install Dir["target/prod/libperry_*.a"]
               end
             end
 

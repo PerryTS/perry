@@ -263,7 +263,7 @@ jobs:
         run: ./tests/test_parity_compile_budget.sh
 
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal --component rustfmt --component clippy
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal --component rustfmt --component clippy
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -823,7 +823,7 @@ jobs:
       # GC_FLAG_FORWARDED, GC_OBJ_TYPED_LAYOUT_INTACT and friends, held together
       # only by a comment -- the `debug_assert_eq!` that looks like it checks
       # them compares codegen's constant to a string literal (a tautology) and
-      # is compiled out of release and perry-dev anyway. A renumbering in the
+      # is compiled out of release, prod, and perry-dev anyway. A renumbering in the
       # runtime therefore compiled clean, passed every suite, and shipped a
       # binary whose objects the collector misreads. Build-free, so it belongs
       # in `lint`, which IS a required context.
@@ -1127,7 +1127,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal --component clippy
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal --component clippy
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -1245,7 +1245,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
@@ -1300,8 +1300,8 @@ jobs:
   # artifacts USED to live here. It only fed `binary-size` (which now does
   # its own quick build) — every other job did `cargo build --release`
   # itself anyway, so `needs: build` was a serializing barrier with no
-  # cache benefit. Removed in v0.5.387 along with the `actions/cache@v4`
-  # blocks (replaced by `Swatinem/rust-cache@v2`, which handles target/
+  # cache benefit. Removed in v0.5.387 along with the `./.github/actions/perry/actions/cache@v4`
+  # blocks (replaced by `./.github/actions/perry/Swatinem/rust-cache@v2`, which handles target/
   # pruning intelligently and avoids the disk-pressure issue that
   # required the manual simulator-runtime wipe + cache=registry-only
   # workaround). Each downstream job below builds in parallel directly.
@@ -1316,17 +1316,12 @@ jobs:
     # don't exercise any platform behavior; they're pure logic +
     # codegen.
     runs-on: ubuntu-latest
-    # The per-package serial build+prune loop below (plus the big stdlib links)
-    # takes ~50-60 min with a WARM sccache disk cache. A fully cold cache
-    # (recompiling the whole dependency graph) measured ~90-103 min, and PRs
-    # that invalidate perry-runtime/perry-codegen previously exceeded the old
-    # 120-min bound entirely. The bound is 180 to (a) leave headroom while the
-    # disk cache warms after the sccache-backend fix, and (b) still cut a true
-    # hang (e.g. a flaky link SIGBUS retry storm). Once warm hit rates are
-    # confirmed in CI this can come back down. NOTE: the old "~45-50 min" figure
-    # predated the sccache GHA-backend rot — it was never accurate once that
-    # cache stopped delivering Rust hits.
-    timeout-minutes: 180
+    # Use lane-sized job bounds: PR-scoped unit tests must fit the 30-minute
+    # required-gate budget; full workspace runs get 120 minutes. The latter
+    # leaves headroom above the measured 90-103-minute cold-cache baseline.
+    # Perry's large integration inventory is isolated in the eight-shard slow
+    # lane, with its own 120-minute cap per shard.
+    timeout-minutes: ${{ fromJSON(needs.plan.outputs.plan).cargo_test_scope == 'pr' && 30 || fromJSON(needs.plan.outputs.plan).tier == 'pr' && 180 || 120 }}
     # sccache (compiler-level cache, shared across ALL branches/jobs via the
     # GitHub Actions cache backend) on top of Swatinem/rust-cache (target/ +
     # registry). rust-cache only writes on main (save-if below), so PRs can't
@@ -1377,7 +1372,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
@@ -1496,8 +1491,11 @@ jobs:
           # Run perry-runtime single-threaded so the tests can't interfere.
 
           if [ "${{ fromJSON(needs.plan.outputs.plan).cargo_test_scope }}" != "pr" ]; then
-            # ---- FULL run: release tags / nightly cron / workflow_dispatch ----
-            # Every target, including the slow auto-optimize integration tests.
+            # ---- Full workspace run: main sweep / release / nightly ----
+            # Main sweeps cover the full unit-test inventory and other package
+            # suites. Perry's large integration inventory is the slow lane:
+            # changed suites run in e2e-scoped on PRs, and the complete set
+            # runs in cargo-test-perry on the full tier.
             if printf '%s\n' "$scope" | grep -qx 'perry-runtime'; then
               RUST_TEST_THREADS=1 cargo test -p perry-runtime
             fi
@@ -1509,7 +1507,7 @@ jobs:
             # directly and fail with "Could not find libperry_runtime.a" if the
             # cached staticlib was invalidated. Build them explicitly.
             # #8479: build these with `--release`. The `panic` strategy is a
-            # PROFILE-level setting, and only `release`/`dist`/`perry-dev` set
+            # PROFILE-level setting, and `dev`/`release`/`prod`/`dist`/`perry-dev` set
             # `panic = "abort"` — a bare `cargo build` produces a DEBUG,
             # `panic = "unwind"` runtime. Under `panic = "unwind"` rustc plants
             # an RFC-2945 abort guard in every `extern "C"` helper, which a JS
@@ -1525,19 +1523,11 @@ jobs:
             # `function_apply_with_runtime_args_defers_to_a_located_aot_error`
             # pass.
             if printf '%s\n' "$scope" | grep -qE '^(perry|perry-stdlib)$'; then
-              if printf '%s\n' "$scope" | grep -qx 'perry' && [ "${{ needs.plan.outputs.tier }}" != "full" ]; then
-                # Sweep tier runs every perry integration target here, including
-                # the coherent-require fixtures. Prepare their providers in one
-                # graph outside the fixture's ten-minute spawnSync bound, else
-                # the fixture rebuilds the perry-dev graph and ETIMEDOUTs.
-                cargo build --release -p perry -p perry-runtime -p perry-stdlib \
-                  -p perry-runtime-static -p perry-stdlib-static \
-                  -p perry-ext-http -p perry-ext-net \
-                  -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib
-                export PERRY_TEST_RUNTIME_PREBUILT=1
-              else
-                cargo build --release -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
-              fi
+              # These runs need the shipped runtime archives. The slow perry
+              # integration fixtures prepare extra compiler/ext providers in
+              # their own full-tier shards.
+              cargo build --release -p perry-runtime -p perry-stdlib \
+                -p perry-runtime-static -p perry-stdlib-static
               export PERRY_RUNTIME_DIR="$PWD/target/release"
             fi
             find target/debug/deps -maxdepth 1 -type f -perm -111 ! -name '*.so' -delete 2>/dev/null || true
@@ -1546,10 +1536,9 @@ jobs:
             # disk doesn't exhaust mid-job.
             export CARGO_BUILD_JOBS=1
             for package in $(printf '%s\n' "$scope" | grep -vx 'perry-runtime'); do
-              if [ "$package" = "perry" ] && [ "${{ needs.plan.outputs.tier }}" = "full" ]; then
-                # The full tier's cargo-test-perry matrix owns every perry
-                # integration target. Keep the bin/unit target here so the
-                # split is exhaustive without running any target twice.
+              if [ "$package" = "perry" ] && [ "${{ needs.plan.outputs.plan.tier }}" != "pr" ]; then
+                # Keep Perry's bin/unit tests in the full workspace lane. Its
+                # large integration inventory runs separately on the full tier.
                 echo "::group::cargo test --bins -p perry"
                 cargo test --bins -p perry
               else
@@ -1698,7 +1687,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
@@ -2082,7 +2071,7 @@ jobs:
   # and an MSVC-only link error (LNK2019: `js_crypto_ed25519_verify`
   # unresolved when linking perry.exe — Unix linkers dead-strip the unused
   # extern, link.exe errors). Building `perry` LINKS perry.exe, so the LNK2019
-  # class is caught here, not just rustc errors. The perry-dev profile
+  # class is caught here, not just rustc errors. The dev profile
   # (opt-level 1, no LTO) keeps a cold Windows build inside a PR-sized budget;
   # --release would be far too slow for per-PR CI.
   # ---------------------------------------------------------------------------
@@ -2146,7 +2135,7 @@ jobs:
           python benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
 
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Setup Node.js
@@ -2159,14 +2148,14 @@ jobs:
           shared-key: "${{ runner.os }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      # perry-dev (see Cargo.toml [profile.perry-dev]) trades peak optimization
+      # dev (see Cargo.toml [profile.dev]) trades peak optimization
       # for build speed. The package set covers the compiler binary (link
       # gate), the runtime/stdlib pair (the usual source of cfg(windows)
       # externs), their static-library wrappers (used by the parity smoke
       # below), and both Windows UI crates — the ones cargo-test's ubuntu
       # runner must exclude and therefore never compiles.
-      - name: Build compiler + runtime + Windows UI crates (perry-dev)
-        run: cargo build --profile perry-dev -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ui-windows -p perry-ui-windows-winui
+      - name: Build compiler + runtime + Windows UI crates (dev)
+        run: cargo build --profile dev -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-ui-windows -p perry-ui-windows-winui
 
       # #7356: the full perry-runtime --lib suite is green on Windows for the
       # first time (the SEH/longjmp transport, setjmp alignment, TZ, trim and
@@ -2175,12 +2164,12 @@ jobs:
       # arm that keeps the suite green rather than letting it rot back to
       # "unmeasurable". Single-threaded for the same #1444 process-global-state
       # reason as the ubuntu leg (both its invocations set RUST_TEST_THREADS=1);
-      # perry-dev profile so the test build shares the dependency artifacts the
+      # dev profile so the test build shares the dependency artifacts the
       # build step above already produced instead of paying a second cold
       # dev-profile build of a ~340k-line crate.
       - name: perry-runtime unit tests (single-threaded, #7356)
         shell: bash
-        run: RUST_TEST_THREADS=1 cargo test --profile perry-dev --lib -p perry-runtime
+        run: RUST_TEST_THREADS=1 cargo test --profile dev --lib -p perry-runtime
 
       - name: Windows runtime regressions against pinned Node
         run: python scripts/run_windows_runtime_regressions.py
@@ -2192,8 +2181,8 @@ jobs:
         shell: bash
         run: |
           PERRY_SKIP_BUILD=1 \
-          PERRY_BIN="$PWD/target/perry-dev/perry.exe" \
-          PERRY_RUNTIME_DIR="$PWD/target/perry-dev" \
+          PERRY_BIN="$PWD/target/debug/perry.exe" \
+          PERRY_RUNTIME_DIR="$PWD/target/debug" \
           ./run_parity_tests.sh \
             --suite node-suite \
             --module process \
@@ -2203,7 +2192,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $binary = 'target/perry-dev/perry.exe'
+          $binary = 'target/debug/perry.exe'
           $metadata = cargo metadata --no-deps --format-version 1 | ConvertFrom-Json
           $expectedVersion = ($metadata.packages | Where-Object name -eq 'perry').version
           $version = (Get-Item $binary).VersionInfo
@@ -2228,7 +2217,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          cargo test --profile perry-dev -p perry --bin perry \
+          cargo test --profile dev -p perry --bin perry \
             coff_archive_dedup_drops_only_fully_provided_members 2>&1 | tee test-output.log
           grep -q 'test result: ok. 1 passed; 0 failed' test-output.log || {
             echo "::error::expected COFF dedup test did not run exactly once"
@@ -2270,7 +2259,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Set up ARM64 MSVC environment
@@ -2287,11 +2276,11 @@ jobs:
           shared-key: "${{ runner.os }}-${{ runner.arch }}-perry"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
-      - name: Build ARM64 compiler and static libraries (perry-dev)
-        run: cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
+      - name: Build ARM64 compiler and static libraries (dev)
+        run: cargo build --profile dev -p perry -p perry-runtime-static -p perry-stdlib-static
 
       - name: Run ARM64 setjmp ABI tests
-        run: 'cargo test --profile perry-dev --lib -p perry-runtime ffi::setjmp::tests:: -- --test-threads=1'
+        run: 'cargo test --profile dev --lib -p perry-runtime ffi::setjmp::tests:: -- --test-threads=1'
 
       - name: Compile and run a Perry ARM64 executable
         shell: pwsh
@@ -2301,9 +2290,9 @@ jobs:
           # composition has its own gate; this job's contract is the ARM ABI,
           # target selection, SDK discovery, final PE link, and execution.
           New-Item -ItemType Directory -Force 'target/windows-arm64-smoke-libs' | Out-Null
-          Copy-Item 'target/perry-dev/perry_runtime.lib' 'target/windows-arm64-smoke-libs/'
+          Copy-Item 'target/debug/perry_runtime.lib' 'target/windows-arm64-smoke-libs/'
           $env:PERRY_RUNTIME_DIR = (Resolve-Path 'target/windows-arm64-smoke-libs').Path
-          target/perry-dev/perry.exe compile tests/release/link_smoke/fixture.ts `
+          target/debug/perry.exe compile tests/release/link_smoke/fixture.ts `
             --target windows-aarch64 `
             --no-auto-optimize `
             -o target/windows-arm64-smoke.exe
@@ -2363,7 +2352,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
@@ -2446,7 +2435,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
@@ -2563,7 +2552,7 @@ jobs:
       # The remaining GC stress arms are aggregate-only. Repeating them in
       # every matrix shard would add cost without increasing their coverage.
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
@@ -2674,7 +2663,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
@@ -3047,7 +3036,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
@@ -3239,7 +3228,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Install sccache
@@ -3347,7 +3336,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -3457,7 +3446,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -3688,7 +3677,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
@@ -3773,7 +3762,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
         with:
@@ -3988,7 +3977,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -4408,7 +4397,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -4490,7 +4479,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -4591,7 +4580,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -4665,7 +4654,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
@@ -4846,7 +4835,7 @@ jobs:
           echo "Disk free: ${BEFORE} -> ${AFTER}"
 
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - name: Set up MSVC environment (Windows)
@@ -5059,7 +5048,7 @@ jobs:
             git config http.https://github.com/.extraheader "$auth_header"
           fi
       - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-08-20 --profile minimal
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
       - uses: ./.github/actions/perry/Swatinem/rust-cache # v2

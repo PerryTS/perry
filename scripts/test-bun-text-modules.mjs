@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process';
 import { prepareRequireRuntime } from './test-require-runtime.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 prepareRequireRuntime(root);
-const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/perry-dev/perry');
+const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/debug/perry');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-bun-text-'));
 const source = path.join(work, 'source');
 fs.cpSync(path.join(root, 'tests/modules/bunfs_text_require'), source, { recursive: true });

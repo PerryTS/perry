@@ -17,9 +17,10 @@
 //!
 //! 1. `[profile.release]` itself was on the default (`unwind`) — closed by
 //!    #7302.
-//! 2. `[profile.dist]` (what `release-packages.yml` builds the SHIPPED
-//!    `libperry_{runtime,stdlib}.a` with) *inherits* `release` but then
-//!    re-declared `panic = "unwind"`, which wins. Every local build, every
+//! 2. `[profile.dist]` is the compatibility base inherited by `[profile.prod]`
+//!    (what `release-packages.yml` now builds the SHIPPED
+//!    `libperry_{runtime,stdlib}.a` with). It once re-declared
+//!    `panic = "unwind"`, which won over `release`. Every local build, every
 //!    CI job and the whole parity suite were correct while the artifact
 //!    users install aborted on the first cross-helper throw.
 //! 3. A **separate workspace** in the tree —
@@ -54,8 +55,8 @@
 //!   a `[workspace]` table that does not `exclude` it (or via an explicit
 //!   `package.workspace` pointer), so the audit attributes members the same
 //!   way instead of resolving `members` globs.
-//! * **`inherits` chains are followed**, so `[profile.dist] inherits =
-//!   "release"` is judged by what it actually resolves to.
+//! * **`inherits` chains are followed**, so `[profile.prod] inherits =
+//!   "dist"` is judged by what it actually resolves to.
 //! * **`dev-dependencies` are not an edge.** A dev-dependency is linked only
 //!   into test/bench harnesses, and cargo ignores `panic` for those profiles
 //!   outright — such a workspace cannot emit a shipped runtime archive.
@@ -87,9 +88,9 @@ mod tests {
     /// gitignored). Everything else — including `node_modules` — is walked.
     const PRUNED_DIRS: &[&str] = &["target"];
 
-    /// Profiles the main workspace ships runtime archives with, asserted by
-    /// name so a rename cannot silently drop one from the audit.
-    const MAIN_SHIPPING_PROFILES: &[&str] = &["release", "dist", "perry-dev"];
+    /// Profiles that can produce runtime archives with the shipped panic
+    /// strategy, asserted by name so a rename cannot silently drop one.
+    const MAIN_ABORT_RUNTIME_PROFILES: &[&str] = &["dev", "release", "prod", "dist", "perry-dev"];
 
     fn repo_root() -> PathBuf {
         let path = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../.."));
@@ -531,11 +532,11 @@ mod tests {
         );
     }
 
-    /// The main workspace's shipping profiles are also pinned BY NAME, so
+    /// The main workspace's runtime profiles are also pinned BY NAME, so
     /// renaming or deleting one cannot quietly shrink what the audit above
     /// judges.
     #[test]
-    fn main_workspace_shipping_profiles_exist_and_abort() {
+    fn main_workspace_abort_runtime_profiles_exist_and_abort() {
         let root = repo_root();
         let manifests = collect_manifests(&root);
         let main = manifests
@@ -543,11 +544,11 @@ mod tests {
             .expect("the repo root Cargo.toml must parse");
         let profiles = profiles_of(main).expect("the repo root must declare [profile.*]");
 
-        for name in MAIN_SHIPPING_PROFILES {
+        for name in MAIN_ABORT_RUNTIME_PROFILES {
             assert!(
                 profiles.contains_key(*name),
                 "[profile.{name}] has disappeared from the workspace manifest; if it was \
-                 renamed, update MAIN_SHIPPING_PROFILES so the rename is judged too"
+                 renamed, update MAIN_ABORT_RUNTIME_PROFILES so the rename is judged too"
             );
             match resolve_panic(Some(profiles), name) {
                 Panic::Declared { value, by } => assert_eq!(

@@ -8,7 +8,7 @@ import { prepareRequireRuntime } from './test-require-runtime.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 prepareRequireRuntime(root);
-const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/perry-dev/perry');
+const compiler = process.env.PERRY_BIN ?? path.join(root, 'target/debug/perry');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-child-late-iterator-'));
 const env = { ...process.env, PERRY_TEST_CHILD_EXECUTABLE: process.execPath,
   PERRY_TEST_MISSING_CHILD: path.join(work, 'definitely-absent-child') };

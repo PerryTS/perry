@@ -13,7 +13,7 @@ python3 scripts/ci_plan.py --self-test   # the policy's own invariants
 | tier | trigger | what it is for | fan-in job |
 |---|---|---|---|
 | **pr** | every `pull_request` push | the required gate. Small, fast, must be green on `main`. | `pr-gate` — **the only required status context** |
-| **sweep** | every `push` to `main` (coalesced) **+ a two-hourly cron backstop** | post-merge truth for `main`: the PR tier unscoped plus the medium-weight jobs that do not fit the PR budget | `main-gate` |
+| **sweep** | every `push` to `main` (coalesced) **+ a two-hourly cron backstop** | post-merge truth for `main`: unscoped unit/package tests plus medium-weight jobs; Perry's large integration inventory stays in the nightly/release full tier | `main-gate` |
 | **full** | nightly `schedule`, `v*` tags, `workflow_dispatch`, PRs labelled `run-extended-tests` | everything, incl. parity, compile-smoke, doc-tests, package smokes, the 24-shard auto-optimize gap suite | `full-suite-gate` — what `release-packages.yml` waits for |
 
 ## The job × tier matrix
@@ -84,6 +84,38 @@ those tests exercise runtime GC, arenas, closures, promises and the event loop.
 The `perry-ext-*` crates remain excluded from dependency fan-out unless directly
 changed. `scripts/ci_test_scope.py` owns this policy, with regression tests in
 `lint`.
+
+## Rust test lanes and timeboxes
+
+Perry's Cargo suites use the same fast / mid / slow idea as socket-wheelhouse,
+but their wall times are measured in minutes because Rust compilation and the
+runtime-linked test binaries dominate these suites. The wheelhouse's 10s / 30s /
+60s limits apply to its small Vitest lanes and should not be copied onto Cargo.
+
+| Lane | What runs | Expected time | Enforced timebox |
+|---|---|---:|---:|
+| **Fast** | PR-scoped crate unit tests (`--lib --bins`), plus the always-on FFI ABI unit check | `<10 min` for the scoped Cargo loop | `30 min` Cargo job cap; the PR gate targets `≤30 min` wall clock once queued. |
+| **Mid** | Full workspace package tests on main sweeps, including Perry bin/unit tests; Perry integration tests are left to the slow lane | `<60 min` target; the prior full Cargo job measured `50–60 min` warm and `90–103 min` cold before removing Perry's serial integration inventory | `120 min` Cargo job cap. |
+| **Slow** | Complete Perry integration inventory on nightly, release tags, and opt-in full runs; changed suites run through `e2e-scoped` on PRs | Eight round-robin shards | `120 min` per shard. The separate scoped e2e job applies `25 min` subprocess bounds where configured. |
+
+The hard caps are failure cutoffs, not performance goals. Although fast and mid
+share the `cargo-test` job, its timeout comes from the planner tier: 30 minutes
+for PR scope and 120 minutes for full workspace scope. A manual
+`workflow_dispatch --tier pr` has full workspace scope without the sharded slow
+lane, so it retains a 180-minute cap. The main sweep now runs Perry's bin/unit
+target in the `cargo-test` job while the complete Perry integration inventory
+stays in the nightly/release shards; this avoids repeating the expensive serial
+integration loop on every merge without dropping it from the full-suite gate.
+A run that approaches its cap should trigger a measured build/test optimization,
+not a larger timeout. Keep
+`RUST_TEST_THREADS=1` for `perry-runtime`: its tests share process-global GC,
+arena, timer, and notification state. Keep `CARGO_BUILD_JOBS=1` for the
+runtime-linked test binaries until runner memory measurements support increasing
+it. The sccache-backed CI jobs set `CARGO_INCREMENTAL=0`, so sccache can reuse
+compiler outputs. Mr Boxington-backed release jobs use mbx's default cache
+policy instead; local `make build-dev` and `make build-prod` leave
+`MBX_INCREMENTAL` unset so mbx can keep private incremental state for edited
+crates while sharing unchanged compilations.
 
 `e2e-scoped` runs integration suites selected by the diff, but its
 `SUITE_EXCLUSIONS` check is deliberately not scoped: whenever that list is

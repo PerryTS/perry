@@ -2,21 +2,21 @@
   "tools": {
     "rust": {
       "description": "Rust toolchain (rustc + cargo) — pinned exact version for every workflow, instead of floating on whatever `dtolnay/rust-toolchain@stable` resolves to at run time.",
-      "version": "nightly-2026-08-20",
+      "version": "nightly-2026-10-04",
       "release": "rustup-toolchain",
       "repository": "github:rust-lang/rust",
       "notes": [
         "Pinned via `toolchain:` on every `dtolnay/rust-toolchain@stable` step in .github/workflows/*.yml. Bump by editing tools.rust.version here and re-running the same substitution across every workflow file.",
         "Integrity is rustup's own signed-manifest verification, not a second SRI hash — this entry just records the adopted version for the soak gate.",
-        "Nightly, not stable, because -Zmin-publish-age (.cargo/config.toml) is nightly-only on 1.98.0 — verified directly, not assumed.",
-        "Transition-to-stable target: Rust 1.100.0, late September 2026, per the min-publish-age stabilization PR (https://github.com/rust-lang/cargo/pull/17335, open) and tracking issue (https://github.com/rust-lang/cargo/issues/17009). Same target as socket-wheelhouse's canonical rust-toolchain.toml.",
+        "Nightly, not stable, because .cargo/config.toml enables rustc's nightly-only -Z use-sync-unwind flag for compact synchronous unwind tables.",
+        "Cargo stabilized min-publish-age in Rust 1.100 (https://github.com/rust-lang/cargo/pull/17335); the registry age policy remains in .cargo/config.toml without the former unstable opt-in.",
         "Already carries the algebraic_* float methods used in crates/perry-runtime/src/perf_histogram.rs — stable since 1.98.0, unrelated to the nightly pin above.",
         "Adopted 1 day after this nightly's cut, via soakBypass below."
       ],
       "soakBypass": {
-        "version": "nightly-2026-08-20",
-        "published": "2026-08-20",
-        "removable": "2026-08-27"
+        "version": "nightly-2026-10-04",
+        "published": "2026-10-04",
+        "removable": "2026-10-11"
       }
     },
     "node": {
@@ -240,10 +240,19 @@
       "description": "cargo-fixit — crate-ci/cargo-fixit, the drop-in faster replacement for `cargo clippy --fix` (skips the re-check compile between fix rounds). Installed from source via `cargo install cargo-fixit@<version> --locked` because the crate publishes NO prebuilt binaries (no cargo binstall, no GitHub release assets). Backs the `make fix` target.",
       "release": "cargo-install",
       "crate": "cargo-fixit",
-      "version": "0.1.15",
+      "version": "0.1.17",
       "binary": "cargo-fixit",
       "repository": "github:crate-ci/cargo-fixit",
-      "notes": "From-source install — no prebuilt binaries. --locked respects the published Cargo.lock (the supply-chain control). make fix-deps reads this pin and runs cargo install cargo-fixit@0.1.15 --locked."
+      "notes": "From-source install — no prebuilt binaries. --locked respects the published Cargo.lock (the supply-chain control). make fix-deps reads this pin and runs cargo install cargo-fixit@0.1.17 --locked."
+    },
+    "mbx": {
+      "description": "Mr Boxington shared Cargo build cache, pinned to match socket-wheelhouse. Uses GitHub Actions cache for release builds and learned incremental reuse for local edit loops.",
+      "release": "cargo-install",
+      "crate": "mbx",
+      "version": "1.22.0",
+      "binary": "mbx",
+      "repository": "github:jdx/mr-boxington",
+      "notes": "Install with cargo install mbx@1.22.0 --locked. CI uses Perry's specialized local composite action, backed by the sparse-vendored upstream mr-boxington-action at a recorded immutable commit."
     }
   }
 }

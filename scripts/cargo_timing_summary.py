@@ -9,7 +9,7 @@ duration so release build regressions are visible without weakening any
 optimization settings.
 
 Usage:
-    cargo build --profile dist -p perry --timings
+    cargo build --profile prod -p perry --timings
     scripts/cargo_timing_summary.py                 # latest report, top 15
     scripts/cargo_timing_summary.py --top 30
     scripts/cargo_timing_summary.py path/to/cargo-timing.html
