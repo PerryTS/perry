@@ -485,12 +485,6 @@ mod tests {
         "js_string_compare",
         "js_string_addref",
         "js_gc_temp_root_push",
-        "js_shadow_frame_enter",
-        "js_shadow_frame_push",
-        "js_shadow_frame_pop",
-        "js_shadow_state_addr",
-        "js_shadow_slot_bind",
-        "js_shadow_slot_set",
         "js_write_barrier",
         "js_write_barrier_root_nanbox",
         "js_gc_register_global_root",
@@ -594,6 +588,32 @@ mod tests {
             assert!(
                 !generated().contains_key(*name),
                 "override {name} shadows a symbol the generated table already classifies"
+            );
+        }
+    }
+
+    #[test]
+    fn removed_native_shadow_helpers_have_no_linux_export_or_leaf_claim() {
+        let linux = include_str!("gc_effects/linux-x86_64.tsv");
+        for name in [
+            "js_shadow_frame_enter",
+            "js_shadow_frame_push",
+            "js_shadow_frame_pop",
+            "js_shadow_state_addr",
+            "js_shadow_slot_bind",
+            "js_shadow_slot_get",
+            "js_shadow_slot_set",
+        ] {
+            assert!(
+                !linux.lines().any(|line| line
+                    .split_once('\t')
+                    .is_some_and(|(symbol, _)| symbol == name)),
+                "{name}"
+            );
+            assert_eq!(
+                classify_direct_callee(name),
+                GcCallEffect::Unknown,
+                "{name}"
             );
         }
     }

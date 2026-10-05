@@ -156,7 +156,6 @@ try {
         // RS4GC's Windows EH limitation is unrelated to this test's moving-GC
         // coverage and rejects the fixture's deliberate try/catch before
         // codegen, so select the shadow-root backend explicitly (#7354).
-        .env("PERRY_RS4GC", "0")
         .arg("compile")
         .arg(&entry)
         .arg("-o")

@@ -53,7 +53,6 @@ fn compile_and_run(source: &str) -> String {
         .current_dir(dir.path())
         // Windows' RS4GC path cannot lower the try/catch assertions in this
         // fixture yet (#7354); this issue is independent of native roots.
-        .env("PERRY_RS4GC", "0")
         // Link the archives built from this worktree, not an auto-optimized
         // runtime cache that may predate the fix.
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")

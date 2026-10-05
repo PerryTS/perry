@@ -25,11 +25,9 @@ try {
         const label = `${type}-${gc}-O${opt}`;
         const output = path.join(dir, label);
         const env = { ...process.env, PERRY_LL_OPT_LEVEL: opt };
-        for (const flag of ['PERRY_RS4GC', 'PERRY_SHADOW_STACK',
-          'PERRY_INLINE_SHADOW_SLOT', 'PERRY_FULL_OUTLINE_IC']) delete env[flag];
+        for (const flag of ['PERRY_FULL_OUTLINE_IC']) delete env[flag];
         if (gc === 'compact') Object.assign(env, {
-          PERRY_RS4GC: '0', PERRY_SHADOW_STACK: '1',
-          PERRY_INLINE_SHADOW_SLOT: '0', PERRY_FULL_OUTLINE_IC: '1',
+          PERRY_FULL_OUTLINE_IC: '1',
         });
         const compile = spawnSync(compiler, ['compile', source, '-o', output,
           '--no-cache', '--no-auto-optimize', '--no-codegen', '--no-color'],

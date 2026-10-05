@@ -1,6 +1,6 @@
 //! Precise GC roots read from native frames, via LLVM statepoints.
 //!
-//! Under `PERRY_RS4GC=1` the compiler runs `RewriteStatepointsForGC`, which
+//! The compiler runs `RewriteStatepointsForGC`, which
 //! records each live root as an LLVM-owned spill slot for a `gc.relocate`
 //! value: a writable, frame-register-relative location in the emitted
 //! stack-map section. This module finds that section in the running image,

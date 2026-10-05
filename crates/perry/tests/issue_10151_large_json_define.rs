@@ -37,9 +37,6 @@ fn compile(root: &Path, args: &[&str]) -> String {
         .env_remove("PERRY_DISABLE_BUILD_CACHE")
         .stdout(Stdio::from(stdout.try_clone().unwrap()))
         .stderr(Stdio::from(stderr.try_clone().unwrap()));
-    if cfg!(windows) {
-        command.env("PERRY_RS4GC", "0");
-    }
     let started = Instant::now();
     let mut child = command.spawn().expect("start compiler");
     let status = loop {

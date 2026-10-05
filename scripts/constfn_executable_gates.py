@@ -418,7 +418,6 @@ def main():
             trace_dir.mkdir(parents=True)
             arm_env["PERRY_SAVE_LL"] = str(trace_dir)
             arm_env["PERRY_NO_CACHE"] = "1"
-            arm_env["PERRY_INLINE_SHADOW_SLOT"] = "0"
             command += ["--trace", "llvm"]
         p = run(command, arm_env, out, out / f"compile-{name}-{arm}-{tag}")
         if not fail:
@@ -672,8 +671,8 @@ def main():
                  str(native)], env, repo, out / "root-statepoints")
         good(p, "full rewritten native root correctness")
     else:
-        # The fallback trace explicitly disables inline shadow bindings so
-        # the checker can see real root stores. Its two modes are exclusive.
+        # Platforms without statepoints emit bind-call shadow roots.
+        # The checker sees real root stores; its two modes are exclusive.
         for mode in ("stale-registers", "unrooted-allocas"):
             p = run([sys.executable, str(checker), "--" + mode, str(trace)], env, repo,
                     out / ("root-" + mode))

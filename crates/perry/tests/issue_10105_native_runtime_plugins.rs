@@ -84,12 +84,6 @@ console.log('startup continued');
         .arg(&executable)
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
         .env("PERRY_RUNTIME_DIR", runtime_dir);
-    // #7354: LLVM's statepoint pass cannot process Windows catchpad EH.
-    // Exercise the supported shadow-frame path there; keep other hosts' GC
-    // defaults so this does not conceal an import/recovery regression.
-    if cfg!(windows) {
-        compile.env("PERRY_RS4GC", "0");
-    }
     let compiled = compile.output().expect("compile fixture");
     assert!(
         compiled.status.success(),

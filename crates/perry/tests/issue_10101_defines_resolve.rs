@@ -3,10 +3,6 @@ use std::process::{Command, Output};
 
 fn compile(root: &Path, args: &[&str]) -> Output {
     let mut command = Command::new(env!("CARGO_BIN_EXE_perry"));
-    // LLVM's statepoint pass does not support Windows catchpad EH (#7354).
-    if cfg!(windows) {
-        command.env("PERRY_RS4GC", "0");
-    }
     command
         .current_dir(root)
         .args(["compile", "main.ts", "-o", "app.exe"])

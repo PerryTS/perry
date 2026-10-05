@@ -17,8 +17,7 @@ const source = path.join(work, 'source.ts');
 fs.copyFileSync(path.join(root, 'test-files/test_gap_retained_source_pool.ts'), source);
 // The native run sets GC instrument knobs; link the instruments it needs.
 const env = { ...process.env, PERRY_LL_OPT_LEVEL: 'z', PERRY_GC_INSTRUMENTS: '1' };
-for (const key of ['PERRY_WORKSPACE_ROOT', 'PERRY_LIB_DIR', 'PERRY_RS4GC', 'PERRY_SHADOW_STACK',
-  'PERRY_INLINE_SHADOW_SLOT', 'PERRY_FULL_OUTLINE_IC', 'PERRY_SAVE_LL']) delete env[key];
+for (const key of ['PERRY_WORKSPACE_ROOT', 'PERRY_LIB_DIR', 'PERRY_FULL_OUTLINE_IC', 'PERRY_SAVE_LL']) delete env[key];
 const report = { work, results: [] };
 function run(label, executable, args, cwd, overrides = {}, timeout = 15000) {
   const result = spawnSync(executable, args, { cwd, env: { ...env, ...overrides },
@@ -42,8 +41,7 @@ try {
     const cwd = path.join(work, mode);
     fs.mkdirSync(cwd);
     const output = path.join(cwd, 'app');
-    const settings = mode === 'compact' ? { PERRY_RS4GC: '0', PERRY_SHADOW_STACK: '1',
-      PERRY_INLINE_SHADOW_SLOT: '0', PERRY_FULL_OUTLINE_IC: '1' } : {};
+    const settings = mode === 'compact' ? { PERRY_FULL_OUTLINE_IC: '1' } : {};
     run(mode + '-compile', env.PERRY_BIN, ['compile', source, '-o', output,
       '--cache-dir', path.join(cwd, 'cache'), '--trace', 'llvm', '--no-auto-optimize', '--no-color',
       ...(env.PERRY_TEST_WASM === '1' ? ['--platform', 'bun', '--enable-wasm-runtime'] : [])],

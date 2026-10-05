@@ -16,8 +16,7 @@ const cache = path.join(scratch, 'cache');
 console.log(`Artifacts: ${scratch}`);
 const env = {
   ...process.env,
-  PERRY_LL_OPT_LEVEL: 's', PERRY_RS4GC: '0', PERRY_SHADOW_STACK: '1',
-  PERRY_INLINE_SHADOW_SLOT: '0', PERRY_FULL_OUTLINE_IC: '1',
+  PERRY_LL_OPT_LEVEL: 's', PERRY_FULL_OUTLINE_IC: '1',
   PERRY_LLVM_INPROCESS: 'native', PERRY_CODEGEN_UNITS: '4',
   PERRY_CODEGEN_UNIT_JOBS: '2', PERRY_CODEGEN_PROGRESS: '1',
 };

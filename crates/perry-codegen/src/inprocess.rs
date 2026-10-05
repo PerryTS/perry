@@ -502,7 +502,7 @@ thread_local! {
 
 /// Thread-local budget seam for native-construction tests. Unlike mutating
 /// `PERRY_LL_RS4GC_MAX_INSTRS`, this cannot make concurrently-running LLVM
-/// tests spuriously spill or fail.
+/// tests spuriously fail.
 #[cfg(test)]
 pub(crate) fn with_test_rs4gc_budget<T>(cap: usize, run: impl FnOnce() -> T) -> T {
     struct Restore(Option<RewriteBudget>);
