@@ -201,3 +201,59 @@ fn symbolic_bound_int32_loop_guarded_copy_has_no_bounds_checks() {
         "load i32, ptr",
     );
 }
+
+#[test]
+fn own_and_other_length_bounds_have_unchecked_guarded_copies() {
+    for (name, bound) in [
+        ("own_length", "a.length"),
+        ("other_length", "b.length"),
+        ("length_minus_two", "a.length - 2"),
+        ("length_minus_k", "a.length - k"),
+        ("length_inclusive", "a.length - 1"),
+    ] {
+        let cmp = if name == "length_inclusive" {
+            "<="
+        } else {
+            "<"
+        };
+        let source = format!(
+            r#"
+const X: number[] = [1, 2, 3, 4, 5, 6];
+function bump(a: Int32Array, b: Int32Array): number {{
+  const k = 2;
+  let s = 0;
+  for (let i = 0; i {cmp} {bound}; i++) s += a[i] * 2 + a[i];
+  return s;
+}}
+const a = new Int32Array(X.length * 3);
+const b = new Int32Array(X.length * 2);
+for (let i = 0; i < a.length; i++) a[i] = i;
+console.log(bump(a, b));
+"#
+        );
+        let prefix = format!("perry_fn_{name}_ts__bump$spec_ta4");
+        let on = compile_ir(name, &source, true);
+        let off = compile_ir(name, &source, false);
+        let (_, with) = function_body(&on, &prefix).expect("typed-array clone");
+        let (_, without) = function_body(&off, &prefix).expect("typed-array clone without regions");
+        assert!(
+            without.contains("icmp ult i32"),
+            "no per-access witness: {without}"
+        );
+        assert!(with.contains("rloop.fast"), "no guarded copy: {with}");
+        let label = with
+            .lines()
+            .find(|l| l.starts_with("rloop.fast.") && l.ends_with(':'))
+            .unwrap();
+        let fast = &with[with.find(label).unwrap() + label.len()..];
+        let fast = fast.split("\n\n").next().unwrap();
+        assert!(fast.matches("load i32, ptr").count() >= 2, "{fast}");
+        assert!(
+            !fast.contains("icmp ult")
+                && !fast.contains("@llvm.assume")
+                && !fast.contains("pview.get.oob"),
+            "guarded access is checked: {fast}"
+        );
+        assert_eq!(checked_accesses(with), checked_accesses(without), "{with}");
+    }
+}

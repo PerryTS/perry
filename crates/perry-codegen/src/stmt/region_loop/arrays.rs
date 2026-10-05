@@ -52,8 +52,8 @@
 //! for its lifetime, its length NOT — `buffer.transfer()` detaches it) is a
 //! VIEW receiver. Its indices are proven by an interval evaluator over the
 //! loop ([`Env::view_end`]): every index of a bare access lies in
-//! `[0, end)`, `end` a constant or `B + c` for a local `B` the loop never
-//! writes. The guard reads the length from the header with a plain load
+//! `[0, end)`, `end` a constant or `B + c`, with `B` an invariant local or
+//! a proven view's current length (optionally minus an invariant integer). The guard reads the length from the header with a plain load
 //! and checks `end <= length`, once in the preheader and again at every
 //! re-check; nothing else is assumed. A bare access is then today's proven
 //! element access with its bounds proven (`BoundsProof::RegionGuard`): no
@@ -99,7 +99,7 @@ pub(crate) struct ViewGuard {
     /// The largest constant end of a bare access (`0`: none).
     pub(super) end: u32,
     /// The symbolic end `B + c` of the bare accesses indexed below `B`.
-    pub(super) sym: Option<(u32, i64)>,
+    pub(super) sym: Option<(Symbol, i64)>,
     /// The view's data-pointer slot and the header length's offset from it.
     pub(super) data_slot: String,
     pub(super) length_offset: i32,
@@ -134,7 +134,7 @@ pub(crate) struct ArrayUse {
     /// View: the largest constant end (`hi + 1`) of a proven index.
     pub(super) view_end: u32,
     /// View: the symbolic end `B + c` (one loop-invariant local `B`).
-    pub(super) view_sym: Option<(u32, i64)>,
+    pub(super) view_sym: Option<(Symbol, i64)>,
     /// View: some proven index uses the loop counter's range, which holds
     /// only when the guard checked the counter's entry value.
     pub(super) view_counter: bool,
@@ -171,7 +171,7 @@ pub(crate) struct Rng {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Hi {
     Le(i64),
-    Lt(u32, i64),
+    Lt(Symbol, i64),
 }
 
 /// Ranges stay far inside the exact-double integers.
@@ -245,7 +245,7 @@ pub(crate) enum End {
     /// `v < c`.
     Const(i64),
     /// `v < B + c`.
-    Sym(u32, i64),
+    Sym(Symbol, i64),
 }
 
 /// The range of an index expression over `ranges`: integer literals, the
@@ -291,7 +291,8 @@ fn eval_range(e: &Expr, ranges: &HashMap<u32, Rng>) -> Option<Rng> {
 
 /// `for (...; i < B; i++)`: the counter `i`, written by the update and
 /// nowhere else (not in the body, not in the condition), and its bound `B`,
-/// an integer literal or a plain local nothing in the loop writes. At the
+/// an integer literal, a plain local, or a proven view length. The loop
+/// writes neither the bound binding nor an optional integer subtraction. At the
 /// top of every iteration `i < B` held and, `i` being an integer `>= 0` at
 /// the guard and only ever incremented, `0 <= i <= B - 1`: the guard checks
 /// the entry value and `B <= length` once.
@@ -301,10 +302,19 @@ pub(crate) struct Counter {
     pub(super) bound: Bound,
 }
 
+/// The source of a symbolic end. A view length is a current header value,
+/// never a construction length; JS stales the region before its next use.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum Symbol {
+    Local(u32),
+    ViewLength(u32, Option<u32>),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Bound {
     Lit(i64),
     Local(u32),
+    ViewLength(u32, Option<u32>, i64),
 }
 
 /// The loop facts an index proof may use: the counter, and the body-local
@@ -357,7 +367,11 @@ impl Env {
             return Some(Some(c));
         }
         match (self.counter, e) {
-            (Some(c), Expr::LocalGet(id)) if self.resolve(*id) == c.id => Some(None),
+            (Some(c), Expr::LocalGet(id))
+                if self.resolve(*id) == c.id && !matches!(c.bound, Bound::ViewLength(..)) =>
+            {
+                Some(None)
+            }
             _ => None,
         }
     }
@@ -473,6 +487,53 @@ fn stmt_mentions(s: &Stmt, id: u32) -> bool {
     perry_hir::walker::stmt_any_expr(s, &mut |e| mentions(e, id))
 }
 
+/// A native header length, optional invariant integer subtraction and addend. This uses the same view
+/// eligibility as element accesses; type annotations alone cannot prove it.
+fn view_length_bound(ctx: &FnCtx<'_>, e: &Expr) -> Option<(u32, Option<u32>, i64)> {
+    match e {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "length" => {
+            let Expr::LocalGet(id) = object.as_ref() else {
+                return None;
+            };
+            view_of(ctx, *id)?;
+            Some((*id, None, 0))
+        }
+        Expr::Binary {
+            op: BinaryOp::Sub,
+            left,
+            right,
+        } => {
+            let (id, sub, c) = view_length_bound(ctx, left)?;
+            if let Expr::LocalGet(k) = right.as_ref() {
+                let r = crate::expr::int_range_expr(ctx, right)?;
+                if sub.is_some()
+                    || !plain_local(ctx, *k)
+                    || r.min < -RANGE_LIMIT
+                    || r.max > RANGE_LIMIT
+                {
+                    return None;
+                }
+                return Some((id, Some(*k), c));
+            }
+            let k = match right.as_ref() {
+                Expr::Integer(k) => *k,
+                Expr::Number(n) if n.fract() == 0.0 && n.abs() <= RANGE_LIMIT as f64 => *n as i64,
+                _ => return None,
+            };
+            let c = c.checked_sub(k).filter(|v| v.abs() <= RANGE_LIMIT)?;
+            Some((id, sub, c))
+        }
+        _ => None,
+    }
+}
+
+/// A property read lowered as a direct native header load: no JavaScript.
+pub(super) fn native_view_length(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+    matches!(e, Expr::PropertyGet { .. }) && view_length_bound(ctx, e).is_some()
+}
+
 /// The [`Env`] of a loop.
 pub(super) fn loop_env(
     ctx: &FnCtx<'_>,
@@ -494,12 +555,7 @@ pub(super) fn loop_env(
             } => *id,
             _ => return None,
         };
-        let Expr::Compare {
-            op: CompareOp::Lt,
-            left,
-            right,
-        } = cond?
-        else {
+        let Expr::Compare { op, left, right } = cond? else {
             return None;
         };
         if !matches!(left.as_ref(), Expr::LocalGet(x) if *x == id) || !plain_local(ctx, id) {
@@ -509,13 +565,41 @@ pub(super) fn loop_env(
         if assigned(body, &[cond?]).contains(&id) {
             return None;
         }
+        // Existing array counter proofs still require strict comparisons.
+        // Only view-length bounds normalize <= to an exclusive end.
         let bound = match right.as_ref() {
-            Expr::Integer(k) if (0..=i64::from(i32::MAX)).contains(k) => Bound::Lit(*k),
-            Expr::Number(n) if n.fract() == 0.0 && (0.0..=f64::from(i32::MAX)).contains(n) => {
+            Expr::Integer(k) if *op == CompareOp::Lt && (0..=i64::from(i32::MAX)).contains(k) => {
+                Bound::Lit(*k)
+            }
+            Expr::Number(n)
+                if *op == CompareOp::Lt
+                    && n.fract() == 0.0
+                    && (0.0..=f64::from(i32::MAX)).contains(n) =>
+            {
                 Bound::Lit(*n as i64)
             }
-            Expr::LocalGet(b) if *b != id && !written.contains(b) && plain_local(ctx, *b) => {
+            Expr::LocalGet(b)
+                if *op == CompareOp::Lt
+                    && *b != id
+                    && !written.contains(b)
+                    && plain_local(ctx, *b) =>
+            {
                 Bound::Local(*b)
+            }
+            e if matches!(op, CompareOp::Lt | CompareOp::Le) => {
+                let (b, sub, c) = view_length_bound(ctx, e)?;
+                if b == id
+                    || written.contains(&b)
+                    || !plain_local(ctx, b)
+                    || sub.is_some_and(|k| k == id || written.contains(&k))
+                {
+                    return None;
+                }
+                let c = c.checked_add(i64::from(*op == CompareOp::Le))?;
+                if c.abs() > RANGE_LIMIT {
+                    return None;
+                }
+                Bound::ViewLength(b, sub, c)
             }
             _ => return None,
         };
@@ -667,7 +751,8 @@ fn view_ranges(
     if let Some(c) = counter {
         let hi = match c.bound {
             Bound::Lit(k) => Hi::Le(k - 1),
-            Bound::Local(b) => Hi::Lt(b, 0),
+            Bound::Local(b) => Hi::Lt(Symbol::Local(b), 0),
+            Bound::ViewLength(b, sub, c) => Hi::Lt(Symbol::ViewLength(b, sub), c),
         };
         if let Some(r) = Rng::checked(Some(0), Some(hi), true) {
             ranges.insert(c.id, r);
@@ -788,7 +873,9 @@ fn view_ranges(
                             {
                                 Hi::Le(*n as i64 - 1)
                             }
-                            Expr::LocalGet(b) if *b != *id && invariant(*b) => Hi::Lt(*b, 0),
+                            Expr::LocalGet(b) if *b != *id && invariant(*b) => {
+                                Hi::Lt(Symbol::Local(*b), 0)
+                            }
                             _ => return None,
                         };
                         let r = match hi {
@@ -874,14 +961,20 @@ pub(super) fn static_index_max(e: &Expr) -> Option<u32> {
 /// locals and literals. A collection there would move an array between the
 /// poll (which refreshes the base) and F-body.
 fn quiet(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    let num = |x: &Expr| crate::type_analysis::is_numeric_expr(ctx, x);
+    fn num(ctx: &FnCtx<'_>, e: &Expr) -> bool {
+        match e {
+            Expr::Binary { left, right, .. } => num(ctx, left) && num(ctx, right),
+            _ => native_view_length(ctx, e) || crate::type_analysis::is_numeric_expr(ctx, e),
+        }
+    }
     match e {
         Expr::LocalGet(_) | Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_) => true,
         Expr::Compare { left, right, .. } | Expr::Binary { left, right, .. } => {
-            num(left) && num(right) && quiet(ctx, left) && quiet(ctx, right)
+            num(ctx, left) && num(ctx, right) && quiet(ctx, left) && quiet(ctx, right)
         }
-        Expr::Update { id, .. } => num(&Expr::LocalGet(*id)),
-        Expr::LocalSet(_, v) => num(v) && quiet(ctx, v),
+        Expr::Update { id, .. } => num(ctx, &Expr::LocalGet(*id)),
+        Expr::LocalSet(_, v) => num(ctx, v) && quiet(ctx, v),
+        Expr::PropertyGet { .. } => native_view_length(ctx, e),
         _ => false,
     }
 }
@@ -1190,11 +1283,37 @@ pub(crate) fn note_view_access(ctx: &mut FnCtx<'_>) {
     stat(2, 1);
 }
 
+/// Load a symbolic bound at every guard/re-check. Even a sealed view's
+/// guard uses a plain load; only its ordinary length reads may be invariant.
+fn emit_symbol(ctx: &mut FnCtx<'_>, s: Symbol) -> Result<String> {
+    match s {
+        Symbol::Local(id) => lower_expr(ctx, &Expr::LocalGet(id)),
+        Symbol::ViewLength(id, sub) => {
+            let v = view_of(ctx, id).expect("a length bound has a proven view");
+            let subtract = sub
+                .map(|k| lower_expr(ctx, &Expr::LocalGet(k)))
+                .transpose()?;
+            let blk = ctx.block();
+            let data = blk.load(crate::types::PTR, &v.data_slot);
+            let ptr = blk.gep(I8, &data, &[(I32, &v.length_offset_from_data.to_string())]);
+            let len = blk.load(I32, &ptr);
+            // Match .length's unsigned u32 interpretation. A signed source
+            // could compare equal to a negative target length and admit a
+            // view larger than the signed index domain.
+            let len = blk.uitofp(I32, &len, DOUBLE);
+            Ok(match subtract {
+                Some(k) => blk.fsub(&len, &k),
+                None => len,
+            })
+        }
+    }
+}
+
 /// The guard of a view receiver (see [`ViewGuard`]); `counter_ok` is the
 /// counter's entry check.
 fn emit_view_guard(ctx: &mut FnCtx<'_>, v: &ViewGuard, counter_ok: &str) -> Result<String> {
     let sym = match v.sym {
-        Some((b, c)) => Some((lower_expr(ctx, &Expr::LocalGet(b))?, c)),
+        Some((b, c)) => Some((emit_symbol(ctx, b)?, c)),
         None => None,
     };
     let blk = ctx.block();
@@ -1243,8 +1362,12 @@ pub(super) fn emit_guard(ctx: &mut FnCtx<'_>, a: &ArrayRecv) -> Result<String> {
     if let Some(c) = a.counter {
         let iv = lower_expr(ctx, &Expr::LocalGet(c.id))?;
         let b = match c.bound {
-            Bound::Lit(k) => format!("{:?}", k as f64),
-            Bound::Local(id) => lower_expr(ctx, &Expr::LocalGet(id))?,
+            Bound::Lit(k) => Some(format!("{:?}", k as f64)),
+            Bound::Local(id) => Some(lower_expr(ctx, &Expr::LocalGet(id))?),
+            Bound::ViewLength(..) => {
+                assert!(a.view.is_some(), "length counters require a view guard");
+                None
+            }
         };
         let blk = ctx.block();
         let lo = blk.fcmp("oge", &iv, "0.0");
@@ -1256,7 +1379,22 @@ pub(super) fn emit_guard(ctx: &mut FnCtx<'_>, a: &ArrayRecv) -> Result<String> {
         let back = blk.sitofp(I32, &as_int, DOUBLE);
         let integral = blk.fcmp("oeq", &back, &iv);
         counter_ok = blk.and(I1, &in_range, &integral);
-        bound = Some(b);
+        if let Bound::ViewLength(id, sub, c) = c.bound {
+            // The iteration's condition preceded a possible JS call. A
+            // shrinking length can invalidate that condition mid-iteration:
+            // end <= target length alone then admits an already-outside i.
+            // Re-establish i < the current exclusive loop end as well.
+            let end = emit_symbol(ctx, Symbol::ViewLength(id, sub))?;
+            let blk = ctx.block();
+            let end = if c == 0 {
+                end
+            } else {
+                blk.fadd(&end, &format!("{:?}", c as f64))
+            };
+            let below = blk.fcmp("olt", &iv, &end);
+            counter_ok = blk.and(I1, &counter_ok, &below);
+        }
+        bound = b;
     }
     if let Some(v) = &a.view {
         return emit_view_guard(ctx, v, &counter_ok);
@@ -1628,3 +1766,7 @@ pub(crate) fn unalias_clone(ctx: &mut FnCtx<'_>, added: Vec<usize>) {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "arrays_tests.rs"]
+mod tests;
