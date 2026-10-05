@@ -45,9 +45,6 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 // undefined/null tag or null pointer — return undefined
                 return JSValue::undefined();
             }
-            if let Some(value) = async_resource_property(raw, key) {
-                return value;
-            }
             // Issue #340: small-handle receivers (raw < 0x100000) come
             // from native modules (axios, fastify, ...) that
             // store objects in registries and expose integer ids. The
@@ -110,9 +107,6 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
     };
     if obj.is_null() {
         return JSValue::undefined();
-    }
-    if let Some(value) = async_resource_property(obj, key) {
-        return value;
     }
     // Same handle-receiver path for already-stripped pointers — happens
     // when the codegen passes a raw i64 handle through the slow path.

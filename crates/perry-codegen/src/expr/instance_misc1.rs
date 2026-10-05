@@ -147,6 +147,8 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         // (`reserved_native_parent_prototype_bits`) never runs. Keep in sync
         // with `CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE` there.
         "EventEmitterAsyncResource" => 0xFFFF0077,
+        "AsyncLocalStorage" => 0xFFFF0078,
+        "AsyncResource" => 0xFFFF0079,
         _ => return None,
     })
 }

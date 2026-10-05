@@ -59,6 +59,7 @@ pub const CRYPTO_HASH: u32 = 0xFFFF_2412;
 pub const CRYPTO_HMAC: u32 = 0xFFFF_2413;
 pub const CRYPTO_CIPHERIV: u32 = 0xFFFF_2414;
 pub const CRYPTO_DECIPHERIV: u32 = 0xFFFF_2415;
+pub const DOMAIN: u32 = 0xFFFF_2416;
 
 /// #10926: `AsyncResource` is native-backed too, but keeps its LEGACY
 /// `0xFFFF_0079`, which `instanceof` and `class_registry::parent_static`
@@ -66,12 +67,13 @@ pub const CRYPTO_DECIPHERIV: u32 = 0xFFFF_2415;
 /// for no gain, so the range gets a legacy companion instead of a renumbering.
 /// Outside the block, so it is not in `ALL`.
 pub(crate) const ASYNC_RESOURCE_LEGACY: u32 = 0xFFFF_0079;
+pub const ASYNC_LOCAL_STORAGE_LEGACY: u32 = 0xFFFF_0078;
 
 /// The first id in the native-state range and the last one, inclusive. Every
 /// family between them carries a `native_state` word the far side of a
 /// `postMessage` could not reconstruct.
 const NATIVE_BACKED_FIRST: u32 = ABORT_CONTROLLER;
-const NATIVE_BACKED_LAST: u32 = CRYPTO_DECIPHERIV;
+const NATIVE_BACKED_LAST: u32 = DOMAIN;
 
 /// Class ids whose instances are ordinary objects carrying native state that
 /// cannot cross a thread boundary (#340/#341).
@@ -84,7 +86,7 @@ const NATIVE_BACKED_LAST: u32 = CRYPTO_DECIPHERIV;
 /// `TypeError` #6185 made these surface.
 pub(crate) fn is_native_backed_class_id(class_id: u32) -> bool {
     (NATIVE_BACKED_FIRST..=NATIVE_BACKED_LAST).contains(&class_id)
-        || class_id == ASYNC_RESOURCE_LEGACY
+        || matches!(class_id, ASYNC_LOCAL_STORAGE_LEGACY | ASYNC_RESOURCE_LEGACY)
 }
 
 /// The first native-PAYLOAD family (`native_payload.rs`). Payload families
@@ -96,7 +98,9 @@ const NATIVE_PAYLOAD_FIRST: u32 = CRYPTO_HASH;
 /// `native_state` is a traced payload cell)? One range compare.
 #[inline(always)]
 pub(crate) fn is_native_payload_class_id(class_id: u32) -> bool {
-    (NATIVE_PAYLOAD_FIRST..=NATIVE_BACKED_LAST).contains(&class_id)
+    class_id == ASYNC_HOOK
+        || matches!(class_id, ASYNC_LOCAL_STORAGE_LEGACY | ASYNC_RESOURCE_LEGACY)
+        || (NATIVE_PAYLOAD_FIRST..=NATIVE_BACKED_LAST).contains(&class_id)
 }
 
 /// Every id this module hands out, newest last. Used by the assertions below
@@ -123,6 +127,7 @@ const ALL: &[u32] = &[
     CRYPTO_HMAC,
     CRYPTO_CIPHERIV,
     CRYPTO_DECIPHERIV,
+    DOMAIN,
 ];
 
 /// Strictly ascending ⟹ no two families share an id, and the block stays
@@ -183,6 +188,8 @@ mod tests {
             CRYPTO_HMAC,
             CRYPTO_CIPHERIV,
             CRYPTO_DECIPHERIV,
+            DOMAIN,
+            ASYNC_LOCAL_STORAGE_LEGACY,
             ASYNC_RESOURCE_LEGACY,
         ] {
             assert!(

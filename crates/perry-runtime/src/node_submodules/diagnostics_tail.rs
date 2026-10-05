@@ -70,6 +70,9 @@ fn is_symbol_value(value: f64) -> bool {
 }
 
 fn store_handle(store: f64) -> Option<i64> {
+    if let Some(token) = crate::async_context::token_from_storage_value(store) {
+        return Some(token);
+    }
     let bits = store.to_bits();
     if bits & crate::value::TAG_MASK == crate::value::INT32_TAG {
         return Some((bits & crate::value::INT32_MASK) as i32 as i64);

@@ -792,20 +792,6 @@ pub(super) fn get_field_ic_miss_impl(
     // lineage generalized moves to the normalized shape before anything is
     // learned from it, so the site converges instead of going polymorphic.
     unsafe { crate::object::field_rep_store::migrate_on_miss(obj as usize) };
-    if !key.is_null() && crate::async_hooks::is_async_resource_handle(obj as i64) {
-        unsafe {
-            if let Some(name) = crate::string::header_str_checked(key) {
-                if let Some(value) =
-                    crate::async_hooks::try_async_resource_property_dispatch(obj as i64, name)
-                {
-                    if diag {
-                        ic_diag_note(cache_slot, key, R::AsyncResource);
-                    }
-                    return value;
-                }
-            }
-        }
-    }
     // ONE validated header read classifies the receiver for everything below.
     // `try_read_gc_header` rejects the handle band and implausible addresses
     // without touching memory, so `None` here is "not a heap cell" and the

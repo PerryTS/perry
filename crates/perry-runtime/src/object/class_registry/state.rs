@@ -1361,6 +1361,8 @@ fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
     let (module, symbol) = match parent_id {
         CLASS_ID_EVENT_EMITTER => ("events", "EventEmitter"),
         CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE => ("events", "EventEmitterAsyncResource"),
+        crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY => ("async_hooks", "AsyncLocalStorage"),
+        crate::native_class_ids::ASYNC_RESOURCE_LEGACY => ("async_hooks", "AsyncResource"),
         _ => return None,
     };
     let func_value =
@@ -1377,6 +1379,15 @@ pub(crate) fn async_resource_prototype_value() -> f64 {
     let func_value = super::super::native_module::bound_native_callable_export_value(
         "async_hooks",
         "AsyncResource",
+    );
+    super::function_prototype::js_function_prototype_value_for_read(func_value)
+}
+
+/// `AsyncLocalStorage.prototype` from its bound native constructor export.
+pub fn async_local_storage_prototype_value() -> f64 {
+    let func_value = super::super::native_module::bound_native_callable_export_value(
+        "async_hooks",
+        "AsyncLocalStorage",
     );
     super::function_prototype::js_function_prototype_value_for_read(func_value)
 }

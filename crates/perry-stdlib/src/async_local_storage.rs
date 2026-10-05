@@ -4,13 +4,12 @@
 //! Provides run(), getStore(), enterWith(), exit(), and disable().
 
 use perry_runtime::array::{js_array_length, ArrayHeader};
+use perry_runtime::closure::JsThis;
 use perry_runtime::closure::{is_closure_ptr, js_closure_call_array, ClosureHeader};
-
-use crate::common::{get_handle_mut, register_handle, Handle};
+use perry_runtime::native_payload::{self, NativePayloadFamily, PayloadMiss, PayloadPrototype};
 
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-const SUBCLASS_BACKING_KEY: &[u8] = b"__perryAsyncLocalStorageBacking";
 
 // Keep the active context in the single perry-runtime provider.  These must be
 // extern calls rather than Rust-path calls: in app-only dylib deployments the
@@ -81,18 +80,74 @@ unsafe fn call_with_forwarded_args(cb: *const ClosureHeader, args_array: i64) ->
 /// AsyncLocalStorage handle. Store stacks live in perry-runtime's active
 /// async context so schedulers can snapshot and restore them across async
 /// boundaries.
-pub struct AsyncLocalStorageHandle;
+static ASYNC_LOCAL_STORAGE_FAMILY: NativePayloadFamily = NativePayloadFamily {
+    class_id: perry_runtime::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY,
+    name: "AsyncLocalStorage",
+    constructor_export: Some(("async_hooks", "AsyncLocalStorage")),
+    constructor_length: 0,
+    links_owner: false,
+    install_prototype: install_async_local_storage_prototype,
+};
 
-impl Default for AsyncLocalStorageHandle {
-    fn default() -> Self {
-        Self::new()
-    }
+macro_rules! als_method {
+    ($proto:expr, $name:literal, $body:ident, $n:tt) => {
+        $proto.method(
+            $name,
+            perry_runtime::fn_info!(
+                $body, $n;
+                with_declared($n),
+                with_flags(perry_runtime::closure::FN_BUILTIN)
+            ),
+            $n,
+        )
+    };
 }
 
-impl AsyncLocalStorageHandle {
-    pub fn new() -> Self {
-        AsyncLocalStorageHandle
-    }
+fn install_async_local_storage_prototype(proto: &mut PayloadPrototype) {
+    proto.getter(
+        "name",
+        perry_runtime::fn_info!(als_name_thunk, 0; with_declared(0), with_flags(perry_runtime::closure::FN_BUILTIN)),
+    );
+    proto.method(
+        "run",
+        perry_runtime::fn_info!(
+            als_run_thunk, 3;
+            with_rest(2),
+            with_declared(2),
+            with_flags(perry_runtime::closure::FN_BUILTIN)
+        ),
+        2,
+    );
+    proto.method(
+        "withScope",
+        perry_runtime::fn_info!(
+            als_run_thunk, 3;
+            with_rest(2),
+            with_declared(2),
+            with_flags(perry_runtime::closure::FN_BUILTIN)
+        ),
+        2,
+    );
+    als_method!(proto, "getStore", als_get_store_thunk, 0);
+    als_method!(proto, "enterWith", als_enter_with_thunk, 1);
+    proto.method(
+        "exit",
+        perry_runtime::fn_info!(
+            als_exit_thunk, 2;
+            with_rest(1),
+            with_declared(1),
+            with_flags(perry_runtime::closure::FN_BUILTIN)
+        ),
+        1,
+    );
+    als_method!(proto, "disable", als_disable_thunk, 0);
+}
+
+fn canonical_prototype() -> *mut perry_runtime::object::ObjectHeader {
+    let value = perry_runtime::object::async_local_storage_prototype_value();
+    let proto = perry_runtime::value::js_nanbox_get_pointer(value)
+        as *mut perry_runtime::object::ObjectHeader;
+    native_payload::adopt_prototype(&ASYNC_LOCAL_STORAGE_FAMILY, proto)
 }
 
 fn throw_invalid_receiver() -> ! {
@@ -104,32 +159,42 @@ fn throw_invalid_receiver() -> ! {
     perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
 }
 
-pub(crate) fn resolve_async_local_storage_handle(receiver: Handle) -> Option<Handle> {
-    if get_handle_mut::<AsyncLocalStorageHandle>(receiver).is_some() {
-        return Some(receiver);
+pub(crate) fn resolve_async_local_storage_token(receiver: i64) -> Option<i64> {
+    let value = perry_runtime::value::js_nanbox_pointer(receiver);
+    unsafe {
+        native_payload::payload_mut_attached::<perry_runtime::async_context::AsyncLocalStoragePayload>(
+            value,
+            &ASYNC_LOCAL_STORAGE_FAMILY,
+        )
+        .ok()
+        .map(|payload| payload.token())
     }
-    let raw = receiver as usize;
-    if !perry_runtime::value::addr_class::is_above_handle_band(raw)
-        || !perry_runtime::value::addr_class::is_valid_obj_ptr(raw as *const u8)
-    {
-        return None;
+}
+
+fn ensure_async_local_storage_token(receiver: i64) -> Option<i64> {
+    let value = perry_runtime::value::js_nanbox_pointer(receiver);
+    match unsafe {
+        native_payload::payload_mut_attached::<perry_runtime::async_context::AsyncLocalStoragePayload>(
+            value,
+            &ASYNC_LOCAL_STORAGE_FAMILY,
+        )
+    } {
+        Ok(payload) => Some(payload.token()),
+        Err(PayloadMiss::Closed) => {
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let receiver = scope.root_nanbox_f64(value);
+            native_payload::attach(
+                receiver.get_nanbox_f64(),
+                &ASYNC_LOCAL_STORAGE_FAMILY,
+                perry_runtime::async_context::AsyncLocalStoragePayload::default(),
+                0,
+            );
+            resolve_async_local_storage_token(perry_runtime::value::js_nanbox_get_pointer(
+                receiver.get_nanbox_f64(),
+            ))
+        }
+        Err(PayloadMiss::Foreign) => None,
     }
-    let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_raw_mut_ptr(raw as *mut perry_runtime::object::ObjectHeader);
-    let key = scope.root_string_ptr(perry_runtime::string::js_string_from_bytes(
-        SUBCLASS_BACKING_KEY.as_ptr(),
-        SUBCLASS_BACKING_KEY.len() as u32,
-    ));
-    let value = receiver.with_mut_ptr(|receiver| {
-        key.with_mut_ptr(|key| {
-            perry_runtime::object::js_object_get_field_by_name_f64(receiver, key)
-        })
-    });
-    if value.to_bits() >> 48 != 0x7FFD {
-        return None;
-    }
-    let backing = (value.to_bits() & POINTER_MASK) as Handle;
-    get_handle_mut::<AsyncLocalStorageHandle>(backing).map(|_| backing)
 }
 
 /// Stamp an ordinary source-compiled subclass instance with a native ALS
@@ -138,57 +203,27 @@ pub(crate) fn resolve_async_local_storage_handle(receiver: Handle) -> Option<Han
 #[no_mangle]
 pub extern "C" fn js_async_local_storage_subclass_init(this_value: f64) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let this_handle = scope.root_nanbox_f64(this_value);
-    let backing = js_async_local_storage_new();
-    let backing_value = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(backing));
-    let raw = perry_runtime::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
-        as *mut perry_runtime::object::ObjectHeader;
-    if !raw.is_null()
-        && perry_runtime::value::addr_class::is_above_handle_band(raw as usize)
-        && perry_runtime::value::addr_class::is_valid_obj_ptr(raw as *const u8)
-    {
-        let key = scope.root_string_ptr(perry_runtime::string::js_string_from_bytes(
-            SUBCLASS_BACKING_KEY.as_ptr(),
-            SUBCLASS_BACKING_KEY.len() as u32,
-        ));
-        let raw = perry_runtime::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
-            as *mut perry_runtime::object::ObjectHeader;
-        perry_runtime::object::js_object_set_field_by_name(
-            raw,
-            key.get_raw_mut_ptr(),
-            backing_value.get_nanbox_f64(),
-        );
-        for method in [
-            b"run".as_slice(),
-            b"getStore".as_slice(),
-            b"enterWith".as_slice(),
-            b"exit".as_slice(),
-            b"disable".as_slice(),
-        ] {
-            let value = crate::common::dispatch::unbound_async_local_storage_method(method);
-            let value_handle = scope.root_nanbox_f64(value);
-            let key = scope.root_string_ptr(perry_runtime::string::js_string_from_bytes(
-                method.as_ptr(),
-                method.len() as u32,
-            ));
-            let current_raw =
-                perry_runtime::value::js_nanbox_get_pointer(this_handle.get_nanbox_f64())
-                    as *mut perry_runtime::object::ObjectHeader;
-            perry_runtime::object::js_object_set_field_by_name(
-                current_raw,
-                key.get_raw_mut_ptr(),
-                value_handle.get_nanbox_f64(),
-            );
-        }
-    }
-    this_handle.get_nanbox_f64()
+    let receiver = scope.root_nanbox_f64(this_value);
+    let _ = canonical_prototype();
+    native_payload::attach(
+        receiver.get_nanbox_f64(),
+        &ASYNC_LOCAL_STORAGE_FAMILY,
+        perry_runtime::async_context::AsyncLocalStoragePayload::default(),
+        0,
+    );
+    receiver.get_nanbox_f64()
 }
 
 /// Create a new AsyncLocalStorage instance
-/// Returns a handle (i64)
 #[no_mangle]
-pub extern "C" fn js_async_local_storage_new() -> Handle {
-    register_handle(AsyncLocalStorageHandle::new())
+pub extern "C" fn js_async_local_storage_new() -> f64 {
+    native_payload::alloc_with_prototype(
+        &ASYNC_LOCAL_STORAGE_FAMILY,
+        perry_runtime::async_context::AsyncLocalStoragePayload::default(),
+        0,
+        &[],
+        canonical_prototype(),
+    )
 }
 
 /// AsyncLocalStorage.run(store, callback, ...args)
@@ -197,7 +232,7 @@ pub extern "C" fn js_async_local_storage_new() -> Handle {
 /// codegen `NA_VARARGS` lowering (#3093).
 #[no_mangle]
 pub unsafe extern "C" fn js_async_local_storage_run(
-    receiver: Handle,
+    receiver: i64,
     store: f64,
     callback: f64,
     args_array: i64,
@@ -211,13 +246,13 @@ pub unsafe extern "C" fn js_async_local_storage_run(
     // without leaving a pushed store behind (#3092).
     let _ = validate_callback(callback.get_nanbox_f64());
     let receiver = perry_runtime::value::js_nanbox_get_pointer(receiver.get_nanbox_f64());
-    let handle =
-        resolve_async_local_storage_handle(receiver).unwrap_or_else(|| throw_invalid_receiver());
+    let token =
+        ensure_async_local_storage_token(receiver).unwrap_or_else(|| throw_invalid_receiver());
 
     // A context guard mirrors the pop below: if the callback throws,
     // `js_throw` applies the guard while unwinding so the catch site still
     // observes the pre-`run` store (#788, Node restores via try/finally).
-    js_async_context_als_run_enter(handle, store.get_nanbox_f64());
+    js_async_context_als_run_enter(token, store.get_nanbox_f64());
     let cb = validate_callback(callback.get_nanbox_f64());
     let result = call_with_forwarded_args(cb, args_array.get_raw_const_ptr::<ArrayHeader>() as i64);
     js_async_context_als_scope_leave();
@@ -228,22 +263,32 @@ pub unsafe extern "C" fn js_async_local_storage_run(
 /// AsyncLocalStorage.getStore()
 /// Returns the current store (top of stack) or undefined
 #[no_mangle]
-pub extern "C" fn js_async_local_storage_get_store(receiver: Handle) -> f64 {
-    let handle =
-        resolve_async_local_storage_handle(receiver).unwrap_or_else(|| throw_invalid_receiver());
-    unsafe { js_async_context_als_get_store(handle) }
+pub extern "C" fn js_async_local_storage_get_store(receiver: i64) -> f64 {
+    let value = perry_runtime::value::js_nanbox_pointer(receiver);
+    match unsafe {
+        native_payload::payload_mut_attached::<perry_runtime::async_context::AsyncLocalStoragePayload>(
+            value,
+            &ASYNC_LOCAL_STORAGE_FAMILY,
+        )
+    } {
+        Ok(payload) => unsafe { js_async_context_als_get_store(payload.token()) },
+        Err(PayloadMiss::Closed) => {
+            f64::from_bits(perry_runtime::value::JSValue::undefined().bits())
+        }
+        Err(PayloadMiss::Foreign) => throw_invalid_receiver(),
+    }
 }
 
 /// AsyncLocalStorage.enterWith(store)
 /// Push store onto stack (caller is responsible for cleanup)
 #[no_mangle]
-pub extern "C" fn js_async_local_storage_enter_with(receiver: Handle, store: f64) {
+pub extern "C" fn js_async_local_storage_enter_with(receiver: i64, store: f64) {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(receiver));
     let store = scope.root_nanbox_f64(store);
     let receiver = perry_runtime::value::js_nanbox_get_pointer(receiver.get_nanbox_f64());
-    if let Some(handle) = resolve_async_local_storage_handle(receiver) {
-        unsafe { js_async_context_als_enter_with(handle, store.get_nanbox_f64()) };
+    if let Some(token) = ensure_async_local_storage_token(receiver) {
+        unsafe { js_async_context_als_enter_with(token, store.get_nanbox_f64()) };
     }
 }
 
@@ -253,7 +298,7 @@ pub extern "C" fn js_async_local_storage_enter_with(receiver: Handle, store: f64
 /// `NA_VARARGS` lowering (#3093).
 #[no_mangle]
 pub unsafe extern "C" fn js_async_local_storage_exit(
-    receiver: Handle,
+    receiver: i64,
     callback: f64,
     args_array: i64,
 ) -> f64 {
@@ -265,9 +310,9 @@ pub unsafe extern "C" fn js_async_local_storage_exit(
     // without disturbing the saved store (#3092).
     let _ = validate_callback(callback.get_nanbox_f64());
     let receiver = perry_runtime::value::js_nanbox_get_pointer(receiver.get_nanbox_f64());
-    let handle =
-        resolve_async_local_storage_handle(receiver).unwrap_or_else(|| throw_invalid_receiver());
-    js_async_context_als_exit_enter(handle);
+    let token =
+        ensure_async_local_storage_token(receiver).unwrap_or_else(|| throw_invalid_receiver());
+    js_async_context_als_exit_enter(token);
 
     let cb = validate_callback(callback.get_nanbox_f64());
     let result = call_with_forwarded_args(cb, args_array.get_raw_const_ptr::<ArrayHeader>() as i64);
@@ -280,8 +325,83 @@ pub unsafe extern "C" fn js_async_local_storage_exit(
 /// AsyncLocalStorage.disable()
 /// Clear the store stack
 #[no_mangle]
-pub extern "C" fn js_async_local_storage_disable(receiver: Handle) {
-    if let Some(handle) = resolve_async_local_storage_handle(receiver) {
-        unsafe { js_async_context_als_clear(handle) };
+pub extern "C" fn js_async_local_storage_disable(receiver: i64) {
+    let value = perry_runtime::value::js_nanbox_pointer(receiver);
+    if let Some(token) = resolve_async_local_storage_token(receiver) {
+        unsafe { js_async_context_als_clear(token) };
+        native_payload::close_attached::<perry_runtime::async_context::AsyncLocalStoragePayload>(
+            value,
+            &ASYNC_LOCAL_STORAGE_FAMILY,
+        );
     }
+}
+
+extern "C" fn als_run_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    store: f64,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    unsafe {
+        js_async_local_storage_run(
+            perry_runtime::value::js_nanbox_get_pointer(this.as_f64()),
+            store,
+            callback,
+            perry_runtime::value::js_nanbox_get_pointer(rest),
+        )
+    }
+}
+
+extern "C" fn als_get_store_thunk(_closure: *const ClosureHeader, this: JsThis) -> f64 {
+    js_async_local_storage_get_store(perry_runtime::value::js_nanbox_get_pointer(this.as_f64()))
+}
+
+extern "C" fn als_name_thunk(_closure: *const ClosureHeader, this: JsThis) -> f64 {
+    if matches!(
+        unsafe {
+            native_payload::payload_mut_attached::<
+                perry_runtime::async_context::AsyncLocalStoragePayload,
+            >(this.as_f64(), &ASYNC_LOCAL_STORAGE_FAMILY)
+        },
+        Err(PayloadMiss::Foreign)
+    ) {
+        throw_invalid_receiver();
+    }
+    perry_runtime::value::js_nanbox_string(perry_runtime::string::js_string_from_bytes(
+        b"".as_ptr(),
+        0,
+    ) as i64)
+}
+
+extern "C" fn als_enter_with_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    store: f64,
+) -> f64 {
+    js_async_local_storage_enter_with(
+        perry_runtime::value::js_nanbox_get_pointer(this.as_f64()),
+        store,
+    );
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
+extern "C" fn als_exit_thunk(
+    _closure: *const ClosureHeader,
+    this: JsThis,
+    callback: f64,
+    rest: f64,
+) -> f64 {
+    unsafe {
+        js_async_local_storage_exit(
+            perry_runtime::value::js_nanbox_get_pointer(this.as_f64()),
+            callback,
+            perry_runtime::value::js_nanbox_get_pointer(rest),
+        )
+    }
+}
+
+extern "C" fn als_disable_thunk(_closure: *const ClosureHeader, this: JsThis) -> f64 {
+    js_async_local_storage_disable(perry_runtime::value::js_nanbox_get_pointer(this.as_f64()));
+    f64::from_bits(0x7FFC_0000_0000_0001)
 }

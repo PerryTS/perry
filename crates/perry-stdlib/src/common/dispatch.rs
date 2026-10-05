@@ -17,7 +17,6 @@ macro_rules! try_arm {
     };
 }
 
-mod emitter_als;
 mod fastify_net_zlib;
 mod init;
 mod method_dispatch;
@@ -36,10 +35,6 @@ pub use init::{
 pub use method_dispatch::js_handle_method_dispatch;
 pub use property_dispatch::js_handle_property_dispatch;
 
-pub(crate) use emitter_als::{
-    dispatch_async_local_storage_method, dispatch_async_local_storage_property,
-    unbound_async_local_storage_method,
-};
 #[cfg(feature = "database-sqlite")]
 pub(crate) use sqlite::{dispatch_sqlite_db, dispatch_sqlite_stmt};
 
@@ -150,17 +145,4 @@ pub(crate) const POINTER_MASK_BITS: u64 = 0x0000_FFFF_FFFF_FFFF;
 
 pub(crate) fn nanbox_handle_value(handle: i64) -> f64 {
     f64::from_bits(POINTER_TAG_BITS | (handle as u64 & POINTER_MASK_BITS))
-}
-
-pub(crate) unsafe fn pack_args_array(args: &[f64]) -> *mut perry_runtime::ArrayHeader {
-    let scope = perry_runtime::gc::RuntimeHandleScope::new();
-    let arg_handles = scope.root_nanbox_f64_slice(args);
-    let arr = perry_runtime::js_array_alloc(0);
-    let arr_handle = scope.root_raw_mut_ptr(arr);
-    for arg in &arg_handles {
-        let arr =
-            perry_runtime::js_array_push_f64(arr_handle.get_raw_mut_ptr(), arg.get_nanbox_f64());
-        arr_handle.set_raw_mut_ptr(arr);
-    }
-    arr_handle.get_raw_mut_ptr::<perry_runtime::ArrayHeader>()
 }

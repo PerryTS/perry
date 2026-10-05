@@ -136,13 +136,19 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # the events instance-method rows and the EventEmitterHandle providers they
 # resolved to are deleted with the handle path. 277 -> 264 rows, 248 -> 237
 # providers, as the script reports on the resolved tree.
-EXPECTED_ROWS = 264
-EXPECTED_PROVIDERS = 237
+# -11 rows / -8 providers (#11919 item 3b): the seven domain rows that
+# returned one of four registry-handle providers now return ordinary
+# NaN-boxed objects, as do AsyncHook create/enable/disable and
+# AsyncResource.emitDestroy. The last NR_FOREIGN_PTR rows are gone with the
+# raw Box representation. Removing the now-unused receiver rows also removes
+# the classified AsyncResource.bind pointer result. 264 -> 252 rows,
+# 237 -> 228 providers.
+EXPECTED_ROWS = 252
+EXPECTED_PROVIDERS = 228
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",
     "NR_HANDLE_ID",
-    "NR_FOREIGN_PTR",
     "NR_JS_VALUE",
 }
 RET_RE = re.compile(r"\bret:\s*(NR_[A-Z0-9_]+)\b")

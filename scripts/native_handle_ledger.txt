@@ -52,8 +52,7 @@
 1 0 crates/perry-runtime/src/array/element_shape.rs
 2 0 crates/perry-runtime/src/array/header.rs
 1 0 crates/perry-runtime/src/array/named_props.rs
-1 0 crates/perry-runtime/src/async_context.rs
-5 0 crates/perry-runtime/src/async_hooks.rs
+3 0 crates/perry-runtime/src/async_hooks.rs
 1 0 crates/perry-runtime/src/buffer/detach.rs
 6 0 crates/perry-runtime/src/buffer/header.rs
 2 0 crates/perry-runtime/src/buffer/view.rs
@@ -108,14 +107,12 @@
 1 0 crates/perry-runtime/src/weakref/index.rs
 2 0 crates/perry-runtime/src/webassembly.rs
 1 0 crates/perry-runtime/src/yoga.rs
-0 1 crates/perry-stdlib/src/async_local_storage.rs
 0 9 crates/perry-stdlib/src/cheerio.rs
 1 0 crates/perry-stdlib/src/common/handle.rs
 1 0 crates/perry-stdlib/src/common/handle_lifecycle.rs
 7 7 crates/perry-stdlib/src/container/types.rs
 0 5 crates/perry-stdlib/src/crypto/ecdh.rs
 0 1 crates/perry-stdlib/src/crypto/x509.rs
-0 1 crates/perry-stdlib/src/domain.rs
 1 2 crates/perry-stdlib/src/fetch/body_metadata.rs
 0 1 crates/perry-stdlib/src/fetch/bun_server_bridge.rs
 5 3 crates/perry-stdlib/src/fetch/mod.rs

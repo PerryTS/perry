@@ -1233,6 +1233,7 @@ fn clear_runtime_callback_roots_for_test() {
     crate::plugin::test_clear_plugin_roots();
     crate::geisterhand_registry::test_clear_geisterhand_roots();
     crate::ui_text_registry::test_clear_ui_text_registry_roots();
+    crate::native_payload::reset_payload_prototypes_for_tests();
 }
 
 static RUNTIME_CALLBACK_ROOT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -1293,7 +1294,8 @@ fn test_gc_init_mutable_scanner_families_rewrite_runtime_slots() {
     crate::set::test_clear_set_roots();
     let _callback_guard = RuntimeCallbackRootGuard::new();
     let fixture = ForwardedRootFixture::new();
-    let active_context_handle = -724_331;
+    let active_context_payload = crate::async_context::AsyncLocalStoragePayload::default();
+    let active_context_handle = active_context_payload.token();
     let shape_id = 0x51A9_E001;
 
     crate::promise::test_seed_promise_scanner_roots(

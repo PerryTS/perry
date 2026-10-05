@@ -6,7 +6,8 @@
 //! while the callback runs.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 
@@ -23,24 +24,90 @@ impl AsyncContextSnapshot {
 
 #[derive(Clone)]
 struct AsyncContextEntry {
-    handle: i64,
+    token: Arc<AsyncLocalStorageTokenInner>,
     generation: u64,
     stores: Vec<f64>,
 }
 
-thread_local! {
-    static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = RefCell::new(AsyncContextSnapshot::default());
-    static HANDLE_GENERATIONS: RefCell<HashMap<i64, u64>> = RefCell::new(HashMap::new());
+struct AsyncLocalStorageTokenInner {
+    generation: AtomicU64,
 }
 
-fn handle_generation(handle: i64) -> u64 {
-    HANDLE_GENERATIONS.with(|generations| generations.borrow().get(&handle).copied().unwrap_or(0))
+/// Native, pointer-free identity carried by an AsyncLocalStorage payload.
+/// Snapshots clone the Arc, so `disable()` can invalidate already-captured
+/// active descendants without a handle->generation registry.
+#[derive(Clone)]
+pub struct AsyncLocalStoragePayload {
+    token: Arc<AsyncLocalStorageTokenInner>,
+}
+
+impl Default for AsyncLocalStoragePayload {
+    fn default() -> Self {
+        Self {
+            token: Arc::new(AsyncLocalStorageTokenInner {
+                generation: AtomicU64::new(0),
+            }),
+        }
+    }
+}
+
+impl AsyncLocalStoragePayload {
+    pub fn token(&self) -> i64 {
+        Arc::as_ptr(&self.token) as i64
+    }
+}
+
+fn install_noop(_proto: &mut crate::native_payload::PayloadPrototype) {}
+
+static ASYNC_LOCAL_STORAGE_PAYLOAD_FAMILY: crate::native_payload::NativePayloadFamily =
+    crate::native_payload::NativePayloadFamily {
+        class_id: crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY,
+        name: "AsyncLocalStorage",
+        constructor_export: Some(("async_hooks", "AsyncLocalStorage")),
+        constructor_length: 0,
+        links_owner: false,
+        install_prototype: install_noop,
+    };
+
+/// Resolve an AsyncLocalStorage ordinary object (including a subclass) to the
+/// native context token used by runtime-owned diagnostics-channel helpers.
+pub fn token_from_storage_value(value: f64) -> Option<i64> {
+    unsafe {
+        crate::native_payload::payload_mut_attached::<AsyncLocalStoragePayload>(
+            value,
+            &ASYNC_LOCAL_STORAGE_PAYLOAD_FAMILY,
+        )
+        .ok()
+        .map(|payload| payload.token())
+    }
+}
+
+thread_local! {
+    static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = RefCell::new(AsyncContextSnapshot::default());
+}
+
+unsafe fn token_ref(token: i64) -> &'static AsyncLocalStorageTokenInner {
+    &*(token as *const AsyncLocalStorageTokenInner)
+}
+
+unsafe fn clone_token(token: i64) -> Arc<AsyncLocalStorageTokenInner> {
+    let ptr = token as *const AsyncLocalStorageTokenInner;
+    Arc::increment_strong_count(ptr);
+    Arc::from_raw(ptr)
+}
+
+fn token_generation(token: i64) -> u64 {
+    unsafe { token_ref(token).generation.load(Ordering::Acquire) }
+}
+
+fn entry_matches(entry: &AsyncContextEntry, token: i64, generation: u64) -> bool {
+    Arc::as_ptr(&entry.token) as i64 == token && entry.generation == generation
 }
 
 fn discard_disabled_entries(snapshot: &mut AsyncContextSnapshot) {
     snapshot
         .entries
-        .retain(|entry| entry.generation == handle_generation(entry.handle));
+        .retain(|entry| entry.generation == entry.token.generation.load(Ordering::Acquire));
 }
 
 pub fn capture_context() -> AsyncContextSnapshot {
@@ -81,16 +148,21 @@ pub fn restore_context(mut snapshot: AsyncContextSnapshot) {
 
 /// Enter an `AsyncLocalStorage#run` scope and register its throw-safe restore.
 #[no_mangle]
-pub extern "C" fn js_async_context_als_run_enter(handle: i64, store: f64) {
-    push_store(handle, store);
-    push_context_guard(ContextGuardAction::PopStore(handle));
+pub extern "C" fn js_async_context_als_run_enter(token: i64, store: f64) {
+    push_store(token, store);
+    push_context_guard(ContextGuardAction::PopStore(AsyncLocalStoragePayload {
+        token: unsafe { clone_token(token) },
+    }));
 }
 
 /// Enter an `AsyncLocalStorage#exit` scope and register its throw-safe restore.
 #[no_mangle]
-pub extern "C" fn js_async_context_als_exit_enter(handle: i64) {
-    let saved = take_store(handle);
-    push_context_guard(ContextGuardAction::RestoreStores(handle, saved));
+pub extern "C" fn js_async_context_als_exit_enter(token: i64) {
+    let lease = AsyncLocalStoragePayload {
+        token: unsafe { clone_token(token) },
+    };
+    let saved = take_store(token);
+    push_context_guard(ContextGuardAction::RestoreStores(lease, saved));
 }
 
 /// Leave the most recently entered ALS `run`/`exit` scope normally.
@@ -103,37 +175,38 @@ pub extern "C" fn js_async_context_als_scope_leave() {
 
 /// Return the current store for one ALS instance, or JavaScript `undefined`.
 #[no_mangle]
-pub extern "C" fn js_async_context_als_get_store(handle: i64) -> f64 {
-    get_store(handle).unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
+pub extern "C" fn js_async_context_als_get_store(token: i64) -> f64 {
+    get_store(token).unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
 /// Implement `AsyncLocalStorage#enterWith` in the runtime-owned context.
 #[no_mangle]
-pub extern "C" fn js_async_context_als_enter_with(handle: i64, store: f64) {
-    enter_with(handle, store);
+pub extern "C" fn js_async_context_als_enter_with(token: i64, store: f64) {
+    enter_with(token, store);
 }
 
 /// Remove one ALS instance from the runtime-owned active context.
 #[no_mangle]
-pub extern "C" fn js_async_context_als_clear(handle: i64) {
-    clear_store(handle);
+pub extern "C" fn js_async_context_als_clear(token: i64) {
+    clear_store(token);
 }
 
-pub fn push_store(handle: i64, store: f64) {
-    let generation = handle_generation(handle);
+pub fn push_store(token: i64, store: f64) {
+    let generation = token_generation(token);
     ACTIVE_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-        ctx.entries
-            .retain(|entry| entry.handle != handle || entry.generation == generation);
+        ctx.entries.retain(|entry| {
+            Arc::as_ptr(&entry.token) as i64 != token || entry.generation == generation
+        });
         if let Some(entry) = ctx
             .entries
             .iter_mut()
-            .find(|entry| entry.handle == handle && entry.generation == generation)
+            .find(|entry| entry_matches(entry, token, generation))
         {
             entry.stores.push(store);
         } else {
             ctx.entries.push(AsyncContextEntry {
-                handle,
+                token: unsafe { clone_token(token) },
                 generation,
                 stores: vec![store],
             });
@@ -141,14 +214,14 @@ pub fn push_store(handle: i64, store: f64) {
     });
 }
 
-pub fn pop_store(handle: i64) {
-    let generation = handle_generation(handle);
+pub fn pop_store(token: i64) {
+    let generation = token_generation(token);
     ACTIVE_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
         if let Some(index) = ctx
             .entries
             .iter()
-            .position(|entry| entry.handle == handle && entry.generation == generation)
+            .position(|entry| entry_matches(entry, token, generation))
         {
             ctx.entries[index].stores.pop();
             if ctx.entries[index].stores.is_empty() {
@@ -158,13 +231,13 @@ pub fn pop_store(handle: i64) {
     });
 }
 
-pub fn get_store(handle: i64) -> Option<f64> {
-    let generation = handle_generation(handle);
+pub fn get_store(token: i64) -> Option<f64> {
+    let generation = token_generation(token);
     ACTIVE_CONTEXT.with(|ctx| {
         ctx.borrow()
             .entries
             .iter()
-            .find(|entry| entry.handle == handle && entry.generation == generation)
+            .find(|entry| entry_matches(entry, token, generation))
             .and_then(|entry| entry.stores.last().copied())
     })
 }
@@ -175,16 +248,17 @@ pub fn get_store(handle: i64) -> Option<f64> {
 /// swaps the storage's value in the current frame, so a surrounding `run()`
 /// (which saves/restores exactly one slot for its own handle) still restores
 /// the pre-`run` value on exit (#788, differential case 21).
-pub fn set_store(handle: i64, store: f64) {
-    let generation = handle_generation(handle);
+pub fn set_store(token: i64, store: f64) {
+    let generation = token_generation(token);
     ACTIVE_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
-        ctx.entries
-            .retain(|entry| entry.handle != handle || entry.generation == generation);
+        ctx.entries.retain(|entry| {
+            Arc::as_ptr(&entry.token) as i64 != token || entry.generation == generation
+        });
         if let Some(entry) = ctx
             .entries
             .iter_mut()
-            .find(|entry| entry.handle == handle && entry.generation == generation)
+            .find(|entry| entry_matches(entry, token, generation))
         {
             if let Some(slot) = entry.stores.last_mut() {
                 *slot = store;
@@ -193,7 +267,7 @@ pub fn set_store(handle: i64, store: f64) {
             }
         } else {
             ctx.entries.push(AsyncContextEntry {
-                handle,
+                token: unsafe { clone_token(token) },
                 generation,
                 stores: vec![store],
             });
@@ -201,8 +275,8 @@ pub fn set_store(handle: i64, store: f64) {
     });
 }
 
-pub fn enter_with(handle: i64, store: f64) {
-    set_store(handle, store);
+pub fn enter_with(token: i64, store: f64) {
+    set_store(token, store);
 }
 
 /// Deferred context-restore action for a scope (`AsyncLocalStorage#run`/
@@ -213,9 +287,9 @@ pub fn enter_with(handle: i64, store: f64) {
 /// unwind past (#788, differential cases 10/25).
 pub enum ContextGuardAction {
     /// `run()`: pop the one store slot the scope pushed for its handle.
-    PopStore(i64),
+    PopStore(AsyncLocalStoragePayload),
     /// `exit()`: restore the handle's store stack removed at entry.
-    RestoreStores(i64, Option<(u64, Vec<f64>)>),
+    RestoreStores(AsyncLocalStoragePayload, Option<(u64, Vec<f64>)>),
     /// `runInAsyncScope()` / snapshot trampoline: restore the full snapshot.
     RestoreSnapshot(AsyncContextSnapshot),
     /// Silently pop one async_hooks execution-id frame (no `after` hook
@@ -248,8 +322,8 @@ pub fn pop_context_guard() -> Option<ContextGuardAction> {
 
 pub fn apply_context_guard(action: ContextGuardAction) {
     match action {
-        ContextGuardAction::PopStore(handle) => pop_store(handle),
-        ContextGuardAction::RestoreStores(handle, stores) => restore_store(handle, stores),
+        ContextGuardAction::PopStore(lease) => pop_store(lease.token()),
+        ContextGuardAction::RestoreStores(lease, stores) => restore_store(lease.token(), stores),
         ContextGuardAction::RestoreSnapshot(snapshot) => restore_context(snapshot),
         ContextGuardAction::RestoreExecutionIds => crate::async_hooks::unwind_execution_scope(),
     }
@@ -298,7 +372,7 @@ fn scan_context_guard_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>)
     });
 }
 
-pub fn clear_store(handle: i64) {
+pub fn clear_store(token: i64) {
     // `disable()` invalidates descendants captured from a currently-active
     // store, but Node leaves already-captured work alone when the storage is
     // disabled after its `run()` scope has returned.  Generation-bump only in
@@ -308,41 +382,39 @@ pub fn clear_store(handle: i64) {
         ctx.borrow()
             .entries
             .iter()
-            .any(|entry| entry.handle == handle)
+            .any(|entry| Arc::as_ptr(&entry.token) as i64 == token)
     }) || CONTEXT_GUARDS.with(|guards| {
         guards.borrow().iter().any(|guard| {
             matches!(
                 &guard.action,
-                ContextGuardAction::RestoreStores(saved_handle, Some(_))
-                    if *saved_handle == handle
+                ContextGuardAction::RestoreStores(saved_token, Some(_))
+                    if saved_token.token() == token
             )
         })
     });
     if was_active {
-        HANDLE_GENERATIONS.with(|generations| {
-            let mut generations = generations.borrow_mut();
-            let generation = generations.entry(handle).or_insert(0);
-            *generation = generation.wrapping_add(1);
-        });
+        unsafe { token_ref(token) }
+            .generation
+            .fetch_add(1, Ordering::AcqRel);
     }
-    remove_store(handle);
+    remove_store(token);
 }
 
-fn remove_store(handle: i64) {
+fn remove_store(token: i64) {
     ACTIVE_CONTEXT.with(|ctx| {
         ctx.borrow_mut()
             .entries
-            .retain(|entry| entry.handle != handle);
+            .retain(|entry| Arc::as_ptr(&entry.token) as i64 != token);
     });
 }
 
-pub fn take_store(handle: i64) -> Option<(u64, Vec<f64>)> {
-    let generation = handle_generation(handle);
+pub fn take_store(token: i64) -> Option<(u64, Vec<f64>)> {
+    let generation = token_generation(token);
     ACTIVE_CONTEXT.with(|ctx| {
         let mut ctx = ctx.borrow_mut();
         ctx.entries
             .iter()
-            .position(|entry| entry.handle == handle && entry.generation == generation)
+            .position(|entry| entry_matches(entry, token, generation))
             .map(|index| {
                 let entry = ctx.entries.remove(index);
                 (entry.generation, entry.stores)
@@ -355,13 +427,13 @@ pub fn take_store(handle: i64) -> Option<(u64, Vec<f64>)> {
 /// `take_store` returns `Some` only for an existing entry, and live entries are
 /// kept non-empty by `pop_store`. The empty guard below is defensive for manual
 /// callers and prevents inert context entries from accumulating.
-pub fn restore_store(handle: i64, stores: Option<(u64, Vec<f64>)>) {
-    remove_store(handle);
+pub fn restore_store(token: i64, stores: Option<(u64, Vec<f64>)>) {
+    remove_store(token);
     if let Some((generation, stores)) = stores {
-        if !stores.is_empty() && generation == handle_generation(handle) {
+        if !stores.is_empty() && generation == token_generation(token) {
             ACTIVE_CONTEXT.with(|ctx| {
                 ctx.borrow_mut().entries.push(AsyncContextEntry {
-                    handle,
+                    token: unsafe { clone_token(token) },
                     generation,
                     stores,
                 });
@@ -460,10 +532,11 @@ pub fn refresh_snapshot_from_roots(
 
 #[cfg(test)]
 pub(crate) fn test_snapshot_with_store(store: f64) -> AsyncContextSnapshot {
+    let payload = AsyncLocalStoragePayload::default();
     AsyncContextSnapshot {
         entries: vec![AsyncContextEntry {
-            handle: -1,
-            generation: handle_generation(-1),
+            generation: token_generation(payload.token()),
+            token: payload.token,
             stores: vec![store],
         }],
     }
@@ -482,8 +555,36 @@ mod tests {
     use super::*;
 
     #[test]
+    fn disabling_storage_inside_a_scope_keeps_its_restore_token_alive() {
+        for exit_scope in [false, true] {
+            let storage = AsyncLocalStoragePayload::default();
+            let token = storage.token();
+            let weak = Arc::downgrade(&storage.token);
+            if exit_scope {
+                js_async_context_als_enter_with(token, 1.0);
+                js_async_context_als_exit_enter(token);
+            } else {
+                js_async_context_als_run_enter(token, 1.0);
+            }
+            js_async_context_als_clear(token);
+            drop(storage);
+            assert!(
+                weak.upgrade().is_some(),
+                "restore action owns an in-flight lease"
+            );
+            js_async_context_als_scope_leave();
+            assert!(
+                weak.upgrade().is_none(),
+                "the last scope releases the token"
+            );
+            assert!(capture_context().is_empty());
+        }
+    }
+
+    #[test]
     fn als_provider_abi_keeps_nested_run_and_exit_scopes_balanced() {
-        let handle = -8037;
+        let storage = AsyncLocalStoragePayload::default();
+        let handle = storage.token();
         js_async_context_als_clear(handle);
         js_async_context_als_enter_with(handle, 1.0);
 

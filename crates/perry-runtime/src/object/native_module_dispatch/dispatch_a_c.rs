@@ -164,9 +164,7 @@ pub(crate) unsafe fn nm_dispatch_async_hooks(
                 .with_mut_ptr::<crate::StringHeader, _>(|msg| crate::error::js_typeerror_new(msg));
             crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
         }
-        ("async_hooks", "createHook") => {
-            ptr_to_f64(crate::async_hooks::js_async_hooks_create_hook(arg(0)) as *const u8)
-        }
+        ("async_hooks", "createHook") => crate::async_hooks::js_async_hooks_create_hook(arg(0)),
         ("async_hooks", "executionAsyncId") => {
             crate::async_hooks::js_async_hooks_execution_async_id()
         }

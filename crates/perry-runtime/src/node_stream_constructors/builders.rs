@@ -188,9 +188,7 @@ pub extern "C" fn js_event_emitter_async_resource_subclass_init(this: f64, optio
     // movable, where it used to be a never-freed `Box` -- and this frame is its
     // only holder until it is stored below, while the hidden key allocates.
     // Root it, and re-read `this` and the resource after that allocation.
-    let resource_handle = scope.root_nanbox_f64(f64::from_bits(
-        crate::value::js_nanbox_pointer(resource).to_bits(),
-    ));
+    let resource_handle = scope.root_nanbox_f64(resource);
     crate::async_hooks::js_async_resource_set_event_emitter(
         raw_ptr_from_value(resource_handle.get_nanbox_f64()) as i64,
         raw_ptr_from_value(this_handle.get_nanbox_f64()) as i64,

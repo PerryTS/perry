@@ -1868,22 +1868,6 @@
    "hook_file": "crates/perry-runtime/src/async_hooks/thread_exit.rs"
   },
   {
-   "file": "crates/perry-runtime/src/async_hooks.rs",
-   "names": [
-    "ASYNC_RESOURCE_HANDLES"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "Set of AsyncResource handles, each a Box::into_raw(AsyncResourceHandle) pointer (async_hooks.rs:1161-1169) that is never freed — malloc, not arena."
-  },
-  {
-   "file": "crates/perry-runtime/src/async_hooks.rs",
-   "names": [
-    "ASYNC_HOOK_HANDLES"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "Set of AsyncHook handles, each a never-freed Box::into_raw(AsyncHookHandle{index}) pointer (async_hooks.rs:740-741) — std alloc, not arena."
-  },
-  {
    "file": "crates/perry-runtime/src/buffer/header.rs",
    "names": [
     "EXTERNAL_CRYPTO_KEY_META_REGISTRY"

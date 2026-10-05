@@ -990,13 +990,11 @@ js_dom_exception_subclass_init	Reenters
 js_domain_add	Reenters
 js_domain_bind	AllocOnly
 js_domain_create	Reenters
-js_domain_emit	Reenters
 js_domain_emit_error	Reenters
 js_domain_enter	Reenters
 js_domain_exit	Reenters
 js_domain_intercept	AllocOnly
 js_domain_native_dispatch	Reenters
-js_domain_on	Reenters
 js_domain_remove	Reenters
 js_domain_run	Reenters
 js_drain_queued_microtasks	Reenters

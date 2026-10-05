@@ -118,13 +118,13 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_cron_timer_tick", I32, &[]);
 
     // ========== async_hooks / AsyncLocalStorage ==========
-    module.declare_function("js_async_hooks_create_hook", I64, &[DOUBLE]);
+    module.declare_function("js_async_hooks_create_hook", DOUBLE, &[DOUBLE]);
     module.declare_function("js_async_hooks_execution_async_id", DOUBLE, &[]);
     module.declare_function("js_async_hooks_trigger_async_id", DOUBLE, &[]);
     module.declare_function("js_async_hooks_execution_async_resource", DOUBLE, &[]);
-    module.declare_function("js_async_hook_enable", I64, &[I64]);
-    module.declare_function("js_async_hook_disable", I64, &[I64]);
-    module.declare_function("js_async_resource_new", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_async_hook_enable", DOUBLE, &[I64]);
+    module.declare_function("js_async_hook_disable", DOUBLE, &[I64]);
+    module.declare_function("js_async_resource_new", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_async_resource_subclass_init",
         DOUBLE,
@@ -132,7 +132,7 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     );
     module.declare_function("js_async_resource_async_id", DOUBLE, &[I64]);
     module.declare_function("js_async_resource_trigger_async_id", DOUBLE, &[I64]);
-    module.declare_function("js_async_resource_emit_destroy", I64, &[I64]);
+    module.declare_function("js_async_resource_emit_destroy", DOUBLE, &[I64]);
     module.declare_function(
         "js_async_resource_run_in_async_scope",
         DOUBLE,
@@ -146,7 +146,7 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     // pointer, so the runtime can reject non-callable callbacks.
     module.declare_function("js_async_local_storage_exit", DOUBLE, &[I64, DOUBLE, I64]);
     module.declare_function("js_async_local_storage_get_store", DOUBLE, &[I64]);
-    module.declare_function("js_async_local_storage_new", I64, &[]);
+    module.declare_function("js_async_local_storage_new", DOUBLE, &[]);
     module.declare_function("js_async_local_storage_subclass_init", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_async_local_storage_run",

@@ -17,7 +17,6 @@ use std::sync::{
 };
 
 mod async_hooks_exports;
-pub(crate) use async_hooks_exports::async_resource_prototype_method_value;
 mod callable_export_arity_table;
 mod callable_export_check;
 mod callable_export_table;

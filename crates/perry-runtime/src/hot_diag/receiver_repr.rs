@@ -469,14 +469,18 @@ mod tests {
         assert_fixture_migrated(ReceiverReprFamily::AsyncHook, || {
             let options = crate::object::js_object_alloc(0, 0);
             let value = f64::from_bits(crate::value::JSValue::pointer(options.cast()).bits());
-            crate::async_hooks::js_async_hooks_create_hook(value) as usize
+            crate::value::js_nanbox_get_pointer(crate::async_hooks::js_async_hooks_create_hook(
+                value,
+            )) as usize
         });
         // #340/#341: `async_resource` is migrated — gate A, inverted.
         assert_fixture_migrated(ReceiverReprFamily::AsyncResource, || {
             let name = crate::string::js_string_from_bytes(b"receiver-repr".as_ptr(), 13);
             let type_value = f64::from_bits(crate::value::js_nanbox_string(name as i64).to_bits());
             let options = f64::from_bits(crate::value::TAG_UNDEFINED);
-            crate::async_hooks::js_async_resource_new(type_value, options) as usize
+            crate::value::js_nanbox_get_pointer(crate::async_hooks::js_async_resource_new(
+                type_value, options,
+            )) as usize
         });
         assert_fixture(ReceiverReprFamily::SymbolGlobal, || {
             (
