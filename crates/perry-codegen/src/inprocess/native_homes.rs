@@ -14,10 +14,15 @@ use llvm_sys::{core::*, prelude::*, LLVMOpcode, LLVMTypeKind};
 /// its address. No runtime registration or side table is involved.
 use crate::gc_map::HOME_RANGE_ID;
 
+// Short live ranges are cheaper as ordinary SSA statepoint roots. A native
+// home amortizes its volatile stores/reloads over a longer collecting span.
+// This selects a location within statepoints, never another rooting backend.
+pub(super) const HOME_CALL_SPAN: usize = 64;
+
 pub(super) fn retain(module: &inkwell::module::Module<'_>) {
     for function in module.get_functions() {
         let (_, sites) = rs4gc_preflight_factors(function);
-        if sites < 2 {
+        if sites < HOME_CALL_SPAN {
             continue;
         }
         // Representation choice only: a root that is read after multiple
@@ -44,6 +49,7 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
         }
         let mut retained = std::collections::HashSet::new();
         let collecting_loops = collecting_loop_blocks(function);
+        let mut store_blocks = std::collections::HashMap::new();
         let mut ordinal = 0usize;
         for bb in function.get_basic_blocks() {
             let mut next = bb.get_first_instruction();
@@ -55,19 +61,25 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
                             let slot = LLVMGetOperand(inst.as_value_ref(), 1);
                             if let Some(last) = slots.get_mut(&slot) {
                                 *last = ordinal;
+                                store_blocks
+                                    .insert(slot, LLVMGetInstructionParent(inst.as_value_ref()));
                             }
                         }
                         inkwell::values::InstructionOpcode::Load => {
                             let slot = LLVMGetOperand(inst.as_value_ref(), 0);
                             if slots.contains_key(&slot) {
                                 let block = LLVMGetInstructionParent(inst.as_value_ref());
-                                if collecting_loops.contains(&block) {
+                                if collecting_loops.contains(&block)
+                                    && store_blocks
+                                        .get(&slot)
+                                        .is_some_and(|stored| !collecting_loops.contains(stored))
+                                {
                                     retained.insert(slot);
                                 }
                             }
                             if slots
                                 .get(&slot)
-                                .is_some_and(|last| ordinal.saturating_sub(*last) >= 2)
+                                .is_some_and(|last| ordinal.saturating_sub(*last) >= HOME_CALL_SPAN)
                             {
                                 retained.insert(slot);
                             }
@@ -96,11 +108,104 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
                 }
             }
         }
+        merge_before_optimization(module, function);
+    }
+}
+
+// Keep the number of retained allocas constant before optimization too.
+// LLVM's TailCallElim walks the entire body once per alloca (#8883); late
+// publication alone would leave that walk quadratic. An empty asm use makes
+// the aggregate address observable to LLVM, so SROA cannot split it back into
+// one alloca per local. It emits no call or runtime rooting operation.
+fn merge_before_optimization(
+    module: &inkwell::module::Module<'_>,
+    function: inkwell::values::FunctionValue<'_>,
+) {
+    unsafe {
+        let context = LLVMGetModuleContext(module.as_mut_ptr());
+        let kind = LLVMGetMDKindIDInContext(context, b"perry.native.home".as_ptr().cast(), 17);
+        let mut slots = Vec::new();
+        for block in function.get_basic_blocks() {
+            let mut instruction = block.get_first_instruction();
+            while let Some(inst) = instruction {
+                instruction = inst.get_next_instruction();
+                if inst.get_opcode() == inkwell::values::InstructionOpcode::Alloca
+                    && !LLVMGetMetadata(inst.as_value_ref(), kind).is_null()
+                {
+                    slots.push(inst.as_value_ref());
+                }
+            }
+        }
+        if slots.len() < 2 {
+            return;
+        }
+        let builder = LLVMCreateBuilderInContext(context);
+        LLVMPositionBuilderBefore(
+            builder,
+            LLVMGetFirstInstruction(LLVMGetFirstBasicBlock(function.as_value_ref())),
+        );
+        let pointer = LLVMPointerTypeInContext(context, 1);
+        let array = LLVMArrayType2(pointer, slots.len() as u64);
+        let home = LLVMBuildAlloca(builder, array, c"gc.homes.entry".as_ptr());
+        LLVMSetAlignment(home, 8);
+        let node = LLVMMDNodeInContext2(context, std::ptr::null_mut(), 0);
+        LLVMSetMetadata(home, kind, LLVMMetadataAsValue(context, node));
+        for (offset, &slot) in slots.iter().enumerate() {
+            let mut indices = [
+                LLVMConstInt(LLVMInt32TypeInContext(context), 0, 0),
+                LLVMConstInt(LLVMInt64TypeInContext(context), offset as u64, 0),
+            ];
+            let address = LLVMBuildInBoundsGEP2(
+                builder,
+                array,
+                home,
+                indices.as_mut_ptr(),
+                2,
+                c"gc.home.entry".as_ptr(),
+            );
+            LLVMReplaceAllUsesWith(slot, address);
+        }
+        let mut arguments = [LLVMPointerTypeInContext(context, 0)];
+        let signature =
+            LLVMFunctionType(LLVMVoidTypeInContext(context), arguments.as_mut_ptr(), 1, 0);
+        let constraints = b"r,~{memory}";
+        let asm = LLVMGetInlineAsm(
+            signature,
+            c"".as_ptr(),
+            0,
+            constraints.as_ptr().cast(),
+            constraints.len(),
+            1,
+            0,
+            llvm_sys::LLVMInlineAsmDialect::LLVMInlineAsmDialectATT,
+            0,
+        );
+        let mut operands = [home];
+        let escape = LLVMBuildCall2(
+            builder,
+            signature,
+            asm,
+            operands.as_mut_ptr(),
+            1,
+            c"".as_ptr(),
+        );
+        let leaf = LLVMCreateStringAttribute(
+            context,
+            b"gc-leaf-function".as_ptr().cast(),
+            16,
+            c"".as_ptr(),
+            0,
+        );
+        LLVMAddCallSiteAttribute(escape, llvm_sys::LLVMAttributeFunctionIndex, leaf);
+        for slot in slots {
+            LLVMInstructionEraseFromParent(slot);
+        }
+        LLVMDisposeBuilder(builder);
     }
 }
 
 // Kosaraju's algorithm visits each block/edge once. A load in a cyclic
-// component containing two collecting calls can cross them on a later
+// component containing a long collecting span can cross them on a later
 // iteration even when source order places the load before either call.
 fn collecting_loop_blocks(
     function: inkwell::values::FunctionValue<'_>,
@@ -175,7 +280,7 @@ fn collecting_loop_blocks(
             }
         }
         let cyclic = component.len() > 1 || edges[start].contains(&start);
-        if cyclic && sites >= 2 {
+        if cyclic && sites >= HOME_CALL_SPAN {
             retained.extend(component.into_iter().map(|i| blocks[i].as_mut_ptr()));
         }
     }

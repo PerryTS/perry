@@ -58,7 +58,12 @@ fn native_homes_publish_every_word_at_every_statepoint() {
 #[test]
 fn merging_first_entry_alloca_keeps_the_builder_position_valid() {
     let context = Context::create();
-    let module = parse_ir_text(&context, &fixture(2, 3), "entry_home_test").unwrap();
+    let module = parse_ir_text(
+        &context,
+        &fixture(2, native_homes::HOME_CALL_SPAN + 1),
+        "entry_home_test",
+    )
+    .unwrap();
     retain(&module);
     global_init(&[]);
     let triple = TargetTriple::create("x86_64-unknown-linux-gnu");
@@ -83,7 +88,10 @@ fn merging_first_entry_alloca_keeps_the_builder_position_valid() {
     module.verify().expect("merged homes verify");
     let text = module.print_to_string().to_string();
     assert_eq!(text.matches("alloca [2 x ptr addrspace(1)]").count(), 1);
-    assert_eq!(text.matches("\"gc-live\"(ptr %gc.homes)").count(), 3);
+    assert_eq!(
+        text.matches("\"gc-live\"(ptr %gc.homes)").count(),
+        native_homes::HOME_CALL_SPAN + 1
+    );
     assert!(!text.contains("@llvm.experimental.gc.relocate"));
 }
 
@@ -145,11 +153,32 @@ header:
 body:
   call void @collect()
   call void @collect()
+  call void @collect()
+  call void @collect()
+  call void @collect()
+  call void @collect()
+  call void @collect()
+  call void @collect()
+  call void @collect()
+  call void @collect()
+  call void @collect()
+  call void @collect()
+  call void @collect()
+  call void @collect()
+  call void @collect()
+  call void @collect()
   br i1 %again, label %header, label %exit
 exit:
   ret void
 }"#;
-    let module = parse_ir_text(&context, ir, "loop_homes").unwrap();
+    let ir = ir.replace(
+        "body:\n",
+        &format!(
+            "body:\n{}",
+            "  call void @collect()\n".repeat(native_homes::HOME_CALL_SPAN)
+        ),
+    );
+    let module = parse_ir_text(&context, &ir, "loop_homes").unwrap();
     retain(&module);
     let text = module.print_to_string().to_string();
     assert!(
@@ -176,4 +205,16 @@ exit:
     let module = parse_ir_text(&context, ir, "short_home").unwrap();
     retain(&module);
     assert!(!module.print_to_string().to_string().contains("volatile"));
+}
+
+#[test]
+fn hundreds_of_long_lived_homes_are_one_alloca_before_optimization() {
+    let context = Context::create();
+    let module = parse_ir_text(&context, &fixture(200, 200), "linear_alloca_walk").unwrap();
+    retain(&module);
+    module.verify().unwrap();
+    let text = module.print_to_string().to_string();
+    assert_eq!(text.matches(" = alloca ").count(), 1);
+    assert!(text.contains("alloca [200 x ptr addrspace(1)]"));
+    assert!(!text.contains("disable-tail-calls"));
 }
