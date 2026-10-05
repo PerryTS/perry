@@ -62,21 +62,27 @@ pub extern "C" fn js_object_alloc_with_parent(
     parent_class_id: u32,
     field_count: u32,
 ) -> *mut ObjectHeader {
-    object_alloc_with_parent_impl(class_id, parent_class_id, field_count, false)
+    object_alloc_with_parent_impl::<false, false>(class_id, parent_class_id, field_count)
 }
 
 /// A class-less ORDINARY object (`JSON.parse` records, `Object.create`),
 /// born marked plain-ordinary before its birth stamp so the birth shape is
 /// minted `Ordinary` directly (charter step 3; `mark_object_plain_ordinary`).
 pub(crate) fn object_alloc_plain(field_count: u32) -> *mut ObjectHeader {
-    object_alloc_with_parent_impl(0, 0, field_count, true)
+    object_alloc_with_parent_impl::<true, false>(0, 0, field_count)
 }
 
-fn object_alloc_with_parent_impl(
+/// A null-parent object must publish that edge in its birth shape, before
+/// any reader can observe the object. Setting only a post-birth header bit
+/// leaves the descriptor claiming the default prototype.
+pub(crate) fn object_alloc_null_proto(class_id: u32, field_count: u32) -> *mut ObjectHeader {
+    object_alloc_with_parent_impl::<false, true>(class_id, 0, field_count)
+}
+
+fn object_alloc_with_parent_impl<const PREMARK_PLAIN: bool, const BORN_NULL: bool>(
     class_id: u32,
     parent_class_id: u32,
     field_count: u32,
-    premark_plain: bool,
 ) -> *mut ObjectHeader {
     // Register this class's parent for inheritance lookups
     if parent_class_id != 0 {
@@ -112,11 +118,17 @@ fn object_alloc_with_parent_impl(
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
-        if premark_plain {
+        if PREMARK_PLAIN {
             crate::object::shapes::store_kind::premark_plain_ordinary(ptr);
         }
-        // A class-less newborn's birth shape is a function of its slot count
-        // and kind alone: replay the one this site last published while its
+        if BORN_NULL {
+            // The allocator just returned this live cell; no safepoint has
+            // intervened, so its trusted header is still ours to initialize.
+            let gc = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
+            (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
+        }
+        // A class-less newborn's birth shape is a function of its prototype
+        // edge, slot count and kind: replay the one this site last published while its
         // record still names those facts (ShapeIds are never reused).
         let memo = class_id == 0 && parent_class_id == 0;
         if memo {

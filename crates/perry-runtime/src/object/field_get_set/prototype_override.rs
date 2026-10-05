@@ -94,8 +94,8 @@ pub(super) fn inherited_field_if_overridden(
     }
     // #10827: the two reasons this walk can miss are not the same reason.
     //
-    // If the chain ENDS IN AN EXPLICIT NULL, the miss is the final answer and
-    // it is `undefined` — there is nothing above this receiver to synthesize
+    // If the chain ENDS IN AN EXPLICIT NULL before Object.prototype, the miss
+    // is the final answer: `undefined`. There is nothing above it to synthesize
     // from, and the arms below would go and ask the class surface anyway.
     // That is how `Object.setPrototypeOf(o, null); o.a` kept answering from
     // the prototype `o` was born with, while `"a" in o` correctly said false:
@@ -106,7 +106,9 @@ pub(super) fn inherited_field_if_overridden(
     // everything Perry SYNTHESIZES rather than stores on a real prototype (a
     // plain function's `.prototype`, the boxed-wrapper builtins, the iterator
     // helpers), and swallowing those made them unreachable.
-    if crate::object::prototype_chain::prototype_chain_ends_in_explicit_null(obj as usize) {
+    if crate::object::prototype_chain::prototype_chain_ends_in_null_before_object_prototype(
+        obj as usize,
+    ) {
         return InheritedRead::Hit(JSValue::undefined());
     }
     if superseded {

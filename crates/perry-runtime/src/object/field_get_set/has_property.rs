@@ -3,6 +3,8 @@
 
 use super::*;
 
+mod shape_presence;
+
 /// Presence of a Symbol-keyed STATIC member on a class ref, for `sym in Class`
 /// (#6160). Covers the registration schemes the generic symbol resolver
 /// (`js_object_get_symbol_property`, which only reads the data-valued
@@ -228,10 +230,13 @@ unsafe fn class_ref_has_inherited_static_data(
 /// ⇒ TypeError).
 #[no_mangle]
 pub extern "C" fn js_in_operator(obj: f64, key: f64) -> f64 {
+    if let Some(present) = unsafe { shape_presence::try_shape_has_property(obj, key) } {
+        return f64::from_bits(JSValue::bool(present).bits());
+    }
     if !in_rhs_is_object(obj) {
         throw_in_operator_non_object(obj, key);
     }
-    js_object_has_property(obj, key)
+    object_has_property_generic(obj, key)
 }
 
 /// Check if a property exists in an object by its string key name
@@ -239,6 +244,14 @@ pub extern "C" fn js_in_operator(obj: f64, key: f64) -> f64 {
 /// This implements the JavaScript 'in' operator: "key" in obj
 #[no_mangle]
 pub extern "C" fn js_object_has_property(obj: f64, key: f64) -> f64 {
+    if let Some(present) = unsafe { shape_presence::try_shape_has_property(obj, key) } {
+        return f64::from_bits(JSValue::bool(present).bits());
+    }
+    object_has_property_generic(obj, key)
+}
+
+#[inline(never)]
+fn object_has_property_generic(obj: f64, key: f64) -> f64 {
     let nanbox_false = f64::from_bits(0x7FFC_0000_0000_0003u64); // TAG_FALSE
     let nanbox_true = f64::from_bits(0x7FFC_0000_0000_0004u64); // TAG_TRUE
 

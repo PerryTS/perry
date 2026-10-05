@@ -321,7 +321,11 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
     // class whose `prototype` was `setPrototypeOf(..., null)`, or one pointed
     // at an `Object.create(null)` — reached `Object.prototype` anyway and
     // answered `toString` from it while `"toString" in o` said false.
-    if super::super::prototype_chain::prototype_chain_ends_in_explicit_null(obj as usize) {
+    // Object.prototype's own terminal null edge must not hide its properties
+    // from receivers whose chain reaches it.
+    if super::super::prototype_chain::prototype_chain_ends_in_null_before_object_prototype(
+        obj as usize,
+    ) {
         return None;
     }
     if super::super::prototype_chain::object_static_prototype(obj as usize).is_some() {

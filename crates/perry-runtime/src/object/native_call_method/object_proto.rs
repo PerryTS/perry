@@ -112,7 +112,9 @@ pub(super) unsafe fn call_ordinary_receiver_inherited_method_unless(
         return None;
     }
     if object_has_null_proto_flag(obj)
-        || super::prototype_chain::prototype_chain_ends_in_explicit_null(obj as usize)
+        || super::prototype_chain::prototype_chain_ends_in_null_before_object_prototype(
+            obj as usize,
+        )
     {
         return Some(None);
     }

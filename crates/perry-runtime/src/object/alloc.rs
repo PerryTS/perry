@@ -124,12 +124,7 @@ pub(crate) fn registered_class_keys_array(
 /// surprises.
 #[no_mangle]
 pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) -> *mut ObjectHeader {
-    let ptr = js_object_alloc_with_parent(class_id, 0, field_count);
-    unsafe {
-        let gc = (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-        (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
-    }
-    ptr
+    super::alloc_basic::object_alloc_null_proto(class_id, field_count)
 }
 
 /// A null-prototype object born holding `entries` as its own data properties,
