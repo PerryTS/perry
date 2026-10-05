@@ -17,17 +17,7 @@ pub(super) type PropertyExports = HashMap<String, (u32, String)>;
 pub(super) fn prepare(hir: &Module) -> (Cow<'_, Module>, PropertyExports) {
     // Pair the wrapper's private binding with its compiler-owned preamble;
     // an ordinary ESM variable named `_cjs` still has snapshot semantics.
-    let has_preamble = hir.imports.iter().any(|import| {
-        import
-            .source
-            .strip_prefix("node:")
-            .unwrap_or(&import.source)
-            == "module"
-            && import.specifiers.iter().any(|specifier| {
-                matches!(specifier, perry_hir::ImportSpecifier::Named { imported, local }
-                    if imported == "createRequire" && local == "__perry_cjs_create_require")
-            })
-    });
+    let has_preamble = hir.is_commonjs_wrap();
     if !has_preamble {
         return (Cow::Borrowed(hir), HashMap::new());
     }

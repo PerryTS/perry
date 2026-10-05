@@ -330,3 +330,74 @@ fn a_var_binding_is_never_touched() {
     run(&mut module, false);
     assert_eq!(dbg(&module.init[0]), dbg(&Stmt::Expr(Expr::LocalGet(V))));
 }
+
+fn import(source: &str, imported: &str, local: &str) -> Import {
+    Import {
+        source: source.to_string(),
+        specifiers: vec![ImportSpecifier::Named {
+            imported: imported.to_string(),
+            local: local.to_string(),
+        }],
+        is_native: false,
+        module_kind: ModuleKind::NativeCompiled,
+        resolved_path: None,
+        type_only: false,
+        runtime_erased: false,
+        is_dynamic: false,
+        is_dynamic_target: false,
+        is_deferred_require: false,
+        is_adopted_require: false,
+    }
+}
+
+fn export(local: &str) -> Export {
+    Export::Named {
+        local: local.to_string(),
+        exported: local.to_string(),
+    }
+}
+
+#[test]
+fn an_exported_binding_is_named_after_its_declarator_when_an_importer_can_run_first() {
+    let mut module = Module::new("a.ts");
+    module.init = vec![let_stmt(X, "x", Expr::Integer(7))];
+    module.exports = vec![export("x")];
+    run(&mut module, true);
+    assert_eq!(
+        dbg(&module.init),
+        dbg(&vec![
+            let_stmt(X, "x", Expr::Integer(7)),
+            Stmt::Expr(tdz_check::check(X, "x")),
+        ])
+    );
+}
+
+#[test]
+fn a_commonjs_module_s_exports_are_never_seeded() {
+    // The CJS-to-ESM wrap: `const _cjs = (function(){…})()` and
+    // `export const y = _cjs.y`. Codegen drops `y`'s initializer and reads
+    // `module.exports.y` live, so a check after it would see a sentinel that
+    // nothing ever clears (#11987).
+    let mut module = Module::new("utils.js");
+    module.imports = vec![import(
+        "node:module",
+        "createRequire",
+        "__perry_cjs_create_require",
+    )];
+    let wrap = vec![
+        let_stmt(X, "_cjs", call(closure(1, Vec::new()))),
+        let_stmt(
+            Y,
+            "y",
+            Expr::PropertyGet {
+                object: Box::new(Expr::LocalGet(X)),
+                property: "y".to_string(),
+                byte_offset: 0,
+            },
+        ),
+    ];
+    module.init = wrap.clone();
+    module.exports = vec![export("_cjs"), export("y")];
+    run(&mut module, true);
+    assert_eq!(dbg(&module.init), dbg(&wrap));
+}
