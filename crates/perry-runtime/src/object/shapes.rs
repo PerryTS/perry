@@ -632,6 +632,89 @@ pub(crate) unsafe fn plain_positional_key_words(
     ))
 }
 
+/// Own-key presence of the string key `key_bits` (whose bytes are `key`) on
+/// a receiver of shape `shape_id`, for `[[GetOwnProperty]]` existence
+/// (`Object.hasOwn`, `Object.prototype.hasOwnProperty`): `Some((present,
+/// kind))`, or `None` when the record does not answer for its receivers' own
+/// keys and the caller asks the object.
+///
+/// The record answers when [`plain_positional_key_words`] would: POSBOUND is
+/// nonzero (an ordinary layout with a canonical key list, no tombstone holes,
+/// no accessor keys, no descriptor generation) and the [[Prototype]] identity
+/// is not per-object (no `process.env`, arguments object or module
+/// namespace, whose own properties are not their key list). A shape carrying
+/// a private key also declines: a private entry sits in the list but is no
+/// property. What remains is a list whose first `logical_key_count` entries
+/// ARE the receiver's own string keys, so presence is membership.
+///
+/// Membership is decided in the list itself, never in a side table: the key
+/// word is compared first (a canonical list holds its text's atom, which is
+/// the very word a pooled key literal evaluates to), and only when no word
+/// matches are the texts compared, because a word mismatch proves nothing (a
+/// list written before its atom existed, an SSO slot, a key built at run
+/// time). A list at or past `KEYS_INDEX_THRESHOLD` asks the shape's key index
+/// instead, exactly as every by-name lookup does.
+///
+/// `kind` is the record's object kind, for a caller whose answer also depends
+/// on WHICH object a runtime-born receiver is (`%Function.prototype%`).
+///
+/// Allocation-free and GC-free.
+///
+/// # Safety
+/// As [`positional_key_words`]; `key` is the text of the string `key_bits`.
+#[inline]
+pub(crate) unsafe fn plain_own_key_present(
+    dir: *const u8,
+    shape_id: u32,
+    key_bits: u64,
+    key: &[u8],
+) -> Option<(bool, ShapeObjectKind)> {
+    let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
+    if r.position_bound_raw() == 0
+        || r.proto_id == PROTO_ID_PER_OBJECT
+        || r.summary() & crate::object::key_attrs::SUMMARY_PRIVATE != 0
+    {
+        return None;
+    }
+    let kind = r.object_kind();
+    let keys = r.keys as usize as *const ArrayHeader;
+    let count = r.logical_key_count;
+    if count >= super::KEYS_INDEX_THRESHOLD {
+        return Some((
+            super::keys_find_slot_by_bytes(keys, count, key).is_some(),
+            kind,
+        ));
+    }
+    // A live descriptor's keys array is the resolved head (the collector
+    // rewrites it on move), holding at least `count` logical keys past its
+    // front offset; the min keeps a short array from being over-read anyway.
+    let n = (count as usize).min((*keys).length.min((*keys).capacity) as usize);
+    let words = crate::array::array_elements_ptr(keys) as *const u64;
+    for i in 0..n {
+        if *words.add(i) == key_bits {
+            return Some((true, kind));
+        }
+    }
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    for i in 0..n {
+        let stored = crate::JSValue::from_bits(*words.add(i));
+        if stored.is_string() {
+            let h = stored.as_string_ptr();
+            if !h.is_null()
+                && (*h).byte_len as usize == key.len()
+                && bytes_eq(super::string_header_payload(h), key.as_ptr(), key.len())
+            {
+                return Some((true, kind));
+            }
+        } else if let Some(text) = crate::string::js_string_key_bytes(stored, &mut sso) {
+            if text == key {
+                return Some((true, kind));
+            }
+        }
+    }
+    Some((false, kind))
+}
+
 /// A record's canonical keys array, for [`positional_key_words`]: its words
 /// are asked only once POSBOUND is known to be nonzero, so the front-offset
 /// arithmetic runs only on the path that reads a key.
