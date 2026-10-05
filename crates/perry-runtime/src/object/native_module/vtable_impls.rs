@@ -114,6 +114,16 @@ pub(super) unsafe fn vt_get_own_field(
 pub(crate) unsafe fn vt_own_keys_array(
     obj: *const ObjectHeader,
 ) -> Option<*mut crate::array::ArrayHeader> {
+    // This hook is also offered to arbitrary values by getOwnPropertyNames.
+    // Read the namespace brand from the shape before interpreting field zero
+    // as a module name; an ordinary object's first value is just user data.
+    let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || super::shapes::object_shape_descriptor(obj)?.object_kind
+            != super::shapes::ShapeObjectKind::NativeNamespace
+    {
+        return None;
+    }
     let module_name = read_native_module_name(obj)?;
     let keys = native_module_enumerable_keys(&module_name)?;
     let include_permission = matches!(

@@ -163,9 +163,9 @@ pub(crate) struct ShapeRecord {
 
 const RECORD_KIND_SHIFT: u32 = 8;
 const RECORD_KIND_MASK: u32 = 0b111 << RECORD_KIND_SHIFT;
-/// The largest `ShapeObjectKind::code()` (`OrdinaryNumericProof`, 6). Code 7
-/// is the field's last free value. `kind_codes_round_trip` pins every kind.
-const RECORD_KIND_MAX_CODE: u32 = 6;
+/// The largest `ShapeObjectKind::code()` (`NativeNamespace`, 7).
+/// `kind_codes_round_trip` pins every kind within this three-bit field.
+const RECORD_KIND_MAX_CODE: u32 = 7;
 const _: () = assert!(RECORD_KIND_MAX_CODE <= RECORD_KIND_MASK >> RECORD_KIND_SHIFT);
 /// Charter step 3: the summary of the attributes the shape's keys carry —
 /// what the chain store check and every per-key reader ask FIRST, so a shape
@@ -320,6 +320,7 @@ impl ShapeRecord {
             4 => ShapeObjectKind::FunctionDictionary,
             5 => ShapeObjectKind::OrdinaryUnmarked,
             6 => ShapeObjectKind::OrdinaryNumericProof,
+            7 => ShapeObjectKind::NativeNamespace,
             _ => ShapeObjectKind::Ordinary,
         }
     }

@@ -298,7 +298,7 @@ fn native_namespace_virtual_value_cannot_publish_a_numeric_own_slot_word() {
             17.0f64.to_bits()
         );
         let d = object_shape_descriptor(obj).unwrap();
-        assert_eq!(d.object_kind, ShapeObjectKind::OrdinaryUnmarked);
+        assert_eq!(d.object_kind, ShapeObjectKind::NativeNamespace);
         assert_eq!(slot_rep(d.rep, 1), REP_F64);
         assert_eq!(d.proto_id, PROTO_ID_PER_OBJECT);
         let site = AtomicU64::new(REGION_GUARD_WORD_EMPTY);

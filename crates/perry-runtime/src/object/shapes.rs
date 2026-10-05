@@ -741,7 +741,7 @@ pub(crate) enum ShapeObjectKind {
     /// The ordinary layout of [`ShapeObjectKind::Ordinary`], on a receiver
     /// whose own slots are NOT proven plain data: a class-less receiver no
     /// birth site marked ordinary (`URL`, `Object.prototype`, a typed-array
-    /// prototype, a runtime-born record) or a native-module receiver. Reads
+    /// prototype, or a runtime-born record). Reads
     /// treat it as `Ordinary`; a store is never admitted on it by shape.
     OrdinaryUnmarked,
     /// [`ShapeObjectKind::Ordinary`] carrying the Array-subclass packed-numeric
@@ -750,6 +750,10 @@ pub(crate) enum ShapeObjectKind {
     /// shape transition and a store word naming an `Ordinary` id can never
     /// match a proof-carrying receiver.
     OrdinaryNumericProof,
+    /// A native-module namespace whose own keys and reads come from its
+    /// export surface. The namespace brand is part of shape identity, so an
+    /// ordinary record with a module name in a data slot cannot impersonate it.
+    NativeNamespace,
 }
 
 impl ShapeObjectKind {
@@ -772,6 +776,7 @@ impl ShapeObjectKind {
             ShapeObjectKind::Ordinary
                 | ShapeObjectKind::OrdinaryUnmarked
                 | ShapeObjectKind::OrdinaryNumericProof
+                | ShapeObjectKind::NativeNamespace
         )
     }
 
@@ -787,6 +792,7 @@ impl ShapeObjectKind {
             ShapeObjectKind::FunctionDictionary => 4,
             ShapeObjectKind::OrdinaryUnmarked => 5,
             ShapeObjectKind::OrdinaryNumericProof => 6,
+            ShapeObjectKind::NativeNamespace => 7,
         }
     }
 }
@@ -804,6 +810,7 @@ const SHAPE_KIND_FUNCTION: u64 = 4;
 const SHAPE_KIND_FUNCTION_DICTIONARY: u64 = 5;
 const SHAPE_KIND_ORDINARY_UNMARKED: u64 = 6;
 const SHAPE_KIND_ORDINARY_NUMERIC_PROOF: u64 = 7;
+const SHAPE_KIND_NATIVE_NAMESPACE: u64 = 8;
 
 #[inline(always)]
 fn shape_kind_cache_slot(shape_id: u32) -> usize {
@@ -826,6 +833,7 @@ fn cached_shape_object_kind(shape_id: u32) -> Option<ShapeObjectKind> {
         SHAPE_KIND_FUNCTION_DICTIONARY => Some(ShapeObjectKind::FunctionDictionary),
         SHAPE_KIND_ORDINARY_UNMARKED => Some(ShapeObjectKind::OrdinaryUnmarked),
         SHAPE_KIND_ORDINARY_NUMERIC_PROOF => Some(ShapeObjectKind::OrdinaryNumericProof),
+        SHAPE_KIND_NATIVE_NAMESPACE => Some(ShapeObjectKind::NativeNamespace),
         _ => None,
     }
 }
@@ -841,6 +849,7 @@ fn publish_shape_object_kind(shape_id: u32, kind: ShapeObjectKind) {
         ShapeObjectKind::FunctionDictionary => SHAPE_KIND_FUNCTION_DICTIONARY,
         ShapeObjectKind::OrdinaryUnmarked => SHAPE_KIND_ORDINARY_UNMARKED,
         ShapeObjectKind::OrdinaryNumericProof => SHAPE_KIND_ORDINARY_NUMERIC_PROOF,
+        ShapeObjectKind::NativeNamespace => SHAPE_KIND_NATIVE_NAMESPACE,
     };
     cache[shape_kind_cache_slot(shape_id)] = (u64::from(shape_id) << 32) | tag;
 }
