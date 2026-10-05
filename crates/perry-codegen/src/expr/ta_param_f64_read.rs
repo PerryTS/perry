@@ -186,7 +186,7 @@ fn f64_kind_from_class(name: &str) -> Option<(u8, crate::types::LlvmType, u32, F
 /// Compile-time gate (bisection): unset / `1` / `on` / `true` enable; `0` /
 /// `off` / `false` disable. Object-cache keys every codegen env var, so a
 /// flipped value re-codegens rather than serving a stale cache.
-fn ta_param_f64_read_enabled() -> bool {
+pub(crate) fn ta_param_f64_read_enabled() -> bool {
     match std::env::var("PERRY_TA_PARAM_F64_READ") {
         Ok(v) => !matches!(v.as_str(), "0" | "off" | "false" | "OFF" | "FALSE"),
         Err(_) => true,

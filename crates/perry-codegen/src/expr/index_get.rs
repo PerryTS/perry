@@ -901,6 +901,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Some(v) = super::try_lower_proven_view_guarded_load(ctx, object, index)? {
                     return Ok(v);
                 }
+                if let Some(value) = super::ta_element_read::try_lower(ctx, object, index, false)? {
+                    return Ok(value);
+                }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
                     if runtime_key_may_expose_typed_array_backing_buffer(index) {
                         if let Expr::LocalGet(id) = object.as_ref() {

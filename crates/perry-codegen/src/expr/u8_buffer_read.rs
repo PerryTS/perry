@@ -721,6 +721,10 @@ pub(crate) fn byte_view_param_for(
 /// helpers retain their existing owning-cache hit and add no entry calls.
 /// Nested closures get their own receiver guards when they are lowered.
 pub(crate) fn byte_view_param_is_read(body: &[perry_hir::Stmt], id: u32) -> bool {
+    u8_inline_read_enabled() && loop_param_is_read(body, id)
+}
+
+pub(crate) fn loop_param_is_read(body: &[perry_hir::Stmt], id: u32) -> bool {
     fn reads(expr: &Expr, id: u32) -> bool {
         if matches!(expr, Expr::Closure { .. }) {
             return false;
@@ -785,7 +789,7 @@ pub(crate) fn byte_view_param_is_read(body: &[perry_hir::Stmt], id: u32) -> bool
             _ => false,
         }
     }
-    u8_inline_read_enabled() && body.iter().any(|stmt| loop_reads(stmt, id))
+    body.iter().any(|stmt| loop_reads(stmt, id))
 }
 
 pub(crate) fn materialize_byte_view_param(ctx: &mut FnCtx<'_>, id: u32, boxed: &str) {

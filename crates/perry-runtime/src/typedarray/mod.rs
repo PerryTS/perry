@@ -27,6 +27,9 @@ mod construct;
 #[cfg(test)]
 mod element_read_receiver_tests;
 mod iterate;
+#[cfg(test)]
+mod resolved_read_tests;
+mod shared_access;
 mod slice_ops;
 #[cfg(test)]
 mod thread_exit_tests;
@@ -172,8 +175,8 @@ pub struct TypedArrayHeader {
     /// Element size in bytes (1, 2, 4, 8).
     pub elem_size: u8,
     /// Where element 0 lives: [`TA_STORAGE_INLINE`] (right after this
-    /// header) or [`TA_STORAGE_EXTERNAL`] (an `ArrayBuffer` backing or a
-    /// native arena, resolved through `data_ptr`). Byte 10 of the header;
+    /// header), [`TA_STORAGE_RESOLVED`] (a cached ArrayBuffer data pointer),
+    /// or [`TA_STORAGE_EXTERNAL`] (native/foreign storage). Byte 10 of the header;
     /// emitted code reads it, so the offset is part of the codegen contract.
     pub storage: u8,
     /// [`TA_FLAG_SHARED_BACKING`]; the rest are zero.
@@ -195,6 +198,20 @@ pub const TA_STORAGE_INLINE: u8 = 0;
 /// Set before the typed array can be read through its new backing, and never
 /// cleared while the header lives: a backing, once taken, is kept.
 pub const TA_STORAGE_EXTERNAL: u8 = 1;
+/// ArrayBuffer storage with a resolved pointer in the former inline region.
+/// The header stays 16 bytes; even empty owners reserve one pointer slot so
+/// observing `.buffer` can install this representation without moving the cell.
+pub const TA_STORAGE_RESOLVED: u8 = crate::codegen_abi::TA_STORAGE_RESOLVED;
+pub const TA_DATA_OFFSET: usize = crate::codegen_abi::TA_DATA_OFFSET;
+const _: () = assert!(std::mem::size_of::<TypedArrayHeader>() == TA_DATA_OFFSET);
+
+pub(crate) unsafe fn resolved_data(ta: *const TypedArrayHeader) -> *mut u8 {
+    *((ta as *const u8).add(TA_DATA_OFFSET) as *const *mut u8)
+}
+
+pub(crate) unsafe fn set_resolved_data(ta: *mut TypedArrayHeader, data: *mut u8) {
+    *((ta as *mut u8).add(TA_DATA_OFFSET) as *mut *mut u8) = data;
+}
 /// Byte offset of [`TypedArrayHeader::storage`], for emitted header reads.
 pub const TA_STORAGE_OFFSET: usize = 10;
 const _: () = assert!(std::mem::offset_of!(TypedArrayHeader, storage) == TA_STORAGE_OFFSET);
@@ -621,6 +638,8 @@ pub(crate) fn data_ptr(ta: *const TypedArrayHeader) -> *const u8 {
     unsafe {
         if (*ta).storage == TA_STORAGE_INLINE {
             (ta as *const u8).add(std::mem::size_of::<TypedArrayHeader>())
+        } else if (*ta).storage == TA_STORAGE_RESOLVED {
+            resolved_data(ta)
         } else if crate::native_arena::is_native_typed_view(ta) {
             crate::native_arena::native_view_data_ptr(ta)
         } else if let Some(p) = crate::typedarray_view::view_backing_data_ptr(ta as usize) {
@@ -684,6 +703,8 @@ pub(crate) fn data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
     unsafe {
         if (*ta).storage == TA_STORAGE_INLINE {
             (ta as *mut u8).add(std::mem::size_of::<TypedArrayHeader>())
+        } else if (*ta).storage == TA_STORAGE_RESOLVED {
+            resolved_data(ta)
         } else if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
             crate::native_arena::native_view_data_ptr_mut(ta)
         } else if let Some(p) = crate::typedarray_view::view_backing_data_ptr(ta as usize) {
@@ -965,7 +986,7 @@ unsafe fn native_memory_copy_accepts_buffer(addr: usize) -> bool {
 #[inline]
 fn typed_array_payload_size(capacity: u32, elem_size: usize) -> usize {
     let total = std::mem::size_of::<TypedArrayHeader>() + (capacity as usize) * elem_size;
-    total.max(std::mem::size_of::<TypedArrayHeader>() + elem_size)
+    total.max(std::mem::size_of::<TypedArrayHeader>() + std::mem::size_of::<*mut u8>())
 }
 
 /// Allocate a zero-filled typed array of `length` elements.
@@ -1109,12 +1130,38 @@ pub(crate) fn jsvalue_to_uint8(value: f64) -> u8 {
     to_uint32_bits(jsvalue_to_f64(value)) as u8
 }
 
+fn to_uint8_clamp(value: f64) -> u8 {
+    // ToUint8Clamp: NaN → 0, v ≤ 0 → 0, v ≥ 255 → 255,
+    // otherwise round-half-to-even then clamp.
+    if value.is_nan() || value <= 0.0 {
+        0u8
+    } else if value >= 255.0 {
+        255u8
+    } else {
+        let f = value.floor();
+        let frac = value - f;
+        let rounded = if frac > 0.5 {
+            f + 1.0
+        } else if frac < 0.5 {
+            f
+        } else if f % 2.0 == 0.0 {
+            f // round half to even
+        } else {
+            f + 1.0
+        };
+        rounded as u8
+    }
+}
+
 /// Store a number into the typed array slot, performing the per-kind cast.
 pub(crate) unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
     let kind = (*ta).kind;
     let elem_size = (*ta).elem_size as usize;
     let base = data_ptr_mut(ta);
     let off = idx * elem_size;
+    if (*ta).flags & TA_FLAG_SHARED_BACKING != 0 {
+        return shared_access::store(base.add(off), kind, value);
+    }
     match kind {
         KIND_INT8 => {
             let v = to_uint32_bits(value) as u8 as i8;
@@ -1124,26 +1171,7 @@ pub(crate) unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64)
             *base.add(off) = to_uint32_bits(value) as u8;
         }
         KIND_UINT8_CLAMPED => {
-            // ToUint8Clamp: NaN → 0, v ≤ 0 → 0, v ≥ 255 → 255,
-            // otherwise round-half-to-even then clamp.
-            let byte = if value.is_nan() || value <= 0.0 {
-                0u8
-            } else if value >= 255.0 {
-                255u8
-            } else {
-                let f = value.floor();
-                let frac = value - f;
-                let rounded = if frac > 0.5 {
-                    f + 1.0
-                } else if frac < 0.5 {
-                    f
-                } else if f % 2.0 == 0.0 {
-                    f // round half to even
-                } else {
-                    f + 1.0
-                };
-                rounded as u8
-            };
+            let byte = to_uint8_clamp(value);
             *base.add(off) = byte;
         }
         KIND_INT16 => {
@@ -1185,6 +1213,9 @@ pub(crate) unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
     let elem_size = (*ta).elem_size as usize;
     let base = data_ptr(ta);
     let off = idx * elem_size;
+    if (*ta).flags & TA_FLAG_SHARED_BACKING != 0 {
+        return shared_access::load(base.add(off), kind);
+    }
     match kind {
         KIND_INT8 => *(base.add(off) as *const i8) as f64,
         KIND_UINT8 | KIND_UINT8_CLAMPED => *base.add(off) as f64,

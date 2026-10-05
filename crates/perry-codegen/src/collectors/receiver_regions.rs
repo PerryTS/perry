@@ -344,6 +344,7 @@ pub(crate) struct ByteViewParamAccess {
 #[derive(Debug, Default)]
 pub(crate) struct ReceiverDescriptorTable {
     byte_view_params: std::collections::HashMap<u32, ByteViewParamAccess>,
+    typed_read_params: std::collections::HashMap<u32, String>,
     entries: Vec<ActiveReceiverDescriptor>,
     /// 5L (step5 DESIGN §4.1): the scoped Number-local sets, innermost last.
     /// Each is the set a guarded clone proved for its own body: the locals
@@ -357,6 +358,14 @@ pub(crate) struct ReceiverDescriptorTable {
 }
 
 impl ReceiverDescriptorTable {
+    pub(crate) fn materialize_typed_read_param(&mut self, receiver: u32, valid_i1: String) {
+        self.typed_read_params.insert(receiver, valid_i1);
+    }
+
+    pub(crate) fn typed_read_param(&self, receiver: u32) -> Option<&String> {
+        self.typed_read_params.get(&receiver)
+    }
+
     pub(crate) fn materialize_byte_view_param(
         &mut self,
         receiver: u32,

@@ -865,6 +865,9 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
         }
     }
     if let Expr::IndexGet { object, index } = expr {
+        if let Some(value) = super::ta_element_read::try_lower(ctx, object, index, true)? {
+            return Ok((value, true));
+        }
         if let Some(value) =
             super::ta_param_f64_read::try_lower_ta_f64_read_for_number_context(ctx, object, index)?
         {

@@ -1,0 +1,7 @@
+Speed up numeric typed-array element reads for Int8Array, Uint8ClampedArray, Int16Array, Uint16Array, Int32Array, Uint32Array, Float16Array, Float32Array and Float64Array, including ArrayBuffer views and owning arrays after `.buffer` is observed.
+
+ArrayBuffer-backed typed arrays now keep a resolved data pointer in their existing payload, with an explicit storage tag. The existing GC backing scanner refreshes that pointer when it rewrites the backing edge. Empty and short owning arrays reserve enough payload for the later pointer without changing the 16-byte header or inline element offset. Native disposable arenas and rebindable foreign buffers retain runtime resolution.
+
+Immutable synchronous parameters indexed in loops validate their receiver kind once at entry. Kind-specific reads retain live bounds and storage checks across resize, detach and `.buffer` exposure, use width-matched relaxed lane loads, and preserve signedness and numeric NaN canonicalization. Float16 reads decode exactly inline; stores keep the existing direct round-to-even conversion and Uint8Clamp rules. Runtime shared numeric accesses use relaxed atomic lanes, and resolved storage also removes backing lookups from writes.
+
+Coverage includes semantic Node parity, all binary16 encodings, synchronized worker aliases, live backing changes, GC pointer rewrite, and compiler acceptance checks that detect removal of the loop-entry proof.
