@@ -1637,14 +1637,6 @@
    "why": "TUI widget table of (i64 handle from NEXT_HANDLE, Node) where Node holds child handle ids, Strings, colors and styles; Rust-owned data, no addresses."
   },
   {
-   "file": "crates/perry-stdlib/src/crypto/hash_handles.rs",
-   "names": [
-    "CRYPTO_STREAM_PENDING_EVENTS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Queue of crypto Hash/Hmac stream events: a handle id into the process-global common::handle HANDLES DashMap plus owned bytes/encoding; the static itself holds no addresses."
-  },
-  {
    "file": "crates/perry-runtime/src/promise/mod.rs",
    "names": [
     "MT_RUN_COUNT"
