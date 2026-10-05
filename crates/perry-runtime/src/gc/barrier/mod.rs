@@ -332,10 +332,9 @@ thread_local! {
     /// `gc()` mixed in. Born-marked objects survive to the NEXT cycle —
     /// bounded floating garbage, already priced by the debt pacer.
     ///
-    /// Codegen's inline bump allocator does NOT read this flag. It shades and
-    /// seeds its initialized birth before publishing the handle instead
-    /// (`lower_call/new_alloc.rs`); generated root stores need no shade, even
-    /// in mutator windows after FinalRootRemark (#11929).
+    /// Codegen's inline bump allocator (lower_call.rs IR) does NOT read this
+    /// flag; codegen-born objects are ordinary JS values whose installs all
+    /// go through codegen store barriers → `incremental_mark_barrier_value`.
     /// The runtime choke points below cover every raw-install allocation.
     pub(crate) static GC_BIRTH_EXTRA_FLAGS: Cell<u8> = const { Cell::new(0) };
 

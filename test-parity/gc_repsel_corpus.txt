@@ -981,9 +981,3 @@ test_gap_gc_11862_array_cell_element_root
 # closure, whose stale pointer was the registry worker's "value is not a
 # function".
 test_gap_gc_worker_message_clone_rooting
-
-# #11929: generated mutable local/global roots use the collector's final
-# root remark instead of per-store shading; closure captures keep heap barriers.
-test_gap_gc_generated_root_final_remark
-# #11929/#11960: root-heavy stable homes during budgeted marking and copying GC.
-test_gap_gc_11929_stable_home_marking

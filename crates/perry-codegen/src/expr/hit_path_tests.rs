@@ -325,7 +325,7 @@ fn increment_has_a_call_free_double_arm() {
 }
 
 #[test]
-fn module_global_increment_uses_final_remark_instead_of_root_shading() {
+fn module_global_increment_gates_its_root_barrier() {
     let mut module = Module::new("global_update.ts");
     module.init.push(let_any(X, "g", Expr::Undefined));
     let bump = function(
@@ -359,13 +359,9 @@ fn module_global_increment_uses_final_remark_instead_of_root_shading() {
         "the double arm must not call:\n{body}"
     );
     assert!(
-        body.matches("store double").count() >= 2,
-        "both increment arms must update the registered global:\n{body}"
-    );
-    assert!(
-        !body.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT")
-            && !body.contains("@js_write_barrier_root_nanbox("),
-        "compiler-managed roots use FinalRootRemark, not per-store shading:\n{body}"
+        body.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT")
+            && body.contains("@js_write_barrier_root_nanbox("),
+        "the coercing arm's root store keeps its gated barrier:\n{body}"
     );
 }
 

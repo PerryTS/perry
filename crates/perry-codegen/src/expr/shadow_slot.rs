@@ -261,9 +261,9 @@ pub(crate) fn emit_shadow_slot_clear(ctx: &mut FnCtx<'_>, slot_idx: u32) {
 /// The alloca is entry-hoisted and initialized to `undefined`, so the early
 /// bind is valid even when the declaration itself sits in a loop or branch.
 /// Every later iteration writes the same alloca, which the GC scanner follows
-/// through `slot_ptrs`. FinalRootRemark rescans that alloca, so pointer-capable
-/// updates need neither repeated TLS rebinding nor per-store root shading; the
-/// lexical-death clear is removed as well.
+/// through `slot_ptrs`. Pointer-capable updates still emit the root shading
+/// barrier required when an incremental collection has already scanned roots;
+/// only the repeated TLS slot rebinding and lexical-death clear are removed.
 pub(crate) fn enable_persistent_shadow_slot_for_array_alias(
     ctx: &mut FnCtx<'_>,
     local_id: u32,
@@ -321,22 +321,23 @@ pub(crate) fn emit_shadow_slot_bind_for_local(ctx: &mut FnCtx<'_>, local_id: u32
 ///
 /// The caller owns the pairing of `slot_idx` and `slot_ptr`; everything else
 /// — the stack-map textual marker, the #7088 inline frame write, the FFI
-/// fallback, and the FinalRootRemark contract — is identical to a named
-/// local's bind, which is the point: a temp rooted through here is
-/// indistinguishable to the collector and to the RS4GC/stack-map lowering from
-/// a local.
+/// fallback, and the incremental root-shading barrier — is identical to a
+/// named local's bind, which is the point: a temp rooted through here is
+/// indistinguishable to the collector and to the RS4GC/stack-map lowering
+/// from a local.
 pub(crate) fn emit_shadow_slot_bind_ptr(ctx: &mut FnCtx<'_>, slot_idx: u32, slot_ptr: &str) {
     ctx.shadow_slots_bound.insert(slot_idx);
     if crate::codegen::helpers::native_stack_roots_enabled() {
         // Kept temporarily as a textual marker: LlFunction's final stack-map
         // lowering records `slot_idx -> slot_ptr` and removes this call.
-        // The slot needs no insertion barrier: budgeted collections rescan it
-        // during FinalRootRemark, while synchronous collections expose no
-        // intervening mutator window. See `emit_gated_root_nanbox_store`.
+        // The incremental root barrier remains real because the native slot
+        // can be updated after an in-flight cycle scanned this frame.
         ctx.block().call_void(
             "js_shadow_slot_bind",
             &[(I32, &slot_idx.to_string()), (PTR, slot_ptr)],
         );
+        let value_bits = ctx.block().load(I64, slot_ptr);
+        emit_persistent_shadow_root_barrier(ctx, &value_bits);
         return;
     }
     // #7088: the hot per-store root write. Emitted inline against this
@@ -349,6 +350,47 @@ pub(crate) fn emit_shadow_slot_bind_ptr(ctx: &mut FnCtx<'_>, slot_idx: u32, slot
         "js_shadow_slot_bind",
         &[(I32, &slot_idx.to_string()), (PTR, slot_ptr)],
     );
+}
+
+/// Emit the incremental-mark root shading barrier for a value that has just
+/// been written into an already-bound (persistent) root slot.
+///
+/// This is the only part of `js_shadow_slot_bind` that is genuinely per-store:
+/// re-recording `slot_ptrs[idx]` and re-mirroring the value are loop-invariant
+/// for an entry-hoisted alloca, but a pointer stored into a root *after* the
+/// collector scanned roots still has to be shaded. Guarding on
+/// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` inline keeps the common
+/// (no incremental cycle in flight) path down to a load, a compare, and a
+/// not-taken branch instead of a TLS-touching call. The load is LLVM
+/// `monotonic`, matching the runtime's Rust `Relaxed` readers: the counter is
+/// only a gate and does not publish accompanying memory.
+pub(crate) fn emit_persistent_shadow_root_barrier(ctx: &mut FnCtx<'_>, value_bits: &str) {
+    // #8583-followup: if computing the value diverged (a throwing sub-expression
+    // — e.g. a TDZ access on a captured `let` — emitted `unreachable`), the
+    // current block is terminated. `LlBlock` drops instructions emitted after a
+    // terminator, so `value_bits`' defining instruction was silently discarded;
+    // the barrier block created below would then reference an undefined register
+    // ("register %rN used but never defined"). The root store is unreachable on
+    // this path, so emit no barrier.
+    if ctx.block().is_terminated() {
+        return;
+    }
+    let active =
+        ctx.block()
+            .load_atomic_monotonic(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
+    let barrier_needed = ctx.block().icmp_ne(I32, &active, "0");
+    let barrier_idx = ctx.new_block("shadow.root.barrier");
+    let done_idx = ctx.new_block("shadow.root.barrier.done");
+    let barrier_label = ctx.block_label(barrier_idx);
+    let done_label = ctx.block_label(done_idx);
+    ctx.block()
+        .cond_br(&barrier_needed, &barrier_label, &done_label);
+
+    ctx.current_block = barrier_idx;
+    ctx.block()
+        .call_void("js_write_barrier_root_nanbox", &[(I64, value_bits)]);
+    ctx.block().br(&done_label);
+    ctx.current_block = done_idx;
 }
 
 /// #9081: root the pointer locals of a constructor body spliced inline into
@@ -406,7 +448,7 @@ pub(crate) fn root_inlined_ctor_pointer_locals(
 pub(crate) fn emit_shadow_slot_update_for_expr(
     ctx: &mut FnCtx<'_>,
     local_id: u32,
-    _value_reg: &str,
+    value_reg: &str,
     rhs: &Expr,
 ) {
     // A clone-scoped Number local (5L): the clone's entry test checked its
@@ -426,8 +468,10 @@ pub(crate) fn emit_shadow_slot_update_for_expr(
         return;
     };
     if ctx.persistent_shadow_slots.contains(&slot_idx) {
-        // The collector reads the bound alloca directly. FinalRootRemark is
-        // the insertion barrier for generated roots; no per-store code.
+        if !expr_is_known_non_pointer_shadow_value(ctx, rhs) {
+            let value_bits = ctx.block().bitcast_double_to_i64(value_reg);
+            emit_persistent_shadow_root_barrier(ctx, &value_bits);
+        }
         return;
     }
     if expr_is_known_non_pointer_shadow_value(ctx, rhs) {
