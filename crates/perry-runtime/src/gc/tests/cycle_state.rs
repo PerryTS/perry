@@ -1453,6 +1453,9 @@ fn final_remark_preserves_unshaded_generated_global_root() {
     );
 }
 
+#[path = "cycle_state/root_remark.rs"]
+mod root_remark;
+
 #[test]
 fn full_cycle_path_module_root_store_after_root_scan_preserves_new_value() {
     let _guard = CopyingNurseryTestGuard::new(0);

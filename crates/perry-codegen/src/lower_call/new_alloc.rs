@@ -830,7 +830,31 @@ fn emit_instance_alloc_inner(
             // function-call path returned). Convert to i64 to match what
             // the existing nanbox_pointer_inline expects.
             let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
-            blk.ptrtoint(&user_ptr, I64)
+            let handle = blk.ptrtoint(&user_ptr, I64);
+
+            // The packed header is white. Unlike runtime allocations, neither
+            // inline arm stamps/seeds a black birth. FinalRootRemark is the
+            // LAST root scan, and later RS/weak slices still open mutator
+            // windows: shade this fully initialized birth before exposing its
+            // handle to roots or a constructor. The existing helper is a GC
+            // leaf; no unrooted handle crosses a collecting call here.
+            let active = ctx.block().load_atomic_monotonic(
+                I32,
+                "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT",
+                4,
+            );
+            let marking = ctx.block().icmp_ne(I32, &active, "0");
+            let birth_idx = ctx.new_block("alloc.birth.shade");
+            let done_idx = ctx.new_block("alloc.birth.done");
+            let birth_label = ctx.block_label(birth_idx);
+            let done_label = ctx.block_label(done_idx);
+            ctx.block().cond_br(&marking, &birth_label, &done_label);
+            ctx.current_block = birth_idx;
+            ctx.block()
+                .call_void("js_write_barrier_root_heap_word", &[(I64, &handle)]);
+            ctx.block().br(&done_label);
+            ctx.current_block = done_idx;
+            handle
         }
     } else {
         // Fallback: build the packed-keys string at this site and

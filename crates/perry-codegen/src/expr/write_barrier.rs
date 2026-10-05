@@ -151,9 +151,10 @@ const GC_FLAG_TENURED_I8: &str = "32"; // 0x20
 ///    `INCREMENTAL_MARK_BARRIER_VALID_PTRS` is null, because
 ///    `incremental_mark_barrier_enable` increments the count BEFORE installing
 ///    the thread-local, while disable clears the thread-local BEFORE
-///    decrementing the count. This is the same gate, on the same global, that
-///    `expr/shadow_inline.rs` and `expr/shadow_slot.rs` already emit for the
-///    root shading barrier. It is an LLVM `monotonic` load (Rust `Relaxed`):
+///    decrementing the count. Inline allocation birth shading in
+///    `lower_call/new_alloc.rs` uses the same gate and global. Generated root
+///    stores themselves need no shade (#11929). This is an LLVM `monotonic`
+///    load (Rust `Relaxed`):
 ///    the counter is authoritative state, not a publication fence for other
 ///    memory.
 ///

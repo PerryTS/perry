@@ -483,6 +483,55 @@ fn a_self_recursive_function_inlines_its_bump_allocator() {
     );
 }
 
+#[test]
+fn inline_object_birth_is_shaded_after_initialization_before_publication() {
+    assert_inline_new_not_forced();
+    let ir = ir_for(walk_module(true));
+    let needle = "call void @js_write_barrier_root_heap_word(i64 ";
+    // Specialization may clone the allocation into generic and fast bodies.
+    // Count emitted allocation sites, not source-level `new` expressions.
+    let allocations = ir.matches(INLINE_SLOW_CALL).count();
+    assert!(allocations > 0, "the inline birth subject must be live");
+    assert_eq!(
+        ir.matches(needle).count(),
+        allocations,
+        "each emitted allocation needs one birth shade, not per-root-store shading:\n{ir}"
+    );
+    for (shade_at, _) in ir.match_indices(needle) {
+        let function_start = ir[..shade_at].rfind("\ndefine ").unwrap_or(0);
+        let function_end = ir[shade_at..]
+            .find("\ndefine ")
+            .map_or(ir.len(), |offset| shade_at + offset);
+        let body = &ir[function_start..function_end];
+        let merge_at = body.find("\nalloc.merge").expect("inline allocation merge");
+        let merge_tail = &body[merge_at..];
+        let initialize_at = merge_tail
+            .find(HEADER_IMAGE_STORE)
+            .expect("header initialization");
+        let gate_at = merge_tail
+            .find("load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT monotonic")
+            .expect("birth shade must be gated while idle");
+        let handle = ir[shade_at + needle.len()..].split(')').next().unwrap();
+        let handle_at = merge_tail
+            .find(&format!("{handle} = ptrtoint ptr "))
+            .expect("shade the actual newborn handle");
+        assert!(
+            initialize_at < handle_at && handle_at < gate_at,
+            "initialize before birth publication:\n{body}"
+        );
+        assert!(
+            merge_tail.contains("br i1 ") && merge_tail.contains("label %alloc.birth.shade"),
+            "gate must dominate the shade call:\n{body}"
+        );
+        // Both raw allocation arms merge BEFORE initialization/shading; a slow
+        // allocation must not escape merely because the fast branch was exhausted.
+        assert!(
+            merge_tail[..initialize_at].contains("phi ptr "),
+            "both raw allocation arms need the birth operation:\n{body}"
+        );
+    }
+}
+
 /// #8591: the public entry resolves the thread's stable arena state once, and
 /// the internal recursive body forwards it through every self call.
 #[test]
