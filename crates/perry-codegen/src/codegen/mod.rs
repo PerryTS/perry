@@ -2537,10 +2537,27 @@ fn compile_module_impl(
                 &class_ids,
             );
             births.extend(class_finals);
+            let widths = hir
+                .classes
+                .iter()
+                .map(|class| {
+                    let lookup = |name: &str| class_table.get(name).copied();
+                    (
+                        class.name.clone(),
+                        class.fields.len() as u32
+                            + crate::lower_call::new_alloc::birth_slack_in(
+                                class,
+                                &lookup,
+                                &anon_key_adds,
+                            ),
+                    )
+                })
+                .collect();
             births.extend(static_constfn::module_literal_finals(
                 hir,
                 &module_prefix,
                 &reps,
+                &widths,
             ));
         }
         if opts.output_type == "executable" {

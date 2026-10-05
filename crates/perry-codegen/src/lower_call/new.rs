@@ -128,8 +128,16 @@ fn lower_new_impl(
             {
                 let bits = ctx.block().bitcast_double_to_i64(&boxed);
                 let handle = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-                let handle =
-                    crate::codegen::static_constfn::finalize_literal(ctx, &props, rep, &handle);
+                let class = ctx.classes[class_name];
+                let live = class.fields.len() as u32
+                    + super::new_alloc::birth_slack_in(
+                        class,
+                        &|name| ctx.classes.get(name).copied(),
+                        ctx.anon_key_adds,
+                    );
+                let handle = crate::codegen::static_constfn::finalize_literal(
+                    ctx, &props, rep, &handle, live,
+                );
                 return nanbox_pointer_inline(ctx.block(), &handle);
             }
         }
