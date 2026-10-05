@@ -1718,8 +1718,6 @@ pub struct ObjectHeader {
     pub meta: *mut ObjectMeta,
 }
 
-// `ObjectKeys` lives in `object_keys.rs`.
-
 /// Return the receiver's ordered keys, derived from its authoritative ShapeId
 /// descriptor: the keys array and the shape's key count. #8047 removed the
 /// per-object header mirror; this is the sole runtime spelling for consumers
@@ -1729,21 +1727,20 @@ pub(crate) unsafe fn object_keys(obj: *const ObjectHeader) -> ObjectKeys {
     object_keys_and_live_slot_count(obj).0
 }
 
-/// [`object_keys`] and [`object_live_slot_count`] together, from ONE shape
-/// table probe. A walk that needs both — `JSON.stringify` visits every object
-/// this way — otherwise pays the probe twice (#10696).
+/// Receiver keys and inline bound, read from one borrowed shape record.
+/// Dictionary shapes delegate the key list to their receiver.
 #[inline]
 pub(crate) unsafe fn object_keys_and_live_slot_count(
     obj: *const ObjectHeader,
 ) -> (ObjectKeys, u32) {
-    let Some(descriptor) = shapes::object_shape_descriptor(obj) else {
+    let Some(record) = shapes::object_shape_record(obj) else {
         return (ObjectKeys::NONE, 0);
     };
-    let live_slots = descriptor.live_inline_slot_count;
-    if descriptor.keys != 0 {
+    let live_slots = record.live_inline_slot_count();
+    if record.keys() != 0 {
         let keys = ObjectKeys::new(
-            descriptor.keys as usize as *mut ArrayHeader,
-            descriptor.logical_key_count,
+            record.keys() as usize as *mut ArrayHeader,
+            record.logical_key_count(),
         );
         return (keys, live_slots);
     }
@@ -1767,13 +1764,13 @@ pub(crate) unsafe fn object_keys_and_live_slot_count(
 pub(crate) unsafe fn object_keys_and_live_slots(
     obj: *const ObjectHeader,
 ) -> Option<(ObjectKeys, u32)> {
-    shapes::object_shape_descriptor(obj).map(|descriptor| {
+    shapes::object_shape_record(obj).map(|record| {
         (
             ObjectKeys::new(
-                descriptor.keys as usize as *mut ArrayHeader,
-                descriptor.logical_key_count,
+                record.keys() as usize as *mut ArrayHeader,
+                record.logical_key_count(),
             ),
-            descriptor.live_inline_slot_count,
+            record.live_inline_slot_count(),
         )
     })
 }
