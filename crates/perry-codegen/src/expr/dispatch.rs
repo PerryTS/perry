@@ -103,7 +103,24 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let strict = ctx.is_strict_fn;
             super::property_set::lower(ctx, expr, strict)
         }
-        Expr::PropertyGet { .. } => super::property_get::lower(ctx, expr),
+        Expr::PropertyGet {
+            object, property, ..
+        } => match object.as_ref() {
+            // `s.length` reads the binding only to measure it: the string
+            // cannot escape through a length read (a string's `length` is an
+            // own data property, so no getter runs with the string as `this`).
+            // Skipping the unique-owner demote for exactly that read keeps an
+            // accumulator measured between appends (`linePos = output.length`)
+            // on the in-place append path instead of copying the whole
+            // accumulator on the next `+=`.
+            Expr::LocalGet(id) if property == "length" => {
+                let saved = ctx.string_length_read_of.replace(*id);
+                let result = super::property_get::lower(ctx, expr);
+                ctx.string_length_read_of = saved;
+                result
+            }
+            _ => super::property_get::lower(ctx, expr),
+        },
         Expr::Conditional { .. } => super::conditional::lower(ctx, expr),
         Expr::ArrayPush { .. } | Expr::ArrayPushSpread { .. } => {
             super::array_push::lower(ctx, expr, value_discarded)

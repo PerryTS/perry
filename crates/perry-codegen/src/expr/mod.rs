@@ -727,6 +727,13 @@ pub(crate) struct FnCtx<'a> {
     pub compiler_private_async_i1_control_locals: &'a std::collections::HashSet<u32>,
     /// Module-wide scope context object groups (`crate::scope_env`).
     pub scope_map: &'a crate::scope_env::ScopeMap,
+    /// Module-wide untyped string accumulators
+    /// (`collectors::string_accumulator_locals`): selected for the in-place
+    /// self-append and demoted on ordinary reads, like a declared `string`.
+    pub string_accumulator_locals: &'a std::collections::HashSet<u32>,
+    /// Set while lowering `<id>.length`: that read of `id` cannot hand the
+    /// string anywhere, so it skips the unique-owner demote.
+    pub string_length_read_of: Option<u32>,
     /// Closure rest param index: closure `FuncId` → index of the rest
     /// parameter. Built once in `compile_module` from the collected
     /// closures. Used by the closure call site in `lower_call` to

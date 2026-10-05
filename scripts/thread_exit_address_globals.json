@@ -377,7 +377,7 @@
     "REGISTRY"
    ],
    "verdict": "no_heap_address",
-   "why": "function_name_registry: compiled function code address (func_ptr) -> &'static name bytes in the image, written only by js_register_function_name_static from codegen module init; keys are code addresses. | (second declaration) function_source_registry (fn_metadata.rs:343): func_ptr code address -> &'static source bytes in the image, written by js_register_function_source_static from codegen module init."
+   "why": "function_name_registry: compiled function code address (func_ptr) -> &'static name bytes in the image, written only by js_register_function_name_static from codegen module init; keys are code addresses. | (second declaration) function_source_registry (fn_metadata.rs): func_ptr code address -> &'static source bytes in the image, retained for raw method/accessor bodies and other callables without an ordinary per-body JsFunctionInfo source record."
   },
   {
    "file": "crates/perry-runtime/src/builtins/fn_metadata.rs",

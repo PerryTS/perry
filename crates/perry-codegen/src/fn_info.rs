@@ -26,8 +26,8 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::runtime_abi::{
     FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_COMPILED_BODY, FN_GENERATOR, FN_HAS_DECLARED,
-    FN_HAS_LENGTH, FN_NON_CONSTRUCTOR, FN_PERMANENT_IMAGE, FN_REST_SYNTHETIC_ARGUMENTS,
-    FN_REST_USER, FN_REST_USER_AND_ARGUMENTS, FN_STRICT,
+    FN_HAS_LENGTH, FN_HAS_SOURCE, FN_NON_CONSTRUCTOR, FN_NON_STRICT_ORDINARY, FN_PERMANENT_IMAGE,
+    FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER, FN_REST_USER_AND_ARGUMENTS, FN_STRICT,
 };
 
 /// The LLVM type of a `JsFunctionInfo`, field for field (perry-abi's
@@ -54,6 +54,17 @@ pub(crate) struct CloneTarget {
     pub boxed_mask: u64,
 }
 
+/// Retained `Function.prototype.toString` bytes for a permanent compiled
+/// body. The emitted info carries a relative displacement, never an absolute
+/// image pointer, so the loader has no per-function relocation to process.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct RetainedSource {
+    pub global: String,
+    pub offset: usize,
+    pub byte_len: usize,
+    pub is_non_strict_ordinary: bool,
+}
+
 /// What the module knows about one of its bodies beyond its parameter
 /// count, which comes from the body's definition.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -64,6 +75,7 @@ pub(crate) struct FnInfoFacts {
     pub declared: u16,
     pub trusted: Option<CloneTarget>,
     pub versioned: Option<CloneTarget>,
+    pub source: Option<RetainedSource>,
 }
 
 /// The rest kind of a body with a rest / `arguments` array.
@@ -124,6 +136,10 @@ impl FnInfoFacts {
     /// `async function*`: async and async-generator both.
     pub(crate) fn set_async_generator(&mut self) {
         self.flags |= FN_ASYNC_GENERATOR | FN_ASYNC;
+    }
+
+    pub(crate) fn set_source(&mut self, source: RetainedSource) {
+        self.source = Some(source);
     }
 }
 
@@ -232,30 +248,85 @@ fn render_definition(
     };
     let (trusted_code, trusted_captures, trusted_mask) = clone(&facts.trusted);
     let (versioned_code, versioned_captures, versioned_mask) = clone(&facts.versioned);
-    format!(
-        "@{info} = {linkage}constant {ty} {{ ptr @{body}, i16 {params}, i16 {rest}, i32 {flags}, \
-         i32 {length}, i32 {tcap}, ptr {tcode}, i64 {tmask}, ptr {vcode}, i32 {vcap}, \
-         i16 {declared}, i16 0, i64 {vmask} }}",
-        info = info_symbol(body),
-        ty = INFO_TYPE,
-        params = saturate_u16(def.params as u64),
-        rest = facts.rest_fixed,
-        // Every body this renders is compiled source (`FN_COMPILED_BODY`).
-        flags = facts.flags
-            | FN_COMPILED_BODY
-            | if permanent_image {
-                FN_PERMANENT_IMAGE
+    let info = info_symbol(body);
+    let source_flags = facts.source.as_ref().map_or(0, |source| {
+        FN_HAS_SOURCE
+            | if source.is_non_strict_ordinary {
+                FN_NON_STRICT_ORDINARY
             } else {
                 0
-            },
+            }
+    });
+    let flags = facts.flags
+        | FN_COMPILED_BODY
+        | source_flags
+        | if permanent_image {
+            FN_PERMANENT_IMAGE
+        } else {
+            0
+        };
+    let source_encoding = facts.source.as_ref().map(|source| {
+        let source_ptr = if source.offset == 0 {
+            format!("@{}", source.global)
+        } else {
+            format!(
+                "getelementptr (i8, ptr @{}, i64 {})",
+                source.global, source.offset
+            )
+        };
+        let delta = format!(
+            "sub (i64 ptrtoint (ptr {source_ptr} to i64), \
+             i64 ptrtoint (ptr @{info} to i64))"
+        );
+        let byte_len = u32::try_from(source.byte_len)
+            .expect("a retained function source must fit the u32 info encoding");
+        (delta, byte_len)
+    });
+    // A versioned clone owns the final mask word. Almost every function has
+    // no such clone, so use that already-present word for source metadata and
+    // keep its JsFunctionInfo at the common 64-byte size. The rare body with
+    // both features uses the optional tail below.
+    let source_in_mask = source_encoding.is_some() && facts.versioned.is_none();
+    let versioned_captures_value = if source_in_mask {
+        source_encoding.as_ref().unwrap().1
+    } else {
+        versioned_captures
+    };
+    let versioned_mask_value = if source_in_mask {
+        source_encoding.as_ref().unwrap().0.clone()
+    } else {
+        (versioned_mask as i64).to_string()
+    };
+    let value = format!(
+        "{{ ptr @{body}, i16 {params}, i16 {rest}, i32 {flags}, i32 {length}, i32 {tcap}, \
+         ptr {tcode}, i64 {tmask}, ptr {vcode}, i32 {vcap}, i16 {declared}, i16 0, \
+         i64 {vmask} }}",
+        params = saturate_u16(def.params as u64),
+        rest = facts.rest_fixed,
         length = facts.length,
         tcap = trusted_captures,
         tcode = trusted_code,
         tmask = trusted_mask as i64,
         vcode = versioned_code,
-        vcap = versioned_captures,
+        vcap = versioned_captures_value,
         declared = facts.declared,
-        vmask = versioned_mask as i64,
+        vmask = versioned_mask_value,
+    );
+    let Some(_source) = facts.source else {
+        return format!("@{info} = {linkage}constant {INFO_TYPE} {value}");
+    };
+    if source_in_mask {
+        return format!("@{info} = {linkage}constant {INFO_TYPE} {value}");
+    }
+    // The info remains the first field, so every existing opaque `ptr
+    // @<body>$info` addresses a byte-for-byte JsFunctionInfo. Only the flag
+    // licenses reading the compact tail at +JS_FUNCTION_INFO_SIZE.
+    let (delta, byte_len) = source_encoding.unwrap();
+    let relative = format!("trunc (i64 {delta} to i32)");
+    format!(
+        "@{info} = {linkage}constant {{ {INFO_TYPE}, i32, i32 }} \
+         {{ {INFO_TYPE} {value}, i32 {relative}, i32 {} }}",
+        byte_len
     )
 }
 
@@ -396,5 +467,57 @@ mod tests {
             "{}",
             lines[0]
         );
+    }
+
+    #[test]
+    fn retained_source_reuses_the_idle_versioned_mask_word() {
+        let mut state = FnInfoState::default();
+        state
+            .facts_mut("perry_closure_m__9")
+            .set_source(RetainedSource {
+                global: "m_.perry.retained_source".to_string(),
+                offset: 17,
+                byte_len: 31,
+                is_non_strict_ordinary: true,
+            });
+        let lines = state.render_globals(|_| defined(0, "internal"), [], true);
+        assert_eq!(lines.len(), 1);
+        let line = &lines[0];
+        assert!(line.contains(&format!(
+            "i32 {}",
+            FN_COMPILED_BODY | FN_PERMANENT_IMAGE | FN_HAS_SOURCE | FN_NON_STRICT_ORDINARY
+        )));
+        assert!(!line.contains(&format!("{{ {INFO_TYPE}, i32, i32 }}")));
+        assert!(
+            line.contains("ptr getelementptr (i8, ptr @m_.perry.retained_source, i64 17) to i64")
+        );
+        assert!(line.contains("ptr @perry_closure_m__9$info to i64"));
+        assert!(line.contains("ptr null, i32 31"));
+        assert!(line.contains("i64 sub (i64 ptrtoint"));
+        assert!(line.ends_with(")) }"));
+    }
+
+    #[test]
+    fn retained_source_uses_a_tail_when_the_versioned_mask_is_live() {
+        let mut state = FnInfoState::default();
+        let facts = state.facts_mut("perry_closure_m__9");
+        facts.versioned = Some(CloneTarget {
+            symbol: "perry_closure_m__9$versioned".to_string(),
+            captures: 2,
+            boxed_mask: 5,
+        });
+        facts.set_source(RetainedSource {
+            global: "m_.perry.retained_source".to_string(),
+            offset: 0,
+            byte_len: 31,
+            is_non_strict_ordinary: false,
+        });
+        let line = state
+            .render_globals(|_| defined(0, "internal"), [], true)
+            .remove(0);
+        assert!(line.contains(&format!("{{ {INFO_TYPE}, i32, i32 }}")));
+        assert!(line.contains("ptr @perry_closure_m__9$versioned"));
+        assert!(line.contains("i64 5 }"));
+        assert!(line.ends_with("i32 31 }"));
     }
 }
