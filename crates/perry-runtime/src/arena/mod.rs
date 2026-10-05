@@ -154,7 +154,7 @@ pub(crate) use quarantine::{
 pub use quarantine::{quarantine_stats, QuarantineStats};
 
 // stats.rs
-pub(crate) use stats::{active_survivor_space, inactive_survivor_space};
+pub(crate) use stats::{active_survivor_space, allocation_totals, inactive_survivor_space};
 pub use stats::{
     arena_live_allocated_bytes, js_arena_stats, longlived_in_use_bytes, old_gen_in_use_bytes,
     pointer_in_nursery, pointer_in_old_gen,

@@ -764,6 +764,7 @@ pub(super) fn external_side_parse_pressure_due() -> bool {
 /// arms use `force_full_scan`), which also keeps it non-moving, so raw
 /// header pointers held by the caller stay valid across the call.
 pub(crate) fn gc_note_external_side_alloc(bytes: usize) {
+    super::allocation_pacing::note_allocation(bytes, bytes >= 16 * 1024);
     GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_add(bytes)));
     let due = GC_EXTERNAL_SIDE_ALLOC_PENDING.with(|c| {
         let now = c.get().saturating_add(bytes);
@@ -3231,6 +3232,13 @@ pub fn gc_check_trigger() {
     gc_check_trigger_inlined();
 }
 
+/// A budgeted minor holds IN_ALLOC for the whole cycle, including mutator
+/// windows. Exclude only actual collector work from allocation debt.
+#[inline(always)]
+pub(super) fn allocation_pacing_collector_active() -> bool {
+    GC_BUDGETED_STEP_ACTIVE.with(Cell::get) || super::allocation_pacing::collector_step_active()
+}
+
 /// [`gc_check_trigger`] with its fast path inlined into the caller, for
 /// `gc_malloc` — the one caller that runs it once per allocation.
 #[inline(always)]
@@ -3807,7 +3815,10 @@ fn gc_budgeted_due_trigger_probe() -> (Option<BudgetedGcTrigger>, bool, TriggerW
     let old_reclaimable = old_gen_reclaimable_pressure_bytes();
     let old_in_use = old_reclaimable.saturating_add(external_side_old_reclaim_pressure_bytes());
     let old_baseline = GC_LAST_OLD_RECLAIM_IN_USE_BYTES.with(|bytes| bytes.get());
-    if old_pending || old_reclaim_pressure_due(old_in_use, old_baseline) {
+    if old_pending
+        || super::allocation_pacing::due(old_in_use, false)
+        || old_reclaim_pressure_due(old_in_use, old_baseline)
+    {
         return (Some(BudgetedGcTrigger::OldReclaim), true, RETIRED);
     }
 
@@ -4186,6 +4197,7 @@ struct BudgetedGcStepGuard;
 
 impl BudgetedGcStepGuard {
     fn enter() -> Option<Self> {
+        super::allocation_pacing::checkpoint();
         GC_BUDGETED_STEP_ACTIVE.with(|active| {
             if active.get() {
                 None
@@ -4213,6 +4225,7 @@ fn gc_start_budgeted_full_cycle(
     // stack-map index must be built here while allocation is still legal.
     // Otherwise the first root-scan step reaches #9182's fail-closed guard
     // with an owed index and aborts.
+    crate::arena::sync_inline_arena_state();
     super::roots::ensure_stack_maps_built();
     super::verify::verify_array_hole_tails_at_collection();
     let mut state = GcCycleState::new_full(GcTriggerSnapshot::capture(trigger_kind));
@@ -4243,6 +4256,7 @@ fn gc_start_budgeted_minor_fallback_cycle_with_snapshot(
     progress_kind: GcProgressKind,
 ) -> BudgetedGcCycle {
     // Same direct-constructor path as gc_start_budgeted_full_cycle above.
+    crate::arena::sync_inline_arena_state();
     super::roots::ensure_stack_maps_built();
     super::verify::verify_array_hole_tails_at_collection();
     let prev_in_alloc = GC_FLAGS.with(|f| {
