@@ -748,7 +748,7 @@ fn pump_worker_microtasks() {
         // agent, so this settles only promises in this worker's heap): a
         // fetch's response lands here once a turn of the worker's own loop
         // collects it, and nothing else ever settles it.
-        ran += crate::common::async_bridge::js_stdlib_process_pending();
+        ran += crate::worker_threads::async_shim::js_stdlib_process_pending();
         // Extension events this worker made (its zlib streams): their queues
         // are per agent, and only this thread may deliver them.
         ran += unsafe { js_run_agent_pumps() };
