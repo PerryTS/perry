@@ -984,3 +984,7 @@ test_gap_gc_worker_message_clone_rooting
 
 # Literal birth capacity: reserved slots, deletion/re-addition and beyond-cap spill.
 test_gap_addkey_born_wide_11497
+# #11931: function attribute edges across incremental/minor GC and agent exit.
+test_gap_gc_11931_function_attrs_incremental
+test_gap_gc_11931_function_attrs_old_minor
+test_gap_gc_11931_function_attrs_worker

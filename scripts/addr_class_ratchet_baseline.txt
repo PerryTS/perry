@@ -102,7 +102,7 @@ handle-floor | crates/perry-runtime/src/object/async_generator_queue.rs | 1
 handle-floor | crates/perry-runtime/src/object/buffer_dispatch.rs | 2
 handle-floor | crates/perry-runtime/src/object/dataview_proto_thunks.rs | 1
 handle-floor | crates/perry-runtime/src/object/delete_rest.rs | 1
-handle-floor | crates/perry-runtime/src/object/descriptor_state.rs | 1
+handle-floor | crates/perry-runtime/src/object/descriptor_state/integrity.rs | 1
 handle-floor | crates/perry-runtime/src/object/descriptors.rs | 1
 handle-floor | crates/perry-runtime/src/object/field_get_set/accessors.rs | 2
 handle-floor | crates/perry-runtime/src/object/field_get_set/entries_shape.rs | 1

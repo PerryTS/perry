@@ -6,6 +6,7 @@ mod bound_method_builder;
 mod call_argument_lists;
 mod callback_scanners;
 mod fs_options_object;
+mod function_attrs_old_minor;
 mod generator_attach_prototype;
 mod handle_stack;
 mod hidden_keys;

@@ -124,7 +124,7 @@
 7 crates/perry-runtime/src/object/native_call_method/string_methods.rs
 4 crates/perry-runtime/src/object/native_module.rs
 19 crates/perry-runtime/src/object/native_module/async_hooks_exports.rs
-26 crates/perry-runtime/src/object/native_module/callable_exports.rs
+24 crates/perry-runtime/src/object/native_module/callable_exports.rs
 6 crates/perry-runtime/src/object/object_literal_ops.rs
 2 crates/perry-runtime/src/object/object_ops/define_property.rs
 2 crates/perry-runtime/src/object/object_ops/descriptor_helpers.rs
@@ -169,3 +169,4 @@
 19 crates/perry-runtime/src/wasi.rs
 4 crates/perry-runtime/src/weakref.rs
 19 crates/perry-runtime/src/webassembly.rs
+2 crates/perry-runtime/src/object/native_module/callable_exports/builtin_closure_metadata.rs  # moved-from: crates/perry-runtime/src/object/native_module/callable_exports.rs
