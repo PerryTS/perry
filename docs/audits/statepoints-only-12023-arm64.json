@@ -1,0 +1,2919 @@
+{
+  "disposition": "blocked by Mac disk guard; no performance candidate promoted",
+  "base": "f969b820f69e904a9f04dde9d7f8dcc216938127",
+  "tested_head": "7547283b4a1af6a883e3d3c89fd8107bd1c237da",
+  "coordinator_arm64_base": "d3098e903ff9e68cec2a900b9baf3143445d195c",
+  "coordinator_arm64_head": "a0037eeb3084aa733633707a35e9e24662b65aa3",
+  "guard_failure": "DISK GUARD STOP: 14.869 GiB",
+  "flags": "shipping release; Rust target x86-64-v2 via cargo --config build.rustflags, generated code PERRY_TARGET_CPU=x86-64-v2; identical package/feature graph",
+  "native_hello": [
+    {
+      "pair": 0,
+      "arm": "base",
+      "instructions": 1203707
+    },
+    {
+      "pair": 0,
+      "arm": "head",
+      "instructions": 1204582
+    },
+    {
+      "pair": 0,
+      "arm": "cell",
+      "instructions": 1203802
+    },
+    {
+      "pair": 1,
+      "arm": "base",
+      "instructions": 1203642
+    },
+    {
+      "pair": 1,
+      "arm": "head",
+      "instructions": 1204544
+    },
+    {
+      "pair": 1,
+      "arm": "cell",
+      "instructions": 1203826
+    },
+    {
+      "pair": 2,
+      "arm": "base",
+      "instructions": 1203635
+    },
+    {
+      "pair": 2,
+      "arm": "head",
+      "instructions": 1204577
+    },
+    {
+      "pair": 2,
+      "arm": "cell",
+      "instructions": 1203809
+    },
+    {
+      "pair": 3,
+      "arm": "base",
+      "instructions": 1203650
+    },
+    {
+      "pair": 3,
+      "arm": "head",
+      "instructions": 1204528
+    },
+    {
+      "pair": 3,
+      "arm": "cell",
+      "instructions": 1203816
+    },
+    {
+      "pair": 4,
+      "arm": "base",
+      "instructions": 1203633
+    },
+    {
+      "pair": 4,
+      "arm": "head",
+      "instructions": 1204556
+    },
+    {
+      "pair": 4,
+      "arm": "cell",
+      "instructions": 1203822
+    },
+    {
+      "pair": 5,
+      "arm": "base",
+      "instructions": 1203633
+    },
+    {
+      "pair": 5,
+      "arm": "head",
+      "instructions": 1204564
+    },
+    {
+      "pair": 5,
+      "arm": "cell",
+      "instructions": 1203834
+    },
+    {
+      "pair": 6,
+      "arm": "base",
+      "instructions": 1203672
+    },
+    {
+      "pair": 6,
+      "arm": "head",
+      "instructions": 1204587
+    },
+    {
+      "pair": 6,
+      "arm": "cell",
+      "instructions": 1203824
+    },
+    {
+      "pair": 7,
+      "arm": "base",
+      "instructions": 1203636
+    },
+    {
+      "pair": 7,
+      "arm": "head",
+      "instructions": 1204630
+    },
+    {
+      "pair": 7,
+      "arm": "cell",
+      "instructions": 1203818
+    },
+    {
+      "pair": 8,
+      "arm": "base",
+      "instructions": 1203648
+    },
+    {
+      "pair": 8,
+      "arm": "head",
+      "instructions": 1204581
+    },
+    {
+      "pair": 8,
+      "arm": "cell",
+      "instructions": 1203827
+    },
+    {
+      "pair": 9,
+      "arm": "base",
+      "instructions": 1203641
+    },
+    {
+      "pair": 9,
+      "arm": "head",
+      "instructions": 1204603
+    },
+    {
+      "pair": 9,
+      "arm": "cell",
+      "instructions": 1203889
+    },
+    {
+      "pair": 10,
+      "arm": "base",
+      "instructions": 1203693
+    },
+    {
+      "pair": 10,
+      "arm": "head",
+      "instructions": 1204623
+    },
+    {
+      "pair": 10,
+      "arm": "cell",
+      "instructions": 1203804
+    },
+    {
+      "pair": 11,
+      "arm": "base",
+      "instructions": 1203669
+    },
+    {
+      "pair": 11,
+      "arm": "head",
+      "instructions": 1204632
+    },
+    {
+      "pair": 11,
+      "arm": "cell",
+      "instructions": 1203878
+    },
+    {
+      "pair": 12,
+      "arm": "base",
+      "instructions": 1203656
+    },
+    {
+      "pair": 12,
+      "arm": "head",
+      "instructions": 1204572
+    },
+    {
+      "pair": 12,
+      "arm": "cell",
+      "instructions": 1203817
+    },
+    {
+      "pair": 13,
+      "arm": "base",
+      "instructions": 1203757
+    },
+    {
+      "pair": 13,
+      "arm": "head",
+      "instructions": 1204609
+    },
+    {
+      "pair": 13,
+      "arm": "cell",
+      "instructions": 1203820
+    },
+    {
+      "pair": 14,
+      "arm": "base",
+      "instructions": 1203649
+    },
+    {
+      "pair": 14,
+      "arm": "head",
+      "instructions": 1204577
+    },
+    {
+      "pair": 14,
+      "arm": "cell",
+      "instructions": 1203889
+    }
+  ],
+  "callgrind_hello": [
+    {
+      "arm": "base",
+      "pair": 0,
+      "total": 1416153,
+      "selected_costs": {
+        "./elf/./elf/dl-reloc.c:_dl_relocate_object_no_relro": 534079,
+        "./stdio-common/./stdio-common/vfscanf-internal.c:__vfscanf_internal": 54772,
+        "./stdlib/../stdlib/strtol_l.c:____strtoul_l_internal": 26866,
+        "./elf/./elf/do-rel.h:_dl_relocate_object_no_relro": 13875,
+        "./elf/../sysdeps/x86_64/dl-machine.h:_dl_relocate_object_no_relro": 11632,
+        "./nptl/./nptl/pthread_getattr_np.c:pthread_getattr_np@@GLIBC_2.32": 1430,
+        "./stdio-common/../include/scratch_buffer.h:__vfscanf_internal": 1166,
+        "./elf/../sysdeps/generic/ldsodefs.h:_dl_relocate_object_no_relro": 1131,
+        "./stdio-common/./stdio-common/printf-parse.h:__vfscanf_internal": 742,
+        "./stdio-common/../string/bits/string_fortified.h:__vfscanf_internal": 53,
+        "./nptl/../string/bits/string_fortified.h:pthread_getattr_np@@GLIBC_2.32": 2
+      }
+    },
+    {
+      "arm": "head",
+      "pair": 0,
+      "total": 1417031,
+      "selected_costs": {
+        "./elf/./elf/dl-reloc.c:_dl_relocate_object_no_relro": 535017,
+        "./stdio-common/./stdio-common/vfscanf-internal.c:__vfscanf_internal": 54772,
+        "./stdlib/../stdlib/strtol_l.c:____strtoul_l_internal": 26818,
+        "./elf/./elf/do-rel.h:_dl_relocate_object_no_relro": 13875,
+        "./elf/../sysdeps/x86_64/dl-machine.h:_dl_relocate_object_no_relro": 11632,
+        "./nptl/./nptl/pthread_getattr_np.c:pthread_getattr_np@@GLIBC_2.32": 1430,
+        "./stdio-common/../include/scratch_buffer.h:__vfscanf_internal": 1166,
+        "./elf/../sysdeps/generic/ldsodefs.h:_dl_relocate_object_no_relro": 1131,
+        "./stdio-common/./stdio-common/printf-parse.h:__vfscanf_internal": 742,
+        "./stdio-common/../string/bits/string_fortified.h:__vfscanf_internal": 53,
+        "./nptl/../string/bits/string_fortified.h:pthread_getattr_np@@GLIBC_2.32": 2
+      }
+    },
+    {
+      "arm": "cell",
+      "pair": 0,
+      "total": 1418443,
+      "selected_costs": {
+        "./elf/./elf/dl-reloc.c:_dl_relocate_object_no_relro": 534205,
+        "./stdio-common/./stdio-common/vfscanf-internal.c:__vfscanf_internal": 55890,
+        "./stdlib/../stdlib/strtol_l.c:____strtoul_l_internal": 27380,
+        "./elf/./elf/do-rel.h:_dl_relocate_object_no_relro": 13875,
+        "./elf/../sysdeps/x86_64/dl-machine.h:_dl_relocate_object_no_relro": 11632,
+        "./nptl/./nptl/pthread_getattr_np.c:pthread_getattr_np@@GLIBC_2.32": 1454,
+        "./stdio-common/../include/scratch_buffer.h:__vfscanf_internal": 1188,
+        "./elf/../sysdeps/generic/ldsodefs.h:_dl_relocate_object_no_relro": 1131,
+        "./stdio-common/./stdio-common/printf-parse.h:__vfscanf_internal": 756,
+        "./stdio-common/../string/bits/string_fortified.h:__vfscanf_internal": 54,
+        "./nptl/../string/bits/string_fortified.h:pthread_getattr_np@@GLIBC_2.32": 2
+      }
+    },
+    {
+      "arm": "base",
+      "pair": 1,
+      "total": 1416153,
+      "selected_costs": {
+        "./elf/./elf/dl-reloc.c:_dl_relocate_object_no_relro": 534079,
+        "./stdio-common/./stdio-common/vfscanf-internal.c:__vfscanf_internal": 54772,
+        "./stdlib/../stdlib/strtol_l.c:____strtoul_l_internal": 26866,
+        "./elf/./elf/do-rel.h:_dl_relocate_object_no_relro": 13875,
+        "./elf/../sysdeps/x86_64/dl-machine.h:_dl_relocate_object_no_relro": 11632,
+        "./nptl/./nptl/pthread_getattr_np.c:pthread_getattr_np@@GLIBC_2.32": 1430,
+        "./stdio-common/../include/scratch_buffer.h:__vfscanf_internal": 1166,
+        "./elf/../sysdeps/generic/ldsodefs.h:_dl_relocate_object_no_relro": 1131,
+        "./stdio-common/./stdio-common/printf-parse.h:__vfscanf_internal": 742,
+        "./stdio-common/../string/bits/string_fortified.h:__vfscanf_internal": 53,
+        "./nptl/../string/bits/string_fortified.h:pthread_getattr_np@@GLIBC_2.32": 2
+      }
+    },
+    {
+      "arm": "head",
+      "pair": 1,
+      "total": 1417031,
+      "selected_costs": {
+        "./elf/./elf/dl-reloc.c:_dl_relocate_object_no_relro": 535017,
+        "./stdio-common/./stdio-common/vfscanf-internal.c:__vfscanf_internal": 54772,
+        "./stdlib/../stdlib/strtol_l.c:____strtoul_l_internal": 26818,
+        "./elf/./elf/do-rel.h:_dl_relocate_object_no_relro": 13875,
+        "./elf/../sysdeps/x86_64/dl-machine.h:_dl_relocate_object_no_relro": 11632,
+        "./nptl/./nptl/pthread_getattr_np.c:pthread_getattr_np@@GLIBC_2.32": 1430,
+        "./stdio-common/../include/scratch_buffer.h:__vfscanf_internal": 1166,
+        "./elf/../sysdeps/generic/ldsodefs.h:_dl_relocate_object_no_relro": 1131,
+        "./stdio-common/./stdio-common/printf-parse.h:__vfscanf_internal": 742,
+        "./stdio-common/../string/bits/string_fortified.h:__vfscanf_internal": 53,
+        "./nptl/../string/bits/string_fortified.h:pthread_getattr_np@@GLIBC_2.32": 2
+      }
+    },
+    {
+      "arm": "cell",
+      "pair": 1,
+      "total": 1418443,
+      "selected_costs": {
+        "./elf/./elf/dl-reloc.c:_dl_relocate_object_no_relro": 534205,
+        "./stdio-common/./stdio-common/vfscanf-internal.c:__vfscanf_internal": 55890,
+        "./stdlib/../stdlib/strtol_l.c:____strtoul_l_internal": 27380,
+        "./elf/./elf/do-rel.h:_dl_relocate_object_no_relro": 13875,
+        "./elf/../sysdeps/x86_64/dl-machine.h:_dl_relocate_object_no_relro": 11632,
+        "./nptl/./nptl/pthread_getattr_np.c:pthread_getattr_np@@GLIBC_2.32": 1454,
+        "./stdio-common/../include/scratch_buffer.h:__vfscanf_internal": 1188,
+        "./elf/../sysdeps/generic/ldsodefs.h:_dl_relocate_object_no_relro": 1131,
+        "./stdio-common/./stdio-common/printf-parse.h:__vfscanf_internal": 756,
+        "./stdio-common/../string/bits/string_fortified.h:__vfscanf_internal": 54,
+        "./nptl/../string/bits/string_fortified.h:pthread_getattr_np@@GLIBC_2.32": 2
+      }
+    },
+    {
+      "arm": "base",
+      "pair": 2,
+      "total": 1416153,
+      "selected_costs": {
+        "./elf/./elf/dl-reloc.c:_dl_relocate_object_no_relro": 534079,
+        "./stdio-common/./stdio-common/vfscanf-internal.c:__vfscanf_internal": 54772,
+        "./stdlib/../stdlib/strtol_l.c:____strtoul_l_internal": 26866,
+        "./elf/./elf/do-rel.h:_dl_relocate_object_no_relro": 13875,
+        "./elf/../sysdeps/x86_64/dl-machine.h:_dl_relocate_object_no_relro": 11632,
+        "./nptl/./nptl/pthread_getattr_np.c:pthread_getattr_np@@GLIBC_2.32": 1430,
+        "./stdio-common/../include/scratch_buffer.h:__vfscanf_internal": 1166,
+        "./elf/../sysdeps/generic/ldsodefs.h:_dl_relocate_object_no_relro": 1131,
+        "./stdio-common/./stdio-common/printf-parse.h:__vfscanf_internal": 742,
+        "./stdio-common/../string/bits/string_fortified.h:__vfscanf_internal": 53,
+        "./nptl/../string/bits/string_fortified.h:pthread_getattr_np@@GLIBC_2.32": 2
+      }
+    },
+    {
+      "arm": "head",
+      "pair": 2,
+      "total": 1417031,
+      "selected_costs": {
+        "./elf/./elf/dl-reloc.c:_dl_relocate_object_no_relro": 535017,
+        "./stdio-common/./stdio-common/vfscanf-internal.c:__vfscanf_internal": 54772,
+        "./stdlib/../stdlib/strtol_l.c:____strtoul_l_internal": 26818,
+        "./elf/./elf/do-rel.h:_dl_relocate_object_no_relro": 13875,
+        "./elf/../sysdeps/x86_64/dl-machine.h:_dl_relocate_object_no_relro": 11632,
+        "./nptl/./nptl/pthread_getattr_np.c:pthread_getattr_np@@GLIBC_2.32": 1430,
+        "./stdio-common/../include/scratch_buffer.h:__vfscanf_internal": 1166,
+        "./elf/../sysdeps/generic/ldsodefs.h:_dl_relocate_object_no_relro": 1131,
+        "./stdio-common/./stdio-common/printf-parse.h:__vfscanf_internal": 742,
+        "./stdio-common/../string/bits/string_fortified.h:__vfscanf_internal": 53,
+        "./nptl/../string/bits/string_fortified.h:pthread_getattr_np@@GLIBC_2.32": 2
+      }
+    },
+    {
+      "arm": "cell",
+      "pair": 2,
+      "total": 1418443,
+      "selected_costs": {
+        "./elf/./elf/dl-reloc.c:_dl_relocate_object_no_relro": 534205,
+        "./stdio-common/./stdio-common/vfscanf-internal.c:__vfscanf_internal": 55890,
+        "./stdlib/../stdlib/strtol_l.c:____strtoul_l_internal": 27380,
+        "./elf/./elf/do-rel.h:_dl_relocate_object_no_relro": 13875,
+        "./elf/../sysdeps/x86_64/dl-machine.h:_dl_relocate_object_no_relro": 11632,
+        "./nptl/./nptl/pthread_getattr_np.c:pthread_getattr_np@@GLIBC_2.32": 1454,
+        "./stdio-common/../include/scratch_buffer.h:__vfscanf_internal": 1188,
+        "./elf/../sysdeps/generic/ldsodefs.h:_dl_relocate_object_no_relro": 1131,
+        "./stdio-common/./stdio-common/printf-parse.h:__vfscanf_internal": 756,
+        "./stdio-common/../string/bits/string_fortified.h:__vfscanf_internal": 54,
+        "./nptl/../string/bits/string_fortified.h:pthread_getattr_np@@GLIBC_2.32": 2
+      }
+    }
+  ],
+  "callgrind_full_receipt": "sp-work/arm-hello-cell-pairs/results.json",
+  "relocation_analysis_receipt": "arm-hello-callgrind-initial/relr-analysis.json",
+  "qs_linux_layout": {
+    "source": "retained Linux final-macro binaries, not a fresh arm64 profile",
+    "arms": {
+      "base": {
+        "sections": {
+          ".text": {
+            "bytes": 16410482,
+            "address": 37376
+          },
+          ".rodata": {
+            "bytes": 2101372,
+            "address": 16449536
+          },
+          ".perry_gcmap": {
+            "bytes": 180256,
+            "address": 19289336
+          }
+        },
+        "qs_parse_utils_code_bytes": 543274,
+        "symbols": {
+          "__perry_wrap_perry_fn_node_modules_qs_lib_parse_js__default": {
+            "address": 4145731,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__arrayToObject": {
+            "address": 4640572,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__assign": {
+            "address": 4640581,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__combine": {
+            "address": 4640590,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__compact": {
+            "address": 4640599,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__decode": {
+            "address": 4640608,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__default": {
+            "address": 4640563,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__encode": {
+            "address": 4640617,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__isBuffer": {
+            "address": 4640626,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__isOverflow": {
+            "address": 4640635,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__isRegExp": {
+            "address": 4640644,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__markOverflow": {
+            "address": 4640653,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__maybeMap": {
+            "address": 4640662,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__merge": {
+            "address": 4640671,
+            "bytes": 9
+          },
+          "perry_fn_node_modules_qs_lib_parse_js__default": {
+            "address": 3861620,
+            "bytes": 12
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__default": {
+            "address": 4402952,
+            "bytes": 12
+          },
+          "__perry_init_strings_node_modules_qs_lib_parse_js": {
+            "address": 4156555,
+            "bytes": 15
+          },
+          "__perry_init_strings_node_modules_qs_lib_utils_js": {
+            "address": 4651261,
+            "bytes": 15
+          },
+          "__perry_prepare_agent_strings_node_modules_qs_lib_parse_js": {
+            "address": 4155017,
+            "bytes": 27
+          },
+          "__perry_prepare_agent_strings_node_modules_qs_lib_utils_js": {
+            "address": 4649577,
+            "bytes": 27
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_0ace823bdef368e0_constructor": {
+            "address": 4123662,
+            "bytes": 36
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_107363372f9b33ec_constructor": {
+            "address": 4093919,
+            "bytes": 36
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_3dd1aa7fcfa902a7_constructor": {
+            "address": 4145659,
+            "bytes": 36
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_4fecfb7fda23182b_constructor": {
+            "address": 4145695,
+            "bytes": 36
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_394053dde51f581e_constructor": {
+            "address": 4625430,
+            "bytes": 36
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_afc7e56b50b79a3f_constructor": {
+            "address": 4617353,
+            "bytes": 36
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__arrayToObject": {
+            "address": 4402964,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__assign": {
+            "address": 4403005,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__combine": {
+            "address": 4403046,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__compact": {
+            "address": 4403087,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__decode": {
+            "address": 4403128,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__encode": {
+            "address": 4403169,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__isBuffer": {
+            "address": 4403210,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__isOverflow": {
+            "address": 4403251,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__isRegExp": {
+            "address": 4403292,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__markOverflow": {
+            "address": 4403333,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__maybeMap": {
+            "address": 4403374,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__merge": {
+            "address": 4403415,
+            "bytes": 41
+          },
+          "__perry_prepare_literals_node_modules_qs_lib_parse_js": {
+            "address": 4156507,
+            "bytes": 48
+          },
+          "__perry_prepare_literals_node_modules_qs_lib_utils_js": {
+            "address": 4651213,
+            "bytes": 48
+          },
+          "node_modules_qs_lib_parse_js__init": {
+            "address": 4145740,
+            "bytes": 51
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__5": {
+            "address": 3888866,
+            "bytes": 58
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__5": {
+            "address": 4435307,
+            "bytes": 58
+          },
+          "node_modules_qs_lib_utils_js__init": {
+            "address": 4640680,
+            "bytes": 61
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__16": {
+            "address": 3972515,
+            "bytes": 83
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__19": {
+            "address": 4006607,
+            "bytes": 83
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__27": {
+            "address": 4093753,
+            "bytes": 83
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__29": {
+            "address": 4093836,
+            "bytes": 83
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__18": {
+            "address": 4474397,
+            "bytes": 83
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__13": {
+            "address": 3907815,
+            "bytes": 98
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__10": {
+            "address": 3906687,
+            "bytes": 147
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__10": {
+            "address": 4453871,
+            "bytes": 147
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__37": {
+            "address": 4588039,
+            "bytes": 163
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__9": {
+            "address": 3906495,
+            "bytes": 192
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__9": {
+            "address": 4453679,
+            "bytes": 192
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__23": {
+            "address": 4506989,
+            "bytes": 199
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__28": {
+            "address": 4520203,
+            "bytes": 294
+          },
+          "__perry_init_strings_node_modules_qs_lib_parse_js_class_chunk0": {
+            "address": 4156134,
+            "bytes": 373
+          },
+          "__perry_init_strings_node_modules_qs_lib_utils_js_class_chunk0": {
+            "address": 4650730,
+            "bytes": 483
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_6bdac9f9ba88c994_constructor": {
+            "address": 4123698,
+            "bytes": 524
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_6bdac9f9ba88c994_constructor": {
+            "address": 4627775,
+            "bytes": 524
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_767edbb2f773003f_constructor": {
+            "address": 4628299,
+            "bytes": 524
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_fdf4ae55b0f7c3de_constructor": {
+            "address": 4630931,
+            "bytes": 524
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__23": {
+            "address": 4038670,
+            "bytes": 538
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__12": {
+            "address": 4454757,
+            "bytes": 676
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__13": {
+            "address": 4455433,
+            "bytes": 676
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__14": {
+            "address": 4456109,
+            "bytes": 722
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__11": {
+            "address": 4454018,
+            "bytes": 739
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__27": {
+            "address": 4476851,
+            "bytes": 743
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__8": {
+            "address": 3905705,
+            "bytes": 790
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__17": {
+            "address": 3972598,
+            "bytes": 805
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__12": {
+            "address": 3906834,
+            "bytes": 981
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__8": {
+            "address": 4452660,
+            "bytes": 1019
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_9ccca0df7c5fcce3_constructor": {
+            "address": 4628823,
+            "bytes": 1054
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_d05fa31e9b75fc9f_constructor": {
+            "address": 4629877,
+            "bytes": 1054
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__32": {
+            "address": 4575328,
+            "bytes": 1056
+          },
+          "__perry_init_strings_node_modules_qs_lib_parse_js_literal_chunk0": {
+            "address": 4155044,
+            "bytes": 1090
+          },
+          "__perry_init_strings_node_modules_qs_lib_utils_js_literal_chunk0": {
+            "address": 4649604,
+            "bytes": 1126
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__29": {
+            "address": 4520497,
+            "bytes": 1151
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__4": {
+            "address": 3887543,
+            "bytes": 1323
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__4": {
+            "address": 4433984,
+            "bytes": 1323
+          },
+          "node_modules_qs_lib_parse_js__init_body": {
+            "address": 4145791,
+            "bytes": 1817
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__15": {
+            "address": 4456831,
+            "bytes": 1868
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__6": {
+            "address": 3888924,
+            "bytes": 1900
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__6": {
+            "address": 4435365,
+            "bytes": 1900
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__38": {
+            "address": 4588202,
+            "bytes": 2150
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_66d42a3de33d50d0_constructor": {
+            "address": 4625466,
+            "bytes": 2309
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__20": {
+            "address": 4474480,
+            "bytes": 2371
+          },
+          "node_modules_qs_lib_utils_js__init_body": {
+            "address": 4640741,
+            "bytes": 2441
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__30": {
+            "address": 4521648,
+            "bytes": 2620
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__0": {
+            "address": 3861632,
+            "bytes": 4052
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__0": {
+            "address": 4403456,
+            "bytes": 5075
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__17": {
+            "address": 4469287,
+            "bytes": 5110
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__26": {
+            "address": 4514880,
+            "bytes": 5323
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__26": {
+            "address": 4087373,
+            "bytes": 6380
+          },
+          "__perry_agent_strings_node_modules_qs_lib_utils_js_literal_chunk0": {
+            "address": 4643182,
+            "bytes": 6395
+          },
+          "__perry_agent_strings_node_modules_qs_lib_parse_js_literal_chunk0": {
+            "address": 4147608,
+            "bytes": 7409
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__25": {
+            "address": 4507188,
+            "bytes": 7692
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__39": {
+            "address": 4590352,
+            "bytes": 8021
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_87f4d674d7c810d8_constructor": {
+            "address": 4093955,
+            "bytes": 8041
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_87f4d674d7c810d8_constructor": {
+            "address": 4617389,
+            "bytes": 8041
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__14": {
+            "address": 3907913,
+            "bytes": 8990
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_4866c1003d68d8fb_constructor": {
+            "address": 4631455,
+            "bytes": 9108
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__16": {
+            "address": 4458699,
+            "bytes": 10588
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__33": {
+            "address": 4576384,
+            "bytes": 11655
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__7": {
+            "address": 3890824,
+            "bytes": 14881
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__7": {
+            "address": 4437265,
+            "bytes": 15395
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__41": {
+            "address": 4598373,
+            "bytes": 18980
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_2aef4a0a4b607449_constructor": {
+            "address": 4124222,
+            "bytes": 21437
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_5a82968dafee09cb_constructor": {
+            "address": 4101996,
+            "bytes": 21666
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__1": {
+            "address": 3865684,
+            "bytes": 21859
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__1": {
+            "address": 4408531,
+            "bytes": 25453
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__22": {
+            "address": 4477594,
+            "bytes": 29395
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__22": {
+            "address": 4006690,
+            "bytes": 31980
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__18": {
+            "address": 3973403,
+            "bytes": 33204
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__24": {
+            "address": 4039208,
+            "bytes": 48165
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__31": {
+            "address": 4524268,
+            "bytes": 51060
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__15": {
+            "address": 3916903,
+            "bytes": 55612
+          }
+        }
+      },
+      "head": {
+        "sections": {
+          ".text": {
+            "bytes": 16297586,
+            "address": 37376
+          },
+          ".rodata": {
+            "bytes": 2100860,
+            "address": 16338944
+          },
+          ".perry_gcmap": {
+            "bytes": 165704,
+            "address": 19178232
+          }
+        },
+        "qs_parse_utils_code_bytes": 490334,
+        "symbols": {
+          "__perry_wrap_perry_fn_node_modules_qs_lib_parse_js__default": {
+            "address": 4090603,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__arrayToObject": {
+            "address": 4533812,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__assign": {
+            "address": 4533821,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__combine": {
+            "address": 4533830,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__compact": {
+            "address": 4533839,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__decode": {
+            "address": 4533848,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__default": {
+            "address": 4533803,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__encode": {
+            "address": 4533857,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__isBuffer": {
+            "address": 4533866,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__isOverflow": {
+            "address": 4533875,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__isRegExp": {
+            "address": 4533884,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__markOverflow": {
+            "address": 4533893,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__maybeMap": {
+            "address": 4533902,
+            "bytes": 9
+          },
+          "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__merge": {
+            "address": 4533911,
+            "bytes": 9
+          },
+          "perry_fn_node_modules_qs_lib_parse_js__default": {
+            "address": 3845512,
+            "bytes": 12
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__default": {
+            "address": 4310112,
+            "bytes": 12
+          },
+          "__perry_init_strings_node_modules_qs_lib_parse_js": {
+            "address": 4101427,
+            "bytes": 15
+          },
+          "__perry_init_strings_node_modules_qs_lib_utils_js": {
+            "address": 4544501,
+            "bytes": 15
+          },
+          "__perry_prepare_agent_strings_node_modules_qs_lib_parse_js": {
+            "address": 4099889,
+            "bytes": 27
+          },
+          "__perry_prepare_agent_strings_node_modules_qs_lib_utils_js": {
+            "address": 4542817,
+            "bytes": 27
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_0ace823bdef368e0_constructor": {
+            "address": 4068024,
+            "bytes": 36
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_107363372f9b33ec_constructor": {
+            "address": 4037921,
+            "bytes": 36
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_3dd1aa7fcfa902a7_constructor": {
+            "address": 4090531,
+            "bytes": 36
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_4fecfb7fda23182b_constructor": {
+            "address": 4090567,
+            "bytes": 36
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_394053dde51f581e_constructor": {
+            "address": 4518341,
+            "bytes": 36
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_afc7e56b50b79a3f_constructor": {
+            "address": 4509844,
+            "bytes": 36
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__arrayToObject": {
+            "address": 4310124,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__assign": {
+            "address": 4310165,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__combine": {
+            "address": 4310206,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__compact": {
+            "address": 4310247,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__decode": {
+            "address": 4310288,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__encode": {
+            "address": 4310329,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__isBuffer": {
+            "address": 4310370,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__isOverflow": {
+            "address": 4310411,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__isRegExp": {
+            "address": 4310452,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__markOverflow": {
+            "address": 4310493,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__maybeMap": {
+            "address": 4310534,
+            "bytes": 41
+          },
+          "perry_fn_node_modules_qs_lib_utils_js__merge": {
+            "address": 4310575,
+            "bytes": 41
+          },
+          "__perry_prepare_literals_node_modules_qs_lib_parse_js": {
+            "address": 4101379,
+            "bytes": 48
+          },
+          "__perry_prepare_literals_node_modules_qs_lib_utils_js": {
+            "address": 4544453,
+            "bytes": 48
+          },
+          "node_modules_qs_lib_parse_js__init": {
+            "address": 4090612,
+            "bytes": 51
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__5": {
+            "address": 3871173,
+            "bytes": 58
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__5": {
+            "address": 4340189,
+            "bytes": 58
+          },
+          "node_modules_qs_lib_utils_js__init": {
+            "address": 4533920,
+            "bytes": 61
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__16": {
+            "address": 3939728,
+            "bytes": 83
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__19": {
+            "address": 3971972,
+            "bytes": 83
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__27": {
+            "address": 4037755,
+            "bytes": 83
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__29": {
+            "address": 4037838,
+            "bytes": 83
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__18": {
+            "address": 4378610,
+            "bytes": 83
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__13": {
+            "address": 3889780,
+            "bytes": 98
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__10": {
+            "address": 3888652,
+            "bytes": 147
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__10": {
+            "address": 4358084,
+            "bytes": 147
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__37": {
+            "address": 4480530,
+            "bytes": 163
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__9": {
+            "address": 3888460,
+            "bytes": 192
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__9": {
+            "address": 4357892,
+            "bytes": 192
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__23": {
+            "address": 4409484,
+            "bytes": 199
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__28": {
+            "address": 4422698,
+            "bytes": 294
+          },
+          "__perry_init_strings_node_modules_qs_lib_parse_js_class_chunk0": {
+            "address": 4101006,
+            "bytes": 373
+          },
+          "__perry_init_strings_node_modules_qs_lib_utils_js_class_chunk0": {
+            "address": 4543970,
+            "bytes": 483
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_6bdac9f9ba88c994_constructor": {
+            "address": 4068060,
+            "bytes": 520
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_6bdac9f9ba88c994_constructor": {
+            "address": 4520710,
+            "bytes": 520
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_767edbb2f773003f_constructor": {
+            "address": 4521230,
+            "bytes": 520
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_fdf4ae55b0f7c3de_constructor": {
+            "address": 4523822,
+            "bytes": 520
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__23": {
+            "address": 4000781,
+            "bytes": 538
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__12": {
+            "address": 4358970,
+            "bytes": 676
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__13": {
+            "address": 4359646,
+            "bytes": 676
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__14": {
+            "address": 4360322,
+            "bytes": 722
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__11": {
+            "address": 4358231,
+            "bytes": 739
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__27": {
+            "address": 4381064,
+            "bytes": 743
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__8": {
+            "address": 3887670,
+            "bytes": 790
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__17": {
+            "address": 3939811,
+            "bytes": 805
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__12": {
+            "address": 3888799,
+            "bytes": 981
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__8": {
+            "address": 4356873,
+            "bytes": 1019
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_9ccca0df7c5fcce3_constructor": {
+            "address": 4521750,
+            "bytes": 1036
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_d05fa31e9b75fc9f_constructor": {
+            "address": 4522786,
+            "bytes": 1036
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__32": {
+            "address": 4467826,
+            "bytes": 1056
+          },
+          "__perry_init_strings_node_modules_qs_lib_parse_js_literal_chunk0": {
+            "address": 4099916,
+            "bytes": 1090
+          },
+          "__perry_init_strings_node_modules_qs_lib_utils_js_literal_chunk0": {
+            "address": 4542844,
+            "bytes": 1126
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__29": {
+            "address": 4422992,
+            "bytes": 1151
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__4": {
+            "address": 3869850,
+            "bytes": 1323
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__4": {
+            "address": 4338866,
+            "bytes": 1323
+          },
+          "node_modules_qs_lib_parse_js__init_body": {
+            "address": 4090663,
+            "bytes": 1817
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__15": {
+            "address": 4361044,
+            "bytes": 1868
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__6": {
+            "address": 3871231,
+            "bytes": 1900
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__6": {
+            "address": 4340247,
+            "bytes": 1900
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__38": {
+            "address": 4480693,
+            "bytes": 2150
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_66d42a3de33d50d0_constructor": {
+            "address": 4518377,
+            "bytes": 2333
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__20": {
+            "address": 4378693,
+            "bytes": 2371
+          },
+          "node_modules_qs_lib_utils_js__init_body": {
+            "address": 4533981,
+            "bytes": 2441
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__30": {
+            "address": 4424143,
+            "bytes": 2620
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__0": {
+            "address": 3845524,
+            "bytes": 4052
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__0": {
+            "address": 4310616,
+            "bytes": 5075
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__17": {
+            "address": 4373500,
+            "bytes": 5110
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__26": {
+            "address": 4417375,
+            "bytes": 5323
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__26": {
+            "address": 4031375,
+            "bytes": 6380
+          },
+          "__perry_agent_strings_node_modules_qs_lib_utils_js_literal_chunk0": {
+            "address": 4536422,
+            "bytes": 6395
+          },
+          "__perry_agent_strings_node_modules_qs_lib_parse_js_literal_chunk0": {
+            "address": 4092480,
+            "bytes": 7409
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__25": {
+            "address": 4409683,
+            "bytes": 7692
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__39": {
+            "address": 4482843,
+            "bytes": 8021
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_87f4d674d7c810d8_constructor": {
+            "address": 4037957,
+            "bytes": 8461
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_87f4d674d7c810d8_constructor": {
+            "address": 4509880,
+            "bytes": 8461
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__14": {
+            "address": 3889878,
+            "bytes": 8983
+          },
+          "node_modules_qs_lib_utils_js____AnonShape_4866c1003d68d8fb_constructor": {
+            "address": 4524342,
+            "bytes": 9461
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__16": {
+            "address": 4362912,
+            "bytes": 10588
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__33": {
+            "address": 4468882,
+            "bytes": 11648
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__7": {
+            "address": 3873131,
+            "bytes": 14539
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__7": {
+            "address": 4342147,
+            "bytes": 14726
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__41": {
+            "address": 4490864,
+            "bytes": 18980
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__1": {
+            "address": 3849576,
+            "bytes": 20274
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_5a82968dafee09cb_constructor": {
+            "address": 4046418,
+            "bytes": 21606
+          },
+          "node_modules_qs_lib_parse_js____AnonShape_2aef4a0a4b607449_constructor": {
+            "address": 4068580,
+            "bytes": 21951
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__1": {
+            "address": 4315691,
+            "bytes": 23175
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__22": {
+            "address": 4381807,
+            "bytes": 27677
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__22": {
+            "address": 3972055,
+            "bytes": 28726
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__24": {
+            "address": 4001319,
+            "bytes": 30056
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__18": {
+            "address": 3940616,
+            "bytes": 31356
+          },
+          "perry_closure_node_modules_qs_lib_parse_js__15": {
+            "address": 3898861,
+            "bytes": 40867
+          },
+          "perry_closure_node_modules_qs_lib_utils_js__31": {
+            "address": 4426763,
+            "bytes": 41063
+          }
+        }
+      }
+    },
+    "matched_symbol_deltas": [
+      {
+        "name": "__perry_agent_strings_node_modules_qs_lib_parse_js_literal_chunk0",
+        "base": {
+          "address": 4147608,
+          "bytes": 7409
+        },
+        "head": {
+          "address": 4092480,
+          "bytes": 7409
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_agent_strings_node_modules_qs_lib_utils_js_literal_chunk0",
+        "base": {
+          "address": 4643182,
+          "bytes": 6395
+        },
+        "head": {
+          "address": 4536422,
+          "bytes": 6395
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_init_strings_node_modules_qs_lib_parse_js",
+        "base": {
+          "address": 4156555,
+          "bytes": 15
+        },
+        "head": {
+          "address": 4101427,
+          "bytes": 15
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_init_strings_node_modules_qs_lib_parse_js_class_chunk0",
+        "base": {
+          "address": 4156134,
+          "bytes": 373
+        },
+        "head": {
+          "address": 4101006,
+          "bytes": 373
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_init_strings_node_modules_qs_lib_parse_js_literal_chunk0",
+        "base": {
+          "address": 4155044,
+          "bytes": 1090
+        },
+        "head": {
+          "address": 4099916,
+          "bytes": 1090
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_init_strings_node_modules_qs_lib_utils_js",
+        "base": {
+          "address": 4651261,
+          "bytes": 15
+        },
+        "head": {
+          "address": 4544501,
+          "bytes": 15
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_init_strings_node_modules_qs_lib_utils_js_class_chunk0",
+        "base": {
+          "address": 4650730,
+          "bytes": 483
+        },
+        "head": {
+          "address": 4543970,
+          "bytes": 483
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_init_strings_node_modules_qs_lib_utils_js_literal_chunk0",
+        "base": {
+          "address": 4649604,
+          "bytes": 1126
+        },
+        "head": {
+          "address": 4542844,
+          "bytes": 1126
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_prepare_agent_strings_node_modules_qs_lib_parse_js",
+        "base": {
+          "address": 4155017,
+          "bytes": 27
+        },
+        "head": {
+          "address": 4099889,
+          "bytes": 27
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_prepare_agent_strings_node_modules_qs_lib_utils_js",
+        "base": {
+          "address": 4649577,
+          "bytes": 27
+        },
+        "head": {
+          "address": 4542817,
+          "bytes": 27
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_prepare_literals_node_modules_qs_lib_parse_js",
+        "base": {
+          "address": 4156507,
+          "bytes": 48
+        },
+        "head": {
+          "address": 4101379,
+          "bytes": 48
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_prepare_literals_node_modules_qs_lib_utils_js",
+        "base": {
+          "address": 4651213,
+          "bytes": 48
+        },
+        "head": {
+          "address": 4544453,
+          "bytes": 48
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_parse_js__default",
+        "base": {
+          "address": 4145731,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4090603,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__arrayToObject",
+        "base": {
+          "address": 4640572,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533812,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__assign",
+        "base": {
+          "address": 4640581,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533821,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__combine",
+        "base": {
+          "address": 4640590,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533830,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__compact",
+        "base": {
+          "address": 4640599,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533839,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__decode",
+        "base": {
+          "address": 4640608,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533848,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__default",
+        "base": {
+          "address": 4640563,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533803,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__encode",
+        "base": {
+          "address": 4640617,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533857,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__isBuffer",
+        "base": {
+          "address": 4640626,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533866,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__isOverflow",
+        "base": {
+          "address": 4640635,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533875,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__isRegExp",
+        "base": {
+          "address": 4640644,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533884,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__markOverflow",
+        "base": {
+          "address": 4640653,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533893,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__maybeMap",
+        "base": {
+          "address": 4640662,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533902,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "__perry_wrap_perry_fn_node_modules_qs_lib_utils_js__merge",
+        "base": {
+          "address": 4640671,
+          "bytes": 9
+        },
+        "head": {
+          "address": 4533911,
+          "bytes": 9
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "node_modules_qs_lib_parse_js____AnonShape_0ace823bdef368e0_constructor",
+        "base": {
+          "address": 4123662,
+          "bytes": 36
+        },
+        "head": {
+          "address": 4068024,
+          "bytes": 36
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "node_modules_qs_lib_parse_js____AnonShape_107363372f9b33ec_constructor",
+        "base": {
+          "address": 4093919,
+          "bytes": 36
+        },
+        "head": {
+          "address": 4037921,
+          "bytes": 36
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "node_modules_qs_lib_parse_js____AnonShape_2aef4a0a4b607449_constructor",
+        "base": {
+          "address": 4124222,
+          "bytes": 21437
+        },
+        "head": {
+          "address": 4068580,
+          "bytes": 21951
+        },
+        "delta_bytes": 514
+      },
+      {
+        "name": "node_modules_qs_lib_parse_js____AnonShape_3dd1aa7fcfa902a7_constructor",
+        "base": {
+          "address": 4145659,
+          "bytes": 36
+        },
+        "head": {
+          "address": 4090531,
+          "bytes": 36
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "node_modules_qs_lib_parse_js____AnonShape_4fecfb7fda23182b_constructor",
+        "base": {
+          "address": 4145695,
+          "bytes": 36
+        },
+        "head": {
+          "address": 4090567,
+          "bytes": 36
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "node_modules_qs_lib_parse_js____AnonShape_5a82968dafee09cb_constructor",
+        "base": {
+          "address": 4101996,
+          "bytes": 21666
+        },
+        "head": {
+          "address": 4046418,
+          "bytes": 21606
+        },
+        "delta_bytes": -60
+      },
+      {
+        "name": "node_modules_qs_lib_parse_js____AnonShape_6bdac9f9ba88c994_constructor",
+        "base": {
+          "address": 4123698,
+          "bytes": 524
+        },
+        "head": {
+          "address": 4068060,
+          "bytes": 520
+        },
+        "delta_bytes": -4
+      },
+      {
+        "name": "node_modules_qs_lib_parse_js____AnonShape_87f4d674d7c810d8_constructor",
+        "base": {
+          "address": 4093955,
+          "bytes": 8041
+        },
+        "head": {
+          "address": 4037957,
+          "bytes": 8461
+        },
+        "delta_bytes": 420
+      },
+      {
+        "name": "node_modules_qs_lib_parse_js__init",
+        "base": {
+          "address": 4145740,
+          "bytes": 51
+        },
+        "head": {
+          "address": 4090612,
+          "bytes": 51
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "node_modules_qs_lib_parse_js__init_body",
+        "base": {
+          "address": 4145791,
+          "bytes": 1817
+        },
+        "head": {
+          "address": 4090663,
+          "bytes": 1817
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "node_modules_qs_lib_utils_js____AnonShape_394053dde51f581e_constructor",
+        "base": {
+          "address": 4625430,
+          "bytes": 36
+        },
+        "head": {
+          "address": 4518341,
+          "bytes": 36
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "node_modules_qs_lib_utils_js____AnonShape_4866c1003d68d8fb_constructor",
+        "base": {
+          "address": 4631455,
+          "bytes": 9108
+        },
+        "head": {
+          "address": 4524342,
+          "bytes": 9461
+        },
+        "delta_bytes": 353
+      },
+      {
+        "name": "node_modules_qs_lib_utils_js____AnonShape_66d42a3de33d50d0_constructor",
+        "base": {
+          "address": 4625466,
+          "bytes": 2309
+        },
+        "head": {
+          "address": 4518377,
+          "bytes": 2333
+        },
+        "delta_bytes": 24
+      },
+      {
+        "name": "node_modules_qs_lib_utils_js____AnonShape_6bdac9f9ba88c994_constructor",
+        "base": {
+          "address": 4627775,
+          "bytes": 524
+        },
+        "head": {
+          "address": 4520710,
+          "bytes": 520
+        },
+        "delta_bytes": -4
+      },
+      {
+        "name": "node_modules_qs_lib_utils_js____AnonShape_767edbb2f773003f_constructor",
+        "base": {
+          "address": 4628299,
+          "bytes": 524
+        },
+        "head": {
+          "address": 4521230,
+          "bytes": 520
+        },
+        "delta_bytes": -4
+      },
+      {
+        "name": "node_modules_qs_lib_utils_js____AnonShape_87f4d674d7c810d8_constructor",
+        "base": {
+          "address": 4617389,
+          "bytes": 8041
+        },
+        "head": {
+          "address": 4509880,
+          "bytes": 8461
+        },
+        "delta_bytes": 420
+      },
+      {
+        "name": "node_modules_qs_lib_utils_js____AnonShape_9ccca0df7c5fcce3_constructor",
+        "base": {
+          "address": 4628823,
+          "bytes": 1054
+        },
+        "head": {
+          "address": 4521750,
+          "bytes": 1036
+        },
+        "delta_bytes": -18
+      },
+      {
+        "name": "node_modules_qs_lib_utils_js____AnonShape_afc7e56b50b79a3f_constructor",
+        "base": {
+          "address": 4617353,
+          "bytes": 36
+        },
+        "head": {
+          "address": 4509844,
+          "bytes": 36
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "node_modules_qs_lib_utils_js____AnonShape_d05fa31e9b75fc9f_constructor",
+        "base": {
+          "address": 4629877,
+          "bytes": 1054
+        },
+        "head": {
+          "address": 4522786,
+          "bytes": 1036
+        },
+        "delta_bytes": -18
+      },
+      {
+        "name": "node_modules_qs_lib_utils_js____AnonShape_fdf4ae55b0f7c3de_constructor",
+        "base": {
+          "address": 4630931,
+          "bytes": 524
+        },
+        "head": {
+          "address": 4523822,
+          "bytes": 520
+        },
+        "delta_bytes": -4
+      },
+      {
+        "name": "node_modules_qs_lib_utils_js__init",
+        "base": {
+          "address": 4640680,
+          "bytes": 61
+        },
+        "head": {
+          "address": 4533920,
+          "bytes": 61
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "node_modules_qs_lib_utils_js__init_body",
+        "base": {
+          "address": 4640741,
+          "bytes": 2441
+        },
+        "head": {
+          "address": 4533981,
+          "bytes": 2441
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__0",
+        "base": {
+          "address": 3861632,
+          "bytes": 4052
+        },
+        "head": {
+          "address": 3845524,
+          "bytes": 4052
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__1",
+        "base": {
+          "address": 3865684,
+          "bytes": 21859
+        },
+        "head": {
+          "address": 3849576,
+          "bytes": 20274
+        },
+        "delta_bytes": -1585
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__10",
+        "base": {
+          "address": 3906687,
+          "bytes": 147
+        },
+        "head": {
+          "address": 3888652,
+          "bytes": 147
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__12",
+        "base": {
+          "address": 3906834,
+          "bytes": 981
+        },
+        "head": {
+          "address": 3888799,
+          "bytes": 981
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__13",
+        "base": {
+          "address": 3907815,
+          "bytes": 98
+        },
+        "head": {
+          "address": 3889780,
+          "bytes": 98
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__14",
+        "base": {
+          "address": 3907913,
+          "bytes": 8990
+        },
+        "head": {
+          "address": 3889878,
+          "bytes": 8983
+        },
+        "delta_bytes": -7
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__15",
+        "base": {
+          "address": 3916903,
+          "bytes": 55612
+        },
+        "head": {
+          "address": 3898861,
+          "bytes": 40867
+        },
+        "delta_bytes": -14745
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__16",
+        "base": {
+          "address": 3972515,
+          "bytes": 83
+        },
+        "head": {
+          "address": 3939728,
+          "bytes": 83
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__17",
+        "base": {
+          "address": 3972598,
+          "bytes": 805
+        },
+        "head": {
+          "address": 3939811,
+          "bytes": 805
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__18",
+        "base": {
+          "address": 3973403,
+          "bytes": 33204
+        },
+        "head": {
+          "address": 3940616,
+          "bytes": 31356
+        },
+        "delta_bytes": -1848
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__19",
+        "base": {
+          "address": 4006607,
+          "bytes": 83
+        },
+        "head": {
+          "address": 3971972,
+          "bytes": 83
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__22",
+        "base": {
+          "address": 4006690,
+          "bytes": 31980
+        },
+        "head": {
+          "address": 3972055,
+          "bytes": 28726
+        },
+        "delta_bytes": -3254
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__23",
+        "base": {
+          "address": 4038670,
+          "bytes": 538
+        },
+        "head": {
+          "address": 4000781,
+          "bytes": 538
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__24",
+        "base": {
+          "address": 4039208,
+          "bytes": 48165
+        },
+        "head": {
+          "address": 4001319,
+          "bytes": 30056
+        },
+        "delta_bytes": -18109
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__26",
+        "base": {
+          "address": 4087373,
+          "bytes": 6380
+        },
+        "head": {
+          "address": 4031375,
+          "bytes": 6380
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__27",
+        "base": {
+          "address": 4093753,
+          "bytes": 83
+        },
+        "head": {
+          "address": 4037755,
+          "bytes": 83
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__29",
+        "base": {
+          "address": 4093836,
+          "bytes": 83
+        },
+        "head": {
+          "address": 4037838,
+          "bytes": 83
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__4",
+        "base": {
+          "address": 3887543,
+          "bytes": 1323
+        },
+        "head": {
+          "address": 3869850,
+          "bytes": 1323
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__5",
+        "base": {
+          "address": 3888866,
+          "bytes": 58
+        },
+        "head": {
+          "address": 3871173,
+          "bytes": 58
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__6",
+        "base": {
+          "address": 3888924,
+          "bytes": 1900
+        },
+        "head": {
+          "address": 3871231,
+          "bytes": 1900
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__7",
+        "base": {
+          "address": 3890824,
+          "bytes": 14881
+        },
+        "head": {
+          "address": 3873131,
+          "bytes": 14539
+        },
+        "delta_bytes": -342
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__8",
+        "base": {
+          "address": 3905705,
+          "bytes": 790
+        },
+        "head": {
+          "address": 3887670,
+          "bytes": 790
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_parse_js__9",
+        "base": {
+          "address": 3906495,
+          "bytes": 192
+        },
+        "head": {
+          "address": 3888460,
+          "bytes": 192
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__0",
+        "base": {
+          "address": 4403456,
+          "bytes": 5075
+        },
+        "head": {
+          "address": 4310616,
+          "bytes": 5075
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__1",
+        "base": {
+          "address": 4408531,
+          "bytes": 25453
+        },
+        "head": {
+          "address": 4315691,
+          "bytes": 23175
+        },
+        "delta_bytes": -2278
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__10",
+        "base": {
+          "address": 4453871,
+          "bytes": 147
+        },
+        "head": {
+          "address": 4358084,
+          "bytes": 147
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__11",
+        "base": {
+          "address": 4454018,
+          "bytes": 739
+        },
+        "head": {
+          "address": 4358231,
+          "bytes": 739
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__12",
+        "base": {
+          "address": 4454757,
+          "bytes": 676
+        },
+        "head": {
+          "address": 4358970,
+          "bytes": 676
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__13",
+        "base": {
+          "address": 4455433,
+          "bytes": 676
+        },
+        "head": {
+          "address": 4359646,
+          "bytes": 676
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__14",
+        "base": {
+          "address": 4456109,
+          "bytes": 722
+        },
+        "head": {
+          "address": 4360322,
+          "bytes": 722
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__15",
+        "base": {
+          "address": 4456831,
+          "bytes": 1868
+        },
+        "head": {
+          "address": 4361044,
+          "bytes": 1868
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__16",
+        "base": {
+          "address": 4458699,
+          "bytes": 10588
+        },
+        "head": {
+          "address": 4362912,
+          "bytes": 10588
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__17",
+        "base": {
+          "address": 4469287,
+          "bytes": 5110
+        },
+        "head": {
+          "address": 4373500,
+          "bytes": 5110
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__18",
+        "base": {
+          "address": 4474397,
+          "bytes": 83
+        },
+        "head": {
+          "address": 4378610,
+          "bytes": 83
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__20",
+        "base": {
+          "address": 4474480,
+          "bytes": 2371
+        },
+        "head": {
+          "address": 4378693,
+          "bytes": 2371
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__22",
+        "base": {
+          "address": 4477594,
+          "bytes": 29395
+        },
+        "head": {
+          "address": 4381807,
+          "bytes": 27677
+        },
+        "delta_bytes": -1718
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__23",
+        "base": {
+          "address": 4506989,
+          "bytes": 199
+        },
+        "head": {
+          "address": 4409484,
+          "bytes": 199
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__25",
+        "base": {
+          "address": 4507188,
+          "bytes": 7692
+        },
+        "head": {
+          "address": 4409683,
+          "bytes": 7692
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__26",
+        "base": {
+          "address": 4514880,
+          "bytes": 5323
+        },
+        "head": {
+          "address": 4417375,
+          "bytes": 5323
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__27",
+        "base": {
+          "address": 4476851,
+          "bytes": 743
+        },
+        "head": {
+          "address": 4381064,
+          "bytes": 743
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__28",
+        "base": {
+          "address": 4520203,
+          "bytes": 294
+        },
+        "head": {
+          "address": 4422698,
+          "bytes": 294
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__29",
+        "base": {
+          "address": 4520497,
+          "bytes": 1151
+        },
+        "head": {
+          "address": 4422992,
+          "bytes": 1151
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__30",
+        "base": {
+          "address": 4521648,
+          "bytes": 2620
+        },
+        "head": {
+          "address": 4424143,
+          "bytes": 2620
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__31",
+        "base": {
+          "address": 4524268,
+          "bytes": 51060
+        },
+        "head": {
+          "address": 4426763,
+          "bytes": 41063
+        },
+        "delta_bytes": -9997
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__32",
+        "base": {
+          "address": 4575328,
+          "bytes": 1056
+        },
+        "head": {
+          "address": 4467826,
+          "bytes": 1056
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__33",
+        "base": {
+          "address": 4576384,
+          "bytes": 11655
+        },
+        "head": {
+          "address": 4468882,
+          "bytes": 11648
+        },
+        "delta_bytes": -7
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__37",
+        "base": {
+          "address": 4588039,
+          "bytes": 163
+        },
+        "head": {
+          "address": 4480530,
+          "bytes": 163
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__38",
+        "base": {
+          "address": 4588202,
+          "bytes": 2150
+        },
+        "head": {
+          "address": 4480693,
+          "bytes": 2150
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__39",
+        "base": {
+          "address": 4590352,
+          "bytes": 8021
+        },
+        "head": {
+          "address": 4482843,
+          "bytes": 8021
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__4",
+        "base": {
+          "address": 4433984,
+          "bytes": 1323
+        },
+        "head": {
+          "address": 4338866,
+          "bytes": 1323
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__41",
+        "base": {
+          "address": 4598373,
+          "bytes": 18980
+        },
+        "head": {
+          "address": 4490864,
+          "bytes": 18980
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__5",
+        "base": {
+          "address": 4435307,
+          "bytes": 58
+        },
+        "head": {
+          "address": 4340189,
+          "bytes": 58
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__6",
+        "base": {
+          "address": 4435365,
+          "bytes": 1900
+        },
+        "head": {
+          "address": 4340247,
+          "bytes": 1900
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__7",
+        "base": {
+          "address": 4437265,
+          "bytes": 15395
+        },
+        "head": {
+          "address": 4342147,
+          "bytes": 14726
+        },
+        "delta_bytes": -669
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__8",
+        "base": {
+          "address": 4452660,
+          "bytes": 1019
+        },
+        "head": {
+          "address": 4356873,
+          "bytes": 1019
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_closure_node_modules_qs_lib_utils_js__9",
+        "base": {
+          "address": 4453679,
+          "bytes": 192
+        },
+        "head": {
+          "address": 4357892,
+          "bytes": 192
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_parse_js__default",
+        "base": {
+          "address": 3861620,
+          "bytes": 12
+        },
+        "head": {
+          "address": 3845512,
+          "bytes": 12
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__arrayToObject",
+        "base": {
+          "address": 4402964,
+          "bytes": 41
+        },
+        "head": {
+          "address": 4310124,
+          "bytes": 41
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__assign",
+        "base": {
+          "address": 4403005,
+          "bytes": 41
+        },
+        "head": {
+          "address": 4310165,
+          "bytes": 41
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__combine",
+        "base": {
+          "address": 4403046,
+          "bytes": 41
+        },
+        "head": {
+          "address": 4310206,
+          "bytes": 41
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__compact",
+        "base": {
+          "address": 4403087,
+          "bytes": 41
+        },
+        "head": {
+          "address": 4310247,
+          "bytes": 41
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__decode",
+        "base": {
+          "address": 4403128,
+          "bytes": 41
+        },
+        "head": {
+          "address": 4310288,
+          "bytes": 41
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__default",
+        "base": {
+          "address": 4402952,
+          "bytes": 12
+        },
+        "head": {
+          "address": 4310112,
+          "bytes": 12
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__encode",
+        "base": {
+          "address": 4403169,
+          "bytes": 41
+        },
+        "head": {
+          "address": 4310329,
+          "bytes": 41
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__isBuffer",
+        "base": {
+          "address": 4403210,
+          "bytes": 41
+        },
+        "head": {
+          "address": 4310370,
+          "bytes": 41
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__isOverflow",
+        "base": {
+          "address": 4403251,
+          "bytes": 41
+        },
+        "head": {
+          "address": 4310411,
+          "bytes": 41
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__isRegExp",
+        "base": {
+          "address": 4403292,
+          "bytes": 41
+        },
+        "head": {
+          "address": 4310452,
+          "bytes": 41
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__markOverflow",
+        "base": {
+          "address": 4403333,
+          "bytes": 41
+        },
+        "head": {
+          "address": 4310493,
+          "bytes": 41
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__maybeMap",
+        "base": {
+          "address": 4403374,
+          "bytes": 41
+        },
+        "head": {
+          "address": 4310534,
+          "bytes": 41
+        },
+        "delta_bytes": 0
+      },
+      {
+        "name": "perry_fn_node_modules_qs_lib_utils_js__merge",
+        "base": {
+          "address": 4403415,
+          "bytes": 41
+        },
+        "head": {
+          "address": 4310575,
+          "bytes": 41
+        },
+        "delta_bytes": 0
+      }
+    ],
+    "new_names": [],
+    "removed_names": []
+  },
+  "prototype": "stable local UnsafeCell words registered with existing runtime handles, in gc/roots/stack_roots.rs; source restored; candidate retained only in sp-work",
+  "prototype_runtime_summary": [
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.08s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 5096 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 15.65s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "test result: ok. 0 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+  ],
+  "restored_statuses": {
+    "runtime": 0,
+    "build": 0,
+    "linear": 0,
+    "fmt": 0
+  },
+  "restored_runtime_summary": [
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.15s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5100 filtered out; finished in 0.00s",
+    "test result: ok. 5096 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 19.29s",
+    "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+    "test result: ok. 0 passed; 0 failed; 8 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+  ],
+  "restored_dominance_summary": [
+    "  seeded test_gap_array_adaptive_sort__test_gap_array_adaptive_sort_ts.ll:8284 -> caught",
+    "=== seeded statepoint violations: 40 planted, 40 caught, 0 MISSED"
+  ],
+  "restored_gate_statuses": {
+    "dominance": 0,
+    "corpus": 0
+  },
+  "linear": [
+    {
+      "n": 25,
+      "symbol_bytes": 22172,
+      "gcmap_bytes": 2749,
+      "binary_bytes": 19161880,
+      "cpu_seconds": 1.7399999999999998,
+      "wall_seconds": 1.63,
+      "compile_rss_kib": 155024
+    },
+    {
+      "n": 50,
+      "symbol_bytes": 44477,
+      "gcmap_bytes": 5752,
+      "binary_bytes": 19213856,
+      "cpu_seconds": 2.19,
+      "wall_seconds": 2.09,
+      "compile_rss_kib": 185264
+    },
+    {
+      "n": 100,
+      "symbol_bytes": 89478,
+      "gcmap_bytes": 11252,
+      "binary_bytes": 19308960,
+      "cpu_seconds": 3.55,
+      "wall_seconds": 3.44,
+      "compile_rss_kib": 242252
+    },
+    {
+      "n": 200,
+      "symbol_bytes": 175935,
+      "gcmap_bytes": 23854,
+      "binary_bytes": 19503208,
+      "cpu_seconds": 7.61,
+      "wall_seconds": 7.5,
+      "compile_rss_kib": 332968
+    }
+  ],
+  "gc_comparison": {
+    "witnesses": 80,
+    "knob_sets": 4,
+    "baseline": "f969b820f69e904a9f04dde9d7f8dcc216938127",
+    "tested_head": "7547283b4a1af6a883e3d3c89fd8107bd1c237da",
+    "new_failures": [],
+    "stdout_differences": [],
+    "equal_failures": [
+      {
+        "source": "test-files/test_gap_gc_11828_stream_readable_from_pipe.ts",
+        "mode": "force",
+        "exit": 1
+      },
+      {
+        "source": "test-files/test_gap_gc_11828_stream_readable_from_pipe.ts",
+        "mode": "verify",
+        "exit": 1
+      },
+      {
+        "source": "test-files/test_gap_gc_11828_stream_readable_from_pipe.ts",
+        "mode": "moving",
+        "exit": 1
+      },
+      {
+        "source": "test-files/test_gap_gc_11828_stream_readable_from_pipe.ts",
+        "mode": "budget",
+        "exit": 1
+      }
+    ]
+  },
+  "fetched_main_at_delivery": "001997e8b025eec70768dfe347e761bdc59d568a"
+}
