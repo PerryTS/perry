@@ -85,8 +85,6 @@ pub(super) enum NativeRetKind {
     NullableGcPtr,
     /// Returns an integer registry id or provider sentinel.
     HandleId,
-    /// Returns a headerless native address (for example an async-hook box).
-    ForeignPtr,
     /// Returns raw NaN-boxed JS value bits in an integer ABI slot.
     JsValue,
     /// Returns i64 promise handle → NaN-box as POINTER, but record the async
@@ -145,7 +143,6 @@ pub(super) const NA_VARARGS: NativeArgKind = NativeArgKind::VarArgsAsArray;
 pub(super) const NR_GCPTR: NativeRetKind = NativeRetKind::GcPtr;
 pub(super) const NR_NULLABLE_GCPTR: NativeRetKind = NativeRetKind::NullableGcPtr;
 pub(super) const NR_HANDLE_ID: NativeRetKind = NativeRetKind::HandleId;
-pub(super) const NR_FOREIGN_PTR: NativeRetKind = NativeRetKind::ForeignPtr;
 pub(super) const NR_JS_VALUE: NativeRetKind = NativeRetKind::JsValue;
 pub(super) const NR_PROMISE: NativeRetKind = NativeRetKind::Promise;
 pub(super) const NR_STR: NativeRetKind = NativeRetKind::Str;
@@ -268,7 +265,6 @@ fn ret_kind_tag(r: &NativeRetKind) -> &'static str {
         NativeRetKind::GcPtr => "NR_GCPTR",
         NativeRetKind::NullableGcPtr => "NR_NULLABLE_GCPTR",
         NativeRetKind::HandleId => "NR_HANDLE_ID",
-        NativeRetKind::ForeignPtr => "NR_FOREIGN_PTR",
         NativeRetKind::JsValue => "NR_JS_VALUE",
         NativeRetKind::Promise => "NR_PROMISE",
         NativeRetKind::Str => "NR_STR",

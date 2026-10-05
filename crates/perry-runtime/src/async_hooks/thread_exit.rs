@@ -16,7 +16,7 @@ use super::{
 /// * `HOOKS` — a `createHook` record whose callback is freed is disabled
 ///   exactly as `set_hook_enabled(_, false)` does (keeping `HOOKS_ACTIVE` /
 ///   `PROMISE_HOOKS_ACTIVE` consistent) and its callbacks nulled. The record
-///   stays: `AsyncHookHandle` names it by index.
+///   stays: the AsyncHook payload names it by index.
 /// * `RESOURCES` — an entry whose resource value or captured context store is
 ///   freed is dropped without a destroy event (the thread that could observe
 ///   it is gone).

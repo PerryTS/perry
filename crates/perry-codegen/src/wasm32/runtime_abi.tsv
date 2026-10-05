@@ -251,9 +251,9 @@ js_async_disposable_stack_use	f64	ptr,f64
 js_async_first_call	f64	f64
 js_async_fn_result	ptr	f64
 js_async_generator_resume	f64	f64,f64,f64
-js_async_hook_disable	i64	i64
-js_async_hook_enable	i64	i64
-js_async_hooks_create_hook	i64	f64
+js_async_hook_disable	f64	i64
+js_async_hook_enable	f64	i64
+js_async_hooks_create_hook	f64	f64
 js_async_hooks_execution_async_id	f64	
 js_async_hooks_execution_async_resource	f64	
 js_async_hooks_provider_defer_destroy	void	i64,i32u
@@ -271,15 +271,15 @@ js_async_local_storage_disable	void	i64
 js_async_local_storage_enter_with	void	i64,f64
 js_async_local_storage_exit	f64	i64,f64,i64
 js_async_local_storage_get_store	f64	i64
-js_async_local_storage_new	i64	
+js_async_local_storage_new	f64
 js_async_local_storage_run	f64	i64,f64,f64,i64
 js_async_local_storage_static_bind_direct	f64	f64,i64
 js_async_local_storage_static_snapshot_direct	f64	i64
 js_async_local_storage_subclass_init	f64	f64
 js_async_resource_async_id	f64	i64
 js_async_resource_bind	i64	i64,f64,f64
-js_async_resource_emit_destroy	i64	i64
-js_async_resource_new	i64	f64,f64
+js_async_resource_emit_destroy	f64	i64
+js_async_resource_new	f64	f64,f64
 js_async_resource_run_in_async_scope	f64	i64,f64,f64,i64
 js_async_resource_set_event_emitter	void	i64,i64
 js_async_resource_static_bind	i64	i64,f64
@@ -1045,17 +1045,15 @@ js_dns_set_default_result_order	f64	i64
 js_dns_set_servers	f64	i64
 js_dom_exception_new	ptr	f64,f64
 js_dom_exception_subclass_init	f64	f64,f64,f64
-js_domain_add	i64	i64,f64
+js_domain_add	f64	i64,f64
 js_domain_bind	f64	i64,f64
-js_domain_create	i64	
-js_domain_emit	f64	i64,ptr,ptr
+js_domain_create	f64
 js_domain_emit_error	bool	i64,f64,f64,bool
 js_domain_enter	f64	i64
 js_domain_exit	f64	i64
 js_domain_intercept	f64	i64,f64
 js_domain_native_dispatch	f64	ptr,usize,ptr,usize
-js_domain_on	i64	i64,ptr,i64
-js_domain_remove	i64	i64,f64
+js_domain_remove	f64	i64,f64
 js_domain_run	f64	i64,f64,ptr
 js_drain_queued_microtasks	void	
 js_dyn_index_get	f64	f64,f64

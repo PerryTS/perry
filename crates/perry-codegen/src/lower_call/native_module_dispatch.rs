@@ -249,7 +249,6 @@ pub fn lower_native_module_dispatch(
             NativeRetKind::GcPtr
             | NativeRetKind::NullableGcPtr
             | NativeRetKind::HandleId
-            | NativeRetKind::ForeignPtr
             | NativeRetKind::JsValue
             | NativeRetKind::Promise
             | NativeRetKind::Str
@@ -271,7 +270,6 @@ pub fn lower_native_module_dispatch(
             NativeRetKind::GcPtr
             | NativeRetKind::NullableGcPtr
             | NativeRetKind::HandleId
-            | NativeRetKind::ForeignPtr
             | NativeRetKind::JsValue => {
                 let blk = ctx.block();
                 let raw = blk.call(I64, sig.runtime, &arg_slices);

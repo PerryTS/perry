@@ -1507,20 +1507,6 @@ fn get_field_by_name_past_data_probe(
         } else {
             0
         };
-        if raw != 0 && !key.is_null() {
-            unsafe {
-                let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-                let key_len = (*key).byte_len as usize;
-                if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(key_ptr, key_len))
-                {
-                    if let Some(value) =
-                        crate::async_hooks::try_async_resource_property_dispatch(raw as i64, name)
-                    {
-                        return JSValue::from_bits(value.to_bits());
-                    }
-                }
-            }
-        }
         if crate::value::addr_class::is_small_handle(raw) {
             if !key.is_null() {
                 unsafe {

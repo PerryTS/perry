@@ -84,6 +84,92 @@ impl PayloadPrototype {
     pub fn method(&mut self, name: &str, info: *const crate::closure::JsFunctionInfo, arity: u32) {
         crate::object::install_proto_method(self.proto, name, info, arity);
     }
+
+    /// Install a non-enumerable, configurable builtin getter.
+    pub fn getter(&mut self, name: &str, info: *const crate::closure::JsFunctionInfo) {
+        let closure = crate::closure::js_closure_alloc(info, 0);
+        crate::object::native_module::set_bound_native_closure_name(
+            closure,
+            &format!("get {name}"),
+        );
+        crate::object::native_module::set_builtin_closure_length(closure as usize, 0);
+        crate::object::native_module::set_builtin_closure_non_constructable(closure as usize);
+        unsafe {
+            crate::object::install_builtin_getter(
+                self.proto,
+                name,
+                crate::value::js_nanbox_pointer(closure as i64).to_bits(),
+            );
+        }
+    }
+
+    /// Install an ordinary data property on the prototype.
+    pub fn data(
+        &mut self,
+        name: &str,
+        value: f64,
+        writable: bool,
+        enumerable: bool,
+        configurable: bool,
+    ) {
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        crate::object::define_builtin_data_property(
+            self.proto,
+            key,
+            value,
+            name.to_string(),
+            crate::object::PropertyAttrs::new(writable, enumerable, configurable),
+        );
+    }
+
+    /// Set the prototype's own `[[Prototype]]`.
+    pub fn inherit(&mut self, parent: f64) {
+        if crate::value::JSValue::from_bits(parent.to_bits()).is_pointer() {
+            crate::object::prototype_chain::object_link_class_default_prototype(
+                self.proto as usize,
+                parent.to_bits(),
+            );
+        }
+    }
+}
+
+/// Install a family's method set on a prototype materialized by an older
+/// native constructor export. Kept for the two legacy async class ids whose
+/// subclass machinery already shares that exact prototype object.
+pub fn install_on_prototype(proto: *mut ObjectHeader, install: fn(&mut PayloadPrototype)) {
+    if !proto.is_null() {
+        // The installer allocates one closure and one string per property.
+        // Its caller hands us a raw prototype pointer, so keep the heap fixed
+        // until every method has been attached.
+        let _no_move = crate::gc::GcSuppressScope::new();
+        install(&mut PayloadPrototype { proto });
+    }
+}
+
+/// Adopt a constructor's existing canonical prototype into the family's
+/// per-realm cache. Its methods are installed only when that prototype is
+/// first adopted, so user changes to the prototype remain ordinary changes.
+pub fn adopt_prototype(
+    family: &NativePayloadFamily,
+    proto: *mut ObjectHeader,
+) -> *mut ObjectHeader {
+    let index = slot_index(family.class_id);
+    let existing = PAYLOAD_PROTOTYPES.with(|slots| slots[index].load(Ordering::Acquire));
+    if existing != 0 {
+        return existing as *mut ObjectHeader;
+    }
+    if !proto.is_null() {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        install_on_prototype(proto, family.install_prototype);
+        PAYLOAD_PROTOTYPES.with(|slots| {
+            crate::gc::runtime_store_root_atomic_raw_i64(
+                &slots[index],
+                proto as i64,
+                Ordering::Release,
+            );
+        });
+    }
+    proto
 }
 
 /// Why [`payload_mut`] has no payload for a value.
@@ -107,19 +193,38 @@ crate::perry_thread_local! {
 }
 
 const _: () = assert!(
-    crate::native_class_ids::CRYPTO_DECIPHERIV - crate::native_class_ids::WEB_BUILTIN_BLOCK_START
+    crate::native_class_ids::DOMAIN - crate::native_class_ids::WEB_BUILTIN_BLOCK_START
         < PROTOTYPE_SLOTS as u32,
     "a native-payload family id outgrew the prototype slot array"
 );
 
 #[inline]
 fn slot_index(class_id: u32) -> usize {
+    if class_id == crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY {
+        return PROTOTYPE_SLOTS - 2;
+    }
+    if class_id == crate::native_class_ids::ASYNC_RESOURCE_LEGACY {
+        return PROTOTYPE_SLOTS - 1;
+    }
     let index = class_id.wrapping_sub(crate::native_class_ids::WEB_BUILTIN_BLOCK_START) as usize;
     assert!(
         index < PROTOTYPE_SLOTS,
         "class id {class_id:#x} is not in the web-builtin block"
     );
     index
+}
+
+#[inline]
+fn slot_index_if_payload(class_id: u32) -> Option<usize> {
+    if matches!(
+        class_id,
+        crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY
+            | crate::native_class_ids::ASYNC_RESOURCE_LEGACY
+    ) {
+        return Some(slot_index(class_id));
+    }
+    let index = class_id.wrapping_sub(crate::native_class_ids::WEB_BUILTIN_BLOCK_START) as usize;
+    (index < PROTOTYPE_SLOTS).then_some(index)
 }
 
 /// GC roots for the payload prototypes. Called from
@@ -167,6 +272,17 @@ fn family_prototype(family: &NativePayloadFamily) -> *mut ObjectHeader {
         }
     };
     if crate::value::JSValue::from_bits(constructor.to_bits()).is_pointer() {
+        let constructor_ptr = crate::value::js_nanbox_get_pointer(constructor) as usize;
+        crate::closure::closure_set_dynamic_prop(
+            constructor_ptr,
+            "prototype",
+            crate::value::js_nanbox_pointer(proto as i64),
+        );
+        crate::object::set_builtin_property_attrs(
+            constructor_ptr,
+            "prototype".to_string(),
+            crate::object::PropertyAttrs::new(false, false, false),
+        );
         let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
         // Spec shape for `constructor`: writable, NOT enumerable, configurable.
         crate::object::define_builtin_data_property(
@@ -234,12 +350,26 @@ pub fn alloc<T: 'static>(
     external_bytes: usize,
     own: &[(&[u8], f64)],
 ) -> f64 {
+    let proto = family_prototype(family);
+    alloc_with_prototype(family, payload, external_bytes, own, proto)
+}
+
+/// Allocate a payload-family instance linked to an already-materialized
+/// constructor prototype. AsyncLocalStorage and AsyncResource predate the
+/// shared payload-prototype cache and their bound exports already own the
+/// canonical per-realm prototype used by source-compiled subclasses.
+pub fn alloc_with_prototype<T: 'static>(
+    family: &'static NativePayloadFamily,
+    payload: T,
+    external_bytes: usize,
+    own: &[(&[u8], f64)],
+    proto: *mut ObjectHeader,
+) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let own_roots: Vec<_> = own
         .iter()
         .map(|&(key, value)| (key, scope.root_nanbox_f64(value)))
         .collect();
-    let proto = family_prototype(family);
     if proto.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -251,13 +381,47 @@ pub fn alloc<T: 'static>(
     for (key, value) in &own_roots {
         set_own(&scope, &obj, key, value.get_nanbox_f64());
     }
+    attach_rooted(&obj, family, payload, external_bytes);
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64))
+}
+
+/// Attach a payload to an existing ordinary object. This is the `super()`
+/// half of the pattern: a source-compiled subclass keeps its own class id and
+/// prototype, while its traced `native_state` owns the same typed cell as a
+/// direct instance.
+pub fn attach<T: 'static>(
+    value: f64,
+    family: &'static NativePayloadFamily,
+    payload: T,
+    external_bytes: usize,
+) -> bool {
+    let Some(obj) = any_object(value) else {
+        return false;
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    attach_rooted(&obj, family, payload, external_bytes);
+    true
+}
+
+fn attach_rooted<T: 'static>(
+    obj: &crate::gc::RuntimeHandle<'_>,
+    family: &'static NativePayloadFamily,
+    payload: T,
+    external_bytes: usize,
+) {
     let meta = obj
         .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe { crate::object::object_meta_ensure(obj) });
     if meta.is_null() {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
+        return;
     }
-    // The cell allocation may collect, which can move the meta record; it is
-    // re-read through the rooted object after.
+    let previous = unsafe { (*meta).native_state };
+    if is_payload_state_word(previous) {
+        let cell = (previous & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
+        if unsafe { (*cell).type_id } == type_tag::<T>(family.class_id) {
+            unsafe { crate::native_handle::native_handle_dispose_rust_payload(cell) };
+        }
+    }
     let resource = Box::into_raw(Box::new(payload)) as *mut c_void;
     let cell = unsafe {
         crate::native_handle::native_handle_new_rust_payload(
@@ -271,8 +435,6 @@ pub fn alloc<T: 'static>(
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
         let meta = (*obj).meta;
         debug_assert!(!meta.is_null(), "object_meta_ensure ran above");
-        // GC_STORE_AUDIT(BARRIERED): metadata-record slot store + object
-        // barrier, exactly as `ObjectMeta::arguments` is stored.
         (*meta).native_state = word;
         crate::gc::runtime_write_barrier_slot(
             meta as usize,
@@ -301,7 +463,6 @@ pub fn alloc<T: 'static>(
     if external_bytes != 0 {
         unsafe { crate::native_handle::native_handle_set_external_bytes(cell, external_bytes) };
     }
-    obj.with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64))
 }
 
 /// A fresh instance of `class_id` linked to its family prototype `proto`,
@@ -370,6 +531,12 @@ unsafe fn mint_birth_record(
 /// The object behind `value` when it is an instance of `class_id`.
 #[inline]
 fn instance_of(value: f64, class_id: u32) -> Option<*mut ObjectHeader> {
+    let obj = any_object(value)?;
+    (unsafe { (*obj).class_id } == class_id).then_some(obj)
+}
+
+#[inline]
+fn any_object(value: f64) -> Option<*mut ObjectHeader> {
     let bits = value.to_bits();
     if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
         return None;
@@ -379,8 +546,7 @@ fn instance_of(value: f64, class_id: u32) -> Option<*mut ObjectHeader> {
     if header.obj_type != crate::gc::GC_TYPE_OBJECT {
         return None;
     }
-    let obj = addr as *mut ObjectHeader;
-    (unsafe { (*obj).class_id } == class_id).then_some(obj)
+    Some(addr as *mut ObjectHeader)
 }
 
 #[inline]
@@ -420,6 +586,29 @@ pub unsafe fn payload_mut<'a, T: 'static>(
     family: &NativePayloadFamily,
 ) -> Result<&'a mut T, PayloadMiss> {
     let cell = payload_cell(value, family.class_id)?;
+    let resource =
+        crate::native_handle::native_handle_rust_payload_ptr(cell, type_tag::<T>(family.class_id));
+    if resource.is_null() {
+        return Err(PayloadMiss::Closed);
+    }
+    Ok(&mut *(resource as *mut T))
+}
+
+/// The live payload attached to any ordinary object, including a subclass
+/// instance whose own class id differs from the native base's id.
+pub unsafe fn payload_mut_attached<'a, T: 'static>(
+    value: f64,
+    family: &NativePayloadFamily,
+) -> Result<&'a mut T, PayloadMiss> {
+    let obj = any_object(value).ok_or(PayloadMiss::Foreign)?;
+    let meta = (*obj).meta;
+    if meta.is_null() || !is_payload_state_word((*meta).native_state) {
+        return Err(PayloadMiss::Foreign);
+    }
+    let cell = ((*meta).native_state & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
+    if (*cell).type_id != type_tag::<T>(family.class_id) {
+        return Err(PayloadMiss::Foreign);
+    }
     let resource =
         crate::native_handle::native_handle_rust_payload_ptr(cell, type_tag::<T>(family.class_id));
     if resource.is_null() {
@@ -867,6 +1056,27 @@ pub unsafe fn link_unref(link: OwnerLink) {
     }
 }
 
+/// Explicitly close a payload attached to an ordinary subclass instance.
+///
+/// Unlike [`close`], this accepts an object whose own class id differs from
+/// the native base family.  The typed probe is what proves that the attached
+/// cell belongs to `family`; a foreign native cell is never disposed.
+pub fn close_attached<T: 'static>(value: f64, family: &NativePayloadFamily) -> bool {
+    if unsafe { payload_mut_attached::<T>(value, family) }.is_err() {
+        return false;
+    }
+    let Some(obj) = any_object(value) else {
+        return false;
+    };
+    let meta = unsafe { (*obj).meta };
+    if meta.is_null() || !is_payload_state_word(unsafe { (*meta).native_state }) {
+        return false;
+    }
+    let cell =
+        (unsafe { (*meta).native_state } & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
+    unsafe { crate::native_handle::native_handle_dispose_rust_payload(cell) }
+}
+
 /// Re-state the native bytes a live payload retains (after a buffer grew or
 /// was released). No-op for a foreign or closed value.
 pub fn set_external_bytes(value: f64, family: &NativePayloadFamily, bytes: usize) {
@@ -930,12 +1140,7 @@ pub(crate) unsafe fn try_payload_method_fast_dispatch(
         return None;
     }
     let obj = addr as *const ObjectHeader;
-    let index = (*obj)
-        .class_id
-        .wrapping_sub(crate::native_class_ids::WEB_BUILTIN_BLOCK_START) as usize;
-    if index >= PROTOTYPE_SLOTS {
-        return None;
-    }
+    let index = slot_index_if_payload((*obj).class_id)?;
     let proto = PAYLOAD_PROTOTYPES.with(|slots| slots[index].load(Ordering::Acquire))
         as *const ObjectHeader;
     if proto.is_null()
@@ -1033,6 +1238,9 @@ pub(crate) fn export_class_id(module: &str, export: &str) -> Option<u32> {
         ("crypto", "Hmac") => ids::CRYPTO_HMAC,
         ("crypto", "Cipheriv") => ids::CRYPTO_CIPHERIV,
         ("crypto", "Decipheriv") => ids::CRYPTO_DECIPHERIV,
+        ("async_hooks", "AsyncLocalStorage") => ids::ASYNC_LOCAL_STORAGE_LEGACY,
+        ("async_hooks", "AsyncResource") => ids::ASYNC_RESOURCE_LEGACY,
+        ("domain", "Domain") => ids::DOMAIN,
         _ => return None,
     })
 }

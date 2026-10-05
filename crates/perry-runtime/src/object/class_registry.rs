@@ -75,6 +75,7 @@ mod vm_brand;
 pub(crate) use crate::object::class_value::CLASS_ACCESSOR_DEFAULT_ATTRS;
 
 // ── state.rs ────────────────────────────────────────────────────────────────
+pub use state::async_local_storage_prototype_value;
 pub(crate) use state::async_resource_prototype_value;
 #[cfg(test)]
 pub(crate) use state::class_decl_prototype_object_root_store;

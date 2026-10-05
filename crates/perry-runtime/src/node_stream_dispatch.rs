@@ -443,7 +443,7 @@ extern "C" fn ns_ee_async_resource_destroy(
     this: crate::closure::JsThis,
 ) -> f64 {
     let resource = require_event_emitter_async_resource_receiver(closure, this);
-    crate::async_hooks::js_async_resource_emit_destroy(resource) as f64
+    crate::async_hooks::js_async_resource_emit_destroy(resource)
 }
 
 /// `EventEmitterAsyncResource.prototype.emit`'s body: `(event, ...args)`.

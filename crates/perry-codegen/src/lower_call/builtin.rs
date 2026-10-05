@@ -836,8 +836,7 @@ pub(super) fn lower_builtin_new<'a>(
                 let _ = lower_expr(ctx, a)?;
             }
             let blk = ctx.block();
-            let handle = blk.call(I64, "js_async_local_storage_new", &[]);
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+            Ok(Some(blk.call(DOUBLE, "js_async_local_storage_new", &[])))
         }
         // #1367: `new crypto.X509Certificate(pem | der)` — parse the cert
         // into a handle exposing subject/issuer/validFrom/validTo/
@@ -874,11 +873,11 @@ pub(super) fn lower_builtin_new<'a>(
             };
             let blk = ctx.block();
             let handle = blk.call(
-                I64,
+                DOUBLE,
                 "js_async_resource_new",
                 &[(DOUBLE, &type_value), (DOUBLE, &options_value)],
             );
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+            Ok(Some(handle))
         }
         // #2875: TC39 explicit-resource-management stacks. `new
         // DisposableStack()` / `new AsyncDisposableStack()` allocate a

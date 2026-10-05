@@ -192,7 +192,7 @@ pub struct NativeMethodRef {
     pub arg_kinds: &'static [&'static str],
     /// Return-kind tag. Pointer-boxed results explicitly distinguish
     /// `"NR_GCPTR"`, `"NR_NULLABLE_GCPTR"`, `"NR_HANDLE_ID"`,
-    /// `"NR_FOREIGN_PTR"`, and `"NR_JS_VALUE"`; the existing
+    /// and `"NR_JS_VALUE"`; the existing
     /// `"NR_PROMISE"`, `"NR_STR"`, `"NR_BIGINT"`, `"NR_F64"`,
     /// `"NR_I32"`, and `"NR_VOID"` tags are unchanged.
     pub ret_kind: &'static str,

@@ -1217,16 +1217,8 @@ pub(crate) fn call_store_run(store: f64, context: f64, next: f64) -> f64 {
         crate::async_context::pop_store(handle);
         result
     }
-    let bits = store.to_bits();
-    if bits & crate::value::TAG_MASK == crate::value::INT32_TAG {
-        let handle = (bits & crate::value::INT32_MASK) as i32 as i64;
-        return run_als(handle, context, next);
-    }
-    if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
-        let raw = (bits & crate::value::POINTER_MASK) as i64;
-        if raw > 0 && raw < 0x10000 {
-            return run_als(raw, context, next);
-        }
+    if let Some(token) = crate::async_context::token_from_storage_value(store) {
+        return run_als(token, context, next);
     }
     if store.is_finite() {
         return run_als(store as i64, context, next);

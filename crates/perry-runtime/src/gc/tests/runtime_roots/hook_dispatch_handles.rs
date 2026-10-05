@@ -17,17 +17,16 @@ fn test_async_resource_subclass_run_in_scope_roots_inputs_across_a_resolve_gc() 
     register_runtime_handle_root_scanner_for_tests();
 
     let resource_type = test_string_value(b"SubclassResource");
-    // #10926: `js_async_resource_new` hands back the handle OBJECT now. What a
-    // subclass receiver is linked to is the NATIVE backing behind it -- the
-    // address the registry brands -- so resolve it. Linking the object instead
-    // stores an address `is_async_resource_handle` rejects, and the resolve
-    // this test is about declines for a reason that has nothing to do with GC.
+    // Resolve the ordinary resource object so the test helper can copy its
+    // native ids into the payload it attaches to the subclass receiver.
     let resource_object = crate::async_hooks::js_async_resource_new(
         resource_type,
         f64::from_bits(crate::value::TAG_UNDEFINED),
     );
-    let backing = crate::async_hooks::resolve_async_resource_handle(resource_object)
-        .expect("a freshly constructed AsyncResource must resolve to its backing");
+    let backing = crate::async_hooks::resolve_async_resource_handle(
+        crate::value::js_nanbox_get_pointer(resource_object),
+    )
+    .expect("a freshly constructed AsyncResource must resolve to its backing");
     let expected_async_id = crate::async_hooks::js_async_resource_async_id(backing);
     let receiver = crate::object::js_object_alloc(0, 1);
     // The helper allocates (a key string, and the meta record the backing word
@@ -69,8 +68,16 @@ fn test_async_hook_option_lookup_roots_callbacks_across_copied_minor_gc() {
     force_next_general_arena_alloc_slow();
     trigger_guard.make_arena_trigger_due();
     let before = gc_collection_count();
-    let _handle = crate::async_hooks::js_async_hooks_create_hook(options);
+    let scope = RuntimeHandleScope::new();
+    let hook = scope.root_nanbox_f64(crate::async_hooks::js_async_hooks_create_hook(options));
     drain_scheduled_minor_gc(before, "async hook option key lookup");
+
+    // Inactive callbacks belong to the ordinary hook's JS-state object, not
+    // the delivery list. Publish them only after the rooted object survives
+    // the forced collection above.
+    crate::async_hooks::js_async_hook_enable(crate::value::js_nanbox_get_pointer(
+        hook.get_nanbox_f64(),
+    ));
 
     let (callback, _resource_bits) = crate::async_hooks::test_async_hooks_scanner_snapshot();
     assert_eq!(assert_callable_closure(ptr_bits(callback)), original);
@@ -161,7 +168,8 @@ fn test_bound_timer_dispatch_roots_args_during_async_hook_init_gc() {
 
 #[test]
 fn test_timer_tick_roots_callback_args_and_previous_context_across_hooks() {
-    const ALS_HANDLE: i64 = -8_501;
+    let storage = crate::async_context::AsyncLocalStoragePayload::default();
+    let als_handle = storage.token();
 
     let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
     let _guard = CopyingNurseryTestGuard::new(0);
@@ -182,7 +190,7 @@ fn test_timer_tick_roots_callback_args_and_previous_context_across_hooks() {
     );
     enable_async_hook(&[(b"before", before_hook), (b"after", after_hook)]);
 
-    crate::async_context::clear_store(ALS_HANDLE);
+    crate::async_context::clear_store(als_handle);
     let callback = crate::closure::js_closure_alloc(crate::fn_info!(test_timer_capture_arg, 1), 0);
     let arg = test_string_value(b"timer-tick-arg");
     let timer_args = [arg];
@@ -192,7 +200,7 @@ fn test_timer_tick_roots_callback_args_and_previous_context_across_hooks() {
 
     let previous = test_string_value(b"timer-previous-context");
     let previous_original = (previous.to_bits() & POINTER_MASK) as usize;
-    crate::async_context::enter_with(ALS_HANDLE, previous);
+    crate::async_context::enter_with(als_handle, previous);
     TEST_TIMER_ARG_BITS.with(|slot| slot.set(0));
     TEST_TIMER_CALLED.with(|slot| slot.set(false));
 
@@ -204,10 +212,10 @@ fn test_timer_tick_roots_callback_args_and_previous_context_across_hooks() {
     );
     assert!(TEST_TIMER_CALLED.with(|slot| slot.get()));
 
-    let restored = crate::async_context::get_store(ALS_HANDLE)
+    let restored = crate::async_context::get_store(als_handle)
         .expect("timer tick should restore previous AsyncLocalStorage context");
     assert_moved_string_value(restored, previous_original, b"timer-previous-context");
-    crate::async_context::clear_store(ALS_HANDLE);
+    crate::async_context::clear_store(als_handle);
     crate::timer::clearTimeout(timer_id);
 }
 
@@ -261,7 +269,8 @@ fn test_timer_tick_roots_the_complete_detached_expired_batch() {
 
 #[test]
 fn test_next_tick_previous_context_survives_hook_gc() {
-    const ALS_HANDLE: i64 = -8_502;
+    let storage = crate::async_context::AsyncLocalStoragePayload::default();
+    let als_handle = storage.token();
 
     let _async_hook_guard = AsyncHookRuntimeTestGuard::new();
     let _guard = CopyingNurseryTestGuard::new(0);
@@ -276,14 +285,14 @@ fn test_next_tick_previous_context_survives_hook_gc() {
     );
     enable_async_hook(&[(b"before", before_hook)]);
 
-    crate::async_context::clear_store(ALS_HANDLE);
+    crate::async_context::clear_store(als_handle);
     let callback =
         crate::closure::js_closure_alloc(crate::fn_info!(test_no_capture_singleton_func, 0), 0);
     crate::builtins::js_queue_next_tick(callback as i64);
 
     let previous = test_string_value(b"nexttick-previous-context");
     let previous_original = (previous.to_bits() & POINTER_MASK) as usize;
-    crate::async_context::enter_with(ALS_HANDLE, previous);
+    crate::async_context::enter_with(als_handle, previous);
 
     let before = gc_collection_count();
     crate::builtins::js_drain_queued_microtasks();
@@ -292,10 +301,10 @@ fn test_next_tick_previous_context_survives_hook_gc() {
         "nextTick before hook should trigger copied-minor GC",
     );
 
-    let restored = crate::async_context::get_store(ALS_HANDLE)
+    let restored = crate::async_context::get_store(als_handle)
         .expect("nextTick should restore previous AsyncLocalStorage context");
     assert_moved_string_value(restored, previous_original, b"nexttick-previous-context");
-    crate::async_context::clear_store(ALS_HANDLE);
+    crate::async_context::clear_store(als_handle);
 }
 
 #[test]
@@ -569,7 +578,7 @@ fn test_async_resource_event_emitter_link_follows_a_moved_subclass_emitter() {
         resource_type,
         f64::from_bits(crate::value::TAG_UNDEFINED),
     );
-    let resource_root = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(resource));
+    let resource_root = scope.root_nanbox_f64(resource);
     let emitter = crate::object::js_object_alloc(EMITTER_CLASS_ID, 1);
     let emitter_before = emitter as usize;
     crate::async_hooks::set_async_resource_event_emitter(
@@ -585,9 +594,11 @@ fn test_async_resource_event_emitter_link_follows_a_moved_subclass_emitter() {
     );
 
     let resource_now = (resource_root.get_nanbox_f64().to_bits() & POINTER_MASK) as i64;
-    let linked =
-        crate::async_hooks::try_async_resource_property_dispatch(resource_now, "eventEmitter")
-            .expect("eventEmitter must resolve on an AsyncResource");
+    let event_emitter_key = crate::string::js_string_from_bytes(b"eventEmitter".as_ptr(), 12);
+    let linked = crate::object::js_object_get_field_by_name_f64(
+        resource_now as *const crate::object::ObjectHeader,
+        event_emitter_key,
+    );
     let emitter_after = (linked.to_bits() & POINTER_MASK) as usize;
     assert_ne!(
         emitter_after, emitter_before,

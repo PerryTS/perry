@@ -330,6 +330,10 @@ impl Writer<'_> {
         if crate::native_class_ids::is_native_backed_class_id(class_id) {
             return SerializedValue::Unsupported("native handle");
         }
+        let meta = (*obj).meta;
+        if !meta.is_null() && crate::native_payload::is_payload_state_word((*meta).native_state) {
+            return SerializedValue::Unsupported("native handle");
+        }
         if let Err(seen) = self.begin(Some(addr)) {
             return seen;
         }

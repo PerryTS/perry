@@ -162,27 +162,21 @@
     },
     {
       "file": "crates/perry-runtime/src/async_hooks.rs",
-      "name": "ASYNC_HOOK_HANDLES",
-      "verdict": "not_a_gc_pointer",
-      "why": "HashSet of Box::into_raw AsyncHookHandle pointers allocated by Rust's global allocator, outside Perry's GC heap. The boxes are never freed or moved; membership is used only to recognize dynamic AsyncHook receivers."
+      "name": "TEST_FORCE_RESOLVE_GC",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] AtomicUsize countdown that asks the AsyncResource resolver test to force one collection. It is a count, never an address, and is absent from shipped binaries."
     },
     {
       "file": "crates/perry-runtime/src/async_hooks.rs",
-      "name": "ASYNC_HOOK_HANDLE_COUNT",
+      "name": "HOOK_CALLBACK_DEPTH",
       "verdict": "not_a_gc_pointer",
-      "why": "Monotonic count of AsyncHookHandle boxes registered in ASYNC_HOOK_HANDLES. It holds no address and is used only as a fast-path emptiness check."
+      "why": "Cell<usize> nesting depth for async-hook callback delivery. It stores only a counter and can never contain a GC address or JavaScript value."
     },
     {
       "file": "crates/perry-runtime/src/async_hooks.rs",
-      "name": "ASYNC_RESOURCE_HANDLES",
+      "name": "PENDING_HOOK_STATES",
       "verdict": "not_a_gc_pointer",
-      "why": "HashSet of async resource IDs (async_hooks' asyncId space), not heap addresses. The resource OBJECTS live in RESOURCES, which scan_async_hooks_roots_mut visits."
-    },
-    {
-      "file": "crates/perry-runtime/src/async_hooks.rs",
-      "name": "ASYNC_RESOURCE_HANDLE_COUNT",
-      "verdict": "not_a_gc_pointer",
-      "why": "Monotonic counter of live async-resource handles. Holds no address at all; the resource objects live in RESOURCES, which scan_async_hooks_roots_mut visits."
+      "why": "Map from AsyncHook record indices to requested enabled/disabled booleans while callback delivery is nested. Both key and value are scalar state; callbacks themselves remain in HOOKS and are visited by scan_async_hooks_roots_mut."
     },
     {
       "file": "crates/perry-runtime/src/buffer/header.rs",
@@ -3029,18 +3023,6 @@
       "name": "KEYS_ARRAY_SLOT_FALLBACKS"
     },
     {
-      "file": "crates/perry-runtime/src/async_context.rs",
-      "name": "HANDLE_GENERATIONS"
-    },
-    {
-      "file": "crates/perry-runtime/src/async_hooks.rs",
-      "name": "HOOK_CALLBACK_DEPTH"
-    },
-    {
-      "file": "crates/perry-runtime/src/async_hooks.rs",
-      "name": "PENDING_HOOK_STATES"
-    },
-    {
       "file": "crates/perry-runtime/src/async_hooks.rs",
       "name": "REGISTERED"
     },
@@ -4266,10 +4248,6 @@
     {
       "file": "crates/perry-stdlib/src/crypto/random.rs",
       "name": "CB_VALUE_PTR"
-    },
-    {
-      "file": "crates/perry-stdlib/src/domain.rs",
-      "name": "ACTIVE_DOMAINS"
     },
     {
       "file": "crates/perry-stdlib/src/domain.rs",

@@ -89,6 +89,7 @@ mod class_super_chain;
 pub(crate) mod class_value;
 #[cfg(test)]
 mod zeroed_cache_tests;
+pub use class_registry::async_local_storage_prototype_value;
 pub(crate) use class_registry::async_resource_prototype_value;
 pub(crate) use class_registry::class_registry_census;
 #[cfg(feature = "regex-engine")]

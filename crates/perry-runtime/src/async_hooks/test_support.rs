@@ -28,6 +28,8 @@ pub(crate) fn test_seed_async_hooks_scanner_roots(callback: *const ClosureHeader
         },
         enabled: true,
         track_promises: true,
+        occupied: true,
+        order: 1,
     });
     HOOKS_ACTIVE.store(1, Ordering::Relaxed);
     PROMISE_HOOKS_ACTIVE.store(1, Ordering::Relaxed);
@@ -63,6 +65,70 @@ pub(crate) fn test_async_hooks_scanner_snapshot() -> (usize, u64) {
 mod tests {
     use super::*;
 
+    #[test]
+    fn disabled_hooks_release_payloads_and_retire_callback_records() {
+        reset_for_tests();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let options = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+        for _ in 0..500 {
+            let hook = scope.root_nanbox_f64(js_async_hooks_create_hook(
+                options.with_mut_ptr::<ObjectHeader, _>(|options| {
+                    crate::value::js_nanbox_pointer(options as i64)
+                }),
+            ));
+            assert!(HOOKS.lock().unwrap().is_empty());
+            js_async_hook_enable(crate::value::js_nanbox_get_pointer(hook.get_nanbox_f64()));
+            assert_eq!(HOOKS.lock().unwrap().len(), 1);
+            js_async_hook_disable(crate::value::js_nanbox_get_pointer(hook.get_nanbox_f64()));
+            assert!(HOOKS.lock().unwrap().is_empty());
+            assert!(matches!(
+                unsafe {
+                    crate::native_payload::payload_mut::<AsyncHookPayload>(
+                        hook.get_nanbox_f64(),
+                        &ASYNC_HOOK_FAMILY,
+                    )
+                },
+                Err(crate::native_payload::PayloadMiss::Closed)
+            ));
+            js_async_hook_enable(crate::value::js_nanbox_get_pointer(hook.get_nanbox_f64()));
+            js_async_hook_disable(crate::value::js_nanbox_get_pointer(hook.get_nanbox_f64()));
+            assert!(HOOKS.lock().unwrap().is_empty());
+        }
+        reset_for_tests();
+    }
+
+    #[test]
+    fn an_attached_payload_of_another_family_is_foreign_even_after_close() {
+        reset_for_tests();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let hook = scope.root_nanbox_f64(crate::native_payload::alloc(
+            &ASYNC_HOOK_FAMILY,
+            AsyncHookPayload { index: usize::MAX },
+            0,
+            &[],
+        ));
+        for close in [false, true] {
+            if close {
+                crate::native_payload::close(hook.get_nanbox_f64(), &ASYNC_HOOK_FAMILY);
+            }
+            assert!(matches!(
+                unsafe {
+                    crate::native_payload::payload_mut_attached::<AsyncResourcePayload>(
+                        hook.get_nanbox_f64(),
+                        &ASYNC_RESOURCE_FAMILY,
+                    )
+                },
+                Err(crate::native_payload::PayloadMiss::Foreign)
+            ));
+            assert!(
+                !crate::native_payload::close_attached::<AsyncResourcePayload>(
+                    hook.get_nanbox_f64(),
+                    &ASYNC_RESOURCE_FAMILY,
+                )
+            );
+        }
+    }
+
     extern "C" fn throwing_lifecycle_hook(
         _closure: *const ClosureHeader,
         _this: crate::closure::JsThis,
@@ -83,6 +149,8 @@ mod tests {
             callbacks,
             enabled: true,
             track_promises: false,
+            occupied: true,
+            order: 1,
         });
         HOOKS_ACTIVE.store(1, Ordering::Relaxed);
     }
@@ -110,13 +178,14 @@ mod tests {
 
     #[test]
     fn resource_scope_restores_context_when_lifecycle_hooks_throw() {
-        const STORE: i64 = -9_401;
         for before_phase in [true, false] {
+            let storage = crate::async_context::AsyncLocalStoragePayload::default();
+            let store = storage.token();
             reset_for_tests();
-            crate::async_context::clear_store(STORE);
-            crate::async_context::enter_with(STORE, 11.0);
+            crate::async_context::clear_store(store);
+            crate::async_context::enter_with(store, 11.0);
             let ids = init_resource("throwing-scope", TAG_UNDEFINED_F64, true);
-            crate::async_context::enter_with(STORE, 22.0);
+            crate::async_context::enter_with(store, 22.0);
             enable_throwing_lifecycle_hook(before_phase);
 
             let mut completion_ran = false;
@@ -129,8 +198,8 @@ mod tests {
             assert_eq!(completion_ran, !before_phase);
             assert_eq!(execution_async_id_u64(), 0);
             assert!(EXECUTION_STACK.with(|stack| stack.borrow().is_empty()));
-            assert_eq!(crate::async_context::get_store(STORE), Some(22.0));
-            crate::async_context::clear_store(STORE);
+            assert_eq!(crate::async_context::get_store(store), Some(22.0));
+            crate::async_context::clear_store(store);
         }
         reset_for_tests();
     }
@@ -159,28 +228,31 @@ mod tests {
                 callbacks,
                 enabled: false,
                 track_promises: false,
+                occupied: true,
+                order: 1,
             },
             HookRecord {
                 callbacks,
                 enabled: false,
                 track_promises: true,
+                occupied: true,
+                order: 2,
             },
         ]);
-        // #10926: `js_async_hook_enable`/`disable` take the JS receiver and
-        // resolve it, where they used to dereference whatever address they
-        // were handed. A BORROWED STACK handle is no longer a valid input --
-        // it is not in the registry, so the resolve declines and the call is a
-        // no-op. Build the backing the way production does instead: a leaked
-        // `Box` in the registry, which is what makes membership monotonic and
-        // an address safe to keep. That exercises the resolver's registry arm;
-        // the handle-OBJECT arm is covered end to end by `hook.enable()` /
-        // `hook.disable()` in the object-surface integration test.
-        let suppressed = Box::into_raw(Box::new(AsyncHookHandle { index: 0 })) as i64;
-        let tracked = Box::into_raw(Box::new(AsyncHookHandle { index: 1 })) as i64;
-        for backing in [suppressed, tracked] {
-            ASYNC_HOOK_HANDLES.lock().unwrap().insert(backing);
-            ASYNC_HOOK_HANDLE_COUNT.fetch_add(1, Ordering::Relaxed);
-        }
+        let suppressed_value = crate::native_payload::alloc(
+            &ASYNC_HOOK_FAMILY,
+            AsyncHookPayload { index: 0 },
+            std::mem::size_of::<AsyncHookPayload>(),
+            &[],
+        );
+        let tracked_value = crate::native_payload::alloc(
+            &ASYNC_HOOK_FAMILY,
+            AsyncHookPayload { index: 1 },
+            std::mem::size_of::<AsyncHookPayload>(),
+            &[],
+        );
+        let suppressed = crate::value::js_nanbox_get_pointer(suppressed_value);
+        let tracked = crate::value::js_nanbox_get_pointer(tracked_value);
         js_async_hook_enable(suppressed);
         assert!(hooks_active());
         assert!(!promise_hooks_active());
@@ -220,9 +292,9 @@ mod tests {
         // backing's expando side table, so resolve through the same entry
         // point every caller uses and keep going with the backing.
         let resource_object = js_async_resource_new(type_value, TAG_UNDEFINED_F64);
-        let handle = resolve_async_resource_handle(resource_object)
-            .expect("a freshly constructed AsyncResource must resolve to its backing");
-        assert!(is_async_resource_handle(handle));
+        let handle =
+            resolve_async_resource_handle(crate::value::js_nanbox_get_pointer(resource_object))
+                .expect("a freshly constructed AsyncResource must resolve to its backing");
         let resource = crate::value::js_nanbox_pointer(handle);
         let symbol = unsafe { crate::symbol::js_symbol_new_empty() };
         unsafe {
@@ -237,8 +309,9 @@ mod tests {
         let name = crate::value::js_nanbox_string(name_ptr as i64);
         crate::proxy::js_put_value_set(resource, name, 42.0, resource, 1);
         assert_eq!(
-            try_async_resource_property_dispatch(handle, "label").map(f64::to_bits),
-            Some(42.0f64.to_bits())
+            crate::object::js_object_get_field_by_name_f64(handle as *const ObjectHeader, name_ptr)
+                .to_bits(),
+            42.0f64.to_bits()
         );
         reset_for_tests();
     }

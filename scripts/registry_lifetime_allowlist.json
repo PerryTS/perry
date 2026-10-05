@@ -72,24 +72,6 @@
       "why": "Keyed by NEXT_WRITER_ID per getWriter(); releaseLock only sets locked=false and the only remove is in #[cfg(test)]"
     },
     {
-      "file": "crates/perry-runtime/src/async_context.rs",
-      "name": "HANDLE_GENERATIONS",
-      "verdict": "open_leak",
-      "why": "Keyed by AsyncLocalStorage handle; bumped on disable() while active and never dropped by remove_store, so it grows per such ALS instance"
-    },
-    {
-      "file": "crates/perry-runtime/src/async_hooks.rs",
-      "name": "ASYNC_HOOK_HANDLES",
-      "verdict": "open_leak",
-      "why": "Set of AsyncHook handles, one per createHook(); disable() does not remove and nothing else does"
-    },
-    {
-      "file": "crates/perry-runtime/src/async_hooks.rs",
-      "name": "ASYNC_RESOURCE_HANDLES",
-      "verdict": "open_leak",
-      "why": "Set of Box::into_raw AsyncResource handles, one per new AsyncResource; documented as monotonic and never shrunk"
-    },
-    {
       "file": "crates/perry-runtime/src/buffer/header.rs",
       "name": "ASYMMETRIC_KEY_REGISTRY",
       "verdict": "open_leak",

@@ -367,14 +367,6 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     if obj_key == 0 || sym_key == 0 {
         return value_f64;
     }
-    // A base AsyncResource's public identity is a process-stable Box pointer,
-    // registered separately from Perry's moving GC heap.  It intentionally
-    // uses POINTER_TAG so it behaves as an object, but bytes before/inside the
-    // Box are allocator state and AsyncResource ids, not GcHeader/ObjectHeader
-    // fields.  Never use those bytes for frozen/extensible or class-setter
-    // decisions; symbol values for the handle live entirely in this side
-    // table.
-    let native_async_resource = crate::async_hooks::is_async_resource_handle(obj_key as i64);
     super::note_symbol_key_installed(sym_key);
     // #5437 (Next.js): a native HANDLE (small-id NaN-boxed POINTER, e.g. the
     // node:http IncomingMessage) carries per-request metadata in the symbol
@@ -427,7 +419,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     // not block it. Checked first, ahead of the extensibility gate, using
     // the same pointer-object condition the class-setter/accessor fallback
     // below uses.
-    if !has_own_data && !native_async_resource {
+    if !has_own_data {
         let bits = obj_f64.to_bits();
         if crate::object::class_value::legacy_class_value_word(bits).is_none() {
             let jsval = crate::value::JSValue::from_bits(bits);
@@ -464,7 +456,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     // plus `is_valid_obj_ptr` is not enough: Web Fetch handles
     // (Request/Response/Headers) live above that floor, and
     // `Reflect.set(new Request(url), sym, v)` read an unmapped GcHeader.
-    if !native_async_resource && (obj_f64.to_bits() >> 48) == 0x7FFD {
+    if (obj_f64.to_bits() >> 48) == 0x7FFD {
         if let Some(gc) = crate::value::addr_class::try_read_gc_header(obj_key) {
             let flags = gc._reserved;
             if has_own_data {
@@ -488,7 +480,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
             {
                 return value_f64;
             }
-        } else if !native_async_resource {
+        } else {
             let jsval = crate::value::JSValue::from_bits(bits);
             if jsval.is_pointer() {
                 let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();

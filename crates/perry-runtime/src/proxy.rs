@@ -1089,43 +1089,11 @@ fn small_handle_from_value(value: f64) -> Option<i64> {
     None
 }
 
-/// Native `AsyncResource` values are process-stable `Box` pointers rather
-/// than GC `ObjectHeader`s or ids in the small-handle band.  Recognize their
-/// exact registry membership before any generic object walk can interpret the
-/// allocation (or its allocator prefix) as GC/object metadata.
-fn async_resource_handle_from_value(value: f64) -> Option<i64> {
-    let bits = value.to_bits();
-    let raw = match bits >> 48 {
-        top if top == (POINTER_TAG >> 48) => (bits & POINTER_MASK) as i64,
-        0 => bits as i64,
-        _ => return None,
-    };
-    crate::async_hooks::is_async_resource_handle(raw).then_some(raw)
-}
-
 fn set_handle_property(target: f64, key: f64, value: f64) -> Option<bool> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let target = scope.root_nanbox_f64(target);
     let key = scope.root_nanbox_f64(key);
     let value = scope.root_nanbox_f64(value);
-    if let Some(handle) = async_resource_handle_from_value(target.get_nanbox_f64()) {
-        if unsafe { crate::symbol::js_is_symbol(key.get_nanbox_f64()) } != 0 {
-            unsafe {
-                crate::symbol::js_object_set_symbol_property(
-                    target.get_nanbox_f64(),
-                    key.get_nanbox_f64(),
-                    value.get_nanbox_f64(),
-                )
-            };
-            return Some(true);
-        }
-        let Some(name) = key_to_rust_string(key.get_nanbox_f64()) else {
-            return Some(false);
-        };
-        crate::object::handle_expando::handle_expando_set(handle, &name, value.get_nanbox_f64());
-        return Some(true);
-    }
-
     let handle = small_handle_from_value(target.get_nanbox_f64())?;
     let Some(name) = key_to_rust_string(key.get_nanbox_f64()) else {
         // A SYMBOL-keyed write on a small native handle (e.g. the

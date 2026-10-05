@@ -74,6 +74,9 @@ fn thread_exit_disables_the_threads_async_hooks_create_hook_record() {
         let _hook = perry_runtime::async_hooks::js_async_hooks_create_hook(pointer_value(
             options.get_raw_mut_ptr::<ObjectHeader>() as *const u8,
         ));
+        perry_runtime::async_hooks::js_async_hook_enable(
+            perry_runtime::value::js_nanbox_get_pointer(_hook),
+        );
         let live = perry_runtime::async_hooks::hook_callback_registered_for_test(addr());
         (addr(), live)
     })
@@ -91,9 +94,9 @@ fn thread_exit_disables_the_threads_async_hooks_create_hook_record() {
 
 #[test]
 fn thread_exit_releases_the_threads_async_hooks_resources_and_snapshots() {
-    // The ALS handle is only an id for the store entry.
-    const ALS_HANDLE: i64 = 0x1147_1001;
     let (async_id, store_bits, live) = std::thread::spawn(|| {
+        let als_payload = perry_runtime::async_context::AsyncLocalStoragePayload::default();
+        let als_token = als_payload.token();
         let scope = RuntimeHandleScope::new();
         let resource = scope.root_raw_mut_ptr(perry_runtime::js_object_alloc(0, 0));
         let store = scope.root_raw_mut_ptr(perry_runtime::js_object_alloc(0, 0));
@@ -103,7 +106,7 @@ fn thread_exit_releases_the_threads_async_hooks_resources_and_snapshots() {
             true,
         );
         perry_runtime::async_context::enter_with(
-            ALS_HANDLE,
+            als_token,
             pointer_value(store.get_raw_mut_ptr::<ObjectHeader>() as *const u8),
         );
         let _snapshot =

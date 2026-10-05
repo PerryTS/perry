@@ -181,3 +181,15 @@ fn weak_wrapper_constructors_name_their_instance_class_ids() {
         );
     }
 }
+
+#[test]
+fn async_payload_bases_register_their_reserved_parent_ids() {
+    assert_eq!(
+        super::builtin_parent_reserved_class_id("AsyncLocalStorage"),
+        Some(0xFFFF_0078)
+    );
+    assert_eq!(
+        super::builtin_parent_reserved_class_id("AsyncResource"),
+        Some(0xFFFF_0079)
+    );
+}

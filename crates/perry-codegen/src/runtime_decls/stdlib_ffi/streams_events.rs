@@ -153,14 +153,12 @@ pub(crate) fn declare_streams_events(module: &mut LlModule) {
     module.declare_function("js_events_init", DOUBLE, &[]);
 
     // ========== Domain ==========
-    module.declare_function("js_domain_create", I64, &[]);
-    module.declare_function("js_domain_on", I64, &[I64, I64, I64]);
-    module.declare_function("js_domain_emit", DOUBLE, &[I64, I64, I64]);
+    module.declare_function("js_domain_create", DOUBLE, &[]);
     module.declare_function("js_domain_run", DOUBLE, &[I64, DOUBLE, I64]);
     module.declare_function("js_domain_bind", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_domain_intercept", DOUBLE, &[I64, DOUBLE]);
-    module.declare_function("js_domain_add", I64, &[I64, DOUBLE]);
-    module.declare_function("js_domain_remove", I64, &[I64, DOUBLE]);
+    module.declare_function("js_domain_add", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_domain_remove", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_domain_enter", DOUBLE, &[I64]);
     module.declare_function("js_domain_exit", DOUBLE, &[I64]);
 

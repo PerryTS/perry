@@ -160,10 +160,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
     ) -> f64 {
         let method = std::slice::from_raw_parts(method_ptr, method_len);
         match method {
-            b"AsyncLocalStorage" => {
-                let handle = crate::async_local_storage::js_async_local_storage_new();
-                perry_runtime::js_nanbox_pointer(handle)
-            }
+            b"AsyncLocalStorage" => crate::async_local_storage::js_async_local_storage_new(),
             b"AsyncResource" => {
                 let type_value = if !args_ptr.is_null() && args_len > 0 {
                     *args_ptr
@@ -175,8 +172,7 @@ pub unsafe extern "C" fn js_stdlib_init_dispatch() {
                 } else {
                     TAG_UNDEFINED_F64
                 };
-                let handle = perry_runtime::async_hooks::js_async_resource_new(type_value, options);
-                perry_runtime::js_nanbox_pointer(handle)
+                perry_runtime::async_hooks::js_async_resource_new(type_value, options)
             }
             _ => TAG_UNDEFINED_F64,
         }

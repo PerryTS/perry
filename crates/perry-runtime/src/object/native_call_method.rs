@@ -2011,24 +2011,6 @@ pub(crate) unsafe fn native_call_method_tower(
             return 0.0;
         }
 
-        // AsyncHook/AsyncResource handles are raw Box pointers under
-        // POINTER_TAG, not GC heap objects — recognize them by registry
-        // membership BEFORE the gc_header read below (which would read foreign
-        // allocator memory). Covers receivers whose static type the codegen
-        // lost through a helper return, closure capture, or `any` binding.
-        if let Some(r) = crate::async_hooks::try_async_hook_method_dispatch(obj as i64, method_name)
-        {
-            return r;
-        }
-        if let Some(r) = crate::async_hooks::try_async_resource_method_dispatch(
-            obj as i64,
-            method_name,
-            args_ptr,
-            args_len,
-        ) {
-            return r;
-        }
-
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
