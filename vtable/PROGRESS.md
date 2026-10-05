@@ -275,3 +275,152 @@ plus the final notes/changelog commit. Bundle:
 Host build targets are removed after copying the final logs.
 All raw logs and harnesses are retained in the approved scratch directory:
 `/Users/amlug/projects/perry/secret-tests/scratchpad/codex-small/vt4/`.
+
+
+### S4 current-main revalidation and regression fix (vt4b, 2026-10-05)
+
+Rebased all five S4 commits from PR head 49b1629553 onto the requested main
+495fa8f94984177d945707a95ab0ef25aa4acf85, cleanly. The runtime fix is
+cceb932933. Versions are unchanged. This section records the current-main
+check; the preceding S4 measurements describe its earlier integration.
+
+Independent source workspaces and targets on qb6 contain main and the
+rebased head. Both use the standard four-package release build with -j 12,
+release codegen-units=1 and thin LTO. Compile drivers use Node 26.5.1,
+TypeScript 5.8.2, PERRY_ALLOW_PERRY_FEATURES=1, PERRY_NO_AUTO_OPTIMIZE=1,
+PERRY_NO_CACHE=1, PERRY_KEEP_SYMBOLS=1, one module worker and twelve LLVM
+unit workers. LLVM worker count controls concurrency, not unit partitioning.
+Fastify's no-auto HTTP runtime/stdlib/wrapper graph is also built separately
+for each arm. No target is shared between arms. Only driver/package files
+were copied; the supplied node_modules/.cache was excluded.
+
+The reported tsc +4.15% and +8.2 MB do not reproduce with these builds.
+Before the new fix, the rebased S4 is +0.215% instructions on tsc, with
+identical stripped size and 856 fewer text-symbol bytes. A second cold
+comparison builds historical main a6c147b7b0 and applies the original S4
+diff to that source: tsc is +0.043%, stripped size is identical, and its
+text-symbol total decreases by 372 bytes. The original 130.59 MB main
+artifact has no counterpart among these fresh builds. The original anomaly
+cannot be attributed without its baseline artifact/build settings; it is
+not established as an interaction with #12041 by these reproductions.
+
+| Cold comparison before the fix | Main instructions (G) | S4 (G) | Delta | Main stripped bytes | S4 stripped bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| current main 495fa8f949 | 28.121576 | 28.182168 | +0.215% | 139083128 | 139083128 |
+| historical main a6c147b7b0 | 28.244683 | 28.256928 | +0.043% | 138853816 | 138853816 |
+
+nm -C -S --size-sort comparisons cover all defined text symbols; section
+sizes are retained as well. All 30938 distinct TypeScript-named text symbols
+have exactly the same sizes in current main, rebased S4 and the final fix:
+92720856 bytes. There is no reproduced codegen arm or per-site inlining
+explosion. In the final binaries, .perry_src is 9099839 bytes and
+.perry_gcmap is 5081675 bytes in both arms. Final text-symbol totals are
+112834465 -> 112834944 (+479 bytes), and .text is
+112618290 -> 112618994 (+704 bytes).
+
+Fastify does reproduce a +3.127% instruction regression. Its instruction
+profiles identify extra accessor discovery and a larger share of collection
+and layout-table work. The fix has two parts:
+
+- Let #12041's class data/absence holder proof answer before an accessor
+  discovery walk. Generic getter fallback only walks an unresolved bare
+  CLASS shape link: ordinary/recorded chains already use the existing full
+  inherited read. These changes reduce Fastify to +2.667%.
+- Fetch's new native getter implementation captured a property-name string
+  in each of 25 closures. These constant names add 25 live strings and 200
+  closure bytes to bootstrap, although Fastify does not need those getter
+  bodies. Replace them with zero-capture bodies naming their native property
+  directly. The bodies use the native byte-name property dispatcher and have
+  correct reflected getter names. Fastify becomes +0.120%.
+
+The first old main/S4 minor collection differs by exactly 25 objects and
+1152 bytes (33377/2415064 -> 33402/2416216). In the final diagnostic pair,
+both arms copy 33375 objects / 2414992 bytes. GC self-profile share is
+7.89% main / 7.98% final, versus 9.73% for the first fix that retained the
+captures. Collection counts and budgeted work units agree in the original
+pair; this is increased collection/table cost rather than extra collection
+frequency. The ablation and removal of the redundant captured state isolate
+the reproduced remaining Fastify cost. The final design still answers class
+accessors through live holder-shape lanes and retains the deleted class-table
+accessor predicates/registries.
+
+Final measurements are medians of five interleaved user-mode instruction
+samples per arm. All 90 measured executions match Node byte-for-byte. Each
+row meets the +0.3% limit.
+
+| Program | Main instructions (G) | Final S4 (G) | Delta |
+| --- | ---: | ---: | ---: |
+| tsc (1 transpile) | 10.192972 | 10.213529 | +0.202% |
+| tsc (3 transpiles; reported workload) | 28.119707 | 28.174057 | +0.193% |
+| tsc ×3 (9 transpiles) | 84.969483 | 85.122413 | +0.180% |
+| Zod ×5000 | 16.121007 | 16.110668 | -0.064% |
+| qs parse | 28.551488 | 28.557220 | +0.020% |
+| qs stringify | 76.436748 | 76.445620 | +0.012% |
+| commander | 7.811391 | 7.809711 | -0.021% |
+| hello | 0.001247 | 0.001248 | +0.086% |
+| fastify | 108.325679 | 108.455861 | +0.120% |
+
+| tsc size | Main bytes | Final bytes | Delta |
+| --- | ---: | ---: | ---: |
+| unstripped | 171790112 | 171799016 | +8904 (+0.0052%) |
+| stripped | 139083128 | 139087224 | +4096 (+0.0029%) |
+
+Both binary-size comparisons meet +0.2%. Compiler, runtime and stdlib
+archive hashes are unchanged across the final measurement run.
+
+The accessor micro rows use five differential 100000/1100000-iteration
+samples per arm, with all 80 outputs matching Node:
+
+| Row | Main instructions/iteration | Final S4 | Delta |
+| --- | ---: | ---: | ---: |
+| lit_get_set_has | 62.999658 | 62.999262 | -0.0006% |
+| inherited_getter | 13090.511226 | 463.001443 | -96.4631% |
+| class_getter | 123.999460 | 124.000171 | +0.0006% |
+| subclass_setter | 15292.125483 | 284.000653 | -98.1428% |
+
+The getter/setter/accessor/class gap subset contains 181 fixtures:
+main 179 PASS, final 181 PASS, zero regressions. The two main failures are
+the existing S4 own-data-write/relink fixture and the new Fetch getter-body
+fixture. The other new fixture covers recorded links, getter results of
+undefined, keyless receivers and data shadowing/deletion. These are default
+runs; the extra forced-moving harness mode was not run in this lane.
+
+Final runtime/HIR/codegen tests include unit, integration and doc targets:
+
+| Crate | Passed | Failed | Ignored |
+| --- | ---: | ---: | ---: |
+| runtime | 5055 | 0 | 13 |
+| HIR | 921 | 0 | 3 |
+| codegen | 2500 | 15 | 6 |
+
+All 15 codegen failures are native_proof_buffer_views cases reproduced with
+identical test names on pristine 495fa8f949 (that target: 32 PASS / 15 FAIL).
+They concern typed-view proof diagnostics, so the requested all-green
+codegen gate remains unmet. No new runtime/HIR/codegen failure is introduced.
+
+Holder ShapeId sabotage is red. Before the new fix, removing only the
+terminal comparison from source made
+class_accessor_rechecks_same_shape_holder_link fail, and source restoration
+passed with byte-identical compiler/runtime/stdlib hashes. On the final
+compiled runtime unit test, a private copy removes only the six-byte
+terminal-holder ShapeId rejection branch (0x1427ed0; receiver, intermediate
+hop and pair checks remain). The stale-getter test exits 101. The untouched
+executable passes before and after with identical SHA-256
+14696c13de6f7a9a4234f3e5cd0b20b69d96e450300656f2121c2df5ae3baebd.
+The repository comparison remains intact. Final fmt, git diff --check and
+Node-version consistency checks pass.
+
+Evidence: separate-arm release logs, raw n=5 samples, nm/section inventories,
+perf instruction records/diffs for current/historical tsc and current/final
+Fastify, GC diagnostics, fixtures, full Rust logs, hashes and sabotage scripts
+are in /Users/amlug/projects/perry/secret-tests/scratchpad/codex-small/vt4b/.
+The final tsc/Fastify binaries and symbol/build inventories are also preserved
+as compressed archives there. All eight build target directories were removed
+after preservation; no target directories remain in the lane's host workspace.
+
+Completion limits: the original +4.15%/+8.2 MB anomaly is not reproduced or
+attributed without its original baseline artifacts/settings; the 15 matching
+main codegen failures prevent an all-green codegen result. All requested
+final instruction/size gates and correctness comparisons pass.
+
+Bundle: /Users/amlug/projects/perry/secret-tests/scratchpad/codex-small/vt4b.bundle.
