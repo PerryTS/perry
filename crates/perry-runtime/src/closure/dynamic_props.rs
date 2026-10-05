@@ -513,8 +513,8 @@ pub(crate) fn closure_get_dynamic_prop_keyed(
     // more, so the read continues on the prototype — `Function.prototype`
     // itself has own `name` ("") and `length` (0).
     if matches!(prop, "name" | "length") && !on_base && closure_is_key_deleted(ptr, prop) {
-        let proto = super::shape::FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
-        if proto != 0 && proto as usize != ptr {
+        let proto = super::shape::function_prototype_ptr_materialized();
+        if proto != 0 && proto != ptr {
             let key_hdr = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
             let v = crate::object::js_object_get_field_by_name(
                 proto as *const crate::object::ObjectHeader,
@@ -681,6 +681,21 @@ pub fn closure_set_dynamic_prop(ptr: usize, prop: &str, value: f64) {
     // #3655: re-defining a previously deleted slot makes it present again.
     unsafe { super::props::state_clear_deleted(ptr, prop) };
     super::shape::refresh_closure_shape(ptr);
+}
+
+/// A function's first own data properties, defined at once: its bag is born
+/// holding `entries` in one shape (`props::bag_born_with`). False, with
+/// nothing done, when the function already has own properties; the caller
+/// then sets them one at a time ([`closure_set_dynamic_prop`]).
+pub fn closure_define_first_props(ptr: usize, entries: &[(&str, f64)]) -> bool {
+    if ptr == 0 || !is_closure_ptr(ptr) {
+        return false;
+    }
+    if !unsafe { super::props::bag_born_with(ptr, entries) } {
+        return false;
+    }
+    super::shape::refresh_closure_shape(ptr);
+    true
 }
 
 /// Read an OWN dynamic property without any prototype/builtin fallback.

@@ -263,22 +263,132 @@ pub(crate) fn install_constructor_static(
     info: *const crate::closure::JsFunctionInfo,
     spec_length: u32,
 ) {
+    let Some(value) = builtin_static_function(name, info, spec_length) else {
+        return;
+    };
+    define_constructor_static(ctor, name, value, STATIC_METHOD_ATTRS);
+}
+
+/// `{ writable: true, enumerable: false, configurable: true }`: Node's
+/// descriptor for a built-in static method.
+const STATIC_METHOD_ATTRS: super::super::PropertyAttrs =
+    super::super::PropertyAttrs::new(true, false, true);
+
+/// A builtin static method's function object: `name`, spec `.length`, not a
+/// constructor. `None` when the allocation failed.
+fn builtin_static_function(
+    name: &str,
+    info: *const crate::closure::JsFunctionInfo,
+    spec_length: u32,
+) -> Option<f64> {
     let closure = crate::closure::js_closure_alloc(info, 0);
     if closure.is_null() {
-        return;
+        return None;
     }
     super::super::native_module::set_bound_native_closure_name(closure, name);
     super::super::native_module::set_builtin_closure_length(closure as usize, spec_length);
     super::super::native_module::set_builtin_closure_non_constructable(closure as usize);
+    Some(crate::value::js_nanbox_pointer(closure as i64))
+}
+
+/// Define one own data property `name` on the constructor function `ctor`.
+fn define_constructor_static(
+    ctor: *mut crate::closure::ClosureHeader,
+    name: &str,
+    value: f64,
+    attrs: super::super::PropertyAttrs,
+) {
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let value = crate::value::js_nanbox_pointer(closure as i64);
     super::super::define_builtin_data_property(
         ctor as *mut ObjectHeader,
         key,
         value,
         name.to_string(),
-        super::super::PropertyAttrs::new(true, false, true),
+        attrs,
     );
+}
+
+/// A builtin constructor's static properties, collected and then defined
+/// together: a fresh constructor's own-property bag is born holding all of
+/// them in ONE shape ([`crate::closure::closure_define_first_props`]), not
+/// grown by one key-add transition per static. Each keeps its attributes.
+/// A constructor that already has own properties defines them one by one.
+///
+/// The collected values are raw function pointers, so collection is
+/// suppressed from [`ConstructorStatics::new`] to [`ConstructorStatics::finish`].
+pub(crate) struct ConstructorStatics {
+    ctor: *mut crate::closure::ClosureHeader,
+    entries: Vec<(&'static str, f64)>,
+    attrs: Vec<super::super::PropertyAttrs>,
+    _no_move: crate::gc::GcSuppressScope,
+}
+
+impl ConstructorStatics {
+    pub(crate) fn new(ctor: *mut crate::closure::ClosureHeader) -> Self {
+        ConstructorStatics {
+            ctor,
+            entries: Vec::new(),
+            attrs: Vec::new(),
+            _no_move: crate::gc::GcSuppressScope::new(),
+        }
+    }
+
+    /// A static method (`{ writable, !enumerable, configurable }`).
+    pub(crate) fn method(
+        &mut self,
+        name: &'static str,
+        info: *const crate::closure::JsFunctionInfo,
+        spec_length: u32,
+    ) {
+        self.method_with_attrs(name, info, spec_length, STATIC_METHOD_ATTRS);
+    }
+
+    /// A static method with its own attributes.
+    pub(crate) fn method_with_attrs(
+        &mut self,
+        name: &'static str,
+        info: *const crate::closure::JsFunctionInfo,
+        spec_length: u32,
+        attrs: super::super::PropertyAttrs,
+    ) {
+        if let Some(value) = builtin_static_function(name, info, spec_length) {
+            self.data(name, value, attrs);
+        }
+    }
+
+    /// A static data property.
+    pub(crate) fn data(
+        &mut self,
+        name: &'static str,
+        value: f64,
+        attrs: super::super::PropertyAttrs,
+    ) {
+        self.entries.push((name, value));
+        self.attrs.push(attrs);
+    }
+
+    /// Define everything collected on the constructor.
+    pub(crate) fn finish(self) {
+        let ctor = self.ctor as usize;
+        if self.entries.is_empty() {
+            return;
+        }
+        if crate::closure::closure_define_first_props(ctor, &self.entries) {
+            // What the per-key define's store does besides storing: a
+            // function taking a named property arms the own-override guard
+            // (builtin form), and each key gets its attributes.
+            super::super::own_override::as_builtin_definition(|| {
+                super::super::own_override::note_exotic_named_prop_install(ctor)
+            });
+            for (&(name, _), &attrs) in self.entries.iter().zip(&self.attrs) {
+                super::super::set_builtin_property_attrs(ctor, name.to_string(), attrs);
+            }
+            return;
+        }
+        for (&(name, value), &attrs) in self.entries.iter().zip(&self.attrs) {
+            define_constructor_static(self.ctor, name, value, attrs);
+        }
+    }
 }
 
 pub(crate) fn install_number_static_data_properties(ctor: *mut crate::closure::ClosureHeader) {
@@ -322,142 +432,121 @@ pub(crate) fn install_builtin_constructor_statics(
     if ctor.is_null() {
         return;
     }
+    let mut statics = ConstructorStatics::new(ctor);
+    let s = &mut statics;
     match name {
         "Object" => {
-            install_constructor_static(
-                ctor,
+            s.method(
                 "keys",
                 crate::fn_info!(object_keys_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "values",
                 crate::fn_info!(object_values_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "entries",
                 crate::fn_info!(object_entries_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "freeze",
                 crate::fn_info!(object_freeze_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "create",
                 crate::fn_info!(object_create_thunk, 2; with_declared(2)),
                 2,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "seal",
                 crate::fn_info!(object_seal_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "isSealed",
                 crate::fn_info!(object_is_sealed_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "isFrozen",
                 crate::fn_info!(object_is_frozen_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "isExtensible",
                 crate::fn_info!(object_is_extensible_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "preventExtensions",
                 crate::fn_info!(object_prevent_extensions_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "is",
                 crate::fn_info!(object_is_thunk, 2; with_declared(2)),
                 2,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "setPrototypeOf",
                 crate::fn_info!(object_set_prototype_of_thunk, 2; with_declared(2)),
                 2,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "getOwnPropertySymbols",
                 crate::fn_info!(object_get_own_property_symbols_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "getOwnPropertyDescriptors",
                 crate::fn_info!(object_get_own_property_descriptors_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "defineProperties",
                 crate::fn_info!(object_define_properties_thunk, 2; with_declared(2)),
                 2,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "groupBy",
                 crate::fn_info!(object_group_by_thunk, 2; with_declared(2)),
                 2,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "getPrototypeOf",
                 crate::fn_info!(object_get_prototype_of_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "getOwnPropertyNames",
                 crate::fn_info!(object_get_own_property_names_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "getOwnPropertyDescriptor",
                 crate::fn_info!(object_get_own_property_descriptor_thunk, 2; with_declared(2)),
                 2,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "defineProperty",
                 crate::fn_info!(object_define_property_thunk, 3; with_declared(3)),
                 3,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "fromEntries",
                 crate::fn_info!(object_from_entries_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "assign",
                 crate::fn_info!(object_assign_thunk, 2; with_rest(1)),
                 2,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "hasOwn",
                 crate::fn_info!(object_hasown_thunk, 2; with_declared(2)),
                 2,
@@ -471,62 +560,49 @@ pub(crate) fn install_builtin_constructor_statics(
             // `undefined` and `.call` threw "Function.prototype.call on a value
             // that is not a function". Install the Object.prototype methods that
             // are reachable on the constructor by inheritance.
-            install_constructor_static(
-                ctor,
+            s.method(
                 "hasOwnProperty",
                 crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "isPrototypeOf",
                 crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "propertyIsEnumerable",
                 crate::fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "toString",
                 crate::fn_info!(object_prototype_to_string_thunk, 0; with_declared(0)),
                 0,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "toLocaleString",
                 crate::fn_info!(object_prototype_to_locale_string_thunk, 0; with_declared(0)),
                 0,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "valueOf",
                 crate::fn_info!(object_prototype_value_of_thunk, 0; with_declared(0)),
                 0,
             );
         }
         "Array" => {
-            install_constructor_static(
-                ctor,
+            s.method(
                 "isArray",
                 crate::fn_info!(array_is_array_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "from",
                 crate::fn_info!(array_from_thunk, 3; with_declared(3)),
                 1,
             );
-            install_constructor_static(
-                ctor,
-                "of",
-                crate::fn_info!(array_of_thunk, 1; with_rest(0)),
-                0,
-            );
+            s.method("of", crate::fn_info!(array_of_thunk, 1; with_rest(0)), 0);
         }
         "Promise" => {
             for static_name in [
@@ -542,7 +618,7 @@ pub(crate) fn install_builtin_constructor_statics(
                 if let Some((info, spec_length)) =
                     super::bigint_promise::promise_static_function_info(static_name)
                 {
-                    install_constructor_static(ctor, static_name, info, spec_length);
+                    s.method(static_name, info, spec_length);
                 }
             }
         }
@@ -562,41 +638,35 @@ pub(crate) fn install_builtin_constructor_statics(
             // `Date.now` / `Date.parse` / `Date.UTC` as real own data props
             // (thunks live in `date_proto_thunks`). The functional calls are
             // codegen intrinsics, so this only affects value reads + reflection.
-            date_proto_thunks::install_date_constructor_statics(ctor);
+            date_proto_thunks::install_date_constructor_statics(s);
         }
         "Number" => {
-            install_constructor_static(
-                ctor,
+            s.method(
                 "isNaN",
                 crate::fn_info!(number_is_nan_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "isFinite",
                 crate::fn_info!(number_is_finite_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "isInteger",
                 crate::fn_info!(number_is_integer_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "isSafeInteger",
                 crate::fn_info!(number_is_safe_integer_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "parseFloat",
                 crate::fn_info!(number_parse_float_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "parseInt",
                 crate::fn_info!(number_parse_int_thunk, 2; with_declared(2)),
                 2,
@@ -604,42 +674,33 @@ pub(crate) fn install_builtin_constructor_statics(
         }
         "BigInt" => {
             // BigInt.asIntN(bits, bigint) / asUintN(bits, bigint) — spec length 2.
-            install_constructor_static(
-                ctor,
+            s.method(
                 "asIntN",
                 crate::fn_info!(bigint_as_int_n_thunk, 2; with_declared(2)),
                 2,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "asUintN",
                 crate::fn_info!(bigint_as_uint_n_thunk, 2; with_declared(2)),
                 2,
             );
         }
         "Symbol" => {
-            install_constructor_static(
-                ctor,
+            s.method(
                 "for",
                 crate::fn_info!(symbol_for_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "keyFor",
                 crate::fn_info!(symbol_key_for_thunk, 1; with_declared(1)),
                 1,
             );
             for name in ["iterator", "asyncIterator"] {
                 let symbol = crate::symbol::well_known_symbol(name);
-                crate::closure::closure_set_dynamic_prop(
-                    ctor as usize,
+                s.data(
                     name,
                     crate::value::js_nanbox_pointer(symbol as i64),
-                );
-                super::super::set_builtin_property_attrs(
-                    ctor as usize,
-                    name.to_string(),
                     super::super::PropertyAttrs::new(false, false, false),
                 );
             }
@@ -650,30 +711,26 @@ pub(crate) fn install_builtin_constructor_statics(
             // `.length`, usable via reference / spread). Call-arity 0 (all args
             // collected into `rest`) with spec `.length` 1. `String.raw` (a tag
             // function) is left on its intrinsic path for now.
-            install_constructor_static(
-                ctor,
+            s.method(
                 "fromCharCode",
                 crate::fn_info!(string_from_char_code_static, 1; with_rest(0)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "fromCodePoint",
                 crate::fn_info!(string_from_code_point_static, 1; with_rest(0)),
                 1,
             );
             // #4627: `String.raw` (tag function) — 1 fixed param (template
             // object) + rest substitutions; spec `.length` 1.
-            install_constructor_static(
-                ctor,
+            s.method(
                 "raw",
                 crate::fn_info!(string_raw_static, 2; with_rest(1)),
                 1,
             );
         }
         "ArrayBuffer" => {
-            install_constructor_static(
-                ctor,
+            s.method(
                 "isView",
                 crate::fn_info!(array_buffer_is_view_thunk, 1; with_declared(1)),
                 1,
@@ -683,40 +740,34 @@ pub(crate) fn install_builtin_constructor_statics(
             // The call forms are codegen intrinsics; these are the real own
             // data properties a value read (`const f = AbortSignal.abort`)
             // and reflection see.
-            install_constructor_static(
-                ctor,
+            s.method(
                 "abort",
                 crate::fn_info!(abort_signal_abort_thunk, 1; with_declared(0)),
                 0,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "timeout",
                 crate::fn_info!(abort_signal_timeout_thunk, 1; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "any",
                 crate::fn_info!(abort_signal_any_thunk, 1; with_declared(1)),
                 1,
             );
         }
         "Response" => {
-            install_constructor_static(
-                ctor,
+            s.method(
                 "error",
                 crate::fn_info!(global_this_response_error_thunk, 0; with_declared(0)),
                 0,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "json",
                 crate::fn_info!(global_this_response_json_thunk, 2; with_declared(2)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "redirect",
                 crate::fn_info!(global_this_response_redirect_thunk, 2; with_declared(2)),
                 1,
@@ -724,14 +775,12 @@ pub(crate) fn install_builtin_constructor_statics(
         }
         #[cfg(feature = "global-url")]
         "URL" => {
-            install_constructor_static(
-                ctor,
+            s.method(
                 "canParse",
                 crate::fn_info!(url_can_parse_thunk, 2; with_declared(1)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "parse",
                 crate::fn_info!(url_parse_thunk, 2; with_declared(1)),
                 1,
@@ -739,21 +788,15 @@ pub(crate) fn install_builtin_constructor_statics(
         }
         #[cfg(feature = "global-webcrypto")]
         "SubtleCrypto" => {
-            install_constructor_static(
-                ctor,
+            s.method_with_attrs(
                 "supports",
                 crate::fn_info!(subtle_crypto_supports_thunk, 1; with_rest(0)),
                 2,
-            );
-            super::super::set_builtin_property_attrs(
-                ctor as usize,
-                "supports".to_string(),
                 super::super::PropertyAttrs::new(true, true, true),
             );
         }
         "Proxy" => {
-            install_constructor_static(
-                ctor,
+            s.method(
                 "revocable",
                 crate::fn_info!(proxy_revocable_thunk, 2; with_declared(2)),
                 2,
@@ -770,14 +813,12 @@ pub(crate) fn install_builtin_constructor_statics(
         // path uses, so the produced value is identical. `fromBase64.length` is
         // 1 (the optional opts is the 2nd, undefined-padded, ABI slot).
         "Uint8Array" => {
-            install_constructor_static(
-                ctor,
+            s.method(
                 "fromBase64",
                 crate::fn_info!(uint8array_from_base64_thunk, 2; with_declared(2)),
                 1,
             );
-            install_constructor_static(
-                ctor,
+            s.method(
                 "fromHex",
                 crate::fn_info!(uint8array_from_hex_thunk, 1; with_declared(1)),
                 1,
@@ -785,6 +826,7 @@ pub(crate) fn install_builtin_constructor_statics(
         }
         _ => {}
     }
+    statics.finish();
 }
 
 /// Install a method on a prototype object as a callable closure value with

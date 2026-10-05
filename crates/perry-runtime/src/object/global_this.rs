@@ -55,7 +55,15 @@ mod math_temporal;
 mod object_intrinsic;
 mod populate;
 mod proto_methods;
+mod proto_room;
 mod typed_array;
+
+/// Is `func` the body of `%Object.prototype%.valueOf`? The dispatcher's
+/// `valueOf` arm answers that body natively instead of calling it.
+#[inline]
+pub(crate) fn is_object_prototype_value_of_code(func: *const u8) -> bool {
+    func == array_error::object_prototype_value_of_thunk as *const u8
+}
 
 /// Which `Function.prototype` intrinsic (`bind`/`call`/`apply`) has code
 /// pointer `func`, if any: the identity the shape-proven method path compares
@@ -176,6 +184,7 @@ pub(crate) use install_static::{
     install_reflect_namespace_members, subtle_crypto_decapsulate_bits_thunk,
     subtle_crypto_decapsulate_key_thunk, subtle_crypto_encapsulate_bits_thunk,
     subtle_crypto_encapsulate_key_thunk, url_pattern_exec_thunk, url_pattern_test_thunk,
+    ConstructorStatics,
 };
 #[cfg(feature = "temporal")]
 pub(crate) use math_temporal::install_temporal_namespace;

@@ -87,6 +87,21 @@ crate::perry_thread_local! {
 pub(crate) static FUNCTION_PROTOTYPE_PTR: crate::object::RealmAtomicI64 =
     crate::object::RealmAtomicI64::new(&FUNCTION_PROTOTYPE_SLOT);
 
+/// This realm's `%Function.prototype%`, building the realm global (which
+/// allocates it) when none exists yet. For a read that continues ON that
+/// object: a function's [[Prototype]] exists as soon as the function does,
+/// whether or not code has named it yet. [`FUNCTION_PROTOTYPE_PTR`] alone is
+/// 0 until then and answers only "has anything been installed there".
+/// Allocates on the first call: callers root what they hold across it.
+pub(crate) fn function_prototype_ptr_materialized() -> usize {
+    let proto = FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
+    if proto != 0 {
+        return proto as usize;
+    }
+    let _ = crate::object::js_get_global_this();
+    FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire) as usize
+}
+
 /// GC root for [`FUNCTION_PROTOTYPE_PTR`].
 pub(crate) fn scan_function_prototype_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     FUNCTION_PROTOTYPE_PTR.with_slot(|slot| {

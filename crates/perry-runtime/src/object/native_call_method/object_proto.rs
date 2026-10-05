@@ -60,6 +60,18 @@ pub(super) unsafe fn call_ordinary_receiver_inherited_method(
     method_name: &str,
     arg_handles: &[crate::gc::RuntimeHandle],
 ) -> Option<Option<f64>> {
+    call_ordinary_receiver_inherited_method_unless(object_handle, method_name, arg_handles, None)
+}
+
+/// [`call_ordinary_receiver_inherited_method`], except that a resolved method
+/// whose body is `native` is not called: `None` is returned and the caller
+/// answers with that very builtin itself (no rebound closure per call).
+pub(super) unsafe fn call_ordinary_receiver_inherited_method_unless(
+    object_handle: &crate::gc::RuntimeHandle,
+    method_name: &str,
+    arg_handles: &[crate::gc::RuntimeHandle],
+    native: Option<fn(*const u8) -> bool>,
+) -> Option<Option<f64>> {
     if !is_ordinary_object_receiver(object_handle.get_nanbox_f64()) {
         return None;
     }
@@ -75,6 +87,15 @@ pub(super) unsafe fn call_ordinary_receiver_inherited_method(
         .or_else(|| super::field_get_set::ordinary_object_prototype_property_value(obj, key_ptr));
     if let Some(method) = inherited {
         let method = f64::from_bits(method.bits());
+        if let Some(is_native) = native {
+            let addr = (method.to_bits() & crate::value::POINTER_MASK) as usize;
+            if JSValue::from_bits(method.to_bits()).is_pointer()
+                && crate::closure::is_closure_ptr(addr)
+                && is_native((*(addr as *const crate::closure::ClosureHeader)).code())
+            {
+                return None;
+            }
+        }
         if crate::collection_iter::is_callable(method)
             && !is_self_redispatching_proto_method(method, method_name)
         {

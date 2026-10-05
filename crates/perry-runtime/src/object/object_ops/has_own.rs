@@ -201,120 +201,60 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
             return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
         }
 
-        if let Some(present) = registered_buffer_index_own_property_present(obj_value, key_str) {
-            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
-        }
+        // The receiver's managed header, read ONCE through the
+        // ownership-proving reader (an arbitrary receiver word is never read
+        // at `addr - 8` unchecked). Its type decides which of the
+        // kind-specific probes below can apply; none of them re-derives it.
+        // `None` means no allocator-owned header: a non-pointer word, or
+        // foreign / untracked memory such as a foreign-backed Buffer. The
+        // read follows every allocating coercion above, and a move never
+        // changes a header's type.
+        let header = if obj_js.is_pointer() {
+            let addr = obj_js.as_pointer::<u8>() as usize;
+            if crate::value::addr_class::is_above_handle_band(addr) {
+                crate::value::addr_class::try_read_tracked_gc_header(addr).map(|h| &*h.as_ptr())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
 
-        if let Some(class_id) = super::super::class_ref_id(obj_value) {
-            let present = super::super::has_own_helpers::str_from_string_header(key_str)
-                .map(|key| {
-                    if super::super::field_get_set::is_internal_runtime_key(key) {
-                        false
-                    } else if super::super::class_registry::class_static_key_deleted(class_id, key)
-                    {
-                        false
-                    } else if matches!(key, "length" | "prototype") {
-                        true
-                    } else if key == "name"
-                        && !crate::object::class_value::class_static_owns_method(class_id, key)
-                    {
-                        super::super::class_registry::class_name_for_id(class_id).is_some()
-                    } else {
-                        let has_public_data =
-                            crate::object::class_value::class_static_get(class_id, key).is_some();
-                        has_public_data
-                            || (!key.starts_with('#')
-                                && (crate::object::class_value::class_static_owns_method(
-                                    class_id, key,
-                                ) || crate::object::class_value::class_static_has_own_accessor(
-                                    class_id, key,
-                                )))
-                    }
-                })
-                .unwrap_or(false);
-            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
-        }
-
-        // A class object owns `prototype` without storing it.
-        if super::super::class_registry::is_class_object_value(obj_value)
-            && super::super::has_own_helpers::str_from_string_header(key_str).is_some_and(|key| {
-                super::super::field_get_set::class_object_has_prototype_property(key.as_bytes())
-            })
-        {
-            return f64::from_bits(TAG_TRUE);
-        }
-
-        if let Some(addr) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
-            let present = crate::typedarray_props::typed_array_has_own_property(
-                addr as *const crate::typedarray::TypedArrayHeader,
-                key_str,
-            );
-            return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
-        }
-
-        // #3655: functions/closures carry built-in own `name`/`length`
-        // (and `prototype` for constructors) plus any user-attached props.
-        // Route them here instead of through `extract_obj_ptr`/`own_key_present`,
-        // which would read `keys_array` off a closure (out of bounds).
-        if obj_js.is_pointer() {
-            let ptr = obj_js.as_pointer::<u8>() as usize;
-            if crate::buffer::is_registered_buffer(ptr) {
-                let present = super::super::has_own_helpers::buffer_own_key_present(
-                    ptr as *const crate::buffer::BufferHeader,
+        match header {
+            // An array is none of the kinds below (Buffer, typed array, class
+            // value, function, exotic cell, %Function.prototype%, native
+            // module): it answers from its elements and own keys.
+            Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {
+                let present = super::super::has_own_helpers::array_own_key_present(
+                    obj_js.as_pointer::<u8>() as *const crate::array::ArrayHeader,
                     key_str,
                 );
                 return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
             }
-            // Date / RegExp / Error exotic instances: own expando props
-            // (side tables) + per-kind builtin own slots.
-            if let Some(kind) = super::super::exotic_expando::exotic_expando_kind(ptr) {
-                use super::super::exotic_expando::ExoticKind;
-                let present = super::super::has_own_helpers::str_from_string_header(key_str)
-                    .map(|key| {
-                        super::super::exotic_expando::exotic_has_own_property(kind, ptr, key)
-                            || match kind {
-                                ExoticKind::RegExp => key == "lastIndex",
-                                ExoticKind::Error => crate::error::js_error_has_own_property(
-                                    ptr as *mut crate::error::ErrorHeader,
-                                    key,
-                                ),
-                                ExoticKind::Date
-                                | ExoticKind::Temporal
-                                | ExoticKind::Promise
-                                | ExoticKind::Map
-                                | ExoticKind::Set => false,
-                            }
-                    })
-                    .unwrap_or(false);
-                return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
-            }
-            if crate::closure::is_closure_ptr(ptr) {
-                let present = super::super::has_own_helpers::str_from_string_header(key_str)
-                    .map(|k| super::super::has_own_helpers::closure_own_key_present(ptr, k))
-                    .unwrap_or(false);
-                return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
-            }
-            if crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
-                let present = crate::typedarray_props::typed_array_has_own_property(
-                    ptr as *const crate::typedarray::TypedArrayHeader,
-                    key_str,
-                );
-                return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
-            }
-            if ptr >= crate::gc::GC_HEADER_SIZE + 0x1000
-                && crate::object::is_valid_obj_ptr(ptr as *const u8)
-            {
-                let gc_header =
-                    (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if (*gc_header).obj_type == crate::gc::GC_TYPE_ERROR {
-                    let present = super::super::has_own_helpers::str_from_string_header(key_str)
-                        .map(|key| {
-                            crate::error::js_error_has_own_property(
-                                ptr as *mut crate::error::ErrorHeader,
-                                key,
+            // An ordinary object is no Buffer, typed array, function or
+            // exotic cell, and no class constructor value (those are
+            // immediates or functions). Only a class object, which owns
+            // `prototype` without storing it, needs a look before the object
+            // arms below.
+            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
+                let ptr = obj_js.as_pointer::<u8>();
+                if super::super::class_registry::parent_static::is_class_object_with_header(ptr, h)
+                    && super::super::has_own_helpers::str_from_string_header(key_str).is_some_and(
+                        |key| {
+                            super::super::field_get_set::class_object_has_prototype_property(
+                                key.as_bytes(),
                             )
-                        })
-                        .unwrap_or(false);
+                        },
+                    )
+                {
+                    return f64::from_bits(TAG_TRUE);
+                }
+            }
+            _ => {
+                let tracked_type = header.map(|h| h.obj_type);
+                if let Some(present) =
+                    has_own_of_non_ordinary_kind(obj_value, obj_js, tracked_type, key_str)
+                {
                     return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
                 }
             }
@@ -477,6 +417,145 @@ pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
 
         f64::from_bits(TAG_FALSE)
     }
+}
+
+/// `js_object_has_own` for a receiver whose tracked header type
+/// (`tracked_type`) is neither an ordinary object nor an array: a class
+/// value, a Buffer / ArrayBuffer / DataView / typed array, a function, an
+/// exotic cell, or a receiver with no tracked header (`None`). Answers
+/// `None` when no kind-specific rule applies and the ordinary object arms
+/// decide.
+///
+/// Each probe runs only for the header types that can reach it: a Buffer,
+/// ArrayBuffer, DataView or typed array is a `GC_TYPE_BUFFER`,
+/// `GC_TYPE_TYPED_ARRAY` or native-view cell, or has no tracked header; a
+/// function is `GC_TYPE_CLOSURE`; an exotic kind IS its header type.
+unsafe fn has_own_of_non_ordinary_kind(
+    obj_value: f64,
+    obj_js: crate::JSValue,
+    tracked_type: Option<u8>,
+    key_str: *const crate::StringHeader,
+) -> Option<bool> {
+    let exotic = tracked_type.and_then(super::super::exotic_expando::exotic_kind_of_gc_type);
+    let buffer_like = match tracked_type {
+        None => true,
+        Some(t) => t != crate::gc::GC_TYPE_CLOSURE && exotic.is_none(),
+    };
+
+    if buffer_like {
+        if let Some(present) = registered_buffer_index_own_property_present(obj_value, key_str) {
+            return Some(present);
+        }
+    }
+
+    // A class constructor value is an immediate or a function.
+    if matches!(tracked_type, None | Some(crate::gc::GC_TYPE_CLOSURE)) {
+        if let Some(class_id) = super::super::class_ref_id(obj_value) {
+            let present = super::super::has_own_helpers::str_from_string_header(key_str)
+                .map(|key| {
+                    if super::super::field_get_set::is_internal_runtime_key(key) {
+                        false
+                    } else if super::super::class_registry::class_static_key_deleted(class_id, key)
+                    {
+                        false
+                    } else if matches!(key, "length" | "prototype") {
+                        true
+                    } else if key == "name"
+                        && !crate::object::class_value::class_static_owns_method(class_id, key)
+                    {
+                        super::super::class_registry::class_name_for_id(class_id).is_some()
+                    } else {
+                        let has_public_data =
+                            crate::object::class_value::class_static_get(class_id, key).is_some();
+                        has_public_data
+                            || (!key.starts_with('#')
+                                && (crate::object::class_value::class_static_owns_method(
+                                    class_id, key,
+                                ) || crate::object::class_value::class_static_has_own_accessor(
+                                    class_id, key,
+                                )))
+                    }
+                })
+                .unwrap_or(false);
+            return Some(present);
+        }
+    }
+
+    // A class object owns `prototype` without storing it. A tracked class
+    // object is `GC_TYPE_OBJECT` and was answered by the caller.
+    if tracked_type.is_none()
+        && super::super::class_registry::is_class_object_value(obj_value)
+        && super::super::has_own_helpers::str_from_string_header(key_str).is_some_and(|key| {
+            super::super::field_get_set::class_object_has_prototype_property(key.as_bytes())
+        })
+    {
+        return Some(true);
+    }
+
+    if let Some(addr) = buffer_like
+        .then(|| crate::typedarray_props::typed_array_addr_from_value(obj_value))
+        .flatten()
+    {
+        return Some(crate::typedarray_props::typed_array_has_own_property(
+            addr as *const crate::typedarray::TypedArrayHeader,
+            key_str,
+        ));
+    }
+
+    if !obj_js.is_pointer() {
+        return None;
+    }
+    let ptr = obj_js.as_pointer::<u8>() as usize;
+    if buffer_like && crate::buffer::is_registered_buffer(ptr) {
+        return Some(super::super::has_own_helpers::buffer_own_key_present(
+            ptr as *const crate::buffer::BufferHeader,
+            key_str,
+        ));
+    }
+    // Date / RegExp / Error / Temporal / Promise / Map / Set cells: own
+    // expando props (side tables) + per-kind builtin own slots.
+    if let Some(kind) = exotic {
+        use super::super::exotic_expando::ExoticKind;
+        return Some(
+            super::super::has_own_helpers::str_from_string_header(key_str)
+                .map(|key| {
+                    super::super::exotic_expando::exotic_has_own_property(kind, ptr, key)
+                        || match kind {
+                            ExoticKind::RegExp => key == "lastIndex",
+                            ExoticKind::Error => crate::error::js_error_has_own_property(
+                                ptr as *mut crate::error::ErrorHeader,
+                                key,
+                            ),
+                            ExoticKind::Date
+                            | ExoticKind::Temporal
+                            | ExoticKind::Promise
+                            | ExoticKind::Map
+                            | ExoticKind::Set => false,
+                        }
+                })
+                .unwrap_or(false),
+        );
+    }
+    // #3655: functions/closures carry built-in own `name`/`length` (and
+    // `prototype` for constructors) plus any user-attached props. Route them
+    // here instead of through `extract_obj_ptr`/`own_key_present`, which
+    // would read `keys_array` off a closure (out of bounds).
+    if matches!(tracked_type, None | Some(crate::gc::GC_TYPE_CLOSURE))
+        && crate::closure::is_closure_ptr(ptr)
+    {
+        return Some(
+            super::super::has_own_helpers::str_from_string_header(key_str)
+                .map(|k| super::super::has_own_helpers::closure_own_key_present(ptr, k))
+                .unwrap_or(false),
+        );
+    }
+    if buffer_like && crate::typedarray::lookup_typed_array_kind(ptr).is_some() {
+        return Some(crate::typedarray_props::typed_array_has_own_property(
+            ptr as *const crate::typedarray::TypedArrayHeader,
+            key_str,
+        ));
+    }
+    None
 }
 
 /// `Object.prototype.propertyIsEnumerable.call(obj, key)` (#2891).

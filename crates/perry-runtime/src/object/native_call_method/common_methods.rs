@@ -124,6 +124,18 @@ pub(super) unsafe fn dispatch_common(
             ) {
                 return Some(result);
             }
+            // An ordinary object reads `valueOf` off its prototype chain like
+            // any method: a replaced `Object.prototype.valueOf` (or a class or
+            // `Object.create` prototype's) runs, a chain ending in `null`
+            // without one throws. The builtin body itself is answered below.
+            if let Some(called) = call_ordinary_receiver_inherited_method_unless(
+                object_handle,
+                method_name,
+                arg_handles,
+                Some(crate::object::global_this::is_object_prototype_value_of_code),
+            ) {
+                return called;
+            }
             // A direct primitive-wrapper call resolves through
             // Number/Boolean/BigInt.prototype and returns the primitive's
             // internal value. The explicit Object.prototype.valueOf.call(x)

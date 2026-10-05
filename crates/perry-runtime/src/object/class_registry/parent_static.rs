@@ -607,10 +607,33 @@ pub fn is_class_object_ptr(ptr: *const u8) -> bool {
         };
         header.obj_type == crate::gc::GC_TYPE_OBJECT
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-            && crate::object::shapes::object_shape_descriptor(ptr.cast()).is_some_and(|shape| {
-                shape.object_kind == crate::object::shapes::ShapeObjectKind::Class
-            })
+            && object_shape_kind_is_class(ptr)
     }
+}
+
+/// [`is_class_object_ptr`] for a caller that already holds `ptr`'s header.
+///
+/// # Safety
+/// `header` is the GcHeader of the cell at `ptr`, obtained from a checked
+/// reader (`try_read_gc_header` / `try_read_tracked_gc_header`).
+pub(crate) unsafe fn is_class_object_with_header(
+    ptr: *const u8,
+    header: &crate::gc::GcHeader,
+) -> bool {
+    header.obj_type == crate::gc::GC_TYPE_OBJECT
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && object_shape_kind_is_class(ptr)
+}
+
+/// Does the ShapeId of the live, unforwarded object at `ptr` name a class
+/// object?
+///
+/// # Safety
+/// `ptr` is a live `GC_TYPE_OBJECT` cell that has not been forwarded.
+#[inline(always)]
+unsafe fn object_shape_kind_is_class(ptr: *const u8) -> bool {
+    crate::object::shapes::object_shape_descriptor(ptr.cast())
+        .is_some_and(|shape| shape.object_kind == crate::object::shapes::ShapeObjectKind::Class)
 }
 
 /// #1789: f64-value form of [`is_class_object_ptr`] — true only for a

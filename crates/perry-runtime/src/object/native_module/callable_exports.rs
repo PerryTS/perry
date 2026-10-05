@@ -1584,11 +1584,12 @@ pub(crate) fn set_bound_native_closure_name(
     let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let name_handle = scope.root_string_ptr(ptr);
     let name_value = f64::from_bits(JSValue::string_ptr(name_handle.get_raw_mut_ptr()).bits());
-    crate::closure::closure_set_dynamic_prop(
-        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-        "name",
-        name_value,
-    );
+    let closure = closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize;
+    // A fresh builtin function's `name` is its first own property: its bag is
+    // born in that shape.
+    if !crate::closure::closure_define_first_props(closure, &[("name", name_value)]) {
+        crate::closure::closure_set_dynamic_prop(closure, "name", name_value);
+    }
     // Spec: a function's `name` property is { writable:false, enumerable:false,
     // configurable:true }. Storing it as a plain dynamic prop left it ENUMERABLE
     // by default, so `for (k in Buffer)` yielded "name" — even though
