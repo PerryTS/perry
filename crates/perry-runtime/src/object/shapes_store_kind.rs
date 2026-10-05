@@ -14,13 +14,15 @@
 //!   must retire it first, so a proof-carrying receiver may not take a raw
 //!   store.
 //!
-//! Both are now [`ShapeObjectKind`] values of the ordinary LAYOUT:
+//! Both are now [`ShapeObjectKind`] values of the ordinary LAYOUT. Native
+//! namespaces also carry their enumeration brand in the kind:
 //!
 //! | kind | F-A | F-B |
 //! |---|---|---|
 //! | `Ordinary` | admitted | clear |
 //! | `OrdinaryUnmarked` | not admitted | clear |
 //! | `OrdinaryNumericProof` | admitted | set |
+//! | `NativeNamespace` | not admitted | clear |
 //!
 //! so `kind == Ordinary` is the whole store admission, and a word published
 //! only for an `Ordinary` shape needs no per-object test on its hit path.
@@ -86,7 +88,9 @@ pub(crate) unsafe fn receiver_carries_numeric_proof(obj: *const ObjectHeader) ->
 /// `obj` is a live `GC_TYPE_OBJECT` `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn receiver_ordinary_kind(obj: *const ObjectHeader) -> ShapeObjectKind {
-    if receiver_admits_plain_store(obj) {
+    if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
+        ShapeObjectKind::NativeNamespace
+    } else if receiver_admits_plain_store(obj) {
         ShapeObjectKind::Ordinary
     } else {
         ShapeObjectKind::OrdinaryUnmarked
