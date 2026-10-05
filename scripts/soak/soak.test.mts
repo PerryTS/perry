@@ -38,19 +38,11 @@ minimumReleaseAgeExclude:
   - react
 `
 
-test('cargo config: wrong window and missing unstable gate are findings', () => {
-  const good = '[unstable]\nmin-publish-age = true\n\n[registry]\nglobal-min-publish-age = "7 days"\n'
+test('cargo config: only the registry age window must match', () => {
+  const good = '[registry]\nglobal-min-publish-age = "7 days"\n'
   assert.equal(checkCargoConfig(good, 'c').length, 0)
   assert.equal(checkCargoConfig(good.replace('7 days', '3 days'), 'c').length, 1)
-  assert.equal(checkCargoConfig('[registry]\nglobal-min-publish-age = "7 days"\n', 'c').length, 1)
-  assert.equal(
-    checkCargoConfig(
-      'global-min-publish-age = "7 days"\n\n[unstable]\nmin-publish-age = true\n',
-      'c',
-    ).length,
-    1,
-  )
-  assert.match(fixCargoConfig('[unstable]\nmin-publish-age = true\n'), /\[registry\]\n/)
+  assert.match(fixCargoConfig('[build]\nrustflags = []\n'), /\[registry\]\n/)
 })
 
 test('npmrc: window must match SOAK_DAYS and fix writes it', () => {

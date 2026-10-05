@@ -1,10 +1,10 @@
 {
   "type": "module",
   "scripts": {
-    "soak": "node scripts/soak/soak.mts --check",
+    "soak": "node scripts/check/dependency-soak-is-current.mts",
     "soak:fix": "node scripts/soak/soak.mts --fix",
     "deps:update": "node scripts/soak/update-deps.mts",
-    "tools:check": "node scripts/soak/external-tools.mts --check",
+    "tools:check": "node scripts/check/external-tools-are-valid.mts",
     "tools:fix": "node scripts/soak/external-tools.mts --fix",
     "tools:install": "node scripts/soak/external-tools.mts --install-all --shims",
     "test:scripts": "node --test scripts/soak/*.test.mts scripts/publish/*.test.mts",
@@ -12,7 +12,8 @@
     "publish:status": "node scripts/publish/pipeline.mts --status",
     "publish:brew": "node scripts/publish/brew/tap-publish.mts",
     "publish:ffi": "node scripts/publish/cargo/ffi-publish.mts",
-    "prepublishOnly": "node scripts/publish/auth-posture.mts --guard"
+    "prepublishOnly": "node scripts/publish/auth-posture.mts --guard",
+    "check": "node scripts/check/run.mts"
   },
   "devDependencies": {
     "@socketsecurity/sdk": "4.1.4",
