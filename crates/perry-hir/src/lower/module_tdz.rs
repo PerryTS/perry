@@ -96,6 +96,54 @@ pub(crate) fn apply(module: &mut Module, facts: &ModuleTdzFacts<'_>) {
             rw_class(class, &Rw::checks(&decl, threshold));
         }
     }
+    // An importer in an import cycle can read an exported binding before this
+    // module's body reaches its declarator, with no check of this module's
+    // own naming it. Name each exported binding once, right after its
+    // declarator (a no-op there), so its global is seeded with the dead-zone
+    // sentinel and its getter throws while the sentinel is still there.
+    //
+    // A CommonJS module has no such binding: what it exports are properties
+    // of `module.exports`, which an importer that runs first finds unset,
+    // never in a dead zone. The wrap's `export const X = _cjs.X` only names
+    // the property: its getter reads `module.exports` live and the declarator
+    // never stores X's global, so a sentinel seeded there would never be
+    // cleared and the check would throw after initialization (#11987).
+    if facts.exports_may_run_early && !module.is_commonjs_wrap() {
+        let exported: HashSet<&str> = module
+            .exports
+            .iter()
+            .filter_map(|export| match export {
+                Export::Named { local, .. } => Some(local.as_str()),
+                _ => None,
+            })
+            .collect();
+        let mut after: Vec<(usize, LocalId, String)> = module
+            .init
+            .iter()
+            .enumerate()
+            .filter_map(|(index, stmt)| match stmt {
+                Stmt::Let { id, name, .. }
+                    if decl.get(id).is_some_and(|(at, _)| *at == index)
+                        && exported.contains(name.as_str()) =>
+                {
+                    Some((index, *id, name.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        after.sort_by_key(|(index, ..)| std::cmp::Reverse(*index));
+        for (index, id, name) in after {
+            if let Stmt::Let {
+                init: init @ None, ..
+            } = &mut module.init[index]
+            {
+                *init = Some(Expr::Undefined);
+            }
+            module
+                .init
+                .insert(index + 1, Stmt::Expr(tdz_check::check(id, &name)));
+        }
+    }
     // A checked `let x;` must end its dead zone when the declaration runs:
     // give it the `undefined` initializer it means.
     let checked = tdz_check::checked_ids(module);
