@@ -216,6 +216,9 @@ pub(crate) use class_object_template::{
 mod crypto_key;
 pub(crate) mod entries_shape;
 pub(crate) mod enumeration;
+mod exotic_named_read;
+#[cfg(test)]
+mod exotic_named_read_tests;
 mod field_ops;
 mod for_in_stable;
 mod get_field_by_name;
