@@ -3968,6 +3968,14 @@
    ],
    "verdict": "process_global_allocation",
    "why": "Test-only RuntimeStoreSite. Its direct addresses are permanent Rust-owned PIC-arena PackedSetWays/AddWays allocations and optional static JsFunctionInfo code; own/key-add ways hold only process-unique ShapeIds, slot indices and validity words. A generic slow store can also install a permanent Rust-owned setter_site::Entry: its key, holder and accessor pair are strong rewritable roots scanned via setter_site::ENTRIES, and both priming and admission require primary_only() before entry access. Worker agents never dereference that heap-bearing arm; after any worker starts it stays disabled. The readonly transition test exercises own/key-add data ways."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_evaluation_storage.rs",
+   "names": [
+    "NEXT_PRIVATE_EVALUATION_ID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Monotonic scalar ClassDefinitionEvaluation identity, initialized to 1. Its only update is checked integer increment via AtomicU64::try_update, rejecting u64::MAX (the template namespace); zero is reserved for intrinsic private names. The returned integer is copied to class metadata native_state and used to qualify private storage keys. No pointer is stored in this atomic, and it is never dereferenced. Checked exhaustion replaces fetch_add, so the mechanical counter-only recognizer no longer admits it."
   }
  ]
 }
