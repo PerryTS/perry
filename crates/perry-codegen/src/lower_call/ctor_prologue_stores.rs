@@ -37,7 +37,7 @@
 //! | precheck condition | why it holds |
 //! |---|---|
 //! | `GcHeader.obj_type == GC_TYPE_OBJECT` | low byte of the packed `gc_packed` constant |
-//! | not forwarded | `gc_flags` is exactly `GC_FLAG_ARENA` |
+//! | not forwarded | fresh nursery birth: `GC_FLAG_ARENA` plus live runtime birth flags; never forwarded |
 //! | receiver is an ordinary object | the emitted precheck reads `class_id` @0 and the ShapeId @4; #8113 deleted the `object_type` word this row used to name |
 //! | `class_id == <this class>` | same word, `cid` is this site's class |
 //! | live-slot bound > slot | the bound is the class's own field count (the ShapeId descriptor's `live_inline_slot_count` since #8113), and every slot in the plan indexes a declared field |

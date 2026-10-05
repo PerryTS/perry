@@ -1217,6 +1217,11 @@ impl ValidPointerSetBuilder {
     }
 }
 
+/// Stable address of the existing thread-local queue, including across `take`.
+pub(crate) fn mark_seed_queue_address() -> *mut std::ffi::c_void {
+    MARK_SEEDS.with(|cell| cell.get().cast())
+}
+
 pub(super) fn push_mark_seed(header: *mut GcHeader) {
     MARK_SEEDS.with(|cell| unsafe {
         (*cell.get()).push(header);

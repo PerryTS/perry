@@ -319,9 +319,9 @@ thread_local! {
     pub(super) static INCREMENTAL_MARK_BARRIER_VALID_PTRS: Cell<*const ValidPointerSet> =
         const { Cell::new(std::ptr::null()) };
 
-    /// Extra GcHeader flags stamped on RUNTIME-path allocations at birth:
-    /// `GC_FLAG_MARKED` while an incremental mark barrier is active, 0
-    /// otherwise (allocate-black). A budgeted cycle's sweep may only collect
+    /// Extra GcHeader flags stamped by ALL allocators at birth:
+    /// `GC_FLAG_MARKED` throughout cycle marking (including barrier-disabled
+    /// build windows), 0 after the sweep snapshot. A budgeted sweep only collects
     /// what its own trace could have seen; an object born mid-cycle and
     /// installed via a runtime-internal RAW store (a grown array's elements
     /// buffer, a map entry node, a string builder's data — none of which pass
@@ -332,9 +332,10 @@ thread_local! {
     /// `gc()` mixed in. Born-marked objects survive to the NEXT cycle —
     /// bounded floating garbage, already priced by the debt pacer.
     ///
-    /// Codegen's inline bump allocator (lower_call.rs IR) does NOT read this
-    /// flag; codegen-born objects are ordinary JS values whose installs all
-    /// go through codegen store barriers → `incremental_mark_barrier_value`.
+    /// Runtime and generated inline allocations read this SAME live cell at
+    /// each birth. Generated non-leaf births seed after their slots are valid;
+    /// no collector step may see an incompletely initialized runtime birth
+    /// either. Root stores need no shade, including after FinalRootRemark.
     /// The runtime choke points below cover every raw-install allocation.
     pub(crate) static GC_BIRTH_EXTRA_FLAGS: Cell<u8> = const { Cell::new(0) };
 
@@ -493,11 +494,18 @@ pub(crate) fn incremental_mark_barrier_globally_idle() -> bool {
     PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT.load(Ordering::Relaxed) == 0
 }
 
-/// Allocate-black birth flags for runtime-path allocations — see
+/// Allocate-black birth flags for all allocations — see
 /// `GC_BIRTH_EXTRA_FLAGS`.
 #[inline(always)]
 pub fn gc_birth_extra_flags() -> u8 {
     hot_birth_extra_flags().get()
+}
+
+/// The thread-local cell's address is stable; its VALUE changes at GC steps.
+/// InlineArenaState caches only this address, never the flags across a poll.
+#[inline(always)]
+pub(crate) fn gc_birth_flags_address() -> *const u8 {
+    hot_birth_extra_flags().as_ptr()
 }
 
 /// A born-black object must also be TRACED: marking treats MARKED as
@@ -511,6 +519,8 @@ pub fn gc_birth_extra_flags() -> u8 {
 /// old fiber tree). Seeding every black birth closes this for all phases;
 /// the trace drains absorb seeds continuously, so the cost is one worklist
 /// visit per mid-cycle runtime allocation.
+/// GC leaf: queues work, never runs a collector or user code. Generated
+/// callers initialize all slots before this call and before publication.
 #[inline]
 pub(crate) fn gc_note_black_birth(header: *mut GcHeader) {
     if hot_birth_extra_flags().get() & GC_FLAG_MARKED == 0 {
@@ -523,7 +533,33 @@ pub(crate) fn gc_note_black_birth(header: *mut GcHeader) {
     if unsafe { gc_type_is_pointer_free((*header).obj_type) } {
         return;
     }
-    push_mark_seed(header);
+    note_black_birth_to_queue(header, mark_seed_queue_address());
+}
+
+/// Shared runtime/generated seed operation. The caller resolves this thread's
+/// queue BEFORE entering an unpublished birth's no-safepoint window. No TLS
+/// resolver, collector, or user callback is reachable from this leaf operation.
+/// Runtime callers retain their live-flags gate above; inline callers read the
+/// same live cell for the header and gate. The header is the birth's own color.
+#[no_mangle]
+pub extern "C" fn js_gc_note_black_birth(header: *mut GcHeader, seeds: *mut std::ffi::c_void) {
+    unsafe {
+        if (*header).gc_flags & GC_FLAG_MARKED != 0 && !gc_type_is_pointer_free((*header).obj_type)
+        {
+            note_black_birth_to_queue(header, seeds);
+        }
+    }
+}
+
+/// The identical queue operation for runtime and generated births. Each caller
+/// has already checked its live birth color and pointer-free type. Keeping
+/// those gates outside this kernel avoids repeating them in runtime allocators;
+/// inlining the existing push also avoids an extra exported-call relocation.
+#[inline(always)]
+fn note_black_birth_to_queue(header: *mut GcHeader, seeds: *mut std::ffi::c_void) {
+    unsafe {
+        (*seeds.cast::<Vec<*mut GcHeader>>()).push(header);
+    }
 }
 
 /// Is an incremental mark cycle in progress **on this thread**, or is this

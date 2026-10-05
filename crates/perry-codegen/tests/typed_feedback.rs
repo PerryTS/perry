@@ -1286,8 +1286,9 @@ fn typed_feedback_guards_numeric_array_push_specialization() {
 #[test]
 fn typed_feedback_marks_numeric_array_literals() {
     // Serialize against the array-literal full-outline test and pin it off, so
-    // this test always observes the inline numeric-array construction
-    // (js_array_mark_numeric_f64_layout) rather than the outlined builder.
+    // this test always observes the inline numeric-array header rather than
+    // the outlined builder. Canonical doubles set their layout at birth:
+    // normalization would be unreachable and must not reserve a root slot.
     let _lock = env_lock();
     let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
     let numeric_ir = ir_for(module(
@@ -1305,7 +1306,11 @@ fn typed_feedback_marks_numeric_array_literals() {
         ])))],
     ));
 
-    assert!(numeric_ir.contains("call i32 @js_array_mark_numeric_f64_layout"));
+    // GcHeader: size=40, pointer-free/raw-f64 reserved bits=0x4080,
+    // flags=ARENA, type=ARRAY. Live birth flags are ORed into this word.
+    let numeric_header = (40u64 << 32) | (0x4080u64 << 16) | 0x0201;
+    assert!(numeric_ir.contains(&numeric_header.to_string()));
+    assert!(!numeric_ir.contains("call i32 @js_array_mark_numeric_f64_layout"));
 
     let mixed_ir = ir_for(module(
         "typed_feedback_mixed_array_literal.ts",
@@ -1318,6 +1323,8 @@ fn typed_feedback_marks_numeric_array_literals() {
     ));
 
     assert!(!mixed_ir.contains("call i32 @js_array_mark_numeric_f64_layout"));
+    let mixed_raw_f64_header = (32u64 << 32) | (0x4080u64 << 16) | 0x0201;
+    assert!(!mixed_ir.contains(&mixed_raw_f64_header.to_string()));
 }
 
 #[test]

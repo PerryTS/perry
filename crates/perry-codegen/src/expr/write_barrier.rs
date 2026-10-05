@@ -151,9 +151,10 @@ const GC_FLAG_TENURED_I8: &str = "32"; // 0x20
 ///    `INCREMENTAL_MARK_BARRIER_VALID_PTRS` is null, because
 ///    `incremental_mark_barrier_enable` increments the count BEFORE installing
 ///    the thread-local, while disable clears the thread-local BEFORE
-///    decrementing the count. This is the same gate, on the same global, that
-///    `expr/shadow_inline.rs` and `expr/shadow_slot.rs` already emit for the
-///    root shading barrier. It is an LLVM `monotonic` load (Rust `Relaxed`):
+///    decrementing the count. Birth color instead reads the per-thread live
+///    birth flags (including barrier-disabled build windows). Generated root
+///    stores themselves need no shade (#11929). This is an LLVM `monotonic`
+///    load (Rust `Relaxed`):
 ///    the counter is authoritative state, not a publication fence for other
 ///    memory.
 ///
@@ -326,42 +327,37 @@ pub(crate) fn emit_write_barrier_slot_value_and_generation_tested(
     ctx.current_block = done_idx;
 }
 
-/// Use the same construction proof as precise local roots. A scalar cannot
-/// introduce a new heap edge during incremental marking; the registered root
-/// slot still receives the store, including overwrites of old heap values.
-/// TypeScript annotations alone do not satisfy this proof.
+/// Store an expression result into a compiler-managed registered root.
+/// FinalRootRemark rescans the slot regardless of the expression's type or
+/// representation; see `emit_gated_root_nanbox_store` for that proof.
 pub(crate) fn emit_root_nanbox_store_for_expr(
     ctx: &mut FnCtx<'_>,
     value: &str,
     root_slot: &str,
-    expr: &Expr,
+    _expr: &Expr,
 ) {
-    if super::expr_is_known_non_pointer_shadow_value(ctx, expr) {
-        // GC_STORE_AUDIT(ROOT): proven scalar in a registered mutable root.
-        ctx.block().store(DOUBLE, value, root_slot);
-    } else {
-        emit_gated_root_nanbox_store(ctx, value, root_slot);
-    }
+    emit_gated_root_nanbox_store(ctx, value, root_slot);
 }
 
-/// [`emit_root_nanbox_store_on_block`] with the runtime's own idle test
-/// inlined: `js_write_barrier_root_nanbox` returns immediately while
-/// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` is zero, so the call is taken
-/// only while some thread is incrementally marking.
+/// Store into a compiler-managed registered root.
+///
+/// No insertion barrier is needed here. Budgeted collections rescan every
+/// mutable root in `FinalRootRemark`; synchronous collections have no mutator
+/// window between root scan and sweep. After that remark, a value generated
+/// code can hold is already marked, was born black, came through a barriered
+/// heap store, or came through the weak-read barrier. Root dominance forbids
+/// an unrooted register from being the value's only home across a collection
+/// point. Runtime-owned caches do not share that proof and keep their runtime
+/// root barriers.
 pub(crate) fn emit_gated_root_nanbox_store(ctx: &mut FnCtx<'_>, value: &str, root_slot: &str) {
-    // GC_STORE_AUDIT(ROOT): module-global slot registered as a mutable GC
-    // root; the gated root barrier below covers incremental marking.
+    // GC_STORE_AUDIT(ROOT): module-global slot registered as a mutable GC root.
     ctx.block().store(DOUBLE, value, root_slot);
-    let value_bits = ctx.block().bitcast_double_to_i64(value);
-    super::emit_persistent_shadow_root_barrier(ctx, &value_bits);
 }
 
 pub(crate) fn emit_root_nanbox_store_on_block(blk: &mut LlBlock, value: &str, root_slot: &str) {
-    // GC_STORE_AUDIT(ROOT): module-global slot registered as a mutable GC
-    // root; the root-barrier call below covers incremental marking.
+    // GC_STORE_AUDIT(ROOT): module-global slot registered as a mutable GC root.
+    // See `emit_gated_root_nanbox_store` for the final-remark proof.
     blk.store(DOUBLE, value, root_slot);
-    let value_bits = blk.bitcast_double_to_i64(value);
-    blk.call_void("js_write_barrier_root_nanbox", &[(I64, &value_bits)]);
 }
 
 pub(crate) fn emit_root_heap_word_store_on_block(
@@ -369,9 +365,9 @@ pub(crate) fn emit_root_heap_word_store_on_block(
     value_bits: &str,
     root_slot: &str,
 ) {
-    // GC_STORE_AUDIT(ROOT): registered mutable GC root slot; root barrier below.
+    // GC_STORE_AUDIT(ROOT): registered mutable GC root slot. See
+    // `emit_gated_root_nanbox_store` for the final-remark proof.
     blk.store(I64, value_bits, root_slot);
-    blk.call_void("js_write_barrier_root_heap_word", &[(I64, value_bits)]);
 }
 
 /// GC layout-note emission (refs #1090) — at heap-slot stores whose

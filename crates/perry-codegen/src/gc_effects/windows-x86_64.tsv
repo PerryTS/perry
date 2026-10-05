@@ -1320,6 +1320,7 @@ js_gc_memory_pressure	Reenters
 js_gc_module_collect	Reenters
 js_gc_module_idle_hint	AllocOnly
 js_gc_module_minor	AllocOnly
+js_gc_note_black_birth	Leaf
 js_gc_note_slot_layout	Leaf
 js_gc_note_slot_layout_aware	Leaf
 js_gc_pause_stats	Leaf

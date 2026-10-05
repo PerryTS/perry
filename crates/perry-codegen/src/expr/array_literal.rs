@@ -235,6 +235,8 @@ pub(crate) fn emit_array_from_lowered_values(
             PTR,
             &[(&raw_fast, &fast_pred_label), (&raw_slow, &slow_pred_label)],
         );
+        let birth_flags = super::inline_birth::flags(ctx, &state_ptr);
+        let blk = ctx.block();
 
         // Packed GcHeader (bits 0..7 obj_type, 8..15 gc_flags, 16..31
         // _reserved, 32..63 size). PR #1146 packs the layout-tag in the
@@ -284,7 +286,9 @@ pub(crate) fn emit_array_from_lowered_values(
             }
             None => gc_packed.to_string(),
         };
-        // GC_STORE_AUDIT(INIT): freshly allocated array header starts pointer-free until slot notes below.
+        let header_word = super::inline_birth::header(ctx, &header_word, &birth_flags);
+        let blk = ctx.block();
+        // GC_STORE_AUDIT(INIT): live runtime birth flags are part of the fresh array header.
         blk.store(I64, &header_word, &raw);
 
         // Packed ArrayHeader at raw+8 (length low 32 / capacity high 32).
@@ -341,15 +345,44 @@ pub(crate) fn emit_array_from_lowered_values(
                         false,
                     );
                 }
-                blk.call(
-                    I32,
-                    "js_array_mark_numeric_f64_layout",
-                    &[(I64, &user_ptr_as_i64)],
-                );
                 blk.br(&done_label);
             }
             ctx.current_block = done_idx;
-            return Ok(user_ptr_as_i64);
+            super::inline_birth::finish(ctx, &raw, &birth_flags, &state_ptr);
+            if all_plain == "true" {
+                // Statically canonical doubles cannot reach normalization.
+                // Do not reserve a phantom temporary root in their function.
+                return Ok(user_ptr_as_i64);
+            }
+            // The generic normalizer's receiver resolution is Reenters.
+            // Keep it OUTSIDE the no-safepoint initialization window, and
+            // protect/re-read the initialized, seeded array across the call.
+            // Plain doubles retain their no-call/no-temporary-root hot path.
+            let normalize_idx = ctx.new_block("arrlit.normalize");
+            let return_idx = ctx.new_block("arrlit.return");
+            let normalize_label = ctx.block_label(normalize_idx);
+            let return_label = ctx.block_label(return_idx);
+            let plain_pred = ctx.block().label.clone();
+            ctx.block()
+                .cond_br(&all_plain, &return_label, &normalize_label);
+            ctx.current_block = normalize_idx;
+            let normalized = rooting::with_rooted_group(ctx, 1, |ctx, group| {
+                let root = group.adopt_emitted(ctx, rooting::Repr::Ptr, &user_ptr_as_i64, true);
+                let array = group.reread_emitted(ctx, root);
+                ctx.block()
+                    .call(I32, "js_array_mark_numeric_f64_layout", &[(I64, &array)]);
+                Ok(group.reread_emitted(ctx, root))
+            })?;
+            let normalized_pred = ctx.block().label.clone();
+            ctx.block().br(&return_label);
+            ctx.current_block = return_idx;
+            return Ok(ctx.block().phi(
+                I64,
+                &[
+                    (&user_ptr_as_i64, &plain_pred),
+                    (&normalized, &normalized_pred),
+                ],
+            ));
         }
 
         // Elements at raw+16 + i*8.
@@ -371,6 +404,7 @@ pub(crate) fn emit_array_from_lowered_values(
             );
         }
 
+        super::inline_birth::finish(ctx, &raw, &birth_flags, &state_ptr);
         return Ok(user_ptr_as_i64);
     }
 

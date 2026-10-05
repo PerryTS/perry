@@ -797,11 +797,18 @@ fn emit_instance_alloc_inner(
                 }
                 crate::expr::HeaderImageSource::EntryValue(value) => value,
             };
+            let birth_flags = crate::expr::inline_birth::flags(ctx, &state_ptr);
+            let born_packed =
+                crate::expr::inline_birth::header(ctx, &gc_packed.to_string(), &birth_flags);
             let blk = ctx.block();
+            let born_image = blk.next_reg();
+            blk.emit_raw(format!(
+                "{born_image} = insertelement <2 x i64> {header_image}, i64 {born_packed}, i32 0"
+            ));
             // GC_STORE_AUDIT(INIT): inline headers initialize freshly allocated unpublished object storage.
             blk.emit_raw(format!(
                 "store <2 x i64> {}, ptr {}, align 8",
-                header_image, raw
+                born_image, raw
             ));
 
             // #6759 Phase B: null the `meta` record pointer — the LAST header
@@ -848,7 +855,12 @@ fn emit_instance_alloc_inner(
             // function-call path returned). Convert to i64 to match what
             // the existing nanbox_pointer_inline expects.
             let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
-            blk.ptrtoint(&user_ptr, I64)
+            let handle = blk.ptrtoint(&user_ptr, I64);
+
+            // Seed only after EVERY field has a valid default, before the
+            // constructor can allocate/poll. Same protocol as runtime births.
+            crate::expr::inline_birth::finish(ctx, &raw, &birth_flags, &state_ptr);
+            handle
         }
     } else {
         // Fallback: build the packed-keys string at this site and

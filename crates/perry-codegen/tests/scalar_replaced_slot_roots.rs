@@ -477,10 +477,10 @@ fn later_store_into_a_scalar_replaced_field_is_bound() {
 // The bind is per SLOT, not per STORE (#7013).
 //
 // #7007 emitted `js_shadow_slot_bind` at every store into a scalar-replacement
-// alloca. That call is loop-invariant apart from its root barrier: the alloca
-// is entry-hoisted, so `slot_ptrs[idx]` never changes, and every reader of a
-// bound slot dereferences `slot_ptrs[idx]` rather than the `stack[idx]` mirror
-// the bind refreshes. In a loop it cost ~4 ns per iteration for nothing.
+// alloca. The alloca is entry-hoisted, so `slot_ptrs[idx]` never changes, and
+// every reader of a bound slot dereferences `slot_ptrs[idx]` rather than the
+// `stack[idx]` mirror the bind refreshes. FinalRootRemark rescans the alloca;
+// in a loop, rebinding it cost ~4 ns per iteration for nothing.
 // ---------------------------------------------------------------------------
 
 /// Two heap stores into the SAME scalar-replaced field must emit exactly one
@@ -529,17 +529,13 @@ fn repeated_stores_into_one_scalar_slot_bind_once() {
     );
 }
 
-/// Every store still shades its value, so an in-flight incremental mark cannot
-/// miss a pointer written into an already-scanned root.
+/// Repeated stores into a bound scalar-replacement alloca need no per-store
+/// shading. Budgeted collections rescan the alloca at FinalRootRemark, and a
+/// synchronous collection has no mutator window between root scan and sweep.
 ///
-/// This is the part of the bind that is genuinely per-store, and dropping it
-/// while hoisting the rest would be a silent incremental-GC miscompile.
-///
-/// Teeth: pre-hoist the scalar-slot path emitted no
-/// `js_write_barrier_root_nanbox` at all (the shading happened inside
-/// `js_shadow_slot_bind`), so the old compiler produces 0 and fails.
+/// Teeth: restoring either generated root barrier makes the count nonzero.
 #[test]
-fn every_store_into_a_hoisted_scalar_slot_shades_its_value() {
+fn every_store_into_a_hoisted_scalar_slot_uses_final_remark() {
     let _pin = NativeRootsPin::shadow();
     let ir = ir_for(
         "scalar_field_two_stores_barrier.ts",
@@ -563,24 +559,19 @@ fn every_store_into_a_hoisted_scalar_slot_shades_its_value() {
         ],
     );
 
+    let main = main_ir(&ir);
     assert_eq!(
-        value_slot_barriers(main_ir(&ir)),
-        2,
-        "each of the two heap stores must shade the value it wrote; the \
-         hoisted bind only shades what the alloca held at function entry \
-         (#7013). Barriers by slot: {:?}\n{}",
-        perry_codegen::testing::root_slots::barriers_by_slot(main_ir(&ir)),
-        main_ir(&ir)
+        value_slot_barriers(main),
+        0,
+        "the two heap stores must rely on the collector's final root rescan, \
+         not generated per-store shading. Barriers by slot: {:?}\n{}",
+        perry_codegen::testing::root_slots::barriers_by_slot(main),
+        main
     );
-
-    // The barrier must be the guarded form, not an unconditional call: the
-    // whole point of hoisting is that the common path (no incremental cycle in
-    // flight) stays a load + compare + not-taken branch.
     assert!(
-        ir.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT"),
-        "the per-store shading barrier must be guarded on the incremental-mark \
-         active count, otherwise the hoist just trades one unconditional call \
-         for another (#7013):\n{ir}"
+        !main.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT")
+            && !main.contains("call void @js_write_barrier_root_nanbox("),
+        "generated scalar roots must emit neither an active-cycle gate nor a root barrier:\n{main}"
     );
 }
 

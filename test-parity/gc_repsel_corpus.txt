@@ -988,3 +988,10 @@ test_gap_addkey_born_wide_11497
 test_gap_gc_11931_function_attrs_incremental
 test_gap_gc_11931_function_attrs_old_minor
 test_gap_gc_11931_function_attrs_worker
+
+# #11929: generated mutable local/global roots use the collector's final
+# root remark instead of per-store shading; closure captures keep heap barriers.
+test_gap_gc_generated_root_final_remark
+# #11929/#11960: root-heavy stable homes during budgeted marking and copying GC.
+test_gap_gc_11929_stable_home_marking
+test_gap_gc_11929_inline_births
