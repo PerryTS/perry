@@ -738,13 +738,27 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         r"(?:gc_malloc|arena_alloc_gc)\s*\([^;]*crate::gc::GC_TYPE_REGEXP",
         "RegExp dedicated GC birth kind",
     )
-    expando_kind = function_body(exotic_expando, "exotic_expando_kind")
+    # `exotic_expando_kind` reads the header and forwards its type to
+    # `exotic_kind_of_gc_type`, which holds the type -> kind table.
+    require_code(
+        function_body(exotic_expando, "exotic_expando_kind"),
+        r"\bexotic_kind_of_gc_type\s*\(",
+        "exotic_expando_kind delegates to the type -> kind table",
+    )
+    expando_kind = function_body(exotic_expando, "exotic_kind_of_gc_type")
     require_code(
         expando_kind,
         r"crate::gc::GC_TYPE_REGEXP\s*=>\s*Some\s*\(\s*ExoticKind::RegExp",
         "RegExp expando dedicated kind",
     )
-    regexp_get = function_body(get_field_tail, "get_field_by_name_object_tail")
+    # The exported tail forwards to its `_with_kind` body (which callers that
+    # already hold the cell's kind enter directly); that body dispatches.
+    require_code(
+        function_body(get_field_tail, "get_field_by_name_object_tail"),
+        r"\bget_field_by_name_object_tail_with_kind\s*\(",
+        "get_field_by_name_object_tail delegates to its _with_kind body",
+    )
+    regexp_get = function_body(get_field_tail, "get_field_by_name_object_tail_with_kind")
     require_code(
         regexp_get,
         r"gc_type\s*==\s*crate::gc::GC_TYPE_REGEXP",
