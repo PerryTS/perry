@@ -146,7 +146,7 @@ struct PlainPrototype {
     live: u32,
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// `new EventEmitter()`'s site memo: the prototype ShapeId it last proved
     /// (see [`PlainPrototype`]), so that `init`'s three `[[Set]]`s are three
     /// own-property creations. A ShapeId names one key list, one descriptor

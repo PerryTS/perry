@@ -325,6 +325,8 @@ unsafe fn positional_prototype_shape_keys(
         {
             return None;
         }
+        // GC_STORE_AUDIT(STACK): `out` is the caller's on-stack snapshot, not
+        // GC-managed storage; no collection runs while the proof reads it.
         slot.write(super::object_keys(obj));
         proto = positional_shape_prototype(obj)?;
     }

@@ -26,7 +26,10 @@
 pub(super) fn try_define_new_class_field(receiver: f64, key: f64, value: f64) -> bool {
     unsafe {
         let key_value = crate::value::JSValue::from_bits(key.to_bits());
-        if !key_value.is_string() {
+        // The store below names the key by its `StringHeader`, which a short
+        // (inline) key does not have; a computed key can be one, and the
+        // general route defines it.
+        if key_value.is_short_string() || !key_value.is_string() {
             return false;
         }
         let key_str = key_value.as_string_ptr();
@@ -34,10 +37,7 @@ pub(super) fn try_define_new_class_field(receiver: f64, key: f64, value: f64) ->
             return false;
         }
         let key_len = (*key_str).byte_len as usize;
-        let key_bytes = std::slice::from_raw_parts(
-            (key_str as *const u8).add(std::mem::size_of::<crate::string::StringHeader>()),
-            key_len,
-        );
+        let key_bytes = std::slice::from_raw_parts(crate::string::string_data(key_str), key_len);
         // Index-like names take the general route (array-index semantics).
         if key_bytes.is_empty() || key_bytes[0].is_ascii_digit() {
             return false;

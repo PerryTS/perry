@@ -76,6 +76,17 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // `PERRY_REGION_SPILL=0|off|false` tells the region lowering every key is
     // stored, which drops the spill-reading copies from the emitted loop.
     "PERRY_REGION_SPILL",
+    // `PERRY_REGION_ELEMENTS=0|off|false` drops the element-receiver loads from
+    // a region, and `PERRY_REGION_JOINT=0|off|false` plans a body region's
+    // binding alone. Either setting emits a different loop.
+    "PERRY_REGION_ELEMENTS",
+    "PERRY_REGION_JOINT",
+    // `PERRY_NUMBER_LOCAL_LOOP=0|off|false` keeps every loop on the ordinary
+    // lowering, without the Number-versioned clone.
+    "PERRY_NUMBER_LOCAL_LOOP",
+    // `PERRY_REGION_VIEWS=0` drops typed-array view receivers from a region,
+    // so the loop keeps its per-access length checks.
+    "PERRY_REGION_VIEWS",
     // #9071: gates resolving a loop-called immutable callee binding once at
     // body entry instead of per call — the two settings emit different call
     // sequences, so a cached object from one must not serve the other.

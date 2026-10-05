@@ -124,20 +124,23 @@ def write_source(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8", newline="")
 
 
-# `#[cfg(test)] mod <stem>;` — the whole file is a test module.
-# An `#[cfg(test)]` may be separated from its `mod` by further attributes --
+# `mod <stem>;` with the attributes above it: the edges of the module tree.
+# `#[cfg(test)]` anywhere in those attributes makes the whole file a test
+# module. It may be separated from its `mod` by further attributes --
 # `#[path = "tests.rs"]` is the spelling 58 declarations in perry-runtime use.
 # Requiring the two to be adjacent made every one of those files read as
 # shipping code, so a `thread_local!` in one was counted against a build it
 # cannot appear in. Intervening attributes only ever NARROW the cfg, so a block
 # reached through them is still test-only.
 _ATTRS = r"(?:[ \t]*#\[[^\]\n]*\]\s*\n)*"
-CFG_TEST_MOD_RE = re.compile(
-    r"(?m)^[ \t]*#\[cfg\(test\)\]\s*\n" + _ATTRS
-    + r"[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_0-9]+)\s*;"
+MOD_DECL_RE = re.compile(
+    r"(?m)^(" + _ATTRS + r")[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_0-9]+)\s*;"
 )
-# Any out-of-line `mod <stem>;`, gated or not — the edges of the module tree.
-ANY_MOD_RE = re.compile(r"(?m)^[ \t]*(?:pub(?:\([^)]*\))?\s+)?mod\s+([A-Za-z_0-9]+)\s*;")
+CFG_TEST_ATTR_RE = re.compile(r"#\[cfg\(test\)\]")
+# `#[path = "x.rs"]` names the file outright, relative to the directory of the
+# declaring file. If the checker resolved such a `mod` by its stem alone, a
+# test file whose name differs from its module would read as shipping code.
+PATH_ATTR_RE = re.compile(r'#\[path\s*=\s*"([^"]+)"\]')
 # `#[cfg(test)] mod <name> {` — an inline test module, whose body is skipped.
 CFG_TEST_INLINE_MOD_RE = re.compile(
     r"(?m)^[ \t]*#\[cfg\(test\)\]\s*\n" + _ATTRS
@@ -187,7 +190,8 @@ def cfg_test_module_files(root: Path, crates: list[str]) -> set[str]:
     plain `mod y;` inside an already-test-only file is test-only too, which is
     what makes `gc/tests/mod.rs` carry its whole subtree. A `mod x;` in `a/b.rs`
     (or `a/b/mod.rs`) resolves to `a/b/x.rs` or `a/b/x/mod.rs`; both spellings
-    are recorded, and a miss is simply a file that stays in scope.
+    are recorded, and a miss is simply a file that stays in scope. A `mod x;`
+    under `#[path = "p.rs"]` resolves to `p.rs` beside the declaring file.
     """
     declares: dict[str, list[tuple[str, bool]]] = {}
     for crate in crates:
@@ -200,12 +204,17 @@ def cfg_test_module_files(root: Path, crates: list[str]) -> set[str]:
                 rel = repo_relative(path, root)
                 src = read_source(path)
                 parent = path.parent if name in ("lib.rs", "mod.rs") else path.with_suffix("")
-                gated = set(CFG_TEST_MOD_RE.findall(src))
                 edges = []
-                for stem in set(ANY_MOD_RE.findall(src)):
-                    for candidate in (parent / f"{stem}.rs", parent / stem / "mod.rs"):
+                for attrs, stem in MOD_DECL_RE.findall(src):
+                    gated = bool(CFG_TEST_ATTR_RE.search(attrs))
+                    named = PATH_ATTR_RE.search(attrs)
+                    if named:
+                        candidates = (path.parent / named.group(1),)
+                    else:
+                        candidates = (parent / f"{stem}.rs", parent / stem / "mod.rs")
+                    for candidate in candidates:
                         if candidate.exists():
-                            edges.append((repo_relative(candidate, root), stem in gated))
+                            edges.append((repo_relative(candidate.resolve(), root.resolve()), gated))
                 declares[rel] = edges
 
     test_only = {child for edges in declares.values() for child, gated in edges if gated}
@@ -490,11 +499,27 @@ def self_test() -> int:
             if not verify(root, CRATES, allowlist):
                 failures.append(f"an UNGATED `{shape}` file passed")
 
+        # 8. `#[path]` may name a file that differs from the module's stem,
+        #    beside a declaring file that is not `mod.rs`. Resolving by stem
+        #    alone would miss it, so its `thread_local!` would be counted.
+        (src_dir / "probes.rs").unlink()
+        write_source(src_dir / "lib.rs", "mod streams;\n")
+        write_source(src_dir / "streams_gc_tests.rs",
+            "thread_local! { static G: u8 = const { 0 }; }\n"
+        )
+        renamed = '#[cfg(test)]\n#[path = "streams_gc_tests.rs"]\nmod gc_tests;\n'
+        write_source(src_dir / "streams.rs", renamed)
+        if verify(root, CRATES, allowlist):
+            failures.append("a `#[cfg(test)]` file named by `#[path]` was counted")
+        write_source(src_dir / "streams.rs", renamed.replace("#[cfg(test)]\n", ""))
+        if not verify(root, CRATES, allowlist):
+            failures.append("an UNGATED file named by `#[path]` passed")
+
     for f in failures:
         print(f"SELF-TEST FAILED: {f}", file=sys.stderr)
     if failures:
         return 1
-    print("self-test: the checker can fail in all nine directions")
+    print("self-test: the checker can fail in all eleven directions")
     return 0
 
 

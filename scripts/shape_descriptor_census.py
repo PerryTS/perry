@@ -514,19 +514,21 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 "again; the descriptor is the authoritative edge since #8112"
             )
 
-    # ConstFn adds exact body facts to the same mint. Follow both forwarding
-    # wrappers and check ordering in the shared body that actually publishes
-    # the descriptor and its reverse indexes.
+    # ConstFn adds exact body facts to the same mint. Follow the forwarding
+    # chain and check ordering in the body that actually publishes the
+    # descriptor and its reverse indexes: the intern's out-of-line miss half,
+    # which allocates the id and publishes the record.
     for wrapper, callee in (
         ("shape_descriptor_intern_with_rep", "shape_descriptor_intern_with_special"),
         ("shape_descriptor_intern_with_special", "shape_descriptor_intern_with_special_mode"),
+        ("shape_descriptor_intern_with_special_mode", "shape_descriptor_mint_fresh"),
     ):
         require_code(
             function_body(shapes, wrapper),
             rf"\b{callee}\s*\(",
             f"{wrapper} delegates to the shared shape mint",
         )
-    ensure = function_body(shapes, "shape_descriptor_intern_with_special_mode")
+    ensure = function_body(shapes, "shape_descriptor_mint_fresh")
     # The property is that the by-id descriptor is installed BEFORE the reverse
     # accelerator points at it — never which append spells it. #9768 added
     # `family_append_fresh`, which is `family_push_back` minus a membership scan
@@ -540,7 +542,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     if ensure_append is None:
         raise CensusError(
             "shape descriptor authority surface missing: family append in "
-            "shape_descriptor_intern_with_special_mode"
+            "shape_descriptor_mint_fresh"
         )
     assert_before(
         ensure,
@@ -682,7 +684,15 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             f"{name} ShapeId authority",
         )
 
-    for name in ("class_vtable_fast_guard", "js_native_call_method"):
+    # The exported entry point only forwards; the dispatch tower it shares
+    # with the call sites' chain-memo entries is the body that holds the
+    # guard facts.
+    require_code(
+        function_body(native_call_method, "js_native_call_method"),
+        r"\bnative_call_method_tower\s*\(",
+        "js_native_call_method delegates to the dispatch tower",
+    )
+    for name in ("class_receiver_fast_guard", "native_call_method_tower"):
         body = function_body(native_call_method, name)
         if re.search(
             r"\(\s*\*\s*obj\s*\)\s*\.\s*(?:keys_array|field_count|object_type)\b|js_array_length\s*\(\s*keys\s*\)",
@@ -728,13 +738,27 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         r"(?:gc_malloc|arena_alloc_gc)\s*\([^;]*crate::gc::GC_TYPE_REGEXP",
         "RegExp dedicated GC birth kind",
     )
-    expando_kind = function_body(exotic_expando, "exotic_expando_kind")
+    # `exotic_expando_kind` reads the header and forwards its type to
+    # `exotic_kind_of_gc_type`, which holds the type -> kind table.
+    require_code(
+        function_body(exotic_expando, "exotic_expando_kind"),
+        r"\bexotic_kind_of_gc_type\s*\(",
+        "exotic_expando_kind delegates to the type -> kind table",
+    )
+    expando_kind = function_body(exotic_expando, "exotic_kind_of_gc_type")
     require_code(
         expando_kind,
         r"crate::gc::GC_TYPE_REGEXP\s*=>\s*Some\s*\(\s*ExoticKind::RegExp",
         "RegExp expando dedicated kind",
     )
-    regexp_get = function_body(get_field_tail, "get_field_by_name_object_tail")
+    # The exported tail forwards to its `_with_kind` body (which callers that
+    # already hold the cell's kind enter directly); that body dispatches.
+    require_code(
+        function_body(get_field_tail, "get_field_by_name_object_tail"),
+        r"\bget_field_by_name_object_tail_with_kind\s*\(",
+        "get_field_by_name_object_tail delegates to its _with_kind body",
+    )
+    regexp_get = function_body(get_field_tail, "get_field_by_name_object_tail_with_kind")
     require_code(
         regexp_get,
         r"gc_type\s*==\s*crate::gc::GC_TYPE_REGEXP",
@@ -918,14 +942,23 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # Invalid ShapeIds now fail closed at publication and exact cache matching.
     # Keep both halves of that proof: the emitted guard consumes a nonempty
     # packed word's exact stamp, and neither cache writer admits a zero stamp.
+    # A stamp mismatch goes to the class-accessor arm when the site has one,
+    # else straight to the miss; the accessor arm never enters `hit_label`, so
+    # the stamp compare stays the only way into the slot load.
     compact_guard = re.sub(r"\s+", "", generic_body)
     for fragment in (
         'letpacked_stamp=ctx.block().trunc(I64,&packed_word,I32);',
         'lettoken_eq=ctx.block().icmp_eq(I32,&pcid,&packed_stamp);',
-        'cond_br(&token_eq,&hit_label,&token_miss_label)',
+        '.map(|(idx,_)|ctx.block_label(*idx)).unwrap_or_else(||token_miss_label.clone());',
+        'cond_br(&token_eq,&hit_label,&miss)',
     ):
         if fragment not in compact_guard:
             raise CensusError("generic read PIC compact identity guard disconnected: " + fragment)
+    accessor_call = re.search(r"emit_class_accessor_arm\((?P<args>[^)]*)\)", compact_guard)
+    if accessor_call is None or "hit_label" in accessor_call.group("args"):
+        raise CensusError(
+            "generic read PIC accessor arm must take the miss edge, never hit_label"
+        )
     prime = function_body(ic_miss, "pic_prime_get")
     if not re.match(
         # S6: the first test admits only an ordinary-band ShapeId token, which
@@ -1228,7 +1261,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     for accelerator in ("family_append_fresh", "facts_append_fresh"):
         inverted_mint = dict(sources)
         mint_body = function_body(
-            inverted_mint[shapes_path], "shape_descriptor_intern_with_special_mode"
+            inverted_mint[shapes_path], "shape_descriptor_mint_fresh"
         )
         inverted_body = swap_once(mint_body, "slab_mut().insert", accelerator)
         inverted_mint[shapes_path] = inverted_mint[shapes_path].replace(

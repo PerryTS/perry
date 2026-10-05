@@ -266,6 +266,42 @@ pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
     rand::rng().random_range(min..max) as f64
 }
 
+/// One-shot `crypto.hash(alg, data, encoding = "hex")`, run as
+/// `createHash(alg).update(data).digest(encoding)`.
+///
+/// The hash is an ordinary GC object that owns its native payload. `update`
+/// can collect (and a copying minor can move it), and a bare Rust local is not
+/// a root, so the hash, the data and the encoding sit in a handle scope rather
+/// than in bare locals.
+unsafe fn crypto_hash_one_shot(alg_ptr: i64, data: f64, encoding: Option<f64>) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let data = scope.root_nanbox_f64(data);
+    let encoding = encoding.map(|value| scope.root_nanbox_f64(value));
+    let hash = scope.root_nanbox_f64(js_crypto_create_hash(alg_ptr));
+    let update_args = [data.get_nanbox_f64()];
+    perry_runtime::object::js_native_call_method(
+        hash.get_nanbox_f64(),
+        b"update".as_ptr() as *const i8,
+        6,
+        update_args.as_ptr(),
+        1,
+    );
+    let encoding = match encoding {
+        Some(handle) => handle.get_nanbox_f64(),
+        None => {
+            f64::from_bits(JSValue::string_ptr(js_string_from_bytes(b"hex".as_ptr(), 3)).bits())
+        }
+    };
+    let digest_args = [encoding];
+    perry_runtime::object::js_native_call_method(
+        hash.get_nanbox_f64(),
+        b"digest".as_ptr() as *const i8,
+        6,
+        digest_args.as_ptr(),
+        1,
+    )
+}
+
 /// #1577: dispatcher for captured-then-called `crypto.*` methods
 /// (`const f = crypto.createHash; f("sha256")`). The runtime's native-module
 /// dispatch (`dispatch_native_module_method`) routes `("crypto", method)`
@@ -321,28 +357,9 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         // through a namespace value. The static lowering expands it to
         // `createHash(alg).update(data).digest(enc)`; do the same here.
         "hash" => {
-            let hash = js_crypto_create_hash(str_ptr(0));
-            let data = [arg(1)];
-            perry_runtime::object::js_native_call_method(
-                hash,
-                b"update".as_ptr() as *const i8,
-                6,
-                data.as_ptr(),
-                1,
-            );
-            let enc = if args_len >= 3 && !JSValue::from_bits(arg(2).to_bits()).is_undefined() {
-                arg(2)
-            } else {
-                f64::from_bits(JSValue::string_ptr(js_string_from_bytes(b"hex".as_ptr(), 3)).bits())
-            };
-            let enc = [enc];
-            perry_runtime::object::js_native_call_method(
-                hash,
-                b"digest".as_ptr() as *const i8,
-                6,
-                enc.as_ptr(),
-                1,
-            )
+            let encoding = (args_len >= 3 && !JSValue::from_bits(arg(2).to_bits()).is_undefined())
+                .then(|| arg(2));
+            crypto_hash_one_shot(str_ptr(0), arg(1), encoding)
         }
         "createSign" | "Sign" => js_crypto_create_sign(str_ptr(0)),
         "createVerify" | "Verify" => js_crypto_create_verify(str_ptr(0)),
@@ -826,6 +843,36 @@ mod tests {
                     assert!(crate::common::take_handle::<VerifyHandle>(handle).is_some());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn crypto_native_dispatch_hash_digests_with_default_and_explicit_encoding() {
+        unsafe { crate::common::js_stdlib_init_dispatch() };
+        let method = b"hash";
+        let digest = |args: &[f64]| -> String {
+            let result = unsafe {
+                js_crypto_native_dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len())
+            };
+            let ptr = perry_runtime::js_get_string_pointer_unified(result) as i64;
+            String::from_utf8(unsafe { bytes_from_ptr(ptr) }).unwrap()
+        };
+        let cases: [(&[f64], &str); 3] = [
+            (
+                &[js_str("sha1"), js_str("x")],
+                "11f6ad8ec52a2984abaafd7c3b516503785c2072",
+            ),
+            (
+                &[js_str("sha1"), js_str("x"), undefined()],
+                "11f6ad8ec52a2984abaafd7c3b516503785c2072",
+            ),
+            (
+                &[js_str("sha256"), js_str("abc"), js_str("base64")],
+                "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=",
+            ),
+        ];
+        for (args, expected) in cases {
+            assert_eq!(digest(args), expected);
         }
     }
 

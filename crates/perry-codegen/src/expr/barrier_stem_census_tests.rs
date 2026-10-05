@@ -68,7 +68,9 @@ use super::class_field_barrier_tests::{
 };
 use crate::compile_module;
 use perry_hir::types::Type;
-use perry_hir::{CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt, UpdateOp};
+use perry_hir::{
+    Class, ClassField, CompareOp, Expr, Function, Module, ModuleInitKind, Param, Stmt, UpdateOp,
+};
 
 /// How a stem's barrier is gated, i.e. which emitter shape its witness must
 /// match. Parsed by `scripts/gc_store_site_inventory.py` — keep entries on the
@@ -92,11 +94,13 @@ pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[
     ("class_field_set", StemKind::PointerTestedStore),
     ("ctor_prologue", StemKind::ValueAndGenerationTested),
     ("dynarr.set", StemKind::ValueAndGenerationTested),
+    ("idxset.bounded", StemKind::ValueAndGenerationTested),
     ("idxset.inbounds", StemKind::ValueAndGenerationTested),
     ("idxset.recv_captured", StemKind::ValueAndGenerationTested),
     ("idxset.recv_global", StemKind::ValueAndGenerationTested),
     ("idxset.recv_prop", StemKind::ValueAndGenerationTested),
     ("idxset.runtime_key", StemKind::ValueAndGenerationTested),
+    ("private_field_set", StemKind::PointerTestedStore),
     ("put.pic", StemKind::PointerTestedStore),
 ];
 
@@ -876,6 +880,179 @@ fn dynarr_set_ir() -> String {
         .expect("LLVM IR should be UTF-8")
 }
 
+/// `probe(v) { let a = []; for (let i = 0; i < a.length; i++) a[i] = v; }` —
+/// a counter bounded by the receiver's own `length` is what records the
+/// bounded-index proof, and that proof is what routes the store through the
+/// `idxset.bounded` arm. Counter and `v: Any` reasoning as in
+/// `idxset_inbounds_ir`.
+fn idxset_bounded_ir() -> String {
+    let mut m = Module::new("idxset_bounded_census.ts");
+    m.functions = vec![Function {
+        id: 1,
+        name: "probe".to_string(),
+        type_params: Vec::new(),
+        params: vec![Param {
+            id: VAL_ID,
+            name: "v".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }],
+        return_type: Type::Any,
+        body: vec![
+            Stmt::Let {
+                id: ARR_ID,
+                name: "a".to_string(),
+                ty: Type::Array(Box::new(Type::Any)),
+                mutable: true,
+                init: Some(Expr::Array(Vec::new())),
+            },
+            Stmt::For {
+                init: Some(Box::new(Stmt::Let {
+                    id: IDX_ID,
+                    name: "i".to_string(),
+                    ty: Type::Number,
+                    mutable: true,
+                    init: Some(Expr::Integer(0)),
+                })),
+                condition: Some(Expr::Compare {
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(IDX_ID)),
+                    right: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
+                        object: Box::new(Expr::LocalGet(ARR_ID)),
+                        property: "length".to_string(),
+                    }),
+                }),
+                update: Some(Expr::Update {
+                    id: IDX_ID,
+                    op: UpdateOp::Increment,
+                    prefix: false,
+                }),
+                body: vec![Stmt::Expr(Expr::IndexSet {
+                    object: Box::new(Expr::LocalGet(ARR_ID)),
+                    index: Box::new(Expr::LocalGet(IDX_ID)),
+                    value: Box::new(Expr::LocalGet(VAL_ID)),
+                })],
+            },
+            Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
+        ],
+        is_async: false,
+        is_generator: false,
+        is_strict: false,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    }];
+    m.init_kind = ModuleInitKind::Eager;
+    String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
+        .expect("LLVM IR should be UTF-8")
+}
+
+/// `class Box { #x; set(v) { this.#x = v } }` plus `new Box().set({})` — the
+/// HIR the lowering produces for an instance private field write: a
+/// `PropertySet` of the private storage key on a write `PrivateGuard` over
+/// `this`. An `Any`-lane hit stores through the pointer-tested slot store, and
+/// `v: Any` keeps the value's pointer-ness undecidable, so the barrier stays.
+fn private_field_set_ir() -> String {
+    const CLASS_ID: u32 = 2;
+    const SET_ID: u32 = 40;
+    let mut m = Module::new("private_field_set_census.ts");
+    let set = Function {
+        id: SET_ID,
+        name: "set".to_string(),
+        type_params: Vec::new(),
+        params: vec![Param {
+            id: VAL_ID,
+            name: "v".to_string(),
+            ty: Type::Any,
+            default: None,
+            decorators: Vec::new(),
+            is_rest: false,
+            arguments_object: None,
+        }],
+        return_type: Type::Void,
+        body: vec![Stmt::Expr(Expr::PropertySet {
+            object: Box::new(Expr::PrivateGuard {
+                class_name: "Box".to_string(),
+                class_id: CLASS_ID,
+                field_name: "#x".to_string(),
+                kind: 0,
+                op: 1,
+                receiver_is_brand_owner: false,
+                object: Box::new(Expr::This),
+            }),
+            property: format!("#<perry:private-value:{CLASS_ID}:#x>"),
+            value: Box::new(Expr::LocalGet(VAL_ID)),
+        })],
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    };
+    m.classes = vec![Class {
+        id: CLASS_ID,
+        name: "Box".to_string(),
+        type_params: Vec::new(),
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: vec![ClassField {
+            name: "#x".to_string(),
+            key_expr: None,
+            ty: Type::Any,
+            init: None,
+            is_private: true,
+            is_readonly: false,
+            decorators: Vec::new(),
+        }],
+        constructor: None,
+        methods: vec![set],
+        getters: Vec::new(),
+        setters: Vec::new(),
+        static_accessor_names: Vec::new(),
+        static_accessor_fn_ids: Vec::new(),
+        computed_members: Vec::new(),
+        static_fields: Vec::new(),
+        static_methods: Vec::new(),
+        decorators: Vec::new(),
+        is_exported: false,
+        aliases: Vec::new(),
+        is_nested: false,
+        alloc_width_hint: 0,
+        specialized_from: None,
+    }];
+    m.init = vec![Stmt::Expr(Expr::Call {
+        callee: Box::new(Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(Expr::New {
+                class_name: "Box".to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+            property: "set".to_string(),
+        }),
+        args: vec![Expr::Object(vec![("v".to_string(), Expr::Number(1.0))])],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    })];
+    m.init_kind = ModuleInitKind::Eager;
+    String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
+        .expect("LLVM IR should be UTF-8")
+}
+
 /// `class Boxed { v: any; constructor(v) { this.v = v } }` plus an escaping
 /// `new Boxed(1)` — the complete parameter-to-field constructor is what selects
 /// constructor-free prologue stores, and the boxed field requires their
@@ -892,11 +1069,13 @@ fn probe_ir(stem: &str) -> String {
         "class_field_set" => super::class_field_barrier_tests::ir(),
         "ctor_prologue" => ctor_prologue_ir(),
         "dynarr.set" => dynarr_set_ir(),
+        "idxset.bounded" => idxset_bounded_ir(),
         "idxset.inbounds" => idxset_inbounds_ir(),
         "idxset.recv_captured" => idxset_recv_captured_ir(),
         "idxset.recv_global" => idxset_recv_global_ir(),
         "idxset.recv_prop" => super::index_set_barrier_tests::ir(),
         "idxset.runtime_key" => idxset_runtime_key_ir(),
+        "private_field_set" => private_field_set_ir(),
         "put.pic" => super::write_pic_barrier_tests::census_put_pic_ir(),
         other => panic!(
             "VERIFIED_BARRIER_STEMS entry {other:?} has no probe in \

@@ -1229,6 +1229,7 @@ js_ext_zlib_is_stream_handle	i32s	i64
 js_ext_zlib_native_dispatch	f64	ptr,usize,ptr,usize
 js_ext_zlib_process_pending	i32s	
 js_ext_zlib_stream_bytes_written	f64	i64
+js_ext_zlib_stream_property	f64	i64,i32s
 js_fetch_get	ptr	ptr
 js_fetch_get_with_auth	ptr	ptr,ptr
 js_fetch_handle_kind	i8u	usize
@@ -3334,7 +3335,7 @@ js_response_static_error	f64
 js_response_static_json	f64	f64,f64,ptr,f64
 js_response_static_redirect	f64	ptr,f64
 js_response_subclass_init	f64	f64,f64,f64
-js_run_agent_pumps	i32	
+js_run_agent_pumps	i32s	
 js_run_ext_pump	void	
 js_run_module_init_catching	void	i64
 js_run_stdlib_pump	void	
@@ -4387,9 +4388,14 @@ js_zlib_inflate	void	f64,f64,f64
 js_zlib_inflate_raw	void	f64,f64,f64
 js_zlib_inflate_raw_sync	ptr	f64
 js_zlib_inflate_sync	ptr	i64
+js_zlib_is_callback	i32s	f64
 js_zlib_native_dispatch	f64	ptr,usize,ptr,usize
+js_zlib_pipe_drain_callback	i64	f64
 js_zlib_process_pending	i32s	
 js_zlib_resolve_level	i32s	f64
+js_zlib_stream_error	f64	ptr,usize,i32s
+js_zlib_stream_iterator	f64	f64,f64
+js_zlib_stream_option	usize	f64,i32s
 js_zlib_unzip	void	f64,f64,f64
 js_zlib_unzip_sync	ptr	f64
 js_zlib_validate_buffer_arg	void	i64

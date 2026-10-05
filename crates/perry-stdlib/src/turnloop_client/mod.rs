@@ -71,13 +71,12 @@
 //!
 //! # GC
 //!
-//! **No JS value and no heap pointer reaches the driver**, exactly as in P1 and
-//! P5. A request carries owned `String`/`Vec<u8>` and the `usize` address of a
-//! promise created by `js_promise_new_cross_thread`, which pins it (#9552);
-//! reads land in turnloop's pooled
-//! buffers and are copied out inside the dispatch call. So this module registers
-//! no GC root scanner, and `scripts/gc_runtime_root_holders.py` needs no entry
-//! for it.
+//! **No JS value reaches the driver**, exactly as in P1 and P5. A request
+//! carries owned `String`/`Vec<u8>` and the `usize` address of a promise created
+//! by `js_promise_new_cross_thread`, which pins it (#9552); reads land in
+//! turnloop's pooled buffers and are copied out inside the dispatch call. The
+//! one movable address is a bound `AbortSignal`'s cancellation key, which
+//! `scan_abort_key_roots_mut` roots and rewrites.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -419,6 +418,10 @@ fn ensure_registered(engine: &mut Engine) -> bool {
     }
     engine.registered = tl::register_sink(SUBSYSTEM, sink, no_accept);
     if engine.registered {
+        perry_runtime::gc::gc_register_mutable_root_scanner_named(
+            "stdlib:turnloop_client",
+            scan_abort_key_roots_mut,
+        );
         // `PERRY_LOOP_STATS`'s P6 line. Installed here rather than at startup so
         // a program that never issues an outbound request prints nothing extra.
         perry_runtime::event_pump::register_stats_reporter(print_stats);
@@ -434,6 +437,29 @@ fn ensure_registered(engine: &mut Engine) -> bool {
         unsafe { js_register_aux_has_active(aux_has_active) };
     }
     engine.registered
+}
+
+/// Root and rewrite the `AbortSignal` addresses the engine keys cancellation
+/// on, in `aborts` and in each request's `spec.abort_key`. If a moved signal
+/// kept its old key, `abort_signal` would miss and `controller.abort()` would
+/// leave the fetch running; the two copies must stay equal or a delivered
+/// request would leave its `aborts` entry behind.
+fn scan_abort_key_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    ENGINE.with(|e| {
+        let mut engine = e.borrow_mut();
+        let mut aborts: Vec<(usize, Vec<u64>)> = engine.aborts.drain().collect();
+        for (key, _) in &mut aborts {
+            visitor.visit_usize_slot(key);
+        }
+        for (key, ids) in aborts {
+            engine.aborts.entry(key).or_default().extend(ids);
+        }
+        for req in engine.requests.values_mut() {
+            if let Some(key) = req.spec.abort_key.as_mut() {
+                visitor.visit_usize_slot(key);
+            }
+        }
+    });
 }
 
 unsafe extern "C" {

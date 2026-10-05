@@ -997,11 +997,7 @@ pub(crate) unsafe fn evaluation_chain_lost_method(
             }
         }
     }
-    let bytes = std::slice::from_raw_parts(
-        (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
-        (*key).byte_len as usize,
-    );
-    let Ok(name) = std::str::from_utf8(bytes) else {
+    let Some(name) = crate::string::header_str_checked(key) else {
         return false;
     };
     let mut cid = class_id;

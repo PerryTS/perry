@@ -766,6 +766,9 @@ fn ensure_zlib_gc_scanner() {
     });
 }
 
+#[cfg(test)]
+pub(crate) use tables::zlib_agent_stream_count_for_test;
+
 /// #11471 test probe: (stream registered, listener count, queued events
 /// naming `id`).
 #[cfg(test)]
@@ -1350,9 +1353,8 @@ pub unsafe fn zlib_stream_off(handle: i64, event_value: f64, cb: i64) {
     if event_ptr.is_null() {
         return;
     }
-    let len = (*event_ptr).byte_len as usize;
-    let data = (event_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let Ok(event) = std::str::from_utf8(std::slice::from_raw_parts(data, len)) else {
+    let event = perry_runtime::OwnedStringBytes::copy_from_header(event_ptr);
+    let Ok(event) = std::str::from_utf8(event.as_bytes()) else {
         return;
     };
     if let Some(events) = tables().listeners.lock().unwrap().get_mut(&handle) {
@@ -1820,10 +1822,6 @@ pub unsafe extern "C" fn js_zlib_native_dispatch(
             js_zlib_zstd_decompress(arg(0), arg(1), arg(2));
             undefined
         }
-        #[cfg(feature = "compression-zstd")]
-        "createZstdCompress" => ptr_to_f64(js_zlib_create_zstd_compress(arg(0)) as *const u8),
-        #[cfg(feature = "compression-zstd")]
-        "createZstdDecompress" => ptr_to_f64(js_zlib_create_zstd_decompress(arg(0)) as *const u8),
         _ => undefined,
     }
 }

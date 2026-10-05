@@ -1053,10 +1053,10 @@
   {
    "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_guard_fast.rs",
    "names": [
-    "PRIVATE_TEMPLATE_EVALUATED"
+    "PERRY_PRIVATE_TEMPLATE_EVALUATED"
    ],
    "verdict": "no_heap_address",
-   "why": "Monotonic hashed bitset of class ids (class_id & 0xFFFF) set by note_private_template_evaluated when a class object is minted (private_guard_fast.rs:108-111); class ids, not addresses."
+   "why": "Monotonic hashed bitset of class ids (class_id & 0xFFFF): note_private_template_evaluated only fetch_ors a bit when a class object is minted. Exported for codegen, whose emit_private_template_inert only loads it (logical_collections.rs); class ids, not addresses."
   },
   {
    "file": "crates/perry-runtime/src/plugin.rs",
@@ -1635,14 +1635,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "TUI widget table of (i64 handle from NEXT_HANDLE, Node) where Node holds child handle ids, Strings, colors and styles; Rust-owned data, no addresses."
-  },
-  {
-   "file": "crates/perry-stdlib/src/crypto/hash_handles.rs",
-   "names": [
-    "CRYPTO_STREAM_PENDING_EVENTS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Queue of crypto Hash/Hmac stream events: a handle id into the process-global common::handle HANDLES DashMap plus owned bytes/encoding; the static itself holds no addresses."
   },
   {
    "file": "crates/perry-runtime/src/promise/mod.rs",
@@ -3606,33 +3598,6 @@
   {
    "file": "crates/perry-stdlib/src/zlib.rs",
    "names": [
-    "ZLIB_STREAMS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "pipes holds NaN-boxed .pipe(dest) targets from the owning thread's heap; a stream with a freed destination or listener is dropped whole.",
-   "hook": "release_zlib_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-stdlib/src/zlib.rs",
-   "names": [
-    "ZLIB_LISTENERS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Raw .on(event, cb) closure pointers from the registering thread's arena; dropped with their stream.",
-   "hook": "release_zlib_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-stdlib/src/zlib.rs",
-   "names": [
-    "ZLIB_PENDING_EVENTS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Queued callback closures whose closure is freed are dropped, as are Data/End/Error events of dropped streams.",
-   "hook": "release_zlib_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-stdlib/src/zlib.rs",
-   "names": [
     "NEXT_ZLIB_ID"
    ],
    "verdict": "no_heap_address",
@@ -3909,11 +3874,10 @@
    "names": [
     "EMPTY_CHUNK",
     "EMPTY_PAGE",
-    "EMPTY_PAGE_ENTRY",
     "PERRY_EMPTY_SHAPE_DIR"
    ],
    "verdict": "no_heap_address",
-   "why": "Shared all-empty shape-slab structure (a chunk of EMPTY records, a page of pointers to that chunk, a directory entry pointing at that page, an empty ordinary-band directory). Every pointer inside is the address of another immutable static in the program image, never an arena or heap address; nothing ever writes them, so an exited thread's Arena::drop cannot leave them dangling."
+   "why": "Shared all-empty shape-slab structure (a chunk of EMPTY records, a page of pointers to that chunk, an empty ordinary-band directory). Every pointer inside is the address of another immutable static in the program image, never an arena or heap address; nothing ever writes them, so an exited thread's Arena::drop cannot leave them dangling."
   },
   {
    "file": "crates/perry-runtime/src/object/static_shapes.rs",
@@ -3922,6 +3886,88 @@
    ],
    "verdict": "no_heap_address",
    "why": "Holds the address of the generated seed unit's `extern \"C\" fn()` (a code address in the program image, stored by js_shape_register_static_seed from a global_ctors entry before any heap exists), or 0 for none. It is never an arena or heap address, so an exited thread's Arena::drop cannot leave it dangling."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/block/decommit.rs",
+   "names": [
+    "SIZE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "OnceLock<Option<usize>> caching sysconf(_SC_PAGESIZE) in page_size(); an OS config value, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/old_sweep_quarantine.rs",
+   "names": [
+    "RETIRED"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "hook": "release_retired_spans_in_freed_ranges",
+   "why": "PERRY_GC_PROTECT_OLD_SWEEP's record of swept objects (header address, size, type) for the fault reporter. Arena::drop and MallocState::drop still free a quarantined object's block at thread exit, so the hook, registered before the first span is recorded, drops every span whose header lies in the freed ranges."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream/async_iterator.rs",
+   "names": [
+    "READABLE_HANDLE_PREDICATE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the perry-stdlib extern \"C\" is_readable_handle predicate; its only store is js_register_readable_handle_predicate, called from perry-stdlib's common/dispatch/init.rs. A function pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/field_get_set/class_object_template.rs",
+   "names": [
+    "THREAD_TOKEN"
+   ],
+   "verdict": "per_thread",
+   "why": "`#[thread_local]` static: every thread has its own cell, which holds only a token taken from the NEXT_THREAD_TOKEN counter (thread_token()), never an address; const-initialised to 0 with no drop glue."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module.rs",
+   "names": [
+    "WORKER_THREADS_THREAD_ID_GETTER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the stdlib extern \"C\" getter for worker_threads.threadId, stored by js_register_worker_threads_namespace_getters; a function pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/native_module.rs",
+   "names": [
+    "WORKER_THREADS_WORKER_CONSTRUCTOR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Code address of the stdlib extern \"C\" `new Worker(filename, options)` constructor, stored by js_register_worker_threads_worker_constructor; a function pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shapes_prototype.rs",
+   "names": [
+    "AGENT_WORD_DIR"
+   ],
+   "verdict": "per_thread",
+   "why": "`#[thread_local]` static: each thread mirrors its own agent's ProtoWords page directories (per band a Rust-heap Vec pointer and length, never an arena address), republished by ProtoWords::publish when a band's page vector grows and reset to empty by ProtoWords::unpublish from ShapeSlab::drop before the Vecs are freed; const-initialised to (null, 0) with no drop glue."
+  },
+  {
+   "file": "crates/perry-stdlib/src/worker_threads/entry_table.rs",
+   "names": [
+    "WORKER_ENTRIES"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Maps a Rust-owned PathBuf to the code address of a compiled worker module's <module>__init, which the generated main registers through js_worker_threads_register_entry (a ptrtoint of the function) before any module runs; no heap address."
+  },
+  {
+   "file": "crates/perry-stdlib/src/zlib/tables.rs",
+   "names": [
+    "ALL_ZLIB_TABLES"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "hook": "release_zlib_in_freed_ranges",
+   "why": "Agent id -> a Box::leak'd ZlibTables (never freed, in no arena) whose streams' .pipe(dest) targets, .on(event, cb) closures and queued callback closures are heap words of the thread that set them. The range hook checks every agent's tables and drops a stream whose pipes or listeners lie in the freed ranges (with its listeners and Data/End/Error events) and a queued callback whose closure does. release_zlib_tables_of_agent, a retire hook, also empties a retired agent's tables and removes its entry."
+  },
+  {
+   "file": "crates/perry-stdlib/src/zlib/tables.rs",
+   "names": [
+    "FREE_ZLIB_TABLES"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Addresses of Box::leak'd ZlibTables sets (Rust heap, never freed, in no arena) that release_zlib_tables_of_agent emptied when their agent retired; tables() hands them to the next agent that needs tables. Thread exit cannot free them."
   }
  ]
 }

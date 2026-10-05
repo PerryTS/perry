@@ -514,8 +514,8 @@ pub extern "C" fn js_private_field_site_get(
         0,
         site,
     );
-    let key_ptr = (key.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
-        as *const crate::StringHeader;
+    let key_ptr =
+        crate::value::js_get_string_pointer_unified(key.get_nanbox_f64()) as *const crate::StringHeader;
     js_object_get_field_by_name_boxed(obj.get_nanbox_f64(), key_ptr)
 }
 

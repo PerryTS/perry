@@ -17,41 +17,109 @@ pub(super) struct ZlibTables {
 static ALL_ZLIB_TABLES: std::sync::LazyLock<Mutex<HashMap<u64, &'static ZlibTables>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
-/// The calling agent's tables, made on its first use and never freed (a
-/// handful of empty maps per exited worker).
+/// Emptied tables of retired agents, handed to the next agent that needs
+/// tables. A set is never freed: [`release_zlib_in_freed_ranges`] may hold a
+/// copy of its reference while another thread retires its agent. Reuse keeps
+/// the leaked sets bounded by the most agents ever alive at once.
+static FREE_ZLIB_TABLES: Mutex<Vec<&'static ZlibTables>> = Mutex::new(Vec::new());
+
+thread_local! {
+    /// This thread's last (agent, tables) pair, so a hot path skips the map.
+    static MINE: std::cell::Cell<Option<(u64, &'static ZlibTables)>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The calling agent's tables, made or reused on its first use and released
+/// when the agent retires ([`release_zlib_tables_of_agent`]).
 pub(super) fn tables() -> &'static ZlibTables {
-    thread_local! {
-        static MINE: std::cell::Cell<Option<(u64, &'static ZlibTables)>> =
-            const { std::cell::Cell::new(None) };
-    }
     let agent = perry_runtime::agent::current_agent() as u64;
     if let Some((cached, mine)) = MINE.with(std::cell::Cell::get) {
         if cached == agent {
             return mine;
         }
     }
+    // Registered before the first entry, so no agent's entry predates it.
+    static RETIRE_HOOK: std::sync::Once = std::sync::Once::new();
+    RETIRE_HOOK
+        .call_once(|| perry_runtime::agent::register_retire_hook(release_zlib_tables_of_agent));
     let mine = *ALL_ZLIB_TABLES
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .entry(agent)
         .or_insert_with(|| {
-            Box::leak(Box::new(ZlibTables {
-                streams: Mutex::new(HashMap::new()),
-                listeners: Mutex::new(HashMap::new()),
-                pending: Mutex::new(Vec::new()),
-            }))
+            let reused = FREE_ZLIB_TABLES
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .pop();
+            reused.unwrap_or_else(|| {
+                Box::leak(Box::new(ZlibTables {
+                    streams: Mutex::new(HashMap::new()),
+                    listeners: Mutex::new(HashMap::new()),
+                    pending: Mutex::new(Vec::new()),
+                }))
+            })
         });
     MINE.with(|slot| slot.set(Some((agent, mine))));
     mine
 }
 
+/// `perry_runtime::agent::retire_agent` hook. Only its own agent pumps a set
+/// of tables, so a retired agent's streams, listeners and queued events can
+/// never run; without this they, and the agent's map entry, would stay for
+/// the life of the process. The emptied set goes to [`FREE_ZLIB_TABLES`].
+/// The retiring thread forgets its cached pair first: it keeps its dead agent
+/// id, so a later `tables()` on it would otherwise return a set that another
+/// agent now owns.
+pub(super) fn release_zlib_tables_of_agent(agent: perry_runtime::agent::AgentId) {
+    use std::sync::PoisonError;
+    let _ = MINE.try_with(|slot| {
+        if matches!(slot.get(), Some((cached, _)) if cached == agent) {
+            slot.set(None);
+        }
+    });
+    let Some(retired) = ALL_ZLIB_TABLES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(&agent)
+    else {
+        return;
+    };
+    fn take_all<T: Default>(table: &Mutex<T>) -> T {
+        std::mem::take(&mut *table.lock().unwrap_or_else(PoisonError::into_inner))
+    }
+    // Dropped outside the table locks: a codec's state can be large.
+    drop((
+        take_all(&retired.streams),
+        take_all(&retired.listeners),
+        take_all(&retired.pending),
+    ));
+    FREE_ZLIB_TABLES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push(retired);
+}
+
+/// Test probe: the number of streams agent `agent` holds, or `None` when it
+/// holds no tables.
+#[cfg(test)]
+pub(crate) fn zlib_agent_stream_count_for_test(
+    agent: perry_runtime::agent::AgentId,
+) -> Option<usize> {
+    ALL_ZLIB_TABLES
+        .lock()
+        .unwrap()
+        .get(&agent)
+        .map(|tables| tables.streams.lock().unwrap().len())
+}
+
 /// #11471: an exiting thread's zlib records outlive its heap: `.pipe(dest)`
 /// destinations and `.on(event, cb)` listeners are the setting thread's heap
 /// objects, and `.flush(cb)` / `zlib.gzip(data, cb)` queue raw closure
-/// pointers that `js_zlib_process_pending` would later call. The tables are
-/// per agent now, but they are never freed, so their records must not keep
-/// pointing at freed (or reused) memory. Every agent's tables are checked:
-/// this runs in a TLS destructor, where the agent thread-local may be gone.
+/// pointers that `js_zlib_process_pending` would later call. A thread with no
+/// agent of its own fills the primary agent's tables, which outlive it, so
+/// their records must not keep pointing at freed (or reused) memory. Every
+/// agent's tables are checked: this runs in a TLS destructor, where the agent
+/// thread-local may be gone.
 ///
 /// A zlib stream whose pipes or listeners lie in `freed` is dropped whole
 /// (state, listeners, and its queued Data/End/Error events); a queued
