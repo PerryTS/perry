@@ -397,9 +397,19 @@ pub(crate) fn coerce_call_this(target: f64, this_arg: f64) -> f64 {
     let Some(info) = crate::closure::closure_info(closure) else {
         return this_arg;
     };
-    if crate::builtins::function_source_for_ptr(info.code as usize).is_none()
-        || info.flags & crate::closure::FN_STRICT != 0
-    {
+    const PERMANENT_COMPILED: u32 =
+        crate::codegen_abi::FN_PERMANENT_IMAGE | crate::codegen_abi::FN_COMPILED_BODY;
+    let image_kind = info.flags & (PERMANENT_COMPILED | crate::codegen_abi::FN_NON_STRICT_ORDINARY);
+    if image_kind & PERMANENT_COMPILED == PERMANENT_COMPILED {
+        // Every permanent compiled user body carries its exact kind in the
+        // info record. Synthetic bodies deliberately leave the ordinary bit
+        // clear, so neither case needs a registry probe.
+        if image_kind & crate::codegen_abi::FN_NON_STRICT_ORDINARY == 0 {
+            return this_arg;
+        }
+    } else if !crate::builtins::function_is_non_strict_ordinary_for_ptr(info.code as usize) {
+        // Runtime-created functions and unloadable images retain the owning
+        // compatibility registry because their image metadata is not permanent.
         return this_arg;
     }
     crate::object::js_object_coerce(this_arg)

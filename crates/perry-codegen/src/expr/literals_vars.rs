@@ -119,7 +119,11 @@ fn demote_extracted_string_binding(ctx: &mut FnCtx<'_>, id: u32, value: &str) {
     let persistent_binding = ctx.closure_captures.contains_key(&id)
         || (ctx.boxed_vars.contains(&id) && !ctx.module_globals.contains_key(&id))
         || ctx.module_globals.contains_key(&id);
-    if persistent_binding && matches!(ctx.local_type_hint(&id), Some(HirType::String)) {
+    if persistent_binding
+        && ctx.string_length_read_of != Some(id)
+        && (matches!(ctx.local_type_hint(&id), Some(HirType::String))
+            || ctx.string_accumulator_locals.contains(&id))
+    {
         super::helpers::emit_string_addref_if_heap_string(ctx, value);
     }
 }
@@ -497,7 +501,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // This is therefore a dispatch hint, not a binding proof; using
             // the stable-only query would disable the optimization for every
             // self-append because this `LocalSet` is itself a reassignment.
-            if matches!(ctx.local_type_hint(id), Some(HirType::String))
+            if (matches!(ctx.local_type_hint(id), Some(HirType::String))
+                || ctx.string_accumulator_locals.contains(id))
                 && can_lower_string_self_append(ctx, *id)
             {
                 if let Expr::Binary {
