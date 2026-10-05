@@ -871,6 +871,8 @@ fn take_census(label: &str, pass1: Option<Vec<usize>>) {
         "seq": seq,
         "label": label,
         "pid": std::process::id(),
+        "thread_id": crate::agent::current_thread_native_id(),
+        "agent_id": crate::agent::current_agent(),
         "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
         "process": {
             "rss_bytes": crate::process::get_rss_bytes(),

@@ -1492,6 +1492,10 @@ pub extern "C" fn js_process_memory_usage() -> f64 {
 
     let rss = get_rss_bytes();
 
+    // Use the existing per-thread heap walk: views contribute no backing,
+    // and malloc-owned backing is already part of malloc bytes.
+    let memory = crate::gc::heap_stats();
+
     // Allocate object with 5 fields
     let obj = crate::object::js_object_alloc(0, 5);
 
@@ -1504,8 +1508,8 @@ pub extern "C" fn js_process_memory_usage() -> f64 {
     set_field("rss", rss as f64);
     set_field("heapTotal", heap_total as f64);
     set_field("heapUsed", heap_used as f64);
-    set_field("external", 0.0);
-    set_field("arrayBuffers", 0.0);
+    set_field("external", memory.external_bytes as f64);
+    set_field("arrayBuffers", memory.array_buffer_bytes as f64);
 
     // Return as NaN-boxed pointer (convert bits to f64)
     f64::from_bits(JSValue::pointer(obj as *const u8).bits())
