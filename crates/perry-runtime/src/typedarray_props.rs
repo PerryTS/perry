@@ -221,11 +221,11 @@ fn is_canonical_numeric_index_name(name: &str) -> bool {
     // `1000000000000000000000` and `1e-7` as `0.0000001`, which wrongly
     // classified those keys as canonical (JS renders `1e+21` / `1e-7`, so
     // they are ORDINARY keys).
-    let rendered = crate::string::js_number_to_string(value);
-    if rendered.is_null() {
-        return false;
-    }
-    unsafe { string_header_str(rendered as *const crate::string::StringHeader) == Some(name) }
+    // The Buffer holder walk borrows its key. Format with the same JS
+    // formatter on the stack, so classifying an index cannot collect.
+    let mut rendered = [0u8; 32];
+    let len = crate::string::concat::format_number_into(value, &mut rendered);
+    &rendered[..len] == name.as_bytes()
 }
 
 fn typed_array_string_key_kind(name: &str, len: u32) -> TypedArrayStringKeyKind {
@@ -754,6 +754,27 @@ unsafe fn typed_array_get_property_value_by_name_for(
                 ))
             }
         }
+    }
+}
+
+/// Integer-indexed [[Get]] for a Buffer holder in the named property walk.
+/// Shares typed-array key classification; non-index names keep their ordinary lookup.
+pub(crate) unsafe fn byte_buffer_index_get_by_name(owner: usize, name: &str) -> Option<f64> {
+    if !crate::buffer::is_byte_indexed_buffer(owner) {
+        return None;
+    }
+    match typed_array_string_key_kind(
+        name,
+        crate::buffer::js_buffer_length(owner as *const crate::buffer::BufferHeader) as u32,
+    ) {
+        TypedArrayStringKeyKind::InBoundsIndex(index) => {
+            Some(crate::buffer::js_buffer_index_get_value(
+                owner as *const crate::buffer::BufferHeader,
+                index as i32,
+            ))
+        }
+        TypedArrayStringKeyKind::IntegerIndex => Some(f64::from_bits(crate::value::TAG_UNDEFINED)),
+        TypedArrayStringKeyKind::Ordinary => None,
     }
 }
 
