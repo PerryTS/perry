@@ -16,8 +16,8 @@ use turnloop_http::http1;
 
 use super::content_decoding::{apply_default_accept_encoding, ContentDecoder};
 use super::{
-    deliver, Conn, Engine, Outcome, Req, ResponseOut, BODY_LIMIT, CONNECTED, DECODED, ENGINE,
-    REDIRECTS, REUSED, SUBSYSTEM, TUNNELS,
+    deliver, flush_emissions, Conn, Delivery, Engine, Outcome, Req, ResponseOut, BODY_LIMIT,
+    CONNECTED, DECODED, ENGINE, REDIRECTS, REUSED, SUBSYSTEM, TUNNELS,
 };
 
 /// A transport failure in the shape `fetch` reports it: Node's `cause.code`,
@@ -502,12 +502,13 @@ pub(super) fn on_completion(
             // orders a handle's writes, and nothing waits on an individual one.
             _ => {}
         }
+        resume(&mut engine, id);
     });
 }
 
 fn on_connect(engine: &mut Engine, conn_id: i64) {
     CONNECTED.fetch_add(1, Ordering::Relaxed);
-    if let Err(err) = tl::read_start(conn_id) {
+    if let Err(err) = tl::read_once(conn_id) {
         fail_conn(engine, conn_id, from_node_error(err.code, err.syscall));
         return;
     }
@@ -830,6 +831,30 @@ enum Produced {
 fn feed(engine: &mut Engine, conn_id: i64, input: &[u8]) -> usize {
     let mut pos = 0;
     loop {
+        let request = engine.conns.get(&conn_id).and_then(|c| c.request);
+        if let Some(id) = request {
+            let result = engine.requests.get_mut(&id).map(drain_decoded);
+            if let Some(Err(error)) = result {
+                fail_conn(engine, conn_id, error);
+                return pos;
+            }
+            flush_emissions(engine, id);
+            let ended = engine
+                .requests
+                .get(&id)
+                .is_some_and(|r| r.body_end && r.decoder.as_ref().is_none_or(|d| d.finished()));
+            if ended {
+                on_end(engine, conn_id);
+                return pos;
+            }
+            if engine
+                .requests
+                .get(&id)
+                .is_some_and(|r| r.streaming && credit(r) < 8192)
+            {
+                return pos;
+            }
+        }
         let step = (|| {
             let Engine {
                 conns, requests, ..
@@ -846,7 +871,17 @@ fn feed(engine: &mut Engine, conn_id: i64, input: &[u8]) -> usize {
             let Some(req) = requests.get_mut(&req_id) else {
                 return Ok((0, Produced::Stop));
             };
-            match conn.http.receive(&input[pos..]) {
+            let end = if req.streaming {
+                let quantum = if req.decoder.is_some() {
+                    8192
+                } else {
+                    input.len() - pos
+                };
+                (pos + quantum.min(credit(req))).min(input.len())
+            } else {
+                input.len()
+            };
+            match conn.http.receive(&input[pos..end]) {
                 Ok(step) => {
                     let consumed = step.consumed;
                     let produced = match step.event {
@@ -861,10 +896,8 @@ fn feed(engine: &mut Engine, conn_id: i64, input: &[u8]) -> usize {
                                 Err(error) => return Err(error),
                             }
                         }
-                        // A client sends no trailers of its own and Perry's
-                        // buffered fetch surface exposes none, so a response
-                        // trailer block is decoded and dropped — the same thing
-                        // reqwest's body API does with it.
+                        // Fetch exposes no response trailers, so decode and
+                        // discard the block without adding it to the body.
                         Some(http1::Event::Trailers(_)) => Produced::Nothing,
                         Some(http1::Event::End) => Produced::End,
                         Some(http1::Event::Upgrade) => Produced::Upgrade,
@@ -903,12 +936,10 @@ fn feed(engine: &mut Engine, conn_id: i64, input: &[u8]) -> usize {
                 }
             }
             Produced::End => {
-                on_end(engine, conn_id);
-                // `on_end` may have released the connection to the pool and
-                // started the next queued request on it, so anything still in
-                // `input` belongs to that exchange.
-                if pos >= input.len() {
-                    return pos;
+                if let Some(id) = engine.conns.get(&conn_id).and_then(|c| c.request) {
+                    if let Some(req) = engine.requests.get_mut(&id) {
+                        req.body_end = true;
+                    }
                 }
                 continue;
             }
@@ -934,48 +965,103 @@ fn feed(engine: &mut Engine, conn_id: i64, input: &[u8]) -> usize {
 
 /// Append one body chunk, decoding it if the response carried a
 /// `Content-Encoding`, and hand it to a streaming sink.
+fn credit(req: &Req) -> usize {
+    req.sink
+        .capacity
+        .map_or(usize::MAX, |cb| cb(req.sink.ctx))
+        .saturating_sub(req.queued_bytes)
+}
+
+fn emit(req: &mut Req, chunk: &[u8]) -> Result<(), ClientError> {
+    if req.streaming {
+        req.queued_bytes += chunk.len();
+        req.emissions.push_back(chunk.to_vec());
+    } else {
+        if req.decoded.len() + chunk.len() > BODY_LIMIT {
+            return Err(ClientError::new("UND_ERR_BODY_TOO_LARGE", "body too large"));
+        }
+        req.decoded.extend_from_slice(chunk);
+    }
+    Ok(())
+}
+
+fn drain_decoded(req: &mut Req) -> Result<(), ClientError> {
+    while req.decoder.is_some() && (!req.streaming || credit(req) >= 8192) {
+        let next = req.decoder.as_mut().unwrap().next_chunk(req.body_end)?;
+        match next {
+            Some(bytes) => emit(req, &bytes)?,
+            None => break,
+        }
+    }
+    Ok(())
+}
+
 fn absorb(req: &mut Req, chunk: &[u8]) -> Result<(), ClientError> {
-    if req.decoder.is_none() {
+    if let Some(decoder) = req.decoder.as_mut() {
+        decoder.push_input(chunk);
+        drain_decoded(req)
+    } else if req.streaming {
+        emit(req, chunk)
+    } else {
         if req.body.len() + chunk.len() > BODY_LIMIT {
             return Err(ClientError::new("UND_ERR_BODY_TOO_LARGE", "body too large"));
         }
-        if req.streaming {
-            if let (Some(on_chunk), ctx) = (req.sink.on_chunk, req.sink.ctx) {
-                on_chunk(ctx, chunk);
-            }
-        } else {
-            req.body.extend_from_slice(chunk);
-        }
-        return Ok(());
-    }
-    let Req {
-        decoder,
-        decoded,
-        streaming,
-        sink,
-        ..
-    } = req;
-    let decoder = decoder.as_mut().unwrap();
-    decoder.feed(chunk, &mut |produced| {
-        if *streaming {
-            if let Some(on_chunk) = sink.on_chunk {
-                on_chunk(sink.ctx, produced);
-            }
-        } else {
-            if decoded.len() + produced.len() > BODY_LIMIT {
-                return Err(ClientError::new("UND_ERR_BODY_TOO_LARGE", "body too large"));
-            }
-            decoded.extend_from_slice(produced);
-        }
+        req.body.extend_from_slice(chunk);
         Ok(())
-    })
+    }
+}
+
+/// Drain retained plaintext and codec output before rearming a single read.
+/// No read is pending when a consumer has exhausted its byte credit.
+pub(super) fn resume(engine: &mut Engine, conn_id: i64) {
+    let Some(conn) = engine.conns.get(&conn_id) else {
+        return;
+    };
+    if conn.closing {
+        return;
+    }
+    // Completion can be a TLS handshake or CONNECT write. Keep rearming
+    // transport reads, but leave the HTTP codec idle until the request starts.
+    let application_ready =
+        conn.tunnel.is_none() && conn.tls.as_ref().is_none_or(|tls| !tls.is_handshaking());
+    if let Some(id) = conn.request.filter(|_| application_ready) {
+        if engine
+            .requests
+            .get(&id)
+            .is_some_and(|r| r.streaming && credit(r) < 8192)
+        {
+            return;
+        }
+        let input = std::mem::take(&mut engine.conns.get_mut(&conn_id).unwrap().input);
+        let consumed = feed(engine, conn_id, &input);
+        if let Some(conn) = engine.conns.get_mut(&conn_id) {
+            if !conn.closing {
+                conn.input.extend_from_slice(&input[consumed..]);
+            }
+        }
+        if engine
+            .requests
+            .get(&id)
+            .is_some_and(|r| r.streaming && credit(r) < 8192)
+        {
+            return;
+        }
+    }
+    if engine.conns.get(&conn_id).is_some_and(|c| !c.closing) {
+        if let Err(err) = tl::read_once(conn_id) {
+            fail_conn(engine, conn_id, from_node_error(err.code, err.syscall));
+        }
+    }
 }
 
 /// `Err` fails the connection (undici rejects a response carrying more than
 /// five content codings before reading its body).
 fn on_head(engine: &mut Engine, conn_id: i64, head: http1::Head) -> Result<(), ClientError> {
     let Engine {
-        conns, requests, ..
+        conns,
+        requests,
+        pending,
+        ..
     } = &mut *engine;
     let Some(conn) = conns.get_mut(&conn_id) else {
         return Ok(());
@@ -989,6 +1075,7 @@ fn on_head(engine: &mut Engine, conn_id: i64, head: http1::Head) -> Result<(), C
     req.body.clear();
     req.decoded.clear();
     req.decoder = None;
+    req.body_end = false;
     // Is this response going to be followed? If so its body is scratch, and a
     // streaming sink must not see it.
     let location = head
@@ -1003,31 +1090,53 @@ fn on_head(engine: &mut Engine, conn_id: i64, head: http1::Head) -> Result<(), C
                 req.spec.redirect,
                 tlc::DEFAULT_MAX_REDIRECTS,
             )
-            .unwrap_or(false)
+            .map_err(|e| ClientError::new(e.code, e.message))?
     };
     if !will_follow {
-        if let Some(encoding) = head.get("content-encoding") {
-            let value = String::from_utf8_lossy(encoding);
-            match ContentDecoder::for_header(&value, BODY_LIMIT) {
-                Ok(Some(decoder)) => {
-                    DECODED.fetch_add(1, Ordering::Relaxed);
-                    req.decoder = Some(Box::new(decoder));
+        if req.request.method != "HEAD" && !matches!(head.status, 204 | 205 | 304) {
+            if let Some(encoding) = head.get("content-encoding") {
+                let value = String::from_utf8_lossy(encoding);
+                match ContentDecoder::for_header(
+                    &value,
+                    if req.sink.capacity.is_some() {
+                        usize::MAX
+                    } else {
+                        BODY_LIMIT
+                    },
+                ) {
+                    Ok(Some(decoder)) => {
+                        DECODED.fetch_add(1, Ordering::Relaxed);
+                        req.decoder = Some(Box::new(decoder));
+                    }
+                    // A coding undici does not decode (or `identity`): the body is
+                    // delivered as received, as Node does.
+                    Ok(None) => {}
+                    Err(error) => return Err(error),
                 }
-                // A coding undici does not decode (or `identity`): the body is
-                // delivered as received, as Node does.
-                Ok(None) => {}
-                Err(error) => return Err(error),
             }
         }
         if req.sink.on_head.is_some() {
             req.streaming = true;
-            let headers = header_pairs(&head);
-            if let Some(on_head) = req.sink.on_head {
-                on_head(req.sink.ctx, head.status, &headers);
-            }
+            pending.push_back((
+                req.sink,
+                Delivery::Head(Box::new(ResponseOut {
+                    status: head.status,
+                    status_text: reason(head.status),
+                    headers: header_pairs(&head),
+                    body: Vec::new(),
+                    body_present: req.request.method != "HEAD"
+                        && !matches!(head.status, 204 | 205 | 304),
+                    final_url: req.request.url.as_str().to_string(),
+                    redirected: req.redirected,
+                    cross_origin_redirect: req.cross_origin_redirect,
+                })),
+            ));
         }
     }
     req.head = Some(head);
+    if will_follow {
+        finish_response(engine, conn_id, false);
+    }
     Ok(())
 }
 
@@ -1044,6 +1153,12 @@ fn header_pairs(head: &http1::Head) -> Vec<(String, String)> {
 }
 
 fn on_end(engine: &mut Engine, conn_id: i64) {
+    finish_response(engine, conn_id, true);
+}
+
+// A followed redirect abandons its unread body at the head. That socket is
+// closed rather than pooled; waiting for its body would delay the next hop.
+fn finish_response(engine: &mut Engine, conn_id: i64, complete: bool) {
     trace!("end conn={conn_id}");
     let (req_id, head, reusable) = {
         let Engine {
@@ -1064,31 +1179,12 @@ fn on_end(engine: &mut Engine, conn_id: i64) {
             None => return,
         };
         // Drain the codec's completion so the connection reports `reusable`.
-        let _ = conn.http.poll_completion();
-        (req_id, head, conn.http.reusable())
-    };
-    // Finish any decoder that still holds buffered output.
-    if let Some(req) = engine.requests.get_mut(&req_id) {
-        let Req {
-            decoder,
-            decoded,
-            streaming,
-            sink,
-            ..
-        } = req;
-        if let Some(decoder) = decoder.as_mut() {
-            decoder.finish(&mut |produced| {
-                if *streaming {
-                    if let Some(on_chunk) = sink.on_chunk {
-                        on_chunk(sink.ctx, produced);
-                    }
-                } else {
-                    decoded.extend_from_slice(produced);
-                }
-                Ok(())
-            });
+        if complete {
+            let _ = conn.http.poll_completion();
         }
-    }
+        (req_id, head, complete && conn.http.reusable())
+    };
+    flush_emissions(engine, req_id);
     let location = head
         .get("location")
         .map(|v| String::from_utf8_lossy(v).to_string());
@@ -1144,6 +1240,8 @@ fn on_end(engine: &mut Engine, conn_id: i64) {
                     status_text: reason(head.status),
                     headers: header_pairs(&head),
                     body: if req.streaming { Vec::new() } else { body },
+                    body_present: req.request.method != "HEAD"
+                        && !matches!(head.status, 204 | 205 | 304),
                     final_url: req.request.url.as_str().to_string(),
                     redirected: req.redirected,
                     cross_origin_redirect: req.cross_origin_redirect,
@@ -1348,8 +1446,14 @@ fn on_eof(engine: &mut Engine, conn_id: i64) {
         .is_some_and(|req| req.head.is_some());
     let ended = conn.http.eof().is_ok();
     if had_head && ended {
-        on_end(engine, conn_id);
-        close_conn(engine, conn_id);
+        if let Some(id) = conn.request {
+            if let Some(req) = requests.get_mut(&id) {
+                req.body_end = true;
+            }
+        }
+        // End-of-input is retained in the request if decoding pauses. The
+        // HTTP codec is terminal, and won't rearm a read after completion.
+        let _ = feed(engine, conn_id, &[]);
         return;
     }
     let reused = conn.used;

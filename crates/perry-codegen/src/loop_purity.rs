@@ -184,6 +184,9 @@ fn expr_alloc_free(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool) -> bool {
                 && expr_alloc_free(value, is_inert)
         }
         Expr::LocalSet(_, val) => expr_alloc_free(val, is_inert),
+        // Only scalar slots with a whole-write Number proof are inert. Generic
+        // property access still invokes Get/Set and must retain its poll.
+        Expr::PropertyGet { .. } | Expr::PropertySet { .. } => is_inert(e),
         // Strict `===` / `!==` never coerce, and `&&` / `||` / `??` only run
         // ToBoolean, which on an object is a tag test — no user code on either.
         // So these stay open to operands of ANY type, which is strictly more

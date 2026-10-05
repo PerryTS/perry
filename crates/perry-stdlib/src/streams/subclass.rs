@@ -448,7 +448,7 @@ pub unsafe extern "C" fn js_transform_stream_subclass_init(
 
 /// A Fetch body chunk's bytes. Unlike `read_bytes_from_chunk`, a string chunk
 /// (valid in an async-iterable body) is UTF-8 encoded rather than dropped.
-unsafe fn body_chunk_bytes(chunk_bits: u64) -> Option<Vec<u8>> {
+pub(super) unsafe fn body_chunk_bytes(chunk_bits: u64) -> Option<Vec<u8>> {
     if JSValue::from_bits(chunk_bits).is_any_string() {
         let mut scratch = [0u8; perry_runtime::value::SHORT_STRING_MAX_LEN];
         let (ptr, len) = perry_runtime::string::str_bytes_from_jsvalue(

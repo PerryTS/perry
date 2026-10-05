@@ -50,6 +50,14 @@ pub unsafe extern "C" fn js_blob_stream(handle: f64) -> f64 {
 /// single stream, and a fresh one each call would silently unlock a held
 /// reader (#1650).
 pub(crate) fn response_body_stream(resp_id: usize) -> f64 {
+    if FETCH_RESPONSES
+        .lock()
+        .unwrap()
+        .get(&resp_id)
+        .is_none_or(|r| !r.body_present)
+    {
+        return f64::from_bits(TAG_NULL);
+    }
     if let Some(id) = FETCH_RESPONSES
         .lock()
         .unwrap()

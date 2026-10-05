@@ -404,6 +404,9 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     .get(id)
                     .is_some_and(|fields| fields.contains_key(property))
                 {
+                    if scalar_replaced_field_is_number(ctx, object, property) {
+                        return true;
+                    }
                     let declared_raw_f64 = scalar_replaced_field_is_raw_f64(ctx, object, property);
                     return scalar_replaced_field_raw_f64_store_state(
                         ctx,
@@ -703,6 +706,9 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
             object, property, ..
         } => {
             if crate::stmt::region_loop::is_f64_read(ctx, e) {
+                return true;
+            }
+            if scalar_replaced_field_is_number(ctx, object, property) {
                 return true;
             }
             // #11759 (c′): the receiver is the guarded `new` of a repeatable

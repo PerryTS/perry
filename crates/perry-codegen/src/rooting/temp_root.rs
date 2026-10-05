@@ -369,6 +369,19 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
         // does allocate.)
         Expr::String(_) => true,
         Expr::LocalGet(id) => local_is_inert_primitive(ctx, *id),
+        Expr::PropertyGet {
+            object, property, ..
+        } => crate::type_analysis::scalar_replaced_field_is_number(ctx, object, property),
+        Expr::PropertySet {
+            object,
+            property,
+            value,
+            ..
+        } => {
+            crate::type_analysis::scalar_replaced_field_is_number(ctx, object, property)
+                && expr_is_inert_primitive(ctx, value)
+                && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value)
+        }
         // A bounds- and lifetime-proven byte read is a native load, not a
         // helper call.  This matters inside a store RHS: classifying
         // `buf[i]` as collecting made `buf[i] = (buf[i] + 1) & 255` discard
@@ -429,9 +442,10 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 ///
 ///  * the refined type is a non-pointer primitive, so `ToPrimitive` on it is
 ///    the identity and dispatches to nothing;
-///  * no shadow slot is reserved for the local — `collect_pointer_typed_locals`'
-///    verdict that the local is not pointer-typed. A reserved slot means
-///    pointer-possible regardless of what the refined type says; and
+///  * no shadow slot is reserved for the local, or a guarded Number scope
+///    proves an unaliased local Number-valued at this lowering site. A root
+///    allocated before that entry test is conservative, not counterevidence;
+///    without such a guard, a reserved slot means pointer-possible; and
 ///  * the binding is not a module-level global. `local_types` and the
 ///    shadow-slot map are both computed per function, from that function's body
 ///    alone, so a module global that a *different* function assigns an object
@@ -445,7 +459,15 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 /// lying scalar annotation therefore retains its root and cannot make coercion
 /// look inert.
 pub(in crate::rooting) fn local_is_inert_primitive(ctx: &FnCtx<'_>, id: u32) -> bool {
-    !ctx.shadow_slot_map.contains_key(&id)
+    // A conservative root allocated before a strict Number entry test does
+    // not invalidate that value proof. Mutable/aliased cells still decline;
+    // the ordinary generic copy has no guarded Number scope.
+    let scoped_number = ctx.receiver_descriptors.local_is_number_in_scope(id)
+        && !ctx.boxed_vars.contains(&id)
+        && !ctx.prealloc_boxes.contains(&id)
+        && !ctx.tdz_boxes.contains(&id)
+        && !ctx.closure_captures.contains_key(&id);
+    (!ctx.shadow_slot_map.contains_key(&id) || scoped_number)
         && !ctx.module_globals.contains_key(&id)
         && (ctx.integer_locals.contains(&id)
             || crate::type_analysis::local_is_number(ctx, id)

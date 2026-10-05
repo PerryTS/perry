@@ -3,11 +3,35 @@ use super::*;
 /// Main monomorphization pass
 /// Processes the module and generates specialized versions of generic functions/classes
 pub fn monomorphize_module(module: &mut Module) {
-    let mut ctx = MonomorphizationContext::new(module);
+    monomorphize_modules(std::iter::once(module));
+}
+
+/// Specialize a program's modules using one class-ID allocation sequence.
+/// Lowering has already assigned IDs to declared classes and literal shapes;
+/// every specialization must be above that whole program's range, not just
+/// above the classes in its own module.
+pub fn monomorphize_modules<'a>(modules: impl IntoIterator<Item = &'a mut Module>) {
+    let modules: Vec<_> = modules.into_iter().collect();
+    let mut next_class_id = modules
+        .iter()
+        .flat_map(|module| &module.classes)
+        .map(|class| class.id)
+        .max()
+        .unwrap_or(0)
+        + 1;
+    for module in modules {
+        let mut ctx = MonomorphizationContext::new(module);
+        ctx.next_class_id = next_class_id;
+        monomorphize_with_context(module, &mut ctx);
+        next_class_id = ctx.next_class_id;
+    }
+}
+
+fn monomorphize_with_context(module: &mut Module, ctx: &mut MonomorphizationContext) {
     let idx = ModuleIndex::new(module);
 
     // First pass: collect all generic instantiations from the code
-    collect_instantiations(module, &mut ctx, &idx);
+    collect_instantiations(module, ctx, &idx);
 
     // Process work queues until empty
     let mut new_functions = Vec::new();
@@ -116,7 +140,7 @@ pub fn monomorphize_module(module: &mut Module) {
     }
 
     // Update call sites to use specialized versions
-    update_call_sites(module, &ctx);
+    update_call_sites(module, ctx);
 
     // Fill in default arguments for constructor calls
     fill_default_arguments(module);

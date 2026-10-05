@@ -106,7 +106,7 @@ impl MonomorphizationContext {
             func_work_queue: VecDeque::new(),
             class_work_queue: VecDeque::new(),
             next_func_id: max_func_id + 1000, // Leave room for original IDs
-            next_class_id: max_class_id + 1000,
+            next_class_id: max_class_id + 1,
             processed_funcs: HashSet::new(),
             processed_classes: HashSet::new(),
         }

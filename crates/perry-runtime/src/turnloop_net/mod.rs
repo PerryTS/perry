@@ -772,6 +772,27 @@ pub fn read_start(id: i64) -> NetResult<()> {
     .unwrap_or_else(|| Err(no_loop()))
 }
 
+/// Read one pooled buffer. The caller explicitly rearms after consuming it,
+/// so downstream backpressure leaves the socket unread without closing it.
+pub fn read_once(id: i64) -> NetResult<()> {
+    with_driver(|driver| {
+        NET.with(|net| {
+            let mut net = net.borrow_mut();
+            let entry = net.entries.get_mut(&id).ok_or_else(|| not_found("read"))?;
+            if entry.read_op.is_some() || entry.closing {
+                return Ok(());
+            }
+            let op = driver
+                .read(entry.handle, turnloop::ReadBuf::Pooled, token(OP_READ, id))
+                .map_err(|e| map_error(e, "read"))?;
+            entry.read_op = Some(op);
+            census::note_submit(OP_READ);
+            Ok(())
+        })
+    })
+    .unwrap_or_else(|| Err(no_loop()))
+}
+
 /// Hand `bytes` to the driver. Returns the number of bytes now queued on this
 /// socket — everything `socket.write()` needs to decide its `false` return,
 /// and everything `writableLength` reports.
@@ -1045,6 +1066,9 @@ pub(crate) fn dispatch(completion: Completion) {
             accept_connection(subsystem, id, conn, None);
         }
         OpResult::Read { n, lease } => {
+            if terminal {
+                clear_op(id, op_class);
+            }
             #[cfg(windows)]
             with_driver(|driver| {
                 NET.with(|net| {

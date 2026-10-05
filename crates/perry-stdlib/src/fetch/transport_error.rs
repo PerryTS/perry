@@ -82,6 +82,14 @@ impl FetchFailure {
     }
 
     pub(crate) fn into_js_bits(self) -> u64 {
+        self.into_js_bits_with_message(b"fetch failed")
+    }
+
+    pub(crate) fn into_body_error_bits(self) -> u64 {
+        self.into_js_bits_with_message(b"terminated")
+    }
+
+    fn into_js_bits_with_message(self, message: &[u8]) -> u64 {
         let cause_message = perry_runtime::js_string_from_bytes(
             self.cause_message.as_ptr(),
             self.cause_message.len() as u32,
@@ -105,7 +113,6 @@ impl FetchFailure {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let cause_handle =
             scope.root_nanbox_u64(perry_runtime::JSValue::pointer(cause as *const u8).bits());
-        let message = b"fetch failed";
         let message = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
         let error = perry_runtime::error::js_typeerror_new_with_cause(
             message,

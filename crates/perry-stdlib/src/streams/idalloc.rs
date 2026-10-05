@@ -263,11 +263,12 @@ pub(super) fn retire_readable_terminal(stream_id: usize) {
         let g = READABLE_STREAMS.lock().unwrap();
         match g.get(&stream_id) {
             Some(s)
-                if match s.state {
-                    ReadableState::Errored => true,
-                    ReadableState::Closed => s.chunks.is_empty() && s.pending_reads.is_empty(),
-                    ReadableState::Readable => false,
-                } =>
+                if s.tee_cancel_promise.is_none()
+                    && match s.state {
+                        ReadableState::Errored => true,
+                        ReadableState::Closed => s.chunks.is_empty() && s.pending_reads.is_empty(),
+                        ReadableState::Readable => false,
+                    } =>
             {
                 s.reader_handle
             }

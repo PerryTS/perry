@@ -1375,12 +1375,6 @@
     },
     {
       "file": "crates/perry-stdlib/src/fetch/mod.rs",
-      "name": "FETCH_RESPONSES",
-      "verdict": "not_a_gc_pointer",
-      "why": "Keyed by fetch handle id; FetchResponse is Rust-owned (status, HeadersStore, body bytes, cached HANDLE IDS for headers/body stream). No JS values."
-    },
-    {
-      "file": "crates/perry-stdlib/src/fetch/mod.rs",
       "name": "REQUEST_REGISTRY",
       "verdict": "covered_elsewhere",
       "scanner": "fetch::gc::scan_fetch_roots_with (fetch/gc.rs, visit_nanbox_f64_slot on RequestRecord.signal), registered through perry_ffi_gc_register_mutable_root_scanner_named as \"stdlib:fetch\"",
@@ -2913,6 +2907,12 @@
       "name": "KEYLESS_BIRTH",
       "verdict": "not_a_gc_pointer",
       "why": "#11992: One allocation-site memo containing a u32 ShapeId, validated on every use against live birth facts including kind and slot count. IDs are never reused; no heap address is stored."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_get_set/has_property/shape_presence.rs",
+      "name": "GETS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only AtomicUsize counting getter invocations in the companion buffer metadata change. It stores an integer count and no heap address."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

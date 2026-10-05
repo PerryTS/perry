@@ -194,6 +194,68 @@ fn f_body_blocks(bl: &HashMap<String, (Vec<String>, Vec<String>)>) -> HashSet<St
     seen
 }
 
+/// Include the shared back edge, which lies outside the F-body slice.
+fn split_loop_has_poll(ir: &str) -> bool {
+    let bl = blocks(ir);
+    let mut seen = HashSet::new();
+    let mut work: Vec<_> = bl
+        .keys()
+        .filter(|l| l.starts_with("rloop.version.split"))
+        .cloned()
+        .collect();
+    assert!(!work.is_empty(), "a versioned split loop must exist:\n{ir}");
+    while let Some(label) = work.pop() {
+        if label.starts_with("rloop.version.merge") || !seen.insert(label.clone()) {
+            continue;
+        }
+        if let Some((insts, successors)) = bl.get(&label) {
+            if insts.iter().any(|i| {
+                i.contains("@js_gc_loop_safepoint") || i.contains("@js_gc_safepoint_pending")
+            }) {
+                return true;
+            }
+            work.extend(successors.iter().cloned());
+        }
+    }
+    false
+}
+
+#[test]
+fn noncollecting_numeric_own_store_split_loop_omits_poll() {
+    let ir = loop_ir_with_bound(
+        "region_numeric_own_store_poll",
+        vec![put("y", Expr::LocalGet(I)), accumulated(&["x"], 1)],
+        Expr::LocalGet(H),
+        Expr::Integer(200),
+    );
+    assert!(
+        !split_loop_has_poll(&ir),
+        "the verified numeric split body must be call free:\n{ir}"
+    );
+    assert!(
+        ir.contains("@js_gc_loop_safepoint"),
+        "the generic fallback must keep its poll:\n{ir}"
+    );
+}
+
+#[test]
+fn allocating_own_store_split_loop_keeps_poll() {
+    let ir = loop_ir_with_bound(
+        "region_allocating_own_store_poll",
+        vec![
+            put("y", Expr::LocalGet(I)),
+            accumulated(&["x"], 1),
+            Stmt::Expr(Expr::Object(vec![("fresh".into(), Expr::Integer(1))])),
+        ],
+        Expr::LocalGet(H),
+        Expr::Integer(200),
+    );
+    assert!(
+        split_loop_has_poll(&ir),
+        "an allocating body must keep its poll even without JS reentry:\n{ir}"
+    );
+}
+
 #[test]
 fn a_bare_pointer_store_keeps_the_store_ics_gc_bookkeeping() {
     // `o.x = v; o.y = i;` — `v` is `any`: pointer-capable.
@@ -722,6 +784,10 @@ fn flow_derived_number_local_constant_bound_avoids_recheck() {
         !ir.contains("br i1 true, label %rloop.recheck"),
         "constant-bound flow-derived R/5L must avoid an unconditional recheck:\n{ir}"
     );
+    assert!(
+        !split_loop_has_poll(&ir),
+        "the emitted Number body must omit its poll:\n{ir}"
+    );
     let bl = blocks(&ir);
     let f = f_body_blocks(&bl);
     assert!(!f.is_empty(), "F body must be present:\n{ir}");
@@ -756,9 +822,10 @@ fn flow_derived_number_local_constant_bound_avoids_recheck() {
     );
 }
 
-/// An unrestricted bound comparison may invoke user code and revoke freshness.
+/// A strict entry test admits an invariant Number bound; its generic copy
+/// retains coercions and polls for objects, strings and other nonnumbers.
 #[test]
-fn any_bound_numeric_region_retains_collecting_comparison_recheck() {
+fn invariant_boxed_bound_has_strict_entry_and_generic_fallback() {
     const TEMP: u32 = 6;
     let body = vec![
         Stmt::Let {
@@ -792,8 +859,16 @@ fn any_bound_numeric_region_retains_collecting_comparison_recheck() {
         "Any bound must retain its collecting comparison:\n{ir}"
     );
     assert!(
-        ir.contains("br i1 true, label %rloop.recheck"),
-        "Any-bound user-code comparison must retain the conservative recheck:\n{ir}"
+        !ir.contains("br i1 true, label %rloop.recheck"),
+        "an entry-tested invariant bound must avoid the per-iteration recheck:\n{ir}"
+    );
+    assert!(
+        !split_loop_has_poll(&ir),
+        "the Number-admitted bound must omit the split-loop poll:\n{ir}"
+    );
+    assert!(
+        ir.contains("@js_gc_loop_safepoint"),
+        "the nonnumber fallback must keep its poll:\n{ir}"
     );
     let masks = prime_rep_masks(&ir);
     assert!(
@@ -816,6 +891,48 @@ fn any_bound_numeric_region_retains_collecting_comparison_recheck() {
             .count()
             >= 2,
         "G and post-loop adds must remain dynamic (no scope leak):\n{ir}"
+    );
+}
+
+#[test]
+fn a_written_bound_retains_collecting_comparison_and_recheck() {
+    let ir = loop_ir_with_return(
+        "region_written_boxed_bound",
+        vec![
+            accumulated(&["x"], 1),
+            Stmt::Expr(Expr::LocalSet(N, Box::new(Expr::String("2".into())))),
+        ],
+        Expr::LocalGet(H),
+    );
+    assert!(
+        split_loop_has_poll(&ir),
+        "a written bound cannot be entry-proven:\n{ir}"
+    );
+    assert!(
+        ir.contains("@js_rel_lt("),
+        "the bound's coercion must remain:\n{ir}"
+    );
+    assert!(
+        ir.contains("br i1 true, label %rloop.recheck"),
+        "a coercing control must recheck:\n{ir}"
+    );
+}
+
+#[test]
+fn a_bound_that_is_also_the_receiver_keeps_its_generic_comparison() {
+    let ir = loop_ir_with_bound(
+        "region_receiver_bound",
+        vec![accumulated(&["x"], 1)],
+        Expr::LocalGet(H),
+        Expr::LocalGet(O),
+    );
+    assert!(
+        split_loop_has_poll(&ir),
+        "a receiver cannot be assumed Number before its guard:\n{ir}"
+    );
+    assert!(
+        ir.contains("@js_rel_lt("),
+        "the receiver-bound coercion must remain:\n{ir}"
     );
 }
 

@@ -160,6 +160,9 @@ fn root_scanner_emits_callbacks_chunks_and_promises() {
         readable.insert(
             1,
             ReadableStreamData {
+                native_source: None,
+                tee_cancel_promise: None,
+                body_consumer: None,
                 state: ReadableState::Errored,
                 chunks: VecDeque::from([0x7FFD_0000_0000_1234, 0x7FFA_0000_0000_2345]),
                 chunk_sizes: VecDeque::from([1.0, 1.0]),

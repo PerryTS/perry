@@ -329,9 +329,26 @@ pub(crate) fn scalar_replaced_field_is_raw_f64(
     object: &Expr,
     field: &str,
 ) -> bool {
-    scalar_replaced_field_static_type(ctx, object, field)
-        .as_ref()
-        .is_some_and(crate::typed_shape::type_is_raw_f64_candidate)
+    scalar_replaced_field_is_number(ctx, object, field)
+        || scalar_replaced_field_static_type(ctx, object, field)
+            .as_ref()
+            .is_some_and(crate::typed_shape::type_is_raw_f64_candidate)
+}
+
+/// Scalar replacement changes storage, not the receiver's whole-write proof.
+/// Use the existing containment/numeric-field fact, never an initializer or
+/// an erased field annotation, to prove a scalar slot Number-valued at joins.
+pub(crate) fn scalar_replaced_field_is_number(ctx: &FnCtx<'_>, object: &Expr, field: &str) -> bool {
+    let Expr::LocalGet(id) = object else {
+        return false;
+    };
+    ctx.scalar_replaced
+        .get(id)
+        .is_some_and(|fields| fields.contains_key(field))
+        && ctx.ptr_shape_receiver_fact(object).is_some_and(|fact| {
+            fact.numeric_fields.contains(field)
+                && receiver_class_name(ctx, object).as_deref() == Some(fact.class_name.as_str())
+        })
 }
 
 pub(crate) fn scalar_replaced_field_raw_f64_store_state(
@@ -428,10 +445,15 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
     match expr {
         Expr::PropertyGet {
             object, property, ..
-        } => receiver_class_name(ctx, object)
-            .and_then(|class_name| class_field_declared_type(ctx, &class_name, property))
-            .as_ref()
-            .is_some_and(crate::typed_shape::type_is_raw_f64_candidate),
+        } => {
+            // A scalar slot backed by the whole-write Number proof has no
+            // guarded heap read and therefore no boxed fallback to coerce.
+            !scalar_replaced_field_is_number(ctx, object, property)
+                && receiver_class_name(ctx, object)
+                    .and_then(|class_name| class_field_declared_type(ctx, &class_name, property))
+                    .as_ref()
+                    .is_some_and(crate::typed_shape::type_is_raw_f64_candidate)
+        }
         Expr::IndexGet { object, .. } => {
             // Inside a packed/stable fast clone the guarded read either
             // produces a genuine raw double or side-exits to the slow clone
