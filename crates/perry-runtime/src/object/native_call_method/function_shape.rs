@@ -76,14 +76,61 @@ pub(crate) unsafe fn try_function_shape_method_call(
         crate::object::native_get::try_data_get_bytes(JSValue::pointer(proto as *mut u8), name)?;
     // (3) Identity by the slot's value.
     if !value.is_pointer() {
-        return None;
+        return patched_slot_call(object, value, name, args_ptr, args_len);
     }
     let method = value.as_pointer::<ClosureHeader>();
     let func = crate::closure::get_valid_func_ptr(method);
-    let which = crate::object::global_this::function_prototype_intrinsic_of(func)?;
+    let Some(which) = crate::object::global_this::function_prototype_intrinsic_of(func) else {
+        return patched_slot_call(object, value, name, args_ptr, args_len);
+    };
     #[cfg(test)]
     FUNCTION_SHAPE_HITS.with(|c| c.set(c.get() + 1));
     super::common_methods::dispatch_function_proto_method(object, which, args_ptr, args_len)
+}
+
+/// #11886: the prototype's data slot for `name` holds something other than
+/// a `Function.prototype` intrinsic (`Function.prototype.call = f`, written
+/// where the compiler could not see it). The slot decides the call, which
+/// the by-name tower would not do (it matches the NAME and runs the
+/// intrinsic): a function is called as an ordinary method with the function
+/// receiver as `this`, and a value that is not callable is the spec's
+/// `TypeError`. A no-op-backed built-in method that re-dispatches by this
+/// same name is left to the tower: calling it here would re-enter this path
+/// (#11700).
+#[cold]
+#[inline(never)]
+unsafe fn patched_slot_call(
+    object: f64,
+    value: JSValue,
+    name: &[u8],
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let value = f64::from_bits(value.bits());
+    if !crate::object::value_is_callable(value) {
+        crate::closure::throw_not_callable();
+    }
+    let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+    if !JSValue::from_bits(value.to_bits()).is_pointer() || !crate::closure::is_closure_ptr(addr) {
+        return None;
+    }
+    let name = std::str::from_utf8(name).ok()?;
+    if super::proto_dispatch::is_self_redispatching_proto_method(value, name) {
+        return None;
+    }
+    #[cfg(test)]
+    FUNCTION_SHAPE_PATCHED_CALLS.with(|c| c.set(c.get() + 1));
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver_h = scope.root_nanbox_f64(object);
+    let value_h = scope.root_nanbox_f64(value);
+    let callee =
+        crate::closure::rebind_explicit_this(value_h.get_nanbox_f64(), receiver_h.get_nanbox_f64());
+    Some(crate::closure::native_call_value_this(
+        callee,
+        crate::closure::JsThis::from_f64(receiver_h.get_nanbox_f64()),
+        args_ptr,
+        args_len,
+    ))
 }
 
 /// The facts [`try_function_shape_method_call`] establishes for
@@ -96,35 +143,43 @@ pub(crate) unsafe fn try_function_shape_method_call(
 /// `object` is a live value.
 pub(crate) unsafe fn function_intrinsic_facts(object: f64, name: &[u8]) -> FunctionIntrinsicFacts {
     match function_intrinsic_facts_inner(object, name) {
-        Ok(facts) => FunctionIntrinsicFacts::Intrinsic(facts.0, facts.1, facts.2),
+        Ok(facts) => FunctionIntrinsicFacts::Intrinsic(facts),
         Err(verdict) => verdict,
     }
 }
 
+/// The facts of an intrinsic-holding `%Function.prototype%` slot.
+pub(crate) struct IntrinsicSlot {
+    /// The holder (`%Function.prototype%`) address.
+    pub(crate) holder: usize,
+    /// The key's slot index in the holder's shape.
+    pub(crate) index: u32,
+    /// The intrinsic closure's body info.
+    pub(crate) info: u64,
+    /// Which intrinsic the slot holds (`"call"`, `"apply"` or `"bind"`).
+    pub(crate) which: &'static str,
+}
+
 /// What [`function_intrinsic_facts`] proves about a call.
 pub(crate) enum FunctionIntrinsicFacts {
-    /// The holder address, the slot index and the intrinsic body info.
-    Intrinsic(usize, u32, u64),
+    /// The holder's slot for the key holds an intrinsic.
+    Intrinsic(IntrinsicSlot),
     /// The receiver inherits from `%Function.prototype%`, but the key is not
     /// one of its intrinsics there (a fact of the two ShapeIds).
     NotIntrinsic,
     /// The receiver is not a function on a described Function shape that
     /// inherits from `%Function.prototype%` (a fact of its word).
     Ineligible,
-    /// The realm has not built `%Function.prototype%` yet: nothing is known.
+    /// The receiver is eligible, but the realm has not built
+    /// `%Function.prototype%` yet: nothing can have replaced its intrinsics.
     NoPrototype,
 }
 
 unsafe fn function_intrinsic_facts_inner(
     object: f64,
     name: &[u8],
-) -> Result<(usize, u32, u64), FunctionIntrinsicFacts> {
+) -> Result<IntrinsicSlot, FunctionIntrinsicFacts> {
     use FunctionIntrinsicFacts::{Ineligible, NoPrototype, NotIntrinsic};
-    let proto =
-        crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
-    if proto == 0 {
-        return Err(NoPrototype);
-    }
     let bits = object.to_bits();
     if bits >> 48 != 0x7FFD {
         return Err(Ineligible);
@@ -147,6 +202,11 @@ unsafe fn function_intrinsic_facts_inner(
         || !crate::closure::shape::function_shape_inherits_from_function_prototype(word, name)
     {
         return Err(Ineligible);
+    }
+    let proto =
+        crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
+    if proto == 0 {
+        return Err(NoPrototype);
     }
     let proto = proto as usize as *const crate::object::ObjectHeader;
     let shape = crate::object::shapes::object_shape_descriptor(proto).ok_or(NotIntrinsic)?;
@@ -171,10 +231,14 @@ unsafe fn function_intrinsic_facts_inner(
     }
     let method = value.as_pointer::<ClosureHeader>();
     let func = crate::closure::get_valid_func_ptr(method);
-    if crate::object::global_this::function_prototype_intrinsic_of(func).is_none() {
-        return Err(NotIntrinsic);
-    }
-    Ok((proto as usize, slot, (*method).info as u64))
+    let which =
+        crate::object::global_this::function_prototype_intrinsic_of(func).ok_or(NotIntrinsic)?;
+    Ok(IntrinsicSlot {
+        holder: proto as usize,
+        index: slot,
+        info: (*method).info as u64,
+        which,
+    })
 }
 
 unsafe fn try_data_get_bytes_value(
@@ -198,6 +262,22 @@ pub(crate) unsafe fn call_function_intrinsic(
 ) -> Option<f64> {
     let func = crate::closure::get_valid_func_ptr(method);
     let which = crate::object::global_this::function_prototype_intrinsic_of(func)?;
+    super::common_methods::dispatch_function_proto_method(object, which, args_ptr, args_len)
+}
+
+/// Run the `Function.prototype` intrinsic `which` (`"call"`, `"apply"` or
+/// `"bind"`) on the function `object`: what [`call_function_intrinsic`] runs
+/// once the slot's value has named the intrinsic.
+///
+/// # Safety
+/// `args_ptr` is valid for `args_len` reads.
+#[inline]
+pub(crate) unsafe fn run_function_intrinsic(
+    object: f64,
+    which: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
     super::common_methods::dispatch_function_proto_method(object, which, args_ptr, args_len)
 }
 
@@ -289,6 +369,8 @@ thread_local! {
     /// Calls this path answered (tests prove the path FIRES, not just that
     /// the result is right — the tower gives the same result).
     pub(crate) static FUNCTION_SHAPE_HITS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    /// Calls a patched slot's user function answered (#11886).
+    pub(crate) static FUNCTION_SHAPE_PATCHED_CALLS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -350,19 +432,29 @@ mod tests {
     }
 
     #[test]
-    fn a_patched_prototype_slot_or_a_dictionary_function_declines() {
+    fn a_patched_prototype_slot_runs_and_an_own_key_declines() {
         let _lock = crate::gc::global_side_table_test_lock();
         let _no_gc = crate::gc::GcSuppressScope::new();
         unsafe {
             let saved = crate::closure::shape::FUNCTION_PROTOTYPE_PTR.load(Ordering::Acquire);
-            // The slot holds something else: identity by VALUE says no.
+            // The slot holds a user function (#11886): identity by VALUE says
+            // it is no intrinsic, and the slot decides the call: that
+            // function runs, with the receiver as `this`.
             install_proto(crate::fn_info!(target_body, 0));
             let target = crate::closure::js_closure_alloc(crate::fn_info!(target_body, 0), 0);
             let target_v = crate::value::js_nanbox_pointer(target as i64);
             let this_arg = [f64::from_bits(crate::value::TAG_UNDEFINED)];
             let before = hits();
-            assert!(
-                try_function_shape_method_call(target_v, b"bind", this_arg.as_ptr(), 1).is_none()
+            let patched = FUNCTION_SHAPE_PATCHED_CALLS.with(std::cell::Cell::get);
+            assert_eq!(
+                try_function_shape_method_call(target_v, b"bind", this_arg.as_ptr(), 1),
+                Some(42.0),
+                "the patched slot's function must run"
+            );
+            assert_eq!(
+                FUNCTION_SHAPE_PATCHED_CALLS.with(std::cell::Cell::get),
+                patched + 1,
+                "the patch path must FIRE"
             );
 
             // The intrinsic is back, but the receiver left its base shape.
