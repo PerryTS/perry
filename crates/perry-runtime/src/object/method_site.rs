@@ -332,9 +332,9 @@ fn stats_report_enabled() -> bool {
                 let (hd, ha, hr) = read_holder::read_holder_stats();
                 let (ap, ah) = read_holder::read_accessor_stats();
                 let (cp, ch, cr) = read_holder::class_read_stats();
-                let (fp, fneg, fh) = function_intrinsic::function_intrinsic_stats();
+                let [fp, fneg, fu, fh, ff, fc] = function_intrinsic::function_intrinsic_stats();
                 eprintln!(
-                    "[method-site] fn_intrinsic_primes={fp} fn_intrinsic_negative={fneg} fn_intrinsic_hits={fh}"
+                    "[method-site] fn_intrinsic_primes={fp} fn_intrinsic_negative={fneg} fn_intrinsic_unbuilt_primes={fu} fn_intrinsic_hits={fh} fn_intrinsic_fast_hits={ff} fn_intrinsic_compiled_calls={fc}"
                 );
                 eprintln!(
                     "[method-site] primes_own={a} primes_inherited={b} primes_function={} primes_constfn={} chain_memo_records={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} class_read_root_rewrites={cr} read_holder_rewrites={} read_accessor_rewrites={} read_accessor_same_shape_relinks={} read_holder_refused={hr}{refused}",
@@ -392,17 +392,24 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
     // A function receiver calling an intrinsic it inherits from
     // `%Function.prototype%` (`fn.bind(this)`): the site's function-intrinsic
     // entry answers from words, or the call primes one (`function_intrinsic`).
-    // Only once the realm has built `%Function.prototype%` can an entry
-    // exist, and only for a receiver whose ShapeId says it inherits from it,
-    // whatever the key: the base Function shape, or a keyed Function shape
-    // over `Function.prototype`. A class method, a class function object, a
-    // FunctionDictionary receiver or an async/generator function is refused
-    // on its ShapeId, before any site or name is read.
+    // First, an entry that names this site's own intrinsic and still holds
+    // runs it with no further lookup. Otherwise an entry is consulted or
+    // primed only for a receiver whose ShapeId says it inherits from the
+    // prototype, whatever the key: the base Function shape, or a keyed
+    // Function shape over `Function.prototype`, once the realm has built it.
+    // Before the realm builds it, a base receiver's `call`, `apply` or `bind`
+    // primes too: nothing can have replaced them yet. A class method, a class
+    // function object, a FunctionDictionary receiver or an async/generator
+    // function is refused on its ShapeId.
     if let MissReceiver::Function { word, base, keyed } = receiver {
-        if (base || keyed)
-            && crate::object::native_call_method::function_prototype_built()
-            && (base
-                || crate::closure::shape::keyed_function_shape_has_function_prototype(
+        if let Some(result) = function_intrinsic::fast_miss(slot, recv, word, args_ptr, argc) {
+            return result;
+        }
+        let built = crate::object::native_call_method::function_prototype_built();
+        if (base && (built || matches!(name, b"call" | b"apply" | b"bind")))
+            || (keyed
+                && built
+                && crate::closure::shape::keyed_function_shape_has_function_prototype(
                     (word >> 32) as u32,
                 ))
         {
@@ -614,12 +621,19 @@ unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
     // objects of one shape holding different bodies each get an entry (the
     // emitted own hit falls through to the next way on a body mismatch).
     let inherited = entry.slot & METHOD_SITE_INHERITED != 0;
+    // A function-intrinsic entry replaces its word's (a holder-validated
+    // entry over one primed before the realm built the prototype).
+    let fn_intrinsic =
+        entry.slot & !METHOD_SITE_INDEX_MASK == function_intrinsic::METHOD_SITE_FUNCTION_INTRINSIC;
     let idx = site
         .entries
         .iter()
         .position(|e| {
             e.word == entry.word
-                && if inherited {
+                && if fn_intrinsic {
+                    e.slot & !METHOD_SITE_INDEX_MASK
+                        == function_intrinsic::METHOD_SITE_FUNCTION_INTRINSIC
+                } else if inherited {
                     e.slot & METHOD_SITE_INHERITED != 0
                 } else {
                     e.slot == entry.slot && e.info == entry.info

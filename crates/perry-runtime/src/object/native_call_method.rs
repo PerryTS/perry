@@ -17,7 +17,7 @@ mod disposal;
 mod function_shape;
 pub(crate) use function_shape::{
     call_function_intrinsic, function_intrinsic_facts, function_prototype_built,
-    FunctionIntrinsicFacts,
+    run_function_intrinsic, FunctionIntrinsicFacts,
 };
 mod handle_methods;
 mod memo_entries;
