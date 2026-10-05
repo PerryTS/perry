@@ -20,11 +20,14 @@ ON_KEYS = {
     "PERRY_GC_MOVING_LOOP_POLLS",
     "PERRY_GC_FORCE_EVACUATE",
     "PERRY_GC_VERIFY_EVACUATION",
+    "PERRY_GC_BUDGETED_OLD_RECLAIM",
 }
 UINT_KEYS = {
     "PERRY_GC_SCHEDULE_SEED",
     "PERRY_GC_SCHEDULE_ALLOC_KB",
     "PERRY_GC_PROTECT_FROMSPACE_DEPTH",
+    "PERRY_GC_MAJOR_PACING_FLOOR_MB",
+    "PERRY_GC_MAJOR_PACING_GROWTH",
 }
 
 
@@ -43,7 +46,7 @@ def parse(text: str) -> str:
             valid = value == "1"
         elif key in UINT_KEYS:
             valid = bool(re.fullmatch(r"[0-9]{1,20}", value)) and int(value) <= 2**64 - 1
-            if key == "PERRY_GC_PROTECT_FROMSPACE_DEPTH":
+            if key in ("PERRY_GC_PROTECT_FROMSPACE_DEPTH", "PERRY_GC_MAJOR_PACING_GROWTH"):
                 valid = valid and int(value) > 0
         elif key == "PERRY_GC_SCHEDULE_RATE":
             valid = bool(re.fullmatch(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", value))
@@ -75,6 +78,8 @@ def self_test() -> None:
     for arm in ("shipped_default", "default", "safepoint_minor", "gen_gc_off", "wb_off", "rep_ptr_shape_off"):
         assert fixture_env(arm, witness) == ""
         assert fixture_env(arm, "// parity-env: PATH=/tmp/evil") == ""
+    budgeted = "PERRY_GC_BUDGETED_OLD_RECLAIM=1 PERRY_GC_MAJOR_PACING_FLOOR_MB=1 PERRY_GC_MAJOR_PACING_GROWTH=1"
+    assert parse("// parity-env: " + budgeted + "\n") == budgeted
     assert parse("// no metadata\n") == ""
     assert parse("  // parity-env: PERRY_GC_MOVING_LOOP_POLLS=1\n") == "PERRY_GC_MOVING_LOOP_POLLS=1"
     invalid = (
@@ -85,7 +90,8 @@ def self_test() -> None:
         "PERRY_GC_SCHEDULE_SEED=18446744073709551616", "PERRY_GC_SCHEDULE_SEED=-1",
         "PERRY_GC_SCHEDULE_RATE=1", "PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=NaN",
         "PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1.01", "PERRY_GC_PROTECT_FROMSPACE_DEPTH=0",
-        "PERRY_GC_PROTECT_FROMSPACE_DEPTH=4",
+        "PERRY_GC_PROTECT_FROMSPACE_DEPTH=4", "PERRY_GC_BUDGETED_OLD_RECLAIM=0",
+        "PERRY_GC_MAJOR_PACING_GROWTH=0", "PERRY_GC_MAJOR_PACING_FLOOR_MB=1.5",
         "", "PERRY_GC_FORCE_EVACUATE=1\n// parity-env: PERRY_GC_VERIFY_EVACUATION=1",
     )
     for settings in invalid:
