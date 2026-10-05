@@ -408,7 +408,8 @@ fn t10_two_hundred_thousand_owner_cycles_have_flat_rss() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _reset = Reset::new();
     let _no_stack = ConservativeScanDisabledGuard::new();
-    let mut rss = Vec::new();
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut rss: Vec<usize> = Vec::new();
     for batch in 0..20 {
         for _ in 0..10_000 {
             let scope = RuntimeHandleScope::new();
