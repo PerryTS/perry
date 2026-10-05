@@ -264,6 +264,13 @@ impl ShapeDescriptor {
 pub(crate) struct ShapeRecordRef(std::ptr::NonNull<ShapeRecord>);
 
 impl ShapeRecordRef {
+    /// The authoritative layout kind, without lifting a descriptor copy.
+    #[inline]
+    pub(crate) fn object_kind(self) -> ShapeObjectKind {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).object_kind() }
+    }
+
     /// The record's live inline-slot bound — the same fact a lifted
     /// descriptor's `live_inline_slot_count` copies.
     #[inline]
@@ -3921,8 +3928,9 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
     // shared array must have cloned before push; otherwise siblings already
     // observe mutated bytes and no descriptor can make that state sound.
     let old_id = object_shape_stamp(obj);
+    let old_shape = shape_descriptor_by_id(old_id);
     let mut retire_owned_history = false;
-    if let Some(old) = shape_descriptor_by_id(old_id) {
+    if let Some(old) = old_shape {
         // #9064: an owned ordinary receiver that already entered stable-
         // tombstone mode keeps its id across same-allocation tail appends and
         // live-bound growth. Cached slots validate `TAG_HOLE`, so the deleted
@@ -3977,7 +3985,9 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
     // authority for this transition. A re-entrant observer can defensively
     // self-heal the zero stamp in that window; never let that interim
     // descriptor replace the saved class/semantic lineage.
-    let lineage = predecessor.or_else(|| shape_descriptor_by_id(old_id));
+    // A successful tombstone update returned above; its decline path neither
+    // collects nor changes the shape. Reuse the descriptor already read.
+    let lineage = predecessor.or(old_shape);
     let semantic_generation = lineage
         .map(|descriptor| descriptor.semantic_generation)
         .unwrap_or(0);

@@ -32,22 +32,20 @@ fn provider_copies_share_storage_without_initializing_a_second_value() {
     #[cfg(target_os = "android")]
     static SECOND_STORAGE: crate::tls_os_pool::LocalKey<Storage> =
         crate::tls_os_pool::LocalKey::new(|| Storage::new(Probe::new()));
-    static FIRST_SLOT: super::SlotId = super::SlotId::named("provider-test::shared");
-    static SECOND_SLOT: super::SlotId = super::SlotId::named("provider-test::shared");
-    static FIRST: super::HotKey<Probe> = super::HotKey::new(
-        &FIRST_SLOT,
-        || FIRST_STORAGE.try_with(|c| c.value_addr()),
-        |idx| {
-            let _ = FIRST_STORAGE.try_with(|c| c.arm_guard(idx));
-        },
-    );
-    static SECOND: super::HotKey<Probe> = super::HotKey::new(
-        &SECOND_SLOT,
-        || SECOND_STORAGE.try_with(|c| c.value_addr()),
-        |idx| {
-            let _ = SECOND_STORAGE.try_with(|c| c.arm_guard(idx));
-        },
-    );
+    const FIRST_SLOT: super::SlotId = super::SlotId::named("provider-test::shared");
+    const SECOND_SLOT: super::SlotId = super::SlotId::named("provider-test::shared");
+    static FIRST: super::HotKey<Probe> = super::HotKey::new(FIRST_SLOT, |idx| {
+        FIRST_STORAGE.try_with(|c| {
+            c.arm_guard(idx);
+            c.value_addr()
+        })
+    });
+    static SECOND: super::HotKey<Probe> = super::HotKey::new(SECOND_SLOT, |idx| {
+        SECOND_STORAGE.try_with(|c| {
+            c.arm_guard(idx);
+            c.value_addr()
+        })
+    });
     // Reverse which provider is touched first, and overlap the threads to
     // exercise independent claim atomics and isolate each thread's value.
     let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));

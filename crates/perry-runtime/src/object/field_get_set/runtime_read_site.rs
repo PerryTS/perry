@@ -80,6 +80,32 @@ impl RuntimeReadSite {
         self.slot.as_ptr() as *mut PicCacheSlot
     }
 
+    /// The emitted own-inline hit. The honest +4 word of any live heap cell
+    /// can be compared here: only a primed ordinary ShapeId admits the load.
+    #[inline(always)]
+    pub(crate) unsafe fn read_own_inline(&self, obj: *const ObjectHeader) -> Option<f64> {
+        let word = self.packed.load(Ordering::Relaxed);
+        if (*obj).parent_class_id != word as u32 {
+            return None;
+        }
+        let bits = *((obj as *const u8)
+            .add(std::mem::size_of::<ObjectHeader>() + (word >> 32) as usize * 8)
+            as *const u64);
+        (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))
+    }
+
+    /// Publish an own data slot established by a namespace-aware lookup.
+    /// The caller has proved that this shape owns the key as a data entry.
+    /// Dictionaries and overflow slots stay on that lookup's slow path.
+    pub(crate) fn prime_own_inline(&self, shape: u32, index: u32, live: u32) {
+        if crate::object::shapes::is_site_matchable_shape_id(shape) && index < live {
+            self.packed.store(
+                (u64::from(index) << 32) | u64::from(shape),
+                Ordering::Relaxed,
+            );
+        }
+    }
+
     /// The site's answer for `obj` when the shapes give it, without
     /// collecting: the compact word, then the GC-leaf front. `None` when the
     /// site must take [`Self::read_slow`].
@@ -89,14 +115,8 @@ impl RuntimeReadSite {
     /// [`object_receiver`]).
     #[inline]
     pub(crate) unsafe fn read_leaf(&self, obj: *const ObjectHeader) -> Option<f64> {
-        let word = self.packed.load(Ordering::Relaxed);
-        if (*obj).parent_class_id == word as u32 {
-            // The emitted hit: an inline own slot. A hole there is a deleted
-            // field the word still names (`pic.hit.deleted`): the slow entry.
-            let v = *((obj as *const u8)
-                .add(std::mem::size_of::<ObjectHeader>() + (word >> 32) as usize * 8)
-                as *const u64);
-            return (v != crate::value::TAG_HOLE).then_some(f64::from_bits(v));
+        if let Some(value) = self.read_own_inline(obj) {
+            return Some(value);
         }
         let dir = std::ptr::addr_of!(crate::object::shapes::PERRY_EMPTY_SHAPE_DIR) as *const u8;
         let biased = (obj as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64;

@@ -23,12 +23,42 @@ impl RuntimeStoreSite {
         }
     }
 
+    #[inline]
+    fn try_store(&self, target: f64, value: f64) -> bool {
+        crate::proxy::js_put_value_set_packed_fast(target, value, self.slot.as_ptr()).to_bits()
+            != crate::value::TAG_HOLE
+    }
+
     pub(crate) fn store(&self, target: f64, key: &'static [u8], value: f64) {
-        let slot = self.slot.as_ptr();
-        let stored = crate::proxy::js_put_value_set_packed_fast(target, value, slot);
-        if stored.to_bits() != crate::value::TAG_HOLE {
-            return;
+        if !self.try_store(target, value) {
+            self.store_slow(target, key, value);
         }
+    }
+
+    /// A Rust-owned operation needs an abrupt completion, not a longjmp
+    /// across its native owners. A cache hit is a GC leaf and cannot throw;
+    /// install the exception boundary only for the collecting miss.
+    pub(crate) fn store_caught(
+        &self,
+        target: f64,
+        key: &'static [u8],
+        value: f64,
+    ) -> Result<(), f64> {
+        if self.try_store(target, value) {
+            return Ok(());
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target = scope.root_nanbox_f64(target);
+        let value = scope.root_nanbox_f64(value);
+        crate::exception::catch_js_throw(|| {
+            self.store_slow(target.get_nanbox_f64(), key, value.get_nanbox_f64());
+        })
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn store_slow(&self, target: f64, key: &'static [u8], value: f64) {
+        let slot = self.slot.as_ptr();
         let scope = crate::gc::RuntimeHandleScope::new();
         let target = scope.root_nanbox_f64(target);
         let value = scope.root_nanbox_f64(value);

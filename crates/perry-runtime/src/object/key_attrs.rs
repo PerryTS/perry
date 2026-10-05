@@ -266,19 +266,32 @@ fn bloom_bit_of_bytes(bytes: &[u8]) -> u16 {
 ///
 /// # Safety
 /// `keys` is null or a live keys array.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn keys_attrs(keys: *const ArrayHeader) -> *mut ArrayHeader {
     if keys.is_null() {
         return std::ptr::null_mut();
     }
     let header = crate::gc::header_from_trusted_user_ptr(keys.cast());
-    let mut keys = keys;
     if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
-        keys = crate::array::clean_arr_ptr(keys);
-        if keys.is_null() {
-            return std::ptr::null_mut();
-        }
+        return keys_attrs_forwarded(keys);
     }
+    keys_attrs_resolved(keys)
+}
+
+// A keys list may still name its pre-growth head. Keep all of that resolution
+// work on the rare edge so ordinary shape reads need no forwarding frame.
+#[cold]
+#[inline(never)]
+unsafe fn keys_attrs_forwarded(keys: *const ArrayHeader) -> *mut ArrayHeader {
+    let keys = crate::array::clean_arr_ptr(keys);
+    if keys.is_null() {
+        return std::ptr::null_mut();
+    }
+    keys_attrs_resolved(keys)
+}
+
+#[inline(always)]
+unsafe fn keys_attrs_resolved(keys: *const ArrayHeader) -> *mut ArrayHeader {
     if crate::array::array_object_flags_resolved(keys) & crate::gc::GC_ARRAY_NAMED_PROPS == 0 {
         return std::ptr::null_mut();
     }

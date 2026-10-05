@@ -659,5 +659,5 @@ pub(crate) fn execute_rooted(
 /// the TypeError for a non-writable `lastIndex` returned instead of thrown.
 /// Neither branch runs user code.
 fn store_last_index(receiver: &RuntimeHandle<'_>, n: usize) -> Result<(), EngineError> {
-    caught(|| super::set_last_index_throwing(regexp(receiver), n))
+    super::set_last_index_caught(receiver.get_nanbox_f64(), n as f64).map_err(EngineError::Abrupt)
 }

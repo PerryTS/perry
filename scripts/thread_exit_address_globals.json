@@ -3959,7 +3959,15 @@
     "LAST_INDEX_STORE"
    ],
    "verdict": "no_heap_address",
-   "why": "RuntimeStoreSite retains ShapeId/slot/validity words, permanent Rust-owned PIC-arena PackedSetWays/AddWays pointers, and an optional static JsFunctionInfo code address. No receiver, stored value, prototype or atom address is retained. ShapeIds are process unique; every hit validates the current receiver shape. Agent exit cannot leave a dangling arena object in this site."
+   "why": "This RuntimeStoreSite is reached only for a branded RegExp with its own non-configurable lastIndex data slot, so it cannot prime an inherited setter entry or add a missing key. Its direct addresses name permanent Rust-owned PIC-arena storage; the active words are process-unique ShapeIds, slot indices and validity, with no receiver, prototype, value or atom address. Every hit validates the current receiver shape, and a descriptor change retires that shape. Agent exit cannot leave a dereferenceable arena object in this site."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/field_get_set/runtime_store_site.rs",
+   "names": [
+    "SITE"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Test-only RuntimeStoreSite. Its direct addresses are permanent Rust-owned PIC-arena PackedSetWays/AddWays allocations and optional static JsFunctionInfo code; own/key-add ways hold only process-unique ShapeIds, slot indices and validity words. A generic slow store can also install a permanent Rust-owned setter_site::Entry: its key, holder and accessor pair are strong rewritable roots scanned via setter_site::ENTRIES, and both priming and admission require primary_only() before entry access. Worker agents never dereference that heap-bearing arm; after any worker starts it stays disabled. The readonly transition test exercises own/key-add data ways."
   }
  ]
 }

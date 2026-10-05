@@ -1224,7 +1224,7 @@ impl ShapeSlab {
     }
 
     /// The cell `index` names in a directory of `len` pages at `pages`: two
-    /// dependent loads and no test — a page past the directory is the shared
+    /// dependent loads after the directory bound check. A page past it is the shared
     /// empty page, and an absent page or chunk is the shared empty one.
     ///
     /// # Safety
@@ -1232,14 +1232,21 @@ impl ShapeSlab {
     #[inline(always)]
     unsafe fn walk(pages: *const Page, len: usize, index: usize) -> *mut ShapeRecord {
         let (page, chunk, slot) = Self::split(index);
-        let entry: *const Page = if page < len {
-            pages.add(page)
-        } else {
-            &EMPTY_PAGE_ENTRY.0
-        };
-        let page = (*entry).0.as_ref();
+        if page >= len {
+            return Self::absent_page_record(chunk, slot);
+        }
+        let page = (*pages.add(page)).0.as_ref();
         let chunk = page[chunk].0.as_ref();
         chunk[slot].get()
+    }
+
+    // Retain the same sentinel cell for every index outside the published
+    // directory. Keeping its address calculation cold leaves the valid-page
+    // path as the directory, page and chunk loads alone.
+    #[cold]
+    #[inline(never)]
+    unsafe fn absent_page_record(chunk: usize, slot: usize) -> *mut ShapeRecord {
+        EMPTY_PAGE_ENTRY.0 .0.as_ref()[chunk].0.as_ref()[slot].get()
     }
 
     /// Present records.

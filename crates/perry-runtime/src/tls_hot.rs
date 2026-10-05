@@ -288,6 +288,10 @@ static HOT: crate::tls_os_pool::LocalKey<UnsafeCell<HotTls>> =
 #[cold]
 #[inline(never)]
 fn fill(slots: *mut HotTls) {
+    // Query the native stack before provider initialization maps arena memory.
+    // On Linux pthread derives the main-thread bounds by scanning process maps;
+    // the bounds are independent of these providers and their allocations.
+    crate::stack_guard::publish_stack_limit();
     // SAFETY: `slots` is this thread's own cache; no other thread can observe
     // it and the runtime is single-threaded per arena.
     unsafe {
@@ -307,7 +311,6 @@ fn fill(slots: *mut HotTls) {
             .runtime_handle_stack
             .set(crate::gc::runtime_handle_stack_hot_addr());
         (*slots).agent_ptrs.set(crate::agent_ptrs::hot_addr());
-        crate::stack_guard::publish_stack_limit();
         // Last, and the field `hot()` tests: every other slot is already
         // written by the time this one is non-null, so a re-entrant call from
         // inside one of the providers above cannot observe a half-filled cache
@@ -832,15 +835,15 @@ impl Drop for SlotGuard {
 /// Android uses the pooled backend's [`AccessError`]; other platforms retain
 /// std's exact error type.
 pub struct HotKey<T: 'static> {
-    slot: &'static SlotId,
+    // Each declaration owns its claim; embedding it avoids a second static
+    // allocation and relocation while its address remains stable for life.
+    slot: SlotId,
     /// Resolves the owning `thread_local!` the ordinary way and returns the
     /// address of its *value*. Cold path only — never called once the slot is
     /// populated, so the indirect call never appears on a hot path.
-    resolve: fn() -> Result<*mut u8, AccessError>,
-    /// Records the claimed index in this thread's teardown guard, if the value
-    /// has one. Generated alongside the storage, so it knows the `GUARD` that
-    /// `HotKey` deliberately does not.
-    arm_guard: fn(u32),
+    /// The resolver arms the storage's guard with the claimed index before
+    /// returning its address. Drop-free storage has no guard to arm.
+    resolve: fn(u32) -> Result<*mut u8, AccessError>,
     _not_send: std::marker::PhantomData<*const T>,
 }
 
@@ -851,15 +854,10 @@ unsafe impl<T: 'static> Sync for HotKey<T> {}
 
 impl<T: 'static> HotKey<T> {
     #[doc(hidden)]
-    pub const fn new(
-        slot: &'static SlotId,
-        resolve: fn() -> Result<*mut u8, AccessError>,
-        arm_guard: fn(u32),
-    ) -> Self {
+    pub const fn new(slot: SlotId, resolve: fn(u32) -> Result<*mut u8, AccessError>) -> Self {
         Self {
             slot,
             resolve,
-            arm_guard,
             _not_send: std::marker::PhantomData,
         }
     }
@@ -968,11 +966,10 @@ impl<T: 'static> HotKey<T> {
                 return Ok(cached);
             }
         }
-        let value = (self.resolve)()?;
+        // Resolution also arms the storage's guard. After publication any
+        // thread-teardown must un-publish the address before destroying it.
+        let value = (self.resolve)(idx)?;
         if (idx as usize) < HOT_SLOT_CAPACITY {
-            // Arm before publishing: after this store any thread-teardown of
-            // the value un-publishes the slot it is about to invalidate.
-            (self.arm_guard)(idx);
             hot().set_slot(idx, value);
         }
         Ok(value)
@@ -1043,7 +1040,7 @@ macro_rules! __perry_thread_local_one {
             // Module/name alone collide for function-local declarations.
             // Avoid file!(): Cargo can use relative vs absolute source paths
             // for the same crate in workspace and standalone provider builds.
-            static SLOT: $crate::tls_hot::SlotId = $crate::tls_hot::SlotId::named(concat!(
+            let slot = $crate::tls_hot::SlotId::named(concat!(
                 module_path!(), "::", stringify!($name), "@", line!(), ":", column!()
             ));
             // `GUARD` is 1 exactly when `$t` has drop glue, so the guard —
@@ -1051,13 +1048,15 @@ macro_rules! __perry_thread_local_one {
             // a cached address could otherwise outlive the value.
             type Storage = $crate::tls_hot::HotCell<$t, { ::core::mem::needs_drop::<$t>() as usize }>;
             $crate::__perry_thread_local_storage!(Storage, $($init)+);
-            fn resolve() -> ::core::result::Result<*mut u8, $crate::tls_hot::AccessError> {
-                STORAGE.try_with(|cell| cell.value_addr())
+            fn resolve(idx: u32) -> ::core::result::Result<*mut u8, $crate::tls_hot::AccessError> {
+                STORAGE.try_with(|cell| {
+                    // A guard ignores an uncached index at teardown; for a
+                    // drop-free T this operation is empty by construction.
+                    cell.arm_guard(idx);
+                    cell.value_addr()
+                })
             }
-            fn arm_guard(idx: u32) {
-                let _ = STORAGE.try_with(|cell| cell.arm_guard(idx));
-            }
-            $crate::tls_hot::HotKey::new(&SLOT, resolve, arm_guard)
+            $crate::tls_hot::HotKey::new(slot, resolve)
         };
     };
 }

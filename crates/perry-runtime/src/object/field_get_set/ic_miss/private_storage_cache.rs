@@ -221,22 +221,33 @@ mod private_storage_cache_tests {
         let scope = crate::gc::RuntimeHandleScope::new();
         let object = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
         let storage = private_storage_key_by_id(0, 0, "[[RegExpMatcher]]");
+        let site = IntrinsicPrivateReadSite::new("[[RegExpMatcher]]");
         let spelling = scope.root_string_ptr(crate::string::intern_ascii_literal(storage.as_bytes()));
         object.with_mut_ptr(|obj: *mut ObjectHeader| unsafe {
             crate::object::key_attrs::apply_edits(obj, &[crate::object::key_attrs::AttrsEdit::Private(storage.as_bytes())]);
         });
         let receiver = || object.with_mut_ptr(|obj: *mut ObjectHeader| crate::value::js_nanbox_pointer(obj as i64));
         assert!(storage.set_cached(receiver(), 11.0));
+        assert_eq!(site.read(receiver()), Some(11.0));
+        assert_eq!(site.read(receiver()), Some(11.0));
         object.with_mut_ptr(|obj: *mut ObjectHeader| spelling.with_const_ptr(|key| {
             assert!(crate::object::js_object_get_field_by_name(obj, key).is_undefined());
             js_object_set_field_by_name(obj, key, 7.0);
         }));
         assert_eq!(storage.get_cached(receiver()), Some(11.0));
+        assert_eq!(site.read(receiver()), Some(11.0));
         object.with_mut_ptr(|obj: *mut ObjectHeader| spelling.with_const_ptr(|key| {
             assert_eq!(crate::object::js_object_get_field_by_name(obj, key).as_number(), 7.0);
         }));
         assert!(storage.set_cached(receiver(), 22.0));
         assert_eq!(storage.get_cached(receiver()), Some(22.0));
+        assert_eq!(site.read(receiver()), Some(22.0));
+        object.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
+            assert!(crate::object::dictionary::latch_object_to_dictionary(obj));
+        });
+        assert_eq!(site.read(receiver()), Some(22.0));
+        assert!(storage.set_cached(receiver(), 33.0));
+        assert_eq!(site.read(receiver()), Some(33.0));
     }
 
     #[test]
@@ -401,39 +412,55 @@ mod private_storage_cache_tests {
 }
 
 
-/// A builtin's fixed intrinsic private read through the class private-slot
-/// machinery. The per-agent site owns one Rust key spelling and its existing
-/// (ShapeId, slot, live-bound) memo; it never retains a managed receiver/value.
+/// A builtin's fixed intrinsic private read. The hit is the existing runtime
+/// read site's packed shape/slot word; namespace/ENTRY_PRIVATE validation and
+/// Rust key spelling live only on the miss. No receiver or value is retained.
 pub(crate) struct IntrinsicPrivateReadSite {
     name: &'static str,
-    key: std::cell::OnceCell<std::rc::Rc<PrivateStorageKey>>,
+    site: super::runtime_read_site::RuntimeReadSite,
 }
 
 impl IntrinsicPrivateReadSite {
     pub(crate) const fn new(name: &'static str) -> Self {
-        Self { name, key: std::cell::OnceCell::new() }
+        Self { name, site: super::runtime_read_site::RuntimeReadSite::new() }
     }
 
     #[inline]
     pub(crate) fn read(&self, receiver: f64) -> Option<f64> {
-        let key = match self.key.get() {
-            Some(key) => key,
-            None => {
-                // An unbranded receiver cannot need a qualified name. Avoid
-                // materializing the Rust key on the first negative probe.
-                let (object, _) = unsafe { private_plain_receiver_shape(receiver) }?;
-                if unsafe { crate::object::key_attrs::object_summary(object) }
-                    & crate::object::key_attrs::SUMMARY_PRIVATE == 0
-                {
-                    return None;
-                }
-                self.key.get_or_init(|| private_storage_key_by_id(0, 0, self.name))
-            }
-        };
-        // The intrinsic is an ordinary receiver, including dictionary
-        // layouts: locate covers both and checks ENTRY_PRIVATE. An absent
-        // entry is a brand miss; there is no property fallback.
-        key.get_cached(receiver)
+        let bits = receiver.to_bits();
+        let addr = (bits & crate::value::POINTER_MASK) as usize;
+        if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
+            || addr < crate::value::addr_class::HANDLE_BAND_MAX
+        {
+            return None;
+        }
+        let object = addr as *const ObjectHeader;
+        if let Some(value) = unsafe { self.site.read_own_inline(object) } {
+            return Some(value);
+        }
+        // Honest tags reject unshaped cells without private-name lookup.
+        if !crate::object::shapes::is_shape_id(unsafe { (*object).parent_class_id }) {
+            return None;
+        }
+        self.read_miss(receiver)
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn read_miss(&self, receiver: f64) -> Option<f64> {
+        let (object, _) = unsafe { private_plain_receiver_shape(receiver) }?;
+        if unsafe { crate::object::key_attrs::object_summary(object) }
+            & crate::object::key_attrs::SUMMARY_PRIVATE == 0
+        {
+            return None;
+        }
+        let key = private_storage_key_by_id(0, 0, self.name);
+        let (object, index, live) = key.locate(receiver)?;
+        let shape = unsafe { crate::object::shapes::object_shape_stamp(object) };
+        self.site.prime_own_inline(shape, index, live);
+        Some(f64::from_bits(unsafe {
+            super::object_field_at_with_live(object, index, live).bits()
+        }))
     }
 }
 
