@@ -205,6 +205,7 @@ fn dynamic_index_site_blocks(ir: &str) -> Vec<String> {
 const DYNAMIC_INDEX_SITE_BLOCKS: &[&str] = &[
     // #10515: the admitted byte-view (`Uint8Array` / `Buffer`) arm.
     "arrlike.u8.brand",
+    "arrlike.u8.view",
     "arrlike.u8.bounds",
     "arrlike.u8.load",
     "arrlike.ic.header",
@@ -232,6 +233,8 @@ const DYNAMIC_INDEX_SITE_BLOCKS: &[&str] = &[
     "arrlike.ic.fwd_header",
     "arrlike.ic.miss",
     "arrlike.ic.merge",
+    // Pointer-layout views have a separate load; owning bytes remain at +8.
+    "arrlike.u8.view_load",
 ];
 
 /// #T2 ("inline hit, one exit"): the emitted `obj[i]` for an erased receiver
@@ -821,8 +824,8 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
     );
     // #10515: the byte-view arm admits only a byte-view brand (#10694: a Node
     // `Buffer`, `GC_TYPE_BUFFER`, or a `Uint8Array`, `GC_TYPE_BUFFER_UINT8ARRAY`)
-    // whose address the admission cache holds; everything else leaves through
-    // the exit.
+    // whose address the admission cache holds; a miss tests the separate
+    // pointer-storage layout before falling through to the same exit.
     let u8_brand = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.brand.")
         .expect("the byte-view brand guard exists");
     assert!(
@@ -832,9 +835,22 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY
             ))
             && u8_brand.contains("@PERRY_U8_INLINE_CACHE")
-            && u8_brand.contains("arrlike.ic.miss"),
+            && u8_brand.contains("arrlike.u8.view"),
         "the byte-view arm must test both byte-view brands and the admission \
-         cache, and exit on a miss:\n{u8_brand}"
+         cache, and offer a miss to the pointer-layout arm:\n{u8_brand}"
+    );
+    let view = super::class_field_barrier_tests::block_body(&ir, "u8v.header.")
+        .expect("the pointer-layout guard exists");
+    assert!(
+        view.contains(&format!(", {}", crate::runtime_abi::GC_BUFFER_VIEW_DATA))
+            && view.contains("arrlike.ic.miss"),
+        "view misses must guard the pointer layout before reaching the load: {view}"
+    );
+    let load = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.view_load.")
+        .expect("the view byte load exists");
+    assert!(
+        load.contains("load atomic i8") && !load.contains("call "),
+        "shared views must load their resolved pointer atomically: {load}"
     );
     // The elements-backed subclass probe, the lazy-JSON-array probe and the
     // dense-tail family token now live behind that exit rather than at every

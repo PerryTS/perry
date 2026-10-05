@@ -77,6 +77,13 @@ pub const GC_TYPE_CLOSURE: u8 = 4;
 /// byte). Emitted byte-access guards accept exactly these two.
 pub const GC_TYPE_BUFFER: u8 = 10;
 pub const GC_TYPE_BUFFER_UINT8ARRAY: u8 = 26;
+/// A buffer view stores its resolved native byte pointer at payload +8.
+/// The backing GC edge remains traced by the buffer descriptor. This bit
+/// never admits a view to the owning-buffer inline-storage cache.
+pub const GC_BUFFER_VIEW_DATA: u16 = 0x100;
+pub const BUFFER_VIEW_DATA_OFFSET: usize = 8;
+/// Header-less symbols must be screened before trusting a buffer layout.
+pub const SYMBOL_HEADER_MAGIC: u32 = 0x5359_4D42;
 /// `gc::GC_FLAG_FORWARDED` (GcHeader byte 1): an evacuated from-space stub.
 pub const GC_FLAG_FORWARDED: u8 = 0x80;
 /// `gc::GC_HEADER_SIZE`.

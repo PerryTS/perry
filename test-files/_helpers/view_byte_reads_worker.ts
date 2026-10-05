@@ -1,0 +1,11 @@
+import {parentPort, workerData} from 'node:worker_threads';
+const sab = workerData as SharedArrayBuffer;
+const control = new Int32Array(sab, 0, 2);
+const bytes = new Uint8Array(sab, 10, 8);
+bytes.fill(7);
+Atomics.store(control, 0, 1);
+Atomics.notify(control, 0);
+while (Atomics.load(control, 1) === 0) Atomics.wait(control, 1, 0, 10000);
+let sum = 0;
+for (let i = 0; i < bytes.length; i++) sum += bytes[i]!;
+parentPort!.postMessage(sum);

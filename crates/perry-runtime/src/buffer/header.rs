@@ -1042,6 +1042,12 @@ pub(crate) fn visit_ab_alias_slot(addr: usize, mut visit: impl FnMut(*mut u64)) 
 
 /// Get the canonical data pointer for a buffer or shared view.
 pub fn buffer_data(buf: *const BufferHeader) -> *const u8 {
+    // The cell carries the derived pointer. No TLS lookup on the hot path;
+    // the existing view metadata still owns the GC edge and resize/detach work.
+    let gc = unsafe { &*((buf as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader) };
+    if gc._reserved & crate::gc::GC_BUFFER_VIEW_DATA != 0 {
+        return unsafe { super::view::cached_data_ptr(buf) };
+    }
     if let Some(info) = super::view::lookup(buf as usize) {
         // Registration flattens nested views; the owner is retained by the GC
         // descriptor. Detach zeroes view lengths before releasing any pages.

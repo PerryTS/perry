@@ -3115,7 +3115,7 @@ mod ta_param_f64_read;
 mod toint32;
 #[cfg(test)]
 mod toint32_tests;
-mod u8_buffer_read;
+pub(crate) mod u8_buffer_read;
 #[cfg(test)]
 mod unary_bigint_tests;
 #[cfg(test)]

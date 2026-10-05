@@ -1421,6 +1421,10 @@ pub const OBJ_FLAG_NULL_PROTO: u16 = 0x40;
 /// Bit 7 is kind-disjoint from object/array numeric-layout proofs. Generic age
 /// and layout transitions preserve it; no Buffer reader interprets those proofs.
 pub(crate) const GC_BUFFER_FOREIGN_DATA: u16 = 0x80;
+/// A Buffer-family view contains a resolved native data pointer at +8.
+/// Kind-disjoint from the Object typed-array-prototype bit. The view's
+/// backing edge is traced and the derived pointer is refreshed on rewrite.
+pub(crate) const GC_BUFFER_VIEW_DATA: u16 = crate::codegen_abi::GC_BUFFER_VIEW_DATA;
 // Array carries properties outside its ordinary dense-element representation:
 // per-index descriptors (accessors or custom attrs installed via
 // `Object.defineProperty`), a non-writable `length`, or named properties in
@@ -1580,7 +1584,7 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 /// | 3..5 | | | `GC_COPY_SURVIVAL_AGE_MASK` |
 /// | 6 | `OBJ_FLAG_NULL_PROTO` | `GC_ARRAY_CUSTOM_PROTO` (alias) | `GC_RESIDUAL_PROTO_OWNER` (non-object) |
 /// | 7 | available | `GC_ARRAY_RAW_F64_LAYOUT` | BUFFER: `GC_BUFFER_FOREIGN_DATA` |
-/// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_NAMED_PROPS` | |
+/// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_NAMED_PROPS` | BUFFER: `GC_BUFFER_VIEW_DATA` |
 /// | 9 | `OBJ_FLAG_PLAIN_ORDINARY` | `GC_ARRAY_ARGUMENTS_OBJECT` | |
 /// | 10 | `OBJ_FLAG_STABLE_TOMBSTONES` | `OBJ_FLAG_ARRAY_DESCRIPTORS` | |
 /// | 11 | `OBJ_FLAG_HAS_DESCRIPTORS` | element shape (#7480) | |
