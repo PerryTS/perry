@@ -1,0 +1,5 @@
+Polymorphic absent-field reads can share a class-cache way across up to 128 receiver shapes with the same class, prototype identity, chain and terminal. The receiver ids live in the entry's owned allocation; every use still checks receiver membership and every prototype-hop and terminal shape, and class-link generation reproof remains shared only across identical prototype identities. The entry stays 48 bytes and its GC scan visits only the chain prefix. This eliminates receiver-shape replacement churn at prettier's absent-field sites without registries or lookup side tables.
+
+Coverage includes a Node parity test over 96 shapes with later own/prototype definitions, getters, prototype relinks and null roots, plus unit checks for shape invalidation, capacity, root coverage and class-link generation reproof.
+
+Sites retain ordinary primary-token ways until capacity. Compatible absent ways then coalesce into an owned receiver set and reclaim redundant ways; a bitmap in the existing cursor makes shared lookup a fallback after primary tokens miss. Cold publication is optimized for code size while hot chain validation stays inline.

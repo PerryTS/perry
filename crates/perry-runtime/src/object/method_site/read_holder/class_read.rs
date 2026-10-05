@@ -21,6 +21,13 @@
 //! block, sized to the chain, that the entry owns. Every hop is still
 //! compared by ShapeId on every use; depth adds compares, never a different
 //! kind of fact.
+//!
+//! Once a site fills its primary ways, absent ways can retain up to 128
+//! receiver shapes with one identical
+//! chain, terminal and receiver prototype identity. Shape membership proves
+//! absence on the receiver; the same per-hop checks prove the rest. The
+//! receiver ids live in the entry's allocation, not a registry or side table.
+//! Different chains and different prototype identities retain separate ways.
 
 use super::*;
 
@@ -36,6 +43,26 @@ const _: () = assert!(STATE_CLASS_LATCHED < 1 << STATE_REPRIME_SHIFT);
 const _: () =
     assert!(STATE_CLASS_LATCHED & (STATE_CLASS_SITE | STATE_LATCHED | STATE_REGISTERED) == 0);
 const WAYS: usize = 16;
+// The cursor's low bits select the next way; its high bits name ways with
+// receiver sets. A primary-token hit pays no receiver-set lookup overhead.
+const CURSOR_BITS: u32 = WAYS.trailing_zeros();
+const CURSOR_MASK: usize = WAYS - 1;
+const SHARED_MASK: usize = (1 << WAYS) - 1;
+const _: () = assert!(WAYS.is_power_of_two() && CURSOR_BITS + WAYS as u32 <= usize::BITS);
+/// An absent entry has no slot to load. Its slot word can instead describe
+/// a bounded set of receiver ShapeIds sharing the SAME chain and prototype
+/// identity. The ids occupy the tail of its owned hop block; they are not
+/// object addresses and the root scan visits only the chain prefix.
+const MULTI_ABSENT: u32 = 1 << 31;
+const ABSENT_BUCKETS: usize = 256;
+const ABSENT_WORDS: usize =
+    ABSENT_BUCKETS * std::mem::size_of::<u32>() / std::mem::size_of::<Hop>();
+const ABSENT_RECEIVERS: u32 = 128; // at most half full, bounded probes
+const _: () = assert!(ABSENT_BUCKETS.is_power_of_two());
+const _: () = assert!(ABSENT_RECEIVERS < ABSENT_BUCKETS as u32);
+const _: () = assert!(
+    ABSENT_WORDS * std::mem::size_of::<Hop>() == ABSENT_BUCKETS * std::mem::size_of::<u32>()
+);
 
 /// The most objects a class entry's chain may span, the holder (or the
 /// terminal object of an absent read) included.
@@ -47,21 +74,19 @@ struct Entry {
     class_id: u32,
     depth: u8,
     absent: bool,
-    /// A holder slot word (`HOLDER_SLOT_SPILL` for a spill position).
+    /// A holder slot word (`HOLDER_SLOT_SPILL` for a spill position), or
+    /// `MULTI_ABSENT | receiver_count` for a shared absent proof.
     slot: u32,
     holder: usize,
     holder_shape: u32,
     /// The entry's `depth - 1` intermediate hops, receiver side first: a
-    /// block the entry alone owns (null at depth 1). Allocated when the entry
-    /// is published, reused or freed when its way is overwritten.
+    /// block the entry alone owns (null for a single-shape depth-1 entry).
+    /// A multi-shape absent proof appends `ABSENT_BUCKETS` u32 ids, outside
+    /// the chain prefix the root scan visits. Reused or freed on overwrite.
     hops: *mut Hop,
     /// The class lookup-surface generation under which the receiver's direct
     /// link was last proved to be `holder` (depth 1) or `hops[0]`.
     generation: u64,
-    /// Every hop's ShapeId records a prototype identity that pins its next
-    /// object (the realm's `%Object.prototype%`, null, or a serial), so a
-    /// matching hop ShapeId proves the link without re-reading it.
-    pinned_hops: bool,
 }
 
 const EMPTY: Entry = Entry {
@@ -74,14 +99,85 @@ const EMPTY: Entry = Entry {
     holder_shape: 0,
     hops: std::ptr::null_mut(),
     generation: 0,
-    pinned_hops: false,
 };
 
 impl Entry {
-    /// The entry's intermediate hops.
+    /// The entry's intermediate hops, excluding receiver ids in its tail.
     #[inline(always)]
     unsafe fn hops(&self) -> &[Hop] {
         hop_block(self.hops, self.depth)
+    }
+
+    #[inline]
+    fn multi_absent(&self) -> bool {
+        self.absent && self.slot & MULTI_ABSENT != 0
+    }
+
+    fn block_len(&self) -> usize {
+        (self.depth as usize).saturating_sub(1) + if self.multi_absent() { ABSENT_WORDS } else { 0 }
+    }
+
+    /// The whole allocation, used only by its owner when replacing a way.
+    unsafe fn drop_block(&self) {
+        if !self.hops.is_null() {
+            drop(Box::from_raw(
+                std::slice::from_raw_parts_mut(self.hops, self.block_len()) as *mut [Hop],
+            ));
+        }
+    }
+
+    /// Open-addressed receiver facts, never GC pointers. A zero id is empty.
+    #[inline(never)]
+    unsafe fn receiver_bucket(&self, shape: u32) -> *mut u32 {
+        let tail = self.hops.add(self.depth as usize - 1).cast::<u32>();
+        let mut i = shape as usize & (ABSENT_BUCKETS - 1);
+        loop {
+            let bucket = tail.add(i);
+            if *bucket == 0 || *bucket == shape {
+                return bucket;
+            }
+            i = (i + 1) & (ABSENT_BUCKETS - 1);
+        }
+    }
+
+    #[inline(never)]
+    unsafe fn matches_receiver(&self, token: i64, class_id: u32) -> bool {
+        self.class_id == class_id
+            && (self.token == token
+                || (self.multi_absent() && *self.receiver_bucket(token as u32) != 0))
+    }
+
+    /// Extend the shared proof after the generic read confirmed this chain.
+    /// More receiver shapes than the bound use another ordinary class way.
+    #[cold]
+    #[inline(never)]
+    unsafe fn add_receiver(&mut self, shape: u32) -> bool {
+        if !self.multi_absent() {
+            let chain_len = self.depth as usize - 1;
+            let block = Box::<[Hop]>::new_uninit_slice(chain_len + ABSENT_WORDS);
+            let hops = Box::into_raw(block) as *mut Hop;
+            if chain_len != 0 {
+                std::ptr::copy_nonoverlapping(self.hops, hops, chain_len);
+            }
+            // Initialize the entire tail, including Hop padding: this region
+            // is u32 receiver ids, never interpreted or traced as hops.
+            std::ptr::write_bytes(hops.add(chain_len).cast::<u32>(), 0, ABSENT_BUCKETS);
+            self.drop_block();
+            self.hops = hops;
+            self.slot = MULTI_ABSENT;
+            *self.receiver_bucket(self.token as u32) = self.token as u32;
+            self.slot += 1;
+        }
+        let bucket = self.receiver_bucket(shape);
+        if *bucket != 0 {
+            return true;
+        }
+        if self.slot & !MULTI_ABSENT == ABSENT_RECEIVERS {
+            return false;
+        }
+        *bucket = shape;
+        self.slot += 1;
+        true
     }
 }
 
@@ -139,35 +235,12 @@ fn hop_identity_pins_link(pid: u64) -> bool {
         || (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid)
 }
 
-/// The current link from an intermediate hop, computed by the same admitted
-/// shape/prototype rule the prime walk used. A changed or exotic link declines.
-unsafe fn admitted_next(hop: *const ObjectHeader) -> Option<usize> {
-    let pid = shape_proto_id(object_shape_stamp(hop))?;
-    let (stated, word) = super::stated_link(hop);
-    if stated != pid {
-        return None;
-    }
-    if !(pid == PROTO_ID_DEFAULT
-        || pid == PROTO_ID_NULL
-        || (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid)
-        || (pid < crate::object::shapes::PROTO_ID_CLASS && pid != PROTO_ID_DEFAULT))
-    {
-        return None;
-    }
-    let next = if pid == PROTO_ID_DEFAULT {
-        crate::array::object_prototype_addr_if_resolved()
-    } else if pid == PROTO_ID_NULL {
-        0
-    } else {
-        super::next_from_word(hop, word) as usize
-    };
-    (next != 0).then_some(next)
-}
-
 unsafe fn answer(e: &mut Entry, recv: *const ObjectHeader) -> Option<u64> {
     if e.token == 0
-        || e.class_id != (*recv).class_id
-        || e.token != (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64
+        || !e.matches_receiver(
+            (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64,
+            (*recv).class_id,
+        )
     {
         return None;
     }
@@ -179,26 +252,7 @@ unsafe fn answer(e: &mut Entry, recv: *const ObjectHeader) -> Option<u64> {
         }
         e.generation = generation;
     }
-    if e.pinned_hops {
-        return pinned_answer(e);
-    }
-    let mut previous = 0usize;
-    for (i, &(addr, shape)) in e.hops().iter().enumerate() {
-        if addr == 0 || shape_word(addr) != shape {
-            return None;
-        }
-        if i != 0 && admitted_next(previous as *const ObjectHeader)? != addr {
-            return None;
-        }
-        previous = addr;
-    }
-    if previous != 0 && admitted_next(previous as *const ObjectHeader)? != e.holder {
-        return None;
-    }
-    if e.holder == 0 || shape_word(e.holder) != e.holder_shape {
-        return None;
-    }
-    value_of(e)
+    pinned_answer(e)
 }
 
 /// The entry's answer once the receiver and its direct link are proved: the
@@ -251,13 +305,23 @@ pub(super) unsafe fn leaf_answer(
     let s = site(c)?;
     let generation = crate::object::class_lookup_surface_generation();
     let class_id = (*recv).class_id;
-    for e in &s.entries {
-        if e.token == token && e.class_id == class_id && e.generation == generation && e.pinned_hops
-        {
-            return pinned_answer(e);
-        }
-    }
-    None
+    let entry = s
+        .entries
+        .iter()
+        .find(|e| e.token == token && e.class_id == class_id && e.generation == generation)
+        .or_else(|| {
+            let mut shared = (s.next >> CURSOR_BITS) & SHARED_MASK;
+            while shared != 0 {
+                let i = shared.trailing_zeros() as usize;
+                shared &= shared - 1;
+                let e = s.entries.get_unchecked(i);
+                if e.matches_receiver(token, class_id) && e.generation == generation {
+                    return Some(e);
+                }
+            }
+            None
+        })?;
+    pinned_answer(entry)
 }
 
 /// A class entry is served on the collecting miss path only. The GC-leaf
@@ -277,14 +341,27 @@ pub(super) unsafe fn try_hit(
         return None;
     }
     let s = site(&*cache)? as *const Site as *mut Site;
-    for e in &mut (*s).entries {
-        if let Some(bits) = answer(e, recv) {
-            HITS.fetch_add(1, Ordering::Relaxed);
-            super::super::stats_report_enabled();
-            return Some(crate::value::JSValue::from_bits(bits));
-        }
-    }
-    None
+    let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
+    let class_id = (*recv).class_id;
+    let mut shared = ((*s).next >> CURSOR_BITS) & SHARED_MASK;
+    let bits = (*s)
+        .entries
+        .iter_mut()
+        .filter(|e| e.token == token && e.class_id == class_id)
+        .find_map(|e| answer(e, recv))
+        .or_else(|| {
+            while shared != 0 {
+                let i = shared.trailing_zeros() as usize;
+                shared &= shared - 1;
+                if let Some(bits) = answer((*s).entries.get_unchecked_mut(i), recv) {
+                    return Some(bits);
+                }
+            }
+            None
+        })?;
+    HITS.fetch_add(1, Ordering::Relaxed);
+    super::super::stats_report_enabled();
+    Some(crate::value::JSValue::from_bits(bits))
 }
 
 /// May the site prime a class entry? (Its class entries have not latched.)
@@ -418,30 +495,108 @@ pub(super) unsafe fn accessor_hops_match(c: &PicCache) -> bool {
             .all(|&(addr, shape)| addr != 0 && shape_word(addr) == shape)
 }
 
+#[optimize(size)]
+#[cold]
+#[inline(never)]
 unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
+    let walked = &w.hops[..w.depth.saturating_sub(1)];
+    // walk_to admits serial/default/null/MIXED identities for every
+    // intermediate hop. Refuse any unproved link before publication, so
+    // all hits use the same per-hop shape validation.
+    if !walked
+        .iter()
+        .all(|&(_, shape)| shape_proto_id(shape).is_some_and(hop_identity_pins_link))
+    {
+        return;
+    }
     let s = site_mut(cache);
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
+    // Preserve primary-token ways while the working set fits. Promotion
+    // starts at capacity and retires compatible singles into the shared way.
+    if w.slot.is_none() && (s.entries[WAYS - 1].token != 0 || s.next >> CURSOR_BITS != 0) {
+        let pid = shape_proto_id(token as u32);
+        let mut extended = None;
+        for (i, e) in s.entries.iter_mut().enumerate() {
+            // A generation re-proof must apply to every receiver in the
+            // set: equal prototype identities and class ids make their
+            // direct link the same. Equal terminals alone are insufficient.
+            if e.token != 0
+                && e.absent
+                && e.class_id == (*recv).class_id
+                && e.depth as usize == w.depth
+                && e.holder == w.holder
+                && e.holder_shape == w.holder_shape
+                && e.generation == crate::object::class_lookup_surface_generation()
+                && pid.is_some()
+                && shape_proto_id(e.token as u32) == pid
+                && e.hops() == walked
+                && e.add_receiver(token as u32)
+            {
+                extended = Some(i);
+                break;
+            }
+        }
+        if let Some(i) = extended {
+            // Receiver ids move into the owned set; old hop allocations
+            // cease to be roots only after that shared proof is established.
+            for j in 0..WAYS {
+                if i == j {
+                    continue;
+                }
+                let other = s.entries[j];
+                let group = &mut s.entries[i];
+                if other.token != 0
+                    && other.absent
+                    && !other.multi_absent()
+                    && other.class_id == group.class_id
+                    && other.depth == group.depth
+                    && other.holder == group.holder
+                    && other.holder_shape == group.holder_shape
+                    && other.generation == group.generation
+                    && shape_proto_id(other.token as u32) == pid
+                    && other.hops() == group.hops()
+                    && group.add_receiver(other.token as u32)
+                {
+                    other.drop_block();
+                    s.entries[j] = EMPTY;
+                    s.next &= !(1 << (j as u32 + CURSOR_BITS));
+                }
+            }
+            s.next |= 1 << (i as u32 + CURSOR_BITS);
+            return;
+        }
+    }
     let index = s
         .entries
         .iter()
         .position(|e| e.token == token && e.class_id == (*recv).class_id)
+        .or_else(|| {
+            let mut shared = (s.next >> CURSOR_BITS) & SHARED_MASK;
+            while shared != 0 {
+                let i = shared.trailing_zeros() as usize;
+                shared &= shared - 1;
+                if s.entries
+                    .get_unchecked(i)
+                    .matches_receiver(token, (*recv).class_id)
+                {
+                    return Some(i);
+                }
+            }
+            None
+        })
+        .or_else(|| s.entries.iter().position(|e| e.token == 0))
         .unwrap_or_else(|| {
-            let i = s.next;
-            s.next = (s.next + 1) % WAYS;
+            let i = s.next & CURSOR_MASK;
+            s.next = (s.next & !CURSOR_MASK) | ((i + 1) & CURSOR_MASK);
             i
         });
-    let walked = &w.hops[..w.depth.saturating_sub(1)];
-    let pinned_hops = walked
-        .iter()
-        .all(|&(_, shape)| shape_proto_id(shape).is_some_and(hop_identity_pins_link));
+    s.next &= !(1 << (index as u32 + CURSOR_BITS));
     // The way's previous block is reused for a chain of the same depth and
     // freed otherwise; the entry written below is its only owner.
     let old = &s.entries[index];
     let mut hops = old.hops;
-    if old.hops().len() != walked.len() {
-        if !hops.is_null() {
-            drop(Box::from_raw(hop_block(hops, old.depth) as *mut [Hop]));
-        }
+    if old.block_len() != walked.len() {
+        old.drop_block();
         hops = if walked.is_empty() {
             std::ptr::null_mut()
         } else {
@@ -460,7 +615,6 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
         holder_shape: w.holder_shape,
         hops,
         generation: crate::object::class_lookup_surface_generation(),
-        pinned_hops,
     };
     PRIMES.fetch_add(1, Ordering::Relaxed);
     super::super::stats_report_enabled();
@@ -495,6 +649,387 @@ pub(super) fn scan_roots(c: &mut PicCache, visitor: &mut crate::gc::RuntimeRootV
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pinned_shape(generation: u64) -> u32 {
+        crate::object::shapes::shape_descriptor_ensure_with_generation(
+            std::ptr::null(),
+            0,
+            0,
+            generation,
+            crate::object::shapes::ShapeObjectKind::Ordinary,
+            PROTO_ID_DEFAULT,
+            crate::object::shapes::ReceiverFacts::NONE,
+        )
+        .expect("pinned hop shape")
+    }
+
+    fn receiver_shape(class_id: u32, generation: u64) -> u32 {
+        crate::object::shapes::shape_descriptor_ensure_with_generation(
+            std::ptr::null(),
+            0,
+            0,
+            generation,
+            crate::object::shapes::ShapeObjectKind::Ordinary,
+            PROTO_ID_CLASS | u64::from(class_id),
+            crate::object::shapes::ReceiverFacts::NONE,
+        )
+        .expect("receiver shape")
+    }
+
+    #[test]
+    fn primary_ways_stay_single_until_capacity() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "primary_ways_stay_single_until_capacity",
+        ) {
+            return;
+        }
+        const CID: u32 = 0x0C3C_89A1;
+        let terminal = shaped(pinned_shape(40_000));
+        let mut receivers: Vec<_> = (0..WAYS + 1)
+            .map(|i| {
+                let mut r = shaped(receiver_shape(CID, 40_001 + i as u64));
+                r.class_id = CID;
+                r
+            })
+            .collect();
+        let w = Walk {
+            holder: &*terminal as *const ObjectHeader as usize,
+            holder_shape: terminal.parent_class_id,
+            slot: None,
+            hops: NO_HOPS,
+            depth: 1,
+            getter: 0,
+        };
+        let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
+        cache[HOLDER_STATE] = STATE_REGISTERED;
+        for r in &mut receivers[..WAYS] {
+            unsafe { publish(&mut cache, &**r, &w) };
+        }
+        let s = unsafe { site(&cache).unwrap() };
+        assert_eq!(s.entries.iter().filter(|e| e.token != 0).count(), WAYS);
+        assert!(s.entries.iter().all(|e| !e.multi_absent()));
+        assert_eq!(s.next >> CURSOR_BITS, 0);
+        unsafe { publish(&mut cache, &*receivers[WAYS], &w) };
+        let s = unsafe { site(&cache).unwrap() };
+        assert_eq!(s.entries.iter().filter(|e| e.token != 0).count(), 1);
+        assert_eq!(s.entries[0].slot & !MULTI_ABSENT, (WAYS + 1) as u32);
+        assert_eq!(s.next >> CURSOR_BITS, 1);
+        for r in &receivers {
+            let token = (u64::from(r.parent_class_id) | PIC_ID_TOKEN_BIT) as i64;
+            assert_eq!(
+                unsafe { leaf_answer(&cache, &**r, token) },
+                Some(crate::value::TAG_UNDEFINED)
+            );
+        }
+        let record = (cache[SITE_WORD] as u64 & crate::value::POINTER_MASK) as usize as *mut Site;
+        let data = Walk { slot: Some(0), ..w };
+        let mut fillers = Vec::new();
+        for i in 1..WAYS {
+            let cid = CID + i as u32;
+            let mut r = shaped(receiver_shape(cid, 41_000 + i as u64));
+            r.class_id = cid;
+            unsafe { publish(&mut cache, &*r, &data) };
+            fillers.push(r);
+        }
+        // Fill reclaimed ways with unrelated data proofs, then replace a
+        // data way. Advancing the cursor must retain the shared-way bits.
+        unsafe { (*record).next = ((*record).next & !CURSOR_MASK) | 1 };
+        let cid = CID + WAYS as u32;
+        let mut extra = shaped(receiver_shape(cid, 42_000));
+        extra.class_id = cid;
+        unsafe { publish(&mut cache, &*extra, &data) };
+        assert_eq!(unsafe { (*record).next } >> CURSOR_BITS, 1);
+        for r in &receivers {
+            let token = (u64::from(r.parent_class_id) | PIC_ID_TOKEN_BIT) as i64;
+            assert_eq!(
+                unsafe { leaf_answer(&cache, &**r, token) },
+                Some(crate::value::TAG_UNDEFINED)
+            );
+        }
+        unsafe { (*record).entries[0].drop_block() };
+        unsafe { drop(Box::from_raw(record)) };
+    }
+
+    /// At capacity, 96 receiver shapes coalesce into ONE way. Every guard
+    /// remains necessary and only its chain prefix is enumerated as roots.
+    #[test]
+    fn multi_absent_shares_chain_and_checks_every_shape() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "multi_absent_shares_chain_and_checks_every_shape",
+        ) {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        const CID: u32 = 0x0C3C_7A10;
+        let base = crate::object::shapes::SHAPE_ID_BASE;
+        let chain: Vec<_> = (0..8).map(|i| shaped(pinned_shape(10_000 + i))).collect();
+        let holder = shaped(base + 200);
+        let w = deep_walk(&chain, &holder);
+        let mut receivers: Vec<_> = (1..=96)
+            .map(|i| {
+                let mut r = shaped(receiver_shape(CID, i));
+                r.class_id = CID;
+                r
+            })
+            .collect();
+        let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
+        cache[HOLDER_STATE] = STATE_REGISTERED;
+        let before = stats().0;
+        for r in &receivers {
+            unsafe { publish(&mut cache, &**r, &w) };
+        }
+        let record = (cache[SITE_WORD] as u64 & crate::value::POINTER_MASK) as usize as *mut Site;
+        let s = unsafe { &mut *record };
+        assert_eq!(s.entries.iter().filter(|e| e.token != 0).count(), 1);
+        assert_eq!(stats().0 - before, WAYS as u64);
+        let e = &mut s.entries[0];
+        assert!(e.multi_absent(), "the multi-shape proof must be exercised");
+        assert_eq!(unsafe { site(&cache).unwrap().next } >> CURSOR_BITS, 1);
+        assert_eq!(e.slot & !MULTI_ABSENT, 96);
+        assert_eq!(unsafe { e.hops() }.len(), 8);
+        assert_eq!(std::mem::size_of::<Entry>(), 48);
+        // Fake hops are not registered shapes. Exercise the same pinned
+        // shape comparisons the real admitted walk proves.
+        for r in &receivers {
+            let token = (PIC_ID_TOKEN_BIT | u64::from(r.parent_class_id)) as i64;
+            assert_eq!(
+                unsafe { answer(e, &**r) },
+                Some(crate::value::TAG_UNDEFINED)
+            );
+            assert_eq!(
+                unsafe { leaf_answer(&cache, &**r, token) },
+                Some(crate::value::TAG_UNDEFINED),
+            );
+        }
+        let r = &mut *receivers[47];
+        let original = r.parent_class_id;
+        r.parent_class_id = receiver_shape(CID, 1000);
+        let token = (PIC_ID_TOKEN_BIT | u64::from(r.parent_class_id)) as i64;
+        assert_eq!(
+            unsafe { answer(e, r) },
+            None,
+            "an own add/getter/relink restamps"
+        );
+        assert_eq!(unsafe { leaf_answer(&cache, r, token) }, None);
+        r.parent_class_id = original;
+        let token = (PIC_ID_TOKEN_BIT | u64::from(original)) as i64;
+        for (i, hop) in chain.iter().enumerate() {
+            let ptr = &**hop as *const ObjectHeader as *mut ObjectHeader;
+            let original = unsafe { (*ptr).parent_class_id };
+            unsafe { (*ptr).parent_class_id = base + 500 };
+            assert_eq!(unsafe { answer(e, r) }, None, "hop {i} changed");
+            assert_eq!(
+                unsafe { leaf_answer(&cache, r, token) },
+                None,
+                "leaf hop {i}"
+            );
+            unsafe { (*ptr).parent_class_id = original };
+        }
+        let ptr = &*holder as *const ObjectHeader as *mut ObjectHeader;
+        unsafe { (*ptr).parent_class_id = base + 501 };
+        assert_eq!(unsafe { answer(e, r) }, None, "terminal changed");
+        assert_eq!(unsafe { leaf_answer(&cache, r, token) }, None);
+        unsafe { (*ptr).parent_class_id = base + 200 };
+        let mut seen = Vec::new();
+        let mut mark = |v: f64| seen.push(v.to_bits() & crate::value::POINTER_MASK);
+        scan_roots(
+            &mut cache,
+            &mut crate::gc::RuntimeRootVisitor::for_copy(&mut mark),
+        );
+        assert_eq!(
+            seen.len(),
+            9,
+            "receiver ids must not be visited as pointers"
+        );
+        for hop in &chain {
+            assert!(seen.contains(&((&**hop as *const ObjectHeader) as u64)));
+        }
+        assert!(seen.contains(&((&*holder as *const ObjectHeader) as u64)));
+        // A new chain for a member replaces the owned group allocation.
+        let short = deep_walk(&chain[..1], &holder);
+        unsafe { publish(&mut cache, r, &short) };
+        assert_eq!(s.entries[0].depth, 2);
+        assert!(!s.entries[0].multi_absent());
+        assert_eq!(s.next >> CURSOR_BITS, 0);
+        unsafe { s.entries[0].drop_block() };
+        unsafe { drop(Box::from_raw(record)) };
+    }
+
+    #[test]
+    fn multi_absent_bound_and_prototype_identity_are_enforced() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "multi_absent_bound_and_prototype_identity_are_enforced",
+        ) {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        const CID: u32 = 0x0C3C_7A11;
+        let base = crate::object::shapes::SHAPE_ID_BASE;
+        let holder = shaped(base + 200);
+        let w = deep_walk(&[], &holder);
+        let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
+        cache[HOLDER_STATE] = STATE_REGISTERED;
+        let receivers: Vec<_> = (1..=ABSENT_RECEIVERS + 5)
+            .map(|i| {
+                let mut r = shaped(receiver_shape(CID, u64::from(i)));
+                r.class_id = CID;
+                r
+            })
+            .collect();
+        for r in &receivers {
+            unsafe { publish(&mut cache, &**r, &w) };
+        }
+        let record = (cache[SITE_WORD] as u64 & crate::value::POINTER_MASK) as usize as *mut Site;
+        let s = unsafe { &mut *record };
+        assert_eq!(s.entries.iter().filter(|e| e.token != 0).count(), 2);
+        assert_eq!(s.entries[0].slot & !MULTI_ABSENT, ABSENT_RECEIVERS);
+        // The class id and terminal alone do not prove a common direct link.
+        let shape = crate::object::shapes::shape_descriptor_ensure_with_generation(
+            std::ptr::null(),
+            0,
+            0,
+            2000,
+            crate::object::shapes::ShapeObjectKind::Ordinary,
+            PROTO_ID_MIXED | u64::from(CID),
+            crate::object::shapes::ReceiverFacts::NONE,
+        )
+        .unwrap();
+        let mut other = shaped(shape);
+        other.class_id = CID;
+        unsafe { publish(&mut cache, &*other, &w) };
+        assert_eq!(s.entries.iter().filter(|e| e.token != 0).count(), 3);
+        for r in &receivers {
+            let token = (PIC_ID_TOKEN_BIT | u64::from(r.parent_class_id)) as i64;
+            assert!(s
+                .entries
+                .iter()
+                .any(|e| unsafe { e.matches_receiver(token, CID) }));
+        }
+        for e in &s.entries {
+            unsafe { e.drop_block() };
+        }
+        unsafe { drop(Box::from_raw(record)) };
+    }
+
+    #[test]
+    fn multi_absent_reproves_shared_class_link_after_generation_change() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "multi_absent_reproves_shared_class_link_after_generation_change",
+        ) {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        // Real GC headers are required by stated_link; keep this fixture
+        // in a no-move scope while its raw receiver vector is constructed.
+        let _no_move = crate::gc::GcSuppressScope::new();
+        const CID: u32 = 0x0C3C_7A12;
+        const PROTO_CID: u32 = 0x0C3C_7A13;
+        let keys = crate::object::js_build_class_keys_array(PROTO_CID, 1, b"marker".as_ptr(), 6, 0);
+        let shape = crate::object::shapes::js_object_shape_id_for_class_keys(
+            keys as usize as u64,
+            1,
+            PROTO_CID,
+            0,
+        );
+        let a = crate::object::js_object_alloc_class_inline_keys_stamped(
+            PROTO_CID, 0, 1, keys, shape, 0,
+        );
+        crate::object::class_decl_prototype_object_root_store(CID, a);
+        let b = crate::object::js_object_alloc_class_inline_keys_stamped(
+            PROTO_CID, 0, 1, keys, shape, 0,
+        );
+        let a = crate::object::class_decl_prototype_object(CID);
+        assert_ne!(a, b);
+        assert_eq!(unsafe { object_shape_stamp(a) }, unsafe {
+            object_shape_stamp(b)
+        });
+        let receivers: Vec<_> = (1..=24)
+            .map(|i| {
+                let name = (0..i)
+                    .map(|n| format!("own{n}"))
+                    .collect::<Vec<_>>()
+                    .join("\0");
+                let keys = crate::object::js_build_class_keys_array(
+                    CID,
+                    i,
+                    name.as_ptr(),
+                    name.len() as u32,
+                    0,
+                );
+                let shape = crate::object::shapes::js_object_shape_id_for_class_keys(
+                    keys as usize as u64,
+                    i,
+                    CID,
+                    0,
+                );
+                crate::object::js_object_alloc_class_inline_keys_stamped(CID, 0, i, keys, shape, 0)
+            })
+            .collect();
+        let w = Walk {
+            holder: a as usize,
+            holder_shape: unsafe { object_shape_stamp(a) },
+            slot: None,
+            hops: NO_HOPS,
+            depth: 1,
+            getter: 0,
+        };
+        let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
+        cache[HOLDER_STATE] = STATE_REGISTERED;
+        for r in &receivers {
+            assert_eq!(unsafe { class_link(*r) }, Some(a as *const ObjectHeader));
+            unsafe { publish(&mut cache, *r, &w) };
+        }
+        let record = (cache[SITE_WORD] as u64 & crate::value::POINTER_MASK) as usize as *mut Site;
+        let e = unsafe { &mut (*record).entries[0] };
+        assert!(e.multi_absent());
+        assert_eq!(e.slot & !MULTI_ABSENT, 24);
+        crate::object::class_registry::class_lookup_surface_gen_bump();
+        for r in &receivers {
+            let token = (PIC_ID_TOKEN_BIT | u64::from(unsafe { object_shape_stamp(*r) })) as i64;
+            assert_eq!(unsafe { leaf_answer(&cache, *r, token) }, None);
+        }
+        assert_eq!(
+            unsafe { answer(e, receivers[5]) },
+            Some(crate::value::TAG_UNDEFINED)
+        );
+        // A same-identity generation re-proof covers the whole set.
+        for r in &receivers {
+            let token = (PIC_ID_TOKEN_BIT | u64::from(unsafe { object_shape_stamp(*r) })) as i64;
+            assert_eq!(
+                unsafe { leaf_answer(&cache, *r, token) },
+                Some(crate::value::TAG_UNDEFINED)
+            );
+        }
+        crate::object::class_decl_prototype_object_root_store(CID, b);
+        for r in &receivers {
+            let token = (PIC_ID_TOKEN_BIT | u64::from(unsafe { object_shape_stamp(*r) })) as i64;
+            assert_eq!(unsafe { leaf_answer(&cache, *r, token) }, None);
+            assert_eq!(unsafe { answer(e, *r) }, None);
+        }
+        unsafe { e.drop_block() };
+        unsafe { drop(Box::from_raw(record)) };
+    }
+
+    #[test]
+    fn unpinned_hop_is_not_published() {
+        if !crate::object::method_site::run_with_fresh_worker_gate("unpinned_hop_is_not_published")
+        {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        const CID: u32 = 0x0C3C_7A14;
+        let recv = shaped(receiver_shape(CID, 1));
+        let chain = vec![shaped(receiver_shape(CID, 2))];
+        let holder = shaped(pinned_shape(30_000));
+        let w = deep_walk(&chain, &holder);
+        let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
+        cache[HOLDER_STATE] = STATE_REGISTERED;
+        unsafe { publish(&mut cache, &*recv, &w) };
+        assert!(
+            unsafe { site(&cache) }.is_none(),
+            "a bare CLASS hop cannot pin the next prototype by shape"
+        );
+    }
 
     /// Fake objects whose only meaningful word is their ShapeId.
     fn shaped(shape: u32) -> Box<ObjectHeader> {
@@ -534,7 +1069,7 @@ mod tests {
         let base = crate::object::shapes::SHAPE_ID_BASE;
         let recv = shaped(base + 1);
         let chain: Vec<Box<ObjectHeader>> = (0..CLASS_READ_MAX_DEPTH as u32 - 1)
-            .map(|i| shaped(base + 10 + i))
+            .map(|i| shaped(pinned_shape(20_000 + u64::from(i))))
             .collect();
         let holder = shaped(base + 200);
         let w = deep_walk(&chain, &holder);
@@ -552,10 +1087,9 @@ mod tests {
             CLASS_READ_MAX_DEPTH - 1,
             "a deep chain's block holds every hop"
         );
-        // These fake hops carry no registered prototype identity; the hop
-        // compares below are what a pinned entry's answer runs.
+        // Fake headers carry admitted shape descriptors; the comparison
+        // checks below exercise every shape the real walk records.
         let mut e = *e;
-        e.pinned_hops = true;
         e.generation = crate::object::class_lookup_surface_generation();
         assert_eq!(
             unsafe { pinned_answer(&e) },
@@ -569,9 +1103,10 @@ mod tests {
             CLASS_READ_MAX_DEPTH - 2,
         ] {
             let hop = &*chain[i] as *const ObjectHeader as *mut ObjectHeader;
+            let original = unsafe { (*hop).parent_class_id };
             unsafe { (*hop).parent_class_id = base + 300 };
             assert_eq!(unsafe { pinned_answer(&e) }, None, "hop {i} moved");
-            unsafe { (*hop).parent_class_id = base + 10 + i as u32 };
+            unsafe { (*hop).parent_class_id = original };
         }
         // The root scan visits every hop, the deepest too.
         let deepest = (&*chain[CLASS_READ_MAX_DEPTH - 2] as *const ObjectHeader) as usize;
@@ -668,7 +1203,6 @@ mod tests {
             holder_shape: proto_shape,
             hops: std::ptr::null_mut(),
             generation: 0,
-            pinned_hops: true,
         };
         assert_eq!(
             unsafe { answer(&mut entry, recv) },
