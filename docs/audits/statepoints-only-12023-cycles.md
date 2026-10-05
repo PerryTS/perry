@@ -113,3 +113,5 @@ These complete tsc on-mode pairs are diagnostic only. Neither campaign reached 1
 |---|---:|---:|---:|---:|---:|
 | original arms | 1 | 11,673,908,170 → 11,579,086,935 | 2.5895 → 2.6085 | 258,040,393 → 251,713,182 | 1 → 1 |
 | pinned main | 1 | 11,322,121,905 → 11,301,745,763 | 2.6220 → 2.6237 | 258,902,669 → 267,984,731 | 1 → 1 |
+
+Quiet-arm64 follow-up: [disk stop, hello relocation measurements and remaining acceptance items](statepoints-only-12023-arm64.md).
