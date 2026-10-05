@@ -126,7 +126,7 @@ pub fn namespace_member_func_key(namespace: &str, member: &str) -> String {
 /// A read site's class-getter arm and a store site's class-setter arm can only
 /// ever take an entry for a name some compiled class declares as that kind of
 /// accessor: the runtime admits an entry only when the receiver's class chain
-/// declares the accessor (`class_chain_has_instance_accessor`). A site whose
+/// declares the getter name. A site whose
 /// name no class declares therefore emits no arm; it misses to the runtime as
 /// before the arm existed, which still asks the same entry first.
 #[derive(Debug, Clone, Default)]

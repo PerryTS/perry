@@ -21,12 +21,13 @@
 //! The one input that is NOT a property of `S` is whether the prototype chain
 //! intercepts the write (an inherited setter, an inherited non-writable data
 //! property). That verdict is the inherited-access lane's
-//! (`object::chain_store`): every prototype hop AND every class id of the
-//! chain is MARKED before the verdict is computed, so any later change that
-//! could flip it moves the one global word `proto_validity`. The guard word
+//! (`object::chain_store`): every prototype hop is MARKED before the verdict
+//! is computed, so any later property change that could flip it moves the
+//! one global word `proto_validity`. Class accessors are properties of those
+//! same holders. The guard word
 //! records it, read after the marking and before the predicate, and the
 //! emitted hit re-proves the verdict with one load and one compare. Evaluating
-//! or registering a class moves nothing unless a verdict walked that class. The prototype the verdict walked is the one
+//! a class moves nothing unless it installs on a marked holder. The prototype the verdict walked is the one
 //! the receiver's SHAPE names, because the pre-shape compare is what admitted
 //! the receiver.
 //!
@@ -765,10 +766,6 @@ pub(crate) unsafe fn packed_add_prime(
     } else {
         class_id
     };
-    // The class side of the chain, marked like its prototype objects: an
-    // accessor registered for any of these classes from now on moves the
-    // generation this memo records.
-    crate::object::chain_store::mark_verdict_class_chain(verdict_class);
     let generation = add_generation();
     if crate::object::class_instance_set_may_intercept(recv, verdict_class, key_h.get_nanbox_f64())
     {

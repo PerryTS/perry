@@ -99,6 +99,8 @@ unsafe fn hop_block<'a>(hops: *mut Hop, depth: u8) -> &'a mut [Hop] {
 struct Site {
     entries: [Entry; WAYS],
     next: usize,
+    accessor_hops: [(usize, u32); HOLDER_MAX_DEPTH - 1],
+    accessor_depth: usize,
 }
 
 per_test_global! {
@@ -202,7 +204,9 @@ unsafe fn answer(e: &mut Entry, recv: *const ObjectHeader) -> Option<u64> {
 /// The entry's answer once the receiver and its direct link are proved: the
 /// hops and the holder by ShapeId alone (the entry's hops all record pinning
 /// identities), as `entry_answer_other` proves a site's own deep entry.
-#[inline]
+// Keep this in the leaf caller: outlining it makes that caller preserve
+// extra registers even when an ordinary data holder answers before this arm.
+#[inline(always)]
 unsafe fn pinned_answer(e: &Entry) -> Option<u64> {
     for &(addr, shape) in e.hops() {
         if addr == 0 || shape_word(addr) != shape {
@@ -353,17 +357,19 @@ pub(super) unsafe fn prime(
     })
 }
 
-unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
+unsafe fn site_mut(cache: *mut PicCache) -> &'static mut Site {
     let c = &mut *cache;
     // Other PIC users may leave scratch data in word 2. Only a marker that
     // we published together with a tagged pointer grants dereference rights.
     let tagged = c[SITE_WORD] as u64;
     let has_site =
         c[HOLDER_STATE] & STATE_CLASS_SITE != 0 && tagged & !crate::value::POINTER_MASK == SITE_TAG;
-    let s = if !has_site {
+    if !has_site {
         let new = Box::into_raw(Box::new(Site {
             entries: [EMPTY; WAYS],
             next: 0,
+            accessor_hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+            accessor_depth: 0,
         }));
         if c[HOLDER_STATE] & STATE_REGISTERED == 0 {
             let mut sites = HOLDER_SITES
@@ -379,7 +385,41 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
         &mut *new
     } else {
         &mut *((c[SITE_WORD] as u64 & crate::value::POINTER_MASK) as usize as *mut Site)
+    }
+}
+
+pub(super) unsafe fn clear_accessor_hops(c: &PicCache) {
+    let word = c[SITE_WORD] as u64;
+    if c[HOLDER_STATE] & STATE_CLASS_SITE == 0 || word & !crate::value::POINTER_MASK != SITE_TAG {
+        return;
+    }
+    let s = (word & crate::value::POINTER_MASK) as usize as *mut Site;
+    (*s).accessor_depth = 0;
+    (*s).accessor_hops = [(0, 0); HOLDER_MAX_DEPTH - 1];
+}
+
+pub(super) unsafe fn publish_accessor_hops(
+    cache: *mut PicCache,
+    hops: &[(usize, u32); HOLDER_MAX_DEPTH - 1],
+    depth: usize,
+) {
+    let s = site_mut(cache);
+    s.accessor_hops = *hops;
+    s.accessor_depth = depth;
+}
+
+pub(super) unsafe fn accessor_hops_match(c: &PicCache) -> bool {
+    let Some(s) = site(c) else {
+        return false;
     };
+    s.accessor_depth != 0
+        && s.accessor_hops[..s.accessor_depth]
+            .iter()
+            .all(|&(addr, shape)| addr != 0 && shape_word(addr) == shape)
+}
+
+unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
+    let s = site_mut(cache);
     let token = (u64::from(object_shape_stamp(recv)) | PIC_ID_TOKEN_BIT) as i64;
     let index = s
         .entries
@@ -434,6 +474,9 @@ pub(super) fn scan_roots(c: &mut PicCache, visitor: &mut crate::gc::RuntimeRootV
         return;
     }
     let s = unsafe { &mut *((word & crate::value::POINTER_MASK) as usize as *mut Site) };
+    for (addr, _) in &mut s.accessor_hops[..s.accessor_depth] {
+        visitor.visit_tagged_usize_slot(addr, crate::value::POINTER_TAG);
+    }
     for e in &mut s.entries {
         if e.token == 0 {
             continue;
@@ -667,6 +710,8 @@ mod tests {
         let record = Box::into_raw(Box::new(Site {
             entries: [entry; WAYS],
             next: 0,
+            accessor_hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+            accessor_depth: 0,
         }));
         let mut cache = [0i64; crate::object::PIC_CACHE_WORDS];
         cache[SITE_WORD] = (SITE_TAG | record as usize as u64) as i64;

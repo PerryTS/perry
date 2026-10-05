@@ -1792,7 +1792,7 @@ fn typed_feedback_class_field_set_guard_retires_packed_numeric_proof_for_tagged_
 }
 
 #[test]
-fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
+fn typed_feedback_class_field_set_guard_own_data_shadows_class_setter() {
     let _guard = typed_feedback_test_lock();
     reset_typed_feedback_for_tests();
     CLASS_FIELD_SETTER_CALLS.store(0, std::sync::atomic::Ordering::SeqCst);
@@ -1823,8 +1823,7 @@ fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
         7.0,
         0,
     );
-    assert_eq!(guard, 0);
-    js_typed_feedback_record_fallback_call(32);
+    assert_eq!(guard, 1);
     crate::object::js_object_set_field_by_name(obj, key, 7.0);
 
     // OrdinarySet step 1: `O.[[GetOwnProperty]](P)` comes FIRST. This receiver
@@ -1877,9 +1876,9 @@ fn typed_feedback_class_field_set_guard_falls_back_for_class_setter() {
     );
 
     let site = &typed_feedback_snapshot().sites[0];
-    assert_eq!(site.guard_passes, 0);
-    assert_eq!(site.guard_failures, 1);
-    assert_eq!(site.fallback_calls, 1);
+    assert_eq!(site.guard_passes, 1);
+    assert_eq!(site.guard_failures, 0);
+    assert_eq!(site.fallback_calls, 0);
 }
 
 #[test]

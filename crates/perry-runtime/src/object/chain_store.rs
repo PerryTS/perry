@@ -33,11 +33,11 @@
 //!   site whose receiver changes shape at every statement while keeping its
 //!   prototype.
 //! * `key` — the interned key the verdict is about.
-//! * `validity` / `vtable_gen` — the two words that move when anything the
-//!   verdict read changes (below).
+//! * `validity` — the word that moves when a marked prototype the verdict
+//!   read changes (below).
 //!
 //! It never decides anything alone: every use re-reads the receiver's shape,
-//! header flags and the two words, and the append itself goes
+//! header flags and the validity word, and the append itself goes
 //! through the transition lane, which re-validates the receiver's shape. A
 //! mismatch falls through to the unchanged `[[Set]]`. Deleting every entry
 //! costs only speed.
@@ -48,9 +48,9 @@
 //! key)` — the predicate `proxy::ordinary_set_with_receiver` already uses to
 //! decide that a class-instance store is a plain `target_set`. Its inputs:
 //!
-//! 1. a class getter/setter for the key in the class chain
-//!    (`class_chain_has_instance_accessor`) — registered in the vtable, so any
-//!    change bumps `VTABLE_GEN` ([`ChainStoreEntry::vtable_gen`]);
+//! 1. declared class accessors are real properties of their prototypes;
+//!    lazy materialization happens before the verdict, and a later
+//!    registration installs on that marked holder through the stamp funnel;
 //! 2. an accessor or non-writable data property for the key on any prototype
 //!    OBJECT on the chain, including `Object.prototype` — a descriptor install
 //!    or clear, which bumps the semantic property epoch, folded into
@@ -97,7 +97,6 @@ pub(crate) struct ChainStoreEntry {
     key: usize,
     proto_id: u64,
     validity: u64,
-    vtable_gen: u64,
 }
 
 crate::perry_thread_local! {
@@ -361,26 +360,18 @@ pub(crate) unsafe fn chain_store_proven(
     let Some(proto_id) = receiver_proto_id(obj) else {
         return false;
     };
-    proto_id == entry.proto_id
-        && entry.validity == crate::object::proto_validity::proto_validity()
-        && entry.vtable_gen == crate::object::class_registry::vtable_generation()
+    proto_id == entry.proto_id && entry.validity == crate::object::proto_validity::proto_validity()
 }
 
 /// The one word a key-add memo's chain verdict is keyed on: `proto_validity`.
 /// It moves when a MARKED prototype object changes structurally or gains a
-/// descriptor, and when an instance accessor is registered for a class a
-/// verdict walked (`mark_verdict_class_chain`). The memo
+/// descriptor, including an accessor installed by a late class registration.
+/// The memo
 /// (`proxy::put_value::packed_add`) records it; its emitted hit reloads it
 /// from `PERRY_PROTO_VALIDITY`.
 #[inline]
 pub(crate) fn verdict_generation() -> u64 {
     crate::object::proto_validity::proto_validity()
-}
-
-/// Mark `class_id`'s class chain as walked by a verdict, before the verdict's
-/// generation is read (see `class_registry::mark_class_chain_for_verdicts`).
-pub(crate) fn mark_verdict_class_chain(class_id: u32) {
-    crate::object::class_registry::verdict_classes::mark_class_chain_for_verdicts(class_id);
 }
 
 /// Count a store the lane served.
@@ -428,7 +419,7 @@ pub(crate) fn chain_store_hits_this_thread() -> u64 {
 /// Called with the receiver and key RE-READ from the caller's roots. The
 /// predicate may allocate (it can materialize a class prototype object), so
 /// the receiver is rooted across it and its identity is read AFTER it; the
-/// two invalidation words are read BEFORE it, so an event that lands during
+/// invalidation word is read BEFORE it, so an event that lands during
 /// the predicate leaves the entry already stale rather than wrongly current.
 ///
 /// # Safety
@@ -479,7 +470,7 @@ pub(crate) unsafe fn chain_store_prime(
             as *const crate::StringHeader
     };
     // Every object this verdict depends on must be MARKED as a prototype
-    // before the two words are read, so that a later accessor, non-writable
+    // before the validity word is read, so that a later accessor, non-writable
     // property or `delete` on any of them moves `proto_validity`
     // (`proto_validity::mutation_owner_may_be_a_recorded_hop`).
     if !mark_chain_hops(&scope, recv_h.get_nanbox_f64()) {
@@ -487,7 +478,6 @@ pub(crate) unsafe fn chain_store_prime(
         return;
     }
     let validity = crate::object::proto_validity::proto_validity();
-    let vtable_gen = crate::object::class_registry::vtable_generation();
     let class_id = (*(recv_now() as *const crate::ObjectHeader)).class_id;
     let intercepts = crate::object::class_instance_set_may_intercept(
         recv_now(),
@@ -518,7 +508,6 @@ pub(crate) unsafe fn chain_store_prime(
         key: key as usize,
         proto_id,
         validity,
-        vtable_gen,
     };
     let word = *entry_word as usize;
     if word != 0 {

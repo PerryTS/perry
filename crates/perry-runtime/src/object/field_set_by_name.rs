@@ -481,9 +481,6 @@ pub extern "C" fn js_object_set_field_by_name(
                         ) {
                             return;
                         }
-                        if super::class_registry::class_has_instance_getter(class_id, &name) {
-                            return;
-                        }
                     } else if !is_prototype_ref
                         && !has_own_data
                         && super::class_registry::class_static_accessor_setter_apply(
