@@ -3,7 +3,7 @@
 
 use super::{scan_zlib_roots, Statics};
 use perry_ffi::gc_register_mutable_root_scanner_named;
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 
 /// The zlib state of the agent this thread acts for: the main thread's, or a
@@ -38,8 +38,6 @@ pub(crate) fn statics() -> &'static Mutex<Statics> {
                 listeners: HashMap::new(),
                 pending: VecDeque::new(),
                 next_id: 0x60000,
-                buffered_output_bytes: 0,
-                evicted_streams: HashSet::new(),
             })))
         });
     MINE.with(|mine| mine.set(Some((agent, state))));
