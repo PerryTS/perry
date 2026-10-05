@@ -17,7 +17,7 @@
 //! | `proc:env`    | `process.env` read/write (`Expr::ProcessEnv`, `Expr::EnvGet`). |
 //! | `proc:argv`   | `Expr::ProcessArgv`. |
 //! | `proc:exec`   | Every `ChildProcess*` HIR variant + `NativeMethodCall { module: "child_process", … }`. |
-//! | `net:fetch`   | `FetchWithOptions`, `FetchGetWithAuth`, `FetchPostWithAuth`. |
+//! | `net:fetch`   | global fetch calls (including spread), `FetchWithOptions`, `FetchGetWithAuth`, `FetchPostWithAuth`. |
 //! | `net:listen`  | `NetCreateServer`. |
 //! | `net:connect` | `NetCreateConnection`, `NetConnect`. |
 //!
@@ -273,6 +273,11 @@ fn required_capability(expr: &Expr) -> Option<(&'static str, &'static str)> {
         Expr::ChildProcessKillProcess(_) => ("proc:exec", "child_process.killProcess"),
 
         // net:fetch
+        Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }
+            if callee.is_global_fetch_callee() =>
+        {
+            ("net:fetch", "fetch")
+        }
         Expr::FetchWithOptions { .. } => ("net:fetch", "fetch"),
         Expr::FetchGetWithAuth { .. } => ("net:fetch", "fetch (with auth)"),
         Expr::FetchPostWithAuth { .. } => ("net:fetch", "fetch POST (with auth)"),
@@ -509,14 +514,15 @@ mod tests {
     #[test]
     fn fetch_requires_net_fetch() {
         let mut m = empty_module();
-        m.init.push(Stmt::Expr(Expr::FetchWithOptions {
-            url: Box::new(Expr::String("https://x.com/y".into())),
-            method: Box::new(Expr::String("GET".into())),
-            body: Box::new(Expr::Undefined),
-            headers: vec![],
-            headers_dynamic: None,
-            signal: None,
-            redirect: None,
+        m.init.push(Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::GlobalGet(0)),
+                property: "fetch".into(),
+            }),
+            args: vec![Expr::String("https://x.com/y".into()), Expr::Object(vec![])],
+            type_args: vec![],
+            byte_offset: 0,
         }));
         let v = audit_module_capabilities(
             &m,

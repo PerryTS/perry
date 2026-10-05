@@ -1,28 +1,44 @@
-//! Regression coverage for #10474: RequestInit.redirect must survive AST to
-//! HIR lowering so native codegen can select follow, manual, or error behavior.
-
+//! RequestInit.redirect remains part of the complete evaluated init (#10474).
 use perry_diagnostics::SourceCache;
-use perry_hir::{lower_module, Expr};
+use perry_hir::{lower_module, Expr, Stmt};
 use perry_parser::parse_typescript_with_cache;
 
-fn lower_src(src: &str) -> anyhow::Result<perry_hir::Module> {
+fn redirect(src: &str) -> Option<Expr> {
     let mut cache = SourceCache::new();
-    let parsed = parse_typescript_with_cache(src, "fetch_redirect.ts", &mut cache)?;
-    lower_module(&parsed.module, "test", "fetch_redirect.ts")
-}
-
-fn redirect_expr(module: &perry_hir::Module) -> Option<Expr> {
-    fn walk(expr: &Expr, found: &mut Option<Expr>) {
-        if let Expr::FetchWithOptions { redirect, .. } = expr {
-            *found = redirect.as_deref().cloned();
-        }
-        perry_hir::walker::walk_expr_children(expr, &mut |child| walk(child, found));
-    }
-
+    let parsed = parse_typescript_with_cache(src, "redirect.ts", &mut cache).unwrap();
+    let module = lower_module(&parsed.module, "test", "redirect.ts").unwrap();
     let mut found = None;
+    fn walk(expr: &Expr, module: &perry_hir::Module, found: &mut Option<Expr>) {
+        if let Expr::Call { callee, args, .. } = expr {
+            if callee.is_global_fetch_callee() {
+                *found = match args.get(1) {
+                    Some(Expr::Object(fields)) => fields
+                        .iter()
+                        .find(|(key, _)| key == "redirect")
+                        .map(|(_, value)| value.clone()),
+                    Some(Expr::New {
+                        class_name, args, ..
+                    }) => module
+                        .classes
+                        .iter()
+                        .find(|class| &class.name == class_name)
+                        .and_then(|class| {
+                            class
+                                .fields
+                                .iter()
+                                .position(|field| field.name == "redirect")
+                        })
+                        .and_then(|index| args.get(index))
+                        .cloned(),
+                    _ => None,
+                };
+            }
+        }
+        perry_hir::walker::walk_expr_children(expr, &mut |child| walk(child, module, found));
+    }
     for stmt in &module.init {
-        if let perry_hir::Stmt::Expr(expr) = stmt {
-            walk(expr, &mut found);
+        if let Stmt::Expr(expr) = stmt {
+            walk(expr, &module, &mut found);
         }
     }
     found
@@ -30,35 +46,15 @@ fn redirect_expr(module: &perry_hir::Module) -> Option<Expr> {
 
 #[test]
 fn redirect_literal_is_preserved() {
-    let module = lower_src(r#"fetch("http://example.test/start", { redirect: "manual" });"#)
-        .expect("fetch redirect should lower");
-
-    assert!(matches!(
-        redirect_expr(&module),
-        Some(Expr::String(mode)) if mode == "manual"
-    ));
-}
-
-#[test]
-fn redirect_shorthand_is_preserved() {
-    let module = lower_src(
-        r#"
-        const redirect = "error";
-        fetch("http://example.test/start", { redirect });
-        "#,
-    )
-    .expect("fetch redirect shorthand should lower");
-
     assert!(
-        redirect_expr(&module).is_some(),
-        "shorthand redirect option must remain attached to FetchWithOptions"
+        matches!(redirect(r#"fetch("http://x/", {redirect: "manual"});"#), Some(Expr::String(mode)) if mode == "manual")
     );
 }
-
 #[test]
-fn absent_redirect_lowers_to_none() {
-    let module = lower_src(r#"fetch("http://example.test/start", { method: "GET" });"#)
-        .expect("fetch without redirect should lower");
-
-    assert!(redirect_expr(&module).is_none());
+fn redirect_shorthand_is_preserved() {
+    assert!(redirect(r#"const redirect = "error"; fetch("http://x/", {redirect});"#).is_some());
+}
+#[test]
+fn absent_redirect_stays_absent() {
+    assert!(redirect(r#"fetch("http://x/", {method: "GET"});"#).is_none());
 }

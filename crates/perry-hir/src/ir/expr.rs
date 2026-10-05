@@ -2915,3 +2915,12 @@ pub enum PathWin32Method {
     ToNamespacedPath,
     MatchesGlob,
 }
+
+impl Expr {
+    /// The callable global fetch used by ordinary and spread-call lowering.
+    /// Imported or locally shadowed functions named fetch are not this callee.
+    pub fn is_global_fetch_callee(&self) -> bool {
+        matches!(self, Expr::PropertyGet { object, property, .. }
+            if matches!(object.as_ref(), Expr::GlobalGet(0)) && property == "fetch")
+    }
+}

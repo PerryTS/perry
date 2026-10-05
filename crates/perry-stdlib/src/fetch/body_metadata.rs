@@ -97,11 +97,7 @@ fn is_missing_value(value: f64) -> bool {
 }
 
 pub(super) fn bool_from_js(value: f64) -> bool {
-    match value.to_bits() {
-        TAG_TRUE => true,
-        TAG_FALSE | TAG_NULL | TAG_UNDEFINED => false,
-        _ => value != 0.0,
-    }
+    perry_runtime::value::js_is_truthy(value) != 0
 }
 
 fn default_abort_signal_value() -> f64 {

@@ -1,143 +1,93 @@
-//! Regression test for #4932: `fetch()` dropped request headers when the
-//! `headers` option was a dynamically-built object (a variable, a spread
-//! literal, or a call such as `Object.assign`/`new Headers`/`JSON.parse`).
-//!
-//! Only an object *literal* with plain string/ident keys gets statically
-//! extracted into `FetchWithOptions::headers`. Everything else must be
-//! captured in `FetchWithOptions::headers_dynamic` and serialized at runtime,
-//! otherwise the headers silently vanish.
-
+//! The complete init must reach runtime dictionary conversion, including the
+//! dynamic HeadersInit cases from #4932 and shorthand headers from #11024.
 use perry_diagnostics::SourceCache;
-use perry_hir::{lower_module, Expr};
+use perry_hir::{lower_module, Expr, Stmt};
 use perry_parser::parse_typescript_with_cache;
 
-fn lower_src(src: &str) -> anyhow::Result<perry_hir::Module> {
+fn fetch_args(src: &str) -> (perry_hir::Module, Vec<Expr>) {
     let mut cache = SourceCache::new();
-    let parsed = parse_typescript_with_cache(src, "fetch_dynamic_headers.ts", &mut cache)?;
-    lower_module(&parsed.module, "test", "fetch_dynamic_headers.ts")
-}
-
-/// Locate the single top-level `FetchWithOptions` node and report
-/// `(static_header_pairs, headers_dynamic.is_some())`.
-fn find_fetch(module: &perry_hir::Module) -> (usize, bool) {
-    fn walk(e: &Expr, out: &mut Option<(usize, bool)>) {
-        if let Expr::FetchWithOptions {
-            headers,
-            headers_dynamic,
-            ..
-        } = e
-        {
-            *out = Some((headers.len(), headers_dynamic.is_some()));
+    let parsed = parse_typescript_with_cache(src, "fetch.ts", &mut cache).unwrap();
+    let module = lower_module(&parsed.module, "test", "fetch.ts").unwrap();
+    let mut found = None;
+    fn walk(expr: &Expr, found: &mut Option<Vec<Expr>>) {
+        if let Expr::Call { callee, args, .. } = expr {
+            if callee.is_global_fetch_callee() {
+                *found = Some(args.clone());
+            }
         }
-        perry_hir::walker::walk_expr_children(e, &mut |c| walk(c, out));
+        perry_hir::walker::walk_expr_children(expr, &mut |child| walk(child, found));
     }
-    let mut result = None;
     for stmt in &module.init {
-        if let perry_hir::Stmt::Expr(e) = stmt {
-            walk(e, &mut result);
+        if let Stmt::Expr(expr) = stmt {
+            walk(expr, &mut found);
         }
     }
-    result.unwrap_or_else(|| panic!("no FetchWithOptions found in module: {module:#?}"))
+    (
+        module,
+        found.expect("fetch must use the callable global with its original arguments"),
+    )
+}
+
+fn fields(module: &perry_hir::Module, expr: &Expr) -> Vec<(String, Expr)> {
+    match expr {
+        Expr::Object(fields) => fields.clone(),
+        Expr::New {
+            class_name, args, ..
+        } => {
+            let class = module
+                .classes
+                .iter()
+                .find(|class| &class.name == class_name)
+                .expect("record class");
+            assert!(class_name.starts_with("__AnonShape_"));
+            class
+                .fields
+                .iter()
+                .zip(args)
+                .map(|(field, value)| (field.name.clone(), value.clone()))
+                .collect()
+        }
+        _ => panic!("whole init object missing: {expr:?}"),
+    }
 }
 
 #[test]
-fn literal_headers_are_extracted_statically() {
-    let module = lower_src(
-        r#"fetch("http://x/", { method: "POST", headers: { "Authorization": "Bearer x" }, body: "b" });"#,
-    )
-    .expect("fetch with literal headers should lower");
-
-    let (static_pairs, has_dynamic) = find_fetch(&module);
-    assert_eq!(
-        static_pairs, 1,
-        "literal headers should be extracted statically"
+fn literal_headers_remain_in_the_complete_init() {
+    let (module, args) = fetch_args(
+        r#"fetch("http://x/", {method: "POST", headers: {Authorization: "Bearer x"}, body: "b", keepalive: true});"#,
     );
-    assert!(
-        !has_dynamic,
-        "literal headers must not route through the dynamic path"
-    );
+    assert_eq!(args.len(), 2);
+    let init_fields = fields(&module, &args[1]);
+    assert_eq!(init_fields.len(), 4);
+    let headers = init_fields
+        .iter()
+        .find(|(key, _)| key == "headers")
+        .unwrap();
+    assert_eq!(fields(&module, &headers.1).len(), 1);
 }
 
 #[test]
-fn variable_headers_are_captured_as_dynamic() {
-    let module = lower_src(
-        r#"
-        const h: Record<string, string> = {};
-        h["Authorization"] = "Bearer x";
-        fetch("http://x/", { method: "POST", headers: h, body: "b" });
-        "#,
-    )
-    .expect("fetch with variable headers should lower");
-
-    let (static_pairs, has_dynamic) = find_fetch(&module);
-    assert_eq!(
-        static_pairs, 0,
-        "a variable headers value has no static pairs"
-    );
-    assert!(
-        has_dynamic,
-        "a property-assigned headers object must be captured in headers_dynamic (#4932)"
-    );
+fn dynamic_headers_remain_in_the_complete_init() {
+    for src in [
+        r#"const h = {}; h.Authorization = "Bearer x"; fetch("http://x/", {headers: h});"#,
+        r#"const headers = new Headers({Authorization: "Bearer x"}); fetch("http://x/", {headers});"#,
+        r#"const h = {}; fetch("http://x/", {headers: {...h}});"#,
+        r#"const h = {}; fetch("http://x/", {headers: Object.assign({}, h)});"#,
+    ] {
+        let (module, args) = fetch_args(src);
+        let init_fields = fields(&module, &args[1]);
+        assert_eq!(init_fields.len(), 1);
+        assert_eq!(init_fields[0].0, "headers");
+        assert!(!matches!(init_fields[0].1, Expr::Undefined));
+    }
 }
 
 #[test]
-fn shorthand_headers_are_captured_as_dynamic() {
-    let module = lower_src(
-        r#"
-        const headers = new Headers({ Authorization: "Bearer x" });
-        fetch("http://x/", { method: "POST", headers, body: "b" });
-        "#,
-    )
-    .expect("fetch with shorthand headers should lower");
-
-    let (static_pairs, has_dynamic) = find_fetch(&module);
-    assert_eq!(
-        static_pairs, 0,
-        "a shorthand headers value has no static pairs"
+fn forwarded_init_and_extra_argument_are_retained() {
+    let (_module, args) = fetch_args(
+        r#"const opts = {headers: {Accept: "corgi"}}; fetch("http://x/", opts, console.log("extra"));"#,
     );
-    assert!(
-        has_dynamic,
-        "shorthand headers must be captured in headers_dynamic (#11024)"
-    );
-}
-
-#[test]
-fn spread_literal_headers_are_captured_as_dynamic() {
-    // `{ ...h }` is an object literal, but its spread prop cannot be enumerated
-    // statically, so it must fall back to the runtime path.
-    let module = lower_src(
-        r#"
-        const h: Record<string, string> = {};
-        h["Authorization"] = "Bearer x";
-        fetch("http://x/", { headers: { ...h } });
-        "#,
-    )
-    .expect("fetch with spread headers should lower");
-
-    let (static_pairs, has_dynamic) = find_fetch(&module);
-    assert_eq!(static_pairs, 0);
-    assert!(
-        has_dynamic,
-        "spread-literal headers must be captured in headers_dynamic (#4932)"
-    );
-}
-
-#[test]
-fn call_headers_are_captured_as_dynamic() {
-    // `Object.assign({}, h)` / `JSON.parse(...)` / `new Headers(h)` etc.
-    let module = lower_src(
-        r#"
-        const h: Record<string, string> = {};
-        h["Authorization"] = "Bearer x";
-        fetch("http://x/", { headers: Object.assign({}, h) });
-        "#,
-    )
-    .expect("fetch with computed headers should lower");
-
-    let (static_pairs, has_dynamic) = find_fetch(&module);
-    assert_eq!(static_pairs, 0);
-    assert!(
-        has_dynamic,
-        "call-produced headers must be captured in headers_dynamic (#4932)"
-    );
+    assert_eq!(args.len(), 3);
+    assert!(matches!(args[1], Expr::LocalGet(_)));
+    assert!(!matches!(args[2], Expr::Undefined));
 }

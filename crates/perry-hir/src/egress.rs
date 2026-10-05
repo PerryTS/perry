@@ -219,6 +219,20 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
 
 fn visit_expr(expr: &Expr, ctx: &mut WalkCtx) {
     match expr {
+        Expr::Call { callee, args, .. } if callee.is_global_fetch_callee() => {
+            if let Some(url) = args.first() {
+                check_url(ctx, "fetch", url);
+            }
+        }
+        Expr::CallSpread { callee, args, .. } if callee.is_global_fetch_callee() => {
+            // A leading spread supplies an unknown first argument. A fixed
+            // first operand keeps its literal host proof even with later spreads.
+            let url = match args.first() {
+                Some(crate::CallArg::Expr(url)) => url,
+                _ => &Expr::Undefined,
+            };
+            check_url(ctx, "fetch", url);
+        }
         Expr::FetchWithOptions { url, .. } => check_url(ctx, "fetch", url),
         Expr::FetchGetWithAuth { url, .. } => check_url(ctx, "fetch (with auth)", url),
         Expr::FetchPostWithAuth { url, .. } => check_url(ctx, "fetch POST (with auth)", url),
@@ -483,14 +497,18 @@ mod tests {
     #[test]
     fn fetch_literal_records_violation() {
         let mut m = Module::new("test");
-        m.init.push(Stmt::Expr(Expr::FetchWithOptions {
-            url: Box::new(Expr::String("https://evil.com/x".into())),
-            method: Box::new(Expr::String("GET".into())),
-            body: Box::new(Expr::Undefined),
-            headers: vec![],
-            headers_dynamic: None,
-            signal: None,
-            redirect: None,
+        m.init.push(Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::GlobalGet(0)),
+                property: "fetch".into(),
+            }),
+            args: vec![
+                Expr::String("https://evil.com/x".into()),
+                Expr::Object(vec![]),
+            ],
+            type_args: vec![],
+            byte_offset: 0,
         }));
         let v = audit_module_egress(&m, "/repo/main.ts", &pats(&["api.example.com"]), false);
         assert_eq!(v.len(), 1);
@@ -502,14 +520,18 @@ mod tests {
     #[test]
     fn fetch_literal_matching_passes() {
         let mut m = Module::new("test");
-        m.init.push(Stmt::Expr(Expr::FetchWithOptions {
-            url: Box::new(Expr::String("https://api.example.com/x".into())),
-            method: Box::new(Expr::String("GET".into())),
-            body: Box::new(Expr::Undefined),
-            headers: vec![],
-            headers_dynamic: None,
-            signal: None,
-            redirect: None,
+        m.init.push(Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::GlobalGet(0)),
+                property: "fetch".into(),
+            }),
+            args: vec![
+                Expr::String("https://api.example.com/x".into()),
+                Expr::Object(vec![]),
+            ],
+            type_args: vec![],
+            byte_offset: 0,
         }));
         let v = audit_module_egress(&m, "/repo/main.ts", &pats(&["api.example.com"]), false);
         assert!(v.is_empty());
@@ -518,14 +540,15 @@ mod tests {
     #[test]
     fn fetch_dynamic_url_blocked_by_default() {
         let mut m = Module::new("test");
-        m.init.push(Stmt::Expr(Expr::FetchWithOptions {
-            url: Box::new(Expr::LocalGet(0)),
-            method: Box::new(Expr::String("GET".into())),
-            body: Box::new(Expr::Undefined),
-            headers: vec![],
-            headers_dynamic: None,
-            signal: None,
-            redirect: None,
+        m.init.push(Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::GlobalGet(0)),
+                property: "fetch".into(),
+            }),
+            args: vec![Expr::LocalGet(0), Expr::Object(vec![])],
+            type_args: vec![],
+            byte_offset: 0,
         }));
         let v = audit_module_egress(&m, "/repo/main.ts", &pats(&["api.example.com"]), false);
         assert_eq!(v.len(), 1);
@@ -539,14 +562,15 @@ mod tests {
     #[test]
     fn fetch_dynamic_url_allowed_when_opted_in() {
         let mut m = Module::new("test");
-        m.init.push(Stmt::Expr(Expr::FetchWithOptions {
-            url: Box::new(Expr::LocalGet(0)),
-            method: Box::new(Expr::String("GET".into())),
-            body: Box::new(Expr::Undefined),
-            headers: vec![],
-            headers_dynamic: None,
-            signal: None,
-            redirect: None,
+        m.init.push(Stmt::Expr(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::GlobalGet(0)),
+                property: "fetch".into(),
+            }),
+            args: vec![Expr::LocalGet(0), Expr::Object(vec![])],
+            type_args: vec![],
+            byte_offset: 0,
         }));
         let v = audit_module_egress(
             &m,
@@ -580,5 +604,39 @@ mod tests {
         }));
         let v = audit_module_egress(&m, "/repo/main.ts", &pats(&["api.example.com"]), false);
         assert!(v.is_empty());
+    }
+    #[test]
+    fn spread_fetch_keeps_literal_host_checks() {
+        let callee = Expr::PropertyGet {
+            byte_offset: 0,
+            object: Box::new(Expr::GlobalGet(0)),
+            property: "fetch".into(),
+        };
+        let mut module = Module::new("test");
+        module.init.push(Stmt::Expr(Expr::CallSpread {
+            callee: Box::new(callee.clone()),
+            args: vec![
+                crate::CallArg::Expr(Expr::String("https://api.example.com/x".into())),
+                crate::CallArg::Spread(Expr::LocalGet(0)),
+            ],
+            type_args: vec![],
+        }));
+        assert!(
+            audit_module_egress(&module, "/repo/main.ts", &pats(&["api.example.com"]), false)
+                .is_empty()
+        );
+        module.init.clear();
+        module.init.push(Stmt::Expr(Expr::CallSpread {
+            callee: Box::new(callee),
+            args: vec![crate::CallArg::Spread(Expr::LocalGet(0))],
+            type_args: vec![],
+        }));
+        let violations =
+            audit_module_egress(&module, "/repo/main.ts", &pats(&["api.example.com"]), false);
+        assert_eq!(violations.len(), 1);
+        assert_eq!(
+            violations[0].reason,
+            EgressRefusalReason::NonLiteralAndDynamicForbidden
+        );
     }
 }

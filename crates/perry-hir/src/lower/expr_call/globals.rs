@@ -7,7 +7,7 @@ use swc_ecma_ast as ast;
 
 use crate::ir::*;
 
-use super::super::{lower_expr, LoweringContext};
+use super::super::LoweringContext;
 use super::os::user_info_expr_for_call;
 
 /// The first argument of a spread call, after expansion: `xs` in `f(...xs)`
@@ -478,181 +478,23 @@ pub(super) fn try_global_builtins(
                 }
             }
             "fetch" => {
-                // Handle fetch(url) and fetch(url, options)
-                // Extract URL (first argument)
-                let url = if !args.is_empty() {
-                    args.remove(0)
-                } else {
-                    return Err(anyhow!("fetch requires at least a URL argument"));
-                };
-
-                // Check if there's an options object (second argument)
-                if !args.is_empty() {
-                    // Extract options from the object literal
-                    // We need to get the original AST to extract the object properties
-                    if let Some(options_arg) = call.args.get(1) {
-                        if let ast::Expr::Object(obj) = &*options_arg.expr {
-                            // Extract method, body, and headers from options
-                            let mut method = Expr::String("GET".to_string());
-                            let mut body = Expr::Undefined;
-                            let mut headers_obj: Vec<(String, Expr)> = Vec::new();
-                            let mut headers_dynamic: Option<Box<Expr>> = None;
-                            let mut signal: Option<Box<Expr>> = None;
-                            let mut redirect: Option<Box<Expr>> = None;
-
-                            for prop in &obj.props {
-                                if let ast::PropOrSpread::Prop(prop) = prop {
-                                    match prop.as_ref() {
-                                        ast::Prop::KeyValue(kv) => {
-                                            let key = match &kv.key {
-                                                ast::PropName::Ident(ident) => {
-                                                    ident.sym.to_string()
-                                                }
-                                                ast::PropName::Str(s) => {
-                                                    s.value.as_str().unwrap_or("").to_string()
-                                                }
-                                                _ => continue,
-                                            };
-                                            match key.as_str() {
-                                                "method" => {
-                                                    method = lower_expr(ctx, &kv.value)?;
-                                                }
-                                                "body" => {
-                                                    body = lower_expr(ctx, &kv.value)?;
-                                                }
-                                                "headers" => {
-                                                    // The headers value can be serialized statically
-                                                    // only if it is an object *literal* whose props
-                                                    // are all plain (non-computed) string/ident keys.
-                                                    // Anything else — a variable (`headers: h`), a
-                                                    // spread literal (`{...h}`), a call such as
-                                                    // `Object.assign({}, h)` / `new Headers(h)` /
-                                                    // `JSON.parse(...)`, or a computed/getter prop —
-                                                    // must be serialized at runtime, so capture the
-                                                    // whole expression in `headers_dynamic`. Without
-                                                    // this, dynamically-built header objects silently
-                                                    // dropped every header (#4932).
-                                                    let static_literal = match &*kv.value {
-                                                        ast::Expr::Object(headers_ast) => {
-                                                            headers_ast.props.iter().all(|p| {
-                                                                match p {
-                                                                    ast::PropOrSpread::Prop(prop) => {
-                                                                        matches!(
-                                                                            prop.as_ref(),
-                                                                            ast::Prop::KeyValue(hkv)
-                                                                                if matches!(
-                                                                                    &hkv.key,
-                                                                                    ast::PropName::Ident(_)
-                                                                                        | ast::PropName::Str(_)
-                                                                                )
-                                                                        )
-                                                                    }
-                                                                    ast::PropOrSpread::Spread(_) => false,
-                                                                }
-                                                            })
-                                                        }
-                                                        _ => false,
-                                                    };
-                                                    if static_literal {
-                                                        if let ast::Expr::Object(headers_ast) =
-                                                            &*kv.value
-                                                        {
-                                                            for hprop in &headers_ast.props {
-                                                                if let ast::PropOrSpread::Prop(
-                                                                    hprop,
-                                                                ) = hprop
-                                                                {
-                                                                    if let ast::Prop::KeyValue(
-                                                                        hkv,
-                                                                    ) = hprop.as_ref()
-                                                                    {
-                                                                        let hkey = match &hkv.key {
-                                                                            ast::PropName::Ident(
-                                                                                ident,
-                                                                            ) => ident.sym.to_string(),
-                                                                            ast::PropName::Str(s) => s
-                                                                                .value
-                                                                                .as_str()
-                                                                                .unwrap_or("")
-                                                                                .to_string(),
-                                                                            _ => continue,
-                                                                        };
-                                                                        let hval = lower_expr(
-                                                                            ctx, &hkv.value,
-                                                                        )?;
-                                                                        headers_obj
-                                                                            .push((hkey, hval));
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                    } else {
-                                                        headers_dynamic = Some(Box::new(
-                                                            lower_expr(ctx, &kv.value)?,
-                                                        ));
-                                                    }
-                                                }
-                                                "signal" => {
-                                                    signal =
-                                                        Some(Box::new(lower_expr(ctx, &kv.value)?));
-                                                }
-                                                "redirect" => {
-                                                    redirect =
-                                                        Some(Box::new(lower_expr(ctx, &kv.value)?));
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                        ast::Prop::Shorthand(ident) => {
-                                            // Handle shorthand properties like { body } which means { body: body }
-                                            let key = ident.sym.to_string();
-                                            let value =
-                                                if let Some(local_id) = ctx.lookup_local(&key) {
-                                                    Expr::LocalGet(local_id)
-                                                } else {
-                                                    continue;
-                                                };
-                                            match key.as_str() {
-                                                "method" => method = value,
-                                                "body" => body = value,
-                                                "headers" => {
-                                                    headers_dynamic = Some(Box::new(value))
-                                                }
-                                                "signal" => signal = Some(Box::new(value)),
-                                                "redirect" => redirect = Some(Box::new(value)),
-                                                _ => {}
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-                                }
-                            }
-
-                            // Create a FetchWithOptions expression
-                            ctx.uses_fetch = true;
-                            return Ok(Ok(Expr::FetchWithOptions {
-                                url: Box::new(url),
-                                method: Box::new(method),
-                                body: Box::new(body),
-                                headers: headers_obj,
-                                headers_dynamic,
-                                signal,
-                                redirect,
-                            }));
-                        }
-                    }
-                }
-
-                // Simple fetch(url) with no options - use GET
+                // Preserve the evaluated input and the entire RequestInit. Re-parsing
+                // literals here dropped variables, spreads, getters and unknown fields
+                // instead of using the options value already lowered above.
+                // The callable global fetch shares Request's runtime normalization.
                 ctx.uses_fetch = true;
-                return Ok(Ok(Expr::FetchWithOptions {
-                    url: Box::new(url),
-                    method: Box::new(Expr::String("GET".to_string())),
-                    body: Box::new(Expr::Undefined),
-                    headers: Vec::new(),
-                    headers_dynamic: None,
-                    signal: None,
-                    redirect: None,
+                if has_spread {
+                    return Ok(Err(args));
+                }
+                return Ok(Ok(Expr::Call {
+                    callee: Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
+                        object: Box::new(Expr::GlobalGet(0)),
+                        property: "fetch".to_string(),
+                    }),
+                    args,
+                    type_args: vec![],
+                    byte_offset: call.span.lo.0,
                 }));
             }
             _ => {} // Fall through to generic handling
