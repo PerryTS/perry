@@ -58,11 +58,11 @@ command -v rustup >/dev/null || {
 
 rustup target add "$target"
 
-if command -v mbx >/dev/null 2>&1; then
-  cargo_build=(mbx build)
-else
-  cargo_build=(cargo build)
+if ! command -v mbx >/dev/null 2>&1; then
+  echo "Mr Boxington is required; install the pinned version with make mbx-deps" >&2
+  exit 1
 fi
+cargo_build=(mbx build)
 
 "${cargo_build[@]}" --profile prod --target "$target" -p perry
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
