@@ -137,21 +137,6 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
     if crate::builtins::boxed_primitive_payload(func_value).is_some() {
         super::super::object_ops::throw_object_type_error(b"is not a constructor");
     }
-    // `new (new RegExp())` — a RegExp instance has no [[Construct]] internal
-    // method (Test262 `S15.10.7_A2_T2`). Without this it fell through to the
-    // empty-object construction fallback and silently produced `{}` instead
-    // of throwing.
-    {
-        let jv = crate::value::JSValue::from_bits(func_value.to_bits());
-        if jv.is_pointer()
-            && crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
-                (jv.as_pointer::<u8>() as usize) as i64,
-            ))
-            .is_some()
-        {
-            super::super::object_ops::throw_object_type_error(b"is not a constructor");
-        }
-    }
     // #3656: `new p()` where `p` is a Proxy dispatches through its `construct`
     // trap (or forwards to the target). Reached when the compiler can't prove
     // the callee is a proxy statically (e.g. `new record.proxy()`). newTarget
@@ -946,7 +931,10 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
             "ERR_INVALID_ARG_TYPE",
         );
     }
-    if extends_target_must_throw(func_value) {
+    // All class/builtin/proxy constructors returned above. The remaining
+    // path constructs callable function values; ordinary instances have no
+    // [[Construct]], regardless of their prototype or private fields.
+    if !is_callable_function_value(func_value) || extends_target_must_throw(func_value) {
         super::super::object_ops::throw_object_type_error(b"is not a constructor");
     }
     let cid = synthetic_class_id_for_function(func_value);

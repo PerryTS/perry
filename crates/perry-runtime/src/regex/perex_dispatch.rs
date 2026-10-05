@@ -99,6 +99,36 @@ thread_local! {
     pub(crate) static EXEC_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+crate::perry_thread_local! {
+    static EXEC_READ: crate::object::field_get_set::runtime_read_site::RuntimeReadSite =
+        const { crate::object::field_get_set::runtime_read_site::RuntimeReadSite::new() };
+}
+
+/// A non-observable hit of the generic read site. Accessor entries decline
+/// the leaf front, so a miss cannot run a getter before the actual Get.
+/// Only a receiver admitted by exec_proof primes this site: a hit on its
+/// immutable shape also proves that the private matcher entry still exists.
+fn cached_builtin_exec(receiver: f64) -> bool {
+    let Some(object) = crate::object::field_get_set::runtime_read_site::object_receiver(receiver)
+    else {
+        return false;
+    };
+    EXEC_READ
+        .with(|site| unsafe { site.read_leaf(object) })
+        .is_some_and(crate::object::regex_proto_thunks::is_builtin_regexp_exec)
+}
+
+/// Prime at the actual RegExpExec Get point after the retained proof has
+/// established a builtin data property. Roots belong to the operation; a
+/// first atom/cache allocation may collect. S3 removes the cold proof.
+fn prime_builtin_exec(receiver: &RuntimeHandle<'_>) -> Result<(), EngineError> {
+    api::caught(|| {
+        let object =
+            crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut RegExpHeader;
+        EXEC_READ.with(|site| unsafe { site.read(object, b"exec") });
+    })
+}
+
 /// RegExpExec with operation-owned limits. Lookup happens on every iteration;
 /// a callback may replace exec or recompile the receiver before the next one.
 /// Only the known builtin may omit materialization for a boolean test.
@@ -114,7 +144,14 @@ pub(crate) fn execute(
     reuse: Option<&api::Reuse<'_, '_>>,
 ) -> Result<Option<ExecResult>, EngineError> {
     host::charge(budget, 1)?;
+    if cached_builtin_exec(receiver.get_nanbox_f64()) {
+        if crate::hot_diag::regex_on() {
+            crate::hot_diag::regex_counters(|d| d.perex_canonical_execs += 1);
+        }
+        return builtin(receiver, input, materialize, budget, memory, poll, reuse);
+    }
     if crate::object::regex_canonical::exec(receiver.get_nanbox_f64()) {
+        prime_builtin_exec(receiver)?;
         if crate::hot_diag::regex_on() {
             crate::hot_diag::regex_counters(|d| d.perex_canonical_execs += 1);
         }
@@ -230,7 +267,7 @@ pub(crate) fn get_symbol(owner: &RuntimeHandle<'_>, name: &str) -> Result<f64, E
 }
 
 pub(crate) fn set_last_index(owner: &RuntimeHandle<'_>, value: f64) -> Result<(), EngineError> {
-    api::caught(|| super::set_last_index_value(owner.get_nanbox_f64(), value))
+    super::set_last_index_caught(owner.get_nanbox_f64(), value).map_err(EngineError::Abrupt)
 }
 
 /// Abstract ToNumber, including object conversion with the number hint.

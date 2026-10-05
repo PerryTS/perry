@@ -247,6 +247,9 @@ pub(crate) unsafe fn js_object_has_own_symbol_property(obj_f64: f64, sym_f64: f6
     if obj_key == 0 || sym_key == 0 {
         return false;
     }
+    if let Some(object) = crate::object::shaped_symbols::owner(obj_key) {
+        return crate::object::shaped_symbols::position(object, sym_key).is_some();
+    }
     accessors::has_own_symbol_accessor(obj_key, sym_key)
         || object_symbol_data_property_exists(obj_key, sym_key)
 }

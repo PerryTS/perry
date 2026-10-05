@@ -2920,6 +2920,13 @@
       "verdict": "covered_elsewhere",
       "scanner": "perry-runtime's read-holder scanner (object::method_site::read_holder::scan_read_holder_roots_mut), via HOLDER_SITES",
       "why": "A RuntimeReadSite is two atomics: the compact MRU word (ShapeId low, slot index high, no heap address) and a pointer to a PIC-arena PicCache that is never freed. The only GC pointers a site can come to hold are the holder entry words inside that PicCache; read_holder::prime_read_holder registers the cache in HOLDER_SITES and scan_read_holder_roots_mut visits each entry as a strong, rewritable root (primary agent only, until a worker starts, after which entry_answer declines before touching an entry word). See runtime_read_site.rs module docs."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/perex_dispatch.rs",
+      "name": "EXEC_READ",
+      "verdict": "covered_elsewhere",
+      "scanner": "perry-runtime's read-holder scanner (object::method_site::read_holder::scan_read_holder_roots_mut), via HOLDER_SITES",
+      "why": "A RuntimeReadSite is two atomics: the compact MRU word (ShapeId low, slot index high, no heap address) and a pointer to a PIC-arena PicCache that is never freed. The only GC pointers a site can come to hold are the holder entry words inside that PicCache; read_holder::prime_read_holder registers the cache in HOLDER_SITES and scan_read_holder_roots_mut visits each entry as a strong, rewritable root (primary agent only, until a worker starts, after which entry_answer declines before touching an entry word). See runtime_read_site.rs module docs."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

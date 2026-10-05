@@ -421,7 +421,7 @@ impl<'s, 'h> InPlace<'s, 'h> {
     }
 
     /// The register count recorded in the program cell, if any.
-    #[inline]
+    #[inline(always)]
     pub(crate) fn registers(&self) -> Option<usize> {
         self.with_cell(|cell| unsafe { (*cell).registers })
     }

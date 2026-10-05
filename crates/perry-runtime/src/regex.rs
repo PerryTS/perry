@@ -193,7 +193,6 @@ crate::perry_thread_local! {
 /// Read an already branded receiver's immutable data before the next
 /// collecting action. Handles must be re-read after such an action.
 #[inline]
-#[track_caller]
 pub(crate) fn regexp_data_ptr(receiver: *const RegExpHeader) -> *const RegExpData {
     regexp_data_of(crate::value::js_nanbox_pointer(receiver as i64))
         .expect("RegExp receiver must have its intrinsic private matcher")
@@ -476,9 +475,10 @@ pub extern "C" fn js_regexp_construct_call(pattern: f64, flags: f64) -> *mut Reg
 #[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader) -> i32 {
-    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some()
-        || !is_valid_ptr(s)
-    {
+    // Test is generic: RegExpExec selects the method and requires the
+    // private matcher only when it selects builtin exec. Do not read the
+    // matcher here just to discard it before that same admission.
+    if !is_valid_ptr(re) || !is_valid_ptr(s) {
         return 0;
     }
     if crate::hot_diag::regex_on() {
@@ -652,6 +652,11 @@ crate::perry_thread_local! {
 #[cfg(feature = "regex-engine")]
 static LAST_INDEX_STORE: crate::object::field_get_set::runtime_store_site::RuntimeStoreSite =
     crate::object::field_get_set::runtime_store_site::RuntimeStoreSite::new();
+
+#[cfg(feature = "regex-engine")]
+pub(super) fn set_last_index_caught(receiver: f64, value: f64) -> Result<(), f64> {
+    LAST_INDEX_STORE.store_caught(receiver, b"lastIndex", value)
+}
 
 /// Builtin spec Set(R, lastIndex, value, true), through the ordinary store site.
 #[cfg(feature = "regex-engine")]
