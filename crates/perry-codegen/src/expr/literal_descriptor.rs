@@ -12,7 +12,7 @@ use crate::types::{DOUBLE, I32, PTR};
 const MIN_NODES: usize = 256;
 const MAX_DEPTH: usize = 128;
 // Must match runtime::array::literal_descriptor::LiteralShape (repr(C)).
-const SHAPE_TYPE: &str = "{ i32, i32, ptr, ptr, ptr, i32, ptr, i32, i64 }";
+const SHAPE_TYPE: &str = "{ i32, i32, ptr, ptr, ptr, i32, ptr, i32, i64, i32 }";
 
 #[derive(Default)]
 struct Descriptor {
@@ -62,9 +62,15 @@ impl Descriptor {
         // The birth rep the module-init mint gave that id (T1).
         let rep = ctx.class_birth_reps.get(keys).copied().unwrap_or(0);
         let index = u32::try_from(self.shapes.len()).ok()?;
+        let width = argc as u32
+            + crate::lower_call::new_alloc::birth_slack_in(
+                class,
+                &|name| ctx.classes.get(name).copied(),
+                ctx.anon_key_adds,
+            );
         self.shapes.push(format!(
             "{SHAPE_TYPE} {{ i32 {class_id}, i32 {argc}, ptr @{keys}, ptr @{shape_id}, \
-             ptr {raw_mask}, i32 {}, ptr {pointer_mask}, i32 {}, i64 {rep} }}",
+             ptr {raw_mask}, i32 {}, ptr {pointer_mask}, i32 {}, i64 {rep}, i32 {width} }}",
             layout.raw_f64_mask_words.len(),
             layout.pointer_mask_words.len(),
         ));

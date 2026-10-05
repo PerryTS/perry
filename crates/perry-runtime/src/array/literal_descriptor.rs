@@ -17,6 +17,8 @@ pub struct LiteralShape {
     pointer_mask_len: u32,
     /// The birth rep codegen gave the shape id (charter step 5).
     rep: u64,
+    /// Capacity only; descriptor payload still contains exactly field_count values.
+    allocation_width: u32,
 }
 
 struct Reader<'a> {
@@ -85,7 +87,7 @@ impl Reader<'_> {
                 let object = crate::object::alloc::js_object_alloc_class_inline_keys_stamped(
                     shape.class_id,
                     0,
-                    shape.field_count,
+                    shape.allocation_width,
                     unsafe { *shape.keys_slot } as *mut super::ArrayHeader,
                     unsafe { *shape.shape_id_slot },
                     shape.rep,
@@ -141,7 +143,7 @@ mod tests {
             crate::object::js_build_class_keys_array(CLASS_ID, 2, b"id\0name\0".as_ptr(), 8, 0)
                 as u64;
         let shape_id =
-            crate::object::shapes::js_object_shape_id_for_class_keys(keys, 2, CLASS_ID, 0);
+            crate::object::shapes::js_object_shape_id_for_class_keys_live(keys, 2, 3, CLASS_ID, 0);
         let shape = LiteralShape {
             class_id: CLASS_ID,
             field_count: 2,
@@ -151,6 +153,7 @@ mod tests {
             raw_mask_len: 1,
             pointer_mask: POINTERS.as_ptr(),
             pointer_mask_len: 1,
+            allocation_width: 3,
             rep: 0,
         };
         // {id:-0, name:"snowman☃"}, using the public compiler/runtime ABI.
@@ -183,6 +186,11 @@ mod tests {
         assert_eq!(
             unsafe { crate::object::shapes::object_shape_stamp(a_ptr) },
             shape_id
+        );
+        assert_eq!(unsafe { crate::object::object_live_slot_count(a_ptr) }, 3);
+        assert_eq!(
+            crate::object::js_object_get_field(a_ptr, 2).bits(),
+            JSValue::undefined().bits()
         );
         let _header = unsafe { crate::value::addr_class::try_read_gc_header(a_ptr as usize) }
             .expect("the descriptor must allocate a managed object");
@@ -231,6 +239,7 @@ mod tests {
             raw_mask_len: 0,
             pointer_mask: std::ptr::null(),
             pointer_mask_len: 0,
+            allocation_width: 2,
             rep: 0,
         };
         for bytes in [

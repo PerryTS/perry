@@ -146,6 +146,21 @@ pub(crate) fn constructor_added_key_count(ctx: &FnCtx<'_>, class: &perry_hir::Cl
     constructor_added_key_count_in(class, &|name| ctx.classes.get(name).copied())
 }
 
+/// One capacity derivation for allocation sites, literal descriptors and the
+/// module-init birth image. Anonymous additions have already been normalized
+/// over classes sharing a keys global, so aliases get the same live bound.
+pub(crate) fn birth_slack_in<'c>(
+    class: &'c Class,
+    lookup: &dyn Fn(&str) -> Option<&'c Class>,
+    anon_adds: &std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+) -> u32 {
+    constructor_added_key_count_in(class, lookup)
+        + private_field_slot_count_in(class, lookup)
+        + anon_adds
+            .get(&class.name)
+            .map_or(0, |keys| keys.len().min(8) as u32)
+}
+
 /// The private fields construction claims on an instance of `class`: one
 /// entry each, appended after the birth keys (#11791). Like the constructor
 /// key-adds they get in-object slack, so every private field is an inline
@@ -354,8 +369,11 @@ fn emit_instance_alloc_inner(
     // keys stay authoritative for enumeration, and a width above the keys
     // count routes the allocation to the outlined entry, which installs an
     // exact descriptor and also honours the learned width.
-    let slack = constructor_added_key_count(ctx, class)
-        + private_field_slot_count_in(class, &|name| ctx.classes.get(name).copied());
+    let slack = birth_slack_in(
+        class,
+        &|name| ctx.classes.get(name).copied(),
+        ctx.anon_key_adds,
+    );
     if slack > 0 {
         field_count = field_count.max(
             ctx.class_field_counts

@@ -722,6 +722,30 @@ mod tests {
         assert_eq!(learned_inline_field_count(CID), 5);
     }
 
+    /// The overwrite itself must execute before checking the layout counter.
+    /// In particular, sabotaging the scalar exit must fail on an overwrite,
+    /// rather than on the first allocation/initialization of the spill.
+    #[test]
+    fn spill_number_overwrite_takes_scalar_exit_after_a_real_store() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        let owner = js_object_alloc(0x6B45_5A20, 0);
+        spill_set(owner as usize, 18, 13.0f64.to_bits());
+        assert_eq!(spill_get(owner as usize, 18), Some(13.0f64.to_bits()));
+        TEST_LAYOUT_NOTE_SLOT_CALLS.with(|calls| calls.set(0));
+        spill_set(owner as usize, 18, 14.0f64.to_bits());
+        assert_eq!(
+            spill_get(owner as usize, 18),
+            Some(14.0f64.to_bits()),
+            "fixture must actually overwrite the spill value"
+        );
+        assert_eq!(
+            TEST_LAYOUT_NOTE_SLOT_CALLS.with(Cell::get),
+            0,
+            "number-over-number must return before the full layout hook"
+        );
+    }
+
     #[test]
     fn spill_overwrites_only_note_pointer_kind_transitions() {
         let _lock = crate::gc::global_side_table_test_lock();

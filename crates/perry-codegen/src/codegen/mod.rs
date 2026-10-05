@@ -2412,6 +2412,29 @@ fn compile_module_impl(
         .iter()
         .map(|class| class.name.as_str())
         .collect();
+    let mut anon_key_adds = crate::collectors::anon_key_adds::anon_receiver_added_keys(
+        hir,
+        &class_table,
+        &module_dispatch_facts,
+    );
+    // A keys global owns ONE birth ShapeId. Equal-key classes and aliases
+    // must reserve the maximum requested capacity before either consumer
+    // derives its image. Deterministic sets also make equal-size ties stable.
+    let mut adds_by_keys: std::collections::HashMap<String, std::collections::BTreeSet<String>> =
+        std::collections::HashMap::new();
+    for (name, keys) in &anon_key_adds {
+        if let Some(global) = class_keys_globals_map.get(name) {
+            let existing = adds_by_keys.entry(global.clone()).or_default();
+            if (keys.len(), keys) > (existing.len(), &*existing) {
+                *existing = keys.clone();
+            }
+        }
+    }
+    for (name, global) in &class_keys_globals_map {
+        if let Some(keys) = adds_by_keys.get(global) {
+            anon_key_adds.insert(name.clone(), keys.clone());
+        }
+    }
     let class_header_image_inits: std::collections::HashMap<String, (u32, u64, u32)> = {
         let mut inits: std::collections::HashMap<String, (u32, u64, u32)> =
             std::collections::HashMap::new();
@@ -2430,8 +2453,7 @@ fn compile_module_impl(
             } else {
                 class_table.get(class_name).map_or(0, |class| {
                     let lookup = |name: &str| class_table.get(name).copied();
-                    crate::lower_call::new_alloc::constructor_added_key_count_in(class, &lookup)
-                        + crate::lower_call::new_alloc::private_field_slot_count_in(class, &lookup)
+                    crate::lower_call::new_alloc::birth_slack_in(class, &lookup, &anon_key_adds)
                 })
             };
             let birth_live = if slack > 0 { key_count + slack } else { 0 };
@@ -2652,6 +2674,7 @@ fn compile_module_impl(
         method_arguments_length_only,
         class_keys_globals: class_keys_globals_map,
         class_field_counts: class_field_counts_map,
+        anon_key_adds,
         class_init_chains: class_init_chains_map,
         class_header_images: class_header_images_map,
         class_birth_reps: class_birth_reps_map,

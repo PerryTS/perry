@@ -1246,6 +1246,7 @@ pub(super) fn compile_function(
         class_ids,
         class_keys_globals: &cross_module.class_keys_globals,
         class_field_counts: &cross_module.class_field_counts,
+        anon_key_adds: &cross_module.anon_key_adds,
         class_init_chains: &cross_module.class_init_chains,
         class_header_image_globals: &cross_module.class_header_images,
         class_birth_reps: &cross_module.class_birth_reps,

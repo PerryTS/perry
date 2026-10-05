@@ -981,3 +981,6 @@ test_gap_gc_11862_array_cell_element_root
 # closure, whose stale pointer was the registry worker's "value is not a
 # function".
 test_gap_gc_worker_message_clone_rooting
+
+# Literal birth capacity: reserved slots, deletion/re-addition and beyond-cap spill.
+test_gap_addkey_born_wide_11497
