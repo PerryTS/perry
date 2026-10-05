@@ -71,7 +71,7 @@ pub use lower::{
     lower_module_with_class_id, lower_module_with_class_id_and_types,
     lower_module_with_class_id_types_and_seed, lower_module_with_class_id_types_seed_and_entry,
 };
-pub use monomorph::monomorphize_module;
+pub use monomorph::{monomorphize_module, monomorphize_modules};
 pub use native_profile::exported_native_pod_abi;
 pub use patched_builtins::{
     clear_patched_builtins, patched_prototype_methods, scan_module as scan_patched_builtins,
