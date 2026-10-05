@@ -553,6 +553,12 @@
       "name": "HIDDEN_KEYS",
       "verdict": "bounded_by_program",
       "why": "Keyed by (address, length) of the &'static [u8] hidden-field name literals passed to hidden_key; at most one entry per literal in the compiled runtime, so growth stops once each has been used once per thread. The cached key strings are rooted (marked and rewritten) by the node_stream_hidden_keys mutable root scanner."
+    },
+    {
+      "file": "crates/perry-stdlib/src/worker_threads/entry_table.rs",
+      "name": "WORKER_ENTRIES",
+      "verdict": "bounded_by_program",
+      "why": "Keyed by the absolute (and canonical) paths of the worker modules compiled into the binary, registered by the generated main before any module runs; nothing inserts at run time, so the table is fixed by the program."
     }
   ]
 }

@@ -150,6 +150,10 @@ pub(crate) unsafe fn retire_swept_object(header: usize, total_size: usize, kind:
         sweep_seq: SWEEP_SEQ.load(Ordering::Relaxed),
         budgeted: SWEEP_BUDGETED.load(Ordering::Relaxed),
     };
+    static THREAD_EXIT_HOOK: std::sync::Once = std::sync::Once::new();
+    THREAD_EXIT_HOOK.call_once(|| {
+        super::thread_exit::register_thread_exit_range_hook(release_retired_spans_in_freed_ranges)
+    });
     if let Ok(mut spans) = RETIRED.lock() {
         spans.push(span);
     }
@@ -170,6 +174,17 @@ pub(crate) unsafe fn retire_swept_object(header: usize, total_size: usize, kind:
             BYTES_PROTECTED.fetch_add(bytes as u64, Ordering::Relaxed);
         }
     }
+}
+
+/// Thread-exit range hook (#11471): the exiting thread's arena and
+/// `gc_malloc` blocks go back to the allocator, quarantined objects included,
+/// and another thread may reuse them. A span left over would make the
+/// reporter call a fault on that newer object a use of freed memory.
+fn release_retired_spans_in_freed_ranges(freed: &super::thread_exit::FreedRanges) {
+    RETIRED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .retain(|span| !freed.contains(span.header));
 }
 
 #[cfg(not(unix))]
@@ -303,4 +318,44 @@ pub(crate) fn old_sweep_quarantine_stats() -> (u64, u64) {
         SPANS_RETIRED.load(Ordering::Relaxed),
         BYTES_PROTECTED.load(Ordering::Relaxed),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn span_at(header: usize) -> RetiredSpan {
+        RetiredSpan {
+            header,
+            total_size: 64,
+            obj_type: 0,
+            kind: RetiredKind::Old,
+            sweep_seq: 1,
+            budgeted: false,
+        }
+    }
+
+    /// Only the spans inside the exiting thread's blocks go; a span in memory
+    /// that stays allocated still describes it.
+    #[test]
+    fn thread_exit_forgets_only_the_spans_in_freed_blocks() {
+        // Addresses no real allocation in this process uses.
+        let (freed_header, kept_header) = (0x7EAD_0000_1000usize, 0x7EAD_0010_1000usize);
+        RETIRED
+            .lock()
+            .unwrap()
+            .extend([span_at(freed_header), span_at(kept_header)]);
+        release_retired_spans_in_freed_ranges(&super::super::thread_exit::FreedRanges::new(&[(
+            freed_header,
+            freed_header + 0x1000,
+        )]));
+        let mut spans = RETIRED.lock().unwrap();
+        let left: Vec<usize> = spans
+            .iter()
+            .map(|span| span.header)
+            .filter(|&header| header == freed_header || header == kept_header)
+            .collect();
+        spans.retain(|span| span.header != kept_header);
+        assert_eq!(left, vec![kept_header]);
+    }
 }
