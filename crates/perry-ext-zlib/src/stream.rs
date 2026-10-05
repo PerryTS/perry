@@ -1143,6 +1143,16 @@ pub unsafe extern "C" fn js_ext_zlib_dispatch_method(
             }
             self_ref
         }
+        "listenerCount" if !args.is_empty() => {
+            let count = event_name(args[0]).map_or(0, |event| {
+                let g = statics().lock().unwrap();
+                g.listeners
+                    .get(&handle)
+                    .and_then(|events| events.get(&event))
+                    .map_or(0, Vec::len)
+            });
+            count as f64
+        }
         // #11620: a `for await` that stops early detaches its listeners.
         "off" | "removeListener" if args.len() >= 2 => {
             if let Some(ev) = event_name(args[0]) {

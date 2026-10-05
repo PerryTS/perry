@@ -70,6 +70,7 @@ pub(in crate::node_stream) fn write_chunk_to_pipe_destinations(stream: f64, chun
             let ret = call_small_native_pipe_method(dest, b"write", &[chunk.get_nanbox_f64()]);
             if ret.to_bits() == TAG_FALSE {
                 let _ = pause_readable_stream(stream.get_nanbox_f64());
+                add_pipe_drain_listener(stream.get_nanbox_f64(), snapshot_at(&dests, i));
             }
             continue;
         }
