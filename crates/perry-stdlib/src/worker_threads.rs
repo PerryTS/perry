@@ -116,7 +116,7 @@ thread_local! {
     /// where its `parentPort.postMessage` events are delivered.
     static CURRENT_PARENT_AGENT: Cell<AgentId> = const { Cell::new(perry_runtime::agent::PRIMARY_AGENT) };
     /// workerData for the current in-process Worker.
-    static CURRENT_WORKER_DATA: RefCell<Option<SerializedValue>> = const { RefCell::new(None) };
+    static CURRENT_WORKER_DATA: RefCell<Option<WorkerData>> = const { RefCell::new(None) };
     /// Worker threadName for the current in-process Worker.
     static CURRENT_THREAD_NAME: RefCell<String> = const { RefCell::new(String::new()) };
     /// Worker resourceLimits for the current in-process Worker.
@@ -129,6 +129,13 @@ thread_local! {
     static ENVIRONMENT_DATA_GC_REGISTERED: Cell<bool> = const { Cell::new(false) };
     static WORKER_GC_REGISTERED: Cell<bool> = const { Cell::new(false) };
     static PARENT_PORT_EVENT_GC_REGISTERED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// workerData is received once. Its adopted JS value is rooted by the existing
+/// worker scanner, rather than re-reading a consumed transfer on every getter.
+enum WorkerData {
+    Serialized(SerializedValue),
+    Received(u64),
 }
 
 /// Per-port state for a same-process MessageChannel (#3157). A `MessageChannel`
@@ -453,6 +460,11 @@ pub(crate) mod thread_exit_probe {
 }
 
 fn scan_worker_roots_mut(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
+    CURRENT_WORKER_DATA.with(|slot| {
+        if let Some(WorkerData::Received(bits)) = slot.borrow_mut().as_mut() {
+            visitor.visit_nanbox_u64_slot(bits);
+        }
+    });
     if let Ok(mut workers) = WORKERS.lock() {
         for worker in workers.values_mut() {
             visitor.visit_nanbox_u64_slot(&mut worker.object_bits);
@@ -1446,7 +1458,8 @@ pub extern "C" fn js_worker_threads_worker_new(entry_ptr: i64, options: f64) -> 
             let previous_env = apply_worker_env(&thread_options.env);
             CURRENT_WORKER_ID.with(|id| id.set(worker_id));
             CURRENT_PARENT_AGENT.with(|agent| agent.set(parent_agent));
-            CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = worker_data);
+            CURRENT_WORKER_DATA
+                .with(|slot| *slot.borrow_mut() = worker_data.map(WorkerData::Serialized));
             CURRENT_THREAD_NAME
                 .with(|slot| *slot.borrow_mut() = thread_options.thread_name.clone());
             CURRENT_RESOURCE_LIMITS.with(|slot| slot.set(thread_options.resource_limits));
@@ -1644,11 +1657,16 @@ pub extern "C" fn js_worker_threads_get_environment_data(key: f64) -> f64 {
 /// Returns the JSON-parsed value as a NaN-boxed f64
 #[no_mangle]
 pub extern "C" fn js_worker_threads_get_worker_data() -> f64 {
-    if let Some(bits) = CURRENT_WORKER_DATA.with(|slot| {
-        slot.borrow()
-            .as_ref()
-            .map(|data| unsafe { deserialize_nanbox_on_current_thread(data) })
-    }) {
+    ensure_worker_gc_scanner();
+    // Release the TLS borrow before allocating: the root scanner visits this
+    // slot during deserialization. A pending serialized message owns no GC edge.
+    let data = CURRENT_WORKER_DATA.with(|slot| slot.borrow_mut().take());
+    if let Some(data) = data {
+        let bits = match data {
+            WorkerData::Serialized(data) => unsafe { deserialize_nanbox_on_current_thread(&data) },
+            WorkerData::Received(bits) => bits,
+        };
+        CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = Some(WorkerData::Received(bits)));
         return f64::from_bits(bits);
     }
     // Node defaults `workerData` to `null` (typeof === "object") on the main

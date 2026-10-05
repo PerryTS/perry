@@ -41,6 +41,7 @@ fn remembers(sv: &SerializedValue) -> bool {
             | SerializedValue::Date(_)
             | SerializedValue::Uint8Array(_)
             | SerializedValue::ArrayBuffer(_)
+            | SerializedValue::TransferredArrayBuffer(_)
             | SerializedValue::View { .. }
             | SerializedValue::Map(_)
             | SerializedValue::Set(_)
@@ -148,6 +149,11 @@ impl<'s> Reader<'s> {
             SerializedValue::ScopeCapture(slots) => return self.scope_capture(slots),
             SerializedValue::Uint8Array(bytes) => owned_uint8array(bytes),
             SerializedValue::ArrayBuffer(bytes) => array_buffer(bytes),
+            SerializedValue::TransferredArrayBuffer(store) => {
+                let buffer = crate::buffer::buffer_adopt_backing(store.take(), store.length);
+                crate::buffer::mark_as_array_buffer(buffer as usize);
+                JSValue::pointer(buffer as *const u8).bits()
+            }
             SerializedValue::View {
                 kind,
                 buffer,

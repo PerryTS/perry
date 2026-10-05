@@ -742,19 +742,7 @@ pub extern "C" fn js_uint8array_view(
 
 pub(super) fn zeroed_array_buffer_storage(size: i32) -> *mut BufferHeader {
     let size = size.max(0) as u32;
-    let buf = buffer_alloc(size);
-    unsafe {
-        (*buf).length = size;
-        // Zero-fill the data region. `buffer_alloc` does not zero, but
-        // ArrayBuffer per ECMAScript spec must observe zero-initialized
-        // bytes. Small-slab path is bump-allocated and may carry stale
-        // bytes from a prior allocation.
-        if size > 0 {
-            let data = buffer_data_mut(buf);
-            ptr::write_bytes(data, 0, size as usize);
-        }
-    }
-    buf
+    buffer_alloc_owned(size, size)
 }
 
 fn throw_array_buffer_range_error() -> ! {

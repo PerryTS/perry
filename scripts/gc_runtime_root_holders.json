@@ -4308,10 +4308,6 @@
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",
-      "name": "CURRENT_WORKER_DATA"
-    },
-    {
-      "file": "crates/perry-stdlib/src/worker_threads.rs",
       "name": "ENVIRONMENT_DATA_GC_REGISTERED"
     },
     {

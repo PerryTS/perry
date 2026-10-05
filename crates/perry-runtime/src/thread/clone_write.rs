@@ -41,7 +41,7 @@ enum CloneMode {
 /// # Safety
 /// `bits` must be a valid NaN-boxed JSValue of the current thread.
 pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
-    write_value(CloneMode::Thread, bits, None, false)
+    write_value(CloneMode::Thread, bits, None, false, &[])
 }
 
 /// Serialize one closure capture slot for `perry/thread` (see
@@ -50,15 +50,15 @@ pub unsafe fn serialize_nanbox_for_thread(bits: u64) -> SerializedValue {
 /// # Safety
 /// `slot_bits` must be a capture slot of a live closure of this thread.
 pub(super) unsafe fn serialize_capture_for_thread(slot_bits: u64) -> SerializedValue {
-    write_value(CloneMode::Thread, slot_bits, None, true)
+    write_value(CloneMode::Thread, slot_bits, None, true, &[])
 }
 
 /// Clone a value for `postMessage` with Node's structured-clone rules.
 ///
 /// `transfer` holds the ArrayBuffers of the transfer list. They are checked
 /// first, and detached only after the whole value was cloned, so a failed
-/// clone leaves every buffer as it was. A transferred buffer is copied into
-/// the message like any other buffer. `uncloneable` names objects the host
+/// clone leaves every buffer as it was. A transferred buffer moves its native
+/// backing into the message after the walk succeeds. `uncloneable` names objects the host
 /// refuses (MessagePorts, objects marked with `markAsUncloneable`).
 ///
 /// On failure returns the `DataCloneError` message.
@@ -85,14 +85,62 @@ pub unsafe fn serialize_message(
             return Err("Transfer list contains duplicate ArrayBuffer".to_string());
         }
     }
-    let value = write_value(CloneMode::Message, bits, uncloneable, false);
+    let scope = gc::RuntimeHandleScope::new();
+    let _roots: Vec<_> = transfer
+        .iter()
+        .map(|&addr| scope.root_raw_mut_ptr(addr as *mut u8))
+        .collect();
+    let backings: Vec<_> = transfer
+        .iter()
+        .map(|&addr| crate::buffer::view::backing_of(addr))
+        .collect();
+    let mut value = write_value(CloneMode::Message, bits, uncloneable, false, &backings);
     if let Some(name) = super::first_unsupported_transfer_type(&value) {
         return Err(format!("{name} could not be cloned."));
     }
+    commit_transfers(&mut value);
     for &buffer in transfer {
         crate::buffer::detach_array_buffer(buffer);
     }
     Ok(value)
+}
+
+/// Commit only after unsupported-value validation. There are no GC allocations
+/// in this pass, and the transfer roots cover buffers absent from the message.
+unsafe fn commit_transfers(value: &mut SerializedValue) {
+    match value {
+        SerializedValue::TransferredArrayBuffer(backing) => backing.commit(),
+        SerializedValue::Array(values)
+        | SerializedValue::Set(values)
+        | SerializedValue::ScopeCapture(values) => {
+            for value in values {
+                commit_transfers(value);
+            }
+        }
+        SerializedValue::Object { fields, .. } => {
+            for value in fields {
+                commit_transfers(value);
+            }
+        }
+        SerializedValue::Closure { captures, .. } => {
+            for value in captures {
+                commit_transfers(value);
+            }
+        }
+        SerializedValue::Map(entries) => {
+            for (key, value) in entries {
+                commit_transfers(key);
+                commit_transfers(value);
+            }
+        }
+        SerializedValue::View { buffer, .. } | SerializedValue::BoxedCapture(buffer) => {
+            commit_transfers(buffer)
+        }
+        SerializedValue::Error {
+            cause: Some(cause), ..
+        } => commit_transfers(cause),
+        _ => {}
+    }
 }
 
 /// Walk `bits`, build anything the walk could not read without allocating,
@@ -102,6 +150,7 @@ unsafe fn write_value(
     bits: u64,
     uncloneable: Option<&dyn Fn(u64) -> bool>,
     capture: bool,
+    transfer: &[usize],
 ) -> SerializedValue {
     // A capture slot may hold a raw box pointer, not a value; such a slot
     // is rooted by its closure, which the caller holds.
@@ -110,6 +159,7 @@ unsafe fn write_value(
     loop {
         let mut writer = Writer {
             mode,
+            transfer,
             uncloneable,
             seen: HashMap::new(),
             next_index: 0,
@@ -161,6 +211,7 @@ unsafe fn build_pending(pending: &[Pending]) {
 
 struct Writer<'a> {
     mode: CloneMode,
+    transfer: &'a [usize],
     uncloneable: Option<&'a dyn Fn(u64) -> bool>,
     /// Identity key of every object written so far → its index (the order
     /// the reader creates objects in). Buffers backing a view use
@@ -602,6 +653,12 @@ impl Writer<'_> {
         }
         if let Err(seen) = self.begin(Some(backing | 1)) {
             return seen;
+        }
+        if self.transfer.contains(&backing) {
+            let length = (*(backing as *const crate::buffer::BufferHeader)).length;
+            return SerializedValue::TransferredArrayBuffer(
+                crate::buffer::TransferredBacking::pending(backing, length),
+            );
         }
         let bytes = if let Some(kind) = crate::typedarray::lookup_typed_array_kind(backing) {
             let ta = backing as *const crate::typedarray::TypedArrayHeader;

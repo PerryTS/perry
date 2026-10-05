@@ -627,6 +627,9 @@ impl Drop for Arena {
             if block.data.is_null() {
                 continue;
             }
+            super::walk::for_each_block_header(block, |header| unsafe {
+                crate::buffer::drop_owned_backing_at_thread_exit(header);
+            });
             super::map_allocations::walk_block_maps(block, &mut |header| unsafe {
                 if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 {
                     crate::map::drop_map_store_at_thread_exit(
