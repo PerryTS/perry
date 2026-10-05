@@ -200,6 +200,100 @@ pub(crate) fn raise_perry_exception() -> UnwindReasonCode {
     }
 }
 
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+pub(crate) fn native_cleanup_before_trap() -> bool {
+    extern "C" {
+        fn perry_sjlj_native_cleanup_present() -> core::ffi::c_int;
+    }
+    unsafe { perry_sjlj_native_cleanup_present() != 0 }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+#[inline(always)]
+fn native_fde_symbol() -> *mut core::ffi::c_void {
+    // Keep the cold name in its own section: otherwise LLVM merges it with
+    // hot runtime literals and retains it even when this helper is discarded.
+    #[link_section = ".rodata.perry_iterator_unwind"]
+    static FDE_SYMBOL: [u8; 17] = *b"_Unwind_Find_FDE\0";
+    unsafe { libc::dlsym(libc::RTLD_DEFAULT, FDE_SYMBOL.as_ptr().cast()) }
+}
+
+/// Before raising from a Rust trap, look for a native cleanup within it.
+/// A raise with no such pad would let Rust's panic=unwind C-ABI guards catch
+/// the foreign exception instead of taking the existing trap's longjmp.
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+#[cold]
+#[no_mangle]
+pub extern "C" fn perry_native_iterator_cleanup_before_trap() -> core::ffi::c_int {
+    i32::from(find_native_cleanup_before_trap())
+}
+
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+fn find_native_cleanup_before_trap() -> bool {
+    #[repr(C)]
+    struct Bases {
+        text: usize,
+        data: usize,
+        func: usize,
+    }
+    extern "C" {
+        fn perry_sjlj_personality_addr() -> *const core::ffi::c_void;
+    }
+    struct Search {
+        limit: usize,
+        personality: usize,
+        found: bool,
+        find_fde: unsafe extern "C" fn(*const core::ffi::c_void, *mut Bases) -> *const u8,
+    }
+    unsafe extern "C" fn scan(
+        ctx: *mut UnwindContext,
+        arg: *mut core::ffi::c_void,
+    ) -> UnwindReasonCode {
+        let search = &mut *(arg as *mut Search);
+        if _Unwind_GetCFA(ctx) >= search.limit {
+            return 5;
+        }
+        let mut before = 0;
+        let ip = _Unwind_GetIPInfo(ctx, &mut before);
+        let ip = if before == 0 { ip.wrapping_sub(1) } else { ip };
+        let mut bases = Bases {
+            text: 0,
+            data: 0,
+            func: 0,
+        };
+        let fde = (search.find_fde)(ip as *const core::ffi::c_void, &mut bases);
+        if !fde.is_null()
+            && crate::eh_lsda::fde_has_personality(fde, search.personality)
+            && matches!(find_landing_pad(ctx), Ok(Some(_)))
+        {
+            search.found = true;
+            return 5;
+        }
+        0
+    }
+    let personality = unsafe { perry_sjlj_personality_addr() } as usize;
+    if personality == 0 {
+        return false;
+    }
+    // Resolve on this cold path through the existing loader dependency.
+    // A new PLT import alone crosses a whole ELF header page in small binaries.
+    let symbol = native_fde_symbol();
+    if symbol.is_null() {
+        std::process::abort();
+    }
+    let find_fde = unsafe { std::mem::transmute(symbol) };
+    let mut search = Search {
+        find_fde,
+        limit: crate::exception::current_setjmp_stack_limit().unwrap_or(usize::MAX),
+        personality,
+        found: false,
+    };
+    unsafe {
+        _Unwind_Backtrace(scan, &mut search as *mut Search as *mut core::ffi::c_void);
+    }
+    search.found
+}
+
 // ---------------------------------------------------------------------------
 // Personality routine.
 // ---------------------------------------------------------------------------
@@ -236,6 +330,19 @@ pub unsafe extern "C" fn perry_eh_personality(
 ) -> UnwindReasonCode {
     if version != 1 {
         return _URC_FATAL_PHASE1_ERROR;
+    }
+    #[cfg(all(
+        target_os = "linux",
+        target_arch = "x86_64",
+        target_env = "gnu",
+        target_pointer_width = "64"
+    ))]
+    if crate::exception::current_setjmp_stack_limit()
+        .is_some_and(|limit| _Unwind_GetCFA(context) >= limit)
+    {
+        // The nearest Rust trap is an exception boundary. Never let an
+        // older native catch bypass its longjmp cleanup/Err conversion.
+        return _URC_CONTINUE_UNWIND;
     }
     let lpad = match find_landing_pad(context) {
         Ok(l) => l,
@@ -331,3 +438,22 @@ static _KEEP_PERSONALITY: unsafe extern "C" fn(
     *mut UnwindException,
     *mut UnwindContext,
 ) -> UnwindReasonCode = perry_eh_personality;
+
+#[cfg(all(test, target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
+#[test]
+fn native_iterator_preflight_resolves_the_active_unwinder() {
+    let symbol = native_fde_symbol();
+    assert!(
+        !symbol.is_null(),
+        "the active GNU unwinder must expose its FDE lookup"
+    );
+    let find_fde: unsafe extern "C" fn(*const core::ffi::c_void, *mut [usize; 3]) -> *const u8 =
+        unsafe { std::mem::transmute(symbol) };
+    let mut bases = [0; 3];
+    let pc = perry_eh_personality as *const () as *const core::ffi::c_void;
+    let fde = unsafe { find_fde(pc, &mut bases) };
+    assert!(
+        !fde.is_null(),
+        "the runtime personality needs live unwind tables"
+    );
+}

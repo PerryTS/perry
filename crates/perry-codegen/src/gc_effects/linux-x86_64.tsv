@@ -4001,3 +4001,7 @@ redirect_lazy_to_materialized	Reenters
 setInterval	Reenters
 js_net_socket_address_parse_value	Reenters
 js_net_validate_socket_address_parse_input	Reenters
+js_iterator_close_on_throw	Reenters
+js_iterator_delegate_return	Reenters
+js_iterator_delegate_throw	Reenters
+perry_native_iterator_cleanup_before_trap	Leaf

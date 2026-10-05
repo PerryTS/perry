@@ -11,7 +11,7 @@ thread_local! {
     static LINEARIZE_IS_ASYNC_GEN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 
     /// `yield *` delegation suspend-state intervals collected while linearizing an
-    /// async generator. After linearization the `.return()` closure consults these
+    /// generator. After linearization the `.return()` closure consults these
     /// so that `gen.return(v)` while suspended inside a `yield *` forwards to the
     /// delegated iterator's `return` method (spec `yield *` step 6.c) instead of
     /// completing the outer generator directly. Same thread-local rationale as
@@ -39,13 +39,14 @@ pub(crate) fn take_delegation_routes() -> Vec<DelegationRoute> {
     LINEARIZE_DELEGATIONS.with(|c| std::mem::take(&mut *c.borrow_mut()))
 }
 
-/// One `yield *` delegation region in an async generator. The outer generator is
+/// One `yield *` delegation region in a generator. The outer generator is
 /// "suspended inside this `yield *`" whenever its state id is in
 /// `(suspend_state_lo, suspend_state_hi]` — the same exclusive-lower/inclusive-
 /// upper convention as [`FinallyRoute`]. `iter_id` is the captured delegated
 /// iterator (the `this` for its `return`/`throw` methods).
 #[derive(Clone)]
 pub struct DelegationRoute {
+    pub is_async: bool,
     pub suspend_state_lo: u32,
     pub suspend_state_hi: u32,
     pub iter_id: LocalId,
@@ -61,6 +62,33 @@ pub struct DelegationRoute {
     /// emits as `suspend_state_lo + 1` (the non-empty pre-loop state always
     /// takes `suspend_state_lo`).
     pub resume_state: u32,
+}
+
+impl DelegationRoute {
+    pub fn invoke_method(&self, method: LocalId, args: Vec<Expr>) -> Expr {
+        debug_assert!(self.is_async, "sync protocol work lives in the runtime");
+        let mut call_args = vec![Expr::LocalGet(self.iter_id)];
+        call_args.extend(args);
+        let call = Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::LocalGet(method)),
+                property: "call".to_string(),
+            }),
+            args: call_args,
+            type_args: vec![],
+            byte_offset: 0,
+        };
+        self.await_result(call)
+    }
+
+    pub fn await_result(&self, call: Expr) -> Expr {
+        if self.is_async {
+            Expr::Await(Box::new(call))
+        } else {
+            call
+        }
+    }
 }
 
 /// Resolve a `yield*` operand into its iterator. An async generator delegates
@@ -284,7 +312,7 @@ fn emit_yield_star_loop(
     };
 
     // Record the suspend-state interval of the drive loop's single re-yield so
-    // an async `gen.return(v)` issued while suspended here forwards into the
+    // `gen.return(v)` issued while suspended here forwards into the
     // delegated iterator's `return` (spec `yield *` step 6.c) rather than
     // completing the outer generator outright. The loop's only suspendable state
     // is the inner `yield`, whose resume state lands in `(lo, hi]`.
@@ -300,10 +328,11 @@ fn emit_yield_star_loop(
         catches,
         finallys,
     );
-    if linearize_async_generator() {
+    {
         let deleg_hi = *state_num;
         LINEARIZE_DELEGATIONS.with(|c| {
             c.borrow_mut().push(DelegationRoute {
+                is_async: linearize_async_generator(),
                 suspend_state_lo: deleg_lo,
                 suspend_state_hi: deleg_hi,
                 iter_id: del_iter_id,

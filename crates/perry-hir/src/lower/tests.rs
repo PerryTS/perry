@@ -1295,3 +1295,74 @@ mod issue_11157_class_decl_self_statics;
 mod issue_11298_class_expr_evaluation_identity;
 
 mod self_global;
+
+#[test]
+fn known_generator_for_of_closes_in_both_scopes() {
+    let source = r#"
+        function* seq() { try { yield 1; } finally { console.log("closed"); } }
+        for (const value of seq()) { break; }
+        function run() { for (const value of seq()) { throw value; } }
+    "#;
+    let parsed = perry_parser::parse_typescript(source, "iterator_close.ts").unwrap();
+    let hir = super::lower_module(&parsed, "iterator_close", "iterator_close.ts").unwrap();
+    assert!(format!("{:?}", hir.init).contains("iteratorCloseIfNotDone"));
+    let run = hir.functions.iter().find(|f| f.name == "run").unwrap();
+    assert!(format!("{:?}", run.body).contains("iteratorCloseIfNotDone"));
+}
+
+#[test]
+fn generic_for_of_binding_value_is_read_before_close_handler() {
+    let source = r#"
+        function iterable(): any { return null; }
+        for (const {x = missing()} of iterable()) { break; }
+        function run() { for (const [x = missing()] of iterable()) { break; } }
+    "#;
+    let parsed = perry_parser::parse_typescript(source, "binding_close.ts").unwrap();
+    let hir = super::lower_module(&parsed, "binding_close", "binding_close.ts").unwrap();
+    assert!(format!("{:?}", hir.init).contains("__forof_value_"));
+    let run = hir.functions.iter().find(|f| f.name == "run").unwrap();
+    assert!(format!("{:?}", run.body).contains("__forof_value_"));
+}
+
+#[test]
+fn generator_array_binding_uses_iterator_without_draining() {
+    let source = "function* seq() { yield 1; yield 2; } const [x] = seq();";
+    let parsed = perry_parser::parse_typescript(source, "generator_binding.ts").unwrap();
+    let hir = super::lower_module(&parsed, "generator_binding", "generator_binding.ts").unwrap();
+    let init = format!("{:?}", hir.init);
+    assert!(
+        !init.contains("IteratorToArray"),
+        "binding must stop at its last element"
+    );
+    assert!(init.contains("iteratorCloseIfNotDone"));
+}
+
+#[test]
+fn known_generator_identifier_binding_has_no_duplicate_value_root() {
+    let source = r#"
+        function* seq() { yield 1; yield 2; }
+        for (const value of seq()) { console.log(value); }
+        function run() { for (const value of seq()) { console.log(value); } }
+    "#;
+    let parsed = perry_parser::parse_typescript(source, "iterator_root.ts").unwrap();
+    let hir = super::lower_module(&parsed, "iterator_root", "iterator_root.ts").unwrap();
+    assert!(!format!("{:?}", hir.init).contains("__gen_value_"));
+    let run = hir.functions.iter().find(|f| f.name == "run").unwrap();
+    assert!(!format!("{:?}", run.body).contains("__gen_value_"));
+    assert!(format!("{:?}", hir.init).contains("iteratorCloseIfNotDone"));
+    assert!(format!("{:?}", run.body).contains("iteratorCloseIfNotDone"));
+}
+
+#[test]
+fn outlined_iterator_close_uses_the_existing_synchronous_protocol_channel() {
+    let source = "function* values() { yield 1; } for (const x of values()) { break; }";
+    let parsed = perry_parser::parse_typescript(source, "outlined_close.ts").unwrap();
+    let module = super::lower_module(&parsed, "outlined_close", "outlined_close.ts").unwrap();
+    let hir = format!("{:?}", module.init);
+    assert!(hir.contains("iteratorCloseOnThrow"), "{hir}");
+    assert!(hir.contains("iteratorCloseIfNotDone"), "{hir}");
+    assert!(
+        !hir.contains("ExternFuncRef { name: \"js_iterator_close"),
+        "{hir}"
+    );
+}
