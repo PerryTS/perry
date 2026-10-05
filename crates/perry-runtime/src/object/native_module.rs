@@ -26,6 +26,7 @@ pub(crate) use perf_instance_bind::{instance_bound_perf_method, performance_name
 pub(crate) mod constants;
 mod constants_tables;
 mod constructor_exports;
+pub(crate) mod constructor_shapes;
 mod module_keys;
 mod name_tables;
 mod namespace_builders;

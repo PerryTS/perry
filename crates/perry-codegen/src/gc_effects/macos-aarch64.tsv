@@ -1823,6 +1823,7 @@ js_nm_install_util	Leaf
 js_nm_install_v8	Leaf
 js_nm_install_vm	Leaf
 js_nm_install_wasi	Leaf
+js_nm_install_worker_threads	Leaf
 js_nm_install_zlib	Leaf
 js_node_inspector_close	Leaf
 js_node_inspector_console_debug	Reenters

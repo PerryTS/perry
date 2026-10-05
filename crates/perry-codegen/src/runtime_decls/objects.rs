@@ -419,6 +419,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_vm", VOID, &[]);
     module.declare_function("js_nm_install_wasi", VOID, &[]);
     module.declare_function("js_nm_install_zlib", VOID, &[]);
+    module.declare_function("js_nm_install_worker_threads", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
     module.declare_function("js_nm_enable_install_all", VOID, &[]);
     module.declare_function("js_object_get_field_ic_miss", DOUBLE, &[I64, I64, PTR]);

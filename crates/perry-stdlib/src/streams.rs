@@ -25,13 +25,13 @@
 //! into `desiredSize`) live in `streams/byob.rs` and the queue helpers on
 //! `ReadableStreamData` (#4915).
 
+mod statics;
 use perry_runtime::closure::{JsFunctionInfo, JsThis};
 use perry_runtime::{ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader};
+pub(crate) use statics::install_readable_stream_from_static;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
-
-// Calls that allocate or mutate runtime-owned values must cross the stable C
-// ABI. A shared stdlib still contains fallback Rust runtime glue for generic
+// Calls that allocate or mutate runtime-owned values must cross the stable C ABI. A shared stdlib still contains fallback Rust runtime glue for generic
 // monomorphizations; direct Rust calls would allocate into that image's arena
 // instead of the process-wide runtime provider.
 extern "C" {

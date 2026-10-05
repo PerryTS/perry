@@ -1659,6 +1659,7 @@ js_in_operator_presence_ic	f64	f64,f64,ptr
 js_inline_arena_slow_alloc	ptr	ptr,usize,usize
 js_inline_arena_state	ptr	
 js_install_global_value_surfaces	void	
+js_install_readable_stream_from	void	ptr
 js_instanceof	f64	f64,i32u
 js_instanceof_dynamic	f64	f64,f64
 js_instanceof_noncallable_rhs	f64	
@@ -2148,6 +2149,7 @@ js_nm_install_util	void
 js_nm_install_v8	void	
 js_nm_install_vm	void	
 js_nm_install_wasi	void	
+js_nm_install_worker_threads	void	
 js_nm_install_zlib	void	
 js_node_http2_connect	i64	f64,f64,i64
 js_node_http2_create_secure_server	i64	f64,i64

@@ -14,8 +14,6 @@ const STREAM_STATIC_DUPLEX_TO_WEB: f64 = 5.0;
 const STREAM_STATIC_READABLE_FROM_WEB: f64 = 6.0;
 const STREAM_STATIC_WRITABLE_FROM_WEB: f64 = 7.0;
 const STREAM_STATIC_DUPLEX_FROM_WEB: f64 = 8.0;
-const STREAM_STATIC_IS_DISTURBED: f64 = 9.0;
-const STREAM_STATIC_IS_ERRORED: f64 = 10.0;
 
 pub(crate) fn scan_stream_event_emitter_prototype_roots_mut(
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
@@ -177,19 +175,24 @@ pub(crate) fn attach_stream_constructor_prototype(constructor_value: f64, name: 
         "PassThrough" => 0x7FFF_FF38,
         _ => return,
     };
-    let proto = js_object_alloc_with_shape(
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor = scope.root_nanbox_f64(constructor_value);
+    let proto = scope.root_raw_mut_ptr(js_object_alloc_with_shape(
         shape_id,
         1,
         b"constructor\0".as_ptr(),
         b"constructor\0".len() as u32,
-    );
-    js_object_set_field(proto, 0, JSValue::from_bits(constructor_value.to_bits()));
+    ));
+    proto.with_mut_ptr(|p| {
+        js_object_set_field(p, 0, JSValue::from_bits(constructor.get_nanbox_u64()))
+    });
     // `Readable`/`Writable`/`Duplex`/`Transform`/`PassThrough` also chain their
     // own prototype methods onto `<Ctor>.prototype.<m>.call(this, …)` (e.g.
     // `Duplex.prototype.on` ↔ readable-stream borrows). Expose the EventEmitter
     // methods on these prototypes too.
-    crate::node_stream::install_event_emitter_prototype_methods(proto);
-    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
+    proto.with_mut_ptr(|p| crate::node_stream::install_event_emitter_prototype_methods(p));
+    let proto_value =
+        proto.with_mut_ptr(|p: *mut ObjectHeader| crate::value::js_nanbox_pointer(p as i64));
     STREAM_EVENT_EMITTER_PROTOTYPES.with(|protos| {
         let mut protos = protos.borrow_mut();
         if !protos.contains(&proto_value.to_bits()) {
@@ -197,11 +200,11 @@ pub(crate) fn attach_stream_constructor_prototype(constructor_value: f64, name: 
         }
     });
     crate::closure::closure_set_dynamic_prop(
-        (constructor_value.to_bits() & crate::value::POINTER_MASK) as usize,
+        closure_addr_of(constructor.get_nanbox_f64()),
         "prototype",
         proto_value,
     );
-    attach_stream_constructor_statics(constructor_value, name);
+    attach_stream_constructor_statics(constructor.get_nanbox_f64(), name);
 }
 
 pub(crate) fn is_stream_event_emitter_prototype_value(value: f64) -> bool {
@@ -236,57 +239,62 @@ extern "C" fn stream_static_method_thunk(
         crate::node_stream::js_node_stream_writable_from_web(arg0, arg1)
     } else if kind == STREAM_STATIC_DUPLEX_FROM_WEB {
         crate::node_stream::js_node_stream_duplex_from_web(arg0, arg1)
-    } else if kind == STREAM_STATIC_IS_DISTURBED {
-        crate::node_stream::js_node_stream_is_disturbed(arg0)
-    } else if kind == STREAM_STATIC_IS_ERRORED {
-        crate::node_stream::js_node_stream_is_errored(arg0)
     } else {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     }
 }
 
 fn stream_static_method_value(method: &str, kind: f64, exposed_length: u32) -> f64 {
-    let closure = crate::closure::js_closure_alloc(
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
         crate::fn_info!(stream_static_method_thunk, 2; with_declared(2)),
         1,
-    );
-    crate::closure::js_closure_set_capture_f64(closure, 0, kind);
-    set_bound_native_closure_name(closure, method);
-    set_builtin_closure_length(closure as usize, exposed_length);
-    crate::value::js_nanbox_pointer(closure as i64)
+    ));
+    closure.with_mut_ptr(|p| crate::closure::js_closure_set_capture_f64(p, 0, kind));
+    closure.with_mut_ptr(|p| set_bound_native_closure_name(p, method));
+    closure.with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
+        set_builtin_closure_length(p as usize, exposed_length)
+    });
+    closure.with_mut_ptr(|p: *mut crate::closure::ClosureHeader| {
+        crate::value::js_nanbox_pointer(p as i64)
+    })
 }
 
-fn attach_stream_static(closure: usize, method: &str, kind: f64, exposed_length: u32) {
+fn attach_stream_static(
+    constructor: &crate::gc::RuntimeHandle<'_>,
+    method: &str,
+    kind: f64,
+    exposed_length: u32,
+) {
     let value = stream_static_method_value(method, kind, exposed_length);
-    crate::closure::closure_set_dynamic_prop(closure, method, value);
+    crate::closure::closure_set_dynamic_prop(
+        closure_addr_of(constructor.get_nanbox_f64()),
+        method,
+        value,
+    );
 }
 
 fn attach_stream_constructor_statics(constructor_value: f64, name: &str) {
-    let closure = (constructor_value.to_bits() & crate::value::POINTER_MASK) as usize;
-    if closure == 0 {
-        return;
-    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor = scope.root_nanbox_f64(constructor_value);
 
     match name {
         "Readable" => {
-            attach_stream_static(closure, "from", STREAM_STATIC_READABLE_FROM, 2);
-            attach_stream_static(closure, "fromWeb", STREAM_STATIC_READABLE_FROM_WEB, 2);
-            attach_stream_static(closure, "toWeb", STREAM_STATIC_READABLE_TO_WEB, 2);
+            attach_stream_static(&constructor, "from", STREAM_STATIC_READABLE_FROM, 2);
+            attach_stream_static(&constructor, "fromWeb", STREAM_STATIC_READABLE_FROM_WEB, 2);
+            attach_stream_static(&constructor, "toWeb", STREAM_STATIC_READABLE_TO_WEB, 2);
         }
         "Writable" => {
-            attach_stream_static(closure, "fromWeb", STREAM_STATIC_WRITABLE_FROM_WEB, 2);
-            attach_stream_static(closure, "toWeb", STREAM_STATIC_WRITABLE_TO_WEB, 1);
+            attach_stream_static(&constructor, "fromWeb", STREAM_STATIC_WRITABLE_FROM_WEB, 2);
+            attach_stream_static(&constructor, "toWeb", STREAM_STATIC_WRITABLE_TO_WEB, 1);
         }
-        "Duplex" | "Transform" | "PassThrough" => {
-            attach_stream_static(closure, "from", STREAM_STATIC_DUPLEX_FROM, 1);
-            attach_stream_static(closure, "fromWeb", STREAM_STATIC_DUPLEX_FROM_WEB, 2);
-            attach_stream_static(closure, "toWeb", STREAM_STATIC_DUPLEX_TO_WEB, 2);
+        "Duplex" => {
+            attach_stream_static(&constructor, "from", STREAM_STATIC_DUPLEX_FROM, 1);
+            attach_stream_static(&constructor, "fromWeb", STREAM_STATIC_DUPLEX_FROM_WEB, 2);
+            attach_stream_static(&constructor, "toWeb", STREAM_STATIC_DUPLEX_TO_WEB, 2);
         }
         _ => {}
     }
-
-    attach_stream_static(closure, "isDisturbed", STREAM_STATIC_IS_DISTURBED, 1);
-    attach_stream_static(closure, "isErrored", STREAM_STATIC_IS_ERRORED, 1);
 }
 
 pub(crate) unsafe fn dispatch_stream_native_module_method(
