@@ -129,3 +129,39 @@ fn elided_length_and_index_reads_keep_ordinary_parameter_slots() {
         assert!(collect_boxed_param_ids(&params(true), &[Stmt::Return(Some(read))]).is_empty());
     }
 }
+
+#[test]
+fn redeclared_parameters_keep_prologue_cells_in_named_and_expression_bodies() {
+    let body = vec![
+        Stmt::Let {
+            id: 1,
+            name: "a".into(),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(Expr::Integer(5)),
+        },
+        Stmt::Return(Some(Expr::LocalGet(3))),
+    ];
+    let mut named = module(params(true), body.clone());
+    crate::scope_env::group_scope_boxes(&mut named);
+    assert!(matches!(named.functions[0].body[0], Stmt::Let { .. }));
+    // Codegen must decline even a preallocation handed in by another pass.
+    named.functions[0]
+        .body
+        .insert(0, Stmt::PreallocateBoxes(vec![1]));
+    let boxed = crate::codegen::boxed_locals::collect_module_boxed_vars(&named);
+    assert!(
+        crate::scope_env::ScopeMap::build(&named, &boxed, &HashMap::new())
+            .slot(1)
+            .is_none()
+    );
+    let mut expression = Module::new("redeclared_expression");
+    expression
+        .init
+        .push(Stmt::Expr(closure(11, params(true), body, vec![])));
+    crate::scope_env::group_scope_boxes(&mut expression);
+    let Stmt::Expr(Expr::Closure { body, .. }) = &expression.init[0] else {
+        panic!("closure retained")
+    };
+    assert!(matches!(body[0], Stmt::Let { .. }));
+}

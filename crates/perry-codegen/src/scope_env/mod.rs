@@ -64,7 +64,7 @@ pub mod pass;
 
 use std::collections::{HashMap, HashSet};
 
-use perry_hir::{Expr, Module as HirModule, Stmt};
+use perry_hir::{Expr, Module as HirModule, Param, Stmt};
 
 pub use pass::group_scope_boxes;
 
@@ -158,13 +158,14 @@ impl ScopeMap {
             return map;
         }
         let counts = analysis::prealloc_counts(hir);
-        for_each_body(hir, &mut |stmts: &[Stmt]| {
+        for_each_body(hir, &mut |params: &[Param], stmts: &[Stmt]| {
             let mut interest = HashSet::new();
             analysis::collect_shallow_prealloc_ids(stmts, &mut interest);
             interest.retain(|id| {
                 counts.get(id) == Some(&1)
                     && module_boxed_vars.contains(id)
                     && !module_globals.contains_key(id)
+                    && !params.iter().any(|p| p.id == *id)
             });
             if interest.is_empty() {
                 return;
@@ -228,11 +229,11 @@ pub(crate) fn compact_root_slots(
 
 /// Visit every function-like body in the module: top-level functions, class
 /// members, the module init, and every closure body nested anywhere in them.
-pub(crate) fn for_each_body(hir: &HirModule, f: &mut dyn FnMut(&[Stmt])) {
-    let mut roots: Vec<&[Stmt]> = vec![&hir.init];
+pub(crate) fn for_each_body(hir: &HirModule, f: &mut dyn FnMut(&[Param], &[Stmt])) {
+    let mut roots: Vec<(&[Param], &[Stmt])> = vec![(&[], &hir.init)];
     let mut root_exprs: Vec<&Expr> = Vec::new();
     for func in &hir.functions {
-        roots.push(&func.body);
+        roots.push((&func.params, &func.body));
         push_param_defaults(&func.params, &mut root_exprs);
     }
     for c in &hir.classes {
@@ -245,7 +246,7 @@ pub(crate) fn for_each_body(hir: &HirModule, f: &mut dyn FnMut(&[Stmt])) {
             .chain(c.computed_members.iter().map(|m| &m.function))
             .chain(c.constructor.iter())
         {
-            roots.push(&m.body);
+            roots.push((&m.params, &m.body));
             push_param_defaults(&m.params, &mut root_exprs);
         }
         for field in c.fields.iter().chain(c.static_fields.iter()) {
@@ -259,18 +260,24 @@ pub(crate) fn for_each_body(hir: &HirModule, f: &mut dyn FnMut(&[Stmt])) {
     for g in &hir.globals {
         root_exprs.extend(g.init.iter());
     }
-    for stmts in roots {
-        f(stmts);
-        analysis::for_each_closure_in_stmts(stmts, &mut |body| for_each_body_in_closure(body, f));
+    for (params, stmts) in roots {
+        f(params, stmts);
+        analysis::for_each_closure_in_stmts(stmts, &mut |params, body| {
+            for_each_body_in_closure(params, body, f)
+        });
     }
     for e in root_exprs {
-        analysis::for_each_closure_in_expr(e, &mut |body| for_each_body_in_closure(body, f));
+        analysis::for_each_closure_in_expr(e, &mut |params, body| {
+            for_each_body_in_closure(params, body, f)
+        });
     }
 }
 
-fn for_each_body_in_closure(body: &[Stmt], f: &mut dyn FnMut(&[Stmt])) {
-    f(body);
-    analysis::for_each_closure_in_stmts(body, &mut |inner| for_each_body_in_closure(inner, f));
+fn for_each_body_in_closure(params: &[Param], body: &[Stmt], f: &mut dyn FnMut(&[Param], &[Stmt])) {
+    f(params, body);
+    analysis::for_each_closure_in_stmts(body, &mut |params, inner| {
+        for_each_body_in_closure(params, inner, f)
+    });
 }
 
 fn push_param_defaults<'a>(params: &'a [perry_hir::Param], out: &mut Vec<&'a Expr>) {

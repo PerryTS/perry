@@ -14,7 +14,7 @@
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use perry_hir::{Expr, Module as HirModule, Stmt};
+use perry_hir::{Expr, Module as HirModule, Param, Stmt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DeclKind {
@@ -341,7 +341,7 @@ pub(super) fn stmt_exprs<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
 
 /// Call `f` with the body of every closure literal directly in this body's
 /// statements (not inside another closure's body — the caller recurses).
-pub(super) fn for_each_closure_in_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&[Stmt])) {
+pub(super) fn for_each_closure_in_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&[Param], &[Stmt])) {
     for_each_stmt_shallow(stmts, &mut |s| {
         stmt_exprs(s, &mut |e| for_each_closure_in_expr(e, f));
     });
@@ -349,9 +349,9 @@ pub(super) fn for_each_closure_in_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&[Stmt
 
 /// Call `f` with the body of every closure literal in `e`, not descending into
 /// the bodies themselves (param defaults of a closure are searched).
-pub(super) fn for_each_closure_in_expr(e: &Expr, f: &mut dyn FnMut(&[Stmt])) {
-    if let Expr::Closure { body, .. } = e {
-        f(body);
+pub(super) fn for_each_closure_in_expr(e: &Expr, f: &mut dyn FnMut(&[Param], &[Stmt])) {
+    if let Expr::Closure { params, body, .. } = e {
+        f(params, body);
     }
     perry_hir::walker::walk_expr_children(e, &mut |child| for_each_closure_in_expr(child, f));
 }
@@ -359,7 +359,7 @@ pub(super) fn for_each_closure_in_expr(e: &Expr, f: &mut dyn FnMut(&[Stmt])) {
 /// How many preallocation statements in the whole module name each id.
 pub(super) fn prealloc_counts(hir: &HirModule) -> HashMap<u32, u32> {
     let mut counts: HashMap<u32, u32> = HashMap::new();
-    super::for_each_body(hir, &mut |stmts: &[Stmt]| {
+    super::for_each_body(hir, &mut |_: &[Param], stmts: &[Stmt]| {
         for_each_stmt_shallow(stmts, &mut |s| {
             if let Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) = s {
                 for id in ids {

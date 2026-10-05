@@ -25,6 +25,7 @@ use crate::analysis::{
 use crate::ir::{EnumValue, Expr, Function, Param, Stmt};
 use crate::lower_decl::{
     append_synthetic_arguments_param, body_uses_arguments, lower_fn_body_block_stmt,
+    mapped_argument_parameter_ids, params_are_simple_arguments_list, params_use_arguments,
 };
 use crate::lower_patterns::{
     generate_param_destructuring_stmts, get_param_default, get_pat_name, is_destructuring_pattern,
@@ -270,6 +271,38 @@ fn lower_method_prop(
             destructuring_params.push((param_id, inner_pat.clone()));
         }
     }
+    // Object methods inherit strictness and use the same parameter mapping
+    // rules as ordinary functions. Bind arguments before lowering defaults:
+    // a default that refers to arguments sees this method's object.
+    let simple_parameters = params_are_simple_arguments_list(&method.function.params);
+    let user_has_arguments_param = method
+        .function
+        .params
+        .iter()
+        .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
+    let needs_arguments_synth = !user_has_arguments_param
+        && (method
+            .function
+            .body
+            .as_ref()
+            .is_some_and(|b| body_uses_arguments(&b.stmts))
+            || params_use_arguments(&method.function.params));
+    if needs_arguments_synth {
+        let mapped = !method_strict && simple_parameters;
+        let mapped_parameter_ids = if mapped {
+            mapped_argument_parameter_ids(&params)
+        } else {
+            Vec::new()
+        };
+        append_synthetic_arguments_param(
+            ctx,
+            &mut params,
+            method_strict,
+            simple_parameters,
+            !mapped,
+            mapped_parameter_ids,
+        );
+    }
     for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
         param.default = get_param_default(ctx, pat)?;
     }
@@ -287,29 +320,6 @@ fn lower_method_prop(
         .as_ref()
         .map(|rt| extract_ts_type_with_ctx(&rt.type_ann, Some(ctx)))
         .unwrap_or(Type::Any);
-
-    // #321 / #64 / #65: synthesize legacy `arguments` for object-literal methods
-    // whose body references it. Without this, effect's Pipeable prototype
-    // methods (`pipe() { return pipeArguments(this, arguments) }` on
-    // `TypeMatcherProto`/`ValueMatcherProto` and friends) see an unbound
-    // `arguments` identifier, and `.pipe(...)` quietly drops all of its
-    // operands. Mirrors the synthesis in `class_members.rs` / `fn_decl.rs` /
-    // `expr_function.rs` — the only call site that was missing this hook.
-    let user_has_arguments_param = method
-        .function
-        .params
-        .iter()
-        .any(|p| get_pat_name(&p.pat).ok().as_deref() == Some("arguments"));
-    let needs_arguments_synth = !user_has_arguments_param
-        && method
-            .function
-            .body
-            .as_ref()
-            .map(|b| body_uses_arguments(&b.stmts))
-            .unwrap_or(false);
-    if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
-    }
 
     crate::lower::unrebound_params::note(
         ctx,
@@ -434,7 +444,7 @@ fn lower_method_prop(
             body,
             is_async: method.function.is_async,
             is_generator: method.function.is_generator,
-            is_strict: ctx.current_strict,
+            is_strict: method_strict,
             was_plain_async: false,
             was_unrolled: false,
             is_exported: false,
@@ -473,7 +483,7 @@ fn lower_method_prop(
             is_arrow: false,
             is_async: method.function.is_async,
             is_generator: method.function.is_generator,
-            is_strict: ctx.current_strict,
+            is_strict: method_strict,
         }
     };
     Ok(Some((method_key, value_expr, uses_this)))
