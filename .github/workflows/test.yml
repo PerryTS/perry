@@ -215,6 +215,11 @@ jobs:
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
           fi
+      - name: Development debug information policy
+        run: |
+          python3 scripts/check_dev_debug.py --self-test
+          python3 scripts/check_dev_debug.py
+
       - name: Changeset gate self-test
         if: ${{ !cancelled() }}
         run: ./scripts/check_changeset_fragment.sh --self-test
