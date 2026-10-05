@@ -216,7 +216,7 @@ fn builtin_replace(all: bool, search: f64) -> Option<bool> {
         return None;
     }
     let re = crate::value::js_nanbox_get_pointer(search) as *const super::RegExpHeader;
-    Some(unsafe { (*re).global })
+    Some(unsafe { (*crate::regex::regexp_data_ptr(re)).global })
 }
 
 pub(crate) fn string(

@@ -530,7 +530,9 @@ pub(crate) fn array_get(v: f64, index: u32) -> f64 {
 // ── objects ────────────────────────────────────────────────────────────────
 
 pub(crate) fn object_new() -> f64 {
-    let obj = crate::object::js_object_alloc(0, 0);
+    // Interpreted object literals and scope records are ordinary objects.
+    // Publish that fact at birth, as compiled literals already do.
+    let obj = crate::object::object_alloc_plain(0);
     crate::value::js_nanbox_pointer(obj as i64)
 }
 

@@ -1547,7 +1547,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
             || crate::wasi::is_wasi_instance(f64::from_bits(
                 crate::value::js_nanbox_pointer(obj as i64).to_bits(),
             ));
-        if !has_descriptors && !hide_private && !hide_wasi_state {
+        if !has_descriptors && !own_keys_may_hide(obj) && !hide_wasi_state {
             let out = crate::array::js_array_alloc(len as u32);
             for j in 0..len {
                 let key_val = keys_view.get(pos(j));
@@ -1574,7 +1574,11 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         let filtered = crate::array::js_array_alloc(len as u32);
         let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for j in 0..len {
-            let key_val = keys_view.get(pos(j));
+            let slot = pos(j);
+            let key_val = keys_view.get(slot);
+            if own_slot_hidden(obj, slot, key_val) {
+                continue;
+            }
             // #1781: accept inline SSO short keys (≤5 bytes) — the
             // pre-fix `is_string()` skipped them and Object.keys silently
             // dropped them from the result.
@@ -1629,6 +1633,28 @@ pub(crate) unsafe fn instance_private_key_hidden(
     let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     crate::string::js_string_key_bytes(key_val, &mut buf)
         .is_some_and(|bytes| own_key_hidden_bytes(obj, bytes))
+}
+
+/// Hide a physical private slot, independently of an equally spelled
+/// public property. Enumerators already know the key's position.
+pub(crate) unsafe fn own_slot_hidden(
+    obj: *const ObjectHeader,
+    slot: u32,
+    key: crate::JSValue,
+) -> bool {
+    let keys = crate::object::object_keys(obj);
+    if !keys.is_null()
+        && crate::object::key_attrs::entry_is_private(crate::object::key_attrs::keys_entry(
+            keys.arr(),
+            slot,
+        ))
+    {
+        return true;
+    }
+    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    (*obj).class_id != 0
+        && crate::string::js_string_key_bytes(key, &mut buf)
+            .is_some_and(is_internal_runtime_key_bytes)
 }
 
 /// Can any own key of `obj` be hidden from reflection
@@ -1905,7 +1931,7 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 continue;
             }
             let key_val = keys_view.get(i);
-            if hide_private && instance_private_key_hidden(obj, key_val) {
+            if hide_private && own_slot_hidden(obj, i, key_val) {
                 continue;
             }
             if let Some(bytes) = crate::string::js_string_key_bytes(key_val, &mut key_buf) {

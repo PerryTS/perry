@@ -59,6 +59,8 @@ pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
     js_object_alloc_null_proto, js_object_alloc_with_parent, js_object_coerce,
 };
+#[cfg(feature = "regex-engine")]
+pub(crate) use alloc_basic::object_alloc_plain_born;
 pub(crate) use alloc_basic::{object_alloc_born, object_alloc_filled_birth, object_alloc_plain};
 #[allow(unused_imports)]
 pub(crate) use alloc_plain::mark_object_plain_ordinary;
@@ -1781,9 +1783,8 @@ pub(crate) use meta_flags::{OBJECT_META_FLAG_EXOTIC_READ_RECEIVER, OBJECT_META_F
 pub(crate) mod meta_record;
 pub use meta_record::ObjectMeta;
 
-/// Authoritative ordinary-object discriminator. RegExp has its own GC kind,
-/// and heap class-expression values carry their kind in the immutable ShapeId
-/// descriptor. #8113 deleted the legacy `ObjectHeader::object_type` ABI mirror,
+/// Ordinary-object discriminator. Class expressions carry their kind in the
+/// ShapeId descriptor; #8113 deleted the `ObjectHeader::object_type` mirror,
 /// so this is the ONLY spelling of "is an ordinary object" — note it is FALSE
 /// for a class object (`ShapeObjectKind::Class`), which is exactly what the
 /// retired `object_type == OBJECT_TYPE_REGULAR` test meant (#6595).

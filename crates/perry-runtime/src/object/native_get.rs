@@ -127,7 +127,7 @@ unsafe fn try_data_lookup_key(
     let mut inherited = false;
     for _ in 0..32 {
         let addr = object as usize;
-        let (header, keys, key_count, live) = if let Some(shape) = first_shape.take() {
+        let (header, keys, key_count, live, summary, dictionary) = if let Some(shape) = first_shape.take() {
             // The receiver's live ordinary shape already proved ObjectHeader
             // layout. Reuse it on wide, semantic and absent-key reads too;
             // these facts are consumed without allocation or user code.
@@ -136,6 +136,8 @@ unsafe fn try_data_lookup_key(
                 shape.keys,
                 shape.logical_key_count,
                 shape.live_inline_slot_count,
+                shape.summary,
+                false, // The retained proof came from the ordinary ShapeId band.
             )
         } else {
             // An inherited hop or unproved cell still needs positive arena
@@ -162,6 +164,8 @@ unsafe fn try_data_lookup_key(
                 descriptor.keys,
                 descriptor.logical_key_count,
                 descriptor.live_inline_slot_count,
+                descriptor.summary,
+                descriptor.semantic_generation & super::dictionary::DICTIONARY_GENERATION_TAG != 0,
             )
         };
         if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
@@ -195,13 +199,15 @@ unsafe fn try_data_lookup_key(
         if meta.is_null() || (*meta).accessor_key_bits & accessor_bit == 0 {
             let keys = keys as usize as *const crate::array::ArrayHeader;
             if !keys.is_null() {
-                if let Some(slot) =
-                    // `keys` came straight out of the live shape above with no
-                    // allocation in between, and the collector maintains that
-                    // field — so the resolved entry skips a `clean_arr_ptr`
-                    // that re-derives it.
+                // Public reads skip intrinsic and class-private entries.
+                // These facts come from the live owner proof without another
+                // shape lookup or allocation.
+                let slot = if summary & super::key_attrs::SUMMARY_PRIVATE == 0 {
                     super::keys_find_slot_by_bytes_resolved(keys, key_count, key)
-                {
+                } else {
+                    super::keys_find_property_slot_by_bytes_resolved(keys, key_count, key)
+                };
+                if let Some(slot) = slot {
                     let value = super::field_get_set::object_field_at_with_live(object, slot, live);
                     // Legacy inherited resolution treats undefined/null as
                     // misses at some class edges. Preserve that fallback, and
@@ -213,6 +219,10 @@ unsafe fn try_data_lookup_key(
                     }
                     return Some(Some(value));
                 }
+            } else if dictionary {
+                // A keyless dictionary shape cannot prove an own-key miss.
+                // Its mutable list is read by the ordinary generic lookup.
+                return None;
             }
         } else {
             return None;

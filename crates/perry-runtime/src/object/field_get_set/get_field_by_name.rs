@@ -790,11 +790,13 @@ fn get_field_by_name_past_data_probe(
                                     // `js_string_key_matches` at 9.6% self time
                                     // in a computed-key read loop, second only to
                                     // this function itself.
-                                    if let Some(i) = crate::object::keys_find_slot_by_key_ptr(
-                                        keys,
-                                        key_count as u32,
-                                        key,
-                                    ) {
+                                    if let Some(i) =
+                                        crate::object::keys_find_property_slot_by_key_ptr(
+                                            keys,
+                                            key_count as u32,
+                                            key,
+                                        )
+                                    {
                                         let i = i as usize;
                                         prime_read_stub(o, key, i as u32, i < alloc_limit);
                                         super::super::prop_plan::read_plan_record(

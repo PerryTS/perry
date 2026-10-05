@@ -33,7 +33,7 @@ fn address<T>(handle: &RuntimeHandle<'_>) -> usize {
 }
 
 fn program_address(receiver: &RuntimeHandle<'_>) -> usize {
-    unsafe { (*api::regexp(receiver)).perex_program as usize }
+    unsafe { (*crate::regex::regexp_data_ptr(api::regexp(receiver))).perex_program as usize }
 }
 
 /// The subject's refcount word: 1 while unique, 0 once marked shared.
@@ -201,8 +201,11 @@ fn perex_in_place_stateful_search_writes_last_index_without_a_trap() {
         )
         .map(|m| m.map(|m| (m.full.start(), m.full.end())))
     };
-    let last_index = || unsafe {
-        crate::value::JSValue::from_bits((*api::regexp(&receiver)).last_index).as_number()
+    let last_index = || {
+        crate::value::JSValue::from_bits(
+            crate::regex::get_last_index(api::regexp(&receiver)).to_bits(),
+        )
+        .as_number()
     };
     let mut budget = Budget::new(api::WORK);
     assert_eq!(api::finish(run(&mut budget)), Some((1, 2)));
@@ -217,9 +220,13 @@ fn perex_in_place_stateful_search_writes_last_index_without_a_trap() {
         "lastIndex".to_string(),
         attrs,
     );
-    assert!(matches!(
-        run(&mut budget),
-        Err(crate::regex::perex_runtime::EngineError::Type(message))
-            if message == crate::regex::LAST_INDEX_READ_ONLY
-    ));
+    let thrown = match run(&mut budget) {
+        Err(crate::regex::perex_runtime::EngineError::Abrupt(thrown)) => thrown,
+        other => panic!("ordinary throwing Set must return its TypeError: {other:?}"),
+    };
+    let thrown = scope.root_raw_mut_ptr(
+        crate::value::js_nanbox_get_pointer(thrown) as *mut crate::error::ErrorHeader
+    );
+    let name = thrown.with_mut_ptr(|e| crate::error::js_error_get_name(e));
+    assert_eq!(crate::regex::string_as_bytes(name), b"TypeError");
 }

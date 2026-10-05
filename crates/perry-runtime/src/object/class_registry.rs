@@ -111,9 +111,9 @@ pub use state::{
 
 // ── prototype_objects.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_objects::{
-    class_decl_prototype_relinked, class_prototype_object, decl_prototype_relinked,
-    ensure_function_prototype_object, function_class_id, function_value_for_class_id,
-    object_proto_chain_symbol_slot, relinked_class_prototype_read, resolve_proto_chain_field,
+    class_decl_prototype_relinked, class_prototype_object, ensure_function_prototype_object,
+    function_class_id, function_value_for_class_id, object_proto_chain_symbol_slot,
+    relinked_class_prototype_read, resolve_proto_chain_field,
     resolve_proto_chain_field_noting_miss, resolve_proto_chain_field_with_receiver,
     resolve_proto_chain_symbol, synthetic_class_prototype_object, SYNTHETIC_CLASS_ID_BASE,
 };

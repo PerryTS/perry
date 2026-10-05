@@ -581,7 +581,9 @@ fn needle_regex_ptr(needle: f64) -> Option<*const crate::regex::RegExpHeader> {
     } else {
         return None;
     };
-    if crate::regex::is_regex_pointer(addr as *const u8) {
+    if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((addr as *const u8) as i64))
+        .is_some()
+    {
         Some(addr as *const crate::regex::RegExpHeader)
     } else {
         None

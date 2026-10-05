@@ -176,6 +176,25 @@ pub(crate) fn object_alloc_born(
     field_count: u32,
     shape_id: u32,
 ) -> *mut ObjectHeader {
+    object_alloc_born_impl(class_id, field_count, shape_id, false)
+}
+
+/// A plain ordinary receiver born on a previously validated ordinary shape.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn object_alloc_plain_born(field_count: u32, shape_id: u32) -> *mut ObjectHeader {
+    debug_assert_eq!(
+        crate::object::shapes::shape_object_kind_by_id(shape_id),
+        Some(crate::object::shapes::ShapeObjectKind::Ordinary)
+    );
+    object_alloc_born_impl(0, field_count, shape_id, true)
+}
+
+fn object_alloc_born_impl(
+    class_id: u32,
+    field_count: u32,
+    shape_id: u32,
+    premark_plain: bool,
+) -> *mut ObjectHeader {
     let alloc_field_count = std::cmp::max(field_count as usize, crate::object::INLINE_SLOT_FLOOR);
     let total_size =
         std::mem::size_of::<ObjectHeader>() + alloc_field_count * std::mem::size_of::<JSValue>();
@@ -191,6 +210,9 @@ pub(crate) fn object_alloc_born(
             ptr::write(fields_ptr.add(i), JSValue::undefined());
         }
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
+        if premark_plain {
+            crate::object::shapes::store_kind::premark_plain_ordinary(ptr);
+        }
         if crate::arena::pointer_in_nursery(ptr as usize) {
             // A nursery newborn: no proof to retire, nobody inherits from it
             // and no old-generation carrier to note — the stamp is the store.

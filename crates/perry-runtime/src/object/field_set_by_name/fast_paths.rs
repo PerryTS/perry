@@ -182,7 +182,11 @@ unsafe fn existing_own_data_overwrite(
                 // compare per key, in full, every time the epoch-guarded read
                 // plan was flushed — the same miss-path cost #8936 and #8950
                 // removed from their sides of the property paths.
-                own_idx = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key);
+                own_idx = if shape.summary & crate::object::key_attrs::SUMMARY_PRIVATE == 0 {
+                    crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key)
+                } else {
+                    crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
+                };
                 if let Some(i) = own_idx {
                     super::prop_plan::read_plan_record(keys_addr, key_addr, i);
                 }
@@ -196,12 +200,26 @@ unsafe fn existing_own_data_overwrite(
             }
             // The key list's own keying: content, most-derived declaration
             // first (#10595), exactly as the interned lookup resolves it.
-            crate::object::keys_find_slot_by_bytes(keys, key_count, bytes)
+            if shape.summary & crate::object::key_attrs::SUMMARY_PRIVATE == 0 {
+                crate::object::keys_find_slot_by_bytes(keys, key_count, bytes)
+            } else {
+                crate::object::keys_find_property_slot_by_bytes(keys, key_count, bytes)
+            }
         }
     };
     let Some(idx) = own_idx else {
         return false;
     };
+    if shape.summary
+        & (crate::object::key_attrs::SUMMARY_BLOCKS_STORE
+            | crate::object::key_attrs::SUMMARY_PRIVATE)
+        != 0
+        && !crate::object::key_attrs::entry_is_plain_writable_data(
+            crate::object::key_attrs::keys_entry(keys, idx),
+        )
+    {
+        return false;
+    }
 
     let vbits = value.to_bits();
     let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
@@ -454,8 +472,12 @@ pub(crate) fn try_readd_stable_tombstone(
         if keys_gc.obj_type != crate::gc::GC_TYPE_ARRAY
             || keys_gc.gc_flags & (crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_SHAPE_SHARED)
                 != 0
-            || crate::object::keys_find_slot_by_bytes(keys, shape.logical_key_count, key_bytes)
-                .is_some()
+            || crate::object::keys_find_property_slot_by_bytes(
+                keys,
+                shape.logical_key_count,
+                key_bytes,
+            )
+            .is_some()
         {
             return None;
         }
@@ -549,7 +571,7 @@ unsafe fn try_readd_stable_tombstone_sso_no_grow(
     // All-holes is a constructive absence proof and is the steady state of a
     // one-live-key receiver immediately after delete.
     if shape.hole_count != shape.logical_key_count
-        && crate::object::keys_find_slot_by_bytes(keys, shape.logical_key_count, key_bytes)
+        && crate::object::keys_find_property_slot_by_bytes(keys, shape.logical_key_count, key_bytes)
             .is_some()
     {
         return None;

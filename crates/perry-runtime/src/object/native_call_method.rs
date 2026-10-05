@@ -1029,7 +1029,6 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     let excluded = match obj_type {
         crate::gc::GC_TYPE_SET => crate::set::is_registered_set(addr),
         crate::gc::GC_TYPE_MAP => crate::map::is_registered_map(addr),
-        crate::gc::GC_TYPE_REGEXP => true,
         _ => false,
     };
     if excluded {
@@ -2164,17 +2163,17 @@ pub(crate) unsafe fn native_call_method_tower(
         let Some(descriptor) = crate::object::shapes::object_shape_descriptor(obj) else {
             return crate::object::null_stub_value();
         };
-        // #10868 step 2.5 stage 1: see the shadowing scan above.
-        if crate::object::dictionary::is_dictionary(obj) {
-            // #10924 replaced the header-less `NullObjectBytes` static with a
-            // real GC object; #10938 was written before that landed and still
-            // spelled the old static here. Reinstating it would give
-            // dictionary-mode receivers exactly the #10917 bug the replacement
-            // removed -- brand probes reading the `.rodata` bytes in front of
-            // a header-less value.
-            return crate::object::null_stub_value();
-        }
-        let keys = descriptor.keys as usize as *mut ArrayHeader;
+        // A dictionary's shape publishes no keys. The same ordinary own
+        // lookup uses its receiver-owned list before walking the prototype.
+        let (keys, key_count) = if descriptor.keys == 0 {
+            let keys = crate::object::object_keys(obj);
+            (keys.arr(), keys.count() as usize)
+        } else {
+            (
+                descriptor.keys as usize as *mut ArrayHeader,
+                descriptor.logical_key_count as usize,
+            )
+        };
 
         if !keys.is_null() {
             // Validate keys_array pointer before dereferencing
@@ -2189,7 +2188,6 @@ pub(crate) unsafe fn native_call_method_tower(
             // GcHeader-based validation.
 
             // Search for the method in the object's fields
-            let key_count = descriptor.logical_key_count as usize;
             // Sanity check key_count
             if key_count > 65536 {
                 return crate::object::null_stub_value();

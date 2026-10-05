@@ -5,7 +5,7 @@ use super::perex_api::{self as api, PROGRAM_BYTES, SCRATCH_BYTES, WORK};
 use super::perex_memory::MemoryBudget;
 use super::perex_owner::{GcProgram, HeapSubject};
 use super::perex_runtime::{self as host, EngineError};
-use super::{RegExpHeader, REGEXP_MAGIC};
+use super::{RegExpData, RegExpHeader};
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::string::StringHeader;
 use crate::value::{js_nanbox_pointer, js_nanbox_string, JSValue};
@@ -77,8 +77,12 @@ pub(crate) fn nonsticky_program<'s>(
     scope: &'s RuntimeHandleScope,
     re: &RuntimeHandle<'_>,
 ) -> Result<GcProgram<'s>, EngineError> {
-    let (source, flags) =
-        re.with_const_ptr::<RegExpHeader, _>(|re| unsafe { ((*re).pattern_ptr, (*re).flags_ptr) });
+    let (source, flags) = re.with_const_ptr::<RegExpHeader, _>(|re| unsafe {
+        (
+            (*crate::regex::regexp_data_ptr(re)).pattern_ptr,
+            (*crate::regex::regexp_data_ptr(re)).flags_ptr,
+        )
+    });
     if source.is_null() || flags.is_null() {
         return Err(EngineError::InvalidFlags);
     }
@@ -103,7 +107,7 @@ unsafe fn publish(
 ) {
     // Field writes and write barriers only: nothing here allocates, so the
     // three addresses stay current until `install` re-reads the receiver.
-    receiver.with_mut_ptr::<RegExpHeader, _>(|re| {
+    receiver.with_mut_ptr::<RegExpData, _>(|re| {
         source.with_const_ptr::<StringHeader, _>(|source| (*re).pattern_ptr = source);
         flags.with_const_ptr::<StringHeader, _>(|flags| (*re).flags_ptr = flags);
         let flags = canonical.as_str();
@@ -130,11 +134,11 @@ unsafe fn publish(
     program.install(receiver);
 }
 
-pub(super) fn new(
+fn new_data<'s>(
+    scope: &'s RuntimeHandleScope,
     source: *const StringHeader,
     flags: *const StringHeader,
-) -> Result<*mut RegExpHeader, EngineError> {
-    let scope = RuntimeHandleScope::new();
+) -> Result<RuntimeHandle<'s>, EngineError> {
     // Root both arguments before either default/canonical string allocates.
     let source = scope.root_string_ptr(source);
     let flags = scope.root_string_ptr(flags);
@@ -145,12 +149,15 @@ pub(super) fn new(
         flags.set_raw_const_ptr(super::js_string_from_str(""));
     }
     let (canonical, flags) = canonical(&scope, flags)?;
+    if let Some(data) = super::perex_cache::data(&scope, &source, canonical) {
+        return Ok(data);
+    }
     let program = compile(&scope, source, canonical)?;
     let re = crate::arena::arena_alloc_gc(
-        std::mem::size_of::<RegExpHeader>(),
-        std::mem::align_of::<RegExpHeader>(),
+        std::mem::size_of::<RegExpData>(),
+        std::mem::align_of::<RegExpData>(),
         crate::gc::GC_TYPE_REGEXP,
-    ) as *mut RegExpHeader;
+    ) as *mut RegExpData;
     if re.is_null() {
         return Err(EngineError::Storage(
             super::perex_memory::StorageError::Allocation,
@@ -159,7 +166,7 @@ pub(super) fn new(
     unsafe {
         // No collecting action until the entire header and all edges are valid.
         // GC_STORE_AUDIT(INIT): fresh header with every edge null; `publish` stores the pattern, flags and program edges through the barrier.
-        re.write(RegExpHeader {
+        re.write(RegExpData {
             pattern_ptr: std::ptr::null(),
             flags_ptr: std::ptr::null(),
             case_insensitive: false,
@@ -169,24 +176,71 @@ pub(super) fn new(
             dot_all: false,
             unicode: false,
             has_indices: false,
-            last_index: 0.0f64.to_bits(),
-            magic: REGEXP_MAGIC,
-            meta: std::ptr::null_mut(),
             perex_program: std::ptr::null(),
         });
-        crate::object::exotic_expando::expando_clear_on_alloc(re as usize);
     }
     let receiver = scope.root_raw_mut_ptr(re);
     unsafe {
         publish(&receiver, &source, &flags, canonical, &program);
     }
-    Ok(receiver.with_mut_ptr::<RegExpHeader, _>(|re| re))
+    super::perex_cache::install_data(&source, canonical, &receiver);
+    Ok(receiver)
+}
+
+/// Test-only program publication. Copy into a fresh unpublished data cell so
+/// ownership witnesses never mutate data shared by the compile cache.
+#[cfg(test)]
+pub(crate) unsafe fn test_install_program(receiver: &RuntimeHandle<'_>, program: &GcProgram<'_>) {
+    let scope = RuntimeHandleScope::new();
+    let old = scope.root_raw_const_ptr(
+        receiver.with_const_ptr::<RegExpHeader, _>(|r| super::regexp_data_ptr(r)),
+    );
+    let data = crate::arena::arena_alloc_gc(
+        std::mem::size_of::<RegExpData>(),
+        std::mem::align_of::<RegExpData>(),
+        crate::gc::GC_TYPE_REGEXP,
+    ) as *mut RegExpData;
+    // GC_STORE_AUDIT(INIT): copy traced strings into an unpublished cell,
+    // then barrier both edges before any collecting action.
+    data.write(old.with_const_ptr::<RegExpData, _>(|old| std::ptr::read(old)));
+    for (slot, value) in [
+        (
+            std::ptr::addr_of!((*data).pattern_ptr) as usize,
+            js_nanbox_string((*data).pattern_ptr as i64),
+        ),
+        (
+            std::ptr::addr_of!((*data).flags_ptr) as usize,
+            js_nanbox_string((*data).flags_ptr as i64),
+        ),
+    ] {
+        crate::gc::runtime_write_barrier_gc_slot(data as usize, slot, value.to_bits());
+    }
+    let data = scope.root_raw_mut_ptr(data);
+    program.install(&data);
+    assert!(crate::object::intrinsic_private_set(
+        receiver.with_const_ptr::<RegExpHeader, _>(|r| js_nanbox_pointer(r as i64)),
+        super::REGEXP_MATCHER,
+        data.with_const_ptr::<RegExpData, _>(|d| js_nanbox_pointer(d as i64)),
+    ));
+}
+
+pub(super) fn new(
+    source: *const StringHeader,
+    flags: *const StringHeader,
+) -> Result<*mut RegExpHeader, EngineError> {
+    let scope = RuntimeHandleScope::new();
+    let data = new_data(&scope, source, flags)?;
+    Ok(super::instance::new(&scope, &data))
 }
 
 fn actual_regex(value: f64) -> Option<*mut RegExpHeader> {
     let v = JSValue::from_bits(value.to_bits());
-    (v.is_pointer() && super::is_registered_regex(v.as_pointer::<u8>() as usize))
-        .then(|| v.as_pointer::<RegExpHeader>() as *mut RegExpHeader)
+    (v.is_pointer()
+        && crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+            (v.as_pointer::<u8>() as usize) as i64,
+        ))
+        .is_some())
+    .then(|| v.as_pointer::<RegExpHeader>() as *mut RegExpHeader)
 }
 
 fn property(owner: &RuntimeHandle<'_>, name: &'static str) -> f64 {
@@ -214,9 +268,13 @@ pub(super) fn construct(pattern: f64, flags: f64, called: bool) -> *mut RegExpHe
     }
     if let Some(re) = actual_regex(pattern.get_nanbox_f64()) {
         unsafe {
-            pattern.set_nanbox_f64(js_nanbox_string((*re).pattern_ptr as i64));
+            pattern.set_nanbox_f64(js_nanbox_string(
+                (*crate::regex::regexp_data_ptr(re)).pattern_ptr as i64,
+            ));
             if flags.get_nanbox_f64().to_bits() == crate::value::TAG_UNDEFINED {
-                flags.set_nanbox_f64(js_nanbox_string((*re).flags_ptr as i64));
+                flags.set_nanbox_f64(js_nanbox_string(
+                    (*crate::regex::regexp_data_ptr(re)).flags_ptr as i64,
+                ));
             }
         }
     } else if regexp_like {
@@ -246,17 +304,28 @@ pub(super) fn recompile(re: *mut RegExpHeader, pattern: f64, flags: f64) -> f64 
             );
         }
         unsafe {
-            flags.set_nanbox_f64(js_nanbox_string((*source_re).flags_ptr as i64));
-            pattern.set_nanbox_f64(js_nanbox_string((*source_re).pattern_ptr as i64));
+            flags.set_nanbox_f64(js_nanbox_string(
+                (*crate::regex::regexp_data_ptr(source_re)).flags_ptr as i64,
+            ));
+            pattern.set_nanbox_f64(js_nanbox_string(
+                (*crate::regex::regexp_data_ptr(source_re)).pattern_ptr as i64,
+            ));
         }
     }
     let source = string(&scope, &pattern);
     let flags = string(&scope, &flags);
-    let (canonical, flags) = api::finish(canonical(&scope, flags));
-    let program = api::finish(compile(&scope, source, canonical));
-    unsafe {
-        publish(&receiver, &source, &flags, canonical, &program);
-    }
+    let data = api::finish(source.with_const_ptr::<StringHeader, _>(|source| {
+        flags.with_const_ptr::<StringHeader, _>(|flags| new_data(&scope, source, flags))
+    }));
+    let installed = crate::object::intrinsic_private_set(
+        receiver.with_mut_ptr::<RegExpHeader, _>(|re| js_nanbox_pointer(re as i64)),
+        super::REGEXP_MATCHER,
+        data.with_const_ptr::<RegExpData, _>(|data| js_nanbox_pointer(data as i64)),
+    );
+    assert!(
+        installed,
+        "recompile requires the intrinsic private matcher"
+    );
     // RegExpInitialize publishes the new source/flags/program before the
     // throwing lastIndex write. A failed compile above publishes nothing.
     // Allocates only on its throwing path, which does not return.

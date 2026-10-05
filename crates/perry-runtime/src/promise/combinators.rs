@@ -1322,7 +1322,10 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
         || crate::set::is_registered_set(raw_ptr)
         || crate::map::is_registered_map(raw_ptr)
         || crate::symbol::is_registered_symbol(raw_ptr)
-        || crate::regex::is_regex_pointer(raw_ptr as *const u8)
+        || crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+            (raw_ptr as *const u8) as i64,
+        ))
+        .is_some()
         || crate::date::is_date_cell_addr(raw_ptr)
     {
         return value;

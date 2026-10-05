@@ -128,7 +128,7 @@ impl<'scope> GcProgram<'scope> {
         // A field store and its barrier: neither allocates, so both addresses
         // stay current for the whole store.
         self.root.with_const_ptr::<u8, _>(|program| {
-            receiver.with_mut_ptr::<super::RegExpHeader, _>(|receiver| unsafe {
+            receiver.with_mut_ptr::<super::RegExpData, _>(|receiver| unsafe {
                 (*receiver).perex_program = program;
                 crate::gc::runtime_write_barrier_gc_slot(
                     receiver as usize,
@@ -194,7 +194,15 @@ impl<'scope> GcProgram<'scope> {
         scope: &'scope RuntimeHandleScope,
         re: *const super::RegExpHeader,
     ) -> Result<Self, OwnerError> {
-        let ptr = unsafe { (*re).perex_program };
+        Self::from_data(scope, crate::regex::regexp_data_ptr(re))
+    }
+
+    /// Root the immutable program edge from an already branded data cell.
+    pub(crate) unsafe fn from_data(
+        scope: &'scope RuntimeHandleScope,
+        data: *const super::RegExpData,
+    ) -> Result<Self, OwnerError> {
+        let ptr = unsafe { (*data).perex_program };
         if ptr.is_null() {
             return Err(OwnerError::Missing);
         }
@@ -350,7 +358,11 @@ impl<'s, 'h> InPlace<'s, 'h> {
         re: *const super::RegExpHeader,
         input: &RuntimeHandle<'h>,
     ) -> Result<Self, OwnerError> {
-        let program = unsafe { (*re).perex_program.cast::<ProgramCell>() };
+        let program = unsafe {
+            (*crate::regex::regexp_data_ptr(re))
+                .perex_program
+                .cast::<ProgramCell>()
+        };
         if program.is_null() {
             return Err(OwnerError::Missing);
         }

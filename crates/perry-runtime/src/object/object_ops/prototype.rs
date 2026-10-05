@@ -72,7 +72,6 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
                 crate::value::addr_class::is_above_handle_band(addr)
                     && !crate::set::is_registered_set(addr)
                     && !crate::map::is_registered_map(addr)
-                    && !crate::regex::is_regex_pointer(ptr as *const u8)
                     && is_valid_obj_ptr(ptr as *const u8)
             } else {
                 false
@@ -569,9 +568,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // A RegExp's internal prototype does not depend on its
                 // observable constructor property. Resolve it before the
                 // generic constructor probe, which would recurse through Get.
-                if (*gc).obj_type == crate::gc::GC_TYPE_REGEXP {
-                    return crate::object::builtin_prototype_value("RegExp");
-                }
+
                 // #2145: per-kind typed-array `.prototype` objects share a
                 // single `%TypedArray%.prototype` parent. Resolved off the
                 // cached intrinsic pointer (also a GC root) so the chain holds
@@ -829,9 +826,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
             if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
                 return f64::from_bits(TAG_NULL);
             }
-            if (*gc).obj_type == crate::gc::GC_TYPE_REGEXP {
-                return crate::object::builtin_prototype_value("RegExp");
-            }
+
             // Bit 8 means "per-kind TypedArray prototype" only on a
             // `GC_TYPE_OBJECT`; on an array it is `GC_ARRAY_NAMED_PROPS`.
             if (*gc).obj_type == crate::gc::GC_TYPE_OBJECT

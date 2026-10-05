@@ -222,12 +222,17 @@ fn unsupported_receivers_and_private_names_decline_and_preserve_results() {
 
 #[cfg(feature = "regex-engine")]
 #[test]
-fn regexp_expandos_and_accessors_remain_on_the_exotic_path() {
+fn regexp_expandos_are_ordinary_data_and_accessors_preserve_observability() {
     let _no_gc = crate::gc::GcSuppressScope::new();
     let regexp = crate::regex::js_regexp_new(key("x"), key("g"));
     let regexp_obj = regexp as *mut ObjectHeader;
     js_object_set_field_by_name(regexp_obj, key("value"), 67.0);
-    assert!(unsafe { try_data_get_by_name(regexp_obj, key("value")) }.is_none());
+    assert_eq!(
+        unsafe { try_data_get_by_name(regexp_obj, key("value")) }
+            .unwrap()
+            .as_number(),
+        67.0
+    );
     differential(boxed(regexp_obj), "value", 67.0);
     GETTER_CALLS.store(0, Ordering::Relaxed);
     install_getter(regexp_obj, "value", true);

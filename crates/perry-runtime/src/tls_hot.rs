@@ -1502,7 +1502,12 @@ mod tests {
                 seen += usize::from(crate::set::is_registered_set(probe));
                 seen += usize::from(crate::buffer::is_registered_buffer(probe));
                 seen += usize::from(crate::symbol::is_registered_symbol(probe));
-                seen += usize::from(crate::regex::is_regex_pointer(probe as *const u8));
+                seen += usize::from(
+                    crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+                        (probe as *const u8) as i64,
+                    ))
+                    .is_some(),
+                );
             }
             seen
         }

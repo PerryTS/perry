@@ -64,11 +64,14 @@ pub extern "C" fn js_string_split_n(
     delimiter: *const StringHeader,
     limit: i32,
 ) -> *mut ArrayHeader {
-    let separator = if super::is_regex_pointer(delimiter.cast()) {
-        js_nanbox_pointer(delimiter as i64)
-    } else {
-        js_nanbox_string(delimiter as i64)
-    };
+    let separator =
+        if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((delimiter) as i64))
+            .is_some()
+        {
+            js_nanbox_pointer(delimiter as i64)
+        } else {
+            js_nanbox_string(delimiter as i64)
+        };
     array(perex_split::string(
         js_nanbox_string(s as i64),
         separator,

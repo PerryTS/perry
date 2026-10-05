@@ -243,10 +243,9 @@ unsafe fn default_object_prototype_property_value(
     prototype_property_value_with_guard(proto_addr, receiver_addr, key)
 }
 
-/// Read an inherited property while the caller holds
-/// [`ObjectPrototypeLookupGuard`]. Keeping guard acquisition outside this
-/// helper lets Error-family lookup resolve a lazy builtin prototype without a
-/// recursive ordinary-object fallback.
+/// Read an inherited property after resolving its prototype. Keeping
+/// bootstrap guard acquisition outside this helper lets Error-family lookup
+/// resolve a lazy builtin without a recursive ordinary-object fallback.
 unsafe fn prototype_property_value_with_guard(
     proto_addr: usize,
     receiver_addr: usize,
@@ -385,6 +384,9 @@ pub(crate) unsafe fn ordinary_object_prototype_property_value(
         let receiver = scope.root_raw_mut_ptr(obj as *mut ObjectHeader);
         let key = scope.root_string_ptr(key);
         let decl_proto = super::super::class_decl_prototype_value(class_id);
+        // Bootstrap recursion is bounded only while materializing the
+        // prototype. A getter body starts a fresh Get on its own receiver.
+        drop(_guard);
         if crate::value::JSValue::from_bits(decl_proto.to_bits()).is_pointer() {
             let addr = crate::value::js_nanbox_get_pointer(decl_proto) as usize;
             if let Some(value) = receiver.with_mut_ptr::<ObjectHeader, _>(|ptr| {

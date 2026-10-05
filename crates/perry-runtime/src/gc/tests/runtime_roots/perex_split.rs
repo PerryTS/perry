@@ -1098,7 +1098,7 @@ fn perex_construction_uses_strict_string_conversion_for_pattern_and_flags() {
                 let ptr = || {
                     js_nanbox_get_pointer(re.get_nanbox_f64()) as *mut crate::regex::RegExpHeader
                 };
-                crate::regex::js_regexp_set_last_index(ptr(), 9.0);
+                crate::regex::set_last_index(ptr(), 9.0);
                 let error = crate::exception::catch_js_throw(|| {
                     let pattern = if bad_flags {
                         source.get_nanbox_f64()

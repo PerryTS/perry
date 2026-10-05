@@ -267,7 +267,9 @@ fn regexp_active_binding_survives_eviction_and_relocation() {
     let raw = {
         let temporary = RuntimeHandleScope::new();
         let re = regex(&temporary, "active-binding", "");
-        re.with_const_ptr::<RegExpHeader, _>(|re| unsafe { (*re).perex_program })
+        re.with_const_ptr::<RegExpHeader, _>(|re| unsafe {
+            (*crate::regex::regexp_data_ptr(re)).perex_program
+        })
     };
     // No collecting operation between extracting the live cache entry and
     // rooting it in the outer scope, after the temporary scope has ended.

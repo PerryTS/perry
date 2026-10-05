@@ -648,7 +648,6 @@ unsafe fn has_own_of_non_ordinary_kind(
                 .map(|key| {
                     super::super::exotic_expando::exotic_has_own_property(kind, ptr, key)
                         || match kind {
-                            ExoticKind::RegExp => key == "lastIndex",
                             ExoticKind::Error => crate::error::js_error_has_own_property(
                                 ptr as *mut crate::error::ErrorHeader,
                                 key,

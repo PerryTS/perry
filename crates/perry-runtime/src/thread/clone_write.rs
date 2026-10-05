@@ -310,7 +310,13 @@ impl Writer<'_> {
                 }
                 self.array(addr, built as usize)
             }
-            gc::GC_TYPE_OBJECT => self.object_value(bits, addr),
+            gc::GC_TYPE_OBJECT => {
+                if crate::regex::regexp_data_of(f64::from_bits(bits)).is_some() {
+                    self.regexp(addr)
+                } else {
+                    self.object_value(bits, addr)
+                }
+            }
             gc::GC_TYPE_CLOSURE => match self.mode {
                 CloneMode::Thread => self.closure(addr),
                 CloneMode::Message => SerializedValue::Unsupported("function"),
@@ -325,7 +331,6 @@ impl Writer<'_> {
             gc::GC_TYPE_MAP if crate::map::is_registered_map(addr) => self.map(addr),
             gc::GC_TYPE_SET if crate::set::is_registered_set(addr) => self.set(addr),
             gc::GC_TYPE_ERROR => self.error(bits, addr),
-            gc::GC_TYPE_REGEXP => self.regexp(addr),
             other => SerializedValue::Unsupported(unsupported_transfer_type_name(other)),
         }
     }

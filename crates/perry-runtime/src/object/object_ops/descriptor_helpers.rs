@@ -902,7 +902,11 @@ pub(crate) unsafe fn define_property_force_store_value(
         let (slots, slot_len) = keys_view.dense_slots();
         for i in 0..count.min(slot_len) {
             let stored = JSValue::from_bits((*slots.add(i)).to_bits());
-            if crate::string::js_string_key_matches(stored, key_str) {
+            if crate::string::js_string_key_matches(stored, key_str)
+                && !crate::object::key_attrs::entry_is_private(
+                    crate::object::key_attrs::keys_entry(keys, i as u32),
+                )
+            {
                 let live_slots = crate::object::object_live_slot_count(obj) as usize;
                 let inline_limit = live_slots.max(crate::object::INLINE_SLOT_FLOOR);
                 if i < inline_limit {

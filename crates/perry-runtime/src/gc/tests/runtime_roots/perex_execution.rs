@@ -231,7 +231,7 @@ fn perex_host_running_search_survives_reentrant_receiver_recompile() {
         let initial_scope = RuntimeHandleScope::new();
         let initial = compile(&initial_scope, "(a+)", "").into_storage();
         unsafe {
-            initial.install(&receiver);
+            crate::regex::test_install_program(&receiver, &initial);
         }
     }
     let active = BoundProgram::new(
@@ -257,7 +257,7 @@ fn perex_host_running_search_survives_reentrant_receiver_recompile() {
                 let callback_scope = RuntimeHandleScope::new();
                 let next = compile(&callback_scope, "z+", "").into_storage();
                 unsafe {
-                    next.install(&receiver);
+                    crate::regex::test_install_program(&receiver, &next);
                 }
             }
             gc_collect_minor();

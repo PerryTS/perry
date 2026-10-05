@@ -883,7 +883,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
     )),
     Some(gc_type_info_entry(
         GC_TYPE_REGEXP,
-        "regexp",
+        "regexp_data",
         GcAllocationPolicy::ArenaOrMalloc,
         true,
         GcRewriteDescriptorKind::RegExp,
@@ -892,7 +892,7 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcExternalBytePolicy::InlinePayload,
         GcLargeObjectPolicy::MallocTracked,
         false,
-        GcMoveHookKind::ExoticExpandoOwner,
+        GcMoveHookKind::None,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),

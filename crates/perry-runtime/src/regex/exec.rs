@@ -6,7 +6,9 @@ pub extern "C" fn js_regexp_exec(
     re: *mut RegExpHeader,
     s: *const StringHeader,
 ) -> *mut crate::array::ArrayHeader {
-    if !is_valid_regex_ptr(re) || !is_valid_ptr(s) {
+    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some()
+        || !is_valid_ptr(s)
+    {
         LAST_EXEC_INDEX.with(|idx| *idx.borrow_mut() = -1.0);
         LAST_EXEC_GROUPS.with(|g| *g.borrow_mut() = ptr::null_mut());
         return ptr::null_mut();

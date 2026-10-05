@@ -69,7 +69,7 @@ pub(super) fn admissible(receiver: &RuntimeHandle<'_>, reuse: &Reuse<'_, '_>) ->
     }
     let value = receiver.get_nanbox_f64();
     let re = crate::value::js_nanbox_get_pointer(value) as *const RegExpHeader;
-    super::is_valid_regex_ptr(re)
+    crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some()
         && crate::object::regex_proto_thunks::regexp_view_uses_builtin(value)
         && reuse.name_count(re) == Some(0)
 }

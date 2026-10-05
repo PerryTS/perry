@@ -266,17 +266,6 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     // `toString` step runs, and `js_jsvalue_to_string` performs it — own
     // override first (data or accessor), else the `/source/flags` literal.
     // `Symbol.toPrimitive` was already consulted by `js_to_primitive` above.
-    if crate::regex::is_regex_pointer(ptr as *const u8) {
-        if let Some(primitive) = crate::value::to_string_primitive::exotic_own_value_of_primitive(
-            ptr,
-            crate::object::exotic_expando::ExoticKind::RegExp,
-            value,
-        ) {
-            return primitive;
-        }
-        let s = crate::value::js_jsvalue_to_string(value);
-        return crate::value::js_nanbox_string(s as i64);
-    }
 
     if crate::date::is_date_cell_addr(ptr) {
         // `Date.prototype[@@toPrimitive]` maps the "default" hint to "string",

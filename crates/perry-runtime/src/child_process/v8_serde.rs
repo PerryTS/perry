@@ -298,7 +298,11 @@ impl Serializer {
             self.write_dense_array(array);
             return true;
         }
-        if crate::regex::regex_header_has_magic(raw as *const crate::regex::RegExpHeader) {
+        if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+            (raw as *const crate::regex::RegExpHeader) as i64,
+        ))
+        .is_some()
+        {
             if self.write_reference_or_register(raw) {
                 return true;
             }

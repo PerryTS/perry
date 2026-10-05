@@ -119,7 +119,8 @@ fn perex_reuse_serves_a_whole_global_loop_across_moving_collections() {
     let mut setup = Budget::new(api::WORK);
     let reuse = Reuse::new(&scope, &reused, input, &subject, &mut setup);
     let input_before = input.with_const_ptr::<StringHeader, _>(|p| p as usize);
-    let program_before = unsafe { (*receiver_ptr(&reused)).perex_program as usize };
+    let program_before =
+        unsafe { (*crate::regex::regexp_data_ptr(receiver_ptr(&reused))).perex_program as usize };
     let cycles = copying_minor_cycles();
     let (reused_matches, reused_work) = global_loop(&reused, &input, Some(&reuse));
 
@@ -134,7 +135,7 @@ fn perex_reuse_serves_a_whole_global_loop_across_moving_collections() {
         "the bound subject must have been relocated during the loop"
     );
     assert_ne!(
-        unsafe { (*receiver_ptr(&reused)).perex_program as usize },
+        unsafe { (*crate::regex::regexp_data_ptr(receiver_ptr(&reused))).perex_program as usize },
         program_before,
         "the reused program must have moved, and still be recognised as the same cell"
     );
@@ -147,9 +148,10 @@ fn perex_reuse_serves_a_whole_global_loop_across_moving_collections() {
     // Construction now shares the same program cell and its validation witness.
     // The second receiver pays no validation; the remaining work difference
     // must come from resuming searches near the preceding match.
-    assert_eq!(unsafe { (*receiver_ptr(&fresh)).perex_program }, unsafe {
-        (*receiver_ptr(&reused)).perex_program
-    });
+    assert_eq!(
+        unsafe { (*crate::regex::regexp_data_ptr(receiver_ptr(&fresh))).perex_program },
+        unsafe { (*crate::regex::regexp_data_ptr(receiver_ptr(&reused))).perex_program }
+    );
     let validation = api::WORK - setup.remaining();
     assert!(validation > 0, "the first binding must really validate");
     assert!(

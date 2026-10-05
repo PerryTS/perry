@@ -1152,7 +1152,7 @@ mod view_mode_tests {
         let state = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
             crate::object::js_object_alloc(0, 0) as i64,
         ));
-        crate::regex::js_regexp_set_last_index(
+        crate::regex::set_last_index(
             crate::value::js_nanbox_get_pointer(re.get_nanbox_f64()) as *mut _,
             state.get_nanbox_f64(),
         );
@@ -1160,7 +1160,7 @@ mod view_mode_tests {
             cursor.get_nanbox_f64(),
             re.get_nanbox_f64()
         )));
-        crate::regex::js_regexp_set_last_index(
+        crate::regex::set_last_index(
             crate::value::js_nanbox_get_pointer(re.get_nanbox_f64()) as *mut _,
             0.0,
         );

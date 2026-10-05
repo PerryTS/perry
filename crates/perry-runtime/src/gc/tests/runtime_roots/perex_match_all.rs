@@ -315,14 +315,14 @@ fn perex_match_all_iterator_is_the_only_input_owner_and_releases_on_completion()
         (
             iter.get_nanbox_f64(),
             input.get_nanbox_f64().to_bits(),
-            unsafe { (*matcher).perex_program as usize },
+            unsafe { (*crate::regex::regexp_data_ptr(matcher)).perex_program as usize },
         )
     };
     let iter = scope.root_nanbox_f64(value);
     gc_collect_minor();
     assert_ne!(slot(&iter, 1).to_bits(), input_before);
     let matcher = js_nanbox_get_pointer(slot(&iter, 0)) as *const RegExpHeader;
-    let program = unsafe { (*matcher).perex_program as usize };
+    let program = unsafe { (*crate::regex::regexp_data_ptr(matcher)).perex_program as usize };
     assert_ne!(program, program_before);
     assert!(build_valid_pointer_set().contains(&program));
     let programs_before = program_population();

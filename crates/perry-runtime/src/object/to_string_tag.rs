@@ -260,7 +260,11 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
             Some("Map")
         } else if crate::set::is_registered_set(raw_addr) {
             Some("Set")
-        } else if crate::regex::is_regex_pointer(raw_addr as *const u8) {
+        } else if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+            (raw_addr as *const u8) as i64,
+        ))
+        .is_some()
+        {
             // `Object.prototype.toString.call(/a/)` is `[object RegExp]` (the
             // brand) — distinct from `/a/.toString()` which is `/a/` (the value).
             Some("RegExp")

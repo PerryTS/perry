@@ -28,7 +28,10 @@ use super::*;
 /// getter.
 enum RegexReceiver {
     /// A live RegExp instance.
-    Regex(*const crate::regex::RegExpHeader),
+    Regex(
+        *const crate::regex::RegExpHeader,
+        *const crate::regex::RegExpData,
+    ),
     /// Exactly `RegExp.prototype` — getters return the spec sentinel.
     Prototype,
 }
@@ -40,8 +43,10 @@ fn regex_receiver_or_throw(this: crate::closure::JsThis, getter: &str) -> RegexR
     let receiver = crate::value::JSValue::from_bits(this.bits());
     if receiver.is_pointer() {
         let ptr = receiver.as_pointer::<u8>() as usize;
-        if crate::regex::is_registered_regex(ptr) {
-            return RegexReceiver::Regex(ptr as *const crate::regex::RegExpHeader);
+        if let Some(data) =
+            crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(ptr as i64))
+        {
+            return RegexReceiver::Regex(ptr as *const crate::regex::RegExpHeader, data);
         }
         let proto = crate::value::JSValue::from_bits(
             super::global_this::builtin_prototype_value("RegExp").to_bits(),
@@ -62,26 +67,18 @@ fn throw_regex_brand_error(getter: &str) -> ! {
     ))
 }
 
-/// Does the regex's (canonical) flags string contain `flag`?
-fn regex_has_flag(re: *const crate::regex::RegExpHeader, flag: char) -> bool {
-    let s = crate::regex::js_regexp_get_flags(re);
-    if s.is_null() {
-        return false;
-    }
-    unsafe {
-        let len = (*s).byte_len as usize;
-        let data = (s as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        let bytes = std::slice::from_raw_parts(data, len);
-        bytes.iter().any(|&b| b as char == flag)
-    }
+/// Read the already branded immutable data. This leaf performs no allocation
+/// or poll; the caller never keeps the borrowed cell across a safepoint.
+fn regex_has_flag(data: *const crate::regex::RegExpData, flag: char) -> bool {
+    unsafe { (*data).has_flag(flag) }
 }
 
 /// Shared body for the boolean flag getters: regex → boolean, prototype →
 /// undefined, else TypeError.
 fn flag_getter(this: crate::closure::JsThis, getter: &str, flag: char) -> f64 {
     match regex_receiver_or_throw(this, getter) {
-        RegexReceiver::Regex(re) => {
-            f64::from_bits(crate::value::JSValue::bool(regex_has_flag(re, flag)).bits())
+        RegexReceiver::Regex(_, data) => {
+            f64::from_bits(crate::value::JSValue::bool(regex_has_flag(data, flag)).bits())
         }
         RegexReceiver::Prototype => f64::from_bits(crate::value::TAG_UNDEFINED),
     }
@@ -141,7 +138,7 @@ pub(super) extern "C" fn regex_proto_source_getter(
     this: crate::closure::JsThis,
 ) -> f64 {
     match regex_receiver_or_throw(this, "source") {
-        RegexReceiver::Regex(re) => {
+        RegexReceiver::Regex(re, _) => {
             // `js_regexp_get_source` returns the *escaped* source string.
             let s = crate::regex::js_regexp_get_source(re);
             f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
@@ -353,7 +350,7 @@ fn regex_instance_or_throw(
     let receiver = crate::value::JSValue::from_bits(this.bits());
     if receiver.is_pointer() {
         let ptr = receiver.as_pointer::<u8>() as usize;
-        if crate::regex::is_registered_regex(ptr) {
+        if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((ptr) as i64)).is_some() {
             return ptr as *const crate::regex::RegExpHeader;
         }
     }
@@ -428,7 +425,7 @@ pub(crate) fn test_recorded_regexp_prototype() -> i64 {
 }
 
 #[cfg(feature = "regex-engine")]
-pub(super) fn recorded_regexp_prototype() -> *mut ObjectHeader {
+pub(crate) fn recorded_regexp_prototype() -> *mut ObjectHeader {
     REGEXP_PROTOTYPE_TEST_SITE
         .with(|site| site.prototype.load(std::sync::atomic::Ordering::Acquire) as *mut ObjectHeader)
 }
@@ -516,13 +513,17 @@ fn regexp_prototype_test_is_canonical_proof(value: f64) -> bool {
     // the object recorded below. `object_static_prototype` answers from the
     // object's own meta record, or from an atomic "nothing was ever recorded"
     // latch — no mutex, no chain walk.
-    if super::prototype_chain::object_static_prototype_known_non_meta(recv_addr).is_some() {
-        return false;
-    }
     REGEXP_PROTOTYPE_TEST_SITE.with(|site| {
         let proto_ptr = site.prototype.load(std::sync::atomic::Ordering::Acquire);
         let canonical = site.closure.load(std::sync::atomic::Ordering::Acquire);
         let index = site.index.load(std::sync::atomic::Ordering::Acquire);
+        let receiver = recv_addr as *const ObjectHeader;
+        if super::field_get_set::runtime_read_site::object_receiver(value).is_none()
+            || unsafe { crate::object::shapes::object_prototype_word(receiver) }
+                != crate::value::js_nanbox_pointer(proto_ptr as i64).to_bits()
+        {
+            return false;
+        }
         if proto_ptr == 0 || canonical == 0 || index == u32::MAX {
             return false;
         }
@@ -654,20 +655,8 @@ pub(crate) fn regexp_view_flags_is_canonical(value: f64) -> bool {
         return false;
     }
     let addr = crate::value::js_nanbox_get_pointer(value) as usize;
-    for (key, _) in FLAG_ACCESSORS.iter() {
-        // An own accessor (`defineProperty` on the instance) lives in the
-        // descriptor side table; an own data property lives in the exotic
-        // expando table. Either shadows the prototype.
-        if super::descriptor_state::may_have_descriptor_entry(addr, key, true)
-            || super::descriptor_state::may_have_descriptor_entry(addr, key, false)
-            || super::exotic_expando::exotic_has_own_property(
-                super::exotic_expando::ExoticKind::RegExp,
-                addr,
-                key,
-            )
-        {
-            return false;
-        }
+    if super::regex_canonical::receiver_facts(addr as *const ObjectHeader).1 {
+        return false;
     }
     flag_accessors_canonical()
 }
@@ -681,14 +670,9 @@ pub(crate) fn regexp_view_uses_builtin(value: f64) -> bool {
         return false;
     }
     let addr = crate::value::js_nanbox_get_pointer(value) as usize;
-    for name in ["test", "exec"] {
-        if super::exotic_expando::exotic_has_own_property(
-            super::exotic_expando::ExoticKind::RegExp,
-            addr,
-            name,
-        ) {
-            return false;
-        }
+    let facts = super::regex_canonical::receiver_facts(addr as *const ObjectHeader);
+    if facts.0 || facts.3 {
+        return false;
     }
     // The realm prototype now lives in the canonical test site rather than in a
     // standalone static; reading it through the same cell keeps one TLS lookup.
@@ -931,55 +915,4 @@ pub(super) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
         "hasIndices",
         crate::fn_info!(regex_proto_has_indices_getter, 0; with_declared(0)),
     );
-}
-
-/// RegExp owns lastIndex; source/flags/boolean getters live on its prototype.
-/// Keep property-key ownership and all GC roots outside callback traps.
-pub(crate) fn regexp_get_property(
-    receiver: *const ObjectHeader,
-    key: *const crate::StringHeader,
-) -> crate::JSValue {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(receiver as i64));
-    let key = scope.root_string_ptr(key);
-    let name = unsafe {
-        key.with_string_bytes(|bytes| std::str::from_utf8(bytes).ok().map(str::to_owned))
-    };
-    if name.as_deref() == Some("lastIndex") {
-        let re = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64())
-            as *const crate::regex::RegExpHeader;
-        return crate::JSValue::from_bits(crate::regex::js_regexp_get_last_index(re).to_bits());
-    }
-    let result = crate::exception::catch_js_throw(|| {
-        if let Some(name) = &name {
-            let addr = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
-            // The caller classified this receiver as a live RegExp, and the
-            // root above keeps it current across an own-property getter.
-            if let Some(value) = unsafe {
-                super::exotic_expando::exotic_get_own_property(
-                    addr,
-                    super::exotic_expando::ExoticKind::RegExp,
-                    name,
-                    receiver.get_nanbox_f64(),
-                )
-            } {
-                return value;
-            }
-        }
-        let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
-            receiver.get_nanbox_f64(),
-        ));
-        if !crate::proxy::reflect_value_is_object(proto.get_nanbox_f64()) {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
-        let key = key.with_const_ptr::<crate::StringHeader, _>(|key| {
-            crate::value::js_nanbox_string(key as i64)
-        });
-        crate::proxy::js_reflect_get(proto.get_nanbox_f64(), key, receiver.get_nanbox_f64())
-    });
-    drop(name);
-    match result {
-        Ok(value) => crate::JSValue::from_bits(value.to_bits()),
-        Err(error) => crate::exception::js_throw(error),
-    }
 }

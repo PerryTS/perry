@@ -13,7 +13,12 @@ pub unsafe extern "C" fn js_builtin_subclass_construct(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let target = super::super::js_get_global_this_builtin_value(name_ptr, name_len);
-    let new_target = super::super::class_constructor_ref_value(class_id);
+    let current_target = crate::object::js_new_target_get();
+    let new_target = if is_callable_function_value(current_target) || is_class_object_value(current_target) {
+        current_target
+    } else {
+        super::super::class_constructor_ref_value(class_id)
+    };
     js_new_function_construct_with_new_target(target, args_ptr, args_len, new_target)
 }
 
@@ -99,7 +104,6 @@ fn constructor_return_overrides_this(value: f64) -> bool {
                 | crate::gc::GC_TYPE_MAP
                 | crate::gc::GC_TYPE_SET
                 | crate::gc::GC_TYPE_DATE_CELL
-                | crate::gc::GC_TYPE_REGEXP
                 | crate::gc::GC_TYPE_LAZY_ARRAY
         )
     }

@@ -108,8 +108,8 @@ fn regexp_exec_survives_a_moving_minor_inside_the_lastindex_coercion() {
     });
     let coercer_value = coercer_handle
         .with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64));
-    re_handle.with_mut_ptr::<RegExpHeader, _>(|hdr| unsafe {
-        (*hdr).last_index = coercer_value.to_bits();
+    re_handle.with_mut_ptr::<RegExpHeader, _>(|hdr| {
+        crate::regex::set_last_index(hdr, f64::from_bits(coercer_value.to_bits()));
     });
 
     let cycles_before = copying_minor_cycles();
@@ -188,8 +188,8 @@ fn regexp_exec_materializes_an_owned_snapshot_after_an_alloc_point_minor() {
         }),
         1
     );
-    re_handle.with_mut_ptr::<RegExpHeader, _>(|re| unsafe {
-        (*re).last_index = 0.0f64.to_bits();
+    re_handle.with_mut_ptr::<RegExpHeader, _>(|re| {
+        crate::regex::set_last_index(re, f64::from_bits(0.0f64.to_bits()));
     });
 
     // The next general-arena block allocation is the result array created only

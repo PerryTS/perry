@@ -167,12 +167,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- RegExpLastIndex — regex.lastIndex getter --------
-        Expr::RegExpLastIndex(r) => {
-            let r_box = lower_expr(ctx, r)?;
-            let blk = ctx.block();
-            let r_handle = unbox_to_i64(blk, &r_box);
-            Ok(blk.call(DOUBLE, "js_regexp_get_last_index", &[(I64, &r_handle)]))
-        }
+        Expr::RegExpLastIndex(r) => lower_expr(
+            ctx,
+            &Expr::PropertyGet {
+                object: r.clone(),
+                property: "lastIndex".into(),
+                byte_offset: 0,
+            },
+        ),
 
         // -------- BufferConcat stub --------
         // -------- BufferConcat --------

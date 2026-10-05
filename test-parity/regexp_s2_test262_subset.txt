@@ -1,0 +1,8 @@
+# RegExp ordinary-receiver slice (S2), exercised by scripts/test262_subset.py.
+# Test262 checkout revision used for this slice: 4249661388e5d3f92a85186213da140a6481490f
+# --dir accepts these three subtrees; --max 0 runs all applicable cases.
+# Covers receiver branding, exec lastIndex behavior/descriptors, test delegation,
+# and original source rendering. Flags/protocol proof deletions belong to S3.
+built-ins/RegExp/prototype/exec
+built-ins/RegExp/prototype/test
+built-ins/RegExp/prototype/source

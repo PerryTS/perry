@@ -491,12 +491,10 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         return false_val;
     }
 
-    // Built-in JS types Map / Set / RegExp / Date — Perry doesn't define
-    // user classes for these, so we use reserved class IDs and detect via
-    // the per-type registries (MAP_REGISTRY / SET_REGISTRY / REGEX_POINTERS)
-    // or, for Date, by checking that the value is a finite f64 timestamp.
+    // Legacy built-in constructor ids for Map, Set and Date. RegExp follows
+    // the ordinary prototype walk above; its private matcher is no substitute
+    // for the prototype relationship that instanceof asks about.
     const CLASS_ID_DATE: u32 = 0xFFFF0020;
-    const CLASS_ID_REGEXP: u32 = 0xFFFF0021;
     const CLASS_ID_MAP: u32 = 0xFFFF0022;
     const CLASS_ID_SET: u32 = 0xFFFF0023;
     if class_id == CLASS_ID_DATE {
@@ -553,15 +551,6 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
         } else {
             false_val
         };
-    }
-    if class_id == CLASS_ID_REGEXP {
-        if jsval.is_pointer() {
-            let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
-            if crate::regex::is_regex_pointer(addr as *const u8) {
-                return true_val;
-            }
-        }
-        return false_val;
     }
     if class_id == CLASS_ID_PROMISE {
         if let Some(matches) = recorded_prototype_instanceof_builtin(value, "Promise") {

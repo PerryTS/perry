@@ -476,7 +476,10 @@ fn string_search_is_regexp(value: f64) -> bool {
         }
     }
 
-    crate::regex::is_regex_pointer(jsval.as_pointer::<u8>())
+    crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+        (jsval.as_pointer::<u8>()) as i64,
+    ))
+    .is_some()
 }
 
 fn throw_regexp_search_type_error(method_id: i32) -> ! {

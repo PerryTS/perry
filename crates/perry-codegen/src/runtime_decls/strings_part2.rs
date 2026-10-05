@@ -419,8 +419,6 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // Regex extras (runtime has them; codegen was stubbing).
     module.declare_function("js_regexp_exec_get_index", DOUBLE, &[]);
     module.declare_function("js_regexp_exec_get_groups", I64, &[]);
-    module.declare_function("js_regexp_get_last_index", DOUBLE, &[I64]);
-    module.declare_function("js_regexp_set_last_index", VOID, &[I64, DOUBLE]);
     module.declare_function("js_regexp_get_source", I64, &[I64]);
     module.declare_function("js_regexp_get_flags", I64, &[I64]);
     module.declare_function("js_string_replace_regex_named", I64, &[I64, I64, I64]);

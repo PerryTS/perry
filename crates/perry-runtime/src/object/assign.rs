@@ -441,7 +441,7 @@ unsafe fn positional_entry(
 ) -> Option<(crate::JSValue, f64)> {
     let key_val = crate::object::ObjectKeys::new(keys as *mut _, key_count as u32).get(i as u32);
     if !key_val.is_any_string()
-        || (hide_private && crate::object::instance_private_key_hidden(src, key_val))
+        || (hide_private && crate::object::field_get_set::own_slot_hidden(src, i as u32, key_val))
     {
         return None;
     }
@@ -929,9 +929,6 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     //
     // Repro: `Object.assign({}, /x/g)` under
     // PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_HEAP_LIMIT=8.
-    if source_obj_type == crate::gc::GC_TYPE_REGEXP {
-        return target_f64;
-    }
 
     let positional_plan = if source_obj_type == crate::gc::GC_TYPE_OBJECT {
         positional_source_plan(src)

@@ -179,7 +179,7 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
                 continue;
             }
             let key_val = keys_view.get(i);
-            if hide_private && instance_private_key_hidden(obj, key_val) {
+            if hide_private && own_slot_hidden(obj, i, key_val) {
                 continue;
             }
             if let Some(bytes) = crate::string::js_string_key_bytes(key_val, &mut key_buf) {

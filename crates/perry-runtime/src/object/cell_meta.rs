@@ -61,9 +61,7 @@ pub(crate) unsafe fn cell_meta_slot_for_header(
         crate::gc::GC_TYPE_SET => {
             Some(&mut (*(user_ptr as *mut crate::set::SetHeader)).meta as *mut *mut ObjectMeta)
         }
-        crate::gc::GC_TYPE_REGEXP => {
-            Some(&mut (*(user_ptr as *mut crate::regex::RegExpHeader)).meta as *mut *mut ObjectMeta)
-        }
+
         crate::gc::GC_TYPE_PROMISE => {
             Some(&mut (*(user_ptr as *mut crate::promise::Promise)).meta as *mut *mut ObjectMeta)
         }

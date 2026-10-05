@@ -95,7 +95,7 @@ fn forward_program<'s>(
     }
     let value = splitter.get_nanbox_f64();
     let re = crate::value::js_nanbox_get_pointer(value) as *const super::RegExpHeader;
-    if !super::is_valid_regex_ptr(re)
+    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some()
         || !crate::object::regex_proto_thunks::regexp_view_uses_builtin(value)
     {
         return None;
@@ -254,8 +254,12 @@ fn canonical_split(
     let re = scope.root_raw_mut_ptr(
         crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut super::RegExpHeader,
     );
-    let (unicode, sticky) =
-        re.with_const_ptr::<super::RegExpHeader, _>(|re| unsafe { ((*re).unicode, (*re).sticky) });
+    let (unicode, sticky) = re.with_const_ptr::<super::RegExpHeader, _>(|re| unsafe {
+        (
+            (*crate::regex::regexp_data_ptr(re)).unicode,
+            (*crate::regex::regexp_data_ptr(re)).sticky,
+        )
+    });
     // Without `y` the splitter's program is the receiver's own, which binds in
     // constant work once validated (#10166); with it, compile one without.
     let forward = if sticky {

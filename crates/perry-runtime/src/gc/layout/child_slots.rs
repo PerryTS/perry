@@ -399,18 +399,10 @@ pub(in crate::gc) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSl
                 .with_meta_slot(crate::object::gc_object_meta_slot(user_ptr as usize))
         }
         GcLayoutSlotKind::RegExpFields => {
-            let (pattern_slot, slot_count, last_index_slot) =
-                crate::regex::regex_gc_slot_ptrs(user_ptr as *mut crate::regex::RegExpHeader);
-            HeapChildSlotIterator::new(
-                header,
-                Some(last_index_slot),
-                HeapSlotRange::new(pattern_slot, slot_count),
-            )
-            // #6759 phase 1: the metadata edge. RegExp reaches marking through
-            // THIS iterator (its rewrite arm delegates here), so the edge has
-            // to be enumerated at this point, not in the rewrite match.
-            .with_meta_slot(crate::object::cell_meta_slot(user_ptr as usize).map(|s| s as *mut u64))
-            .with_meta_slot2(crate::regex::regex_program_slot(user_ptr))
+            let (source, count) =
+                crate::regex::regex_gc_slot_ptrs(user_ptr as *mut crate::regex::RegExpData);
+            HeapChildSlotIterator::new(header, None, HeapSlotRange::new(source, count))
+                .with_meta_slot(crate::regex::regex_program_slot(user_ptr))
         }
         GcLayoutSlotKind::ObjectMeta => {
             // DIVERGENT AND UNREACHABLE (#10868 step 2.5 stage 1): the

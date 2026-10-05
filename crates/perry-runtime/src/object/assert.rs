@@ -76,7 +76,7 @@ fn regexp_ptr(pattern: f64) -> Option<*const crate::regex::RegExpHeader> {
         return None;
     }
     let ptr = jv.as_pointer::<u8>();
-    if !crate::regex::is_regex_pointer(ptr) {
+    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((ptr) as i64)).is_some() {
         return None;
     }
     Some(ptr as *const crate::regex::RegExpHeader)
