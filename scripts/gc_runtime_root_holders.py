@@ -343,7 +343,19 @@ REGISTER_CALL = re.compile(
 FN_DEF = re.compile(
     r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:unsafe\s+|extern\s+\"[^\"]*\"\s+)*fn\s+(\w+)"
 )
-IDENT = re.compile(r"\b[A-Za-z_]\w*\b")
+# The legacy graph follows every identifier a reachable body names, not only
+# calls, so a function handed over as a value (`for_each(visit_slot)`) still
+# links. What precedes the name decides what it can resolve to:
+# * after `.` it is a field or a method on a receiver whose type the text does
+#   not give, so it is not followed. If it were, `binding.buffer` or
+#   `cell.set(bits)` would pull in any `fn buffer(&mut self)` / `fn set(..)`
+#   in the scanned crates and certify the holders those bodies name;
+# * after `::` it is path-qualified (`Type::method`, `module::f`) and may
+#   resolve to any same-named fn, method or free;
+# * bare, it can name only a free fn (or a local), never a `self` method.
+IDENT_REFERENCE = re.compile(r"(\.|::)?\s*\b([A-Za-z_]\w*)\b(?!\s*::\s*[A-Za-z_])")
+# A method's signature: its first parameter is a `self` receiver.
+SELF_RECEIVER = re.compile(r"\(\s*(?:&\s*(?:'\w+\s+)?)?(?:mut\s+)?self\b")
 # Free/qualified function calls only. Method names must not enter the scanner
 # call graph: walking `.values_mut()`/`.iter_mut()` as though they were free
 # functions can reach unrelated same-named helpers and falsely certify a
@@ -441,12 +453,14 @@ def strip_comments(text: str) -> str:
     return "\n".join(out)
 
 
-def function_bodies(text: str) -> dict[str, str]:
+def function_bodies(text: str, free_only: bool = False) -> dict[str, str]:
     """Map fn name -> its body text. Brace-counted, comments stripped.
 
     Good enough for a call-graph reachability walk: a body that over-runs by a
     brace only ever makes MORE things reachable, i.e. errs toward calling a
     holder covered, which is the direction an inventory entry can correct.
+    `free_only` leaves out methods (a `self` receiver), which a bare name
+    cannot call.
     """
     code = strip_comments(text)
     lines = code.splitlines()
@@ -484,6 +498,10 @@ def function_bodies(text: str) -> dict[str, str]:
                 break
         if declaration_only:
             continue
+        if free_only:
+            body = "\n".join(chunk)
+            if SELF_RECEIVER.search(body[: body.find("{")]):
+                continue
         bodies.setdefault(name, "")
         bodies[name] += "\n".join(chunk)
     return bodies
@@ -885,9 +903,12 @@ def scan(root: Path) -> tuple[list[dict], int, set[str]]:
 
     # 2. call graph over every fn in the scanned crates
     bodies: dict[str, list[tuple[Path, str]]] = {}
+    free_bodies: dict[str, list[tuple[Path, str]]] = {}
     for path, text in texts.items():
         for name, body in function_bodies(text).items():
             bodies.setdefault(name, []).append((path, body))
+        for name, body in function_bodies(text, free_only=True).items():
+            free_bodies.setdefault(name, []).append((path, body))
 
     # Deep hops are matched on the BARE name, and the platform-ported crates
     # define whole files of same-named functions (every perry-ui* crate has a
@@ -976,34 +997,50 @@ def scan(root: Path) -> tuple[list[dict], int, set[str]]:
                             segments = target.split("::")
                             changed |= add_seed(segments[-1], segments[:-1])
 
-    def reachable_text(call_pattern: re.Pattern) -> dict[Path, str]:
-        reachable: set[str] = set()
-        frontier = set(seeds)
+    def call_references(body: str):
+        return ((name, True) for name in CALLED_FUNCTION.findall(body))
+
+    def ident_references(body: str):
+        for prefix, name in IDENT_REFERENCE.findall(body):
+            if prefix != ".":
+                yield name, prefix == "::"
+
+    def reachable_text(references) -> dict[Path, str]:
+        # A name reached only bare resolves to free fns; once reached
+        # path-qualified (or as a registered seed) it resolves to methods too.
+        reachable: dict[str, bool] = {}
+        frontier = {name: True for name in seeds}
         # Files whose functions may be walked for a given reachable name.
         # Root-level names are pinned to the registration's file(s); deeper
         # hops are not (nothing in the text says which module a call resolved
         # to), and the docstring says so.
         for depth in range(MAX_SCANNER_DEPTH):
-            nxt: set[str] = set()
-            for name in frontier:
-                if name in reachable:
+            nxt: dict[str, bool] = {}
+            for name, any_fn in frontier.items():
+                if reachable.get(name) in (True, any_fn):
                     continue
-                reachable.add(name)
+                reachable[name] = any_fn
                 allowed = seed_files.get(name) if depth == 0 else None
-                for path, body in bodies.get(name, []):
+                for path, body in (bodies if any_fn else free_bodies).get(name, []):
                     if allowed is not None and path not in allowed:
                         continue
                     if allowed is None and not crate_hosts_reachable_code(path):
                         continue
-                    nxt.update(call_pattern.findall(body))
-            frontier = {n for n in nxt if n in bodies and n not in reachable}
+                    for ref, ref_any in references(body):
+                        nxt[ref] = nxt.get(ref, False) or ref_any
+            frontier = {
+                n: any_fn
+                for n, any_fn in nxt.items()
+                if n in (bodies if any_fn else free_bodies)
+                and reachable.get(n) not in (True, any_fn)
+            }
             if not frontier:
                 break
 
         by_file: dict[Path, str] = {}
-        for name in reachable:
+        for name, any_fn in reachable.items():
             allowed = seed_files.get(name)
-            for path, body in bodies.get(name, []):
+            for path, body in (bodies if any_fn else free_bodies).get(name, []):
                 if allowed is not None and path not in allowed:
                     continue
                 if allowed is None and not crate_hosts_reachable_code(path):
@@ -1016,8 +1053,8 @@ def scan(root: Path) -> tuple[list[dict], int, set[str]]:
     # across the many ported backend crates and falsely certify UI tables. Keep
     # the pre-existing conservative graph for older tiers so this focused
     # campaign does not silently reclassify unrelated historical inventory.
-    reachable_text_by_file = reachable_text(CALLED_FUNCTION)
-    legacy_reachable_text_by_file = reachable_text(IDENT)
+    reachable_text_by_file = reachable_text(call_references)
+    legacy_reachable_text_by_file = reachable_text(ident_references)
 
     # 3. classify declarations
     holders: list[dict] = []
@@ -1384,6 +1421,7 @@ pub fn gc_init() {
     gc_register_mutable_root_scanner(crate::other::scan_other_roots_mut);
     gc_register_mutable_root_scanner(crate::dup_a::scan_dup_roots_mut);
     gc_register_mutable_root_scanner(crate::fwd::scan_fwd_roots_mut);
+    gc_register_mutable_root_scanner(crate::field_names::scan_field_names_roots_mut);
 """ + "\n".join(
         f"    gc_register_mutable_root_scanner(crate::pad::scan_pad_{i}_mut);"
         for i in range(MIN_REGISTERED)
@@ -1546,6 +1584,36 @@ thread_local! {
 pub fn set_callback(key: usize, callback: f64) {
     BUTTON_CALLBACKS.with(|c| c.borrow_mut().insert(key, callback));
 }
+""",
+    # A scanner whose field accesses and receiver method calls share names
+    # with methods in another file (`binding.buffer`, `cell.set(bits)`), and a
+    # module path segment (`crate::buffer::`) that does too. None of them may
+    # reach `Binding::buffer`/`Binding::set`; a path-qualified method call and
+    # a turbofish free-function call must still reach their bodies.
+    "crates/perry-runtime/src/field_names.rs": """
+pub fn scan_field_names_roots_mut(v: &mut V) {
+    for binding in bindings().values_mut() { v.visit(&mut binding.buffer); }
+    CELL.with(|cell| { let bits = cell.get(); cell.set(bits); });
+    let _ = crate::buffer::header_of(0);
+    Registry::visit_all(&REGISTRY, v);
+    walk_all::<u8>(v);
+}
+""",
+    "crates/perry-runtime/src/method_names.rs": """
+perry_thread_local! {
+    static FIELD_NAME_DECOY: RefCell<Vec<usize>> = RefCell::new(Vec::new());
+    static METHOD_NAME_DECOY: RefCell<Vec<usize>> = RefCell::new(Vec::new());
+    static PATH_QUALIFIED_METHOD: RefCell<Vec<usize>> = RefCell::new(Vec::new());
+    static TURBOFISH_FREE_FN: RefCell<Vec<usize>> = RefCell::new(Vec::new());
+}
+impl Binding {
+    fn buffer(&self) -> usize { FIELD_NAME_DECOY.with(|t| t.borrow().len()) }
+    fn set(&mut self, bits: u64) { METHOD_NAME_DECOY.with(|t| t.borrow_mut().push(bits as usize)); }
+}
+impl Registry {
+    fn visit_all(&self, v: &mut V) { PATH_QUALIFIED_METHOD.with(|t| v.visit(&mut t.borrow_mut())); }
+}
+fn walk_all<T>(v: &mut V) { TURBOFISH_FREE_FN.with(|t| v.visit(&mut t.borrow_mut())); }
 """,
     # The fence case: `accessor` is ALSO the name of a genuinely reachable
     # helper in thing.rs. perry-ui-fake registers nothing, so its same-named
@@ -1815,6 +1883,34 @@ def self_test() -> int:
         "perry-ui-fake registers nothing, so its body must not be attributed "
         "— without the fence this reads covered",
         tier="frontier",
+    )
+    mn = "crates/perry-runtime/src/method_names.rs"
+    expect(
+        mn,
+        "FIELD_NAME_DECOY",
+        False,
+        "the scanner reads the field `binding.buffer` and names the module "
+        "`crate::buffer::`; neither is a call to the method `Binding::buffer`",
+    )
+    expect(
+        mn,
+        "METHOD_NAME_DECOY",
+        False,
+        "`cell.set(bits)` is a method on a receiver whose type the text does "
+        "not give, so it must not resolve to `Binding::set`",
+    )
+    expect(
+        mn,
+        "PATH_QUALIFIED_METHOD",
+        True,
+        "`Registry::visit_all(..)` names the method by path, so its body is reached",
+    )
+    expect(
+        mn,
+        "TURBOFISH_FREE_FN",
+        True,
+        "`walk_all::<u8>(v)` is a bare call of a free fn; the turbofish is not "
+        "a module path",
     )
 
     # --- frontier ratchet red paths ----------------------------------------
