@@ -1110,6 +1110,10 @@ jobs:
           cargo check --locked -p perry-stdlib --no-default-features
           cargo check --locked -p perry --no-default-features --features dev-cli
 
+      - name: Auto-optimize pruned feature builds
+        if: ${{ !cancelled() }}
+        run: ./scripts/check_auto_optimize_features.sh
+
       - name: Regenerate API docs
         if: ${{ !cancelled() }}
         run: ./scripts/regen_api_docs.sh

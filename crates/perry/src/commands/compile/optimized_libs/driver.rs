@@ -1048,31 +1048,22 @@ pub(crate) fn build_optimized_libs(
         cargo_cmd.env("RUSTFLAGS", rustflags.join(" "));
     }
 
-    let status = match super::super::tool_output::run_internal_tool(&mut cargo_cmd, verbose) {
-        Ok(s) => s,
-        Err(e) => {
-            if matches!(format, OutputFormat::Text) {
+    let (status, diagnostic) =
+        match super::super::tool_output::run_internal_tool_with_diagnostic(&mut cargo_cmd, verbose)
+        {
+            Ok(result) => result,
+            Err(e) => {
                 eprintln!(
-                    "  auto-optimize: failed to spawn cargo ({}), \
-                     using prebuilt libraries",
-                    e
+                    "{}",
+                    auto_build_fallback_warning(&format!("failed to spawn cargo: {e}"))
                 );
+                return OptimizedLibs::empty();
             }
-            return OptimizedLibs::empty();
-        }
-    };
+        };
     if !status.success() {
-        if matches!(format, OutputFormat::Text) {
-            eprintln!(
-                "  auto-optimize: cargo build failed ({}), \
-                 using prebuilt libraries. The prebuilt archives may lack the \
-                 feature-gated `js_*` entrypoints this compile routed to ext \
-                 crates; if the link fails with undefined symbols, fix the \
-                 cargo error above (or rebuild the workspace so it matches \
-                 this perry binary) and re-run.",
-                status
-            );
-        }
+        let cause = diagnostic
+            .unwrap_or_else(|| format!("cargo build exited with {status} (no error line emitted)"));
+        eprintln!("{}", auto_build_fallback_warning(&cause));
         return OptimizedLibs::empty();
     }
     let _ = std::fs::write(&build_stamp_path, &build_stamp);
@@ -1333,5 +1324,26 @@ pub(crate) fn build_optimized_libs(
         well_known_libs,
         stdlib_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
         runtime_installs: crate::commands::stdlib_installs::FeatureInstalls::Compiled,
+    }
+}
+
+fn auto_build_fallback_warning(cause: &str) -> String {
+    format!(
+        "warning: auto-optimized runtime build failed; linking the full prebuilt runtime and stdlib instead (larger binary).\n  First error: {cause}\n  Report this at https://github.com/PerryTS/perry/issues with your Perry version, target, compile command, and the Cargo error above."
+    )
+}
+
+#[cfg(test)]
+mod fallback_tests {
+    #[test]
+    fn fallback_warning_names_cause_size_and_report_destination() {
+        let message =
+            super::auto_build_fallback_warning("error[E0425]: missing nanbox_handle_value");
+        assert!(message.starts_with("warning: auto-optimized runtime build failed"));
+        assert!(message.contains("full prebuilt runtime and stdlib"));
+        assert!(message.contains("larger binary"));
+        assert!(message.contains("First error: error[E0425]: missing nanbox_handle_value"));
+        assert!(message.contains("https://github.com/PerryTS/perry/issues"));
+        assert!(message.contains("version, target, compile command"));
     }
 }
