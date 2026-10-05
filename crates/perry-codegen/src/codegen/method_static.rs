@@ -477,6 +477,8 @@ pub(in crate::codegen) fn compile_static_method(
         elided_arguments: HashMap::new(),
         native_rep_records: Vec::new(),
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
+        sealed_buffer_locals: native_facts.sealed_buffer_locals(),
+        late_exposed_buffer_locals: native_facts.late_exposed_buffer_locals(),
         buffer_alias_base,
     };
     crate::codegen::arguments::materialize_arguments_object(

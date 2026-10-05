@@ -124,6 +124,10 @@ pub struct ModuleDispatchFacts {
     /// (`single_binding_closure_locals`), beside the module-wide reassignment
     /// scan it rests on.
     closure_bindings: HashMap<u32, u32>,
+    /// Bindings whose typed array or buffer some use could hand to code that
+    /// reads its `.buffer` (`collectors/sealed_buffers.rs`). `None` when never
+    /// computed, which seals nothing.
+    buffer_exposure: Option<super::sealed_buffers::BufferExposure>,
 }
 
 #[derive(Debug, Clone)]
@@ -147,11 +151,30 @@ impl Default for ModuleDispatchFacts {
             imported_return_shapes: HashMap::new(),
             argument_shape_routes: HashMap::new(),
             closure_bindings: HashMap::new(),
+            buffer_exposure: None,
         }
     }
 }
 
 impl ModuleDispatchFacts {
+    /// True when no use of binding `id` can reach its array's `.buffer`, so
+    /// nothing can rebind its storage or detach it. Fail safe: false when the
+    /// module was never scanned.
+    pub(crate) fn buffer_binding_is_sealed(&self, id: u32) -> bool {
+        self.buffer_exposure
+            .as_ref()
+            .is_some_and(|e| !e.exposed.contains(&id))
+    }
+
+    /// True when binding `id` is exposed only by statements of its own body,
+    /// so its view stays trusted until the first statement that may expose it
+    /// (`sealed_buffers::stmt_may_expose`).
+    pub(crate) fn buffer_binding_is_late_exposed(&self, id: u32) -> bool {
+        self.buffer_exposure
+            .as_ref()
+            .is_some_and(|e| e.exposed.contains(&id) && !e.remote.contains(&id))
+    }
+
     /// True when nothing in the module can rewrite the method table of
     /// `class_name` or of any class it inherits from.
     pub(crate) fn prototype_is_stable(
@@ -481,6 +504,7 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         // `None` as "take no seed". Computed here rather than lazily so the one
         // module-wide walk it needs happens once.
         closure_bindings: super::spec_abi_sites::single_binding_closure_locals(hir),
+        buffer_exposure: Some(super::sealed_buffers::buffer_exposure(hir)),
     };
 
     // #7139: resolve the CommonJS wrap's `exports` / `require` scaffolding
@@ -983,6 +1007,7 @@ mod tests {
             imported_return_shapes: HashMap::new(),
             argument_shape_routes: HashMap::new(),
             closure_bindings: HashMap::new(),
+            buffer_exposure: None,
         }
     }
 

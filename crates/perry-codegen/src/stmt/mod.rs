@@ -197,10 +197,16 @@ fn lower_stmts_from(
 ) -> Result<()> {
     let mut i = 0;
     while i < stmts.len() {
+        // A typed array this statement may expose is untrusted from here on,
+        // and no run lowered as one unit may reach past the next statement
+        // that may expose one (`let_buffer_views::late_exposure_limit`).
+        let_buffer_views::distrust_views_the_stmt_may_expose(ctx, &stmts[i]);
+        let limit = let_buffer_views::late_exposure_limit(ctx, stmts, i);
         // #11759 (c′): the rest of a function body after `let c = new C()`
         // through a repeatable class declaration's binding tests the
         // declaration's first evaluation once (`class_first_loop`).
         if version_tails
+            && limit == stmts.len()
             && class_first_loop::try_lower_versioned_tail(ctx, &stmts[i..], i, emit_shadow_clears)?
         {
             return Ok(());
@@ -211,7 +217,7 @@ fn lower_stmts_from(
         // data-field/Array probe that can return the first truthy value. Every
         // miss falls into the ordinary lowering below, including accessors,
         // proxies, sparse/OOB arrays and the falsy fill branch.
-        cached_field_index_return::try_emit_cached_field_index_return(ctx, &stmts[i..])?;
+        cached_field_index_return::try_emit_cached_field_index_return(ctx, &stmts[i..limit])?;
 
         // Channel-reduction fusion: detect a length-3-or-4 sequence of
         // `acc[c] += arr[idx + c] * k` accumulator updates and emit a
@@ -243,7 +249,7 @@ fn lower_stmts_from(
         // fallback for non-unrolled functions.
         if !ctx.was_unrolled {
             if let Some(reduction) =
-                crate::expr::try_match_channel_reduction(stmts, i, ctx.integer_locals)
+                crate::expr::try_match_channel_reduction(&stmts[..limit], i, ctx.integer_locals)
             {
                 if ctx.buffer_data_slots.contains_key(&reduction.array_id) {
                     crate::expr::lower_channel_reduction(ctx, &reduction)?;
@@ -265,7 +271,8 @@ fn lower_stmts_from(
         // range-loop tiers to version). Probes the accessed arrays once at
         // region entry and branches into a fast copy whose masked reads are
         // bare inline loads; consumes the whole region on a match.
-        if let Some(region) = masked_window_region::try_match_masked_window_region(ctx, &stmts[i..])
+        if let Some(region) =
+            masked_window_region::try_match_masked_window_region(ctx, &stmts[i..limit])
         {
             let end = i + region.len;
             masked_window_region::lower_masked_window_region(
@@ -285,7 +292,7 @@ fn lower_stmts_from(
         // across statements is guarded ONCE, not once per read. Slice 1 takes
         // the runs that sit inside one `+` tree; this takes the runs spelled
         // across statements, which a tsc census puts at 3.7x as many reads.
-        if let Some(run) = region_read_stmts::try_match(ctx, &stmts[i..]) {
+        if let Some(run) = region_read_stmts::try_match(ctx, &stmts[i..limit]) {
             let end = i + run.len;
             region_read_stmts::lower(ctx, &stmts[i..end], &run)?;
             if emit_shadow_clears {
@@ -302,7 +309,9 @@ fn lower_stmts_from(
         // Decision 69: a straight-line run of typed-array view accesses (an
         // unrolled loop) proves its indices against the length once, at its
         // top, like a loop region does per loop.
-        if let Some(len) = region_loop::try_lower_view_run(ctx, &stmts[i..], lower_region_list)? {
+        if let Some(len) =
+            region_loop::try_lower_view_run(ctx, &stmts[i..limit], lower_region_list)?
+        {
             let end = i + len;
             if emit_shadow_clears {
                 for j in i..end {
@@ -373,6 +382,8 @@ fn lower_return_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<Stri
 }
 
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
+    // A typed array exposed by this statement is untrusted from here on.
+    let_buffer_views::distrust_views_the_stmt_may_expose(ctx, stmt);
     // #11759 (c′): a loop holding first-evaluation guards on a binding it
     // cannot rebind tests once, before the loop.
     if matches!(

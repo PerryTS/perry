@@ -7351,9 +7351,13 @@ fn lower_for_after_init_impl(
         if local_bound_index_bounds_are_safe {
             if let Some(buffer_ids) = ctx.min_length_bounds.get(&bound_id).cloned() {
                 for buffer_local_id in buffer_ids {
+                    // `Math.min(a.length, ...)` read the length once; the body
+                    // may run JS, which can detach a receiver whose length is
+                    // not fixed.
                     if ctx
                         .receiver_descriptors
-                        .contains_buffer_view(buffer_local_id)
+                        .buffer_view(buffer_local_id)
+                        .is_some_and(|view| view.length_fixed)
                     {
                         ctx.bounded_buffer_index_pairs.push(BoundedBufferIndex {
                             index_local_id: counter_id,

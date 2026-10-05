@@ -87,12 +87,20 @@ fn rmw_module(name: &str, rhs: Expr) -> Module {
                 arg: Some(Box::new(Expr::Integer(4))),
             }),
         },
+        // The key must provably never be a string. A key read from a plain array
+        // could be "buffer" (or any property name), and `values["buffer"]` observes
+        // the buffer, which rebinds the inline storage; the sealed-buffer proof then
+        // (correctly) refuses the `$spec_ta5x4` clone this test exists to inspect.
+        // An element of a typed array is always a number, so the clone stays sound.
         Stmt::Let {
             id: 2,
             name: "keys".to_string(),
-            ty: Type::Array(Box::new(Type::Any)),
+            ty: Type::Named("Uint32Array".to_string()),
             mutable: false,
-            init: Some(Expr::Array(vec![Expr::Integer(0)])),
+            init: Some(Expr::TypedArrayNew {
+                kind: TYPED_ARRAY_KIND_UINT32,
+                arg: Some(Box::new(Expr::Integer(1))),
+            }),
         },
         Stmt::Expr(Expr::Call {
             callee: Box::new(Expr::FuncRef(7)),

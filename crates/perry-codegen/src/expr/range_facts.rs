@@ -946,9 +946,14 @@ fn guarded_buffer_index(
     if width < 1 || width > u32::MAX as i64 {
         return None;
     }
+    // The guard read the length once; the guarded body may run JS before the
+    // access, and JS can detach a receiver whose length is not fixed
+    // (`buffer.transfer()` zeroes it), which would leave a bare access past
+    // the end.
     if !ctx
         .receiver_descriptors
-        .contains_buffer_view(buffer_local_id)
+        .buffer_view(buffer_local_id)
+        .is_some_and(|view| view.length_fixed)
     {
         return None;
     }

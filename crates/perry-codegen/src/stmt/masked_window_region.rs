@@ -297,9 +297,10 @@ fn region_i32_bounded_write_locals(stmts: &[Stmt]) -> std::collections::HashSet<
 /// Phase 2: decompose a region-admissible proven-view element store —
 /// `IndexSet`/`PutValueSet` on a `storage_inline_proven` integer-element view
 /// receiver with an exact-i32 index shape. Element writes cannot rebind the
-/// receiver, resize it, or move its storage (non-view typed arrays are
-/// non-movable and non-detachable), and the checked-store lowering emits no
-/// calls, so the statement is safe inside every region copy.
+/// receiver, resize it, or move its storage (a proven view's binding is
+/// sealed, so nothing can rebind or detach its storage), and the
+/// checked-store lowering emits no calls, so the statement is safe inside
+/// every region copy.
 fn proven_view_store_parts<'e>(
     ctx: &FnCtx<'_>,
     expr: &'e Expr,

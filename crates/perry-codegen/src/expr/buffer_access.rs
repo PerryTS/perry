@@ -428,7 +428,13 @@ pub(crate) fn emit_buffer_access_pointer(
             &data_ptr,
             &[(I32, &proof.view.length_offset_from_data.to_string())],
         );
-        blk.load_invariant(I32, &header_ptr)
+        // `!invariant.load` only when nothing can detach the receiver: JS
+        // between two accesses (`buffer.transfer()`) zeroes the length.
+        if proof.view.length_fixed {
+            blk.load_invariant(I32, &header_ptr)
+        } else {
+            blk.load(I32, &header_ptr)
+        }
     };
     if proof.may_emit_inbounds && !region_proven {
         let bounds_width_units = spec.bounds_width_units();

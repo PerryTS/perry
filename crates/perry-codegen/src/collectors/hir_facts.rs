@@ -155,6 +155,12 @@ pub(crate) struct BoundsFacts {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AliasNoAliasFacts {
     pub known_noalias_buffer_locals: HashSet<u32>,
+    /// The `known_noalias_buffer_locals` whose every use is sealed: nothing
+    /// can observe their `.buffer`, so nothing can rebind or detach them.
+    pub sealed_buffer_locals: HashSet<u32>,
+    /// The exposed `known_noalias_buffer_locals` whose every exposing use is a
+    /// statement of their own body: trusted until the first such statement.
+    pub late_exposed_buffer_locals: HashSet<u32>,
     /// Locals that always hold a Number, BigInt or `undefined`: keys an owned
     /// typed array can take through the guarded view tier without reaching
     /// its `buffer` getter. See `collectors/numeric_key_locals.rs`.
@@ -372,6 +378,14 @@ impl TypeFacts {
 
     pub(crate) fn known_noalias_buffer_locals(&self) -> &HashSet<u32> {
         &self.alias_noalias.known_noalias_buffer_locals
+    }
+
+    pub(crate) fn sealed_buffer_locals(&self) -> &HashSet<u32> {
+        &self.alias_noalias.sealed_buffer_locals
+    }
+
+    pub(crate) fn late_exposed_buffer_locals(&self) -> &HashSet<u32> {
+        &self.alias_noalias.late_exposed_buffer_locals
     }
 
     pub(crate) fn numeric_key_locals(&self) -> &HashSet<u32> {
@@ -807,6 +821,20 @@ pub(crate) fn collect_type_facts(
     let non_object_locals: HashSet<u32> = number_locals.union(&integer_locals).copied().collect();
     let known_noalias_buffer_locals =
         collect_known_noalias_buffer_locals(stmts, &non_object_locals);
+    // The owned bindings no use can hand to code that reads their `.buffer`
+    // (`collectors/sealed_buffers.rs`). Only these keep their construction
+    // facts: observing `.buffer` rebinds a typed array to an external
+    // backing, and `buffer.transfer()` then detaches it.
+    let sealed_buffer_locals: HashSet<u32> = known_noalias_buffer_locals
+        .iter()
+        .copied()
+        .filter(|id| module_dispatch.buffer_binding_is_sealed(*id))
+        .collect();
+    let late_exposed_buffer_locals: HashSet<u32> = known_noalias_buffer_locals
+        .iter()
+        .copied()
+        .filter(|id| module_dispatch.buffer_binding_is_late_exposed(*id))
+        .collect();
     let numeric_key_locals = super::numeric_key_locals::collect_numeric_key_locals(
         stmts,
         params,
@@ -868,6 +896,8 @@ pub(crate) fn collect_type_facts(
         },
         alias_noalias: AliasNoAliasFacts {
             known_noalias_buffer_locals,
+            sealed_buffer_locals,
+            late_exposed_buffer_locals,
             numeric_key_locals,
         },
         escape: EscapeFacts {
@@ -2363,6 +2393,15 @@ mod tests {
 
     /// `collect_type_facts` for one function whose parameter 1 is a
     /// specialized entry's proven Number.
+    /// Module-wide dispatch facts for a module whose init is `stmts`: an owned
+    /// buffer binding must also be sealed (`collectors/sealed_buffers.rs`), and
+    /// the fail-safe default seals nothing.
+    fn sealed_dispatch(stmts: &[Stmt]) -> crate::collectors::ModuleDispatchFacts {
+        let mut m = perry_hir::Module::new("hir_facts_test");
+        m.init = stmts.to_vec();
+        crate::collectors::collect_module_dispatch_facts(&m)
+    }
+
     fn facts_with_spec_numeric_param(stmts: &[Stmt]) -> TypeFacts {
         let params = vec![perry_hir::Param {
             id: 1,
@@ -2384,7 +2423,7 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &HashMap::new(),
-            &super::super::ModuleDispatchFacts::default(),
+            &sealed_dispatch(stmts),
             &HashMap::new(),
             &HashSet::new(),
             &[1].into_iter().collect(),
@@ -2549,7 +2588,10 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
             &constants,
-            &crate::collectors::ModuleDispatchFacts::default(),
+            &sealed_dispatch(&[const_let(
+                1,
+                Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(8)))),
+            )]),
             &HashMap::new(),
         );
 

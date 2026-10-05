@@ -960,6 +960,8 @@ pub(super) fn compile_module_entry(
             elided_arguments: HashMap::new(),
             native_rep_records: Vec::new(),
             known_noalias_buffer_locals: main_native_facts.known_noalias_buffer_locals(),
+            sealed_buffer_locals: main_native_facts.sealed_buffer_locals(),
+            late_exposed_buffer_locals: main_native_facts.late_exposed_buffer_locals(),
             buffer_alias_base,
         };
         // Register every module-level global's ADDRESS as a GC root so
@@ -1837,6 +1839,8 @@ pub(super) fn compile_module_entry(
             elided_arguments: HashMap::new(),
             native_rep_records: Vec::new(),
             known_noalias_buffer_locals: init_native_facts.known_noalias_buffer_locals(),
+            sealed_buffer_locals: init_native_facts.sealed_buffer_locals(),
+            late_exposed_buffer_locals: init_native_facts.late_exposed_buffer_locals(),
             buffer_alias_base,
         };
         // Register every module-level global's ADDRESS as a GC root —

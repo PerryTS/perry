@@ -1449,6 +1449,8 @@ pub(super) fn compile_function(
         elided_arguments: HashMap::new(),
         native_rep_records: Vec::new(),
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
+        sealed_buffer_locals: native_facts.sealed_buffer_locals(),
+        late_exposed_buffer_locals: native_facts.late_exposed_buffer_locals(),
         buffer_alias_base,
     };
 
@@ -1523,6 +1525,8 @@ pub(super) fn compile_function(
                 // Declared-type hoist only — the construction form is unknown,
                 // so no inline-storage proof.
                 storage_inline_proven: false,
+                // Any caller's Buffer, which JS may detach between reads.
+                length_fixed: false,
             },
         );
     }
@@ -1545,8 +1549,12 @@ pub(super) fn compile_function(
     // minor never relocates, and old-page defrag skips it because
     // `gc_type_is_movable(GC_TYPE_TYPED_ARRAY)` is `false`. Note the reason is
     // header residency, not "storage is non-movable": the value in `%arg` is
-    // the header, and hoisting data+length reads THROUGH it (#6981). A
-    // non-view typed array also cannot be detached or resized.
+    // the header, and hoisting data+length reads THROUGH it (#6981). The
+    // data pointer and length stay valid only because every call site passes
+    // a SEALED binding and this param is itself sealed in the body
+    // (`spec_abi_sites::buffer_exposed_bindings`): construction alone does
+    // not keep them, since observing `.buffer` rebinds the array to an
+    // external backing and `buffer.transfer()` then detaches it (length 0).
     if let Some(plan) = spec_entry {
         for (p, rep) in f.params.iter().zip(plan.reps.iter()) {
             let crate::collectors::SpecParamRep::TaPtr { kind, const_len } = rep else {
@@ -1591,6 +1599,8 @@ pub(super) fn compile_function(
                     native_owned: None,
                     pointer_state: BufferViewPointerState::Stable,
                     storage_inline_proven: true,
+                    // Every call site passes a sealed binding.
+                    length_fixed: true,
                 },
             );
         }

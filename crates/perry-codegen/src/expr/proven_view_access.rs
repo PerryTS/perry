@@ -12,7 +12,9 @@
 //! This tier serves receivers whose `BufferViewSlot` carries
 //! `storage_inline_proven` (fresh non-view construction: literal-length
 //! `new TA(n)` let-bindings, or a specialized-entry `TaPtr` param whose
-//! call-site pre-pass proved the construction). For those, element kind,
+//! call-site pre-pass proved the construction), both SEALED: no use of the
+//! binding can reach its `.buffer`, which is the only way to rebind its
+//! storage or detach it. For those, element kind,
 //! data pointer, and length are fixed for the array's lifetime, so the access
 //! needs NO kind guard, NO view guard, and NO runtime call — just:
 //!
@@ -247,7 +249,9 @@ fn proven_u32_view_value(ctx: &FnCtx<'_>, value: &Expr) -> bool {
 }
 
 /// Data pointer + entry-derived length for the proven view. The length load
-/// is `invariant` — a non-view typed array's length is immutable.
+/// is `invariant` only for a `length_fixed` view (a sealed binding, which
+/// nothing can detach); otherwise it is a plain load, re-read at every access
+/// so a detach by intervening JS is observed.
 pub(super) fn load_data_and_len(
     ctx: &mut FnCtx<'_>,
     view: &crate::native_value::BufferViewSlot,
@@ -262,7 +266,11 @@ pub(super) fn load_data_and_len(
             &data_ptr,
             &[(I32, &view.length_offset_from_data.to_string())],
         );
-        blk.load_invariant(I32, &len_ptr)
+        if view.length_fixed {
+            blk.load_invariant(I32, &len_ptr)
+        } else {
+            blk.load(I32, &len_ptr)
+        }
     };
     (data_ptr, len)
 }

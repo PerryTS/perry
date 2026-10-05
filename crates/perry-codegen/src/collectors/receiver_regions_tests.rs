@@ -365,6 +365,7 @@ fn test_buffer_view(data_slot: &str) -> crate::native_value::BufferViewSlot {
         native_owned: None,
         pointer_state: crate::native_value::BufferViewPointerState::Stable,
         storage_inline_proven: true,
+        length_fixed: true,
     }
 }
 

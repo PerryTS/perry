@@ -296,8 +296,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             && matches!(object.as_ref(), Expr::LocalGet(id)
                     if ctx.buffer_data_slots.contains_key(id)) =>
         {
-            // A native view normally reads this immutable header word
-            // directly. `Object.defineProperty(view, "length", ...)` creates
+            // A native view normally reads this header word directly. `Object.defineProperty(view, "length", ...)` creates
             // an ordinary own property, however, and it must shadow the
             // intrinsic TypedArray length. A module-wide shape barrier is the
             // conservative cross-closure proof that such a definition may
@@ -328,6 +327,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `length_offset_from_data` (and a `length_slot` for native views).
             let view = ctx.receiver_descriptors.buffer_view(arr_id).cloned();
             let length_slot = view.as_ref().and_then(|v| v.length_slot.clone());
+            // Only a `length_fixed` view's length is immutable: any other one
+            // can be detached by JS (`buffer.transfer()` zeroes it).
+            let length_fixed = view.as_ref().is_some_and(|v| v.length_fixed);
             let length_offset = view
                 .as_ref()
                 .map(|v| v.length_offset_from_data)
@@ -338,7 +340,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             } else {
                 let data_ptr = blk.load(PTR, &ptr_slot);
                 let header_ptr = blk.gep(I8, &data_ptr, &[(I32, &length_offset.to_string())]);
-                blk.load_invariant(I32, &header_ptr)
+                if length_fixed {
+                    blk.load_invariant(I32, &header_ptr)
+                } else {
+                    blk.load(I32, &header_ptr)
+                }
             };
             let lowered = LoweredValue::buffer_len(len_i32);
             ctx.record_lowered_value(
