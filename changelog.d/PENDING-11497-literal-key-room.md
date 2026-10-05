@@ -9,9 +9,8 @@ One shared slack calculation controls allocation, module birth images and
 constant literal descriptors. Classes sharing a keys global use its maximum
 requested capacity. ConstFn final shapes preserve the capacity, keeping the
 existing literal-method specialization. The descriptor width uses existing
-padding on 64-bit targets, preserving its 64-byte record size. Tests cover
-birth images and allocation widths,
-precision, the eight-slot cap, descriptors, enumeration and moving GC.
+padding on 64-bit targets, preserving its 64-byte record size. Tests cover birth images, allocation widths, precision, the eight-slot cap,
+descriptors, enumeration and moving GC.
 
 Validation and measurements are recorded in
 `docs/performance/11497-literal-key-room.txt`, including the scalar spill

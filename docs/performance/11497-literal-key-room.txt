@@ -1,0 +1,277 @@
+Literal key room, phase 1 (#11497, #10496)
+========================================
+
+Comparison main: 014f3e553d574e9e136b57b8ac57c89519755459.
+Implementation commits: 8b40985a, b17a95b4, c95390dc.
+Original requested base: 4cf05cbe389666712c4899cfe128c975fa593e0b.
+A stale main static archive was detected by an unrelated-function text-size
+comparison before final timing. Its source matched main, but the archive
+lacked main's thread-exit quarantine hook. That target was deleted and the
+baseline rebuilt from scratch; all baseline matrix, issue, program and census
+results below were then replaced. Both trees were checked against every Git
+blob in their respective snapshots.
+Measurements below compare the rebased lane with the comparison main, using
+separate source trees, release targets and linked program binaries on qb6.
+
+Implementation
+--------------
+The collector derives capacity evidence from unreassigned local, captured and
+module bindings initialized by a literal, module-local factory return-shape
+facts, and this in literal methods. It counts distinct absent named keys,
+excludes private/numeric names and dynamic computed keys, and caps additional
+capacity at eight.
+Parameter and array-element receivers are deferred. Imported factories cannot
+widen a producer's births from consumer-only evidence and remain a residual.
+
+birth_slack_in is shared by normal allocation, module birth images, literal
+descriptors and ConstFn final shapes. Classes sharing a keys global receive
+the maximum requested capacity for that global. Reservation changes live
+capacity, never the keys image. The descriptor ABI carries allocation_width
+separately from field_count and uses the existing stamped allocator.
+On 64-bit targets the width occupies existing padding at offset 52, keeping
+the original 64-byte descriptor stride, rep offset 56 and pointer-mask offset
+40. A regression assertion against the production C-layout struct failed on
+the initial 72-byte layout and passed after packing; the same assertion is
+included in the runtime tests. Compiler and runtime declare the same field
+order on every target.
+There is no additional runtime store path, spill code at a store site or side
+table. Existing guards, key insertion, descriptors and enumeration remain
+authoritative.
+
+The ConstFn final-shape follow-up preserves the full live width in both the
+module prepass and emitted finalization. Without it, a method literal's wide
+birth could reject its narrow final shape and retire the existing method
+lane. The focused regression requires both final-shape and call-site width.
+
+Measurement protocol
+--------------------
+Both arms: release cargo build -j 12 -p perry -p perry-runtime
+-p perry-runtime-static -p perry-stdlib-static; auto-optimize disabled;
+cache disabled; symbols retained. Runtime build flavour is identical.
+Matrix: instructions:u median of three at 500000, 1000000 and 5000000
+iterations, end-to-end slope and second-segment agreement within max(2%,0.5).
+Issue rows use 2000000, 3000000 and 4000000 iterations. Disassembly checks
+require a retained heap load (or the explicitly hoisted control).
+Node 26.5.1 is the byte-for-byte correctness oracle. Node 26.8.1 provides
+the matrix's additional instruction comparison, matching the re-measure.
+Real programs: five alternating base/head pairs, taskset CPU 7,
+perf instructions:u/task-clock and /usr/bin/time peak RSS. Full-GC diagnostics
+and LD_PRELOAD exit smaps_rollup are separate executions with identical output
+checks. File-backed RSS = Rss - Anonymous (Shmem is zero). THP-off uses a
+PR_SET_THP_DISABLE launcher before exec. All reported summaries are medians.
+
+Matrix, instructions per iteration. L/F/O = literal/factory/Object.create.
+
+type | receiver | main L/F/O | lane L/F/O | lane L/O,F/O | scope
+---- | -------- | ---------- | ---------- | ------------ | -----
+num | local | 471.000/471.000/76.000 | 74.000/73.999/76.000 | 0.9737/0.9737 | phase 1
+num | local_esc | 472.000/472.001/77.000 | 75.001/75.000/77.000 | 0.9740/0.9740 | phase 1
+num | modconst | 467.000/467.000/79.000 | 79.000/79.000/79.000 | 1.0000/1.0000 | phase 1
+num | captured | 474.000/474.000/81.999 | 82.000/82.000/82.000 | 1.0000/1.0000 | phase 1
+num | this | 471.001/471.000/77.000 | 77.000/77.000/77.000 | 1.0000/1.0000 | phase 1
+num | param | 468.000/468.000/72.000 | 468.001/468.000/72.000 | 6.5000/6.5000 | deferred
+num | varying | 519.000/519.000/75.000 | 519.000/519.000/75.000 | 6.9200/6.9200 | deferred
+str | local | 591.000/591.000/130.000 | 128.000/128.000/130.000 | 0.9846/0.9846 | phase 1
+str | local_esc | 591.000/591.000/130.000 | 128.000/128.000/130.000 | 0.9846/0.9846 | phase 1
+str | modconst | 589.000/589.001/128.000 | 128.000/128.001/128.000 | 1.0000/1.0000 | phase 1
+str | captured | 595.000/594.999/130.000 | 130.000/130.001/130.000 | 1.0000/1.0000 | phase 1
+str | this | 591.000/591.001/125.000 | 125.000/125.000/125.000 | 1.0000/1.0000 | phase 1
+str | param | 592.000/592.001/126.000 | 592.001/592.002/126.001 | 4.6984/4.6984 | deferred
+str | varying | 648.000/648.000/179.000 | 648.002/648.004/179.001 | 3.6201/3.6201 | deferred
+
+All 42 addkey cells measured. Phase-1 max ratio: 1.000006; bad validation cells: [].
+
+Other matrix cells: 541; regressions outside slope tolerance: [].
+
+Full-GC counts in matrix diagnostic runs: Counter({0: 1166})
+
+Issue #11497 rows:
+
+row | main | lane | full GC main/lane
+--- | ---- | ---- | -----------------
+addkey__local__factory__num | 473.00108 | 76.00092 | 0/0
+addkey__local__lit__num | 473.00023 | 75.99954 | 0/0
+addkey__local__ocreate__num | 76.00035 | 76.00091 | 0/0
+inherited__local__ocreate__num | 140.00041 | 139.99888 | 0/0
+inherited_hoisted__local__ocreate__num | 97.99989 | 97.99953 | 0/0
+
+real.jsonl, n=5 alternating pairs; positive deltas fail the strict no-rise gate.
+
+program | instr Δ | CPU Δ | peak RSS Δ | text/data Δ B | exit file/anon/THP Δ KiB | full GC | OUTPUT==Node
+------- | ------- | ----- | ---------- | ------------- | ------------------------ | ------- | ------------
+tsc | -0.0119% | -14.9005% | +0.9590% | 4672/0 | 1740/-8/0 | 0/0 | True
+tsc3 | -0.0055% | +1.2032% | +0.5287% | 4672/0 | 1784/2024/0 | 1/1 | True
+zod | -0.0154% | +0.0417% | +0.7517% | 0/0 | 92/0/0 | 0/0 | True
+zod5k | +0.0059% | -1.9250% | +0.2324% | 0/0 | 484/0/0 | 0/0 | True
+qsparse | -0.0170% | -2.1733% | -0.3215% | 0/0 | -20/8/0 | 0/0 | True
+qsstr | -0.0199% | -1.1478% | -0.1680% | 0/0 | -216/4/0 | 0/0 | True
+commander | -0.0014% | -7.4529% | -0.4495% | 0/0 | -192/0/0 | 0/0 | True
+hello | -0.1341% | +17.5481% | +0.1790% | 0/0 | -244/0/0 | 0/0 | True
+
+Absolute main -> lane medians:
+
+program | instructions | CPU ms | peak RSS KiB | exit file KiB | exit anon KiB | THP KiB
+------- | ------------ | ------ | ------------ | ------------- | ------------- | -------
+tsc | 10231703955.0->10230485799.0 | 2107.52->1793.49 | 219384->221488 | 83972->85712 | 24928->24920 | 6144->6144
+tsc3 | 28251935134.0->28250367262.0 | 5731.53->5800.49 | 267048->268460 | 84648->86432 | 25848->27872 | 6144->6144
+zod | 784089133.0->783968141.0 | 143.87->143.93 | 56940->57368 | 15012->15104 | 11388->11388 | 2048->2048
+zod5k | 16060271479.0->16061219759.0 | 2618.7->2568.29 | 56808->56940 | 14788->15272 | 11388->11388 | 2048->2048
+qsparse | 28603823442.0->28598956571.0 | 5313.92->5198.43 | 59712->59520 | 17424->17404 | 9080->9088 | 2048->2048
+qsstr | 76396998606.0->76381765881.0 | 12028.72->11890.65 | 59532->59432 | 17540->17324 | 7036->7040 | 2048->2048
+commander | 7784450515.0->7784344501.0 | 1005.92->930.95 | 52500->52264 | 14456->14264 | 10764->10764 | 2048->2048
+hello | 1650779.0->1648565.0 | 4.16->4.89 | 15644->15672 | 6708->6464 | 5000->5000 | 2048->2048
+
+real-thpoff.jsonl, n=5 alternating pairs; positive deltas fail the strict no-rise gate.
+
+program | instr Δ | CPU Δ | peak RSS Δ | text/data Δ B | exit file/anon/THP Δ KiB | full GC | OUTPUT==Node
+------- | ------- | ----- | ---------- | ------------- | ------------------------ | ------- | ------------
+tsc | -0.0093% | +0.7028% | -0.0509% | 4672/0 | 704/-52/0 | 0/0 | True
+tsc3 | -0.0049% | +3.6058% | +0.4377% | 4672/0 | 856/40/0 | 1/1 | True
+zod | +0.0034% | -0.5691% | +0.5977% | 0/0 | 308/4/0 | 0/0 | True
+zod5k | +0.0218% | -0.8403% | +0.6979% | 0/0 | 96/-4/0 | 0/0 | True
+qsparse | -0.0068% | +2.9827% | -0.5089% | 0/0 | 72/0/0 | 0/0 | True
+qsstr | -0.0239% | +11.1976% | +0.7227% | 0/0 | -168/0/0 | 0/0 | True
+commander | -0.0000% | -0.1338% | -0.4710% | 0/0 | -240/12/0 | 0/0 | True
+hello | -0.0077% | +1.5009% | -0.3202% | 0/0 | -108/0/0 | 0/0 | True
+
+Absolute main -> lane medians:
+
+program | instructions | CPU ms | peak RSS KiB | exit file KiB | exit anon KiB | THP KiB
+------- | ------------ | ------ | ------------ | ------------- | ------------- | -------
+tsc | 10232587682.0->10231637529.0 | 1462.75->1473.03 | 180740->180648 | 85032->85736 | 14912->14860 | 0->0
+tsc3 | 28248957797.0->28247585987.0 | 5748.28->5955.55 | 222072->223044 | 85248->86104 | 15460->15500 | 0->0
+zod | 784108651.0->784135586.0 | 147.61->146.77 | 28108->28276 | 15028->15336 | 3360->3364 | 0->0
+zod5k | 16056528901.0->16060028431.0 | 1328.12->1316.96 | 28084->28280 | 14876->14972 | 3368->3364 | 0->0
+qsparse | 28600974272.0->28599043644.0 | 2727.69->2809.05 | 30652->30496 | 17348->17420 | 2932->2932 | 0->0
+qsstr | 76398979013.0->76380745573.0 | 7655.96->8513.24 | 33760->34004 | 17556->17388 | 2964->2964 | 0->0
+commander | 7784357884.0->7784354742.0 | 1435.34->1433.42 | 26328->26204 | 14484->14244 | 3472->3484 | 0->0
+hello | 1760175.0->1760039.0 | 5.33->5.41 | 7496->7472 | 6616->6508 | 1328->1328 | 0->0
+
+tsc final read-cache census: main {'0': 52176, '1': 1967, '2': 291, '3': 158, '4': 40, '5': 105, 'mega': 128}; lane {'0': 52176, '1': 1967, '2': 291, '3': 158, '4': 40, '5': 105, 'mega': 128}; new polymorphic/megamorphic sites [].
+
+tsc3 final read-cache census: main {'0': 52176, '1': 1786, '2': 451, '3': 145, '4': 61, '5': 109, 'mega': 137}; lane {'0': 52176, '1': 1786, '2': 451, '3': 145, '4': 61, '5': 109, 'mega': 137}; new polymorphic/megamorphic sites [].
+
+zod final read-cache census: main {'0': 1694, '1': 115, '2': 8, '3': 1}; lane {'0': 1694, '1': 115, '2': 8, '3': 1}; new polymorphic/megamorphic sites [].
+
+zod5k final read-cache census: main {'0': 1694, '1': 115, '2': 8, '3': 1}; lane {'0': 1694, '1': 115, '2': 8, '3': 1}; new polymorphic/megamorphic sites [].
+
+Capacity and exact spill-allocation census:
+
+program | anon classes | widened classes | reserved slots per class sum | outlined wide births | outlined requested slots | spill buffers main/lane
+------- | ------------ | --------------- | ---------------------------- | -------------------- | ------------------------ | -----------------------
+tsc | 1826 | 12 | 19 | 0 | 0 | 689/689
+tsc3 | 1826 | 12 | 19 | 0 | 0 | 701/701
+zod | 109 | 0 | 0 | 0 | 0 | 3070/3070
+zod5k | 109 | 0 | 0 | 0 | 0 | 70270/70270
+qsparse | 132 | 0 | 0 | 0 | 0 | 42284/42284
+qsstr | 140 | 0 | 0 | 0 | 0 | 284/284
+commander | 30 | 0 | 0 | 0 | 0 | 10629/10629
+hello | 0 | 0 | 0 | 0 | 0 | 0/0
+
+Read census inspects compact words and all retained PIC ways at exit, including megamorphic state. It measures retained cache cardinality, not an unbounded history of evicted shapes. Spill-buffer counts include initial allocation and growth in spill_set_slow. Capacity counts deduplicate raw/native LLVM traces by keys global. Extra widened-birth counters cover the stamped allocator only; inlined loop births are outside that counter. Zero outlined births does not prove unused capacity.
+
+Acceptance status
+-----------------
+The phase-1 matrix comparisons pass the 1.10x target. Parameter/varying
+comparisons are still above it by the explicitly deferred rules.
+The strict real-program no-rise gate is NOT satisfied: five of eight normal
+rows and seven of eight THP-off rows have a positive instructions, CPU or
+peak-RSS median. These are complete n=5 cohorts; no repeats were selected to
+make a positive row green. All 160 samples and their diagnostic executions
+match Node; the 160 exit maps show zero shared-memory RSS, and THP-off maps
+show zero AnonHugePages.
+The normal tsc3 exit-anonymous difference is +2024 KiB, versus +40 KiB with
+THP disabled. Its peak-RSS difference remains positive in the THP-off cohort.
+Disabling THP therefore does not close the requested no-rise gate.
+Spill-buffer counts do not fall in any real-program driver. Static capacity
+evidence exists in tsc (12 keys globals, 19 spare slots); it is zero in Zod,
+qs, commander and hello. No real-program spill or throughput win is claimed.
+The requested zero-failure stdlib and full-lint gates are also NOT satisfied
+because of the reproduced baseline failures detailed below.
+
+
+Correctness and audit gates
+---------------------------
+Per-package cargo test --profile perry-dev -j 12, RUST_TEST_THREADS=1:
+- runtime: 5013 unit tests passed, 5 ignored; integration tests passed.
+- HIR: 603 unit tests passed, 1 ignored; integration tests passed.
+- codegen: 2002 unit tests passed, 1 ignored; integration tests passed.
+- stdlib: the full suite aborts in
+  streams::tests::pipe_through_pair_survives_a_moving_getter with
+  TypeError: Invalid transform writable, on both main and the lane. Isolated
+  default-feature runs reproduce it on both arms. A lane run excluding that
+  test passes all remaining 246 tests. The requested zero-failure stdlib gate
+  is therefore NOT satisfied; the failing test was not removed or weakened.
+
+The new gap test matches pinned Node byte for byte in normal mode and with
+PERRY_GC_FORCE_EVACUATE=1, PERRY_GC_VERIFY_EVACUATION=1 and diagnostics enabled.
+Its diagnostics report six copying minors and six evacuation_ok checks.
+It is registered in the moving-GC corpus. A separate GDB census witness
+observes one widened literal birth and one requested spare slot, and counts
+spill buffers dropping from two to one; this establishes instrument liveness.
+
+All five requested sabotage cases produced assertion failures (exit 101):
+image/allocation disagreement, removal of factory return-shape evidence,
+receiver-insensitive evidence, zero cap, and unconditional spill layout notes.
+The source was restored after each mutation. They ran before the descriptor
+padding follow-up; the unchanged reservation logic and restored scalar helper
+then passed the full post-padding codegen and runtime suites.
+
+The full lint driver ran all 125 gates (two CI-only steps excluded), including
+the compile tier. The final post-padding run reported 15 failures (110 passed). The 13 script-tier
+failures match main's separate 115-gate run exactly (compile tier skipped in
+that baseline run):
+- cargo-xwin unavailable in the supplied environment;
+- public-baseline harness tests;
+- address-classification and SSO inventories;
+- GC root-holder custody audit and its self-test;
+- raw-handle debt audit;
+- native-handle ledger self-test (stale zlib stream classification);
+- unrooted-local shape ratchet;
+- GC matrix fixture-environment self-test;
+- test-registration audit and its self-test (main's unregistered
+  test_gap_gc_protected_poll_reclaim);
+- per-test global-sink audit (64 asserted statics, recorded baseline 60).
+
+Workspace Clippy separately fails on both arms at
+perry-ext-zlib/src/stream/driver.rs:124, unused_io_amount on header.read(&mut []).
+Product Clippy, both warnings-as-errors checks and lean dependency checks pass.
+An earlier API regeneration attempt failed because its script ignores CARGO_TARGET_DIR
+and assumes src/target. An in-hostdir target symlink resolves that path; the
+generated Markdown and declarations then match clean main's generated output
+byte for byte. The Markdown differs from the empty committed reference;
+the declarations match their committed file. This remains a baseline docs
+gate failure. Generated API changes were not added to the lane.
+
+native_handle_ledger's ordinary audit passes: 202 tables, 188 producers,
+145 per-file ceilings. Its no-raise comparison against main passes.
+raw_handle_debt's no-raise comparison passes (recorded total 861, 107 ceilings
+unchanged); its ordinary audit fails identically on both arms with 868 sites:
+node_stream/async_iterator.rs 10 versus ceiling 7, node_submodules/zlib.rs one
+unlisted site, object/field_get_set/exotic_named_read_tests.rs three unlisted
+sites. No debt ceilings or allowlists were raised.
+GC store-site inventory and its self-test pass (2510 files, 550 audited sites,
+110 allowlisted); its INIT/POINTER_FREE/ROOT/STACK classes remain human-audited,
+as the gate itself states. Node-pin consistency and cargo fmt --check pass.
+
+layout_note_slot_aware investigation
+-----------------------------------
+On the final main numeric addkey cell, gdb checked all 25 index-5 stores:
+old_bits was TAG_HOLE for insertion, then exactly the previous numeric value
+for each overwrite. The pointer branch was not taken on number-to-number
+overwrites. A single-step trace from the helper's exact entry through its
+direct return counted 55 instructions for old=19/new=20, with no nested call.
+The sampled estimate of approximately 137 instructions was not reproduced
+as an exact scalar-call count. Its nontrivial cost includes the prologue and
+classification of both old and new bits, including raw-pointer classification.
+There is no evidence of incorrect old bits; no runtime correctness fix or
+separate fix commit is warranted. The added test performs a real spill store,
+then checks that a scalar overwrite does not invoke layout_note_slot. Replacing
+the aware helper with the unconditional helper must make that test fail.
+
+Historical settling limitation
+-----------------------------
+The old experiment-arm binaries named in design section 1 were no longer
+available on qb6. Their exact settling experiment could not be rerun. New
+matched builds, exit smaps and a THP-off rerun address the current lane's RSS;
+they do not retroactively establish the old arms' build flavour or noise.
