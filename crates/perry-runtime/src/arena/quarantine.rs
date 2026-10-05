@@ -73,8 +73,9 @@
 //! page-sets stay quarantined. Evicting a set restores `PROT_READ|PROT_WRITE`
 //! and hands the blocks **back to Eden** rather than freeing them, so the
 //! quarantine is a ring buffer: steady-state footprint is bounded by
-//! `depth × from-space bytes` and no `mprotect`ed page is ever handed to
-//! `dealloc`.
+//! `depth × from-space bytes` plus the ordinary Eden reuse window. Eden
+//! reclaims expired idle blocks through its normal moving-minor path; pages
+//! still under `mprotect` are detached and never handed to `dealloc`.
 //!
 //! **Depth is the knob to raise when a suspected bug does not fault.** A stale
 //! pointer is only caught while the page-set it names is still quarantined, and
@@ -525,6 +526,14 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
     let mut reset_blocks = 0usize;
     let mut reusable_bytes = 0usize;
 
+    // Expired quarantine blocks return to Eden with offset zero. Age and
+    // reclaim them through the ordinary moving-minor path before detaching
+    // this cycle's occupied blocks; otherwise survivor copies add one idle
+    // Eden block per collection. Quarantined pages remain detached and
+    // protected until push_set_and_evict restores their permissions.
+    let released =
+        ARENA.with(|arena| unsafe { super::reset::release_idle_eden_blocks(&mut *arena.get()) });
+
     // --- Eden -------------------------------------------------------------
     let eden_detached = ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
@@ -564,8 +573,8 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
         );
     }
 
-    // Hand expired blocks back to Eden rather than `dealloc`ing them: nothing
-    // that was ever `mprotect`ed is returned to the system allocator.
+    // Hand expired blocks back to Eden after restoring their permissions.
+    // Eden applies the ordinary reuse window before reclaiming idle blocks.
     ARENA.with(|arena| unsafe {
         let arena = &mut *arena.get();
         for block in recycled {
@@ -608,7 +617,7 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
     ArenaResetStats {
         reset_blocks,
         reusable_bytes,
-        ..ArenaResetStats::default()
+        ..released
     }
 }
 
