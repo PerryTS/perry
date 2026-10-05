@@ -543,6 +543,10 @@ jobs:
           fi
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --target x86_64-apple-darwin
+      - uses: ./.github/actions/perry-mbx-cache
+        with:
+          cache-generation: perry-release-x86_64-apple-darwin
+          save-on-workflow-dispatch: true
       - uses: ./.github/actions/setup-llvm22
       # Keep the proven partial-failure cache for this exceptionally slow
       # Intel leg. mbx's object bundle is saved only after a successful job.
@@ -870,8 +874,8 @@ jobs:
 
           # Keep old-sysroot objects isolated from the noble GTK4 build. Only
           # the outputs release packaging consumes cross that boundary.
-          src="target-glibc231/$TARGET/dist"
-          dst="target/$TARGET/dist"
+          src="target-glibc231/$TARGET/prod"
+          dst="target/$TARGET/prod"
           mkdir -p "$dst"
           for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a; do
             test -s "$src/$artifact"
@@ -917,8 +921,8 @@ jobs:
 
           # Same boundary as the old-sysroot leg: only the artifacts packaging
           # consumes cross back into target/.
-          src="target-musl/$TARGET/dist"
-          dst="target/$TARGET/dist"
+          src="target-musl/$TARGET/prod"
+          dst="target/$TARGET/prod"
           mkdir -p "$dst"
           for artifact in perry libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a; do
             test -s "$src/$artifact"
@@ -1043,7 +1047,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          libs=$(find target -path "*/dist/libperry_runtime.a" -o -path "*/dist/perry_runtime.lib")
+          libs=$(find target -path "*/prod/libperry_runtime.a" -o -path "*/prod/perry_runtime.lib")
           if [ -z "$libs" ]; then
             echo "::error::no built runtime archives found under target/ — nothing to verify"
             exit 1
@@ -1055,11 +1059,11 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p staging
-          cp target/${{ matrix.target }}/dist/perry staging/
+          cp target/${{ matrix.target }}/prod/perry staging/
           # Include static libraries for linking (runtime, stdlib, UI)
           for lib in libperry_runtime.a libperry_runtime_abort.a libperry_runtime_core.a libperry_stdlib.a libperry_ui_macos.a libperry_ui_gtk4.a; do
-            if [ -f "target/${{ matrix.target }}/dist/$lib" ]; then
-              cp "target/${{ matrix.target }}/dist/$lib" staging/
+            if [ -f "target/${{ matrix.target }}/prod/$lib" ]; then
+              cp "target/${{ matrix.target }}/prod/$lib" staging/
             fi
           done
           # #2532 — ship the perry-ext-* staticlibs so an out-of-tree install
@@ -1067,7 +1071,7 @@ jobs:
           # drivers without the workspace source. `perry compile` finds them
           # via the same exe-dir / PERRY_LIB_DIR search as the runtime/stdlib
           # libs (optimized_libs.rs::resolve_prebuilt_ext_libs).
-          for lib in target/${{ matrix.target }}/dist/libperry_ext_*.a; do
+          for lib in target/${{ matrix.target }}/prod/libperry_ext_*.a; do
             [ -f "$lib" ] && cp "$lib" staging/
           done
           # Closes #394: macOS legs also ship iOS-cross-compiled libs.
@@ -1076,7 +1080,7 @@ jobs:
           # bottle's flat lib dir. library_search.rs's cross-compile
           # branch composes the right name based on --target.
           if [ "${{ runner.os }}" = "macOS" ]; then
-            dev_dir="target/aarch64-apple-ios/dist"
+            dev_dir="target/aarch64-apple-ios/prod"
             if [ -f "$dev_dir/libperry_runtime.a" ]; then
               cp "$dev_dir/libperry_runtime.a" "staging/libperry_runtime_ios.a"
             fi
@@ -1086,7 +1090,7 @@ jobs:
             if [ -f "$dev_dir/libperry_ui_ios.a" ]; then
               cp "$dev_dir/libperry_ui_ios.a" "staging/libperry_ui_ios.a"
             fi
-            sim_dir="target/aarch64-apple-ios-sim/dist"
+            sim_dir="target/aarch64-apple-ios-sim/prod"
             if [ -f "$sim_dir/libperry_runtime.a" ]; then
               cp "$sim_dir/libperry_runtime.a" "staging/libperry_runtime_ios_sim.a"
             fi
@@ -1129,7 +1133,7 @@ jobs:
             throw 'WINDOWS_CODE_SIGNING_PFX_BASE64 is configured but WINDOWS_CODE_SIGNING_PFX_PASSWORD is missing.'
           }
 
-          $binary = "target/${{ matrix.target }}/dist/perry.exe"
+          $binary = "target/${{ matrix.target }}/prod/perry.exe"
           $certificate = Join-Path $env:RUNNER_TEMP 'perry-code-signing.pfx'
           try {
             $certificateBytes = [Convert]::FromBase64String($env:WINDOWS_CODE_SIGNING_PFX_BASE64)
@@ -1170,7 +1174,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $binary = "target/${{ matrix.target }}/dist/perry.exe"
+          $binary = "target/${{ matrix.target }}/prod/perry.exe"
           $llvmBin = Join-Path $env:LLVM_SYS_221_PREFIX 'bin'
           $llvmReadObj = Join-Path $llvmBin 'llvm-readobj.exe'
           $llvmRuntime = Join-Path $llvmBin 'LLVM-C.dll'
@@ -1201,7 +1205,7 @@ jobs:
           # Include static libraries for linking (runtime, stdlib, UI)
           $libs = @("perry_runtime.lib", "perry_stdlib.lib", "perry_ui_windows.lib")
           foreach ($lib in $libs) {
-            $path = "target/${{ matrix.target }}/dist/$lib"
+            $path = "target/${{ matrix.target }}/prod/$lib"
             if (Test-Path $path) {
               Copy-Item $path staging/
             }
@@ -1225,7 +1229,7 @@ jobs:
             New-Item -ItemType Directory -Force -Path $androidLibDir | Out-Null
             $androidLibs = @("libperry_runtime.a", "libperry_stdlib.a", "libperry_ui_android.a")
             foreach ($lib in $androidLibs) {
-              $src = "target/aarch64-linux-android/dist/$lib"
+              $src = "target/aarch64-linux-android/prod/$lib"
               if (-not (Test-Path -LiteralPath $src -PathType Leaf)) {
                 Write-Error "Required Android library missing from ${{ matrix.artifact }}: $src"
                 exit 1
@@ -1292,7 +1296,7 @@ jobs:
           TAG="$RELEASE_TAG"
           ARCHIVE="${{ matrix.artifact }}.tar.gz"
           URL="https://github.com/${{ github.repository }}/releases/download/${TAG}/${ARCHIVE}"
-          "target/${{ matrix.target }}/dist/perry" updater sign-cli-manifest \
+          "target/${{ matrix.target }}/prod/perry" updater sign-cli-manifest \
             --artifact "$ARCHIVE" --platform "$ARCHIVE" --url "$URL" \
             --release-version "${TAG#v}" --key-id "$PERRY_CLI_UPDATE_KEY_ID" \
             --secret-key-b64 "$PERRY_CLI_UPDATE_SIGNING_KEY" > "$ARCHIVE.update.json"
@@ -1313,7 +1317,7 @@ jobs:
           $tag = $env:RELEASE_TAG
           $archive = "${{ matrix.artifact }}.zip"
           $url = "https://github.com/${{ github.repository }}/releases/download/$tag/$archive"
-          & "target/${{ matrix.target }}/dist/perry.exe" updater sign-cli-manifest `
+          & "target/${{ matrix.target }}/prod/perry.exe" updater sign-cli-manifest `
             --artifact $archive --platform $archive --url $url `
             --release-version $tag.TrimStart('v') --key-id $env:PERRY_CLI_UPDATE_KEY_ID `
             --secret-key-b64 $env:PERRY_CLI_UPDATE_SIGNING_KEY | Out-File -Encoding utf8 "$archive.update.json"
@@ -1568,9 +1572,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          lib="target/${{ matrix.target }}/dist/libperry_runtime.a"
+          lib="target/${{ matrix.target }}/prod/libperry_runtime.a"
           # Windows MSVC emits perry_runtime.lib (no `lib` prefix).
-          [ -f "$lib" ] || lib="target/${{ matrix.target }}/dist/perry_runtime.lib"
+          [ -f "$lib" ] || lib="target/${{ matrix.target }}/prod/perry_runtime.lib"
           ./scripts/check_runtime_symbols.sh "$lib"
 
       # --- Package + manifest ----------------------------------------------
@@ -1594,7 +1598,7 @@ jobs:
           mkdir -p "$STAGING"
           # Required runtime + stdlib (always present on a successful build).
           for lib in libperry_runtime.a libperry_stdlib.a; do
-            src="target/${TARGET}/dist/${lib}"
+            src="target/${TARGET}/prod/${lib}"
             if [ ! -f "$src" ]; then
               echo "::error::Expected $src after build but it's missing — aborting bundle."
               exit 1
@@ -1605,7 +1609,7 @@ jobs:
           # principle, but we built it above so this should exist; we hard-fail
           # if it's missing so the worker doesn't see a silently-degraded
           # bundle).
-          UI_SRC="target/${TARGET}/dist/${UI_LIB}"
+          UI_SRC="target/${TARGET}/prod/${UI_LIB}"
           if [ ! -f "$UI_SRC" ]; then
             echo "::error::UI lib $UI_SRC missing after build — aborting bundle."
             exit 1

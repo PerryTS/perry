@@ -261,17 +261,15 @@ fn entry_byte_proof_resolves_both_layouts_and_rejects_other_receivers() {
     let owner = js_uint8array_alloc(32);
     let sub = js_buffer_slice(owner, 7, 15);
     let resolve = header::js_u8_resolve_read_data;
-    assert_eq!(resolve(value(owner)), unsafe { buffer_data(owner) }
-        as usize);
-    assert_eq!(resolve(value(sub)), unsafe { buffer_data(owner).add(7) }
-        as usize);
+    assert_eq!(resolve(value(owner)), buffer_data(owner) as usize);
+    assert_eq!(resolve(value(sub)), unsafe { buffer_data(owner).add(7) } as usize);
     assert!(!header::test_u8_inline_cache_holds(sub as usize));
     assert_eq!(resolve(17.0), 0);
     assert_eq!(resolve(f64::from_bits(crate::value::TAG_UNDEFINED)), 0);
     let raw_buffer = js_buffer_alloc(8, 0);
     mark_as_array_buffer(raw_buffer as usize);
     assert_eq!(resolve(value(raw_buffer)), 0);
-    let foreign = unsafe { header::buffer_alloc_foreign(buffer_data(owner) as *mut u8, 32) };
+    let foreign = header::buffer_alloc_foreign(buffer_data(owner) as *mut u8, 32);
     mark_as_uint8array(foreign as usize);
     assert_eq!(resolve(value(foreign)), 0);
     let pointer = resolve(value(owner));
