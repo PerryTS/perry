@@ -123,6 +123,7 @@ pub(crate) fn decl_prototype_own_accessor(class_id: u32, name: &str) -> Option<f
 /// own property named `name` — an accessor answers, a data property shadows
 /// (`None`). This is the one lookup the class-accessor readers use (S3).
 pub(crate) fn class_proto_accessor(class_id: u32, name: &str) -> Option<(usize, Accessor)> {
+    let _no_move = crate::gc::GcSuppressScope::new();
     prototype_accessor(class_decl_prototype_value(class_id), name)
 }
 
@@ -176,7 +177,6 @@ unsafe fn accessor_prototype(obj: *const ObjectHeader) -> Option<f64> {
 
 fn prototype_accessor(start: f64, name: &str) -> Option<(usize, Accessor)> {
     use crate::object::key_attrs as ka;
-    let _no_move = crate::gc::GcSuppressScope::new();
     let mut cur = start;
     for _ in 0..10_000 {
         let value = cur;
@@ -269,10 +269,7 @@ pub(crate) unsafe fn class_chain_getter_value(
     name: &str,
     this_of: impl FnOnce() -> f64,
 ) -> Option<(crate::JSValue, usize)> {
-    let acc = {
-        let _no_move = crate::gc::GcSuppressScope::new();
-        class_proto_accessor(class_id, name)?.1
-    };
+    let acc = class_proto_accessor(class_id, name)?.1;
     Some(invoke_instance_getter(acc, this_of()))
 }
 
@@ -285,10 +282,7 @@ pub(crate) unsafe fn instance_chain_getter_value(
 ) -> Option<(crate::JSValue, usize)> {
     // The generic getter keeps obj raw across its fallback arms. Prototype
     // materialization may allocate but cannot move that receiver here.
-    let acc = {
-        let _no_move = crate::gc::GcSuppressScope::new();
-        instance_proto_accessor(obj, name)?.1
-    };
+    let acc = instance_proto_accessor(obj, name)?.1;
     Some(invoke_instance_getter(acc, this_of()))
 }
 
@@ -322,10 +316,7 @@ pub(crate) unsafe fn class_chain_setter_apply(
     this: f64,
     value: f64,
 ) -> Option<bool> {
-    let acc = {
-        let _no_move = crate::gc::GcSuppressScope::new();
-        class_proto_accessor(class_id, name)?.1
-    };
+    let acc = class_proto_accessor(class_id, name)?.1;
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_h = scope.root_nanbox_f64(this);
     let value_h = scope.root_nanbox_f64(value);
