@@ -1604,11 +1604,14 @@ pub(super) fn compile_function(
         super::helpers::emit_callee_binding_resolutions(&mut ctx, &f.body, &param_ids, None, false);
     }
 
-    // Stable byte-view parameters resolve their backing once. This proof
+    // Stable byte parameters indexed in loops resolve their backing once. This proof
     // never treats an owning buffer's +8 byte payload as a pointer, and does
     // not cache length across detach or resize. Async/generator continuations
-    // and mutable boxes need their ordinary per-access receiver guards.
-    if f.is_strict
+    // and mutable/mapped parameters need their per-access receiver guards.
+    if !f
+        .params
+        .iter()
+        .any(|param| param.arguments_object.is_some())
         && !f.is_async
         && !f.is_generator
         && !f.was_plain_async

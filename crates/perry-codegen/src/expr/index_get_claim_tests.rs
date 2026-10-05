@@ -849,7 +849,10 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
     let load = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.view_load.")
         .expect("the view byte load exists");
     assert!(
-        load.contains("load atomic i8") && !load.contains("call "),
+        load.contains("asm sideeffect \"movzbl ($1), $0\"")
+            && load.contains("~{memory}")
+            && load.contains("gc-leaf-function")
+            && !load.contains("call double @"),
         "shared views must load their resolved pointer atomically: {load}"
     );
     // The elements-backed subclass probe, the lazy-JSON-array probe and the

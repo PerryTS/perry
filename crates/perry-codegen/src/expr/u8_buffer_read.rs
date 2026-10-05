@@ -150,20 +150,26 @@ fn lower_u8_buffer_checked_load(
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    let tag_mask = i64_literal(crate::nanbox::TAG_MASK);
-
-    // ---- entry guard: pointer tag + admission-cache full-address hit ----
-    let raw = {
+    let bits = ctx.block().bitcast_double_to_i64(&obj_box);
+    let raw = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    // Entry-resolved owning and view storage share the bounds/load path. A
+    // failed proof retains the existing guarded receiver recovery below.
+    if let Some(access) = &param_access {
+        let cache_idx = ctx.new_block("u8b.get.cache");
+        let cache_label = ctx.block_label(cache_idx);
+        ctx.block()
+            .cond_br(&access.valid_i1, &slow_label, &cache_label);
+        ctx.current_block = cache_idx;
+    }
+    {
         let blk = ctx.block();
-        let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-        let raw = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
-        let tagged = blk.and(I64, &obj_bits, &tag_mask);
+        let tag_mask = i64_literal(crate::nanbox::TAG_MASK);
+        let tagged = blk.and(I64, &bits, &tag_mask);
         let is_ptr = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
         let hit = emit_u8_cache_holds(blk, &raw);
         let g = blk.and(I1, &is_ptr, &hit);
         blk.cond_br(&g, &chk_label, &slow_label);
-        raw
-    };
+    }
 
     // ---- chk: bounds against `BufferHeader.length` (u32 at offset 0) ----
     ctx.current_block = chk_idx;
@@ -660,8 +666,8 @@ fn emit_u8_view_get_value(
     let offset = ctx.block().zext(I32, idx, I64);
     let addr = ctx.block().add(I64, &data, &offset);
     let ptr = ctx.block().inttoptr(I64, &addr);
-    let byte = ctx.block().load_atomic_monotonic(I8, &ptr, 1);
-    let val = ctx.block().uitofp(I8, &byte, DOUBLE);
+    let target = ctx.target_triple.to_owned();
+    let val = emit_u8_atomic_load_f64(ctx.block(), &target, &ptr);
     let load_end = ctx.block().label.clone();
     ctx.block().br(&done_label);
     ctx.current_block = oob_idx;
@@ -677,6 +683,30 @@ fn emit_u8_view_get_value(
     (value, end)
 }
 
+/// A relaxed byte load is one indivisible memory operation. On x86 LLVM 22
+/// lowers `uitofp (load atomic i8)` to a partial-register load followed by
+/// zero extension, making the byte load depend on the preceding length load.
+/// MOVZX reads exactly one byte and clears the destination in one instruction.
+/// Its memory clobber and sideeffect retain concurrent reads; no fence is
+/// required for relaxed ordering on x86. Other targets keep LLVM atomics.
+pub(crate) fn emit_u8_atomic_load_f64(
+    blk: &mut crate::block::LlBlock,
+    target: &str,
+    ptr: &str,
+) -> String {
+    let byte = if target.starts_with("x86_64") {
+        let byte = blk.next_reg();
+        blk.emit_raw(format!(
+            "{byte} = call i32 asm sideeffect \"movzbl ($1), $0\", \"=r,r,~{{memory}}\"(ptr {ptr}) \"gc-leaf-function\""
+        ));
+        byte
+    } else {
+        let byte = blk.load_atomic_monotonic(I8, ptr, 1);
+        blk.zext(I8, &byte, I32)
+    };
+    blk.uitofp(I32, &byte, DOUBLE)
+}
+
 pub(crate) fn byte_view_param_for(
     ctx: &FnCtx<'_>,
     object: &Expr,
@@ -687,14 +717,17 @@ pub(crate) fn byte_view_param_for(
     }
 }
 
-/// Do not add entry work to a parameter that has no indexed reads in this
-/// body. Nested closures get their own receiver guards when they are lowered.
+/// Amortize entry validation only for indexed reads in loops. Single-read
+/// helpers retain their existing owning-cache hit and add no entry calls.
+/// Nested closures get their own receiver guards when they are lowered.
 pub(crate) fn byte_view_param_is_read(body: &[perry_hir::Stmt], id: u32) -> bool {
     fn reads(expr: &Expr, id: u32) -> bool {
         if matches!(expr, Expr::Closure { .. }) {
             return false;
         }
-        if matches!(expr, Expr::IndexGet { object, .. } if matches!(object.as_ref(), Expr::LocalGet(receiver) if *receiver == id))
+        if matches!(expr,
+            Expr::IndexGet { object, .. } | Expr::Uint8ArrayGet { array: object, .. }
+                if matches!(object.as_ref(), Expr::LocalGet(receiver) if *receiver == id))
         {
             return true;
         }
@@ -702,30 +735,64 @@ pub(crate) fn byte_view_param_is_read(body: &[perry_hir::Stmt], id: u32) -> bool
         perry_hir::walker::walk_expr_children(expr, &mut |child| found |= reads(child, id));
         found
     }
-    u8_inline_read_enabled()
-        && body
-            .iter()
-            .any(|stmt| perry_hir::walker::stmt_any_expr(stmt, &mut |expr| reads(expr, id)))
+    fn loop_reads(stmt: &perry_hir::Stmt, id: u32) -> bool {
+        use perry_hir::Stmt;
+        let any_read = |body: &[Stmt]| {
+            body.iter()
+                .any(|stmt| perry_hir::walker::stmt_any_expr(stmt, &mut |expr| reads(expr, id)))
+        };
+        match stmt {
+            Stmt::While { condition, body } | Stmt::DoWhile { condition, body } => {
+                reads(condition, id) || any_read(body)
+            }
+            Stmt::For {
+                condition,
+                update,
+                body,
+                ..
+            } => {
+                condition.as_ref().is_some_and(|expr| reads(expr, id))
+                    || update.as_ref().is_some_and(|expr| reads(expr, id))
+                    || any_read(body)
+            }
+            Stmt::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
+                then_branch.iter().any(|stmt| loop_reads(stmt, id))
+                    || else_branch
+                        .as_ref()
+                        .is_some_and(|branch| branch.iter().any(|stmt| loop_reads(stmt, id)))
+            }
+            Stmt::Try {
+                body,
+                catch,
+                finally,
+            } => {
+                body.iter().any(|stmt| loop_reads(stmt, id))
+                    || catch
+                        .as_ref()
+                        .is_some_and(|clause| clause.body.iter().any(|stmt| loop_reads(stmt, id)))
+                    || finally
+                        .as_ref()
+                        .is_some_and(|body| body.iter().any(|stmt| loop_reads(stmt, id)))
+            }
+            Stmt::Switch { cases, .. } => cases
+                .iter()
+                .any(|case| case.body.iter().any(|stmt| loop_reads(stmt, id))),
+            Stmt::Labeled { body, .. } => loop_reads(body, id),
+            _ => false,
+        }
+    }
+    u8_inline_read_enabled() && body.iter().any(|stmt| loop_reads(stmt, id))
 }
 
 pub(crate) fn materialize_byte_view_param(ctx: &mut FnCtx<'_>, id: u32, boxed: &str) {
-    let bits = ctx.block().bitcast_double_to_i64(boxed);
-    let raw = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-    let miss_idx = ctx.new_block("u8v.param.miss");
-    let done_idx = ctx.new_block("u8v.param.done");
-    let miss_label = ctx.block_label(miss_idx);
-    let done_label = ctx.block_label(done_idx);
-    let data = emit_u8_view_data_guard(ctx, boxed, &raw, &miss_label);
-    let hit_end = ctx.block().label.clone();
-    ctx.block().br(&done_label);
-    ctx.current_block = miss_idx;
-    let miss_end = ctx.block().label.clone();
-    ctx.block().br(&done_label);
-    ctx.current_block = done_idx;
-    let valid_i1 = ctx
+    let data_i64 = ctx
         .block()
-        .phi(I1, &[("true", &hit_end), ("false", &miss_end)]);
-    let data_i64 = ctx.block().phi(I64, &[(&data, &hit_end), ("0", &miss_end)]);
+        .call(I64, "js_u8_resolve_read_data", &[(DOUBLE, boxed)]);
+    let valid_i1 = ctx.block().icmp_ne(I64, &data_i64, "0");
     ctx.receiver_descriptors.materialize_byte_view_param(
         id,
         crate::collectors::ByteViewParamAccess { valid_i1, data_i64 },
@@ -748,5 +815,71 @@ pub(crate) fn emit_u8_view_param_or_guard(
         access.data_i64.clone()
     } else {
         emit_u8_view_data_guard(ctx, obj_box, raw, miss_label)
+    }
+}
+
+#[cfg(test)]
+mod byte_loop_proof_tests {
+    use super::*;
+    use perry_hir::Stmt;
+
+    #[test]
+    fn relaxed_byte_reads_are_one_byte_and_zero_extended() {
+        use crate::block::{LlBlock, RegCounter};
+        use std::rc::Rc;
+        for target in ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"] {
+            let mut blk = LlBlock::new("entry.0", Rc::new(RegCounter::new()));
+            emit_u8_atomic_load_f64(&mut blk, target, "%data");
+            let ir = blk.to_ir();
+            if target.starts_with("x86_64") {
+                assert!(ir.contains("movzbl ($1), $0"));
+                assert!(ir.contains("asm sideeffect") && ir.contains("~{memory}"));
+                assert!(ir.contains("gc-leaf-function"));
+            } else {
+                assert!(ir.contains("load atomic i8, ptr %data monotonic, align 1"));
+                assert!(!ir.contains("asm"));
+            }
+            assert!(ir.contains("uitofp i32"));
+            assert!(!ir.contains("load i32"));
+        }
+    }
+
+    #[test]
+    fn entry_resolution_requires_a_loop_read_of_this_parameter() {
+        let read = Stmt::Expr(Expr::IndexGet {
+            object: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::Integer(0)),
+        });
+        assert!(!byte_view_param_is_read(&[read.clone()], 1));
+        let loop_read = Stmt::For {
+            init: None,
+            condition: None,
+            update: None,
+            body: vec![read.clone()],
+        };
+        assert!(byte_view_param_is_read(&[loop_read.clone()], 1));
+        assert!(!byte_view_param_is_read(&[loop_read], 2));
+        let init_only = Stmt::For {
+            init: Some(Box::new(read)),
+            condition: None,
+            update: None,
+            body: vec![],
+        };
+        assert!(!byte_view_param_is_read(&[init_only], 1));
+        // The HIR specializes `bytes[i]` to Uint8ArrayGet before codegen.
+        let native_read = Stmt::Expr(Expr::Uint8ArrayGet {
+            array: Box::new(Expr::LocalGet(1)),
+            index: Box::new(Expr::Integer(0)),
+        });
+        assert!(!byte_view_param_is_read(&[native_read.clone()], 1));
+        assert!(byte_view_param_is_read(
+            &[Stmt::For {
+                init: None,
+                condition: None,
+                update: None,
+                body: vec![native_read],
+            }],
+            1
+        ));
     }
 }

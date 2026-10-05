@@ -255,3 +255,51 @@ fn hot_read_probe_detects_disabled_view_pointer_layout() {
     );
     probe();
 }
+
+#[test]
+fn entry_byte_proof_resolves_both_layouts_and_rejects_other_receivers() {
+    let owner = js_uint8array_alloc(32);
+    let sub = js_buffer_slice(owner, 7, 15);
+    let resolve = header::js_u8_resolve_read_data;
+    assert_eq!(resolve(value(owner)), unsafe { buffer_data(owner) }
+        as usize);
+    assert_eq!(resolve(value(sub)), unsafe { buffer_data(owner).add(7) }
+        as usize);
+    assert!(!header::test_u8_inline_cache_holds(sub as usize));
+    assert_eq!(resolve(17.0), 0);
+    assert_eq!(resolve(f64::from_bits(crate::value::TAG_UNDEFINED)), 0);
+    let raw_buffer = js_buffer_alloc(8, 0);
+    mark_as_array_buffer(raw_buffer as usize);
+    assert_eq!(resolve(value(raw_buffer)), 0);
+    let foreign = unsafe { header::buffer_alloc_foreign(buffer_data(owner) as *mut u8, 32) };
+    mark_as_uint8array(foreign as usize);
+    assert_eq!(resolve(value(foreign)), 0);
+    let pointer = resolve(value(owner));
+    detach_array_buffer(buffer_backing_array_buffer(owner as usize));
+    assert_eq!(resolve(value(owner)), pointer);
+    assert_eq!(unsafe { (*owner).length }, 0);
+}
+
+#[test]
+fn byte_view_admission_does_not_depend_on_thread_local_metadata() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let owner = js_uint8array_alloc(32);
+    let _owner = scope.root_raw_mut_ptr(owner);
+    js_buffer_set(owner, 7, 42);
+    let sub = js_buffer_slice(owner, 7, 15);
+    let _sub = scope.root_raw_mut_ptr(sub);
+    let address = sub as usize;
+    let expected = unsafe { buffer_data(owner).add(7) } as usize;
+    std::thread::spawn(move || {
+        assert!(view::lookup(address).is_none());
+        header::u8_inline_cache_try_prime(address);
+        assert!(!header::test_u8_inline_cache_holds(address));
+        assert_eq!(
+            buffer_data(address as *const BufferHeader) as usize,
+            expected
+        );
+        assert_eq!(js_buffer_get(address as *const BufferHeader, 0), 42);
+    })
+    .join()
+    .unwrap();
+}
