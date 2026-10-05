@@ -34,7 +34,7 @@ mod tests;
 
 pub use constraints::ConstraintError;
 pub use context::MonomorphizationContext;
-pub use driver::monomorphize_module;
+pub use driver::{monomorphize_module, monomorphize_modules};
 pub use specialize::{specialize_class, specialize_function};
 pub use substitute_type::substitute_type;
 

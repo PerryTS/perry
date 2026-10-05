@@ -1,0 +1,3 @@
+Generic class specializations now allocate class IDs from one sequence above all declared classes and object-literal shapes in the program. The old per-module maximum plus 1,000 could reuse another module's literal ID, making a class instance's shape claim the default `Object.prototype` edge. This preserves the shape-based prototype fast path while restoring the declared class prototype and inherited methods on descriptor clones, including Effect 4 Schema initialization.
+
+Adds a multi-module gap regression with 1,100 distinct literal shapes and a HIR unit test covering specialization IDs and origin metadata across modules. The regression first became observable in `993bcb2e9704bf9596cc1710c8373060b4372cab` (PR #12024); its parent `8ec553a709` matches Node.

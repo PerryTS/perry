@@ -1073,16 +1073,9 @@ pub(super) fn run_native_instance_fixups(ctx: &mut CompilationContext) {
         }
     }
 
-    // Cross-module fix → local-fix re-run → monomorphize (parallel,
-    // fused per-module). Tier 4.2: pre-fix this was three separate
-    // `par_iter_mut().for_each(...)` passes. The local-fix re-run
-    // depends on `fix_cross_module_native_instances` having
-    // populated cross-module type info on this module, and
-    // monomorphize depends on the post-local-fix module shape — but
-    // both dependencies are intra-module, so running all three in
-    // one rayon job per module is safe and saves two scheduler
-    // round-trips. The cross-module step is gated on at least one
-    // export existing (skip the call entirely otherwise).
+    // Cross-module and local native-instance fixes remain module-local and
+    // parallel. Specialization below must share a class-ID allocator across
+    // the entire program, including every module's object-literal shapes.
     let has_native_exports =
         !exported_instances.is_empty() || !exported_func_return_instances.is_empty();
     ctx.native_modules
@@ -1101,8 +1094,8 @@ pub(super) fn run_native_instance_fixups(ctx: &mut CompilationContext) {
             // is false this is effectively a no-op since nothing changed
             // since the first local-fix in Pass A above.
             perry_hir::fix_local_native_instances(hir_module);
-            perry_hir::monomorphize_module(hir_module);
         });
+    perry_hir::monomorphize_modules(ctx.native_modules.iter_mut().map(|(_, module)| module));
 }
 
 /// --- HarmonyOS Phase 2: harvest perry/ui App({body: ...}) into ArkUI ---

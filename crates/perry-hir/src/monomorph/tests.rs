@@ -948,39 +948,6 @@ fn assert_specialized_call(expr: &Expr, module: &Module, expected_name: &str) {
 /// red for days (#5960). This runs on every PR.
 #[test]
 fn a_specialized_class_reports_the_generics_display_name() {
-    fn generic_class(id: u32, name: &str) -> Class {
-        Class {
-            id,
-            name: name.to_string(),
-            type_params: vec![TypeParam {
-                name: "T".to_string(),
-                constraint: None,
-                default: None,
-            }],
-            extends: None,
-            extends_name: None,
-            native_extends: None,
-            extends_expr: None,
-            heritage_lexically_shadowed: false,
-            fields: vec![],
-            constructor: None,
-            methods: vec![],
-            getters: vec![],
-            setters: vec![],
-            static_accessor_names: vec![],
-            static_accessor_fn_ids: vec![],
-            static_fields: vec![],
-            static_methods: vec![],
-            computed_members: vec![],
-            decorators: vec![],
-            is_exported: false,
-            aliases: vec![],
-            is_nested: false,
-            alloc_width_hint: 0,
-            specialized_from: None,
-        }
-    }
-
     let mut module = Module::new("test");
     module.classes.push(generic_class(1, "Gen"));
     module.init.push(Stmt::Expr(Expr::New {
@@ -1232,4 +1199,80 @@ fn fill_defaults_pads_before_appended_class_captures() {
         args[4..].iter().all(|a| !matches!(a, Expr::Undefined)),
         "the trailing capture args must be the captured values, not padding: {args:?}"
     );
+}
+
+fn generic_class(id: u32, name: &str) -> Class {
+    Class {
+        id,
+        name: name.to_string(),
+        type_params: vec![TypeParam {
+            name: "T".to_string(),
+            constraint: None,
+            default: None,
+        }],
+        extends: None,
+        extends_name: None,
+        native_extends: None,
+        extends_expr: None,
+        heritage_lexically_shadowed: false,
+        fields: vec![],
+        constructor: None,
+        methods: vec![],
+        getters: vec![],
+        setters: vec![],
+        static_accessor_names: vec![],
+        static_accessor_fn_ids: vec![],
+        static_fields: vec![],
+        static_methods: vec![],
+        computed_members: vec![],
+        decorators: vec![],
+        is_exported: false,
+        aliases: vec![],
+        is_nested: false,
+        alloc_width_hint: 0,
+        specialized_from: None,
+    }
+}
+
+#[test]
+fn specializations_do_not_reuse_other_modules_class_or_literal_ids() {
+    let mut first = Module::new("first");
+    first.classes.push(generic_class(1, "First"));
+    let mut second = Module::new("second");
+    second.classes.push(generic_class(2, "Second"));
+    let mut literal = generic_class(1001, "Literal");
+    literal.type_params.clear();
+    second.classes.push(literal);
+    let mut third = Module::new("third");
+    let mut last_literal = generic_class(1100, "LastLiteral");
+    last_literal.type_params.clear();
+    third.classes.push(last_literal);
+
+    for (module, name) in [(&mut first, "First"), (&mut second, "Second")] {
+        for ty in [Type::Number, Type::String] {
+            module.init.push(Stmt::Expr(Expr::New {
+                class_name: name.to_string(),
+                args: vec![],
+                type_args: vec![ty],
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }));
+        }
+    }
+    monomorphize_modules([&mut first, &mut second, &mut third]);
+
+    let mut ids = HashSet::new();
+    let mut specializations = 0;
+    for module in [&first, &second, &third] {
+        for class in &module.classes {
+            assert!(ids.insert(class.id), "duplicate class ID {}", class.id);
+            if let Some(origin) = &class.specialized_from {
+                specializations += 1;
+                assert!(class.id > 1100, "specialization overlaps lowered IDs");
+                assert_eq!(module.class_display_names.get(&class.id), Some(origin));
+            }
+        }
+    }
+    assert_eq!(specializations, 4);
+    assert_eq!(ids.len(), 8);
 }
