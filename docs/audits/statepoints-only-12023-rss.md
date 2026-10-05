@@ -1,5 +1,7 @@
 # #12023 RSS follow-up
 
+The [cycles follow-up](statepoints-only-12023-cycles.md) supersedes the short-witness RSS figures here: the previous timing scope included the profiler. It also records the pinned-main rebase, guarded cycle attempts, fresh performance failures, and new correctness receipts.
+
 The ~1.7 MiB commander increase is executable file-backed residency, with a
 substantial file-cache/layout contribution. It survives THP off; it is not a
 growing GC heap or a megabyte-scale stack change. Equal warming of both immutable

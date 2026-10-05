@@ -1386,3 +1386,5 @@ crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.
 crates/perry-runtime/src/gc/tests/dead_owner_side_tables/regexp_expandos.rs:65:    js_shadow_slot_set(0, ptr_bits(addr));
 crates/perry-runtime/src/gc/tests/dead_owner_side_tables/regexp_expandos.rs:70:    assert_eq!((js_shadow_slot_get(0) & POINTER_MASK) as usize, addr);
 crates/perry-runtime/src/gc/tests/dead_owner_side_tables/regexp_expandos.rs:81:    js_shadow_slot_set(0, 0);
+
+Pinned-main f969b820f rebase addition: object/native_module/constructor_shapes.rs::own_static_thunk used js_shadow_frame_push/pop and js_shadow_slot_bind for five UnsafeCell argument words on native targets. Classification NOT. Commit eb2523f9b replaces those calls with the existing RuntimeHandleScope::root_heap_word_cell and drops the scope before rethrow. No new rooting registry, selector, scanner, or platform exception.

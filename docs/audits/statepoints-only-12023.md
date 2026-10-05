@@ -21,6 +21,8 @@
 | stdlib fetch/lifecycle.rs; ext-streams/lib.rs; ext-http/server/mod.rs | TEST-ONLY | Extended-crate shadow uses are cfg(test) fixtures, not native production callers; they retain platform/test scanner coverage. |
 | per-target runtime stack_maps.rs / fp_chain / EH walkers | PLATFORM authority | Establish actual map loading and walking capabilities; no heuristic selection. |
 
+The [cycles follow-up](statepoints-only-12023-cycles.md) records the later pinned-main rebase and performance investigation. Owner performance acceptance remains open.
+
 # Statepoint lowering investigation, #12023
 
 Base: d3098e903ff9e68cec2a900b9baf3143445d195c, qb6 x86_64 Linux,
