@@ -5,31 +5,13 @@
 
 use super::*;
 
+mod dense_array;
+
 /// Receiver-kind test shared by every object-write fast path (#8098).
 ///
-/// A class instance qualifies, and so does a plain object the runtime
-/// birth-marked `OBJ_FLAG_PLAIN_ORDINARY` — today that is `JSON.parse` output
-/// (`json/parser.rs`, `json_tape.rs`), which carries an authoritative ShapeId
-/// since #8067/#8086 but no class.
-///
-/// Charter step 3: this is F-A, and it is now a SHAPE fact — the receiver's
-/// shape kind is `Ordinary` (or `OrdinaryNumericProof`, whose proof the
-/// store's layout note retires) exactly when the per-object record admits it
-/// (`object::shapes::store_kind`). A class object (`Class`), a dictionary
-/// and a native-module receiver (`OrdinaryUnmarked`) all fail it. The
-/// history below explains why the record exists at all.
-///
-/// This replaces a blanket `class_id != 0`. That clause was standing in for
-/// three per-object exclusions the generic path still applies verbatim
-/// (`object/field_set_by_name/fast_paths.rs::try_existing_own_data_overwrite`):
-/// `NATIVE_MODULE_CLASS_ID`, `Object.prototype`, and a `URL` instance, whose
-/// `pathname`/`search`/… own slots are live views whose setters rebuild `href`
-/// (`field_set_by_name/tail.rs`). None of those is derivable from the ShapeId —
-/// two objects share one iff they share a keys-array ALLOCATION, and the
-/// shape-transition cache deliberately converges distinct objects onto one
-/// shared array — so the discriminator has to be per-object and re-tested on
-/// every generated cache hit. An opt-in mark is exactly that, and it fails
-/// safe: an unmarked class-less receiver keeps the full `[[Set]]` walk.
+/// The receiver's shape kind supplies the admission: `Ordinary` or
+/// `OrdinaryNumericProof` (retired by the store's layout note). Class objects,
+/// dictionaries and unmarked native-module receivers keep full `[[Set]]`.
 #[inline]
 unsafe fn write_fast_path_receiver_kind_ok(
     obj: *const crate::ObjectHeader,
@@ -200,6 +182,12 @@ pub extern "C" fn js_put_value_set(
         if unsafe { crate::object::try_existing_own_data_overwrite(obj, key_ptr, value) } {
             return value;
         }
+    } else if dense_array::try_set(target, key, value, receiver) {
+        // A Number index needs no observable ToPropertyKey. The array's
+        // header and slot answer [[Set]] without constructing a String key.
+        // The preceding arm's String key cannot hit this lane: named-field
+        // misses continue straight to their key-add proof below.
+        return value;
     }
     // A key the receiver lacks: the append its shape's key-add edge names
     // (`(ShapeId, key) -> target`), for a plain receiver whose prototype chain

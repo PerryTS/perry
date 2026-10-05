@@ -1,0 +1,3 @@
+Speed up captured-variable updates in class constructors and members by sending Number-key PutValue writes to existing writable dense Array elements through the guarded dense setter. Successful writes avoid allocating a String property key and walking descriptors, while preserving coercion, BigInt updates, sharing and write barriers. Frozen arrays, accessor elements, holes, distinct receivers and coercible keys keep the ordinary Set path.
+
+Add unit coverage for key allocation and guard refusals, plus Node parity coverage for independent captured counters, BigInt/string/valueOf coercion, sealed/frozen arrays, accessor-defined elements, receiver semantics and inherited setters on holes.
