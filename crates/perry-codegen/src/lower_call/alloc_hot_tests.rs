@@ -483,6 +483,35 @@ fn a_self_recursive_function_inlines_its_bump_allocator() {
     );
 }
 
+#[test]
+fn every_inline_birth_uses_live_flags_and_seeds_initialized_slots() {
+    assert_inline_new_not_forced();
+    let mut module = walk_module(true);
+    // Whole module: both numeric branches, noted pointer elements, different
+    // sizes, and specialized clones. No subject-function filtering is allowed.
+    module.functions[0].body.insert(
+        0,
+        Stmt::Expr(Expr::Array(vec![Expr::LocalGet(N_ID), Expr::Number(3.0)])),
+    );
+    module
+        .init
+        .push(Stmt::Expr(Expr::Array(vec![Expr::Number(1.0)])));
+    module
+        .init
+        .push(Stmt::Expr(Expr::Array(vec![Expr::Bool(true); 16])));
+    module
+        .init
+        .push(Stmt::Expr(Expr::Array(vec![Expr::Array(vec![
+            Expr::Number(2.0),
+        ])])));
+    let ir = ir_for(module);
+    inline_birth_invariant::check(&ir);
+    inline_birth_invariant::sabotage_controls(&ir);
+}
+
+#[path = "inline_birth_invariant.rs"]
+mod inline_birth_invariant;
+
 /// #8591: the public entry resolves the thread's stable arena state once, and
 /// the internal recursive body forwards it through every self call.
 #[test]
@@ -535,10 +564,9 @@ fn the_inline_allocator_stores_its_header_prefix_as_one_vector_image() {
         "the inline allocation site must store the `<2 x i64>` header image:\n{ir}"
     );
     let merge_at = ir.find("\nalloc.merge").unwrap();
-    let merge_end = ir[merge_at + 1..]
-        .find("\nshadow.root.barrier")
-        .map_or(ir.len(), |at| merge_at + 1 + at);
-    let allocation_merge = &ir[merge_at..merge_end];
+    let merge_tail = &ir[merge_at..];
+    let merge_end = merge_tail.find("\n\n").unwrap_or(merge_tail.len());
+    let allocation_merge = &merge_tail[..merge_end];
     assert!(
         !allocation_merge.contains("shl i64 1,") && !allocation_merge.contains("lshr i64"),
         "ordinary inline objects must not pay to update the Map-only object-start bitmap:\n{allocation_merge}"

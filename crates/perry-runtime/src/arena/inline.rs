@@ -13,7 +13,22 @@ pub struct InlineArenaState {
     pub data: *mut u8, // offset  0  — current block's data pointer
     pub offset: usize, // offset  8  — bump pointer (mutated inline)
     pub size: usize,   // offset 16 — current block's size
+    /// Stable address of THIS thread's live birth flags, never a cached value.
+    /// Generated code reads the byte again after every raw allocation merge.
+    pub birth_flags: *const u8, // offset 24 on the 64-bit inline-allocation ABI
+    /// Existing per-thread mark-seed queue, not its reallocating backing buffer.
+    /// Resolving TLS here keeps the unpublished birth's seeding call GC-leaf.
+    pub birth_seeds: *mut std::ffi::c_void, // offset 32 on LP64
 }
+
+pub const INLINE_BIRTH_FLAGS_OFFSET_LP64: usize = 24;
+pub const INLINE_BIRTH_SEEDS_OFFSET_LP64: usize = 32;
+#[cfg(target_pointer_width = "64")]
+const _: () =
+    assert!(std::mem::offset_of!(InlineArenaState, birth_flags) == INLINE_BIRTH_FLAGS_OFFSET_LP64);
+#[cfg(target_pointer_width = "64")]
+const _: () =
+    assert!(std::mem::offset_of!(InlineArenaState, birth_seeds) == INLINE_BIRTH_SEEDS_OFFSET_LP64);
 
 /// Get the per-thread inline arena state pointer. Called once per JS
 /// function entry; the codegen caches the result in a stack slot and
@@ -37,6 +52,10 @@ pub extern "C" fn js_inline_arena_state() -> *mut InlineArenaState {
     // out, resolved once per thread instead of once per call.
     unsafe {
         let state = &mut *super::block::hot_inline_state();
+        if state.birth_flags.is_null() {
+            state.birth_seeds = crate::gc::mark_seed_queue_address();
+            state.birth_flags = crate::gc::gc_birth_flags_address();
+        }
         if state.data.is_null() {
             // Lazy init: copy from underlying ARENA's current block.
             let arena = &*super::block::hot_arena();

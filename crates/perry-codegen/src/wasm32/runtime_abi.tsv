@@ -1456,6 +1456,7 @@ js_gc_memory_pressure	i32u	i32u
 js_gc_module_collect	f64	
 js_gc_module_idle_hint	f64	
 js_gc_module_minor	f64	
+js_gc_note_black_birth	void	ptr,ptr
 js_gc_note_slot_layout	void	i64,i32u,i64
 js_gc_note_slot_layout_aware	void	i64,i32u,i64,i64
 js_gc_pause_stats	void	ptr,ptr,ptr,ptr

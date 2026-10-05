@@ -1257,6 +1257,8 @@ thread_local! {
         data: std::ptr::null_mut(),
         offset: 0,
         size: 0,
+        birth_flags: std::ptr::null(),
+        birth_seeds: std::ptr::null_mut(),
     }) };
 }
 

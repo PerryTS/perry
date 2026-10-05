@@ -88,6 +88,7 @@ mod bitset_test;
 pub(crate) mod body_call;
 pub(crate) mod folded_builtin_override;
 pub(crate) mod hot_tls;
+pub(crate) mod inline_birth;
 mod literal_descriptor;
 #[cfg(test)]
 mod map_entry_at_tests;
@@ -300,10 +301,10 @@ pub(crate) use scalar_slot_root::{
     root_scalar_replaced_slot_unconditional,
 };
 pub(crate) use shadow_slot::{
-    current_closure_ptr_value, emit_persistent_shadow_root_barrier,
-    emit_shadow_slot_bind_for_local, emit_shadow_slot_clear, emit_shadow_slot_update_for_expr,
-    enable_persistent_shadow_slot_for_array_alias, expr_is_known_non_pointer_shadow_value,
-    root_inlined_ctor_pointer_locals, try_current_closure_ptr_value,
+    current_closure_ptr_value, emit_shadow_slot_bind_for_local, emit_shadow_slot_clear,
+    emit_shadow_slot_update_for_expr, enable_persistent_shadow_slot_for_array_alias,
+    expr_is_known_non_pointer_shadow_value, root_inlined_ctor_pointer_locals,
+    try_current_closure_ptr_value,
 };
 
 /// One in-flight inline-constructor return target. See
@@ -2646,7 +2647,11 @@ pub(crate) fn load_inline_arena_state(ctx: &mut FnCtx<'_>) -> String {
             let blk = ctx.block();
             let state = blk.load(PTR, &state_ptr);
             let data = blk.load(PTR, &state);
-            let initialised = blk.icmp_ne(PTR, &data, "null");
+            let data_initialised = blk.icmp_ne(PTR, &data, "null");
+            let birth_field = blk.gep(I8, &state, &[(I64, inline_birth::BIRTH_FLAGS_OFFSET)]);
+            let birth_address = blk.load(PTR, &birth_field);
+            let birth_initialised = blk.icmp_ne(PTR, &birth_address, "null");
+            let initialised = blk.and(crate::types::I1, &data_initialised, &birth_initialised);
             blk.cond_br(&initialised, &ready_label, &slow_label);
             state
         };
@@ -3145,8 +3150,6 @@ mod index_set_packed_loop;
 mod index_set_typed_array;
 mod instance_misc1;
 mod member_update;
-#[cfg(test)]
-mod packed_loop_shadow_barrier_tests;
 mod typed_array_rmw;
 mod typed_array_update;
 pub(crate) use instance_misc1::builtin_parent_reserved_class_id;

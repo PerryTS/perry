@@ -1201,6 +1201,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // in sync with the GEPs we emit in `lower_call::compile_new`.
     module.declare_function("js_inline_arena_state", PTR, &[]);
     module.declare_function("js_inline_arena_slow_alloc", PTR, &[PTR, I64, I64]);
+    module.declare_function("js_gc_note_black_birth", VOID, &[PTR, PTR]);
     module.declare_function("js_object_delete_field", I32, &[I64, I64]);
     // Primitive-safe `delete` wrappers: take the RAW NaN-boxed receiver (DOUBLE)
     // so `delete (number).x` / `delete (number)[k]` no-op to `true` instead of

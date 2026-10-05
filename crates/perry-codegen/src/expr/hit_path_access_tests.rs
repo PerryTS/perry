@@ -236,8 +236,17 @@ fn plain_double_array_literal_skips_notes_and_marking() {
     );
     let noted = block_body(&ir, "arrlit.noted").unwrap_or_else(|| panic!("no noted arm:\n{ir}"));
     assert!(
-        noted.contains("@js_array_mark_numeric_f64_layout("),
-        "a boxed element must keep the marking walk:\n{noted}"
+        noted.contains("@js_gc_note_slot_layout(")
+            && !noted.contains("@js_array_mark_numeric_f64_layout("),
+        "the noted arm initializes metadata without running a collecting normalizer:\n{noted}"
+    );
+    let normalize = block_body(&ir, "arrlit.normalize")
+        .unwrap_or_else(|| panic!("boxed elements must keep a normalizer arm:\n{ir}"));
+    assert!(normalize.contains("@js_array_mark_numeric_f64_layout("));
+    assert!(
+        ir.find("@js_gc_note_black_birth(").unwrap()
+            < ir.find("@js_array_mark_numeric_f64_layout(").unwrap(),
+        "normalization must follow the completed birth seed"
     );
 }
 

@@ -892,7 +892,7 @@ fn top_level_loop_body_shadow_slots_clear_each_iteration() {
 }
 
 #[test]
-fn immutable_index_alias_binds_once_but_keeps_incremental_root_barrier() {
+fn immutable_index_alias_binds_once_and_uses_final_remark() {
     let _pin = NativeRootsPin::shadow();
     let ir = String::from_utf8(
         compile_module(&persistent_index_alias_shadow_module(), entry_opts()).unwrap(),
@@ -912,15 +912,12 @@ fn immutable_index_alias_binds_once_but_keeps_incremental_root_barrier() {
         "persistent index alias must not be cleared on each backedge"
     );
     assert!(
-        main_ir.contains("call void @js_write_barrier_root_nanbox(i64 %"),
-        "pointer-capable alias updates must still shade a newly installed root"
+        !main_ir.contains("call void @js_write_barrier_root_nanbox(i64 %"),
+        "generated alias updates must rely on the final root rescan"
     );
     assert!(
-        main_ir.contains(
-            "load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT monotonic, align 4"
-        ) && main_ir.contains("shadow.root.barrier"),
-        "the relaxed global gate should let an inactive incremental collector skip the \
-         TLS-backed root barrier call"
+        !main_ir.contains("shadow.root.barrier"),
+        "persistent generated aliases must not retain per-store root-barrier blocks"
     );
 }
 
