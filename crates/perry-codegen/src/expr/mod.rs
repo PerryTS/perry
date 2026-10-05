@@ -1001,7 +1001,7 @@ pub(crate) struct FnCtx<'a> {
     pub number_by_construction_locals: &'a std::collections::HashSet<u32>,
 
     /// Gen-GC Phase A sub-phase 3a: pointer-typed local → shadow-
-    /// frame slot index. Empty when `PERRY_SHADOW_STACK` is off.
+    /// frame slot index. Empty on native statepoint targets.
     /// Sub-phase 3b uses this map at `Stmt::Let` / `LocalSet`
     /// lowering sites to emit `js_shadow_slot_set(idx, bits)` so
     /// the frame reflects the live pointer state at the following

@@ -157,7 +157,7 @@ fn compact_and_assemble_refusal(target: &str) -> String {
     // fails if that guard is removed rather than if a string changes.
     if matches!(format_for(target), ObjectFormat::Coff) && !target.starts_with("x86_64") {
         return format!(
-            "perry: native GC roots (PERRY_RS4GC) are not enabled for target \
+            "perry: statepoint GC roots are not enabled for target \
                  `{target}` yet — the runtime's Windows stack walker is x86-64 only"
         );
     }

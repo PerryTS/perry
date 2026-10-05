@@ -77,24 +77,11 @@ mkdir -p "$OUTDIR"
 scratch="$(mktemp -d)"
 trap 'rm -rf "$scratch"' EXIT
 
-# Same two env knobs as the curated corpus, for the same two reasons.
-# PERRY_GC_MOVING_LOOP_POLLS=1 is what puts `js_gc_loop_safepoint` in the IR
-# (it is off by default since #7161, so without it the corpus cannot express a
-# back-edge collection at all). PERRY_INLINE_SHADOW_SLOT=0 makes every root
-# store the @js_shadow_slot_bind call form the checker anchors on.
-# PERRY_RS4GC=0 selects the SHADOW-STACK root lowering, for the same reason as
-# the sibling corpus (#7452): statepoints became the default in #7370 and
-# express roots as `gc.statepoint` relocation bundles rather than
-# `@js_shadow_slot_bind` calls, so without this the corpus contains ZERO of the
-# checker's subject. #7452 fixed the curated corpus and missed this one -- it
-# was still emitting 81 modules with 0 bind call sites, i.e. a dependency-scale
-# gate measuring nothing, which is exactly the failure #7280 created it to
-# avoid.
-if ! env PERRY_RS4GC=0 \
-         PERRY_GC_MOVING_LOOP_POLLS=1 \
-         PERRY_INLINE_SHADOW_SLOT=0 \
+# Use the actual WASI platform lowering with ILP32 bind calls.
+# Loop polls keep moving reach visible; native targets always use statepoints.
+if ! env PERRY_GC_MOVING_LOOP_POLLS=1 \
          PERRY_NO_AUTO_OPTIMIZE=1 \
-     "$PERRY_BIN" compile "$ENTRY" -o "$scratch/dep-corpus" --trace llvm \
+     "$PERRY_BIN" compile "$ENTRY" --target wasi --no-link -o "$scratch/dep-corpus" --trace llvm \
      >"$scratch/compile.log" 2>&1; then
   echo "::error::$ENTRY failed to compile; the corpus cannot be emitted" >&2
   tail -40 "$scratch/compile.log" >&2

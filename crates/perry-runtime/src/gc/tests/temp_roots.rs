@@ -180,12 +180,12 @@ fn shadow_savepoint_restores_the_temp_root_depth() {
     reset_shadow_stack();
 
     let outer = js_gc_temp_root_push(0x1000);
-    let savepoint = shadow_stack_savepoint();
+    let savepoint = frame_root_savepoint();
     js_gc_temp_root_push(0x2000);
     js_gc_temp_root_push(0x3000);
     assert_eq!(temp_root_depth(), 3);
 
-    shadow_stack_restore(savepoint);
+    frame_root_restore(savepoint);
     assert_eq!(
         temp_root_depth(),
         1,

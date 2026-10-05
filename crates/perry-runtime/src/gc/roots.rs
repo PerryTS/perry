@@ -1,10 +1,16 @@
 use super::*;
 use std::any::Any;
 
+mod mutable_slot;
+#[cfg(all(not(test), perry_native_stack_maps))]
+mod native_savepoint;
 mod rooted_values;
+pub(super) use mutable_slot::{MutableRootSlot, MutableRootSlotKind};
 mod runtime_handles;
 mod scan_mode;
 mod scanner_shims;
+mod shadow_layout;
+#[cfg(any(test, not(perry_native_stack_maps)))]
 mod shadow_stack;
 mod stack_maps;
 mod stack_roots;
@@ -51,18 +57,35 @@ pub(crate) use scan_mode::{
     ConservativeStackScanDecision, ConservativeStackScanMode, ManualGcScanGuard,
     CONSERVATIVE_STACK_SCAN_OVERRIDE,
 };
+#[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) use shadow_stack::shadow_stack_has_active_frame;
-pub(crate) use shadow_stack::SHADOW;
+#[cfg(all(not(test), perry_native_stack_maps))]
+pub(crate) fn shadow_stack_has_active_frame() -> bool {
+    false
+}
+#[cfg(all(not(test), perry_native_stack_maps))]
+pub(crate) use native_savepoint::{frame_root_restore, frame_root_savepoint, FrameRootSavepoint};
 #[allow(unused_imports)]
-pub(crate) use shadow_stack::{bound_slot_meta, ShadowEntry, SLOT_ACTIVE, SLOT_PTR_MASK};
-pub use shadow_stack::{
-    js_shadow_frame_enter, js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_bind,
-    js_shadow_slot_get, js_shadow_slot_set, js_shadow_state_addr, shadow_stack_depth,
+#[cfg(any(test, not(perry_native_stack_maps)))]
+pub(crate) use shadow_layout::{ShadowEntry, SLOT_ACTIVE, SLOT_PTR_MASK};
+// ABI layout is also exported to compiler contract consumers.
+#[allow(unused_imports)]
+pub use shadow_layout::{
     ShadowStackState, SHADOW_ENTRY_META_OFFSET, SHADOW_ENTRY_SIZE, SHADOW_SLOT_ACTIVE_BIT,
     SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_FRAME_TOP_OFFSET,
     SHADOW_STATE_LEN_OFFSET, SHADOW_STATE_PTR_OFFSET,
 };
-pub(crate) use shadow_stack::{shadow_stack_restore, shadow_stack_savepoint, ShadowSavepoint};
+#[cfg(any(test, not(perry_native_stack_maps)))]
+pub(crate) use shadow_stack::bound_slot_meta;
+#[cfg(any(test, not(perry_native_stack_maps)))]
+pub(crate) use shadow_stack::SHADOW;
+#[cfg(any(test, not(perry_native_stack_maps)))]
+pub(crate) use shadow_stack::{frame_root_restore, frame_root_savepoint, FrameRootSavepoint};
+#[cfg(any(test, not(perry_native_stack_maps)))]
+pub use shadow_stack::{
+    js_shadow_frame_enter, js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_bind,
+    js_shadow_slot_get, js_shadow_slot_set, js_shadow_state_addr, shadow_stack_depth,
+};
 #[cfg(test)]
 pub(crate) use temp_roots::reset_temp_roots;
 #[cfg(test)]
@@ -103,6 +126,7 @@ pub(super) struct MutableRootScannerEntry {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RuntimeHandleSlot {
     Nanbox(u64),
+    HeapWordCell(usize),
     HeapWord(u64),
     RawPointer(usize),
     RawString(usize),
@@ -1450,56 +1474,15 @@ pub(super) fn atomic_store_ordering(
     }
 }
 
-/// Which registry a mutable root slot came from.
-///
-/// The kind selects a *telemetry bucket* only — it must never select a
-/// different pointer decoding. All kinds are marked by
-/// `mark_mutable_root_bits` and rewritten by `try_rewrite_value`, and all
-/// therefore accept a heap reference either NaN-boxed or bare. That symmetry
-/// is the #6910 invariant; see `gc::root_words`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum MutableRootSlotKind {
-    ShadowStack,
-    NativeStack,
-    GlobalRoot,
-}
-
-impl MutableRootSlotKind {
-    /// Label for the pin-latch abort's `copying walk phase` line.
-    pub(super) fn walk_phase_name(self) -> &'static str {
-        match self {
-            Self::ShadowStack => "mutable_root_slots/shadow_stack",
-            Self::NativeStack => "mutable_root_slots/native_stack",
-            Self::GlobalRoot => "mutable_root_slots/global_root",
-        }
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(super) struct MutableRootSlot {
-    pub(super) kind: MutableRootSlotKind,
-    pub(super) ptr: *mut u64,
-}
-
-impl MutableRootSlot {
-    #[inline]
-    pub(super) unsafe fn read(self) -> u64 {
-        *self.ptr
-    }
-
-    #[inline]
-    pub(super) unsafe fn write(self, bits: u64) {
-        *self.ptr = bits;
-    }
-}
-
-/// Visit every live shadow-stack slot. The visitor receives real
+/// Visit native frame roots and, on unsupported platforms, shadow slots.
+/// The visitor receives real
 /// mutable slot addresses so the same walk can support mark-only
 /// scanning and post-forwarding rewrites.
 pub(super) fn visit_shadow_stack_root_slots(
     mut visit: impl FnMut(MutableRootSlot),
 ) -> stack_maps::NativeStackWalkStats {
     let native_stack_walk = stack_maps::visit_stack_map_root_slots(&mut visit);
+    #[cfg(any(test, not(perry_native_stack_maps)))]
     SHADOW.with(|cell| unsafe {
         let s = &mut *cell.get();
         if s.len == 0 || s.ptr.is_null() {

@@ -6,7 +6,7 @@
 # gc-root-dominance.yml has four corpus/lowering combinations, and one of the
 # four is missing:
 #
-#                       shadow (PERRY_RS4GC=0)   native (statepoints, SHIPS)
+#                       shadow (WASI target)   native (statepoints, SHIPS)
 #   curated ~124 files  gated                    gated, --max-unrooted 0
 #   dependency (zod)    gated, --max-stale 10    THIS SCRIPT (was missing)
 #
@@ -51,9 +51,7 @@ rm -rf "$OUTDIR" .perry-trace/llvm
 mkdir -p "$OUTDIR"
 scratch="$(mktemp -d)"
 
-env PERRY_RS4GC=1 \
-    PERRY_GC_MOVING_LOOP_POLLS=1 \
-    PERRY_INLINE_SHADOW_SLOT=0 \
+env PERRY_GC_MOVING_LOOP_POLLS=1 \
     PERRY_NO_AUTO_OPTIMIZE=1 \
     "$PERRY_BIN" compile "$ENTRY" -o "$scratch/dep-native" --trace llvm \
     >"$scratch/compile.log" 2>&1 || { tail -40 "$scratch/compile.log" >&2; exit 1; }

@@ -571,6 +571,17 @@ fn emit_instrument_cfgs() {
 }
 
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(perry_native_stack_maps)");
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let width = std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap_or_default();
+    if width == "64"
+        && matches!(arch.as_str(), "aarch64" | "x86_64")
+        && (os != "windows" || arch == "x86_64")
+    {
+        println!("cargo:rustc-cfg=perry_native_stack_maps");
+    }
+
     emit_instrument_cfgs();
     println!("cargo:rerun-if-changed=src/ffi/perry_memory_profile.c");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")

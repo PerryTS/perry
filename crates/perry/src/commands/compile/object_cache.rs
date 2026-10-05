@@ -1101,13 +1101,7 @@ fn compute_object_cache_key_with_env(
     //     different clang versions/builds emit different bytes (linker.rs).
     //   - PERRY_WRITE_BARRIERS=0/off/false suppresses generated barrier
     //     calls at heap-store sites (codegen.rs / expr.rs).
-    //   - PERRY_SHADOW_STACK=0/off/false suppresses generated frame/slot
-    //     roots at function entry and pointer local stores.
-    //   - (historical) PERRY_STACK_MAPS lowered precise roots to plain LLVM
-    //     stackmap records, and PERRY_STATEPOINTS selected native-frame roots.
-    //     Both are deleted; PERRY_RS4GC is the only spelling now, and it is
-    //     listed above. Left here because a cache key that silently stops
-    //     covering a knob is indistinguishable from one that never did.
+    //     Rooting selection is fixed by the target in the cache identity.
     //   - PERRY_DISABLE_BUFFER_FAST_PATH=1 overrides CompileOptions and
     //     changes Buffer/Uint8Array lowering.
     //   - PERRY_VERIFY_NATIVE_REGIONS=1 overrides CompileOptions and must
@@ -1146,11 +1140,6 @@ fn compute_object_cache_key_with_env(
         env_var("PERRY_WRITE_BARRIERS").as_deref().unwrap_or(""),
     );
     h.field(
-        "env_shadow_stack",
-        env_var("PERRY_SHADOW_STACK").as_deref().unwrap_or(""),
-    );
-    h.field("env_rs4gc", env_var("PERRY_RS4GC").as_deref().unwrap_or(""));
-    h.field(
         "env_ll_size_opt",
         env_var("PERRY_LL_SIZE_OPT").as_deref().unwrap_or(""),
     );
@@ -1166,30 +1155,6 @@ fn compute_object_cache_key_with_env(
             .as_deref()
             .unwrap_or(""),
     );
-    // #8883: the TailCallElim alloca-walk budget stamps `disable-tail-calls`
-    // on the functions it trips on, which changes their object code.
-    h.field(
-        "env_ll_tre_max_alloca_walk",
-        env_var("PERRY_LL_TRE_MAX_ALLOCA_WALK")
-            .as_deref()
-            .unwrap_or(""),
-    );
-    // Oversized post-optimization functions can use LLVM's O0 machine
-    // pipeline for bounded ISel/regalloc; the resulting object differs from
-    // normal optimized machine emission.
-    h.field(
-        "env_ll_fast_emit_max_instrs",
-        env_var("PERRY_LL_FAST_EMIT_MAX_INSTRS")
-            .as_deref()
-            .unwrap_or(""),
-    );
-    // #8583: root-spill threshold changes which functions carry statepoints.
-    h.field(
-        "env_root_spill_relocations",
-        env_var("PERRY_ROOT_SPILL_RELOCATIONS")
-            .as_deref()
-            .unwrap_or(""),
-    );
     // Explicit-safepoint contract: flips audited AllocNoReentry helpers
     // between statepoint and plain call. Two arms sharing a cached object
     // would make the contract's metadata reduction unmeasurable.
@@ -1200,10 +1165,6 @@ fn compute_object_cache_key_with_env(
     // #7088: flips the shadow-slot store between an inline sequence and the
     // `js_shadow_slot_*` calls. Two arms that shared a cached object would
     // silently measure the same code.
-    h.field(
-        "env_inline_shadow_slot",
-        env_var("PERRY_INLINE_SHADOW_SLOT").as_deref().unwrap_or(""),
-    );
     h.field(
         "env_disable_buffer_fast_path",
         env_var("PERRY_DISABLE_BUFFER_FAST_PATH")

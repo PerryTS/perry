@@ -1604,8 +1604,7 @@ pub(crate) fn lower_let(
         // mem2reg/SROA in many cases; when it can't, the
         // cost is one bitcast + one call per pointer-typed
         // Let — measured noise on bench_json_roundtrip.
-        // Only fires when PERRY_SHADOW_STACK=1 is set at
-        // compile time, since the map is empty otherwise.
+        // Only platforms without native stack maps populate this map.
         if !used_i32_init {
             if ctx.shadow_slot_map.contains_key(&id)
                 && !crate::expr::expr_is_known_non_pointer_shadow_value(ctx, init_expr)

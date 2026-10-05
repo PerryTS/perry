@@ -42,8 +42,6 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // lane from the emitted code, so an object built with the lane must not be
     // served from cache to a build that turned it off (and vice versa).
     "PERRY_U8_INLINE_READ",
-    "PERRY_SHADOW_STACK",
-    "PERRY_RS4GC",
     // `-Os` vs `-O3` for every native module.
     "PERRY_LL_SIZE_OPT",
     // Explicit application-module LLVM optimization level. This overrides the
@@ -56,11 +54,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // #8883: the alloca-walk budget above which a function is stamped
     // `disable-tail-calls` before the optimizer. It changes the generated
     // code of the functions it trips on, so it is a cache input.
-    "PERRY_LL_TRE_MAX_ALLOCA_WALK",
     // A unit over this post-optimization per-function ceiling uses LLVM's O0
     // machine pipeline for bounded ISel/regalloc. That changes object bytes,
     // so both the build and object caches must distinguish its settings.
-    "PERRY_LL_FAST_EMIT_MAX_INSTRS",
     // #10884 step 4b kill switch: `PERRY_REGION_READS=0` makes the region
     // slice(s) decline, so every guarded run lowers as individual reads instead
     // of one shape compare plus a slot load. Different emitted code, so an
@@ -154,11 +150,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // #8583: the relocation estimate above which a function spills its GC roots
     // to a shadow frame. It changes which functions carry statepoints, so it
     // changes the generated code and must be a cache input.
-    "PERRY_ROOT_SPILL_RELOCATIONS",
     // #8583: selects the descriptor-backed lowering for large constant arrays.
     // The two paths emit different IR and therefore require distinct cache keys.
     "PERRY_GC_SAFEPOINT_ONLY",
-    "PERRY_INLINE_SHADOW_SLOT",
     "PERRY_DISABLE_BUFFER_FAST_PATH",
     "PERRY_VERIFY_NATIVE_REGIONS",
     // #6125: the resolved CPU baseline (promoted from --march / perry.toml

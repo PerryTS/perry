@@ -83,6 +83,14 @@ mod tests {
     ///
     /// Sabotage check: have `js_shadow_frame_enter` return anything other than
     /// the thread-local's address and this fails.
+    #[cfg(not(any(
+        all(target_arch = "x86_64", target_pointer_width = "64"),
+        all(
+            target_arch = "aarch64",
+            target_pointer_width = "64",
+            not(target_os = "windows")
+        )
+    )))]
     #[test]
     fn frame_enter_returns_the_runtime_thread_local_address() {
         let state = rt::js_shadow_frame_enter(1);

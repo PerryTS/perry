@@ -741,12 +741,6 @@ pub(super) fn compile_function(
         );
         // Root the entry `this` slot of a this-reading body.
         let this_root_slots = usize::from(reads_this);
-        crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
-            lf,
-            &llvm_name,
-            m.len() + this_root_slots,
-            &f.body,
-        );
         lf.enable_shadow_frame((m.len() + this_root_slots) as u32);
         m
     } else {

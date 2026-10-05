@@ -153,3 +153,32 @@ fn late_scope_drop_resolves_os_tls_without_retaining_its_address() {
     .expect("late OS-TLS scope thread");
     assert!(DROPPED.load(Ordering::SeqCst));
 }
+
+#[test]
+fn native_argument_cells_are_marked_and_rewritten_in_place() {
+    let nursery = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    let valid = build_valid_pointer_set();
+    let destination = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_OBJECT);
+    let cell = std::cell::UnsafeCell::new(f64::from_bits(POINTER_TAG | nursery as u64));
+    let before = RuntimeHandleScope::active_len_for_tests();
+    let scope = RuntimeHandleScope::new();
+    let root = unsafe { scope.root_heap_word_cell(&cell) };
+    scan_runtime_handle_roots_mut(&mut RuntimeRootVisitor::for_mark(&valid));
+    let header = unsafe { header_from_user_ptr(nursery) as *mut GcHeader };
+    unsafe {
+        assert_ne!((*header).gc_flags & GC_FLAG_MARKED, 0);
+        set_forwarding_address(header, destination);
+    }
+    scan_runtime_handle_roots_mut(&mut RuntimeRootVisitor::for_rewrite(&valid));
+    let expected = POINTER_TAG | destination as u64;
+    assert_eq!(
+        unsafe { (*cell.get()).to_bits() },
+        expected,
+        "the native constructor/replacer buffer must receive the collector rewrite"
+    );
+    assert_eq!(root.get_heap_word_u64(), expected);
+    root.set_heap_word_u64(43.0f64.to_bits());
+    assert_eq!(unsafe { *cell.get() }, 43.0);
+    drop(scope);
+    assert_eq!(RuntimeHandleScope::active_len_for_tests(), before);
+}

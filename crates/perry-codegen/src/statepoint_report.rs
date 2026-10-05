@@ -175,7 +175,7 @@ fn render_text_with(records: &[FunctionRecord], gc_map: GcMapTotals) -> String {
     );
     if records.is_empty() {
         out.push_str(
-            "No native-stack lowering records were emitted. Set PERRY_RS4GC=1 and\n\
+            "No native-stack lowering records were emitted. Use a supported native target and\n\
              ensure codegen is not served from cache (PERRY_NO_AUTO_OPTIMIZE=1, or\n\
              clear the object cache) — a cached .o emits no records.\n",
         );
@@ -203,7 +203,7 @@ fn render_text_with(records: &[FunctionRecord], gc_map: GcMapTotals) -> String {
              confident `0 statepoints emitted` is indistinguishable from a real\n\
              zero and that is exactly how these counts silently died once before\n\
              (#7348 removed their only writers with the bridge, and nothing\n\
-             noticed). Compile with PERRY_RS4GC=1 on a target whose map is\n\
+             noticed). Compile on a native target whose map is\n\
              rewritten, and without a cached .o.\n",
         );
         return out;

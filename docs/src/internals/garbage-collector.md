@@ -212,13 +212,20 @@ One root-set analysis feeds two lowerings:
 | target | shipped precise-root lowering |
 |---|---|
 | 64-bit AArch64/arm64 and x86-64, including x86-64 Windows | LLVM RS4GC statepoints plus Perry's compact native stack map |
-| `arm64_32` watchOS, ARM64 Windows, and unsupported architectures | Perry shadow frames |
+| wasm32 WASI and ARM64 Windows | Perry shadow frames |
 
-This is target-aware, not host-aware. `PERRY_RS4GC=0` selects the shadow
-lowering for bisection; `PERRY_RS4GC=1` requests native roots and fails closed
-if the target cannot emit/read them. `PERRY_SHADOW_STACK=0` disables only the
-shadow lowering—native-root analysis remains enabled when native roots are the
-selected backend.
+Rooting is selected by the target. Native platforms always use LLVM
+statepoints; environment controls and function-size estimates cannot select
+shadow frames. Long-lived managed locals retain LLVM stack storage and appear
+as direct frame locations in the statepoint stack map. The compact map records
+contiguous native homes as a range, so both machine code and metadata grow
+linearly with the locals and safepoints. Moving collection rewrites those
+same locations before generated code reloads them.
+
+WASI uses platform shadow frames because it has no native frame walker or
+statepoint stack-map backend. ARM64 Windows lacks the required native walker;
+watchOS ILP32 lacks a native map loader and currently refuses compiler emission
+rather than pretending its LP64 offsets work.
 
 Runtime-owned roots do not live in generated frames. Registered scanners visit
 module globals, pending async work, caches, registries, and other side tables;
@@ -355,7 +362,6 @@ These are the operational controls most useful outside collector development:
 | `PERRY_GC_PROMOTE_IN_PLACE=0` | revert whole-block promotion to object-by-object evacuation |
 | `PERRY_GC_SCAVENGE_NURSERY_MB=N` | set the base nursery cap |
 | `PERRY_GC_HEAP_LIMIT=N` | override the process heap budget in MiB |
-| `PERRY_RS4GC=0` | select shadow roots on a native-root-capable target |
 | `PERRY_CONSERVATIVE_STACK_SCAN=full` | diagnostic full native-stack scan; disables copying |
 | `PERRY_GC_TRACE=1` | emit structured per-cycle trace records |
 | `PERRY_GC_DIAG=1` | emit human-readable collector diagnostics (per cycle, plus `[gc-trigger]`/`[gc-full]`/`[gc-budgeted]`/`[gc-charge]` decision and charge attribution and the per-minor `[gc-survival]` root attribution) |

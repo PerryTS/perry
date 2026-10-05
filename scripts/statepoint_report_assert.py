@@ -10,7 +10,7 @@ rather than merely that nothing threw (CLAUDE.md, "four ways a gate can be
 unable to fail", #4). Each mode has a signature in this report that the other
 modes cannot produce:
 
-  * RS4GC (`PERRY_RS4GC=1`)   -> every record `"backend": "rs4gc"`, and
+  * mandatory RS4GC   -> every record `"backend": "rs4gc"`, and
     `gc_map.records > 0`. The explicit bridge is deleted, so there is no
     second backend to fall back to; `--only-backend` still answers "did it
     run *everywhere*", which is a different question from "did it run".

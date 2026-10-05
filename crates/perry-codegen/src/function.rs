@@ -170,18 +170,6 @@ pub struct LlFunction {
     /// final IR pass resolves these indices to the native allocas named by
     /// `js_shadow_slot_bind` calls, removes the calls, and emits stack maps.
     stack_map_slot_count: u32,
-    /// #8583: force this function onto the heap-backed shadow frame even when
-    /// native stack-map roots are the build default. Set for a function whose
-    /// estimated statepoint relocation count (`live_roots × safepoints`) would
-    /// make `rewrite-statepoints-for-gc` fan-out super-linear in the optimizer
-    /// (`codegen/helpers::maybe_spill_roots_to_shadow_frame`). The shadow-frame
-    /// lowering is the pre-#7370 default, walked by the same runtime root scan
-    /// as stack maps, so a spilled function's roots stay precise — it simply
-    /// carries no `gc "statepoint-example"` strategy and RS4GC skips it. The
-    /// frame pointer is unaffected (kept for every native-roots build), so the
-    /// FP-chain walker steps over the spilled frame exactly as it does the
-    /// runtime's own.
-    force_shadow_frame: bool,
     /// #10663: outline this function's static-key store inline caches at
     /// sites outside any loop (`expr/put_value_store_ic.rs`). Set for a body
     /// with so many once-per-call stores that the inline caches' code
@@ -318,68 +306,10 @@ impl LlFunction {
             shadow_frame_slot_count: 0,
             stack_map_requested: false,
             stack_map_slot_count: 0,
-            force_shadow_frame: false,
             outline_straight_line_store_ics: false,
             pre_return_void_calls: Vec::new(),
             entry_tls_addresses: Vec::new(),
         }
-    }
-
-    /// Enable shadow-stack frame emission for this function (gen-GC
-    /// Phase A sub-phase 2). Emits `js_shadow_frame_push(slot_count)`
-    /// into `entry_allocas` so it runs at the top of block 0, stores
-    /// the returned u64 handle into a fresh alloca, and records the
-    /// slot for the `to_ir()` ret-rewriting pass to load from.
-    ///
-    /// Safe to call at most once per function. After this call,
-    /// `to_ir()` will insert a matching
-    /// `js_shadow_frame_pop(loaded_handle)` before every `ret` in
-    /// the function body, regardless of which codegen path emitted
-    /// the ret. Frame balance is preserved automatically.
-    ///
-    /// Passing `slot_count = 0` is a no-op: the frame would only carry
-    /// a (prev_top, slot_count) header with no GC-root slots — that is
-    /// pure overhead, an extra TLS-touching call per function entry +
-    /// per ret. Today every leaf function with no pointer-typed locals
-    /// (clampIdx, clampU8, imul32, …) hits this case, and when the
-    /// function is `alwaysinline` the push/pop pair gets duplicated
-    /// into every caller's hot loop. Skip the frame entirely; the
-    /// to_ir() rewrite pass keys off `shadow_frame_slot.is_some()`,
-    /// so no matching pop is emitted either.
-    /// #8583/#8679: route this function's precise roots through the heap
-    /// shadow frame instead of native statepoints.
-    ///
-    /// The estimate-driven path calls this before `enable_shadow_frame`, while
-    /// the post-RS4GC budget retry calls it after lowering is complete. In the
-    /// latter case the native-root path deliberately retained the original
-    /// `js_shadow_slot_bind` calls until final rendering, so converting the
-    /// recorded stack-map request back into a shadow-frame push is a complete
-    /// re-lowering: final rendering keeps those binds, adds the matching pops,
-    /// and drops the GC strategy so RS4GC skips the function on retry.
-    ///
-    /// Returns `true` only when this call changed the lowering. A retry driver
-    /// uses that to reject an impossible second retry instead of looping.
-    pub fn request_shadow_frame_spill(&mut self) -> bool {
-        if self.force_shadow_frame {
-            return false;
-        }
-        self.force_shadow_frame = true;
-        self.stack_map_requested = false;
-        if self.shadow_frame_requested
-            && self.shadow_frame_slot.is_none()
-            && self.stack_map_slot_count != 0
-        {
-            self.emit_shadow_frame_push(
-                self.stack_map_slot_count,
-                self.shadow_frame_post_init_region,
-            );
-        }
-        true
-    }
-
-    /// Whether this function spills its roots to the shadow frame (#8583).
-    pub fn spills_roots_to_shadow_frame(&self) -> bool {
-        self.force_shadow_frame
     }
 
     /// #10663: see [`Self::outlines_straight_line_store_ics`].
@@ -409,7 +339,7 @@ impl LlFunction {
     }
 
     fn enable_shadow_frame_inner(&mut self, slot_count: u32, post_init: bool) {
-        if crate::codegen::helpers::native_stack_roots_enabled() && !self.force_shadow_frame {
+        if crate::codegen::helpers::native_stack_roots_enabled() {
             self.shadow_frame_requested = true;
             self.shadow_frame_post_init_region = post_init;
             self.stack_map_requested = slot_count != 0;
@@ -463,12 +393,7 @@ impl LlFunction {
         // binds into whatever frame is on top when it runs: before this
         // functions push that is the callers frame (or none), so the slot is
         // never rooted here and an evacuating minor leaves it naming
-        // from-space. The estimate-driven request pushes before any bind
-        // exists, so appending was enough there; the post-RS4GC retry
-        // (`request_shadow_frame_spill` on an already-lowered function, #8679)
-        // arrives after every bind was emitted. `entry_allocas` needs no such
-        // care: it is spliced above the post-init region, and this push reads
-        // allocas appended to it just above.
+        // from-space. Insert platform shadow-frame setup before every bind.
         let (region, line_idx) = if post_init {
             (&mut self.entry_post_init_setup, 0)
         } else {
@@ -514,7 +439,7 @@ impl LlFunction {
         if !self.shadow_frame_requested {
             return None;
         }
-        if crate::codegen::helpers::native_stack_roots_enabled() && !self.force_shadow_frame {
+        if crate::codegen::helpers::native_stack_roots_enabled() {
             let idx = self.stack_map_slot_count;
             self.stack_map_slot_count += 1;
             self.stack_map_requested = true;
@@ -1044,19 +969,14 @@ impl LlFunction {
         // #7174: the `!has_try` exclusion is gone with the field. Try/catch no
         // longer lowers to setjmp/longjmp (#7302), so nothing can jump past a
         // `gc.relocate` any more and statepoints cover every function.
-        // A spilled function (#8583) keeps precise roots in the shadow frame,
-        // so it must NOT carry the statepoint strategy — RS4GC would then run
-        // on it and reintroduce the relocation fan-out the spill avoids. Its
-        // `stack_map_requested` is already false (enable_shadow_frame_inner
-        // took the shadow branch), so this is belt-and-braces.
-        let gc_strategy = if self.stack_map_requested
-            && !self.force_shadow_frame
-            && crate::codegen::helpers::native_stack_roots_enabled()
-        {
-            " gc \"statepoint-example\""
-        } else {
-            ""
-        };
+        // Unsupported platforms have no statepoint strategy; supported
+        // native targets use it for every rooted function.
+        let gc_strategy =
+            if self.stack_map_requested && crate::codegen::helpers::native_stack_roots_enabled() {
+                " gc \"statepoint-example\""
+            } else {
+                ""
+            };
         // Invoke-EH (#7302): functions containing landing/funclet pads name
         // their personality on the define line. LLVM's grammar orders these
         // `[fn attrs] [gc] [personality]`, so the strategy precedes it.
@@ -1576,191 +1496,6 @@ mod define_header_tests {
                  pass over IR that has no addrspace(1) roots to rewrite"
             );
         }
-    }
-
-    /// #8583 root spilling: under the native-roots build, a function that
-    /// requested a shadow-frame spill BEFORE `enable_shadow_frame` must take
-    /// the heap shadow lowering — no `gc "statepoint-example"` strategy (so
-    /// RS4GC skips it and cannot fan out its relocations) — while a sibling
-    /// that did not request the spill keeps native statepoints. The frame
-    /// pointer is kept regardless, so the FP-chain root walker still steps
-    /// over the spilled frame.
-    #[test]
-    fn a_spilled_function_takes_the_shadow_lowering_while_its_sibling_keeps_statepoints() {
-        use crate::codegen::helpers::NativeRootsPin;
-        use crate::types::{I64, PTR};
-        const STRATEGY: &str = "gc \"statepoint-example\"";
-        const FRAME_PTR: &str = "\"frame-pointer\"=\"non-leaf\"";
-
-        // Build a function with one bound root across a call: enough for both
-        // lowerings to have real content to render.
-        fn rooted(spill: bool) -> LlFunction {
-            let mut f = LlFunction::new("perry_fn_probe", crate::types::VOID, vec![]);
-            if spill {
-                f.request_shadow_frame_spill();
-            }
-            f.enable_shadow_frame(0);
-            let idx = f.reserve_shadow_slot().expect("a frame yields a root slot");
-            let root = f.alloca_entry(I64);
-            f.entry_allocas_push_store(I64, "0", &root);
-            f.entry_setup_call_void(
-                "js_shadow_slot_bind",
-                &[(crate::types::I32, &idx.to_string()), (PTR, &root)],
-            );
-            let entry = f.create_block("entry");
-            let _ = entry.call(I64, "may_collect", &[]);
-            entry.ret_void();
-            f
-        }
-
-        let _native = NativeRootsPin::native();
-
-        let native = rooted(false);
-        assert_eq!(
-            native.stack_map_slot_count, 1,
-            "the un-spilled sibling must take the stack-map path"
-        );
-        let native_hdr = native.define_header(false);
-        assert!(
-            native_hdr.contains(STRATEGY),
-            "the un-spilled sibling must carry the statepoint strategy:\n{native_hdr}"
-        );
-
-        let spilled = rooted(true);
-        assert!(spilled.spills_roots_to_shadow_frame());
-        assert_eq!(
-            spilled.stack_map_slot_count, 0,
-            "a spilled function must NOT take the stack-map path even under the \
-             native-roots pin — that is the whole point of the spill"
-        );
-        let spilled_hdr = spilled.define_header(false);
-        assert!(
-            !spilled_hdr.contains(STRATEGY),
-            "a spilled function must NOT claim the statepoint strategy, or RS4GC \
-             would run on it and reintroduce the relocation fan-out:\n{spilled_hdr}"
-        );
-        assert!(
-            spilled_hdr.contains(FRAME_PTR) && native_hdr.contains(FRAME_PTR),
-            "both lowerings keep the non-leaf frame pointer so the FP-chain \
-             walker can step over the frame:\nspilled: {spilled_hdr}\nnative: {native_hdr}"
-        );
-
-        // The spilled function builds the heap shadow frame (`js_shadow_frame_enter`
-        // + retained `js_shadow_slot_bind`); the native sibling has neither — its
-        // roots are stack-map slots that RS4GC lowers, and the bind calls are
-        // stripped.
-        let spilled_ir = spilled.to_ir();
-        assert!(
-            spilled_ir.contains("@js_shadow_frame_enter")
-                && spilled_ir.contains("@js_shadow_slot_bind"),
-            "a spilled function keeps the runtime shadow frame:\n{spilled_ir}"
-        );
-        let native_ir = native.to_ir();
-        assert!(
-            !native_ir.contains("@js_shadow_frame_enter")
-                && !native_ir.contains("@js_shadow_slot_bind"),
-            "the native sibling has no heap shadow frame; its roots are stack-map \
-             slots and its binds are lowered away:\n{native_ir}"
-        );
-    }
-
-    /// #8679's budget is learned only after RS4GC, so the durable fallback
-    /// necessarily asks an already-lowered function to change root lowering.
-    /// This pins that late request to the same complete shadow-frame shape as
-    /// the estimate-driven early request, including balanced return pops.
-    #[test]
-    fn a_post_lowering_spill_request_rebuilds_the_shadow_frame() {
-        use crate::codegen::helpers::NativeRootsPin;
-        use crate::types::{I64, PTR};
-        const STRATEGY: &str = "gc \"statepoint-example\"";
-
-        let _native = NativeRootsPin::native();
-        let mut function = LlFunction::new("late_spill", crate::types::VOID, vec![]);
-        function.enable_post_init_shadow_frame(0);
-        let idx = function
-            .reserve_shadow_slot()
-            .expect("native lowering reserves a precise-root slot");
-        let root = function.alloca_entry(I64);
-        function.entry_allocas_push_store(I64, "0", &root);
-        function.entry_setup_call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, &idx.to_string()), (PTR, &root)],
-        );
-        function.mark_entry_init_boundary();
-        let entry = function.create_block("entry");
-        let _ = entry.call(I64, "may_collect", &[]);
-        entry.ret_void();
-
-        let native_ir = function.to_ir();
-        assert!(native_ir.contains(STRATEGY));
-        assert!(!native_ir.contains("@js_shadow_frame_enter"));
-        assert!(!native_ir.contains("@js_shadow_slot_bind"));
-
-        assert!(
-            function.request_shadow_frame_spill(),
-            "the first late request must change the lowering"
-        );
-        assert!(
-            !function.request_shadow_frame_spill(),
-            "a repeated request must report that no retry progress is possible"
-        );
-        let shadow_ir = function.to_ir();
-        assert!(!shadow_ir.contains(STRATEGY), "{shadow_ir}");
-        assert!(shadow_ir.contains("call ptr @js_shadow_frame_enter(i32 1)"));
-        assert!(shadow_ir.contains("call void @js_shadow_slot_bind(i32 0"));
-        assert!(shadow_ir.contains("call void @js_shadow_frame_pop(i64"));
-    }
-
-    /// #11836: the late request must push the frame BEFORE the entry-hoisted
-    /// binds already sitting in the post-init region. A bind that runs first
-    /// binds into the caller's frame (or none), so the slot is not a root of
-    /// this frame and an evacuating minor leaves it naming from-space; the
-    /// prettier typescript plugin's module init then built objects over a
-    /// moved class-keys array.
-    #[test]
-    fn a_post_lowering_spill_pushes_the_frame_before_the_entry_binds() {
-        use crate::codegen::helpers::NativeRootsPin;
-        use crate::types::{I64, PTR};
-
-        let _native = NativeRootsPin::native();
-        let mut function = LlFunction::new("late_spill_order", crate::types::VOID, vec![]);
-        function.enable_post_init_shadow_frame(0);
-        let entry = function.create_block("entry");
-        entry.call_void("js_gc_init", &[]);
-        function.mark_entry_init_boundary();
-        // The shape `entry_init_load_rooted_global` leaves behind: a
-        // post-init load of the global into an entry slot, then its bind.
-        let slot = function.entry_init_load_global("perry_class_keys_m__C", I64);
-        let idx = function
-            .reserve_shadow_slot()
-            .expect("native lowering reserves a precise-root slot");
-        function.entry_setup_call_void(
-            "js_shadow_slot_bind",
-            &[(crate::types::I32, &idx.to_string()), (PTR, &slot)],
-        );
-        let entry = function.block_mut(0).expect("entry block");
-        let _ = entry.call(I64, "may_collect", &[]);
-        entry.ret_void();
-
-        assert!(function.request_shadow_frame_spill());
-        let shadow_ir = function.to_ir();
-        let position = |needle: &str| {
-            shadow_ir
-                .find(needle)
-                .unwrap_or_else(|| panic!("no `{needle}`:\n{shadow_ir}"))
-        };
-        let init = position("@js_gc_init(");
-        let enter = position("@js_shadow_frame_enter(");
-        let bind = position("call void @js_shadow_slot_bind(");
-        assert!(
-            enter < bind,
-            "the frame push must precede every entry bind, or the bind roots \
-             the slot in the caller's frame:\n{shadow_ir}"
-        );
-        assert!(
-            init < enter,
-            "the push still belongs after the init prelude:\n{shadow_ir}"
-        );
     }
 
     /// `force_external` drops only the linkage keyword. The codegen-unit path
