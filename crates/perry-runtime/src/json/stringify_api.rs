@@ -365,7 +365,7 @@ pub unsafe extern "C" fn js_json_stringify_string(
     {
         return ptr;
     }
-    if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
+    if crate::value::addr_class::is_handle_band(str_ptr as usize) {
         return std::ptr::null_mut();
     }
     let len = (*str_ptr).byte_len as usize;

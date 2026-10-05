@@ -127,7 +127,13 @@ pub(crate) fn note_sweep_started(budgeted: bool) {
 /// # Safety
 /// `header` must head a dead object of `total_size` bytes that nothing may
 /// legally touch again.
-pub(crate) unsafe fn retire_swept_object(header: usize, total_size: usize, kind: RetiredKind) {
+pub(crate) unsafe fn retire_swept_object(
+    header: *const crate::gc::GcHeader,
+    total_size: usize,
+    kind: RetiredKind,
+) {
+    let obj_type = (*header).obj_type;
+    let header = header as usize;
     let start = header + crate::gc::GC_HEADER_SIZE;
     let len = total_size.saturating_sub(crate::gc::GC_HEADER_SIZE);
     let mode = old_sweep_protection_mode();
@@ -145,7 +151,7 @@ pub(crate) unsafe fn retire_swept_object(header: usize, total_size: usize, kind:
     let span = RetiredSpan {
         header,
         total_size,
-        obj_type: (*(header as *const crate::gc::GcHeader)).obj_type,
+        obj_type,
         kind,
         sweep_seq: SWEEP_SEQ.load(Ordering::Relaxed),
         budgeted: SWEEP_BUDGETED.load(Ordering::Relaxed),
