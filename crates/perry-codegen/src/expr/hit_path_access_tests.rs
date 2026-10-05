@@ -139,8 +139,8 @@ fn unproven_numeric_index_store_has_an_inline_element_tier() {
     );
 }
 
-/// A declared typed array with an unproven index takes the same guarded inline
-/// arms as an erased receiver, not an unconditional runtime call per access.
+/// A declared typed array with an unproven index takes a kind-specific inline
+/// load; only declined receivers/keys reach the boxed dynamic getter.
 #[test]
 fn declared_typed_array_unproven_index_access_is_inline() {
     let get = probe_ir(&module(
@@ -152,8 +152,15 @@ fn declared_typed_array_unproven_index_access_is_inline() {
         }))],
     ));
     assert!(
-        get.contains("tav.brand") && !get.contains("@js_typed_array_index_get_dynamic("),
+        get.contains("ta.read.load")
+            && get.contains("ta.read.pointer")
+            && get.contains("@js_dyn_index_get("),
         "declared typed-array read must use the inline arm:\n{get}"
+    );
+    let hot = super::class_field_barrier_tests::block_body(&get, "ta.read.load.").unwrap();
+    assert!(
+        hot.contains("load atomic i64") && !hot.contains("call double"),
+        "in-bounds reads must load the lane without dispatch: {hot}"
     );
     let set = probe_ir(&module(
         "ta_dynamic_set",

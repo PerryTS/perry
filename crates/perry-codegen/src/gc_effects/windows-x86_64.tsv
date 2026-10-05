@@ -3209,6 +3209,7 @@ js_symbol_typeof	Reenters
 js_symbol_well_known_async_iterator	AllocOnly
 js_symbol_well_known_iterator	AllocOnly
 js_syntaxerror_new	Reenters
+js_ta_read_receiver_is_kind	Leaf
 js_tagged_template_get_or_init	Reenters
 js_tagged_template_register_raw	Reenters
 js_tdz_suppress_begin	Leaf
@@ -3449,9 +3450,9 @@ js_typed_string_arg_to_raw	Reenters
 js_typeerror_new	Reenters
 js_typeerror_new_with_cause	Reenters
 js_u8_buffer_read_f64	Reenters
-js_u8_resolve_read_data	Leaf
 js_u8_from_base64	Reenters
 js_u8_from_hex	Reenters
+js_u8_resolve_read_data	Leaf
 js_u8_set_from_base64	Reenters
 js_u8_set_from_hex	Reenters
 js_u8_to_base64	Reenters
@@ -3994,4 +3995,3 @@ perry_updater_verify_signature_v2	Reenters
 perry_updater_write_sentinel	Reenters
 redirect_lazy_to_materialized	Reenters
 setInterval	Reenters
-js_ta_read_receiver_is_kind	Leaf
