@@ -54,6 +54,7 @@ mod repsel_benefit;
 mod safepoint_sites;
 mod scalar_method_dispatch;
 mod scalar_methods;
+pub(crate) mod sealed_buffers;
 pub mod segview;
 #[cfg(test)]
 mod segview_tests;

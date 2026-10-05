@@ -21,8 +21,10 @@
 //!   site the slot still holds that exact typed array, whose header address,
 //!   element kind, and length are fixed for the program's lifetime (typed-array
 //!   storage is non-movable: `gc/types.rs` marks `GC_TYPE_TYPED_ARRAY` /
-//!   `GC_TYPE_BUFFER` `movable: false`, and a non-view typed array cannot be
-//!   detached). `const_len` is `Some` when the length is an integer literal
+//!   `GC_TYPE_BUFFER` `movable: false`). The binding must also be SEALED
+//!   (`collectors/sealed_buffers.rs`): a fresh non-view typed array CAN be
+//!   detached, by `ta.buffer.transfer()`, and observing `.buffer` alone moves
+//!   its elements to an external backing. `const_len` is `Some` when the length is an integer literal
 //!   (directly or through the immutable local above), or the element count of
 //!   an array-literal source whose uses provably cannot change its length.
 //! - **`I32`** — integer literal in i32 range, or a local whose complete
@@ -1054,6 +1056,10 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
     // provably-non-view `TypedArrayNew` of a numeric kind, never reassigned,
     // never referenced by a closure.
     let mut ta_bindings: HashMap<u32, SpecTaBinding> = HashMap::new();
+    // The callee hoists the data pointer and length through the header once,
+    // so only a sealed binding may be passed: observing `.buffer` rebinds the
+    // storage, and `buffer.transfer()` detaches it.
+    let exposed = super::sealed_buffers::buffer_exposure(hir).exposed;
     let mut collect_ta = |stmts: &[Stmt]| {
         for s in stmts {
             if let Stmt::Let {
@@ -1063,6 +1069,7 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
             } = s
             {
                 if !spec_ta_kind_is_numeric(*kind)
+                    || exposed.contains(id)
                     || scan.let_counts.get(id).copied() != Some(1)
                     || scan.writes.contains(id)
                     || scan.closure_refs.contains(id)

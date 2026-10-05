@@ -14,8 +14,12 @@
 //!    moves — `typed_array_alloc` places header + inline payload in the OLD
 //!    arena (`GC_FLAG_TENURED`), which the nursery copying minor never
 //!    relocates and old-page defrag skips (`gc_type_is_movable` is `false`
-//!    for `GC_TYPE_TYPED_ARRAY`) — and because a non-view typed array cannot
-//!    be detached or resized. The older phrasing here ("typed-array storage
+//!    for `GC_TYPE_TYPED_ARRAY`) — and because every call site passes a
+//!    SEALED binding whose param is sealed in the callee too: no use can reach
+//!    the array's `.buffer`, so nothing can rebind its storage to an external
+//!    backing or detach it (`spec_abi_sites::buffer_exposed_bindings`). A
+//!    fresh non-view typed array CAN be detached once its `.buffer` is
+//!    observed (`ta.buffer.transfer()`). The older phrasing here ("typed-array storage
 //!    never moves") named the wrong object: what is passed and hoisted THROUGH
 //!    is the header, which is an object; only its old-arena residency makes
 //!    the address stable (#6981). Do not carry this shortcut to any other

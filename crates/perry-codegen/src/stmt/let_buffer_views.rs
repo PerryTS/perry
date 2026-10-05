@@ -37,6 +37,19 @@ pub(super) fn register_noalias_buffer_view(
     // immutable binding whose construction the HIR fact layer proved fresh
     // and owned (`collectors/hir_facts.rs::is_owned_u8_buffer_alloc`).
     let owned_by_fact = ctx.known_noalias_buffer_locals.contains(&id);
+    // Construction alone is not a lasting fact. Observing `.buffer` rebinds a
+    // typed array to an external backing (its elements leave `header + 16`)
+    // and `buffer.transfer()` then detaches it, so the cached data pointer,
+    // the construction length and the inline-storage proof hold only for a
+    // SEALED binding, one no use can hand to code that reads its `.buffer`
+    // (`collectors/sealed_buffers.rs`), or for a binding exposed only by
+    // statements of its own body until the first of them
+    // ([`distrust_views_the_stmt_may_expose`]). Invalidating at the exposing
+    // use itself would not do: on a loop back edge an access that precedes
+    // the use runs after it. An arena view keeps its own owner and dispose
+    // lifecycle.
+    let sealed = ctx.sealed_buffer_locals.contains(&id);
+    let late = ctx.late_exposed_buffer_locals.contains(&id);
     let Some(init) = buffer_view_init_for_expr(ctx, init_expr, owned_by_fact) else {
         return;
     };
@@ -113,8 +126,94 @@ pub(super) fn register_noalias_buffer_view(
             length_source: Some(init.length_source),
             native_owned,
             pointer_state: BufferViewPointerState::Stable,
-            storage_inline_proven: init.storage_inline_proven,
+            storage_inline_proven: init.storage_inline_proven && (sealed || late),
+            // Invariant only while nothing can ever detach it: a late view's
+            // length must not be carried past its exposing statement. Arena
+            // views carry their own length slot.
+            length_fixed: sealed && init.native_owner_local_id.is_none(),
         },
+    );
+    if !sealed && !late && init.native_owner_local_id.is_none() {
+        // Exposed from elsewhere (a closure, another function): the view
+        // never serves a native access.
+        distrust_view(ctx, id);
+    }
+}
+
+/// Before `stmt` lowers: a late-exposed view (`late_exposed_buffer_locals`)
+/// that `stmt` may expose stops being trusted, for `stmt` and everything after
+/// it. Arena views keep their own owner and dispose lifecycle. A loop containing the exposing use is itself such a statement, so its
+/// whole body (the back edge included) runs untrusted.
+pub(crate) fn distrust_views_the_stmt_may_expose(ctx: &mut FnCtx<'_>, stmt: &perry_hir::Stmt) {
+    if ctx.late_exposed_buffer_locals.is_empty() {
+        return;
+    }
+    let exposed: Vec<u32> = ctx
+        .late_exposed_buffer_locals
+        .iter()
+        .copied()
+        .filter(|id| {
+            ctx.receiver_descriptors
+                .buffer_view(*id)
+                .is_some_and(|view| view.pointer_state.is_stable() && view.native_owned.is_none())
+                && crate::collectors::sealed_buffers::stmt_may_expose(stmt, *id)
+        })
+        .collect();
+    for id in exposed {
+        distrust_view(ctx, id);
+    }
+}
+
+/// The end of the statements from `i` on that may lower as one unit: the
+/// index of the next statement after `i` that may expose a still-trusted
+/// late view, or the end of the list. A matcher that versions a run of
+/// statements decides once for the whole run, so the run must stop before
+/// the statement that will distrust the view.
+pub(crate) fn late_exposure_limit(ctx: &FnCtx<'_>, stmts: &[perry_hir::Stmt], i: usize) -> usize {
+    if ctx.late_exposed_buffer_locals.is_empty() {
+        return stmts.len();
+    }
+    let trusted: Vec<u32> = ctx
+        .late_exposed_buffer_locals
+        .iter()
+        .copied()
+        .filter(|id| {
+            ctx.receiver_descriptors
+                .buffer_view(*id)
+                .is_some_and(|view| view.pointer_state.is_stable() && view.native_owned.is_none())
+        })
+        .collect();
+    if trusted.is_empty() {
+        return stmts.len();
+    }
+    (i + 1..stmts.len())
+        .find(|j| {
+            trusted
+                .iter()
+                .any(|id| crate::collectors::sealed_buffers::stmt_may_expose(&stmts[*j], *id))
+        })
+        .unwrap_or(stmts.len())
+}
+
+/// The view's cached pointer and construction facts no longer hold: its
+/// `.buffer` may have been observed (rebinding the storage) and the buffer
+/// detached (length 0).
+fn distrust_view(ctx: &mut FnCtx<'_>, id: u32) {
+    if let Some(view) = ctx.receiver_descriptors.buffer_view_mut(id) {
+        view.length_source = Some(LengthSource::Unknown);
+        view.storage_inline_proven = false;
+        view.length_fixed = false;
+    }
+    ctx.bounded_buffer_index_pairs
+        .retain(|fact| fact.buffer_local_id != id);
+    ctx.guarded_buffer_index_pairs
+        .retain(|fact| fact.buffer_local_id != id);
+    ctx.min_length_bounds
+        .retain(|_, buffer_ids| !buffer_ids.contains(&id));
+    crate::expr::invalidate_buffer_view_pointer(
+        ctx,
+        id,
+        crate::native_value::MaterializationReason::MutableAlias,
     );
 }
 

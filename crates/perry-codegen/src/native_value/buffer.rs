@@ -230,12 +230,25 @@ pub(crate) struct BufferViewSlot {
     /// Representation-selection Phase 2: `true` when the receiver is PROVEN to
     /// be a freshly-constructed inline-storage (non-view) typed array /
     /// buffer — the construction form was a length or plain-array source,
-    /// never an `ArrayBuffer`. Such storage never moves (GC marks
-    /// `GC_TYPE_TYPED_ARRAY`/`GC_TYPE_BUFFER` non-movable), cannot be
-    /// detached, and its length is immutable, so the checked-native element
-    /// access tier (`expr/proven_view_access.rs`) may derive data/length from
-    /// the header with a plain bounds compare and NO kind/view guard.
+    /// never an `ArrayBuffer` — AND its binding is sealed: no use can hand the
+    /// array to code that reads its `.buffer` (`collectors::spec_abi_sites`,
+    /// `buffer_exposed_bindings`). Construction alone proves nothing lasting:
+    /// observing `.buffer` rebinds a typed array to an external backing (its
+    /// elements stop living at `header + 16`), and `buffer.transfer()` then
+    /// detaches it (length 0). Only the seal makes the header storage stay
+    /// inline with a fixed length, so the checked-native element access tier
+    /// (`expr/proven_view_access.rs`) may derive data/length from the header
+    /// with a plain bounds compare and NO kind/view guard. The storage never
+    /// moves either way (GC marks `GC_TYPE_TYPED_ARRAY`/`GC_TYPE_BUFFER`
+    /// non-movable).
     pub storage_inline_proven: bool,
+    /// The receiver's length cannot change while this view is live: a sealed
+    /// fresh construction (see `storage_inline_proven`) or a `TaPtr` param,
+    /// whose call sites pass only sealed bindings. Only then may a length read
+    /// through the header be an `!invariant.load`. Any other view (a declared
+    /// `Buffer` param, a reassignment refresh) may be detached by JS between
+    /// two reads, so its length is reloaded with a plain load.
+    pub length_fixed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1743,6 +1743,13 @@ pub(crate) struct FnCtx<'a> {
     /// store. Collected once as a HIR fact and consumed by Let lowering to seed
     /// direct data-pointer slots plus noalias metadata.
     pub known_noalias_buffer_locals: &'a std::collections::HashSet<u32>,
+    /// The `known_noalias_buffer_locals` no use can hand to code that reads
+    /// their `.buffer`: only these keep a trusted view
+    /// (`stmt/let_buffer_views.rs`).
+    pub sealed_buffer_locals: &'a std::collections::HashSet<u32>,
+    /// Exposed only by statements of their own body: their views stay trusted
+    /// until `lower_stmt` meets the first statement that may expose them.
+    pub late_exposed_buffer_locals: &'a std::collections::HashSet<u32>,
     /// Starting alias-scope id for buffers registered in this function.
     /// Seeded from `LlModule::buffer_alias_counter` at FnCtx creation so
     /// scope ids don't collide across functions in the same LLVM module.

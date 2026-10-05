@@ -253,7 +253,11 @@ fn load_view_bytes(ctx: &mut FnCtx<'_>, view: &BufferViewSlot) -> ViewBytes {
             &data_ptr,
             &[(I32, &view.length_offset_from_data.to_string())],
         );
-        blk.load_invariant(I32, &header_ptr)
+        if view.length_fixed {
+            blk.load_invariant(I32, &header_ptr)
+        } else {
+            blk.load(I32, &header_ptr)
+        }
     };
     let len_i64 = blk.zext(I32, &len_i32, I64);
     let byte_len_i64 = if view.element_width_bytes == 1 {

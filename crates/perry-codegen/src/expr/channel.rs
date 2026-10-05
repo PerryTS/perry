@@ -362,13 +362,23 @@ pub(crate) fn lower_channel_reduction(ctx: &mut FnCtx<'_>, r: &ChannelReduction)
         let d = lower_expr(ctx, &r.k_expr)?;
         ctx.block().fptosi(DOUBLE, &d, I32)
     };
+    // Only a `length_fixed` view's length is immutable; any other buffer can
+    // be detached by JS (`buffer.transfer()` zeroes the length).
+    let length_fixed = ctx
+        .receiver_descriptors
+        .buffer_view(r.array_id)
+        .is_some_and(|view| view.length_fixed);
     let blk = ctx.block();
     // Buffer length-load via the data ptr's preceding header. The 4-byte
     // i32 length sits 8 bytes before the data start (BufferHeader
     // layout, identical to the scalar Uint8ArrayGet path).
     let data_ptr = blk.load(PTR, &ptr_slot);
     let header_ptr = blk.gep(I8, &data_ptr, &[(I32, "-8")]);
-    let len_i32 = blk.load_invariant(I32, &header_ptr);
+    let len_i32 = if length_fixed {
+        blk.load_invariant(I32, &header_ptr)
+    } else {
+        blk.load(I32, &header_ptr)
+    };
     // Tell LLVM the highest channel offset is in-bounds. The
     // `Uint8ArrayGet` scalar path emits one assume per access; one
     // assume covering the highest offset is sufficient because

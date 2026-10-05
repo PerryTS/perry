@@ -50,7 +50,83 @@ fn func(id: u32, body: Vec<Stmt>) -> Function {
 fn module_with_init(init: Vec<Stmt>) -> Module {
     let mut m = Module::new("spec_abi_test");
     m.init = init;
+    add_callee_stubs(&mut m);
     m
+}
+
+/// Every `FuncRef` callee resolves to a module function, as in a real module:
+/// a missing callee gets a stub whose parameters are never used, so passing a
+/// typed array to it keeps the binding sealed (`collectors/sealed_buffers.rs`).
+fn add_callee_stubs(m: &mut Module) {
+    fn visit_expr(e: &Expr, out: &mut HashMap<u32, usize>) {
+        if let Expr::Call { callee, args, .. } = e {
+            if let Expr::FuncRef(f) = callee.as_ref() {
+                let n = out.entry(*f).or_insert(0);
+                *n = (*n).max(args.len());
+            }
+        }
+        perry_hir::walker::walk_expr_children(e, &mut |c| visit_expr(c, out));
+    }
+    fn visit_stmts(stmts: &[Stmt], out: &mut HashMap<u32, usize>) {
+        for s in stmts {
+            match s {
+                Stmt::Let { init: Some(e), .. }
+                | Stmt::Expr(e)
+                | Stmt::Return(Some(e))
+                | Stmt::Throw(e) => visit_expr(e, out),
+                Stmt::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    visit_expr(condition, out);
+                    visit_stmts(then_branch, out);
+                    if let Some(eb) = else_branch {
+                        visit_stmts(eb, out);
+                    }
+                }
+                Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
+                    visit_expr(condition, out);
+                    visit_stmts(body, out);
+                }
+                Stmt::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                } => {
+                    if let Some(i) = init {
+                        visit_stmts(std::slice::from_ref(i.as_ref()), out);
+                    }
+                    for e in condition.iter().chain(update.iter()) {
+                        visit_expr(e, out);
+                    }
+                    visit_stmts(body, out);
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut callees = HashMap::new();
+    visit_stmts(&m.init, &mut callees);
+    for (id, arity) in callees {
+        if m.functions.iter().any(|f| f.id == id) {
+            continue;
+        }
+        let mut stub = func(id, vec![]);
+        stub.params = (0..arity as u32)
+            .map(|i| perry_hir::Param {
+                id: 100_000 + id * 100 + i,
+                name: format!("s{id}_{i}"),
+                ty: Type::Any,
+                default: None,
+                decorators: vec![],
+                is_rest: false,
+                arguments_object: None,
+            })
+            .collect();
+        m.functions.push(stub);
+    }
 }
 
 #[test]
@@ -243,6 +319,7 @@ fn reassignment_in_another_function_rejects_binding() {
         ),
         Stmt::Expr(call(7, vec![Expr::LocalGet(3)])),
     ]);
+    m.functions.retain(|f| f.id != 7);
     m.functions.push(func(
         7,
         vec![Stmt::Expr(Expr::LocalSet(3, Box::new(Expr::Undefined)))],
