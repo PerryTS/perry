@@ -378,6 +378,8 @@ pub(crate) enum GcRewriteDescriptorKind {
     /// #6759 phase 1: a cell whose ONLY traced edge is its metadata record.
     /// `DateCell` was `Leaf` (pointer-free) before it gained a `meta` field.
     MetaOnly,
+    /// The optional NaN-boxed back-edge from a payload cell to its owner.
+    NativeHandle,
 }
 
 #[allow(dead_code)]
@@ -766,14 +768,14 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         "native_handle",
         GcAllocationPolicy::Malloc,
         false,
-        GcRewriteDescriptorKind::Leaf,
+        GcRewriteDescriptorKind::NativeHandle,
         GcLayoutSlotKind::None,
         false,
         // #11919 P0: a Rust payload reports its native bytes through
         // `gc_note_external_side_alloc` and finalization releases them.
         GcExternalBytePolicy::SideAllocation,
         GcLargeObjectPolicy::MallocTracked,
-        true,
+        false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::NativeHandle,
@@ -1263,6 +1265,7 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
         | GcRewriteDescriptorKind::Scope
         | GcRewriteDescriptorKind::Buffer
         | GcRewriteDescriptorKind::MetaOnly
+        | GcRewriteDescriptorKind::NativeHandle
         | GcRewriteDescriptorKind::Promise
         | GcRewriteDescriptorKind::Error
         | GcRewriteDescriptorKind::Map
