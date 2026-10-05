@@ -673,3 +673,7 @@ pub unsafe extern "C" fn js_perry_payload_external_bytes(
         crate::native_handle::native_handle_set_external_bytes(cell, bytes);
     }
 }
+
+#[path = "native_payload_transport_abi.rs"]
+mod transport;
+pub use transport::*;

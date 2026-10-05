@@ -65,6 +65,7 @@ pub mod abi;
 pub mod census;
 pub(crate) mod errors;
 mod sink;
+pub mod transport;
 #[cfg(windows)]
 mod windows_pipe;
 mod write_queue;
@@ -74,14 +75,17 @@ mod write_queue;
 mod tests;
 
 pub use errors::{map_error, NodeError};
-pub use sink::{register_sink, sink_installed, NetCompletion, SinkFn, MAX_SUBSYSTEMS};
+pub use sink::{
+    register_link_sink, register_sink, sink_installed, NetCompletion, SinkFn, MAX_SUBSYSTEMS,
+};
+pub use transport::{TransportCore, TransportPayload, TRANSPORT_CORE_WORDS};
 // P6: the completion kinds, for an in-tree subsystem. A separately linked
 // binding reads them through `perry_ffi::turnloop_net`, which declares its
 // own copy; perry-stdlib has a Cargo edge to this crate and must not need a
 // second declaration to keep in step with.
 pub use sink::{
-    NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_SHUTDOWN, NET_TIMER,
-    NET_WROTE,
+    NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_FLAG_LINK, NET_SHUTDOWN,
+    NET_TIMER, NET_WROTE,
 };
 
 // ── Operation classes, carried in the top 8 bits of every submission token ──
@@ -110,6 +114,26 @@ fn token(op: u64, id: i64) -> Token {
 
 fn token_parts(t: Token) -> (u64, i64) {
     ((t.0 >> ID_BITS), (t.0 & ID_MASK) as i64)
+}
+
+/// How a socket's submissions are named in their tokens: by the binding's id
+/// (the id route, phases P1-P7), or by its payload cell (a link route,
+/// NET-TRANSPORT-DESIGN). The write queue and the Windows pipe helpers serve
+/// both, so they take this rather than an id.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Name {
+    Id(i64),
+    Link { route: u8, cell: usize },
+}
+
+impl Name {
+    #[inline]
+    fn token(self, op: u64) -> Token {
+        match self {
+            Name::Id(id) => token(op, id),
+            Name::Link { route, cell } => transport::link_token(route, op, cell),
+        }
+    }
 }
 
 /// The `syscall` string Node reports for a failure of each operation class.
@@ -279,6 +303,11 @@ struct ConnectPlan {
     retrying: bool,
     /// The most recent failure, reported if the list runs out.
     last_error: Option<NodeError>,
+    /// The pending resolve of a link-routed plan: its incarnation. A resolve
+    /// completion whose op is not this one belongs to an earlier connect of
+    /// the same socket and must not start an attempt. Always `None` on the id
+    /// route, whose plan map already forgets a superseded plan.
+    op: Option<OpId>,
 }
 
 /// A subsystem-owned one-shot deadline (P5).
@@ -323,7 +352,7 @@ pub fn live_handles() -> usize {
     NET.with(|net| {
         let net = net.borrow();
         net.entries.len() + net.plans.len() + net.timers.len()
-    })
+    }) + transport::outstanding()
 }
 
 /// Whether this thread can take the turnloop net path at all.
@@ -355,6 +384,8 @@ fn not_found(syscall: &'static str) -> NodeError {
 
 /// Run `f` against this agent's driver, creating a net-sized loop first.
 fn with_driver<R>(f: impl FnOnce(&mut turnloop::Loop) -> R) -> Option<R> {
+    #[cfg(test)]
+    transport::assert_driver_access_allowed();
     crate::event_pump::with_net_driver(f)
 }
 
@@ -549,6 +580,7 @@ pub fn tcp_connect_host(
                     remaining: std::collections::VecDeque::new(),
                     retrying: false,
                     last_error: None,
+                    op: None,
                 },
             )
         });
@@ -840,7 +872,7 @@ pub fn close(id: i64) -> NetResult<()> {
             entry.closing = true;
             #[cfg(windows)]
             {
-                windows_pipe::cancel_eof(driver, id, entry);
+                windows_pipe::cancel_eof(driver, Name::Id(id), entry);
                 if let Some(op) = entry.pipe_drain.take() {
                     driver.cancel(op);
                 }
@@ -911,6 +943,12 @@ pub fn is_live(id: i64) -> bool {
 /// never calls host code), so a sink is free to run JS, allocate, collect, and
 /// submit new operations on the same loop.
 pub(crate) fn dispatch(completion: Completion) {
+    // A link token names its payload cell, not an id: route it before the
+    // id lookups below (the transitional fork; phase D deletes the id route).
+    if transport::owns(completion.token) {
+        transport::dispatch(completion);
+        return;
+    }
     let (op_class, id) = token_parts(completion.token);
     census::note_completion(op_class);
     let Completion {
@@ -1000,7 +1038,7 @@ pub(crate) fn dispatch(completion: Completion) {
                             .entries
                             .get_mut(&id)
                             .ok_or_else(|| Error::new(ErrorKind::InvalidInput))?;
-                        windows_pipe::arm_eof(driver, id, entry)
+                        windows_pipe::arm_eof(driver, Name::Id(id), entry).map(|_| ())
                     })
                 });
                 if !matches!(armed, Some(Ok(()))) {
@@ -1074,7 +1112,7 @@ pub(crate) fn dispatch(completion: Completion) {
                 NET.with(|net| {
                     if let Some(entry) = net.borrow_mut().entries.get_mut(&id) {
                         if entry.pipe_eof_timer.is_some() {
-                            let _ = windows_pipe::arm_eof(driver, id, entry);
+                            let _ = windows_pipe::arm_eof(driver, Name::Id(id), entry);
                         }
                     }
                 })
@@ -1091,7 +1129,7 @@ pub(crate) fn dispatch(completion: Completion) {
             with_driver(|driver| {
                 NET.with(|net| {
                     if let Some(entry) = net.borrow_mut().entries.get_mut(&id) {
-                        windows_pipe::cancel_eof(driver, id, entry);
+                        windows_pipe::cancel_eof(driver, Name::Id(id), entry);
                     }
                 })
             });
@@ -1329,6 +1367,7 @@ fn accept_connection(subsystem: u8, server: i64, conn: Handle, peer: Option<Sock
 /// test that is about to drop the loop itself.
 #[cfg(test)]
 pub(crate) fn reset_for_test() {
+    transport::reset_for_test();
     NET.with(|net| net.borrow_mut().timers.clear());
     NET.with(|net| {
         let mut net = net.borrow_mut();
@@ -1344,6 +1383,11 @@ pub(crate) fn reset_for_test() {
 /// this exists to run the sink's `Closed` bookkeeping rather than to release
 /// descriptors.
 pub(crate) fn shutdown_current_thread() {
+    // Link-routed completions are discarded from here on: their payload cells
+    // are finalized by the heap teardown that follows, and no JS may run for
+    // a thread that is going away (LIFECYCLE-DESIGN L8). `Loop::drop` releases
+    // their descriptors.
+    transport::begin_teardown();
     let ids: Vec<i64> = NET.with(|net| net.borrow().entries.keys().copied().collect());
     for id in ids {
         let _ = close(id);

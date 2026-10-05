@@ -75,6 +75,8 @@ mod native_payload_callbacks;
 mod native_payload_streams;
 mod stream_state_record;
 mod native_this_alias;
+#[cfg(not(target_arch = "wasm32"))]
+mod net_transport;
 mod noncollecting_root_lock;
 mod object_create;
 mod old_free_intrusive;

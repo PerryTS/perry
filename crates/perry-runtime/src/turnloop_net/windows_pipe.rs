@@ -15,31 +15,37 @@ pub(super) fn is_pipe(driver: &turnloop::Loop, entry: &Entry) -> bool {
 
 /// Windows duplex pipes cannot half-close. Match libuv's 50 ms read grace
 /// after draining writes, refreshing it whenever incoming data arrives.
+/// Returns whether a new timer handle was created (a link route holds one ref
+/// per timer handle until its `Closed`).
 pub(super) fn arm_eof(
     driver: &mut turnloop::Loop,
-    id: i64,
+    name: Name,
     entry: &mut Entry,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     let at = driver.now() + std::time::Duration::from_millis(50);
     if let Some(handle) = entry.pipe_eof_timer {
         if driver.timer_reset(handle, at) {
-            return Ok(());
+            return Ok(false);
         }
-        let _ = driver.close(handle, token(OP_PIPE_EOF, id));
+        let _ = driver.close(handle, name.token(OP_PIPE_EOF));
     }
-    let handle = driver.timer(at, None, token(OP_PIPE_EOF, id))?;
+    let handle = driver.timer(at, None, name.token(OP_PIPE_EOF))?;
     let _ = driver.set_ref(handle, false);
     entry.pipe_eof_timer = Some(handle);
-    Ok(())
+    Ok(true)
 }
 
-pub(super) fn cancel_eof(driver: &mut turnloop::Loop, id: i64, entry: &mut Entry) {
+pub(super) fn cancel_eof(driver: &mut turnloop::Loop, name: Name, entry: &mut Entry) {
     if let Some(handle) = entry.pipe_eof_timer.take() {
-        let _ = driver.close(handle, token(OP_PIPE_EOF, id));
+        let _ = driver.close(handle, name.token(OP_PIPE_EOF));
     }
 }
 
-pub(super) fn submit(driver: &mut turnloop::Loop, id: i64, entry: &mut Entry) -> Result<(), Error> {
+pub(super) fn submit(
+    driver: &mut turnloop::Loop,
+    name: Name,
+    entry: &mut Entry,
+) -> Result<(), Error> {
     let turnloop::RawTransport::Handle(raw) = driver.raw_transport(entry.handle)? else {
         return Err(Error::new(ErrorKind::InvalidInput));
     };
@@ -96,7 +102,7 @@ pub(super) fn submit(driver: &mut turnloop::Loop, id: i64, entry: &mut Entry) ->
                 .unwrap_or_else(|_| Err(Error::new(ErrorKind::Other)))
         },
         turnloop::Occupancy::Long,
-        token(OP_PIPE_DRAIN, id),
+        name.token(OP_PIPE_DRAIN),
     )?;
     entry.pipe_drain = Some(op);
     census::note_submit(OP_PIPE_DRAIN);
