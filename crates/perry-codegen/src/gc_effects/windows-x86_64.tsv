@@ -3209,7 +3209,7 @@ js_symbol_typeof	Reenters
 js_symbol_well_known_async_iterator	AllocOnly
 js_symbol_well_known_iterator	AllocOnly
 js_syntaxerror_new	Reenters
-js_ta_read_receiver_is_kind	Leaf
+js_ta_read_receiver_is_kind	Reenters
 js_tagged_template_get_or_init	Reenters
 js_tagged_template_register_raw	Reenters
 js_tdz_suppress_begin	Leaf
