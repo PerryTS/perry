@@ -234,3 +234,30 @@ fn thread_exit_releases_zlib_streams_listeners_and_events() {
         "a dead thread's zlib stream, listener or queued events outlived its heap"
     );
 }
+
+/// A retired worker agent's zlib tables go with it, including a stream that
+/// names nothing in its heap, which no freed-range check would ever drop.
+#[cfg(feature = "compression-gzip")]
+#[test]
+fn agent_retirement_releases_the_agents_zlib_tables() {
+    use crate::zlib as z;
+    let (agent, while_alive) = std::thread::spawn(|| {
+        let agent = perry_runtime::agent::enter_worker_agent();
+        unsafe { z::js_zlib_create_gzip(undef()) };
+        let while_alive = z::zlib_agent_stream_count_for_test(agent);
+        perry_runtime::agent::retire_agent(agent);
+        (agent, while_alive)
+    })
+    .join()
+    .unwrap();
+    assert_eq!(
+        while_alive,
+        Some(1),
+        "the stream must be in its agent's tables while the agent lives"
+    );
+    assert_eq!(
+        z::zlib_agent_stream_count_for_test(agent),
+        None,
+        "a retired agent's zlib tables outlived it"
+    );
+}

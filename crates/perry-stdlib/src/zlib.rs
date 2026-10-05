@@ -766,6 +766,9 @@ fn ensure_zlib_gc_scanner() {
     });
 }
 
+#[cfg(test)]
+pub(crate) use tables::zlib_agent_stream_count_for_test;
+
 /// #11471 test probe: (stream registered, listener count, queued events
 /// naming `id`).
 #[cfg(test)]
