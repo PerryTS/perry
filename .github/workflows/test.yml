@@ -215,6 +215,9 @@ jobs:
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
           fi
+      - name: Agent build storage policy tests
+        run: python3 -m unittest discover -s tests -p test_zfs_build_storage.py -v
+
       - name: Changeset gate self-test
         if: ${{ !cancelled() }}
         run: ./scripts/check_changeset_fragment.sh --self-test

@@ -204,4 +204,5 @@
 - [Architecture](contributing/architecture.md)
 - [Crate policy](contributing/crate-policy.md)
 - [Building from Source](contributing/building.md)
+- [Linux agent build storage](contributing/build-storage.md)
 - [Releasing Perry](contributing/releasing.md)
