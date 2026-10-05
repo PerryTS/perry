@@ -84,6 +84,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // `PERRY_NUMBER_LOCAL_LOOP=0|off|false` keeps every loop on the ordinary
     // lowering, without the Number-versioned clone.
     "PERRY_NUMBER_LOCAL_LOOP",
+    // `PERRY_REGION_VIEWS=0` drops typed-array view receivers from a region,
+    // so the loop keeps its per-access length checks.
+    "PERRY_REGION_VIEWS",
     // #9071: gates resolving a loop-called immutable callee binding once at
     // body entry instead of per call — the two settings emit different call
     // sequences, so a cached object from one must not serve the other.
