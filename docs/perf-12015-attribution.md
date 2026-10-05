@@ -65,3 +65,21 @@ Offsets refer to the historical binaries and must be remapped in fresh profiles.
 ## Fresh measurement and implementation status
 
 Pending: symbol-bearing fresh main profiles, source-site mapping, micro measurements, supported fixes, sabotage and gap tests, separate-target interleaved n=5 instruction/RSS medians, baseline failure lists, and lint/fmt/root-dominance validation. Historical evidence above must not be mistaken for fresh validation. No performance claim is made at this milestone.
+
+## First fresh observations and implementation
+
+The first symbol-bearing tsc profile on the pinned base charges 0.49% self-time to `object_key_entry_filtered`, 0.43% to `shape_descriptor_intern_with_special_mode`, and 0.22% to `object_keys`. The first qs stringify profile has 1.31% in shape interning, 0.89% in `finalized_constfn_facts`, and 0.25% in its packed-name `Vec` builder. These single recordings identify mechanisms; they are not pooled bucket shares or A/B savings.
+
+Fresh qs stringify ELF function-info source records identify `getSideChannel`, `getSideChannelWeakMap`, and the latter's `set(key, value)` closure. Their JS sites create the `assert/delete/get/has/set` method records, then lazily create a WeakMap or fallback Map channel. Each returned method record repeats completed ConstFn publication. A seeded shape already owns its key prefix and immutable body list; publication must validate the receiver's current closure slots and captured-this eligibility, rather than reparse names or native registries.
+
+The first implementation uses that existing target record. Unseeded/worker reconstruction retains bootstrap parsing. `FN_COMPILED_BODY`, the existing ABI fact emitted by codegen, proves a compiled body is not a native/bound/class constructor; native permanent-image fixtures retain the general admission checks. No new shape storage, site cache, registry or latch is added. Two focused runtime tests pass: a successful live promotion asserts zero bootstrap/name and native-admission probes while preserving distinct captures, and a different key prefix is refused. Sabotage, gap and full-program A/B validation remain pending at this milestone.
+
+| Parameter micro (one loop body) | Main instructions/op | Node 26.5.1 instructions/op |
+|---|---:|---:|
+| keys | 6057.45 | 189.28 |
+| values_entries | 25088.09 | 4461.69 |
+| descriptors | 8220.35 | 502.79 |
+| for_in | 23187.72 | 253.08 |
+| spread_assign | 26038.80 | 465.22 |
+
+Five interleaved main/Node trials use `(instructions(110000) - instructions(10000)) / 100000`, removing startup consistently. All outputs match Node at both counts. The added method-factory row directly exercises the primary fresh-profile mechanism; its measurements are pending.

@@ -1,0 +1,8 @@
+Use seeded ConstFn shapes as the authority for completed method-record
+publication. Reuse their key prefix and immutable body metadata, while checking
+the receiver's current closures and retaining bootstrap validation for unseeded
+reconstruction. Compiled-body ABI facts avoid redundant native admission probes.
+
+Attribution, parameter-receiver micros, validation progress and measurements:
+`docs/perf-12015-attribution.md`. Full validation and A/B results are pending at
+this milestone; no performance claim is made yet. Versions are unchanged.
