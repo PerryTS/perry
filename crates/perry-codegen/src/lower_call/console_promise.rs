@@ -816,18 +816,7 @@ fn emit_native_method_str_dispatch_with(
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
     // The alloca MUST live in the entry block. An alloca in a loop body lowers
     // to a runtime stack adjustment which is never restored (#167).
-    let (args_ptr, args_len_str) = if lowered_args.is_empty() {
-        ("null".to_string(), "0".to_string())
-    } else {
-        let n = lowered_args.len();
-        let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
-        let blk = ctx.block();
-        for (i, value) in lowered_args.iter().enumerate() {
-            let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &i.to_string())]);
-            blk.store(DOUBLE, value, &slot);
-        }
-        (buf_reg, n.to_string())
-    };
+    let (args_ptr, args_len_str) = emit_method_args_buffer(ctx, lowered_args);
     let site_id = emit_typed_feedback_register_site(
         ctx,
         TypedFeedbackKind::MethodCall,
@@ -862,6 +851,236 @@ fn emit_native_method_str_dispatch_with(
             (I64, &args_len_str),
         ],
     )
+}
+
+/// The `[N x double]` argument buffer the by-id dispatcher reads.
+pub(crate) fn emit_method_args_buffer(
+    ctx: &mut FnCtx<'_>,
+    lowered_args: &[String],
+) -> (String, String) {
+    if lowered_args.is_empty() {
+        return ("null".to_string(), "0".to_string());
+    }
+    // The alloca MUST live in the entry block. An alloca in a loop body lowers
+    // to a runtime stack adjustment which is never restored (#167).
+    let n = lowered_args.len();
+    let buf_reg = ctx.func.alloca_entry_array(DOUBLE, n);
+    let blk = ctx.block();
+    for (i, value) in lowered_args.iter().enumerate() {
+        let slot = blk.gep(DOUBLE, &buf_reg, &[(I64, &i.to_string())]);
+        blk.store(DOUBLE, value, &slot);
+    }
+    (buf_reg, n.to_string())
+}
+
+/// The split method site's call half below the arguments: the typed-feedback
+/// site the by-name dispatch hands the dispatcher and
+/// [`crate::expr::method_site::emit_method_site_call`], whose dispatcher path
+/// alone fills the argument buffer. `recv_box` and `value` are re-read from
+/// their roots.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_split_call_half(
+    ctx: &mut FnCtx<'_>,
+    lookup: &crate::expr::method_site::SiteLookup,
+    recv_box: &str,
+    value: &str,
+    lowered_args: &[String],
+    property: &str,
+    call_byte_offset: u32,
+    method_id: &str,
+) -> String {
+    let site_id = emit_typed_feedback_register_site(
+        ctx,
+        TypedFeedbackKind::MethodCall,
+        property,
+        TypedFeedbackContract::method_call(),
+    );
+    crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
+    crate::expr::method_site::emit_method_site_call(
+        ctx,
+        lookup,
+        recv_box,
+        value,
+        lowered_args,
+        &site_id,
+        method_id,
+        |ctx| emit_method_args_buffer(ctx, lowered_args),
+    )
+}
+
+/// `recv.m(args)` whose arguments can run code (#11910): the method site's
+/// lookup half runs BEFORE the arguments (ECMA-262 13.3.6.1 reads `recv.m`
+/// first), its loaded value is rooted across them, and the call half follows.
+///
+/// Rooting windows: the receiver is live across the lookup (whose miss can
+/// run a getter) and every argument, so it is always rooted; the looked-up
+/// value across the arguments; each argument across the ones after it, as in
+/// the fused form (the value call roots its own arguments across its rebind).
+fn lower_split_method_call(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    args: &[Expr],
+    call_byte_offset: u32,
+    lanes: &[crate::codegen::static_constfn::StaticMethodLane],
+    optional: Option<&Expr>,
+    continuation: Option<(perry_hir::types::LocalId, &Expr)>,
+) -> Result<String> {
+    let arg_collects: Vec<bool> = args.iter().map(|a| operand_may_collect(ctx, a)).collect();
+    // The optional call's guard runs between the lookup and the arguments.
+    let any_arg_collects = arg_collects.iter().any(|&c| c) || optional.is_some();
+    with_rooted_group(ctx, args.len() + 2, |ctx, group| {
+        let recv = lower_expr(ctx, object)?;
+        let recv_i = group.adopt(ctx, object, &recv, true);
+        let key_idx = ctx.strings.intern(property);
+        let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+        let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
+        // A getter or a nullish receiver throws from the lookup.
+        crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
+        let lookup = crate::expr::method_site::emit_method_site_lookup(
+            ctx,
+            &recv,
+            &method_id,
+            args.len(),
+            lanes,
+        );
+        let value = lookup.value.clone();
+        let value_root =
+            group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &value, any_arg_collects);
+        // `recv.m?.(args)`: short-circuit on the value the lookup read. A
+        // receiver whose read is unobservable (by-name modes) has no value
+        // in hand; its guard (`recv.m == null`, string builtins excepted,
+        // #4814) re-reads it, which nothing can observe.
+        let short = match optional {
+            Some(guard) => Some(crate::expr::method_site::emit_lookup_nullish(
+                ctx,
+                &value,
+                |ctx| Ok(crate::lower_conditional::lower_expr_with_truthy(ctx, guard)?.1),
+            )?),
+            None => None,
+        };
+        let short_blocks = short.map(|short| {
+            let undef_idx = ctx.new_block("optcall.short");
+            let call_idx = ctx.new_block("optcall.call");
+            let merge_idx = ctx.new_block("optcall.merge");
+            let undef_l = ctx.block_label(undef_idx);
+            let call_l = ctx.block_label(call_idx);
+            ctx.block().cond_br(&short, &undef_l, &call_l);
+            ctx.current_block = call_idx;
+            (undef_idx, merge_idx)
+        });
+        let mut arg_idx = Vec::with_capacity(args.len());
+        for (i, a) in args.iter().enumerate() {
+            let collects = arg_collects[i + 1..].iter().any(|&c| c);
+            arg_idx.push(group.lower(ctx, a, collects)?);
+        }
+        let recv_box = group.reread(ctx, recv_i)?;
+        let value = group.reread_emitted(ctx, value_root);
+        let mut lowered_args = Vec::with_capacity(args.len());
+        for i in arg_idx {
+            lowered_args.push(group.reread(ctx, i)?);
+        }
+        let r = emit_split_call_half(
+            ctx,
+            &lookup,
+            &recv_box,
+            &value,
+            &lowered_args,
+            property,
+            call_byte_offset,
+            &method_id,
+        );
+        // The rest of the chain (`recv.m?.(a).x`) runs on the live path,
+        // with the call's result bound to its temp.
+        let r = match continuation {
+            Some((id, body)) => crate::rooting::lower_scoped_body(ctx, id, &r, body)?,
+            None => r,
+        };
+        let Some((undef_idx, merge_idx)) = short_blocks else {
+            return Ok(r);
+        };
+        let merge_l = ctx.block_label(merge_idx);
+        let call_end = ctx.block().label.clone();
+        ctx.block().br(&merge_l);
+        ctx.current_block = undef_idx;
+        let undef_end = ctx.block().label.clone();
+        ctx.block().br(&merge_l);
+        ctx.current_block = merge_idx;
+        let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        Ok(ctx
+            .block()
+            .phi(DOUBLE, &[(&r, &call_end), (&undefined, &undef_end)]))
+    })
+}
+
+/// `recv.m?.(args)` as the optional-chain lowering builds it:
+/// `guard(recv, recv.m) ? undefined : recv.m(args)` with `recv` a repeatable
+/// base. Reading `recv.m` twice runs a getter twice (#11910); this lowers it
+/// as ONE split method site whose lookup value the guard tests.
+pub(crate) fn try_lower_optional_method_call(
+    ctx: &mut FnCtx<'_>,
+    condition: &Expr,
+    then_expr: &Expr,
+    else_expr: &Expr,
+) -> Result<Option<String>> {
+    if !matches!(then_expr, Expr::Undefined) {
+        return Ok(None);
+    }
+    // The call, or the call bound for the rest of the chain.
+    let (call, continuation) = match else_expr {
+        Expr::ScopedTemp { id, value, body } => (value.as_ref(), Some((*id, body.as_ref()))),
+        other => (other, None),
+    };
+    let Expr::Call {
+        callee,
+        args,
+        byte_offset,
+        ..
+    } = call
+    else {
+        return Ok(None);
+    };
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    else {
+        return Ok(None);
+    };
+    let same_base = |e: &Expr| match (e, object.as_ref()) {
+        (Expr::LocalGet(a), Expr::LocalGet(b)) => a == b,
+        (Expr::This, Expr::This) => true,
+        _ => false,
+    };
+    let reads_method = |e: &Expr| {
+        matches!(e, Expr::Compare { op: perry_hir::CompareOp::LooseEq, left, right }
+            if matches!(right.as_ref(), Expr::Null)
+                && matches!(left.as_ref(), Expr::PropertyGet { object: o, property: p, .. }
+                    if p == property && same_base(o)))
+    };
+    let guard_matches = reads_method(condition)
+        || matches!(condition, Expr::Logical { op: perry_hir::LogicalOp::And, left, right }
+            if reads_method(left)
+                && matches!(right.as_ref(), Expr::Compare { op: perry_hir::CompareOp::Ne, left: t, right: s }
+                    if matches!(s.as_ref(), Expr::String(k) if k == "string")
+                        && matches!(t.as_ref(), Expr::TypeOf(o) if same_base(o))));
+    if !guard_matches
+        || !crate::expr::method_site::method_site_enabled(ctx, property, args.len())
+        || crate::lower_call::property_get::patched_proto::guards(ctx, object, property)
+    {
+        return Ok(None);
+    }
+    let lanes = crate::codegen::static_constfn::static_method_lanes(ctx, object, property);
+    lower_split_method_call(
+        ctx,
+        object,
+        property,
+        args,
+        *byte_offset,
+        &lanes,
+        Some(condition),
+        continuation,
+    )
+    .map(Some)
 }
 
 pub fn try_lower_native_method_str_dispatch(
@@ -1112,6 +1331,22 @@ pub fn try_lower_native_method_str_dispatch(
             // ConstFn lane names this method's body (compile-time facts; the
             // emitted shape compare is the proof).
             let lanes = crate::codegen::static_constfn::static_method_lanes(ctx, object, property);
+            // #11910: arguments that can run code see the method read first.
+            if crate::expr::method_site::args_may_observe_lookup(ctx, args)
+                && crate::expr::method_site::method_site_enabled(ctx, property, args.len())
+            {
+                return lower_split_method_call(
+                    ctx,
+                    object,
+                    property,
+                    args,
+                    call_byte_offset,
+                    &lanes,
+                    None,
+                    None,
+                )
+                .map(Some);
+            }
             return with_operands_rooted(ctx, &operand_exprs, |ctx, rereads| {
                 let recv_box = rereads[0].clone();
                 let lowered_args: Vec<String> = rereads[1..].to_vec();

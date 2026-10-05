@@ -72,6 +72,11 @@ const ARRAY_PROTO_CACHE: usize = 0;
 const OBJECT_PROTO_CACHE: usize = 1;
 /// Row index of the `Function.prototype` cell (#10497).
 const FUNCTION_PROTO_CACHE: usize = 2;
+/// Row indices of the primitive wrappers' prototypes (#11910): the method
+/// call site asks whether a primitive receiver's chain holds a getter.
+const STRING_PROTO_CACHE: usize = 3;
+const NUMBER_PROTO_CACHE: usize = 4;
+const BOOLEAN_PROTO_CACHE: usize = 5;
 
 /// **THIS THREAD's** lazily-memoized intrinsic prototype addresses, indexed
 /// by [`ARRAY_PROTO_CACHE`] / [`OBJECT_PROTO_CACHE`]. `usize::MAX` marks a
@@ -140,8 +145,14 @@ fn prototype_addrs() -> &'static [Cell<usize>; PROTOTYPE_ADDR_CACHE_COUNT] {
 /// second fact a reader has to trust — "each accessor resolves the builtin its
 /// cell is named for" — is established by construction instead of by a test
 /// that has to mutate a process-global to observe it (#7955).
-static PROTOTYPE_ADDR_BUILTINS: [&[u8]; PROTOTYPE_ADDR_CACHE_COUNT] =
-    [b"Array", b"Object", b"Function"];
+static PROTOTYPE_ADDR_BUILTINS: [&[u8]; PROTOTYPE_ADDR_CACHE_COUNT] = [
+    b"Array",
+    b"Object",
+    b"Function",
+    b"String",
+    b"Number",
+    b"Boolean",
+];
 
 /// GC root scanner for this thread's memoized prototype addresses (#6981).
 ///
@@ -354,6 +365,27 @@ pub(crate) fn function_prototype_addr_if_resolved() -> usize {
     memoized_prototype_addr(&prototype_addrs()[FUNCTION_PROTO_CACHE]).unwrap_or(0)
 }
 
+/// The prototype a primitive's property read starts at (`%String.prototype%`,
+/// `%Number.prototype%`, `%Boolean.prototype%`), memoized on first use, or 0
+/// while this thread has no `globalThis`. `value` is a NaN-boxed primitive;
+/// any other kind (a symbol, a bigint, an object) answers 0. Rows 3–5 are NOT
+/// primed at startup (that would build the three constructors in every
+/// program): the first use resolves `globalThis.<Wrapper>.prototype`, which
+/// is also what the universal dispatcher's primitive arm reads.
+pub(crate) fn primitive_wrapper_prototype_addr(value: f64) -> usize {
+    let v = crate::value::JSValue::from_bits(value.to_bits());
+    let slot = if v.is_number() {
+        NUMBER_PROTO_CACHE
+    } else if v.is_any_string() {
+        STRING_PROTO_CACHE
+    } else if v.is_bool() {
+        BOOLEAN_PROTO_CACHE
+    } else {
+        return 0;
+    };
+    resolve_prototype_addr(slot)
+}
+
 /// Memoize THIS realm's `%Object.prototype%` the moment it is built, so the
 /// store path's "is this Object.prototype?" check answers for it even before
 /// the realm global exists (the class prototype chain reaches it first).
@@ -378,7 +410,9 @@ pub(crate) fn function_prototype_addr() -> usize {
 /// intrinsic. A row that cannot resolve yet stays unresolved and keeps its
 /// lazy fallback, exactly as before.
 pub(crate) fn prime_prototype_addr_cache() {
-    for slot in 0..PROTOTYPE_ADDR_CACHE_COUNT {
+    // The primitive wrappers' rows resolve on first use (see
+    // `primitive_wrapper_prototype_addr`).
+    for slot in 0..STRING_PROTO_CACHE {
         if prototype_addrs()[slot].get() == usize::MAX {
             bootstrap_prototype_addr(slot);
         }
@@ -402,7 +436,7 @@ pub(crate) fn object_prototype_addr_matches(addr: usize) -> bool {
 /// The mutating #6981 cases run on cells they own; nothing hands out a writable
 /// reference to the realm's real intrinsic cells (#7955).
 #[cfg(test)]
-pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 3] {
+pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 6] {
     [
         (
             ARRAY_PROTO_CACHE,
@@ -415,6 +449,18 @@ pub(crate) fn test_prototype_addr_cache_wiring() -> [(usize, &'static [u8]); 3] 
         (
             FUNCTION_PROTO_CACHE,
             PROTOTYPE_ADDR_BUILTINS[FUNCTION_PROTO_CACHE],
+        ),
+        (
+            STRING_PROTO_CACHE,
+            PROTOTYPE_ADDR_BUILTINS[STRING_PROTO_CACHE],
+        ),
+        (
+            NUMBER_PROTO_CACHE,
+            PROTOTYPE_ADDR_BUILTINS[NUMBER_PROTO_CACHE],
+        ),
+        (
+            BOOLEAN_PROTO_CACHE,
+            PROTOTYPE_ADDR_BUILTINS[BOOLEAN_PROTO_CACHE],
         ),
     ]
 }

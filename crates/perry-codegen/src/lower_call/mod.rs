@@ -52,6 +52,7 @@ mod console_promise;
 /// diamond, including the one `expr/folded_builtin_override.rs` emits for
 /// the builtin calls HIR folded before this module could see them.
 pub(crate) use console_promise::emit_native_method_str_dispatch_plain;
+pub(crate) use console_promise::{emit_method_args_buffer, try_lower_optional_method_call};
 /// Rooting and evaluation-order coverage for the `console.*` arms slice 6
 /// repaired (#7649) — see the module header for why these assert on IR.
 #[cfg(test)]
@@ -81,6 +82,9 @@ pub(crate) use func_ref::{
 };
 mod direct_method_guard;
 mod jsx;
+pub(crate) mod lookup_first;
+#[cfg(test)]
+mod method_order_tests;
 pub(crate) mod method_override;
 pub(crate) use direct_method_guard::emit_inline_direct_method_shape_guard;
 #[cfg(test)]

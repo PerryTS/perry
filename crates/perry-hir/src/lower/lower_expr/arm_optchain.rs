@@ -116,6 +116,31 @@ pub(crate) fn lower_opt_chain_expr(
                 &mut bindings,
                 !opt_chain.optional && receiver_is_optional_chain(&member.obj),
             );
+            // A non-optional link after an upstream optional chain
+            // (`o.m?.(x).length`, `a?.b.c`) continues INSIDE that chain's
+            // live branch: the upstream value is evaluated once, and its
+            // short-circuit skips the rest (#11910 — guarding the whole
+            // upstream Conditional again evaluated it twice, calling `o.m`
+            // twice).
+            let (obj_expr, upstream) = match obj_expr {
+                Expr::Conditional {
+                    condition,
+                    then_expr,
+                    else_expr,
+                } if !opt_chain.optional && receiver_is_optional_chain(&member.obj) => {
+                    (*else_expr, Some((condition, then_expr)))
+                }
+                other => (other, None),
+            };
+            // A call continued by this link is bound once (the codegen reads
+            // an optional method call's method once only in this form).
+            let (obj_expr, call_temp) = match obj_expr {
+                call @ Expr::Call { .. } if upstream.is_some() => {
+                    let id = ctx.fresh_local();
+                    (Expr::LocalGet(id), Some((id, call)))
+                }
+                other => (other, None),
+            };
 
             // Get the property access
             let prop_expr = match &member.prop {
@@ -163,6 +188,26 @@ pub(crate) fn lower_opt_chain_expr(
             // `===` only matches null, leaving undefined to
             // fall through and dereference (returning
             // `[object Object]` for Map.get's missing value).
+            if let Some((condition, then_expr)) = upstream {
+                // The link itself is not optional: a nullish upstream value
+                // throws from the property read, as in node.
+                let live = match call_temp {
+                    Some((id, call)) => Expr::ScopedTemp {
+                        id,
+                        value: Box::new(call),
+                        body: Box::new(prop_expr),
+                    },
+                    None => prop_expr,
+                };
+                return Ok(bind_bases(
+                    Expr::Conditional {
+                        condition,
+                        then_expr,
+                        else_expr: Box::new(live),
+                    },
+                    bindings,
+                ));
+            }
             Ok(bind_bases(
                 Expr::Conditional {
                     condition: Box::new(Expr::Compare {

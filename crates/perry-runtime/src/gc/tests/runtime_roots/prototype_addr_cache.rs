@@ -309,6 +309,18 @@ fn the_shipped_cells_are_the_ones_the_scanner_visits() {
          cell makes the second accessor return the first intrinsic's address \
          and leaves the collector with nothing to rewrite for it (#6981)"
     );
+    // Rows 3-5: the primitive wrappers' prototypes (#11910), each its own cell.
+    assert_eq!(wiring[3].1, b"String");
+    assert_eq!(wiring[4].1, b"Number");
+    assert_eq!(wiring[5].1, b"Boolean");
+    for i in 0..wiring.len() {
+        for j in i + 1..wiring.len() {
+            assert_ne!(
+                wiring[i].0, wiring[j].0,
+                "rows {i} and {j} must memoize into different cells (#6981)"
+            );
+        }
+    }
     // The scanner iterates the per-thread cell array itself, so covering every
     // accessor's row reduces to the array being at least as long as the highest
     // index an accessor uses.

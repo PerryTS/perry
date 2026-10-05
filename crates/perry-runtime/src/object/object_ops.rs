@@ -45,6 +45,7 @@ pub(crate) use descriptor_helpers::{
     validate_property_descriptor_view, value_is_object_like, DESC_CONFIGURABLE, DESC_ENUMERABLE,
     DESC_GET, DESC_SET, DESC_VALUE, DESC_WRITABLE,
 };
+pub(crate) use prototype::get_prototype_of_resolved;
 // Module-private `unsafe fn value_is_callable` (descriptor_helpers): used by the
 // object_ops children (`accessors.rs`, `descriptor_helpers.rs`) but NOT
 // re-exported, so `crate::object::value_is_callable` resolves uniquely to the
