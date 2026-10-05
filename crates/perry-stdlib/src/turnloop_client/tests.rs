@@ -941,3 +941,59 @@ fn a_thread_with_no_loop_posts_its_fetch_to_the_thread_that_owns_one() {
          agent's JS values live on"
     );
 }
+
+/// A fetch's cancellation key is its `AbortSignal`'s address. A copying minor
+/// that moves the signal must move the key with it, or `abort_signal` with the
+/// signal's new address would miss and `controller.abort()` would not cancel.
+#[test]
+fn abort_keys_follow_a_signal_moved_by_a_copying_minor() {
+    // The scanner is the signal's only root, and its address stays off the
+    // native stack (masked, dead stack zeroed): a conservative scan that saw
+    // it would pin the signal and the minor would move nothing.
+    const MASK: usize = 0x5A5A_0000_0000_0000;
+    const MOVED_SIGNAL_CLASS_ID: u32 = 0x5157;
+    #[inline(never)]
+    fn bind_fresh_signal() -> usize {
+        let signal = perry_runtime::object::js_object_alloc(MOVED_SIGNAL_CLASS_ID, 0) as usize;
+        super::ENGINE.with(|e| e.borrow_mut().aborts.insert(signal, vec![7]));
+        std::hint::black_box(signal) ^ MASK
+    }
+    #[inline(never)]
+    fn scrub_dead_stack() {
+        let mut words = [0u64; 8192];
+        std::hint::black_box(&mut words);
+    }
+    struct RestoreGc(i32);
+    impl Drop for RestoreGc {
+        fn drop(&mut self) {
+            perry_runtime::gc::js_gc_write_barriers_emitted(0);
+            perry_runtime::gc::js_gc_force_evacuation_test_override(self.0);
+        }
+    }
+    let _restore = RestoreGc(perry_runtime::gc::js_gc_force_evacuation_test_override(1));
+    perry_runtime::gc::js_gc_write_barriers_emitted(1);
+    perry_runtime::gc::gc_register_mutable_root_scanner_named(
+        "stdlib:turnloop_client",
+        super::scan_abort_key_roots_mut,
+    );
+    let masked_before = bind_fresh_signal();
+    scrub_dead_stack();
+
+    perry_runtime::gc::gc_collect_minor();
+
+    let aborts = super::ENGINE.with(|e| std::mem::take(&mut e.borrow_mut().aborts));
+    let keys: Vec<usize> = aborts.keys().copied().collect();
+    assert_eq!(keys.len(), 1);
+    let after = keys[0];
+    assert_ne!(
+        after,
+        masked_before ^ MASK,
+        "the minor must move the signal, or this test proves nothing"
+    );
+    let class_id = unsafe { (*(after as *const perry_runtime::object::ObjectHeader)).class_id };
+    assert_eq!(
+        class_id, MOVED_SIGNAL_CLASS_ID,
+        "the rewritten key must name the moved signal"
+    );
+    assert_eq!(aborts[&after], vec![7]);
+}
