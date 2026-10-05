@@ -331,6 +331,31 @@ fn an_old_edge_is_already_buffered_when_full_mark_propagation_finishes() {
 }
 
 #[test]
+fn a_born_black_old_parent_contributes_its_unbarriered_young_edge() {
+    run_isolated(|| {
+        let mut state =
+            GcCycleState::new_full(GcTriggerSnapshot::capture(GcTriggerKind::ArenaBytes));
+        state.set_progress_kind(GcProgressKind::NormalIncremental);
+        state.step(GcWorkBudget::bounded(1));
+        assert_eq!(state.phase(), GcCyclePhase::BuildValidPointerSet);
+
+        let (parent, _fields, _child) = plant_unbarriered_young_edge();
+        assert_ne!(
+            unsafe { (*header_from_user_ptr(parent as *const u8)).gc_flags } & GC_FLAG_MARKED,
+            0,
+            "premise: this old parent is born marked during the build window"
+        );
+        step_to(&mut state, GcCyclePhase::Complete);
+        let verify = verify_live_parent(parent);
+        assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
+        assert_eq!(
+            verify.missing_edges, 0,
+            "the birth seed's mark visit must remember the edge: {verify:?}"
+        );
+    });
+}
+
+#[test]
 fn a_later_store_into_a_traced_old_parent_keeps_dirty_snapshot_coverage() {
     run_isolated(|| {
         let (parent, fields) = rooted_old_parent();
