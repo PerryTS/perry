@@ -125,6 +125,26 @@ npm run publish:release -- --socket-scan
 npm run publish:status      # inspect the commit/run/package/Socket receipt
 ```
 
+### Automated nightly prerelease
+
+`release-packages.yml` runs nightly at 06:37 UTC from the latest `main` commit.
+It builds current binaries for testers without waiting for stable release gates.
+To request an additional prerelease from a pushed branch, run:
+
+```bash
+npm run publish:nightly
+```
+
+The automated and on-demand runs build host and cross-platform release archives
+from an exact commit and publish them as a GitHub prerelease named
+`nightly-v<workspace-version>-YYYYMMDD-r<run>a<attempt>-<sha>`. The compiler
+keeps its Cargo workspace version; `nightly` is a separate release channel, not
+a version suffix. They do not publish npm packages or update Homebrew, APT,
+winget, or build workers. They skip the full-suite and simulator gates, so treat
+these downloads as preview builds. The manual command requires `gh`
+authentication and a pushed branch whose tip matches the checkout. Find builds
+under [GitHub prereleases](https://github.com/PerryTS/perry/releases).
+
 Publication sends the eight platform packages first and the wrapper last. If a
 network or registry error interrupts it before the tag exists, rerun the failed
 jobs (or `publish:release`) on the same candidate. Actions skips an

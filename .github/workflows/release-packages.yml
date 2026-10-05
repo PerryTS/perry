@@ -1,12 +1,18 @@
 name: Release Packages
 
 on:
+  schedule:
+    - cron: "37 6 * * *"
   release:
     types: [published]
   workflow_dispatch:
     inputs:
       cut_release:
         description: "Release the dispatched candidate: gates/builds, npm OIDC publish, registry verification, then tag + GitHub Release."
+        type: boolean
+        default: false
+      nightly:
+        description: "Build this exact commit and publish its host/cross archives as a GitHub prerelease. Does not run stable release gates or publish to npm."
         type: boolean
         default: false
       candidate_sha:
@@ -47,7 +53,7 @@ permissions:
 # never blocked. `cancel-in-progress: false` — never cancel a release/publish
 # leg that's already running.
 concurrency:
-  group: release-packages-${{ github.event.release.tag_name || inputs.existing_tag || (inputs.cut_release && inputs.candidate_sha) || github.run_id }}
+  group: release-packages-${{ github.event.release.tag_name || inputs.existing_tag || ((inputs.cut_release || inputs.nightly) && inputs.candidate_sha) || github.run_id }}
   cancel-in-progress: false
 
 # Shipped runtime archives carry no GC/diagnostic instruments: perry-runtime's
@@ -103,17 +109,44 @@ jobs:
           EVENT: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
           CUT_RELEASE: ${{ inputs.cut_release }}
-          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          NIGHTLY: ${{ inputs.nightly || github.event_name == 'schedule' }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha || github.sha }}
           EXISTING_TAG: ${{ inputs.existing_tag }}
           SHA: ${{ github.sha }}
           REF: ${{ github.ref }}
           REF_NAME: ${{ github.ref_name }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
           set -euo pipefail
           CHECKOUT_REF=""
           if [ "$EVENT" = "release" ]; then
             MODE=release
             TAG="$RELEASE_TAG"
+          elif [ "$NIGHTLY" = "true" ]; then
+            MODE=nightly
+            if [ "$CUT_RELEASE" = "true" ] || [ -n "$EXISTING_TAG" ]; then
+              echo "::error::nightly cannot be combined with cut_release or existing_tag."
+              exit 1
+            fi
+            if [ -z "$CANDIDATE_SHA" ] || [ "$CANDIDATE_SHA" != "$SHA" ]; then
+              echo "::error::candidate_sha must equal this workflow run's exact SHA."
+              exit 1
+            fi
+            if [[ "$REF" != refs/heads/* ]]; then
+              echo "::error::nightly builds must run from a branch ref."
+              exit 1
+            fi
+            if [ "$EVENT" = "schedule" ] && [ "$REF_NAME" != "main" ]; then
+              echo "::error::scheduled nightly builds must use main; got $REF_NAME."
+              exit 1
+            fi
+            VERSION=$(sed -n '/^\[workspace\.package\]/,/^\[/p' Cargo.toml | grep -m1 '^version' | sed -E 's/.*"([^"]+)".*/\1/')
+            if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::could not resolve a stable workspace version for the nightly build."
+              exit 1
+            fi
+            TAG="nightly-v${VERSION}-$(date -u +%Y%m%d)-r${RUN_NUMBER}a${RUN_ATTEMPT}-${SHA:0:8}"
           elif [ "$CUT_RELEASE" = "true" ] && [ -n "$EXISTING_TAG" ]; then
             echo "::error::cut_release and existing_tag are mutually exclusive — cut_release derives the tag from Cargo.toml."
             exit 1
@@ -216,7 +249,7 @@ jobs:
         run: |
           set -euo pipefail
           case "$MODE" in
-            republish|stage)
+            republish|stage|nightly)
               echo "$MODE mode — bypassing test gate (manual lever)."
               exit 0
               ;;
@@ -1748,6 +1781,57 @@ jobs:
               || echo "::warning::could not dispatch $wf on $TAG — run it manually"
           done
 
+  # Fast preview lane: the package matrices still build the real release
+  # archives, but no full-suite/simulator gate or npm publication is required.
+  # Keep the GitHub prerelease as a draft until publish-assets has uploaded the
+  # exact outputs for this SHA.
+  create-nightly:
+    needs: [preflight, build, build-cross]
+    if: >
+      !cancelled() &&
+      needs.preflight.outputs.mode == 'nightly' &&
+      needs.build.result == 'success' &&
+      needs.build-cross.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Create draft prerelease for the exact commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          TAG: ${{ needs.preflight.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if gh api "repos/$REPO/git/ref/tags/$TAG" --silent 2>/dev/null; then
+            echo "::error::nightly tag $TAG already exists; rerun tomorrow or use a new commit."
+            exit 1
+          fi
+          gh release create "$TAG" -R "$REPO" --target "$SHA" \
+            --title "Perry $TAG" --notes "Automated nightly build from commit $SHA." \
+            --draft --prerelease
+
   # ---------------------------------------------------------------------------
   # Upload every packaged archive to the GitHub Release. Runs for all
   # publishing modes (single upload path — the build legs no longer touch the
@@ -1758,13 +1842,17 @@ jobs:
   # upload semantics where a red cross leg didn't sink the release.
   # ---------------------------------------------------------------------------
   publish-assets:
-    needs: [preflight, build, build-cross, create-release]
+    needs: [preflight, build, build-cross, create-release, create-nightly]
     if: >
       !cancelled() &&
       needs.preflight.outputs.tag != '' &&
       needs.build.result == 'success' &&
       contains(fromJSON('["success", "failure"]'), needs.build-cross.result) &&
-      (needs.preflight.outputs.mode != 'cut-release' || needs.create-release.result == 'success')
+      (
+        (needs.preflight.outputs.mode == 'cut-release' && needs.create-release.result == 'success') ||
+        (needs.preflight.outputs.mode == 'nightly' && needs.create-nightly.result == 'success') ||
+        (needs.preflight.outputs.mode != 'cut-release' && needs.preflight.outputs.mode != 'nightly')
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Download packaged host archives
@@ -1801,6 +1889,10 @@ jobs:
             echo "uploading $(basename "$f")"
             gh release upload "$TAG" "$f" -R "$REPO" --clobber
           done
+          if [ "${{ needs.preflight.outputs.mode }}" = "nightly" ]; then
+            gh release edit "$TAG" -R "$REPO" --draft=false --prerelease
+            echo "Published prerelease $TAG with ${#files[@]} build asset(s)."
+          fi
 
   # ---------------------------------------------------------------------------
   # Update Homebrew tap
@@ -1809,6 +1901,7 @@ jobs:
     # publish-assets success implies: a tag exists, host builds are green, and
     # the bottles this job downloads from the release are actually there.
     needs: [preflight, publish-assets]
+    if: needs.preflight.outputs.mode != 'nightly'
     runs-on: ubuntu-latest
     steps:
       - name: Get release info
@@ -1927,6 +2020,7 @@ jobs:
     needs: [preflight, build, create-release]
     if: >
       !cancelled() &&
+      needs.preflight.outputs.mode != 'nightly' &&
       needs.preflight.outputs.tag != '' &&
       needs.build.result == 'success' &&
       (needs.preflight.outputs.mode != 'cut-release' || needs.create-release.result == 'success')
@@ -2132,6 +2226,7 @@ jobs:
     # Default needs-semantics: runs only when apt succeeded (and is skipped
     # whenever apt was skipped — stage mode, red builds, missing tag).
     needs: [preflight, apt]
+    if: needs.preflight.outputs.mode != 'nightly'
     runs-on: ubuntu-latest
     steps:
       - name: Get release info
@@ -2235,6 +2330,7 @@ jobs:
     # wingetcreate resolves the zip by its release-download URL, so the asset
     # must already be on the release — hence publish-assets, not build.
     needs: [preflight, publish-assets]
+    if: needs.preflight.outputs.mode != 'nightly'
     runs-on: windows-latest
     steps:
       - name: Get release info
@@ -2289,6 +2385,7 @@ jobs:
     # Workers pull the new binaries off the GitHub Release, so only ping them
     # once the assets are actually up.
     needs: [preflight, publish-assets]
+    if: needs.preflight.outputs.mode != 'nightly'
     runs-on: ubuntu-latest
     steps:
       - name: Get release version

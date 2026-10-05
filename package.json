@@ -9,6 +9,7 @@
     "tools:install": "node scripts/soak/external-tools.mts --install-all --shims",
     "test:scripts": "node --test scripts/soak/*.test.mts scripts/publish/*.test.mts",
     "publish:release": "node scripts/publish/pipeline.mts --publish",
+    "publish:nightly": "node scripts/publish/nightly.mts",
     "publish:status": "node scripts/publish/pipeline.mts --status",
     "publish:brew": "node scripts/publish/brew/tap-publish.mts",
     "publish:ffi": "node scripts/publish/cargo/ffi-publish.mts",
