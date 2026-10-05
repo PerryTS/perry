@@ -197,3 +197,45 @@ fn an_attribute_on_an_absent_key_claims_the_key() {
         assert!(!attrs.writable() && !attrs.enumerable() && attrs.configurable());
     }
 }
+
+/// Reserved inline capacity stays distinct from the attributed key count.
+#[test]
+fn attributed_rekey_keeps_reserved_inline_capacity() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let obj = crate::object::js_object_alloc_null_proto(0, 8);
+        crate::object::js_object_set_field_by_name(obj, key("name"), 1.0);
+        crate::object::js_object_set_field_by_name(obj, key("length"), 2.0);
+        let before = crate::object::shapes::object_shape_descriptor(obj).unwrap();
+        assert_eq!(before.live_inline_slot_count, 8);
+        assert_eq!(before.logical_key_count, 2);
+        apply_edits(obj, &[AttrsEdit::Data(b"name", 4)]);
+        let after = crate::object::shapes::object_shape_descriptor(obj).unwrap();
+        assert_eq!(after.live_inline_slot_count, 8);
+        assert_eq!(after.logical_key_count, 2);
+        assert_ne!(
+            after.keys, before.keys,
+            "attribute edit must re-key the shape"
+        );
+        assert_eq!(
+            crate::object::get_property_attrs(obj as usize, "name")
+                .unwrap()
+                .bits,
+            4
+        );
+        crate::object::js_object_set_field_by_name(obj, key("extra"), 3.0);
+        let added = crate::object::shapes::object_shape_descriptor(obj).unwrap();
+        assert_eq!(added.live_inline_slot_count, 8);
+        assert_eq!(added.logical_key_count, 3);
+        assert_eq!(
+            crate::object::js_object_get_field(obj, 2).bits(),
+            3.0f64.to_bits()
+        );
+        assert_eq!(
+            crate::object::js_object_get_field(obj, 7).bits(),
+            crate::JSValue::undefined().bits()
+        );
+    }
+}
