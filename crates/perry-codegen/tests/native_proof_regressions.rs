@@ -7630,40 +7630,126 @@ fn boxed_local_storage_module(name: &str, init: Expr, replacement: Expr) -> Modu
     )
 }
 
+/// A derived-from-builtin class whose constructor never calls `super()`:
+/// `new AbruptDerived()` is statically abrupt. Lowering emits `js_throw_reference_error_this_before_super`
+/// followed by `unreachable`, ending the current block.
+fn abrupt_derived_classes() -> Vec<Class> {
+    // A builtin base keeps the constructor inline at the `new` site (see
+    // `force_ctor_call` in `lower_call/new.rs`), so the no-`super()` throw
+    // lands in the caller's block rather than in a separate constructor
+    // function.
+    let mut derived = class(91, "AbruptDerived", Vec::new());
+    derived.extends_name = Some("Map".to_string());
+    derived.constructor = Some(Function {
+        id: 92,
+        name: "AbruptDerived_constructor".to_string(),
+        type_params: Vec::new(),
+        params: Vec::new(),
+        return_type: Type::Any,
+        body: Vec::new(),
+        is_async: false,
+        is_generator: false,
+        is_strict: true,
+        is_exported: false,
+        captures: Vec::new(),
+        decorators: Vec::new(),
+        was_plain_async: false,
+        was_unrolled: false,
+    });
+    vec![derived]
+}
+
+fn abrupt_operand() -> Expr {
+    Expr::New {
+        class_name: "AbruptDerived".to_string(),
+        args: Vec::new(),
+        type_args: Vec::new(),
+        byte_offset: 0,
+        cap_args_appended: 0,
+    }
+}
+
 #[test]
 fn abrupt_captured_local_assignment_does_not_emit_orphan_write_barrier() {
-    // An unresolved Worker construction asks the runtime worker entry table
-    // (`js_worker_threads_worker_new_by_spec`), which throws only if no entry
-    // matches, so the block stays open and the store after it is live. The
-    // module must still verify (the Pi agent bundle once exposed an orphan
-    // post-store write-barrier block at LLVM parse time).
-    let replacement = Expr::WorkerNew {
-        partial: false,
-        paths: Vec::new(),
-        filename: Box::new(Expr::LocalGet(99)),
-        options: None,
-        is_eval: false,
-    };
-    let module = boxed_local_storage_module(
+    // A statically abrupt operand (`new` of a derived class that never calls
+    // `super()`) lowers to a runtime throw followed by `unreachable`.  The enclosing LocalSet must not create its post-store
+    // write-barrier blocks after that terminator: the store and its SSA inputs
+    // were never emitted, so such a block is unreachable *and* refers to
+    // undefined registers (the Pi agent bundle exposed this at LLVM parse
+    // time).
+    let replacement = abrupt_operand();
+    let mut module = boxed_local_storage_module(
         "abrupt_captured_local_set_barrier.ts",
         Expr::Array(Vec::new()),
         replacement,
     );
+    module.classes = abrupt_derived_classes();
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    let throw = ir
+        .find("call double @js_throw_reference_error_this_before_super")
+        .expect("the abrupt operand should lower to its runtime throw");
+    let function_tail = &ir[throw..];
+    let function_end = function_tail
+        .find("\n}\n")
+        .expect("throwing closure should have a complete definition");
+    let throwing_body = &function_tail[..function_end];
+
     assert!(
-        ir.contains("@js_worker_threads_worker_new_by_spec("),
-        "the unresolved Worker should defer to the runtime worker entry table"
+        throwing_body.contains("\n  unreachable"),
+        "fixture should terminate the assignment before its store:\n{throwing_body}"
     );
+    // #11450: the store after the throw is lowered into a predecessor-less
+    // block (dead code), so whatever it emits must be well-formed IR rather
+    // than a barrier naming registers dropped from the terminated block.
+    assert_code_after_abrupt_operand_is_dead(throwing_body);
     perry_codegen::testing::verify_ir(&ir, "abrupt_captured_local_set_barrier")
         .unwrap_or_else(|e| panic!("LLVM verifier rejected the module: {e}\n{ir}"));
+}
+
+/// Everything lowered after an abrupt operand's `unreachable` sits in a
+/// predecessor-less continuation block (`ctor.return.after*` for the inlined
+/// no-`super()` constructor used here), which no branch targets (#11450).
+///
+/// #10812's entry-level stack-guard check creates its `stack_guard.ok` block
+/// *before* the function body (including the throw) is lowered into it, and
+/// creates the paired `stack_guard.overflow` block right after — so that
+/// live, unrelated block can now render, by block-creation order, textually
+/// between the throw's `unreachable` and the dead `ctor.return.after`
+/// block below it. That is harmless (it is reached from the guard's
+/// fast-path branch, not from anything after the throw), so the check below
+/// only looks at the throw's *own* block — the text up to the next block
+/// label, whatever that label turns out to be — rather than assuming the
+/// dead block is textually adjacent.
+fn assert_code_after_abrupt_operand_is_dead(after_throw: &str) {
+    let throw_block_tail: String = after_throw
+        .lines()
+        .skip(1) // the `call double @js_throw_reference_error_this_before_super()` line itself
+        .take_while(|l| !(l.ends_with(':') && !l.starts_with(' ')))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        throw_block_tail.trim_end().ends_with("unreachable"),
+        "the throw's own block must terminate in `unreachable`:\n{after_throw}"
+    );
+    let dead_label = after_throw
+        .lines()
+        .find_map(|l| {
+            l.strip_suffix(':')
+                .filter(|l| l.starts_with("ctor.return.after"))
+        })
+        .unwrap_or_else(|| panic!("no dead continuation block after the throw:\n{after_throw}"));
+    assert!(
+        !after_throw.contains(&format!("label %{dead_label}")),
+        "the dead continuation block must have no predecessors:\n{after_throw}"
+    );
 }
 
 #[test]
 fn abrupt_constructor_argument_stops_anonymous_object_construction() {
     // Closed object literals are `new __AnonShape_*(field0, field1, ...)` by
     // the time codegen sees them.  Claude Code returns an object whose first
-    // field constructs an unresolved dynamic Worker and whose second field
-    // constructs an Int32Array.  The Worker emits throw + unreachable, so the
+    // field constructs a statically abrupt operand and whose second field
+    // constructs an Int32Array.  The operand emits throw + unreachable, so the
     // later field, allocation and constructor diamond must not be emitted:
     // their definitions would be dropped from the terminated block while the
     // newly-created blocks still used their registers.
@@ -7707,31 +7793,37 @@ fn abrupt_constructor_argument_stops_anonymous_object_construction() {
     });
     let module = module_with_classes_and_params(
         "abrupt_anonymous_object_constructor_arg.ts",
-        vec![record],
+        {
+            let mut classes = abrupt_derived_classes();
+            classes.push(record);
+            classes
+        },
         vec![param(99, "filename", Type::Any)],
         Type::Any,
         vec![Stmt::Return(Some(Expr::New {
             class_name: "__AnonShape_abrupt_constructor_arg".to_string(),
-            args: vec![
-                Expr::WorkerNew {
-                    partial: false,
-                    paths: Vec::new(),
-                    filename: Box::new(local(99)),
-                    options: None,
-                    is_eval: false,
-                },
-                Expr::Array(Vec::new()),
-            ],
+            args: vec![abrupt_operand(), Expr::Array(Vec::new())],
             type_args: Vec::new(),
             byte_offset: 0,
             cap_args_appended: 0,
         }))],
     );
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
+    let body = probe_body(&ir);
+    let throw = body
+        .find("call double @js_throw_reference_error_this_before_super")
+        .expect("the abrupt operand should emit its runtime throw");
+    let after_throw = &body[throw..];
+
     assert!(
-        ir.contains("@js_worker_threads_worker_new_by_spec("),
-        "the unresolved Worker should defer to the runtime worker entry table"
+        after_throw.contains("\n  unreachable"),
+        "the dynamic Worker fallback must terminate the path:\n{after_throw}"
     );
+    // #11450: the later field, allocation and constructor diamond are lowered
+    // into a predecessor-less block after the throw. They are dead, and the
+    // module must verify: none of them may name a register dropped from the
+    // terminated block.
+    assert_code_after_abrupt_operand_is_dead(after_throw);
     perry_codegen::testing::verify_ir(&ir, "abrupt_anonymous_object_constructor_arg")
         .unwrap_or_else(|e| panic!("LLVM verifier rejected the module: {e}\n{ir}"));
 }

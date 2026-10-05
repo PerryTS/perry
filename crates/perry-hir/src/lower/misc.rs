@@ -63,8 +63,6 @@ pub(crate) fn native_instance_from_return_type(ty: &Type) -> Option<(&'static st
     if let Type::Named(name) = inner {
         return match name.as_str() {
             "Socket" => Some(("net", "Socket")),
-            "EventEmitter" => Some(("events", "EventEmitter")),
-            "EventEmitterAsyncResource" => Some(("events", "EventEmitterAsyncResource")),
             "Pool" => Some(("mysql2/promise", "Pool")),
             "PoolConnection" => Some(("mysql2/promise", "PoolConnection")),
             "WebSocket" => Some(("ws", "WebSocket")),

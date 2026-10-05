@@ -30,7 +30,7 @@ fn class_instance(class_id: u32, keys: &[&str]) -> f64 {
 }
 
 fn guard(receiver: f64, method: &str) -> Option<(usize, u32)> {
-    unsafe { class_receiver_fast_guard(receiver, method.as_bytes()) }
+    unsafe { class_receiver_fast_guard(receiver, method.as_bytes()) }.map(|r| (r.addr, r.class_id))
 }
 
 #[test]

@@ -998,6 +998,20 @@ pub(super) unsafe fn dispatch_handle(
             // (`C.prototype.m = f`) or delete is a property write on that
             // object, so the chain sees it like any other key.
             let class_id = (*obj).class_id;
+            // #11919 P0: a native-payload family's prototype method, for a
+            // call that did not come through a method site (the site miss
+            // answers those before the tower).
+            if crate::native_class_ids::is_native_payload_class_id(class_id) {
+                let args = refreshed_args();
+                if let Some(result) = crate::native_payload::try_payload_method_fast_dispatch(
+                    object_handle.get_nanbox_f64(),
+                    method_name.as_bytes(),
+                    args.as_ptr(),
+                    args.len(),
+                ) {
+                    return Some(result);
+                }
+            }
             if class_id != 0 {
                 if !super::class_holder::name_is_not_a_prototype_method(method_name.as_bytes()) {
                     let key = super::class_holder::MethodKey {

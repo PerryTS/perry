@@ -1,7 +1,7 @@
-//! Function-name and function-source registries: the sidecar tables codegen
-//! populates at module init so `console.log(fn)`, `fn.name`, `Error.stack`
-//! frames and `Function.prototype.toString()` can recover metadata the
-//! compiled code itself no longer carries.
+//! Function names and retained source for reflection. Ordinary functions in a
+//! permanent executable carry source as a relative range in their static
+//! `JsFunctionInfo`; these registries remain for names, unloadable images,
+//! runtime-created functions, and raw method/accessor bodies.
 //!
 //! # Why there are two entry points per registry (#9188)
 //!
@@ -258,6 +258,7 @@ pub unsafe extern "C" fn js_register_function_names_static(descriptors: *const u
     let Ok(mut map) = function_name_registry().lock() else {
         return;
     };
+    map.reserve(entries.len());
     for entry in entries {
         if entry.byte_len == 0 {
             continue;
@@ -399,10 +400,10 @@ struct RegisteredFunctionSource<B> {
 }
 
 /// Source text borrowed from the program image, written only by
-/// [`js_register_function_source_static`]. Populated from module init
-/// alongside the function names, so by the time user code runs the map is
-/// fully populated. Mirrors the name registry's single-writer,
-/// last-write-wins semantics.
+/// [`js_register_function_source_static`]. Permanent ordinary compiled
+/// functions use their info record instead; this map covers raw method/accessor
+/// bodies and the other ABI shapes that cannot carry one. Mirrors the name
+/// registry's single-writer, last-write-wins semantics.
 fn function_source_registry() -> &'static std::sync::Mutex<
     std::collections::HashMap<usize, RegisteredFunctionSource<&'static [u8]>>,
 > {
@@ -438,7 +439,8 @@ fn function_source_overrides() -> &'static std::sync::Mutex<
 /// uses the sloppy ordinary-function `caller` / `arguments` behavior.
 /// Idempotent — last write wins.
 ///
-/// Codegen does NOT call this; see [`js_register_function_source_static`].
+/// Codegen uses this for unloadable dylib/staticlib images; runtime-created
+/// functions use it as well.
 ///
 /// # Safety
 ///
@@ -473,22 +475,19 @@ pub unsafe extern "C" fn js_register_function_source(
 /// Codegen-facing entry point: like [`js_register_function_source`], but the
 /// registry BORROWS the bytes rather than copying them.
 ///
-/// Source text is registered for every function a bundle CONTAINS, to serve
-/// `Function.prototype.toString()` — which most programs never call — so this
-/// is the larger of the two copies #9188 removed: 23.8 MB on the compiled
-/// claude-code TUI, against text the image already held read-only.
+/// Permanent ordinary compiled functions now use a relative source range in
+/// their `JsFunctionInfo`; this entry point remains for raw method/accessor
+/// bodies and compatible external callers.
 ///
 /// # Safety
 ///
 /// `src_ptr..src_ptr+src_len` must point at bytes valid for the REST OF THE
 /// PROCESS, not merely for the duration of the call — the registry keeps the
-/// pointer. Codegen satisfies this by emitting the text as a `private
-/// unnamed_addr constant` global (`codegen/string_pool.rs`), which is exactly
-/// the property that makes the borrow free: the bytes are already resident,
-/// read-only and file-backed. Anything that can be freed, or that lives in an
-/// image which may be unloaded, must use [`js_register_function_source`]
-/// instead. `func_ptr` is used only as a map key. The flag is treated as a
-/// boolean (`0` is false; every other value is true).
+/// pointer. Codegen satisfies this with a range in the module's read-only
+/// retained-source blob. Anything that can be freed, or that lives in an image
+/// which may be unloaded, must use [`js_register_function_source`] instead.
+/// `func_ptr` is used only as a map key. The flag is treated as a boolean (`0`
+/// is false; every other value is true).
 #[no_mangle]
 pub unsafe extern "C" fn js_register_function_source_static(
     func_ptr: *const u8,
@@ -539,6 +538,7 @@ pub unsafe extern "C" fn js_register_function_sources_static(descriptors: *const
     let Ok(mut map) = function_source_registry().lock() else {
         return;
     };
+    map.reserve(entries.len());
     for entry in entries {
         if entry.byte_len == 0 {
             continue;
@@ -598,6 +598,48 @@ pub fn function_source_for_ptr(func_ptr: usize) -> Option<String> {
         .ok()
         .and_then(|map| decode_registered(map.get(&func_ptr).map(|source| source.bytes)))
         .filter(|s| !s.is_empty())
+}
+
+/// Read retained source from a compiled body's info record.
+#[inline(always)]
+fn retained_source_for_info(info: &crate::closure::JsFunctionInfo) -> Option<String> {
+    if info.flags & crate::codegen_abi::FN_HAS_SOURCE == 0 {
+        return None;
+    }
+    // Most infos pack the range into the otherwise idle versioned-clone mask.
+    // Only a body that also has a versioned clone uses the optional tail.
+    unsafe {
+        let base = info as *const crate::closure::JsFunctionInfo as *const u8;
+        let (displacement, byte_len) = if info.versioned_code.is_null() {
+            (
+                info.versioned_boxed_mask as i64 as isize,
+                info.versioned_captures as usize,
+            )
+        } else {
+            // SAFETY: with FN_HAS_SOURCE and a live versioned mask, codegen
+            // emits `{ JsFunctionInfo, i32 displacement, u32 length }`.
+            let tail = base.add(crate::codegen_abi::JS_FUNCTION_INFO_SIZE);
+            (
+                (tail as *const i32).read_unaligned() as isize,
+                (tail.add(std::mem::size_of::<i32>()) as *const u32).read_unaligned() as usize,
+            )
+        };
+        if byte_len == 0 {
+            return None;
+        }
+        let bytes = std::slice::from_raw_parts(base.offset(displacement), byte_len);
+        // Compiler source enters this record as Rust `&str`, so it is valid
+        // UTF-8 by construction. Avoid the registry's defensive lossy decode
+        // on this compact, compiler-owned path.
+        Some(String::from_utf8_unchecked(bytes.to_vec()))
+    }
+}
+
+pub fn function_source_for_info_or_native(info: &crate::closure::JsFunctionInfo) -> String {
+    if let Some(source) = retained_source_for_info(info) {
+        return source;
+    }
+    function_source_for_func_ptr(info.code as usize)
 }
 
 /// #4101: build the `Function.prototype.toString` result for a closure whose
@@ -668,6 +710,12 @@ pub(crate) fn function_registries_census() -> Vec<crate::gc::census::SideTableRo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[repr(C)]
+    struct InfoWithInlineSource<const N: usize> {
+        info: crate::closure::JsFunctionInfo,
+        bytes: [u8; N],
+    }
 
     /// Fake function addresses. Never dereferenced — the registries only use
     /// them as map keys — but distinct per test so these cases stay
@@ -831,6 +879,35 @@ mod tests {
             Some("function b() {}")
         );
         assert!(function_is_non_strict_ordinary_for_ptr(key as usize));
+    }
+
+    #[test]
+    fn compiled_info_packed_source_round_trips_without_a_registry_entry() {
+        const SOURCE: &[u8; 15] = b"function h() {}";
+        let mut info =
+            unsafe { crate::closure::JsFunctionInfo::from_code(0x1234usize as *const u8, 0) }
+                .with_flags(
+                    crate::codegen_abi::FN_COMPILED_BODY
+                        | crate::codegen_abi::FN_HAS_SOURCE
+                        | crate::codegen_abi::FN_NON_STRICT_ORDINARY,
+                );
+        info.versioned_captures = SOURCE.len() as u32;
+        info.versioned_boxed_mask = crate::codegen_abi::JS_FUNCTION_INFO_SIZE as u64;
+        let fixture = InfoWithInlineSource {
+            // The address is only a registry key/native-form fallback here.
+            info,
+            bytes: *SOURCE,
+        };
+        assert_eq!(
+            retained_source_for_info(&fixture.info).as_deref(),
+            std::str::from_utf8(SOURCE).ok()
+        );
+        assert_ne!(fixture.info.flags & crate::codegen_abi::FN_HAS_SOURCE, 0);
+        assert_ne!(
+            fixture.info.flags & crate::codegen_abi::FN_NON_STRICT_ORDINARY,
+            0
+        );
+        assert_eq!(std::mem::size_of_val(&fixture.info), 64);
     }
 
     /// Borrowed and owned names live in different maps, so a reader has to

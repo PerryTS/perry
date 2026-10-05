@@ -223,34 +223,6 @@ pub extern "C" fn js_ethers_parse_ether() -> i64 {
 pub extern "C" fn js_ethers_parse_units() -> i64 {
     0
 }
-#[no_mangle]
-pub extern "C" fn js_event_emitter_emit() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_event_emitter_emit0() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_event_emitter_listener_count() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_event_emitter_new() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_event_emitter_on() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_event_emitter_remove_all_listeners() -> i64 {
-    0
-}
-#[no_mangle]
-pub extern "C" fn js_event_emitter_remove_listener() -> i64 {
-    0
-}
 // js_fetch_stream_* — not yet implemented for Android
 #[no_mangle]
 pub extern "C" fn js_fetch_stream_start() -> i64 {

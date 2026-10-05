@@ -31,6 +31,7 @@ const FOREIGN_READABLE_KEY: &[u8] = b"__perryForeignReadable";
 const METHOD_LISTENER_READABLE_KEY: &[u8] = b"__perryMethodListenerReadable";
 const READABLE_ITERATOR_DATA_CB_KEY: &[u8] = b"__perryReadableIteratorDataCb";
 const READABLE_ITERATOR_END_CB_KEY: &[u8] = b"__perryReadableIteratorEndCb";
+const READABLE_ITERATOR_CLOSE_CB_KEY: &[u8] = b"__perryReadableIteratorCloseCb";
 const READABLE_ITERATOR_ERROR_CB_KEY: &[u8] = b"__perryReadableIteratorErrorCb";
 // One-shot async iterator (`js_make_single_value_async_iterator`) — the value it
 // yields on its single pull.
@@ -344,6 +345,10 @@ pub(crate) fn readable_handle_async_iterator(value: f64) -> Option<f64> {
     is_readable_handle(value).then(|| build_readable_async_iterator(value, true))
 }
 
+pub(crate) fn readable_handle_iterator_with_options(stream: f64, opts: f64) -> f64 {
+    build_readable_async_iterator(stream, destroy_on_return_from_options(opts))
+}
+
 fn uses_method_listeners(stream: f64) -> bool {
     has_truthy_hidden(stream, hidden_key(METHOD_LISTENER_READABLE_KEY))
         || is_readable_handle(stream)
@@ -360,7 +365,7 @@ pub(super) fn is_foreign_readable(stream: f64) -> bool {
 /// pull is waiting gives `Readable.toWeb()` one-file-chunk backpressure instead
 /// of eagerly buffering the complete file on its first read (#9616).
 fn call_foreign_flow_method(stream: f64, method: &[u8]) {
-    if !is_foreign_readable(stream) {
+    if !is_foreign_readable(stream) && !is_readable_handle(stream) {
         return;
     }
     unsafe {
@@ -478,6 +483,30 @@ extern "C" fn ns_readable_iter_on_error(
     f64::from_bits(TAG_UNDEFINED)
 }
 
+extern "C" fn ns_readable_iter_on_close(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    if closure.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iterator = scope.root_nanbox_f64(iterator_from_listener(closure));
+    if !iterator_is_done(iterator.get_nanbox_f64())
+        && !iterator_stream_ended(iterator.get_nanbox_f64())
+        && iterator_stored_error(iterator.get_nanbox_f64()).is_none()
+    {
+        let reason = scope.root_nanbox_f64(pipeline_premature_close_error());
+        iterator_set_error(iterator.get_nanbox_f64(), reason.get_nanbox_f64());
+        if iterator_has_pending(iterator.get_nanbox_f64()) {
+            iterator_mark_done(iterator.get_nanbox_f64());
+            iterator_remove_listeners(iterator.get_nanbox_f64());
+            iterator_reject_all_pending(iterator.get_nanbox_f64(), reason.get_nanbox_f64());
+        }
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
 fn attach_iterator_listener(
     iterator: f64,
     stream: f64,
@@ -548,8 +577,52 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
         READABLE_ITERATOR_ERROR_CB_KEY,
     );
 
+    attach_iterator_listener(
+        iterator,
+        stream,
+        b"close",
+        crate::fn_info!(ns_readable_iter_on_close, 0; with_declared(0)),
+        READABLE_ITERATOR_CLOSE_CB_KEY,
+    );
+
     // Attaching the iterator does not disturb the stream (#11212): the chunks
     // it later hands out do, through the `'data'` / `read()` paths.
+
+    if is_readable_handle(stream) {
+        let state = unsafe {
+            crate::object::js_native_call_method(
+                stream,
+                b"_perryIteratorState".as_ptr() as *const i8,
+                19,
+                std::ptr::null(),
+                0,
+            )
+        };
+        if state == 1.0 {
+            iterator_set_stream_ended(iterator);
+            return;
+        }
+        if state == 2.0 {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let iterator = scope.root_nanbox_f64(iterator);
+            let reason = pipeline_premature_close_error();
+            iterator_set_error(iterator.get_nanbox_f64(), reason);
+            return;
+        }
+        if state == 3.0 {
+            let reason = unsafe {
+                crate::object::js_native_call_method(
+                    stream,
+                    b"_perryIteratorError".as_ptr() as *const i8,
+                    19,
+                    std::ptr::null(),
+                    0,
+                )
+            };
+            iterator_set_error(iterator, reason);
+            return;
+        }
+    }
 
     // Already-terminal-before-attach: no future event will reach our listeners,
     // so seed the terminal state directly.
@@ -596,6 +669,7 @@ fn iterator_remove_listeners(iterator: f64) {
     remove_iterator_listener(iterator, stream, b"data", READABLE_ITERATOR_DATA_CB_KEY);
     remove_iterator_listener(iterator, stream, b"end", READABLE_ITERATOR_END_CB_KEY);
     remove_iterator_listener(iterator, stream, b"error", READABLE_ITERATOR_ERROR_CB_KEY);
+    remove_iterator_listener(iterator, stream, b"close", READABLE_ITERATOR_CLOSE_CB_KEY);
 }
 
 fn settle_iterator_return_value(value: f64) {
@@ -749,20 +823,77 @@ extern "C" fn ns_readable_iterator_return(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
 ) -> f64 {
-    let iterator = this_value(closure, this);
-    let already_done = iterator_is_done(iterator);
-    iterator_mark_done(iterator);
-    iterator_remove_listeners(iterator);
-    // Settle every outstanding pull with `{done:true}` — `return()` must never
-    // drop a pending pull without resolving it.
-    iterator_resolve_all_pending_done(iterator);
-    if !already_done && iterator_has_yielded(iterator) && iterator_destroys_on_return(iterator) {
-        if let Some(stream) = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_STREAM_KEY)) {
-            call_source_iterator_return(stream);
-            destroy_stream(stream, f64::from_bits(TAG_UNDEFINED));
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iterator = scope.root_nanbox_f64(this_value(closure, this));
+    // Native transforms use Node's async-generator ordering: a return queued
+    // behind outstanding pulls waits for the last pull before tearing down.
+    let stream = get_hidden_value(
+        iterator.get_nanbox_f64(),
+        hidden_key(READABLE_ITERATOR_STREAM_KEY),
+    );
+    if stream.is_some_and(is_readable_handle) && iterator_has_pending(iterator.get_nanbox_f64()) {
+        let queue = get_hidden_value(
+            iterator.get_nanbox_f64(),
+            hidden_key(READABLE_ITERATOR_PENDING_KEY),
+        )
+        .unwrap();
+        let arr = raw_ptr_from_value(queue) as *mut crate::array::ArrayHeader;
+        let last = crate::array::js_array_get_f64(arr, crate::array::js_array_length(arr) - 1);
+        let last = scope.root_nanbox_f64(last);
+        let continuation = scope.root_raw_mut_ptr(js_closure_alloc(
+            crate::fn_info!(ns_readable_iterator_return_after_pull, 1; with_declared(1)),
+            1,
+        ));
+        js_closure_set_capture_f64(continuation.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
+        return box_pointer(crate::promise::js_promise_then(
+            crate::value::js_nanbox_get_pointer(last.get_nanbox_f64())
+                as *mut crate::promise::Promise,
+            continuation.get_raw_mut_ptr(),
+            continuation.get_raw_mut_ptr(),
+        ) as *const u8);
+    }
+    let already_done = iterator_is_done(iterator.get_nanbox_f64());
+    let attached = has_truthy_hidden(
+        iterator.get_nanbox_f64(),
+        hidden_key(READABLE_ITERATOR_ATTACHED_KEY),
+    );
+    iterator_mark_done(iterator.get_nanbox_f64());
+    iterator_remove_listeners(iterator.get_nanbox_f64());
+    iterator_resolve_all_pending_done(iterator.get_nanbox_f64());
+    if !already_done
+        && (iterator_has_yielded(iterator.get_nanbox_f64()) || attached)
+        && iterator_destroys_on_return(iterator.get_nanbox_f64())
+    {
+        if let Some(stream) = get_hidden_value(
+            iterator.get_nanbox_f64(),
+            hidden_key(READABLE_ITERATOR_STREAM_KEY),
+        ) {
+            let stream = scope.root_nanbox_f64(stream);
+            call_source_iterator_return(stream.get_nanbox_f64());
+            let reason = if is_readable_handle(stream.get_nanbox_f64()) {
+                let msg =
+                    crate::string::js_string_from_bytes(b"The operation was aborted".as_ptr(), 25);
+                crate::node_submodules::register_error_code_pub(msg, "ABORT_ERR");
+                crate::value::js_nanbox_pointer(crate::error::js_error_new_with_name_message(
+                    b"AbortError",
+                    msg,
+                ) as i64)
+            } else {
+                f64::from_bits(TAG_UNDEFINED)
+            };
+            let reason = scope.root_nanbox_f64(reason);
+            destroy_stream(stream.get_nanbox_f64(), reason.get_nanbox_f64());
         }
     }
     readable_iterator_done()
+}
+
+extern "C" fn ns_readable_iterator_return_after_pull(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    _result: f64,
+) -> f64 {
+    ns_readable_iterator_return(closure, crate::closure::JsThis::UNDEFINED)
 }
 
 extern "C" fn ns_readable_iterator_self(

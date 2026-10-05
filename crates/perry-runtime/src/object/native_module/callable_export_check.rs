@@ -17,9 +17,8 @@ use super::*;
 /// `.prototype` read on a closure pointer returns `undefined` (no method
 /// dispatch table tracks `.prototype` on closures), which
 /// `Object.setPrototypeOf` then ignores (Perry's runtime helper is a
-/// no-op anyway). `new EventEmitter()` still routes through the dedicated
-/// builtin path at lower_call/builtin.rs that allocates a real
-/// `EventEmitterHandle`, so dispatch coherence is preserved.
+/// no-op anyway). `new EventEmitter()` builds an ordinary object whose
+/// prototype is `EventEmitter.prototype` (#10508).
 /// Test-only reference: the original hand-written ladder, kept verbatim as
 /// the equivalence oracle for `CALLABLE_EXPORT_TABLE` (the exhaustive
 /// cross-product test below compares every literal ever mentioned in this

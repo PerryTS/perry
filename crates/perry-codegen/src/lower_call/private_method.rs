@@ -95,12 +95,11 @@ pub(super) fn try_lower_private_method_call(
 
     with_rooted_group(ctx, args.len(), |ctx, group| {
         let recv = lower_expr(ctx, receiver)?;
-        // The rooting window between these two operands is empty: lowering
-        // `this` only reads the current binding and cannot collect.
+        // Loading the lexical brand context cannot collect.
         let brand_owner = if receiver_is_brand_owner {
             recv.clone()
         } else {
-            lower_expr(ctx, &Expr::This)?
+            crate::expr::this_super_call::load_private_brand_owner(ctx)
         };
         let name_label = emit_string_literal_global(ctx, field_name);
         let guard_site = emit_private_site_cache(ctx, 1);
@@ -137,7 +136,7 @@ pub(super) fn try_lower_private_method_call(
         let brand_owner = if receiver_is_brand_owner {
             recv.clone()
         } else {
-            lower_expr(ctx, &Expr::This)?
+            crate::expr::this_super_call::load_private_brand_owner(ctx)
         };
         let (args_ptr, args_len) = if lowered_args.is_empty() {
             ("null".to_string(), "0".to_string())

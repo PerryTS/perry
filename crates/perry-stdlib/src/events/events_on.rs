@@ -4,16 +4,13 @@
 //! `on()` returns an async iterator that buffers emitted events and blocks
 //! `next()` until one arrives.
 
-use super::handle_probes::stream_value_from_handle;
 use super::*;
 
 use perry_runtime::{
     js_array_alloc, js_array_length, js_array_push_f64, js_nanbox_get_pointer, js_nanbox_pointer,
-    js_nanbox_string, js_promise_new, js_promise_reject, js_promise_resolve, ArrayHeader,
-    ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader,
+    js_promise_new, js_promise_reject, js_promise_resolve, ArrayHeader, ClosureHeader, JSValue,
+    Promise, StringHeader,
 };
-
-use crate::common::{get_handle_mut, Handle};
 
 // `events.on(...)` async-iterator state. Node's `on()` returns an async
 // iterator that buffers emitted events and blocks `next()` until one arrives.
@@ -23,26 +20,28 @@ use crate::common::{get_handle_mut, Handle};
 //   [1] pending       — FIFO of `next()` Promises blocked on a future event
 //   [2] done          — bool: iteration ended (return() / abort)
 //   [3] abort_reason  — the AbortError to reject `next()` with, or undefined
-//   [4] handle        — emitter handle (for listener removal on return)
+//   [4] emitter       — the emitter / EventTarget value (for listener removal)
 //   [5] listener      — the queue listener closure (for removal on return)
+//   [6] event         — the event name value
 const EVENTS_ON_BUFFER: u32 = 0;
 const EVENTS_ON_PENDING: u32 = 1;
 const EVENTS_ON_DONE: u32 = 2;
 const EVENTS_ON_ABORT: u32 = 3;
-const EVENTS_ON_HANDLE: u32 = 4;
+const EVENTS_ON_EMITTER: u32 = 4;
 const EVENTS_ON_LISTENER: u32 = 5;
+const EVENTS_ON_EVENT: u32 = 6;
 const EVENTS_ON_ITER_SHAPE_ID: u32 = 0x7FFF_FF60;
 
 unsafe fn events_on_state_new() -> *mut ArrayHeader {
-    let state = js_array_alloc(6);
+    let state = js_array_alloc(7);
     let buffer = js_array_alloc(0);
     let pending = js_array_alloc(0);
     let _ = js_array_push_f64(state, js_nanbox_pointer(buffer as i64));
     let _ = js_array_push_f64(state, js_nanbox_pointer(pending as i64));
     let _ = js_array_push_f64(state, TAG_FALSE_F64);
-    let _ = js_array_push_f64(state, f64::from_bits(TAG_UNDEFINED_F64_BITS));
-    let _ = js_array_push_f64(state, f64::from_bits(TAG_UNDEFINED_F64_BITS));
-    let _ = js_array_push_f64(state, f64::from_bits(TAG_UNDEFINED_F64_BITS));
+    for _ in EVENTS_ON_ABORT..=EVENTS_ON_EVENT {
+        let _ = js_array_push_f64(state, f64::from_bits(TAG_UNDEFINED_F64_BITS));
+    }
     state
 }
 
@@ -77,11 +76,11 @@ fn events_resolved_iter_promise(value: f64, done: bool) -> f64 {
 fn register_events_on_arities() {}
 
 /// The queue listener fired for each emitted event. Resolves a blocked `next()`
-/// Promise immediately if one is waiting, otherwise buffers the `[arg]` array.
+/// Promise immediately if one is waiting, otherwise buffers the args array.
 extern "C" fn events_on_queue_listener(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
-    arg0: f64,
+    rest: f64,
 ) -> f64 {
     use perry_runtime::closure::js_closure_get_capture_ptr;
 
@@ -90,9 +89,11 @@ extern "C" fn events_on_queue_listener(
         return f64::from_bits(TAG_UNDEFINED_F64_BITS);
     }
     unsafe {
-        let mut args = js_array_alloc(0);
-        args = js_array_push_f64(args, arg0);
-        let args_val = js_nanbox_pointer(args as i64);
+        let args_val = if JSValue::from_bits(rest.to_bits()).is_pointer() {
+            rest
+        } else {
+            js_nanbox_pointer(js_array_alloc(0) as i64)
+        };
 
         let pending = events_on_state_array(state, EVENTS_ON_PENDING);
         if !pending.is_null() && js_array_length(pending) > 0 {
@@ -166,17 +167,10 @@ extern "C" fn events_on_return(
     unsafe {
         events_on_state_set(state, EVENTS_ON_DONE, TAG_TRUE_F64);
         // Detach the queue listener from the emitter so no further events queue.
-        let handle = perry_runtime::array::js_array_get_f64(state, EVENTS_ON_HANDLE);
-        let listener = perry_runtime::array::js_array_get_f64(state, EVENTS_ON_LISTENER);
-        if handle.to_bits() != TAG_UNDEFINED_F64_BITS
-            && listener.to_bits() != TAG_UNDEFINED_F64_BITS
-        {
-            let handle_id = handle as Handle;
-            let listener_ptr = js_nanbox_get_pointer(listener);
-            if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle_id) {
-                remove_listener_by_callback(emitter, listener_ptr);
-            }
-        }
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let state_handle = scope.root_raw_mut_ptr(state);
+        detach_queue_listener(state);
+        let state = state_handle.get_raw_mut_ptr::<ArrayHeader>();
         // Resolve any blocked `next()` with completion.
         let pending = events_on_state_array(state, EVENTS_ON_PENDING);
         if !pending.is_null() {
@@ -273,60 +267,68 @@ unsafe fn install_events_on_async_iterator(queue: *mut ArrayHeader, state: *mut 
     );
 }
 
+/// Remove the queue listener recorded in `state` from its emitter.
+unsafe fn detach_queue_listener(state: *mut ArrayHeader) {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let emitter = scope.root_nanbox_f64(perry_runtime::array::js_array_get_f64(
+        state,
+        EVENTS_ON_EMITTER,
+    ));
+    let listener = scope.root_nanbox_f64(perry_runtime::array::js_array_get_f64(
+        state,
+        EVENTS_ON_LISTENER,
+    ));
+    let event = scope.root_nanbox_f64(perry_runtime::array::js_array_get_f64(
+        state,
+        EVENTS_ON_EVENT,
+    ));
+    if emitter.get_nanbox_u64() == TAG_UNDEFINED_F64_BITS
+        || listener.get_nanbox_u64() == TAG_UNDEFINED_F64_BITS
+    {
+        return;
+    }
+    if let Some(target) = event_target_ptr(emitter.get_nanbox_f64()) {
+        let event_ptr = perry_runtime::value::js_get_string_pointer_unified(event.get_nanbox_f64())
+            as *const StringHeader;
+        perry_runtime::event_target::js_event_target_remove_event_listener(
+            target,
+            event_ptr,
+            js_nanbox_get_pointer(listener.get_nanbox_f64()),
+        );
+    } else {
+        let _ = call_emitter_method(
+            emitter.get_nanbox_f64(),
+            "removeListener",
+            &[event.get_nanbox_f64(), listener.get_nanbox_f64()],
+        );
+    }
+}
+
+/// The signal's `abort`: detach, then end the iteration with an AbortError.
+/// Captures `[state, signal]`.
 extern "C" fn events_on_abort_listener(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    use perry_runtime::closure::js_closure_get_capture_ptr;
+    use perry_runtime::closure::js_closure_get_capture_f64;
 
-    let handle = js_closure_get_capture_ptr(closure, 0) as Handle;
-    let data_listener = js_closure_get_capture_ptr(closure, 1);
-    let signal_ptr = js_closure_get_capture_ptr(closure, 2) as *mut ObjectHeader;
-    let state = js_closure_get_capture_ptr(closure, 3) as *mut ArrayHeader;
-    let event_name_ptr = js_closure_get_capture_ptr(closure, 4) as *const StringHeader;
-
-    if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-        remove_listener_by_callback(emitter, data_listener);
-    }
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let state = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 0));
+    let signal = scope.root_nanbox_f64(js_closure_get_capture_f64(closure, 1));
+    let this_listener = scope.root_raw_mut_ptr(closure as *mut ClosureHeader);
     unsafe {
-        if !event_name_ptr.is_null() {
-            if let Some(target) = event_target_ptr(handle) {
-                perry_runtime::event_target::js_event_target_remove_event_listener(
-                    target,
-                    event_name_ptr,
-                    data_listener,
-                );
-            } else if perry_runtime::object::net_socket_handle_probe()
-                .is_some_and(|probe| probe(handle))
-            {
-                let _ = super::module_helpers::call_net_socket_method(
-                    handle,
-                    "removeListener",
-                    &[
-                        js_nanbox_string(event_name_ptr as i64),
-                        js_nanbox_pointer(data_listener),
-                    ],
-                );
-            } else if stream_value_from_handle(handle).is_some() {
-                let event = js_nanbox_string(event_name_ptr as i64);
-                let listener = js_nanbox_pointer(data_listener);
-                let _ = perry_runtime::node_stream::js_node_stream_method_remove_listener(
-                    handle, event, listener,
-                );
-            }
-        }
-        if !signal_ptr.is_null() {
-            perry_runtime::url::js_abort_signal_remove_listener(
-                signal_ptr,
-                abort_event_value(),
-                js_nanbox_pointer(closure as i64),
-            );
-        }
+        detach_queue_listener(js_nanbox_get_pointer(state.get_nanbox_f64()) as *mut ArrayHeader);
+        remove_abort_listener(
+            signal.get_nanbox_f64(),
+            js_nanbox_pointer(this_listener.get_raw_mut_ptr::<ClosureHeader>() as i64),
+        );
         // Mark the iterator aborted and reject any blocked `next()`. Buffered
         // events drained before the abort still surface; only once the buffer is
         // empty does `next()` observe the stored AbortError (matching Node).
+        let abort_err = scope.root_nanbox_f64(perry_runtime::url::js_abort_error_value());
+        let state = js_nanbox_get_pointer(state.get_nanbox_f64()) as *mut ArrayHeader;
         if !state.is_null() {
-            let abort_err = perry_runtime::url::js_abort_error_value();
+            let abort_err = abort_err.get_nanbox_f64();
             events_on_state_set(state, EVENTS_ON_ABORT, abort_err);
             events_on_state_set(state, EVENTS_ON_DONE, TAG_TRUE_F64);
             let pending = events_on_state_array(state, EVENTS_ON_PENDING);
@@ -357,88 +359,95 @@ pub unsafe extern "C" fn js_events_on(
     event_name_ptr: *const StringHeader,
     options: f64,
 ) -> *mut ArrayHeader {
-    use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    use perry_runtime::closure::{
+        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
+    };
 
-    ensure_gc_scanner_registered();
-    let target =
-        event_helper_target(target_value).unwrap_or_else(|| throw_invalid_emitter(target_value));
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let target_value = scope.root_nanbox_f64(target_value);
+    let event_name = scope.root_string_ptr(event_name_ptr);
+    let options = scope.root_nanbox_f64(options);
+    let target = event_helper_target(target_value.get_nanbox_f64())
+        .unwrap_or_else(|| throw_invalid_emitter(target_value.get_nanbox_f64()));
     // `queue` is the returned async-iterable handle; `state` holds the buffer /
     // pending / done / abort bookkeeping and is kept alive through the handle's
     // `Symbol.asyncIterator` closure capture.
-    let queue = js_array_alloc(0);
-    let state = events_on_state_new();
-    install_events_on_async_iterator(queue, state);
-    let event_name = match string_from_header(event_name_ptr) {
-        Some(name) => name,
-        None => return queue,
-    };
-    let signal = options_signal_or_throw(options);
-    if signal.is_some_and(signal_is_aborted) {
+    let queue = scope.root_raw_mut_ptr(js_array_alloc(0));
+    let state = scope.root_raw_mut_ptr(events_on_state_new());
+    install_events_on_async_iterator(queue.get_raw_mut_ptr(), state.get_raw_mut_ptr());
+    if string_from_header(event_name.get_raw_const_ptr()).is_none() {
+        return queue.get_raw_mut_ptr();
+    }
+    let signal =
+        options_signal_or_throw(options.get_nanbox_f64()).map(|s| scope.root_nanbox_f64(s));
+    if signal
+        .as_ref()
+        .is_some_and(|signal| signal_is_aborted(signal.get_nanbox_f64()))
+    {
         perry_runtime::exception::js_throw(perry_runtime::url::js_abort_error_value());
     }
 
-    let listener = js_closure_alloc(perry_runtime::fn_info!(events_on_queue_listener, 1), 1);
-    js_closure_set_capture_ptr(listener, 0, state as i64);
+    let listener = scope.root_raw_mut_ptr(js_closure_alloc(
+        perry_runtime::fn_info!(events_on_queue_listener, 1; with_rest(0)),
+        1,
+    ));
+    js_closure_set_capture_ptr(
+        listener.get_raw_mut_ptr(),
+        0,
+        state.get_raw_mut_ptr::<ArrayHeader>() as i64,
+    );
+    let event = scope.root_nanbox_f64(event_value(event_name.get_raw_const_ptr()));
+    let listener_value = || js_nanbox_pointer(listener.get_raw_mut_ptr::<ClosureHeader>() as i64);
 
-    let handle = match target {
-        EventHelperTarget::EventEmitter(handle) => {
-            if let Some(emitter) = get_handle_mut::<EventEmitterHandle>(handle) {
-                emitter.add_listener(handle, &event_name, listener as i64, false, false);
-            }
-            handle
-        }
+    match target {
         EventHelperTarget::EventTarget(target) => {
             perry_runtime::event_target::js_event_target_add_event_listener(
                 target,
-                event_name_ptr,
-                listener as i64,
+                event_name.get_raw_const_ptr(),
+                listener.get_raw_mut_ptr::<ClosureHeader>() as i64,
             );
-            target as Handle
         }
-        EventHelperTarget::NetSocket(handle) => {
-            let _ = module_helpers::call_net_socket_method(
-                handle,
+        EventHelperTarget::Emitter(_) => {
+            let _ = call_emitter_method(
+                target_value.get_nanbox_f64(),
                 "on",
-                &[
-                    js_nanbox_string(event_name_ptr as i64),
-                    js_nanbox_pointer(listener as i64),
-                ],
-            );
-            handle
-        }
-        EventHelperTarget::Stream(handle) => {
-            let event = js_nanbox_string(event_name_ptr as i64);
-            let listener_value = js_nanbox_pointer(listener as i64);
-            let _ =
-                perry_runtime::node_stream::js_node_stream_method_on(handle, event, listener_value);
-            handle
-        }
-    };
-
-    // Record the emitter handle + listener so `return()` can detach cleanly.
-    events_on_state_set(state, EVENTS_ON_HANDLE, handle as f64);
-    events_on_state_set(
-        state,
-        EVENTS_ON_LISTENER,
-        js_nanbox_pointer(listener as i64),
-    );
-
-    if let Some(signal) = signal {
-        if let Some(signal_ptr) = object_ptr_from_value(signal) {
-            let abort_listener =
-                js_closure_alloc(perry_runtime::fn_info!(events_on_abort_listener, 0), 5);
-            js_closure_set_capture_ptr(abort_listener, 0, handle);
-            js_closure_set_capture_ptr(abort_listener, 1, listener as i64);
-            js_closure_set_capture_ptr(abort_listener, 2, signal_ptr as i64);
-            js_closure_set_capture_ptr(abort_listener, 3, state as i64);
-            js_closure_set_capture_ptr(abort_listener, 4, event_name_ptr as i64);
-            perry_runtime::url::js_abort_signal_add_listener(
-                signal_ptr,
-                abort_event_value(),
-                js_nanbox_pointer(abort_listener as i64),
+                &[event.get_nanbox_f64(), listener_value()],
             );
         }
     }
 
-    queue
+    // Record the emitter, listener and event so `return()` / abort detach.
+    let state_ptr = state.get_raw_mut_ptr::<ArrayHeader>();
+    events_on_state_set(state_ptr, EVENTS_ON_EMITTER, target_value.get_nanbox_f64());
+    events_on_state_set(state_ptr, EVENTS_ON_LISTENER, listener_value());
+    events_on_state_set(state_ptr, EVENTS_ON_EVENT, event.get_nanbox_f64());
+
+    if let Some(signal) = &signal {
+        if object_ptr_from_value(signal.get_nanbox_f64()).is_some() {
+            let abort_listener = scope.root_raw_mut_ptr(js_closure_alloc(
+                perry_runtime::fn_info!(events_on_abort_listener, 0),
+                2,
+            ));
+            js_closure_set_capture_f64(
+                abort_listener.get_raw_mut_ptr(),
+                0,
+                js_nanbox_pointer(state.get_raw_mut_ptr::<ArrayHeader>() as i64),
+            );
+            js_closure_set_capture_f64(
+                abort_listener.get_raw_mut_ptr(),
+                1,
+                signal.get_nanbox_f64(),
+            );
+            let abort_event = scope.root_nanbox_f64(abort_event_value());
+            if let Some(signal_ptr) = object_ptr_from_value(signal.get_nanbox_f64()) {
+                perry_runtime::url::js_abort_signal_add_listener(
+                    signal_ptr,
+                    abort_event.get_nanbox_f64(),
+                    js_nanbox_pointer(abort_listener.get_raw_mut_ptr::<ClosureHeader>() as i64),
+                );
+            }
+        }
+    }
+
+    queue.get_raw_mut_ptr()
 }

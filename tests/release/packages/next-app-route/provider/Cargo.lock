@@ -2985,13 +2985,6 @@ name = "perry-dispatch"
 version = "0.5.1654"
 
 [[package]]
-name = "perry-ext-events"
-version = "0.5.1654"
-dependencies = [
- "perry-ffi",
-]
-
-[[package]]
 name = "perry-ext-http"
 version = "0.5.1654"
 dependencies = [
@@ -3089,7 +3082,6 @@ dependencies = [
 name = "perry-next-stdlib-provider"
 version = "0.0.0"
 dependencies = [
- "perry-ext-events",
  "perry-ext-http",
  "perry-ext-net",
  "perry-ext-zlib",

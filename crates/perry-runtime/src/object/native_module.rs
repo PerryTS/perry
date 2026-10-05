@@ -38,6 +38,7 @@ pub(crate) use callable_export_check::is_native_module_callable_export;
 pub use callable_exports::bound_native_callable_export_value;
 #[cfg(test)]
 pub(crate) use callable_exports::builtin_closure_is_non_constructable;
+pub(crate) use callable_exports::minted_native_callable_export;
 #[cfg(test)]
 pub(crate) use callable_exports::test_collect_native_export_after_alloc;
 pub(crate) use callable_exports::{
@@ -77,8 +78,11 @@ pub(crate) use vtable_impls::vt_own_keys_array;
 pub(crate) use web_locks::{worker_threads_locks_value, WebLocksState};
 
 crate::perry_thread_local! {
-    pub(crate) static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64>> =
-        RefCell::new(HashMap::new());
+    /// Every minted bound export by `"<module>\0<property>"`. Read on hot
+    /// paths (`new EventEmitter()` resolves its prototype through it), so it
+    /// hashes with aHash, which keeps a random key without SipHash's rounds.
+    pub(crate) static NATIVE_CALLABLE_EXPORTS: RefCell<HashMap<String, u64, ahash::RandomState>> =
+        RefCell::new(HashMap::default());
     pub(crate) static NATIVE_MODULE_ACCESSOR_EXPORTS: RefCell<HashMap<String, u64>> =
         RefCell::new(HashMap::new());
     static HANDLE_PROPERTY_BIND_REENTRY: Cell<bool> = const { Cell::new(false) };
@@ -553,6 +557,9 @@ static NM_NAMESPACE_OPS_IMPL: super::NmNamespaceOps = super::NmNamespaceOps {
 
 static NM_EE_OPS_IMPL: super::NmEeOps = super::NmEeOps {
     ee_prototype_install: super::class_registry::prototype_objects::nm_ee_prototype_install,
+    ee_prototype_inline_slots:
+        super::class_registry::prototype_objects::nm_ee_prototype_inline_slots,
+    emit_call: crate::node_stream::emitter_emit_call,
     ee_dynamic_super: nm_ee_dynamic_super,
 };
 

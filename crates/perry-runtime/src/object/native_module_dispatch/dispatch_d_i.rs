@@ -340,6 +340,9 @@ pub(crate) unsafe fn nm_dispatch_fs(ctx: &NmCtx, module_name: &str, method_name:
         ("fs", "writeSync") if args_len >= 5 => {
             crate::fs::js_fs_write_buffer_sync(arg(0), arg(1), arg(2), arg(3), arg(4))
         }
+        ("fs", "writeSync") if args_len == 4 => {
+            crate::fs::js_fs_write_sync_args(arg(0), arg(1), arg(2), arg(3))
+        }
         ("fs", "writeSync") if args_len >= 3 => {
             crate::fs::js_fs_write_sync_options_dispatch(arg(0), arg(1), arg(2))
         }

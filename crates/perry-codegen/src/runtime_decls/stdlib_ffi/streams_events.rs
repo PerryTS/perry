@@ -13,6 +13,13 @@ pub(crate) fn declare_streams_events(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
+    // #10508: `new EventEmitter(opts)` / `new EventEmitterAsyncResource(opts)`.
+    module.declare_function("js_event_emitter_object_new", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_event_emitter_async_resource_object_new",
+        DOUBLE,
+        &[DOUBLE],
+    );
     module.declare_function("js_array_subclass_init", DOUBLE, &[DOUBLE, DOUBLE]); // class extends Array
     module.declare_function("js_array_subclass_init_args", DOUBLE, &[DOUBLE, PTR, I64]);
     module.declare_function("js_map_set_subclass_init", DOUBLE, &[DOUBLE, I32, DOUBLE]); // class extends Map/Set
@@ -132,45 +139,9 @@ pub(crate) fn declare_streams_events(module: &mut LlModule) {
     module.declare_function("js_node_stream_method_writable_object_mode", DOUBLE, &[I64]);
 
     // ========== Event emitter ==========
-    module.declare_function("js_event_emitter_emit", DOUBLE, &[I64, I64, I64]);
-    module.declare_function("js_event_emitter_emit0", DOUBLE, &[I64, I64]);
-    module.declare_function("js_event_emitter_listener_count", DOUBLE, &[I64, I64, I64]);
-    module.declare_function("js_event_emitter_new", I64, &[]);
-    module.declare_function("js_event_emitter_new_with_options", I64, &[DOUBLE]);
-    module.declare_function("js_event_emitter_on", I64, &[I64, I64, I64]);
-    module.declare_function("js_event_emitter_once", I64, &[I64, I64, I64]);
-    module.declare_function("js_event_emitter_prepend_listener", I64, &[I64, I64, I64]);
-    module.declare_function(
-        "js_event_emitter_prepend_once_listener",
-        I64,
-        &[I64, I64, I64],
-    );
-    module.declare_function("js_event_emitter_remove_all_listeners", I64, &[I64, I64]);
-    module.declare_function("js_event_emitter_remove_listener", I64, &[I64, I64, I64]);
-    module.declare_function("js_event_emitter_set_max_listeners", I64, &[I64, DOUBLE]);
-    module.declare_function("js_event_emitter_get_max_listeners", DOUBLE, &[I64]);
-    module.declare_function("js_event_emitter_event_names", I64, &[I64]);
-    module.declare_function("js_event_emitter_listeners", I64, &[I64, I64]);
-    module.declare_function("js_event_emitter_raw_listeners", I64, &[I64, I64]);
-    module.declare_function("js_event_emitter_domain_value", DOUBLE, &[I64]);
-    module.declare_function("js_event_emitter_async_resource_new", I64, &[DOUBLE]);
+    // An emitter is an ordinary object (#10508): `new EventEmitter()` and its
+    // subclass inits are declared above, the methods live on the prototype.
     module.declare_function("js_event_emitter_async_resource_call", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_event_emitter_async_resource_async_id", DOUBLE, &[I64]);
-    module.declare_function(
-        "js_event_emitter_async_resource_trigger_async_id",
-        DOUBLE,
-        &[I64],
-    );
-    module.declare_function(
-        "js_event_emitter_async_resource_async_resource",
-        DOUBLE,
-        &[I64],
-    );
-    module.declare_function(
-        "js_event_emitter_async_resource_emit_destroy",
-        DOUBLE,
-        &[I64],
-    );
     // Module-level helpers
     module.declare_function("js_events_once", I64, &[DOUBLE, I64, DOUBLE]);
     module.declare_function("js_events_on", I64, &[DOUBLE, I64, DOUBLE]);

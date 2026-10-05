@@ -51,12 +51,7 @@ const INSTALLS: &[(&str, &[&str])] = &[
     ),
     (
         "js_stdlib_install_events",
-        &[
-            "bundled-events",
-            "default",
-            "external-events-construct",
-            "full",
-        ],
+        &["bundled-events", "default", "full"],
     ),
     (
         "js_stdlib_install_bundled_nodemailer",
@@ -236,8 +231,8 @@ mod tests {
         seen
     }
 
-    /// The feature an install symbol is named after (`events` covers both
-    /// EventEmitter implementations, which share the install).
+    /// The feature an install symbol is named after (`events` installs the
+    /// `bundled-events` module helpers).
     fn installed_feature(symbol: &str) -> &str {
         match symbol {
             "js_stdlib_install_events" => "bundled-events",
@@ -258,14 +253,6 @@ mod tests {
                 .filter(|f| closure(&table, f).contains(&installed))
                 .cloned()
                 .collect();
-            if *symbol == "js_stdlib_install_events" {
-                expected.extend(
-                    table
-                        .keys()
-                        .filter(|f| closure(&table, f).contains("external-events-construct"))
-                        .cloned(),
-                );
-            }
             let listed: BTreeSet<String> = triggers.iter().map(|t| t.to_string()).collect();
             assert_eq!(
                 listed, expected,

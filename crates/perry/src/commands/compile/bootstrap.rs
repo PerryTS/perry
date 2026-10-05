@@ -224,6 +224,8 @@ pub(super) fn rerun_collect_with_class_field_types(
     ctx.cjs_require_diagnostics = false;
     ctx.native_modules.clear();
     ctx.reexport_pruner = Default::default();
+    ctx.uses_worker_threads = false;
+    ctx.worker_url_entries.clear();
     visited.clear();
     *next_class_id = 1;
     collect_modules(

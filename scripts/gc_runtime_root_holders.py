@@ -239,7 +239,7 @@ INT_TYPE_TOKENS = ("f64", "usize", "u64", "i64", "AtomicI64", "AtomicUsize", "At
 
 # ffi-side rule A adds the perry-ffi spellings. `Promise` is here because a
 # `*mut Promise` parked in a pending-event struct is a movable GC object
-# (ext-events' `pending_once_promises` really does this, and really scans it).
+# (the former perry-ext-events' `pending_once_promises` did this, and scanned it).
 FFI_HEAP_TYPE_TOKENS = HEAP_TYPE_TOKENS + ("JsValue", "JsClosure", "Promise")
 
 # Rule V/S value primitives: what a NaN-boxed JS value (or raw ClosureHeader

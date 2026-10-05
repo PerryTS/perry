@@ -492,18 +492,17 @@ pub(super) fn lower_builtin_new<'a>(
             );
             Ok(Some(nanbox_pointer_inline(blk, &handle)))
         }
-        // events.EventEmitter — `new EventEmitter()` produces a real
-        // EventEmitterHandle so `.on(...)` / `.emit(...)` find their
-        // registered handle (NATIVE_MODULE_TABLE wires those methods
-        // through `js_event_emitter_*`). Same #187-shape bug — pre-fix
-        // every .on/.emit call dispatched against a junk pointer and
-        // silently registered nothing / fired nothing.
+        // events.EventEmitter — `new EventEmitter(opts)` is an ordinary
+        // object with the shared `EventEmitter.prototype` (#10508); its
+        // methods are the prototype's, exactly as for a subclass instance.
         "EventEmitter" => {
             // #6986: `opts` was held across the discard loop's lowering.
             let opts = adopt_leading_arg_discard_rest(ctx, args, group)?;
-            let blk = ctx.block();
-            let handle = blk.call(I64, "js_event_emitter_new_with_options", &[(DOUBLE, &opts)]);
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_event_emitter_object_new",
+                &[(DOUBLE, &opts)],
+            )))
         }
         // The public Node constructor creates an inert ChildProcess whose
         // low-level `.spawn(options)` validates its own option bag. Normal
@@ -517,13 +516,11 @@ pub(super) fn lower_builtin_new<'a>(
         "EventEmitterAsyncResource" => {
             // #6986: `opts` was held across the discard loop's lowering.
             let opts = adopt_leading_arg_discard_rest(ctx, args, group)?;
-            let blk = ctx.block();
-            let handle = blk.call(
-                I64,
-                "js_event_emitter_async_resource_new",
+            Ok(Some(ctx.block().call(
+                DOUBLE,
+                "js_event_emitter_async_resource_object_new",
                 &[(DOUBLE, &opts)],
-            );
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+            )))
         }
         "BlockList" => {
             for a in args {

@@ -122,8 +122,15 @@ pub extern "C" fn js_zlib_validate_params(level: f64, strategy: f64) -> i32 {
 /// Read an options-object field by name as a raw NaN-boxed `f64`. Returns the
 /// `undefined` sentinel when `ptr` carries no such property.
 fn read_option_field(ptr: *const crate::object::ObjectHeader, name: &[u8]) -> f64 {
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_get_field_by_name_f64(ptr, key)
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ptr = scope.root_raw_const_ptr(ptr);
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        name.as_ptr(),
+        name.len() as u32,
+    ));
+    key.with_const_ptr(|key| {
+        crate::object::js_object_get_field_by_name_f64(ptr.get_raw_const_ptr(), key)
+    })
 }
 
 /// Decode an options field to its numeric `f64`, validating Node's type
@@ -301,3 +308,132 @@ static KEEP_JS_ZLIB_VALIDATE_BUFFER_ARG: extern "C" fn(i64) = js_zlib_validate_b
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_ZLIB_VALIDATE_CALLBACK: extern "C" fn(f64) -> i64 = js_zlib_validate_callback;
+
+/// Read a stream sizing option before entering the external codec's mutex.
+/// This helper also validates the Readable/Writable high-water marks.
+#[no_mangle]
+pub extern "C" fn js_zlib_stream_option(opts: f64, which: i32) -> usize {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let field: &[u8] = match which {
+        0 => b"chunkSize",
+        1 => b"readableHighWaterMark",
+        _ => b"writableHighWaterMark",
+    };
+    let default = if which == 0 { 16384 } else { 65536 };
+    let value = crate::value::JSValue::from_bits(opts.get_nanbox_f64().to_bits());
+    if !value.is_pointer() {
+        return default;
+    }
+    if !crate::value::addr_class::is_above_handle_band(crate::value::addr_class::object_ref_addr(
+        opts.get_nanbox_f64(),
+    )) {
+        return default;
+    }
+    let read = |name| {
+        let live = crate::value::JSValue::from_bits(opts.get_nanbox_f64().to_bits());
+        read_option_field(live.as_pointer::<crate::object::ObjectHeader>(), name)
+    };
+    let mut v = read(field);
+    if which != 0 {
+        let common = read(b"highWaterMark");
+        let common_value = crate::value::JSValue::from_bits(common.to_bits());
+        if !common_value.is_undefined() && !common_value.is_null() {
+            v = common;
+        }
+    }
+    let jv = crate::value::JSValue::from_bits(v.to_bits());
+    if jv.is_undefined() || jv.is_null() {
+        return default;
+    }
+    let n = if jv.is_int32() {
+        jv.as_int32() as f64
+    } else {
+        v
+    };
+    if !jv.is_number() && !jv.is_int32()
+        || !n.is_finite()
+        || n < (if which == 0 { 64.0 } else { 0.0 })
+        || (which != 0 && n.fract() != 0.0)
+    {
+        crate::fs::validate::throw_type_error_with_code(
+            &format!(
+                "The property 'options.{}' is invalid",
+                std::str::from_utf8(field).unwrap()
+            ),
+            "ERR_INVALID_ARG_VALUE",
+        );
+    }
+    n as usize
+}
+
+extern "C" fn zlib_pipe_drain(
+    closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let stream = crate::closure::js_closure_get_capture_f64(closure, 0);
+    unsafe {
+        crate::object::js_native_call_method(
+            stream,
+            b"_perryDrain".as_ptr() as *const i8,
+            11,
+            std::ptr::null(),
+            0,
+        )
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn js_zlib_pipe_drain_callback(stream: f64) -> i64 {
+    let cb =
+        crate::closure::js_closure_alloc(crate::fn_info!(zlib_pipe_drain, 0; with_declared(0)), 1);
+    crate::closure::js_closure_set_capture_f64(cb, 0, stream);
+    cb as i64
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_STREAM_OPTION: extern "C" fn(f64, i32) -> usize = js_zlib_stream_option;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_PIPE_DRAIN_CALLBACK: extern "C" fn(f64) -> i64 = js_zlib_pipe_drain_callback;
+
+#[no_mangle]
+pub unsafe extern "C" fn js_zlib_stream_error(
+    message: *const u8,
+    len: usize,
+    truncated: i32,
+) -> f64 {
+    let text = crate::string::js_string_from_bytes(message, len as u32);
+    crate::node_submodules::register_error_code_pub(
+        text,
+        match truncated {
+            1 => "Z_BUF_ERROR",
+            2 => "ERR_STREAM_DESTROYED",
+            _ => "Z_DATA_ERROR",
+        },
+    );
+    crate::value::js_nanbox_pointer(crate::error::js_error_new_with_message(text) as i64)
+}
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_STREAM_ERROR: unsafe extern "C" fn(*const u8, usize, i32) -> f64 =
+    js_zlib_stream_error;
+
+#[no_mangle]
+pub extern "C" fn js_zlib_is_callback(value: f64) -> i32 {
+    let addr = crate::value::addr_class::object_ref_addr(value);
+    (crate::value::addr_class::is_above_handle_band(addr)
+        && !crate::closure::get_valid_func_ptr(addr as *const crate::closure::ClosureHeader)
+            .is_null()) as i32
+}
+#[no_mangle]
+pub extern "C" fn js_zlib_stream_iterator(stream: f64, options: f64) -> f64 {
+    crate::node_stream::async_iterator::readable_handle_iterator_with_options(stream, options)
+}
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_IS_CALLBACK: extern "C" fn(f64) -> i32 = js_zlib_is_callback;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_STREAM_ITERATOR: extern "C" fn(f64, f64) -> f64 = js_zlib_stream_iterator;

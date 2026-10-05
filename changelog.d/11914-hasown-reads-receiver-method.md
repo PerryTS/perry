@@ -1,0 +1,1 @@
+`x.hasOwnProperty(k)` and `x.propertyIsEnumerable(k)` now call the method the receiver actually has: the HIR rewrite that lowered them to a runtime intrinsic is removed, builtin prototypes install the real methods instead of no-op placeholders, and a replaced `Object.prototype` method or an own method of the same name is honoured. (#11914)

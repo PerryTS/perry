@@ -3,6 +3,7 @@ use super::*;
 fn bounds_proof_label(proof: &BoundsProof) -> &'static str {
     match proof {
         BoundsProof::LoopGuard => "loop_guard",
+        BoundsProof::RegionGuard => "region_guard",
         BoundsProof::MinLength => "min_length",
         BoundsProof::ExplicitGuard => "explicit_guard",
         BoundsProof::ExplicitAssume => "explicit_assume",

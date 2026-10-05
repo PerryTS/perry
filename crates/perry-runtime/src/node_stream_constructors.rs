@@ -325,6 +325,8 @@ pub(super) fn init_abort_signal_state(stream: f64, opts: f64) {
 
 #[path = "node_stream_constructors/builders.rs"]
 mod builders;
+#[path = "node_stream_constructors/event_emitter_new.rs"]
+mod event_emitter_new;
 #[path = "node_stream_constructors/introspection.rs"]
 mod introspection;
 #[path = "node_stream_constructors/pipeline.rs"]
@@ -341,6 +343,11 @@ pub use builders::{
     js_node_stream_readable_subclass_init, js_node_stream_transform_new,
     js_node_stream_transform_subclass_init, js_node_stream_writable_new,
     js_node_stream_writable_subclass_init,
+};
+pub use event_emitter_new::{
+    event_emitter_constructor_value, event_emitter_prototype_value,
+    js_event_emitter_async_resource_call, js_event_emitter_async_resource_object_new,
+    js_event_emitter_object_new,
 };
 
 pub use introspection::{

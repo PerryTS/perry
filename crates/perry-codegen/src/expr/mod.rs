@@ -130,7 +130,7 @@ pub(crate) use buffer_access::{
     access_facts_for_spec, can_lower_buffer_access_without_calls,
     can_lower_integer_typed_array_store_value, emit_buffer_access_pointer,
     lower_buffer_access_proof, lower_buffer_load, lower_buffer_store, lower_typed_array_load,
-    lower_typed_array_store, BufferAccessSpec,
+    lower_typed_array_store, typed_array_store_value_is_native, BufferAccessSpec,
 };
 pub(crate) use buffer_views::{
     alias_buffer_view_slot, attach_buffer_view_facts, attach_buffer_view_pointer_state_for_expr,
@@ -176,8 +176,8 @@ pub(crate) use pod_record::{
 };
 pub(crate) use proven_view_access::{
     index_is_exact_i32_shape, is_proven_u32_view_read, local_is_proven_int_store_view,
-    try_lower_proven_view_checked_f64_load, try_lower_proven_view_checked_store,
-    try_lower_proven_view_checked_u32_load,
+    proven_view_receiver, try_lower_proven_view_checked_f64_load,
+    try_lower_proven_view_checked_store, try_lower_proven_view_checked_u32_load,
 };
 pub(crate) use proven_view_guarded::{
     try_lower_proven_view_guarded_load, try_lower_proven_view_guarded_store,
@@ -727,6 +727,13 @@ pub(crate) struct FnCtx<'a> {
     pub compiler_private_async_i1_control_locals: &'a std::collections::HashSet<u32>,
     /// Module-wide scope context object groups (`crate::scope_env`).
     pub scope_map: &'a crate::scope_env::ScopeMap,
+    /// Module-wide untyped string accumulators
+    /// (`collectors::string_accumulator_locals`): selected for the in-place
+    /// self-append and demoted on ordinary reads, like a declared `string`.
+    pub string_accumulator_locals: &'a std::collections::HashSet<u32>,
+    /// Set while lowering `<id>.length`: that read of `id` cannot hand the
+    /// string anywhere, so it skips the unique-owner demote.
+    pub string_length_read_of: Option<u32>,
     /// Closure rest param index: closure `FuncId` → index of the rest
     /// parameter. Built once in `compile_module` from the collected
     /// closures. Used by the closure call site in `lower_call` to

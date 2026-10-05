@@ -75,6 +75,28 @@ fn a_lexical_fetch_result_is_not_registered_as_a_native_response() {
     );
 }
 
+#[test]
+fn an_imported_fetch_result_keeps_userland_method_dispatch() {
+    let source = r#"
+        import { fetch } from "./registry-fetch";
+        async function run() {
+            const response = await fetch("http://localhost/");
+            return response.json();
+        }
+    "#;
+    let module =
+        perry_parser::parse_typescript(source, "imported-fetch.ts").expect("source parses");
+    let mut hir =
+        super::lower_module(&module, "imported-fetch", "imported-fetch.ts").expect("source lowers");
+    crate::ir::clear_current_module_source();
+    crate::js_transform::fix_local_native_instances(&mut hir);
+    let dump = format!("{hir:?}");
+    assert!(
+        !dump.contains("NativeMethodCall { module: \"fetch\", class_name: Some(\"Response\")"),
+        "an imported fetch function must keep userland Response dispatch: {dump}"
+    );
+}
+
 mod buffer_static_values;
 mod class_decl_self_binding;
 mod fresh_class_extends_renamed;
@@ -805,16 +827,9 @@ fn test_lower_rejects_deep_logical_chain() {
 #[test]
 fn test_native_instance_index_shadowing_and_truncation() {
     let mut ctx = make_ctx();
-    // Outer binding `e` -> events/EventEmitter.
-    ctx.register_native_instance(
-        "e".to_string(),
-        "events".to_string(),
-        "EventEmitter".to_string(),
-    );
-    assert_eq!(
-        ctx.lookup_native_instance("e"),
-        Some(("events", "EventEmitter"))
-    );
+    // Outer binding `e` -> net/Socket.
+    ctx.register_native_instance("e".to_string(), "net".to_string(), "Socket".to_string());
+    assert_eq!(ctx.lookup_native_instance("e"), Some(("net", "Socket")));
 
     // Enter an inner scope: shadow `e` with a different native type.
     let mark = ctx.native_instances.len();
@@ -831,10 +846,7 @@ fn test_native_instance_index_shadowing_and_truncation() {
 
     // Pop the inner scope: the outer binding must be restored.
     ctx.truncate_native_instances(mark);
-    assert_eq!(
-        ctx.lookup_native_instance("e"),
-        Some(("events", "EventEmitter"))
-    );
+    assert_eq!(ctx.lookup_native_instance("e"), Some(("net", "Socket")));
 
     // Pop the outer binding too: no entry remains.
     ctx.truncate_native_instances(0);
@@ -885,7 +897,7 @@ fn perf_registry_lookup_is_flat_in_k() {
                 vec![format!("f{i}")],
                 vec![format!("s{i}")],
             );
-            ctx.register_native_instance(format!("ni{i}"), "events".into(), "EventEmitter".into());
+            ctx.register_native_instance(format!("ni{i}"), "net".into(), "Socket".into());
             ctx.register_native_module(format!("nm{i}"), "fs".into(), None);
         }
         // The hot case the bug targets: the receiver is NOT in the registry, so

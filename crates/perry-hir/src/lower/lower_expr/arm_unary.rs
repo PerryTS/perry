@@ -296,30 +296,6 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                     ) {
                         return Ok(Expr::String("function".to_string()));
                     }
-                    if matches!(
-                        ctx.lookup_native_instance(obj_name),
-                        Some(("events", "EventEmitterAsyncResource"))
-                    ) && matches!(
-                        prop_name,
-                        "emitDestroy"
-                            | "on"
-                            | "addListener"
-                            | "once"
-                            | "prependListener"
-                            | "prependOnceListener"
-                            | "off"
-                            | "removeListener"
-                            | "removeAllListeners"
-                            | "emit"
-                            | "listenerCount"
-                            | "listeners"
-                            | "rawListeners"
-                            | "eventNames"
-                            | "setMaxListeners"
-                            | "getMaxListeners"
-                    ) {
-                        return Ok(Expr::String("function".to_string()));
-                    }
                     // #1320: `typeof obs.observe` on a PerformanceObserver
                     // instance. A bare member read on a native-class
                     // instance lowers to a 0-arg NativeMethodCall (getter

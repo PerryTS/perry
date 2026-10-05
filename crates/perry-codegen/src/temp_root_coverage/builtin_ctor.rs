@@ -90,7 +90,7 @@ fn event_emitter_options_is_rooted_across_the_discard_loop() {
         );
         let opts = first_call_result(&ir, "js_object_alloc")
             .unwrap_or_else(|| panic!("{lowering}: opts must allocate:\n{ir}"));
-        assert_rooted_across(&ir, &opts, "js_event_emitter_new_with_options", lowering);
+        assert_rooted_across(&ir, &opts, "js_event_emitter_object_new", lowering);
     });
 }
 

@@ -638,6 +638,17 @@ pub struct CompilationContext {
     /// Native TypeScript modules to compile
     pub native_modules: BTreeMap<PathBuf, HirModule>,
     pub(crate) reexport_pruner: super::collect_modules::reexport_prune::ReexportPruner,
+    /// Some module of the program uses worker_threads (imports it, names it in
+    /// a string literal, or constructs a Worker). Gates worker entries named
+    /// by URL literals (`collect_modules/worker_url.rs`).
+    pub(crate) uses_worker_threads: bool,
+    /// `new URL("<script>", import.meta.url)` targets not yet accepted.
+    pub(crate) worker_url_candidates: Vec<super::collect_modules::worker_url::WorkerUrlCandidate>,
+    /// Accepted URL-literal targets, linked once collection ends.
+    pub(crate) worker_url_accepted: Vec<super::collect_modules::worker_url::WorkerUrlCandidate>,
+    /// Worker entries named by URL literals, as (path as the program spells
+    /// it, canonical path). The driver adds them to the worker entry table.
+    pub(crate) worker_url_entries: Vec<(PathBuf, PathBuf)>,
     /// JavaScript modules to interpret via V8
     pub js_modules: BTreeMap<String, JsModule>,
     /// Declaration sidecars discovered for resolved implementation files.
@@ -864,10 +875,8 @@ pub struct CompilationContext {
     /// Whether codegen routes any construction to the native `EventEmitter`
     /// (a `new EventEmitter()` / `EventEmitterAsyncResource`, regardless of
     /// where the binding was imported from — e.g. `eventemitter3`'s default
-    /// export, whose local name is `EventEmitter`). The `js_event_emitter_*`
-    /// helpers live in perry-stdlib's `events` module behind `bundled-events`;
-    /// without this flag a program that uses native EventEmitter but never
-    /// imports `node:events` fails to link (#5140).
+    /// export, whose local name is `EventEmitter`). Such a program is treated
+    /// as importing `node:events`, so its module helpers are linked (#5140).
     pub uses_event_emitter: bool,
     /// Whether any TS module uses a WHATWG URL API (`new URL`, the hostname
     /// setter, `url.domainToASCII/Unicode`, legacy `url.resolve`,
@@ -1254,6 +1263,10 @@ impl CompilationContext {
         Self {
             native_modules: BTreeMap::new(),
             reexport_pruner: Default::default(),
+            uses_worker_threads: false,
+            worker_url_candidates: Vec::new(),
+            worker_url_accepted: Vec::new(),
+            worker_url_entries: Vec::new(),
             js_modules: BTreeMap::new(),
             declaration_sidecars: BTreeMap::new(),
             import_map: BTreeMap::new(),

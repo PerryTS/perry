@@ -137,8 +137,13 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
                 dispatch_worker_event(worker_id, "message", Some(f64::from_bits(bits)));
                 processed += 1;
             }
-            WorkerEvent::Error(worker_id) => {
-                dispatch_worker_event(worker_id, "error", None);
+            WorkerEvent::Error(worker_id, error) => {
+                let error = f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&error) });
+                // Like an EventEmitter 'error' with no listener: the worker's
+                // error becomes an uncaught exception of the parent.
+                if !dispatch_worker_event(worker_id, "error", Some(error)) {
+                    perry_runtime::exception::js_throw(error);
+                }
                 processed += 1;
             }
             WorkerEvent::Exit(worker_id, code) => {
@@ -264,7 +269,9 @@ pub extern "C" fn js_worker_threads_has_pending() -> i32 {
     }
 }
 
-fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
+/// Run the listeners of one worker event. Returns whether anything listened
+/// (a listener or an `on<event>` property).
+fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) -> bool {
     // Collect (callback, web_event) pairs, then invoke OUTSIDE the WORKERS lock —
     // a listener may re-enter postMessage / terminate, which needs the lock again.
     let (object_bits, callbacks, async_resources): (
@@ -274,7 +281,7 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
     ) = {
         let mut workers = WORKERS.lock().unwrap();
         let Some(worker) = workers.get_mut(&worker_id) else {
-            return;
+            return false;
         };
         let callbacks = worker
             .listeners
@@ -315,6 +322,7 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
         "message" | "messageerror" => async_resources[2],
         _ => async_resources[0],
     };
+    let mut listened = !callbacks.is_empty();
     perry_runtime::async_hooks::run_resource_scope_catching(resource, || {
         let property_name = match event {
             "message" => Some("onmessage"),
@@ -325,6 +333,7 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
         let property_handler = property_name
             .and_then(|name| object_event_handler(object_h.get_nanbox_f64().to_bits(), name))
             .map(|bits| scope.root_nanbox_f64(f64::from_bits(bits)));
+        listened |= property_handler.is_some();
         let needs_event = property_handler.is_some() || callbacks.iter().any(|(_, web)| *web);
         let event_handle = if needs_event {
             let data = (event == "message")
@@ -371,4 +380,5 @@ fn dispatch_worker_event(worker_id: u64, event: &str, arg: Option<f64>) {
         }
         js_undefined()
     });
+    listened
 }

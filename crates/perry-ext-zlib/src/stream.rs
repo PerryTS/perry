@@ -10,26 +10,22 @@
 //! `js_native_call_method` → HANDLE_METHOD_DISPATCH → perry-stdlib's
 //! external-zlib-pump arm → `js_ext_zlib_dispatch_method` here.
 //!
-//! This mirrors the perry-ext-net handle+event pattern, but zlib compression
-//! is synchronous so there's no tokio task: input is buffered across
-//! `.write()`, the codec runs once on `.end()`, and the resulting
-//! 'data'/'end' events are *deferred* onto `ZLIB_PENDING` (drained by
-//! `js_ext_zlib_process_pending` on the next loop tick) so listeners
-//! registered after `.write()` still fire and `.pipe()` can forward chunks.
+//! Codec work is deferred onto the agent pump. Each stream owns its input and
+//! bounded readable queue; paused consumers leave the codec suspended there.
 
 use perry_ffi::{
-    alloc_buffer, alloc_string, gc_register_mutable_root_scanner_named, notify_main_thread,
-    register_aux_event_pump, BufferHeader, ErrorKind, GcRootVisitor, JsClosure, JsValue,
-    RawClosureHeader, StringHeader, TransientRootScope, TransientRootedAddr,
+    alloc_buffer, alloc_string, notify_main_thread, register_agent_event_pump, BufferHeader,
+    ErrorKind, GcRootVisitor, JsClosure, JsValue, RawClosureHeader, StringHeader,
+    TransientRootScope, TransientRootedAddr,
 };
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::ffi::c_void;
 use std::io::{Read, Write};
-use std::sync::Mutex;
 
 mod one_shot_callback;
 pub(crate) use one_shot_callback::queue_one_shot_callback;
 
+#[cfg(test)]
 use flate2::read::{
     DeflateDecoder, DeflateEncoder, GzEncoder, MultiGzDecoder, ZlibDecoder, ZlibEncoder,
 };
@@ -44,6 +40,11 @@ const TRUE_BITS: u64 = 0x7FFC_0000_0000_0004;
 // perry-runtime `#[no_mangle]` symbols, resolved at final link (perry-runtime
 // is always linked). Mirrors perry-ext-net's extern usage.
 extern "C" {
+    fn js_zlib_stream_error(message: *const u8, len: usize, truncated: i32) -> f64;
+    fn js_zlib_is_callback(value: f64) -> i32;
+    fn js_zlib_stream_iterator(stream: f64, options: f64) -> f64;
+    fn js_zlib_stream_option(opts: f64, which: i32) -> usize;
+    fn js_zlib_pipe_drain_callback(stream: f64) -> i64;
     fn js_buffer_is_buffer(ptr: i64) -> i32;
     fn js_get_string_pointer_unified(value: f64) -> i64;
     // #2935: resolve + validate a `{ level }` option to a flate2 level
@@ -102,7 +103,8 @@ extern "C" fn process_pending_aux() -> i32 {
 fn ensure_aux_pump_registered() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| {
-        register_aux_event_pump(process_pending_aux, js_ext_zlib_has_active_handles);
+        // The queues are per agent (see `statics`), so a worker drains its own.
+        register_agent_event_pump(process_pending_aux, js_ext_zlib_has_active_handles);
     });
 }
 
@@ -341,6 +343,7 @@ enum Codec {
 /// resolved by `js_zlib_resolve_level` is not applied to zstd codecs.
 const ZSTD_DEFAULT_LEVEL: i32 = 3;
 
+#[cfg(test)]
 fn run_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
     match codec {
@@ -519,96 +522,79 @@ struct ZlibStreamState {
     /// Streaming codec, fed incrementally. `None` for `createUnzip` (uses
     /// `input` + `run_codec` on `.end()`) or once finalized.
     codec_state: Option<CodecState>,
-    /// Only used by `createUnzip` (buffer-until-end auto-detect).
-    input: Vec<u8>,
     ended: bool,
     /// Set once any chunk has been fed. `.params()` can only rebuild the
     /// encoder at a new level (flate2 has no mid-stream `deflateParams`) before
     /// this flips; after data is written it validates + flushes only (#3285).
     wrote_data: bool,
     bytes_written: usize,
-    pending_bytes_written: usize,
     /// `.pipe(dest)` destinations as NaN-boxed bits; 'data'/'end' forward here.
     pipes: Vec<u64>,
-    /// Decompressed/compressed output produced BEFORE any consumer (`'data'`
-    /// listener or pipe) attached, held until one does — Node's paused-Readable
-    /// buffering. Without this, output drained to no listener was dropped and a
-    /// consumer that attaches later (gaxios/node-fetch attach `on('data')` only
-    /// after `await`ing the fetch) hung waiting on bytes that were already lost.
-    output_buffer: Vec<u8>,
-    /// `'end'` reached but deferred because no consumer had attached yet; the
-    /// stream is kept alive (not removed) so a late consumer can drain
-    /// `output_buffer` and then receive `'end'`.
-    end_buffered: bool,
+    driver: Driver,
+    destroyed: bool,
+    readable_ended: bool,
+    finished: bool,
+    error: Option<f64>,
+    end_callbacks: Vec<i64>,
 }
 
 enum ZlibEvent {
+    Pump(i64),
+    Drain(i64),
+    Close(i64),
     Data(i64, Vec<u8>),
     Finish(i64),
     End(i64),
-    Error(i64, String),
+    DestroyError(i64),
     /// `.flush(cb)` completion callback — invoked (0 args) after its flushed
     /// 'data' is delivered.
     Callback(i64),
+    WriteError(i64, i64),
     /// `zlib.gzip(data, cb)` style one-shot completion callback.
     OneShotCallback(i64, Result<Vec<u8>, String>, u64),
 }
 
-struct Statics {
+pub(crate) struct Statics {
     streams: HashMap<i64, ZlibStreamState>,
-    listeners: HashMap<i64, HashMap<String, Vec<i64>>>,
+    listeners: HashMap<i64, HashMap<String, Vec<(i64, bool)>>>,
     pending: VecDeque<ZlibEvent>,
     next_id: i64,
-    /// Running total of bytes held across every stream's `output_buffer` (i.e.
-    /// output buffered for a consumer that has not attached yet). Maintained by
-    /// the buffering path + `drop_buffered_stream` / `flush_buffered` so the
-    /// global byte cap can be enforced without rescanning all streams.
-    buffered_output_bytes: usize,
-    /// Tombstone set for streams dropped by an overflow/eviction cap before a
-    /// consumer attached. A late consumer attaching to one of these handles
-    /// receives a terminal error event instead of silently hanging.
-    evicted_streams: HashSet<i64>,
 }
 
-fn statics() -> &'static Mutex<Statics> {
-    static S: std::sync::OnceLock<Mutex<Statics>> = std::sync::OnceLock::new();
-    S.get_or_init(|| {
-        Mutex::new(Statics {
-            streams: HashMap::new(),
-            listeners: HashMap::new(),
-            pending: VecDeque::new(),
-            next_id: 0x60000,
-            buffered_output_bytes: 0,
-            evicted_streams: HashSet::new(),
-        })
-    })
-}
+mod driver;
+use driver::{Driver, Work};
+mod agent_state;
+use agent_state::ensure_gc_scanner_registered;
+pub(crate) use agent_state::statics;
 
-static ZLIB_GC_REGISTERED: std::sync::Once = std::sync::Once::new();
-
-/// Register the GC root scanner once. Listener closures live only in the
-/// `listeners` map; without rooting them a GC between `.on()` and the deferred
-/// dispatch would free the closure (same hazard perry-ext-net guards).
-fn ensure_gc_scanner_registered() {
-    ZLIB_GC_REGISTERED.call_once(|| {
-        gc_register_mutable_root_scanner_named("perry-ext-zlib", scan_zlib_roots);
-    });
-}
-
-fn scan_zlib_roots(visitor: &mut GcRootVisitor<'_>) {
+pub(super) fn scan_zlib_roots(visitor: &mut GcRootVisitor<'_>) {
     if let Ok(mut s) = statics().lock() {
         for per_stream in s.listeners.values_mut() {
             for cb_vec in per_stream.values_mut() {
                 for cb in cb_vec.iter_mut() {
-                    visitor.visit_i64_slot(cb);
+                    visitor.visit_i64_slot(&mut cb.0);
                 }
+            }
+        }
+        for stream in s.streams.values_mut() {
+            stream.driver.scan(visitor);
+            for cb in &mut stream.end_callbacks {
+                visitor.visit_i64_slot(cb);
+            }
+            if let Some(error) = &mut stream.error {
+                visitor.visit_nanbox_f64_slot(error);
+            }
+            for dest in &mut stream.pipes {
+                visitor.visit_nanbox_u64_slot(dest);
             }
         }
         // Queued callbacks are referenced only here — root them too, same
         // hazard as listeners.
         for ev in s.pending.iter_mut() {
             match ev {
-                ZlibEvent::Callback(cb) | ZlibEvent::OneShotCallback(cb, _, _) => {
+                ZlibEvent::Callback(cb)
+                | ZlibEvent::OneShotCallback(cb, _, _)
+                | ZlibEvent::WriteError(_, cb) => {
                     visitor.visit_i64_slot(cb);
                 }
                 _ => {}
@@ -617,7 +603,13 @@ fn scan_zlib_roots(visitor: &mut GcRootVisitor<'_>) {
     }
 }
 
-fn create_stream(codec: Codec, level: Compression) -> i64 {
+fn create_stream(
+    codec: Codec,
+    level: Compression,
+    chunk_size: usize,
+    readable_hwm: usize,
+    writable_hwm: usize,
+) -> i64 {
     // External zlib owns its event queue, so register it directly with the
     // runtime when the first stream is created. In particular, do not rely on
     // perry-stdlib's async pump registration: zlib streams are synchronous and
@@ -626,6 +618,12 @@ fn create_stream(codec: Codec, level: Compression) -> i64 {
     ensure_aux_pump_registered();
     ensure_gc_scanner_registered();
     let async_id = unsafe { js_async_hooks_provider_init(b"ZLIB".as_ptr(), b"ZLIB".len()) };
+    let driver = Driver::new(codec, chunk_size, readable_hwm, writable_hwm);
+    let codec_state = if driver.is_decoder() {
+        None
+    } else {
+        make_codec_state_with_level(codec, level)
+    };
     let mut s = statics().lock().unwrap();
     let id = s.next_id;
     s.next_id += 1;
@@ -635,15 +633,17 @@ fn create_stream(codec: Codec, level: Compression) -> i64 {
             async_id,
             codec,
             level,
-            codec_state: make_codec_state_with_level(codec, level),
-            input: Vec::new(),
+            codec_state,
             ended: false,
             wrote_data: false,
             bytes_written: 0,
-            pending_bytes_written: 0,
             pipes: Vec::new(),
-            output_buffer: Vec::new(),
-            end_buffered: false,
+            driver,
+            destroyed: false,
+            readable_ended: false,
+            finished: false,
+            error: None,
+            end_callbacks: Vec::new(),
         },
     );
     id
@@ -663,11 +663,16 @@ macro_rules! factory {
         /// encoders.
         #[no_mangle]
         pub unsafe extern "C" fn $name(opts: f64) -> i64 {
+            let roots = TransientRootScope::enter();
+            let opts = roots.root_nanbox(opts);
             if $min_wb != 0 {
-                js_zlib_validate_options(opts, $min_wb);
+                js_zlib_validate_options(opts.get(), $min_wb);
             }
-            let level = Compression::new(js_zlib_resolve_level(opts) as u32);
-            create_stream($codec, level)
+            let level = Compression::new(js_zlib_resolve_level(opts.get()) as u32);
+            let chunk_size = js_zlib_stream_option(opts.get(), 0);
+            let readable_hwm = js_zlib_stream_option(opts.get(), 1);
+            let writable_hwm = js_zlib_stream_option(opts.get(), 2);
+            create_stream($codec, level, chunk_size, readable_hwm, writable_hwm)
         }
     };
 }
@@ -764,58 +769,44 @@ unsafe fn event_name(value: f64) -> Option<String> {
 
 // ── instance ops ───────────────────────────────────────────────────────────────
 
-/// Feed a chunk to the streaming codec and queue any output that becomes
-/// available immediately (incremental 'data'). For `createUnzip` (no streaming
-/// codec) the chunk is buffered until `.end()`.
-fn stream_write(handle: i64, bytes: &[u8]) {
-    let mut g = statics().lock().unwrap();
-    let event = match g.streams.get_mut(&handle) {
-        Some(s) if !s.ended => {
-            s.wrote_data = true;
-            s.pending_bytes_written = s.pending_bytes_written.saturating_add(bytes.len());
-            match s.codec_state.as_mut() {
-                Some(cs) => match cs.write_chunk(bytes) {
-                    Ok(()) => {
-                        let out = cs.drain();
-                        (!out.is_empty()).then_some(ZlibEvent::Data(handle, out))
-                    }
-                    Err(e) => Some(ZlibEvent::Error(handle, e.to_string())),
-                },
-                None => {
-                    s.input.extend_from_slice(bytes);
-                    None
-                }
-            }
+fn schedule(g: &mut Statics, handle: i64) {
+    if let Some(s) = g.streams.get_mut(&handle) {
+        if !s.driver.scheduled && !s.destroyed {
+            s.driver.scheduled = true;
+            g.pending.push_back(ZlibEvent::Pump(handle));
         }
-        _ => return,
-    };
-    if let Some(ev) = event {
-        g.pending.push_back(ev);
-        drop(g);
-        notify_main_thread();
     }
 }
 
-/// `.flush([kind], cb?)` — emit a Z_SYNC_FLUSH (BROTLI_OPERATION_FLUSH) block so
-/// a consumer can decode everything written so far, then queue the callback.
+fn stream_write(handle: i64, bytes: Vec<u8>, cb: i64) -> bool {
+    let mut g = statics().lock().unwrap();
+    let accepted = match g.streams.get_mut(&handle) {
+        Some(s) if !s.ended && !s.destroyed => {
+            s.wrote_data = true;
+            s.driver.input_bytes += bytes.len();
+            s.driver.work.push_back(Work::Write(bytes, 0, cb));
+            let accepted = s.driver.input_bytes < s.driver.writable_hwm;
+            s.driver.need_drain |= !accepted;
+            accepted
+        }
+        _ => {
+            return false;
+        }
+    };
+    schedule(&mut g, handle);
+    drop(g);
+    notify_main_thread();
+    accepted
+}
+
 fn stream_flush(handle: i64, cb: i64) {
     let mut g = statics().lock().unwrap();
-    let data = match g.streams.get_mut(&handle) {
-        Some(s) if !s.ended => match s.codec_state.as_mut() {
-            Some(cs) => {
-                let _ = cs.flush_codec();
-                cs.drain()
-            }
-            None => Vec::new(),
-        },
-        _ => Vec::new(),
-    };
-    if !data.is_empty() {
-        g.pending.push_back(ZlibEvent::Data(handle, data));
+    if let Some(s) = g.streams.get_mut(&handle) {
+        if !s.ended && !s.destroyed {
+            s.driver.work.push_back(Work::Flush(cb));
+        }
     }
-    if cb != 0 {
-        g.pending.push_back(ZlibEvent::Callback(cb));
-    }
+    schedule(&mut g, handle);
     drop(g);
     notify_main_thread();
 }
@@ -840,20 +831,15 @@ unsafe fn stream_params(handle: i64, level: f64, strategy: f64, cb: i64) {
         if !s.ended && !s.wrote_data {
             let level = Compression::new(clamped as u32);
             s.level = level;
-            s.codec_state = make_codec_state_with_level(s.codec, level);
-        } else if !s.ended {
-            if let Some(cs) = s.codec_state.as_mut() {
-                let _ = cs.flush_codec();
-                let out = cs.drain();
-                if !out.is_empty() {
-                    g.pending.push_back(ZlibEvent::Data(handle, out));
-                }
+            if !s.driver.is_decoder() {
+                s.codec_state = make_codec_state_with_level(s.codec, level);
             }
         }
+        if !s.ended {
+            s.driver.work.push_back(Work::Flush(cb));
+        }
     }
-    if cb != 0 {
-        g.pending.push_back(ZlibEvent::Callback(cb));
-    }
+    schedule(&mut g, handle);
     drop(g);
     notify_main_thread();
 }
@@ -861,12 +847,20 @@ unsafe fn stream_params(handle: i64, level: f64, strategy: f64, cb: i64) {
 fn stream_reset(handle: i64) {
     let mut g = statics().lock().unwrap();
     if let Some(s) = g.streams.get_mut(&handle) {
-        s.codec_state = make_codec_state_with_level(s.codec, s.level);
-        s.input.clear();
+        s.driver = Driver::new(
+            s.codec,
+            s.driver.chunk_size,
+            s.driver.readable_hwm,
+            s.driver.writable_hwm,
+        );
+        s.codec_state = if s.driver.is_decoder() {
+            None
+        } else {
+            make_codec_state_with_level(s.codec, s.level)
+        };
         s.ended = false;
         s.wrote_data = false;
         s.bytes_written = 0;
-        s.pending_bytes_written = 0;
     }
 }
 
@@ -880,47 +874,64 @@ fn stream_bytes_written(handle: i64) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn publish_bytes_written(handle: i64) {
-    if let Some(s) = statics().lock().unwrap().streams.get_mut(&handle) {
-        s.bytes_written = s.pending_bytes_written;
-    }
-}
-
-/// Finalize the stream and queue the remaining output + 'end' (or 'error').
 fn finish_stream(handle: i64) {
-    let (codec_state, codec, input) = {
-        let mut g = statics().lock().unwrap();
-        match g.streams.get_mut(&handle) {
-            Some(s) if !s.ended => {
-                s.ended = true;
-                (s.codec_state.take(), s.codec, std::mem::take(&mut s.input))
-            }
-            _ => return,
-        }
-    };
-    let result = match codec_state {
-        Some(cs) => cs.finish().map_err(|e| e.to_string()),
-        None => run_codec(codec, &input).map_err(|e| e.to_string()), // Unzip
-    };
-    {
-        let mut g = statics().lock().unwrap();
-        match result {
-            Ok(out) => {
-                // Writable completion precedes the final readable bytes/end
-                // of a Transform stream in Node.
-                g.pending.push_back(ZlibEvent::Finish(handle));
-                if !out.is_empty() {
-                    g.pending.push_back(ZlibEvent::Data(handle, out));
-                }
-                g.pending.push_back(ZlibEvent::End(handle));
-            }
-            Err(msg) => g.pending.push_back(ZlibEvent::Error(handle, msg)),
+    let mut g = statics().lock().unwrap();
+    if let Some(s) = g.streams.get_mut(&handle) {
+        if !s.ended && !s.destroyed {
+            s.ended = true;
+            s.driver.work.push_back(Work::End);
+            schedule(&mut g, handle);
         }
     }
+    drop(g);
     notify_main_thread();
 }
 
-fn stream_on(handle: i64, event: String, cb: i64) {
+fn destroy_stream(handle: i64, message: Option<String>) -> bool {
+    let roots = TransientRootScope::enter();
+    let error = message
+        .as_ref()
+        .map(|msg| roots.root_nanbox(unsafe { build_error_object(msg) }));
+    let mut g = statics().lock().unwrap();
+    let Some(s) = g.streams.get_mut(&handle) else {
+        return false;
+    };
+    if s.destroyed {
+        return false;
+    }
+    s.destroyed = true;
+    if let Some(error) = &error {
+        s.error = Some(error.get());
+    }
+    let mut callbacks = s.driver.cancel_callbacks();
+    callbacks.append(&mut s.end_callbacks);
+    s.codec_state = None;
+    s.pipes.clear();
+    s.driver.work.clear();
+    s.driver.output.clear();
+    s.driver.output_bytes = 0;
+    s.driver.done = true;
+    // Drop decoder and its compressed input immediately.
+    s.driver = Driver::new(
+        Codec::Gzip,
+        s.driver.chunk_size,
+        s.driver.readable_hwm,
+        s.driver.writable_hwm,
+    );
+    g.pending.retain(|e| event_stream_handle(e) != Some(handle));
+    for cb in callbacks {
+        g.pending.push_back(ZlibEvent::WriteError(handle, cb));
+    }
+    if message.is_some() {
+        g.pending.push_back(ZlibEvent::DestroyError(handle));
+    }
+    g.pending.push_back(ZlibEvent::Close(handle));
+    drop(g);
+    notify_main_thread();
+    true
+}
+
+fn stream_on(handle: i64, event: String, cb: i64, once: bool) {
     ensure_gc_scanner_registered();
     statics()
         .lock()
@@ -930,14 +941,14 @@ fn stream_on(handle: i64, event: String, cb: i64) {
         .or_default()
         .entry(event)
         .or_default()
-        .push(cb);
-    flush_buffered(handle);
+        .push((cb, once));
+    resume_stream(handle, false);
 }
 
 fn stream_off(handle: i64, event: &str, cb: i64) {
     if let Some(events) = statics().lock().unwrap().listeners.get_mut(&handle) {
         if let Some(list) = events.get_mut(event) {
-            if let Some(at) = list.iter().rposition(|&c| c == cb) {
+            if let Some(at) = list.iter().rposition(|&(c, _)| c == cb) {
                 list.remove(at);
             }
         }
@@ -948,72 +959,80 @@ fn stream_pipe(handle: i64, dest_bits: u64) {
     if let Some(s) = statics().lock().unwrap().streams.get_mut(&handle) {
         s.pipes.push(dest_bits);
     }
-    flush_buffered(handle);
+    resume_stream(handle, false);
 }
 
-/// Once a consumer (a `'data'` listener or a `.pipe(dest)`) attaches, re-queue
-/// any output buffered before it arrived, followed by the deferred `'end'`, so a
-/// late consumer still receives the full body. Re-queuing (rather than
-/// delivering inline) is essential: `consumeBody` attaches `on('data')` then
-/// `on('end')` synchronously, so the events must be delivered by a later pump
-/// tick when BOTH listeners are present. No-op when there is no buffered output
-/// / deferred end, or no data consumer yet.
-fn flush_buffered(handle: i64) {
+fn resume_stream(handle: i64, explicit: bool) {
     let mut g = statics().lock().unwrap();
-    let has_data_consumer = g
+    let consumer = g
         .listeners
         .get(&handle)
         .and_then(|m| m.get("data"))
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
-        || g.streams
-            .get(&handle)
-            .map(|s| !s.pipes.is_empty())
-            .unwrap_or(false);
-    if !has_data_consumer {
-        return;
-    }
-    let Some(s) = g.streams.get_mut(&handle) else {
-        // Stream is gone. If it was evicted by an overflow cap, deliver a
-        // terminal error so the consumer does not hang indefinitely.
-        if g.evicted_streams.remove(&handle) {
-            g.pending.push_back(ZlibEvent::Error(
-                handle,
-                "zlib stream buffer overflow: output discarded before consumer attached"
-                    .to_string(),
-            ));
-            drop(g);
-            notify_main_thread();
+        .is_some_and(|v| !v.is_empty());
+    if let Some(s) = g.streams.get_mut(&handle) {
+        if explicit {
+            s.driver.paused = false;
         }
-        return;
-    };
-    if s.output_buffer.is_empty() && !s.end_buffered {
-        return;
+        if !s.driver.paused && (explicit || consumer || !s.pipes.is_empty()) {
+            s.driver.flowing = true;
+        }
     }
-    let buf = std::mem::take(&mut s.output_buffer);
-    let ended = s.end_buffered;
-    s.end_buffered = false;
-    g.buffered_output_bytes = g.buffered_output_bytes.saturating_sub(buf.len());
-    // Buffered output predates anything still queued for this handle: it was
-    // produced and drained by an earlier pump tick, before this consumer
-    // attached. `process_pending` drains FIFO, so a plain `push` could deliver
-    // these older bytes AFTER newer chunks already queued for the same stream
-    // (e.g. a `.write()` landed between the buffering tick and the consumer
-    // attaching). Splice ahead of the first pending event for this handle to
-    // preserve per-stream order.
-    insert_buffered_ahead(&mut g.pending, handle, buf, ended);
+    schedule(&mut g, handle);
     drop(g);
     notify_main_thread();
+}
+
+fn pump_stream(handle: i64) {
+    let mut g = statics().lock().unwrap();
+    let Some(s) = g.streams.get_mut(&handle) else {
+        return;
+    };
+    s.driver.scheduled = false;
+    if s.destroyed {
+        return;
+    }
+    let events = match s
+        .driver
+        .produce(&mut s.codec_state, handle, &mut s.bytes_written)
+    {
+        Ok(events) => events,
+        Err(message) => {
+            drop(g);
+            destroy_stream(handle, Some(message));
+            return;
+        }
+    };
+    g.pending.extend(events);
+    let s = g.streams.get_mut(&handle).unwrap();
+    if s.driver.flowing && s.driver.pipe_waiters == 0 {
+        if let Some(bytes) = s.driver.output.pop_front() {
+            g.pending.push_back(ZlibEvent::Data(handle, bytes));
+            // The next pump is scheduled AFTER data delivery so a listener's
+            // pause/destroy applies before any further codec work.
+            return;
+        }
+        if s.driver.done {
+            g.pending.push_back(ZlibEvent::End(handle));
+            return;
+        }
+    }
+    if s.driver.can_progress() {
+        schedule(&mut g, handle);
+    }
 }
 
 /// Stream handle an event targets, if it is handle-scoped. `Callback` /
 /// `OneShotCallback` carry only a closure, so they are not tied to a stream.
 fn event_stream_handle(ev: &ZlibEvent) -> Option<i64> {
     match ev {
-        ZlibEvent::Data(id, _)
+        ZlibEvent::Pump(id)
+        | ZlibEvent::Drain(id)
+        | ZlibEvent::Close(id)
+        | ZlibEvent::Data(id, _)
         | ZlibEvent::Finish(id)
         | ZlibEvent::End(id)
-        | ZlibEvent::Error(id, _) => Some(*id),
+        | ZlibEvent::DestroyError(id)
+        | ZlibEvent::WriteError(id, _) => Some(*id),
         ZlibEvent::Callback(_) | ZlibEvent::OneShotCallback(_, _, _) => None,
     }
 }
@@ -1024,158 +1043,6 @@ fn stream_async_id(handle: i64) -> u64 {
         .ok()
         .and_then(|g| g.streams.get(&handle).map(|stream| stream.async_id))
         .unwrap_or(0)
-}
-
-/// Splice late-flushed buffered `Data` (then the deferred `End`) ahead of any
-/// newer queued events for `handle`, so the FIFO `process_pending` drain still
-/// delivers a late consumer its chunks in write order. Inserts at the first
-/// queued event for this handle, or the tail when none is queued (equivalent to
-/// a push). `Callback`/`OneShotCallback` are not handle-scoped and are never
-/// jumped.
-fn insert_buffered_ahead(
-    pending: &mut VecDeque<ZlibEvent>,
-    handle: i64,
-    buf: Vec<u8>,
-    ended: bool,
-) {
-    let mut at = pending
-        .iter()
-        .position(|ev| event_stream_handle(ev) == Some(handle))
-        .unwrap_or(pending.len());
-    if !buf.is_empty() {
-        pending.insert(at, ZlibEvent::Data(handle, buf));
-        at += 1;
-    }
-    if ended {
-        pending.insert(at, ZlibEvent::End(handle));
-    }
-}
-
-/// Upper bound on never-consumed `end_buffered` streams kept alive for a late
-/// consumer. A deferred-`End` stream is normally drained within a tick or two
-/// (the consumer attaches right after `await`), so this only trips for a
-/// genuinely abandoned handle — one that ends but never gets a `'data'` listener
-/// or `.pipe()`. Without a cap those would pin their buffered output for the
-/// process lifetime (the handle is a small int, not a GC-tracked object, so
-/// nothing finalizes it). Mirrors perry-ext-net's bounded buffer pool.
-const MAX_BUFFERED_ENDED_STREAMS: usize = 1024;
-
-/// Fallback eviction for abandoned ended streams: once more than
-/// [`MAX_BUFFERED_ENDED_STREAMS`] streams sit `end_buffered` without a consumer,
-/// drop the oldest (smallest id ≈ earliest created) until back under the cap,
-/// freeing their buffered output and listener entries. A still-wanted late
-/// consumer keeps this count tiny, so a stream about to drain is not evicted in
-/// practice.
-fn evict_excess_buffered_ended(g: &mut Statics) {
-    let buffered = g.streams.values().filter(|s| s.end_buffered).count();
-    if buffered <= MAX_BUFFERED_ENDED_STREAMS {
-        return;
-    }
-    let mut ids: Vec<i64> = g
-        .streams
-        .iter()
-        .filter(|(_, s)| s.end_buffered)
-        .map(|(id, _)| *id)
-        .collect();
-    ids.sort_unstable();
-    for id in ids.into_iter().take(buffered - MAX_BUFFERED_ENDED_STREAMS) {
-        drop_buffered_stream(g, id);
-    }
-}
-
-/// Remove a stream and its listeners, decrementing the buffered-output total by
-/// whatever the stream still held. The single removal path so
-/// `buffered_output_bytes` always equals the sum of every live `output_buffer`.
-///
-/// Leaves a tombstone in `evicted_streams` so that a late consumer attaching
-/// after an overflow eviction receives a terminal error rather than hanging.
-fn drop_buffered_stream(g: &mut Statics, id: i64) {
-    if let Some(s) = g.streams.remove(&id) {
-        g.buffered_output_bytes = g
-            .buffered_output_bytes
-            .saturating_sub(s.output_buffer.len());
-        g.evicted_streams.insert(id);
-    }
-    g.listeners.remove(&id);
-}
-
-/// Per-stream cap on output buffered for a not-yet-attached consumer. Generous
-/// enough for a realistic late consumer (gaxios/node-fetch awaiting a response
-/// body) while still bounding a single never-consumed stream — e.g. a
-/// decompression bomb fed incrementally with no listener. A no-consumer stream
-/// that would exceed it is treated as abandoned and dropped (its buffer freed)
-/// rather than grown without limit.
-const MAX_BUFFERED_OUTPUT_PER_STREAM: usize = 64 * 1024 * 1024;
-
-/// Global cap on output buffered across ALL not-yet-consumed streams. Bounds
-/// total retained decompressed output even when many streams each stay under the
-/// per-stream cap; the oldest no-consumer buffers are evicted first.
-const MAX_BUFFERED_OUTPUT_TOTAL: usize = 256 * 1024 * 1024;
-
-/// Buffer decompressed output for a stream whose consumer has not attached yet,
-/// enforcing the production byte caps. See [`buffer_output_capped`].
-fn buffer_output_for_late_consumer(g: &mut Statics, id: i64, bytes: &[u8]) {
-    buffer_output_capped(
-        g,
-        id,
-        bytes,
-        MAX_BUFFERED_OUTPUT_PER_STREAM,
-        MAX_BUFFERED_OUTPUT_TOTAL,
-    );
-}
-
-/// Append `bytes` to a no-consumer stream's buffer under explicit caps (the
-/// caps are parameters so tests can exercise the policy without allocating
-/// hundreds of MiB). Policy: a stream that would exceed `per_stream_cap` without
-/// a consumer is dropped as abandoned (a never-consumed stream or a hostile
-/// decompression bomb) instead of growing unbounded; otherwise the bytes are
-/// appended and, if the global total then exceeds `total_cap`, the oldest
-/// no-consumer buffers are evicted. A stream that already has a consumer never
-/// reaches here — its output is delivered, not buffered — so this never
-/// penalizes a consumed stream.
-fn buffer_output_capped(
-    g: &mut Statics,
-    id: i64,
-    bytes: &[u8],
-    per_stream_cap: usize,
-    total_cap: usize,
-) {
-    let cur = match g.streams.get(&id) {
-        Some(s) => s.output_buffer.len(),
-        None => return,
-    };
-    if cur.saturating_add(bytes.len()) > per_stream_cap {
-        drop_buffered_stream(g, id);
-        return;
-    }
-    if let Some(s) = g.streams.get_mut(&id) {
-        s.output_buffer.extend_from_slice(bytes);
-    }
-    g.buffered_output_bytes = g.buffered_output_bytes.saturating_add(bytes.len());
-    enforce_global_output_cap(g, total_cap);
-}
-
-/// Evict the oldest never-consumed buffers (smallest id ≈ earliest created)
-/// until the retained total is back under `total_cap`. Only streams that still
-/// hold buffered output are candidates; a consumed stream has already drained
-/// its buffer and contributes nothing.
-fn enforce_global_output_cap(g: &mut Statics, total_cap: usize) {
-    if g.buffered_output_bytes <= total_cap {
-        return;
-    }
-    let mut ids: Vec<i64> = g
-        .streams
-        .iter()
-        .filter(|(_, s)| !s.output_buffer.is_empty())
-        .map(|(id, _)| *id)
-        .collect();
-    ids.sort_unstable();
-    for id in ids {
-        if g.buffered_output_bytes <= total_cap {
-            break;
-        }
-        drop_buffered_stream(g, id);
-    }
 }
 
 // ── dynamic method dispatch for external zlib handles ─────────────────────────
@@ -1218,24 +1085,61 @@ pub unsafe extern "C" fn js_ext_zlib_dispatch_method(
     let self_ref = f64::from_bits(POINTER_TAG | (handle as u64 & POINTER_MASK));
     match method.as_str() {
         "write" if !args.is_empty() => {
-            if let Some(bytes) = chunk_to_bytes(args[0]) {
-                stream_write(handle, &bytes);
-            }
-            f64::from_bits(TRUE_BITS) // Node's writable.write() returns a boolean
+            let cb = args
+                .iter()
+                .skip(1)
+                .rev()
+                .find(|v| js_zlib_is_callback(**v) != 0)
+                .map(|v| (v.to_bits() & POINTER_MASK) as i64)
+                .unwrap_or(0);
+            let accepted =
+                chunk_to_bytes(args[0]).is_some_and(|bytes| stream_write(handle, bytes, cb));
+            f64::from_bits(if accepted {
+                TRUE_BITS
+            } else {
+                JsValue::FALSE.bits()
+            })
         }
         "end" => {
-            if let Some(chunk) = args.first().copied() {
+            let cb = args
+                .iter()
+                .rev()
+                .find(|v| js_zlib_is_callback(**v) != 0)
+                .map(|v| (v.to_bits() & POINTER_MASK) as i64)
+                .unwrap_or(0);
+            if cb != 0 {
+                let mut g = statics().lock().unwrap();
+                if let Some(s) = g.streams.get_mut(&handle) {
+                    if s.finished {
+                        g.pending.push_back(ZlibEvent::Callback(cb));
+                    } else if s.destroyed {
+                        g.pending.push_back(ZlibEvent::WriteError(handle, cb));
+                    } else {
+                        s.end_callbacks.push(cb);
+                    }
+                }
+            }
+            if let Some(chunk) = args
+                .first()
+                .copied()
+                .filter(|v| js_zlib_is_callback(*v) == 0)
+            {
                 if let Some(bytes) = chunk_to_bytes(chunk) {
-                    stream_write(handle, &bytes);
+                    stream_write(handle, bytes, 0);
                 }
             }
             finish_stream(handle);
+            notify_main_thread();
             self_ref
         }
+        "iterator" | "@@asyncIterator" => js_zlib_stream_iterator(
+            self_ref,
+            args.first().copied().unwrap_or(f64::from_bits(UNDEFINED)),
+        ),
         "on" | "once" | "addListener" if args.len() >= 2 => {
             if let Some(ev) = event_name(args[0]) {
                 let cb = (args[1].to_bits() & POINTER_MASK) as i64;
-                stream_on(handle, ev, cb);
+                stream_on(handle, ev, cb, method == "once");
             }
             self_ref
         }
@@ -1252,8 +1156,67 @@ pub unsafe extern "C" fn js_ext_zlib_dispatch_method(
             args[0] // Node's `.pipe(dest)` returns `dest` for chaining
         }
         "close" | "destroy" => {
-            finish_stream(handle);
-            f64::from_bits(UNDEFINED)
+            let destroyed = destroy_stream(handle, None);
+            if let Some(reason) = args.first().copied().filter(|v| {
+                !JsValue::from_bits(v.to_bits()).is_undefined()
+                    && !JsValue::from_bits(v.to_bits()).is_null()
+            }) {
+                if destroyed {
+                    let mut g = statics().lock().unwrap();
+                    if let Some(s) = g.streams.get_mut(&handle) {
+                        s.error = Some(reason);
+                    }
+                    let at = g
+                        .pending
+                        .iter()
+                        .position(|e| matches!(e, ZlibEvent::Close(id) if *id == handle))
+                        .unwrap_or(g.pending.len());
+                    g.pending.insert(at, ZlibEvent::DestroyError(handle));
+                }
+            }
+            self_ref
+        }
+        "_perryIteratorState" => {
+            let g = statics().lock().unwrap();
+            g.streams
+                .get(&handle)
+                .map(|s| {
+                    if s.readable_ended {
+                        1.0
+                    } else if s.error.is_some() {
+                        3.0
+                    } else if s.destroyed {
+                        2.0
+                    } else {
+                        0.0
+                    }
+                })
+                .unwrap_or(2.0)
+        }
+        "_perryIteratorError" => statics()
+            .lock()
+            .unwrap()
+            .streams
+            .get(&handle)
+            .and_then(|s| s.error)
+            .unwrap_or(f64::from_bits(UNDEFINED)),
+        "pause" => {
+            if let Some(s) = statics().lock().unwrap().streams.get_mut(&handle) {
+                s.driver.paused = true;
+                s.driver.flowing = false;
+            }
+            self_ref
+        }
+        "resume" => {
+            resume_stream(handle, true);
+            self_ref
+        }
+        "_perryDrain" => {
+            if let Some(s) = statics().lock().unwrap().streams.get_mut(&handle) {
+                s.driver.pipe_waiters = s.driver.pipe_waiters.saturating_sub(1);
+            }
+            resume_stream(handle, false);
+            self_ref
         }
         // `.flush([kind], cb?)` — Node's signature is `flush([kind], callback)`.
         // `kind` is numeric; the callback is the POINTER_TAG arg (if any).
@@ -1294,16 +1257,42 @@ pub extern "C" fn js_ext_zlib_stream_bytes_written(handle: i64) -> f64 {
     stream_bytes_written(handle)
 }
 
+/// State lives on the handle record; no payload survives end/destroy.
+#[no_mangle]
+pub extern "C" fn js_ext_zlib_stream_property(handle: i64, which: i32) -> f64 {
+    let g = statics().lock().unwrap();
+    let Some(s) = g.streams.get(&handle) else {
+        return f64::from_bits(UNDEFINED);
+    };
+    let boolean = |b| {
+        f64::from_bits(if b {
+            JsValue::TRUE.bits()
+        } else {
+            JsValue::FALSE.bits()
+        })
+    };
+    match which {
+        0 => s.driver.output_bytes as f64,
+        1 => s.driver.readable_hwm as f64,
+        2 => s.driver.input_bytes as f64,
+        3 => s.driver.writable_hwm as f64,
+        4 => boolean(s.destroyed),
+        5 => boolean(s.readable_ended),
+        6 => boolean(s.finished),
+        _ => f64::from_bits(UNDEFINED),
+    }
+}
+
 // ── pump (drained on the main thread from perry-stdlib) ─────────────────────────
 
 fn listeners_for(id: i64, event: &str) -> Vec<i64> {
-    statics()
-        .lock()
-        .unwrap()
-        .listeners
-        .get(&id)
-        .and_then(|m| m.get(event).cloned())
-        .unwrap_or_default()
+    let mut g = statics().lock().unwrap();
+    let Some(list) = g.listeners.get_mut(&id).and_then(|m| m.get_mut(event)) else {
+        return Vec::new();
+    };
+    let callbacks = list.iter().map(|&(cb, _)| cb).collect();
+    list.retain(|&(_, once)| !once);
+    callbacks
 }
 
 fn pipes_for(id: i64) -> Vec<u64> {
@@ -1319,41 +1308,53 @@ fn pipes_for(id: i64) -> Vec<u64> {
 /// Forward a piped chunk: `dest.write(Buffer.from(bytes))`. Builds the method-
 /// name string then the chunk Buffer back-to-back (the chunk comes from an
 /// owned `Vec<u8>`), so dispatch roots the arg before any further allocation.
-unsafe fn forward_write(dest_bits: u64, bytes: &[u8]) {
-    let name = alloc_string("write").as_raw();
-    if name.is_null() {
+unsafe fn forward_write(handle: i64, dest_bits: u64, bytes: &[u8]) {
+    let roots = TransientRootScope::enter();
+    let dest = roots.root_nanbox(f64::from_bits(dest_bits));
+    let name = roots.root_addr(alloc_string("write").as_raw() as i64);
+    if name.get() == 0 {
         return;
     }
-    let buf = match make_buffer_f64(bytes) {
-        Some(b) => b,
-        None => return,
+    let Some(buf) = make_buffer_f64(bytes) else {
+        return;
     };
-    let args = [buf];
-    js_native_call_method_str_key(f64::from_bits(dest_bits), name as i64, args.as_ptr(), 1);
+    let buf = roots.root_nanbox(buf);
+    let args = [buf.get()];
+    let written = js_native_call_method_str_key(dest.get(), name.get(), args.as_ptr(), 1);
+    if written.to_bits() == JsValue::FALSE.bits() {
+        if let Some(s) = statics().lock().unwrap().streams.get_mut(&handle) {
+            s.driver.pipe_waiters += 1;
+        }
+        let cb = roots.root_addr(js_zlib_pipe_drain_callback(f64::from_bits(
+            POINTER_TAG | handle as u64,
+        )));
+        let event = roots.root_nanbox(f64::from_bits(
+            STRING_TAG | alloc_string("drain").as_raw() as u64,
+        ));
+        let name = alloc_string("once").as_raw();
+        let args = [event.get(), f64::from_bits(POINTER_TAG | cb.get() as u64)];
+        js_native_call_method_str_key(dest.get(), name as i64, args.as_ptr(), 2);
+    }
 }
 
 unsafe fn forward_end(dest_bits: u64) {
+    let roots = TransientRootScope::enter();
+    let dest = roots.root_nanbox(f64::from_bits(dest_bits));
     let name = alloc_string("end").as_raw();
     if name.is_null() {
         return;
     }
-    js_native_call_method_str_key(f64::from_bits(dest_bits), name as i64, std::ptr::null(), 0);
+    js_native_call_method_str_key(dest.get(), name as i64, std::ptr::null(), 0);
 }
 
-/// `{ message: msg }` error object so `s.on('error', e => e.message)` works.
 unsafe fn build_error_object(msg: &str) -> f64 {
-    let (packed, shape) = perry_ffi::build_object_shape(&["message"]);
-    let obj = perry_ffi::js_object_alloc_with_shape(shape, 1, packed.as_ptr(), packed.len() as u32);
-    let s = alloc_string(msg).as_raw();
-    if obj.is_null() {
-        return f64::from_bits(STRING_TAG | (s as u64 & POINTER_MASK));
-    }
-    perry_ffi::js_object_set_field(obj, 0, JsValue::from_string_ptr(s));
-    f64::from_bits(POINTER_TAG | (obj as u64 & POINTER_MASK))
+    let truncated = msg.contains("unexpected end") || msg.contains("UnexpectedEof");
+    js_zlib_stream_error(msg.as_ptr(), msg.len(), truncated as i32)
 }
 
 struct ZlibEventDispatch {
     event: Option<ZlibEvent>,
+    callback: Option<TransientRootedAddr>,
 }
 
 unsafe extern "C" fn zlib_event_dispatch_thunk(data: *mut c_void) -> f64 {
@@ -1364,16 +1365,27 @@ unsafe extern "C" fn zlib_event_dispatch_thunk(data: *mut c_void) -> f64 {
         .expect("zlib event dispatch thunk must run exactly once");
     match event {
         ZlibEvent::Data(id, bytes) => {
-            publish_bytes_written(id);
+            {
+                let mut g = statics().lock().unwrap();
+                let Some(s) = g.streams.get_mut(&id) else {
+                    return f64::from_bits(UNDEFINED);
+                };
+                if s.destroyed {
+                    return f64::from_bits(UNDEFINED);
+                }
+                if !s.driver.flowing || s.driver.pipe_waiters != 0 {
+                    s.driver.output.push_front(bytes);
+                    return f64::from_bits(UNDEFINED);
+                }
+                s.driver.output_bytes -= bytes.len();
+            }
             let roots = TransientRootScope::enter();
             let callbacks = roots.root_addrs(&listeners_for(id, "data"));
             let destinations = pipes_for(id)
                 .into_iter()
                 .map(|bits| roots.root_nanbox(f64::from_bits(bits)))
                 .collect::<Vec<_>>();
-            if callbacks.is_empty() && destinations.is_empty() {
-                buffer_output_for_late_consumer(&mut statics().lock().unwrap(), id, &bytes);
-            } else {
+            {
                 if !callbacks.is_empty() {
                     if let Some(buffer) = make_buffer_f64(&bytes) {
                         let buffer = roots.root_nanbox(buffer);
@@ -1387,13 +1399,57 @@ unsafe extern "C" fn zlib_event_dispatch_thunk(data: *mut c_void) -> f64 {
                     }
                 }
                 for destination in destinations {
-                    forward_write(destination.get().to_bits(), &bytes);
+                    forward_write(id, destination.get().to_bits(), &bytes);
+                }
+            }
+            let mut g = statics().lock().unwrap();
+            if g.streams
+                .get(&id)
+                .is_some_and(|s| !s.destroyed && s.driver.can_progress())
+            {
+                schedule(&mut g, id);
+            }
+        }
+        ZlibEvent::Pump(id) => pump_stream(id),
+        ZlibEvent::Drain(id) => {
+            let roots = TransientRootScope::enter();
+            for callback in roots.root_addrs(&listeners_for(id, "drain")) {
+                if callback.get() != 0 {
+                    let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader)
+                        .call0(perry_ffi::JsThis::UNDEFINED);
+                }
+            }
+        }
+        ZlibEvent::Close(id) => {
+            let roots = TransientRootScope::enter();
+            let callbacks = roots.root_addrs(&listeners_for(id, "close"));
+            let mut g = statics().lock().unwrap();
+            // Keep the handle's terminal state, as Node keeps it on the
+            // stream object. Its codec/input/output have already been freed.
+            g.listeners.remove(&id);
+            drop(g);
+            for callback in callbacks {
+                if callback.get() != 0 {
+                    let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader)
+                        .call0(perry_ffi::JsThis::UNDEFINED);
                 }
             }
         }
         ZlibEvent::Finish(id) => {
+            if let Some(s) = statics().lock().unwrap().streams.get_mut(&id) {
+                s.finished = true;
+            }
             let roots = TransientRootScope::enter();
-            for callback in roots.root_addrs(&listeners_for(id, "finish")) {
+            let end_callbacks = statics()
+                .lock()
+                .unwrap()
+                .streams
+                .get_mut(&id)
+                .map(|s| std::mem::take(&mut s.end_callbacks))
+                .unwrap_or_default();
+            let end_callbacks = roots.root_addrs(&end_callbacks);
+            let callbacks = roots.root_addrs(&listeners_for(id, "finish"));
+            for callback in end_callbacks.into_iter().chain(callbacks) {
                 if callback.get() != 0 {
                     let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader)
                         .call0(perry_ffi::JsThis::UNDEFINED);
@@ -1401,7 +1457,6 @@ unsafe extern "C" fn zlib_event_dispatch_thunk(data: *mut c_void) -> f64 {
             }
         }
         ZlibEvent::End(id) => {
-            publish_bytes_written(id);
             let roots = TransientRootScope::enter();
             let end_callbacks = roots.root_addrs(&listeners_for(id, "end"));
             let destinations = pipes_for(id)
@@ -1409,7 +1464,22 @@ unsafe extern "C" fn zlib_event_dispatch_thunk(data: *mut c_void) -> f64 {
                 .map(|bits| roots.root_nanbox(f64::from_bits(bits)))
                 .collect::<Vec<_>>();
             let close_callbacks = roots.root_addrs(&listeners_for(id, "close"));
-            drop_buffered_stream(&mut statics().lock().unwrap(), id);
+            {
+                let mut g = statics().lock().unwrap();
+                if let Some(s) = g.streams.get_mut(&id) {
+                    s.destroyed = true;
+                    s.readable_ended = true;
+                    s.codec_state = None;
+                    s.pipes.clear();
+                    s.driver = Driver::new(
+                        Codec::Gzip,
+                        s.driver.chunk_size,
+                        s.driver.readable_hwm,
+                        s.driver.writable_hwm,
+                    );
+                }
+                g.listeners.remove(&id);
+            }
             for callback in end_callbacks {
                 if callback.get() != 0 {
                     let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader)
@@ -1426,19 +1496,51 @@ unsafe extern "C" fn zlib_event_dispatch_thunk(data: *mut c_void) -> f64 {
                 }
             }
         }
-        ZlibEvent::Error(id, message) => {
+        ZlibEvent::DestroyError(id) => {
             let roots = TransientRootScope::enter();
-            let callbacks = roots.root_addrs(&listeners_for(id, "error"));
-            drop_buffered_stream(&mut statics().lock().unwrap(), id);
-            let error = roots.root_nanbox(build_error_object(&message));
-            for callback in callbacks {
+            let reason = statics()
+                .lock()
+                .unwrap()
+                .streams
+                .get(&id)
+                .and_then(|s| s.error)
+                .unwrap_or(f64::from_bits(UNDEFINED));
+            let reason = roots.root_nanbox(reason);
+            for callback in roots.root_addrs(&listeners_for(id, "error")) {
                 if callback.get() != 0 {
                     let _ = JsClosure::from_raw(callback.get() as *const RawClosureHeader)
-                        .call1(perry_ffi::JsThis::UNDEFINED, error.get());
+                        .call1(perry_ffi::JsThis::UNDEFINED, reason.get());
                 }
             }
         }
+        ZlibEvent::WriteError(id, cb) => {
+            let roots = TransientRootScope::enter();
+            let cb = roots.root_addr(call.callback.as_ref().map(|cb| cb.get()).unwrap_or(cb));
+            let reason = statics()
+                .lock()
+                .unwrap()
+                .streams
+                .get(&id)
+                .and_then(|s| s.error);
+            let reason = reason.unwrap_or_else(|| {
+                js_zlib_stream_error(
+                    b"Cannot call write after a stream was destroyed".as_ptr(),
+                    b"Cannot call write after a stream was destroyed".len(),
+                    2,
+                )
+            });
+            let reason = roots.root_nanbox(reason);
+            if cb.get() != 0 {
+                let _ = JsClosure::from_raw(cb.get() as *const RawClosureHeader)
+                    .call1(perry_ffi::JsThis::UNDEFINED, reason.get());
+            }
+        }
         ZlibEvent::Callback(callback) => {
+            let callback = call
+                .callback
+                .as_ref()
+                .map(|cb| cb.get())
+                .unwrap_or(callback);
             if callback != 0 {
                 let _ = JsClosure::from_raw(callback as *const RawClosureHeader)
                     .call0(perry_ffi::JsThis::UNDEFINED);
@@ -1471,18 +1573,12 @@ unsafe extern "C" fn zlib_one_shot_dispatch_thunk(data: *mut c_void) -> f64 {
     f64::from_bits(UNDEFINED)
 }
 
-/// Drain queued zlib stream events on the main thread. Wired into perry-stdlib's
-/// `js_stdlib_process_pending` via the external-zlib-pump feature.
+/// Drain the calling agent's queued zlib stream events: the main thread's from
+/// its loop, a worker's from its own pump. Registered as an extension pump.
 #[no_mangle]
 pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
-    // Drain ONE event at a time from the SHARED queue (not a detached snapshot).
-    // A JS callback fired while processing an event can attach a late consumer,
-    // whose `flush_buffered` splices the older buffered bytes back into this same
-    // queue; popping from the front means that splice lands AHEAD of a newer
-    // same-handle event still waiting in the drain, so FIFO order is preserved. A
-    // snapshot drain (`mem::take` into a local vec) would strand the buffered
-    // bytes on the next tick, behind newer data delivered now. The lock is held
-    // only to pop — never across a callback.
+    // Pop from the shared queue so reentrant pause/destroy takes effect before
+    // the next event. Never hold the registry mutex across a JavaScript call.
     //
     // The loop is bounded to the queue length AT ENTRY so that callbacks which
     // repeatedly enqueue new work (e.g. write/flush in a tight loop) cannot
@@ -1500,33 +1596,6 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
         };
         count += 1;
         let event_async_id = event_stream_handle(&ev).map(stream_async_id).unwrap_or(0);
-        if let ZlibEvent::End(id) = &ev {
-            // Defer `'end'` (keep the stream + its buffer alive) when no
-            // consumer has attached yet. Do this before entering the provider
-            // so a deferred stream does not emit a lifecycle phase prematurely.
-            let has_consumer = !listeners_for(*id, "data").is_empty() || !pipes_for(*id).is_empty();
-            if !has_consumer {
-                let mut g = statics().lock().unwrap();
-                let deferred = match g.streams.get_mut(id) {
-                    Some(s) => {
-                        s.end_buffered = true;
-                        true
-                    }
-                    None => false,
-                };
-                if deferred {
-                    // Cap how many never-consumed ended streams we retain so
-                    // an abandoned handle (one that never gets a `'data'`
-                    // listener or pipe) can't pin its buffered output for the
-                    // process lifetime; drop the oldest excess.
-                    evict_excess_buffered_ended(&mut g);
-                    continue;
-                }
-                // Stream already gone — release the lock and fall through to
-                // the (no-op) delivery + removal below.
-                drop(g);
-            }
-        }
 
         let ev = match ev {
             ZlibEvent::OneShotCallback(callback, result, async_id) => {
@@ -1555,8 +1624,17 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
             event => event,
         };
 
-        let terminal = matches!(&ev, ZlibEvent::End(_) | ZlibEvent::Error(_, _));
-        let mut call = ZlibEventDispatch { event: Some(ev) };
+        let terminal = matches!(&ev, ZlibEvent::End(_) | ZlibEvent::Close(_));
+        let scope = TransientRootScope::enter();
+        let callback = if let ZlibEvent::WriteError(_, cb) | ZlibEvent::Callback(cb) = &ev {
+            Some(scope.root_addr(*cb))
+        } else {
+            None
+        };
+        let mut call = ZlibEventDispatch {
+            event: Some(ev),
+            callback,
+        };
         if event_async_id == 0 {
             zlib_event_dispatch_thunk(&mut call as *mut ZlibEventDispatch as *mut c_void);
         } else if terminal {
@@ -1574,6 +1652,13 @@ pub unsafe extern "C" fn js_ext_zlib_process_pending() -> i32 {
             );
         }
     }
+    // The bounded turn deliberately leaves newly scheduled work for the next
+    // pump. Wake that turn even when no new JavaScript write arrives; otherwise
+    // a subsequent stream can sleep with native output still queued.
+    let pending = !statics().lock().unwrap().pending.is_empty();
+    if pending {
+        notify_main_thread();
+    }
     count
 }
 
@@ -1589,401 +1674,4 @@ pub extern "C" fn js_ext_zlib_has_active_handles() -> i32 {
 }
 
 #[cfg(test)]
-mod stream_tests {
-    use super::*;
-
-    /// Drive the streaming codec like the FFI ops do: write each chunk +
-    /// drain, flush + drain between chunks, then finish — and reassemble the
-    /// full compressed stream.
-    fn stream_compress(codec: Codec, chunks: &[&[u8]]) -> Vec<u8> {
-        let mut cs = make_codec_state(codec).expect("streaming codec");
-        let mut out = Vec::new();
-        for c in chunks {
-            cs.write_chunk(c).unwrap();
-            out.extend(cs.drain());
-            cs.flush_codec().unwrap();
-            out.extend(cs.drain());
-        }
-        out.extend(cs.finish().unwrap());
-        out
-    }
-
-    #[test]
-    fn gzip_stream_roundtrips() {
-        let c = stream_compress(Codec::Gzip, &[b"hello ", b"streaming ", b"world"]);
-        assert_eq!(&c[..2], &[0x1f, 0x8b]); // gzip magic
-        assert_eq!(
-            run_codec(Codec::Gunzip, &c).unwrap(),
-            b"hello streaming world"
-        );
-    }
-
-    #[test]
-    fn zstd_decoder_finish_flushes_pending_output() {
-        let expected = b"zstd decoder output buffered until the stream finishes";
-        let compressed = zstd::stream::encode_all(expected.as_slice(), ZSTD_DEFAULT_LEVEL).unwrap();
-        let mut decoder = make_codec_state(Codec::ZstdDecompress).expect("zstd decoder");
-        decoder.write_chunk(&compressed).unwrap();
-        assert_eq!(decoder.finish().unwrap(), expected);
-    }
-
-    #[test]
-    fn gunzip_run_codec_reads_all_members() {
-        let a = stream_compress(Codec::Gzip, &[b"first "]);
-        let b = stream_compress(Codec::Gzip, &[b"second "]);
-        let c = stream_compress(Codec::Gzip, &[b"third"]);
-        let mut concatenated = Vec::new();
-        concatenated.extend_from_slice(&a);
-        concatenated.extend_from_slice(&b);
-        concatenated.extend_from_slice(&c);
-        assert_eq!(
-            run_codec(Codec::Gunzip, &concatenated).unwrap(),
-            b"first second third"
-        );
-    }
-
-    #[test]
-    fn deflate_stream_is_zlib_format_and_roundtrips() {
-        let c = stream_compress(Codec::Deflate, &[b"AAAA", b"BBBB"]);
-        assert_eq!(c[0], 0x78); // zlib header (NOT raw deflate)
-        assert_eq!(run_codec(Codec::Inflate, &c).unwrap(), b"AAAABBBB");
-    }
-
-    #[test]
-    fn deflate_raw_stream_roundtrips() {
-        let c = stream_compress(Codec::DeflateRaw, &[b"raw ", b"deflate"]);
-        assert_eq!(run_codec(Codec::InflateRaw, &c).unwrap(), b"raw deflate");
-    }
-
-    #[test]
-    fn brotli_stream_roundtrips() {
-        let c = stream_compress(Codec::BrotliCompress, &[b"brotli ", b"stream ", b"test"]);
-        assert_eq!(
-            run_codec(Codec::BrotliDecompress, &c).unwrap(),
-            b"brotli stream test"
-        );
-    }
-
-    #[test]
-    fn brotli_decompress_rejects_invalid_data() {
-        assert!(brotli_decompress_bytes(b"not a brotli stream").is_err());
-    }
-
-    // ── late-flush ordering (insert-ahead) ───────────────────────────────────
-
-    fn data_bytes(pending: &VecDeque<ZlibEvent>) -> Vec<(i64, Vec<u8>)> {
-        pending
-            .iter()
-            .filter_map(|ev| match ev {
-                ZlibEvent::Data(id, b) => Some((*id, b.clone())),
-                _ => None,
-            })
-            .collect()
-    }
-
-    #[test]
-    fn buffered_output_is_spliced_ahead_of_newer_queued_chunk() {
-        // A newer chunk for this handle is already queued (a `.write()` landed
-        // between the buffering tick and the consumer attaching, so the stream
-        // is NOT ended yet); the late flush of the OLDER buffered bytes must
-        // still be delivered first under the FIFO drain.
-        let handle = 0x60000;
-        let mut pending: VecDeque<ZlibEvent> =
-            VecDeque::from(vec![ZlibEvent::Data(handle, b"newer".to_vec())]);
-        insert_buffered_ahead(&mut pending, handle, b"older".to_vec(), false);
-
-        assert_eq!(
-            data_bytes(&pending),
-            vec![(handle, b"older".to_vec()), (handle, b"newer".to_vec())],
-            "older buffered bytes must precede the newer queued chunk"
-        );
-        // No End yet — the stream has not ended.
-        assert!(!pending.iter().any(|ev| matches!(ev, ZlibEvent::End(_))));
-    }
-
-    #[test]
-    fn deferred_end_trails_buffered_data() {
-        // The realistic end_buffered case: the stream ended with no consumer,
-        // so all output is buffered and there is no newer queued chunk. The
-        // flush emits the buffered Data immediately followed by End.
-        let handle = 0x60002;
-        let mut pending: VecDeque<ZlibEvent> = VecDeque::new();
-        insert_buffered_ahead(&mut pending, handle, b"body".to_vec(), true);
-        assert!(matches!(&pending[0], ZlibEvent::Data(h, b) if *h == handle && b == b"body"));
-        assert!(matches!(pending.back(), Some(ZlibEvent::End(h)) if *h == handle));
-    }
-
-    #[test]
-    fn buffered_output_appends_when_queue_has_no_event_for_handle() {
-        let handle = 0x60001;
-        let mut pending: VecDeque<ZlibEvent> = VecDeque::new();
-        insert_buffered_ahead(&mut pending, handle, b"body".to_vec(), true);
-        assert!(matches!(&pending[0], ZlibEvent::Data(h, b) if *h == handle && b == b"body"));
-        assert!(matches!(&pending[1], ZlibEvent::End(h) if *h == handle));
-    }
-
-    #[test]
-    fn insert_ahead_does_not_jump_other_handles() {
-        // An event for a DIFFERENT handle queued first must not be reordered —
-        // buffered output is spliced only ahead of ITS OWN handle's events.
-        let mine = 0x60010;
-        let other = 0x60011;
-        let mut pending: VecDeque<ZlibEvent> = VecDeque::from(vec![
-            ZlibEvent::Data(other, b"other".to_vec()),
-            ZlibEvent::Data(mine, b"newer".to_vec()),
-        ]);
-        insert_buffered_ahead(&mut pending, mine, b"older".to_vec(), false);
-        assert_eq!(
-            data_bytes(&pending),
-            vec![
-                (other, b"other".to_vec()),
-                (mine, b"older".to_vec()),
-                (mine, b"newer".to_vec()),
-            ]
-        );
-    }
-
-    #[test]
-    fn reentrant_flush_during_drain_delivers_older_bytes_first() {
-        // Models the one-at-a-time drain: events are popped from the SHARED queue
-        // (not a detached snapshot). When processing the first event triggers a
-        // late consumer to attach (a reentrant `flush_buffered`), its older
-        // buffered bytes are spliced into the SAME queue ahead of the newer chunk
-        // still waiting in the drain — so the FIFO pop delivers them first. A
-        // snapshot drain would strand the older bytes on the next tick, behind the
-        // newer chunk delivered now (this assert would then fail).
-        let h = 0x60000;
-        let mut pending: VecDeque<ZlibEvent> = VecDeque::from(vec![
-            // Stand-in for "an event whose handler attaches a consumer for `h`".
-            ZlibEvent::Callback(0),
-            // A newer chunk for `h` already queued ahead in this same drain.
-            ZlibEvent::Data(h, b"newer".to_vec()),
-        ]);
-        let mut delivered: Vec<Vec<u8>> = Vec::new();
-        while let Some(ev) = pending.pop_front() {
-            match ev {
-                ZlibEvent::Callback(_) => {
-                    // Reentrant flush of `h`'s older buffered bytes mid-drain.
-                    insert_buffered_ahead(&mut pending, h, b"older".to_vec(), false);
-                }
-                ZlibEvent::Data(_, b) => delivered.push(b),
-                _ => {}
-            }
-        }
-        assert_eq!(delivered, vec![b"older".to_vec(), b"newer".to_vec()]);
-    }
-
-    // ── abandoned-stream eviction cap + byte caps ────────────────────────────
-
-    fn empty_statics() -> Statics {
-        Statics {
-            streams: HashMap::new(),
-            listeners: HashMap::new(),
-            pending: VecDeque::new(),
-            next_id: 0x60000,
-            buffered_output_bytes: 0,
-            evicted_streams: HashSet::new(),
-        }
-    }
-
-    fn no_consumer_state() -> ZlibStreamState {
-        ZlibStreamState {
-            async_id: 0,
-            codec: Codec::Gzip,
-            level: Compression::default(),
-            codec_state: None,
-            input: Vec::new(),
-            ended: false,
-            wrote_data: true,
-            bytes_written: 0,
-            pending_bytes_written: 0,
-            pipes: Vec::new(),
-            output_buffer: Vec::new(),
-            end_buffered: false,
-        }
-    }
-
-    fn ended_buffered_state() -> ZlibStreamState {
-        ZlibStreamState {
-            codec: Codec::Gzip,
-            level: Compression::default(),
-            codec_state: None,
-            input: Vec::new(),
-            ended: true,
-            wrote_data: true,
-            bytes_written: 0,
-            pending_bytes_written: 0,
-            pipes: Vec::new(),
-            output_buffer: b"buffered".to_vec(),
-            end_buffered: true,
-            async_id: 0,
-        }
-    }
-
-    #[test]
-    fn evicts_oldest_excess_abandoned_ended_streams() {
-        let mut g = empty_statics();
-        let extra = 5;
-        for i in 0..(MAX_BUFFERED_ENDED_STREAMS + extra) as i64 {
-            g.streams.insert(0x60000 + i, ended_buffered_state());
-            g.listeners.insert(0x60000 + i, HashMap::new());
-        }
-
-        evict_excess_buffered_ended(&mut g);
-
-        assert_eq!(
-            g.streams.values().filter(|s| s.end_buffered).count(),
-            MAX_BUFFERED_ENDED_STREAMS,
-            "buffered-ended streams must be capped"
-        );
-        // The oldest `extra` handles (smallest ids) are the ones dropped.
-        for i in 0..extra as i64 {
-            assert!(!g.streams.contains_key(&(0x60000 + i)));
-            assert!(!g.listeners.contains_key(&(0x60000 + i)));
-        }
-        assert!(g.streams.contains_key(&(0x60000 + extra as i64)));
-    }
-
-    #[test]
-    fn eviction_is_a_noop_under_the_cap() {
-        let mut g = empty_statics();
-        for i in 0..8i64 {
-            g.streams.insert(0x60000 + i, ended_buffered_state());
-        }
-        evict_excess_buffered_ended(&mut g);
-        assert_eq!(g.streams.len(), 8, "nothing evicted while under the cap");
-    }
-
-    #[test]
-    fn buffering_accumulates_and_tracks_total_bytes() {
-        let mut g = empty_statics();
-        g.streams.insert(0x60000, no_consumer_state());
-        buffer_output_capped(&mut g, 0x60000, b"hello", 1024, 1024);
-        buffer_output_capped(&mut g, 0x60000, b"world", 1024, 1024);
-        assert_eq!(g.streams[&0x60000].output_buffer, b"helloworld");
-        assert_eq!(g.buffered_output_bytes, 10);
-    }
-
-    #[test]
-    fn per_stream_byte_cap_drops_overlarge_abandoned_stream() {
-        let mut g = empty_statics();
-        g.streams.insert(0x60000, no_consumer_state());
-        g.listeners.insert(0x60000, HashMap::new());
-        // Under the per-stream cap: accepted and accounted.
-        buffer_output_capped(&mut g, 0x60000, b"1234", 8, 1024);
-        assert_eq!(g.buffered_output_bytes, 4);
-        // Crossing the per-stream cap with no consumer: the stream is dropped and
-        // its buffer freed rather than grown unbounded.
-        buffer_output_capped(&mut g, 0x60000, b"56789", 8, 1024);
-        assert!(!g.streams.contains_key(&0x60000));
-        assert!(!g.listeners.contains_key(&0x60000));
-        assert_eq!(g.buffered_output_bytes, 0);
-    }
-
-    #[test]
-    fn global_byte_cap_evicts_oldest_buffers() {
-        let mut g = empty_statics();
-        // Per-stream cap large (never trips); global cap 10 bytes.
-        for i in 0..4i64 {
-            let id = 0x60000 + i;
-            g.streams.insert(id, no_consumer_state());
-            buffer_output_capped(&mut g, id, b"abcd", 1024, 10);
-        }
-        assert!(
-            g.buffered_output_bytes <= 10,
-            "total stays under the global cap"
-        );
-        // Oldest (smallest ids) evicted first; newest retained.
-        assert!(!g.streams.contains_key(&0x60000));
-        assert!(!g.streams.contains_key(&0x60001));
-        assert!(g.streams.contains_key(&0x60003));
-        // The running total still equals the sum of the remaining buffers.
-        let sum: usize = g.streams.values().map(|s| s.output_buffer.len()).sum();
-        assert_eq!(g.buffered_output_bytes, sum);
-    }
-
-    // ── eviction tombstone ───────────────────────────────────────────────────
-
-    #[test]
-    fn drop_buffered_stream_leaves_tombstone() {
-        let mut g = empty_statics();
-        g.streams.insert(0x60000, no_consumer_state());
-        g.listeners.insert(0x60000, HashMap::new());
-
-        drop_buffered_stream(&mut g, 0x60000);
-
-        assert!(!g.streams.contains_key(&0x60000), "stream removed");
-        assert!(
-            g.evicted_streams.contains(&0x60000),
-            "tombstone set so a late consumer gets an error instead of hanging"
-        );
-    }
-
-    #[test]
-    fn tombstone_consumed_and_error_queued_when_late_consumer_attaches() {
-        // Simulate the flush_buffered tombstone path: stream absent, tombstone
-        // present, and a data consumer has just attached.
-        let mut g = empty_statics();
-        g.streams.insert(0x60000, no_consumer_state());
-        drop_buffered_stream(&mut g, 0x60000);
-
-        // Attach a listener (simulates stream_on registering a 'data' cb).
-        g.listeners
-            .entry(0x60000)
-            .or_default()
-            .entry("data".to_string())
-            .or_default()
-            .push(1);
-
-        // The tombstone check logic (inline from flush_buffered).
-        let stream_exists = g.streams.contains_key(&0x60000);
-        assert!(!stream_exists);
-        assert!(g.evicted_streams.contains(&0x60000));
-        if g.evicted_streams.remove(&0x60000) {
-            g.pending.push_back(ZlibEvent::Error(
-                0x60000,
-                "zlib stream buffer overflow: output discarded before consumer attached"
-                    .to_string(),
-            ));
-        }
-
-        assert!(
-            !g.evicted_streams.contains(&0x60000),
-            "tombstone consumed on first late attachment"
-        );
-        assert!(
-            matches!(g.pending.front(), Some(ZlibEvent::Error(id, _)) if *id == 0x60000),
-            "error queued for the late consumer"
-        );
-    }
-
-    // ── bounded drain ────────────────────────────────────────────────────────
-
-    #[test]
-    fn drain_bounded_to_initial_count_leaves_new_work_for_next_tick() {
-        // Model the `for _ in 0..initial_count` loop: events enqueued by a
-        // callback during the drain are NOT processed in the same pump call.
-        let mut pending: VecDeque<ZlibEvent> = VecDeque::from(vec![
-            ZlibEvent::Callback(0), // the only event present at loop entry
-        ]);
-        let mut processed = 0usize;
-        let initial_count = pending.len(); // 1
-        for _ in 0..initial_count {
-            let Some(ev) = pending.pop_front() else {
-                break;
-            };
-            processed += 1;
-            if let ZlibEvent::Callback(_) = ev {
-                // A callback that enqueues two more events mid-drain.
-                pending.push_back(ZlibEvent::Callback(0));
-                pending.push_back(ZlibEvent::Callback(0));
-            }
-        }
-        assert_eq!(processed, 1, "only the initial batch is drained");
-        assert_eq!(
-            pending.len(),
-            2,
-            "newly enqueued events are deferred to the next pump tick"
-        );
-    }
-}
+mod tests;

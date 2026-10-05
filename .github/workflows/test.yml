@@ -1440,7 +1440,7 @@ jobs:
                 # the fixture rebuilds the perry-dev graph and ETIMEDOUTs.
                 cargo build --release -p perry -p perry-runtime -p perry-stdlib \
                   -p perry-runtime-static -p perry-stdlib-static \
-                  -p perry-ext-events -p perry-ext-http -p perry-ext-net \
+                  -p perry-ext-http -p perry-ext-net \
                   -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib
                 export PERRY_TEST_RUNTIME_PREBUILT=1
               else
@@ -1662,7 +1662,7 @@ jobs:
             # inside a bounded Node fixture and fail before running it.
             cargo build --release -p perry -p perry-runtime -p perry-stdlib \
               -p perry-runtime-static -p perry-stdlib-static \
-              -p perry-ext-events -p perry-ext-http -p perry-ext-net \
+              -p perry-ext-http -p perry-ext-net \
               -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib
             export PERRY_TEST_RUNTIME_PREBUILT=1
           else
@@ -1860,7 +1860,7 @@ jobs:
               # ten-minute bound on fresh runners (#9989/#9990/#10076).
               cargo build --release -p perry -p perry-runtime -p perry-stdlib \
                 -p perry-runtime-static -p perry-stdlib-static \
-                -p perry-ext-events -p perry-ext-http -p perry-ext-net \
+                -p perry-ext-http -p perry-ext-net \
                 -p perry-ext-typescript -p perry-ext-ws -p perry-ext-zlib
               export PERRY_TEST_RUNTIME_PREBUILT=1
             else

@@ -3,9 +3,7 @@
 
 The default mode checks names, assertions, mutation anchors, and adapter fixture
 serialization. It does not claim behavioral results. --run requires an authorized
-build host and runs no Cargo. It compiles the real native core and Events registry
-source; Events uses an empty native payload fixture, not the full runtime/provider.
-It also extracts the actual FFI allocation/removal functions into a native fixture
+build host and runs no Cargo. It compiles the real native core source. It also extracts the actual FFI allocation/removal functions into a native fixture
 with a Mutex<HashMap> payload map and an inert runtime-probe registration hook.
 This checks their transition calls, not DashMap/provider/runtime integration.
 Original source is never modified. Every mutant must compile and fail exactly its
@@ -26,14 +24,12 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCES = {
     "core": ROOT / "crates/perry-native-registration/src/lib.rs",
     "core_tests": ROOT / "crates/perry-native-registration/src/tests.rs",
-    "events": ROOT / "crates/perry-ext-events/src/registry.rs",
     "ffi": ROOT / "crates/perry-ffi/src/handle.rs",
     "ffi_tests": ROOT / "crates/perry-ffi/src/handle_registration_tests.rs",
 }
 PREFIX = "native_registration::tests::"
-EVENTS_PREFIX = "registry::tests::"
 FFI_PREFIX = "handle::registration_tests::"
-EXPECTED_COUNTS = {PREFIX: 19, EVENTS_PREFIX: 1, FFI_PREFIX: 4}
+EXPECTED_COUNTS = {PREFIX: 19, FFI_PREFIX: 4}
 EXPECTED_TOTAL = sum(EXPECTED_COUNTS.values())
 
 
@@ -164,21 +160,6 @@ MUTATIONS = [
         "retirement ordered before publication must reject acquisition",
     ),
     Mutation(
-        "events_empty_slot_selection", "events",
-        "pub(super) fn register_event_emitter_handle(value: EventEmitterHandle) -> Handle {",
-        """pub(super) fn register_event_emitter_handle(value: EventEmitterHandle) -> Handle {
-    {
-        let mut slots = lock_event_emitters();
-        if let Some(idx) = slots.iter().position(|slot| slot.is_none()) {
-            slots[idx] = Some(Box::new(value));
-            return EVENT_EMITTER_HANDLE_ID_START + idx as Handle;
-        }
-    }""",
-        EVENTS_PREFIX + "retained_event_emitter_registration_blocks_empty_slot_reuse",
-        "retained Events registration must block empty-slot selection",
-    ),
-
-    Mutation(
         "ffi_worker_retirement_omission", "ffi",
         """    let identity = REGISTRATIONS.begin_retirement(handle, NativeRegistrationKind::Payload)?;
     // Retiring blocks acquisition/reuse. Neither payload removal nor its later
@@ -233,7 +214,6 @@ def fixture_bodies(text: str) -> dict[str, str]:
 
 def source_checks(source: dict[str, str]) -> set[str]:
     fixtures = {PREFIX + name: body for name, body in fixture_bodies(source["core_tests"]).items()}
-    fixtures.update({EVENTS_PREFIX + name: body for name, body in fixture_bodies(source["events"]).items()})
     fixtures.update({FFI_PREFIX + name: body for name, body in fixture_bodies(source["ffi_tests"]).items()})
     for prefix, count in EXPECTED_COUNTS.items():
         assert sum(name.startswith(prefix) for name in fixtures) == count, (prefix, count)
@@ -261,8 +241,6 @@ def source_checks(source: dict[str, str]) -> set[str]:
     for name, body in {**fixture_bodies(common), **fixture_bodies(common_tests)}.items():
         assert "let _serial = REGISTRATION_TEST_LOCK" in body, (name, "missing Common ordering guard")
         assert "drain_quarantined_common_handles(" not in body, (name, "shared Common fixture must not drain globally")
-    assert "#[cfg(test)]\nuse perry_ffi::NativeQuarantine;" in source["events"]
-    assert source["events"].count("NativeQuarantine,") == 0
     return set(fixtures)
 
 
@@ -274,36 +252,18 @@ def checked_run(argv: list[str], timeout: int = 120) -> str:
 
 
 def harness_source() -> str:
-    # Copy constants from the real Events source. The fixture changes only its
-    # payload type, whose fields this registry source never reads.
-    events_lib = (ROOT / "crates/perry-ext-events/src/lib.rs").read_text()
-    constants = []
-    for name in ("EVENT_EMITTER_HANDLE_ID_START", "EVENT_EMITTER_HANDLE_ID_END"):
-        match = re.search(rf"const {name}: Handle = (0x[0-9A-Fa-f_]+);", events_lib)
-        assert match, name
-        constants.append(f"const {name}: Handle = {match.group(1)};")
     return """extern crate self as perry_ffi;
 #[path = "native_registration/lib.rs"]
 mod native_registration;
 pub use native_registration::*;
-type Handle = i64;
-pub struct EventEmitterHandle;
-impl EventEmitterHandle { pub fn new() -> Self { Self } }
-pub fn handle_registry_domain() -> NativeRegistryDomain {
-    static DOMAIN: std::sync::LazyLock<NativeRegistryDomain> =
-        std::sync::LazyLock::new(|| NativeRegistryDomain::new().unwrap());
-    *DOMAIN
-}
 // The extracted allocation functions now install the runtime tick hook. This
 // native-only fixture has no runtime event pump; its inert seam keeps the
 // source extraction exact while runtime-linked tests own lifecycle behavior.
 mod event_pump {
     pub(crate) fn ensure_handle_tick_hook_registered() {}
 }
-mod registry;
 mod handle;
-""" + "\n".join(constants) + "\n"
-
+"""
 
 
 FFI_FUNCTIONS = (
@@ -384,7 +344,6 @@ def compile_copy(directory: Path, source: dict[str, str], rustc: str, harness: s
     (directory / "native_registration").mkdir()
     (directory / "native_registration/lib.rs").write_text(source["core"])
     (directory / "native_registration/tests.rs").write_text(source["core_tests"])
-    (directory / "registry.rs").write_text(source["events"])
     (directory / "handle.rs").write_text(ffi_harness_source(source["ffi"]))
     (directory / "handle_registration_tests.rs").write_text(source["ffi_tests"])
     harness_file = directory / "harness.rs"
@@ -396,7 +355,7 @@ def compile_copy(directory: Path, source: dict[str, str], rustc: str, harness: s
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--run", action="store_true", help="compile/execute native and Events fixtures and all mutants")
+    parser.add_argument("--run", action="store_true", help="compile/execute native fixtures and all mutants")
     parser.add_argument("--rustc", default="rustc")
     args = parser.parse_args()
     source = {name: path.read_text() for name, path in SOURCES.items()}
@@ -407,7 +366,7 @@ def main() -> None:
     for mutation in MUTATIONS:
         if mutation.target == "ffi":
             assert mutation.anchor in extracted_ffi, (mutation.name, "mutation must reach extracted adapter code")
-    print(f"SOURCE CHECK: {EXPECTED_TOTAL} fixtures (19 core + 1 Events + 4 FFI); {len(MUTATIONS)} mutation cases; global fixture ordering", flush=True)
+    print(f"SOURCE CHECK: {EXPECTED_TOTAL} fixtures (19 core + 4 FFI); {len(MUTATIONS)} mutation cases; global fixture ordering", flush=True)
     for name, digest in hashes.items():
         print(f"SOURCE SHA256 {name}: {digest}", flush=True)
     if not args.run:
@@ -416,13 +375,13 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="native-registration-") as scratch:
         root = Path(scratch)
         clean = compile_copy(root / "clean", source, args.rustc, harness)
-        # Also compile without cfg(test): the Events import finding was absent
-        # from a test-only build. This verifies unused imports in the real file;
+        # Also compile without cfg(test): an unused-import finding can be absent
+        # from a test-only build. This verifies unused imports in the real files;
         # it does not replace the full provider's warnings gate.
         checked_run([args.rustc, "--edition=2021", "--crate-type=lib", "-D", "unused-imports",
                      str(root / "clean/harness.rs"), "-o", str(root / "clean/native-registration.rlib")])
         listing = checked_run([str(clean), "--list"])
-        actual = set(re.findall(r"^((?:native_registration::tests|registry::tests|handle::registration_tests)::\w+): test$", listing, re.M))
+        actual = set(re.findall(r"^((?:native_registration::tests|handle::registration_tests)::\w+): test$", listing, re.M))
         assert actual == fixtures, listing
         output = checked_run([str(clean), "--test-threads=1"])
         assert f"{EXPECTED_TOTAL} passed; 0 failed" in output, output
@@ -444,7 +403,7 @@ def main() -> None:
         print(output, flush=True)
     for name, path in SOURCES.items():
         assert hashlib.sha256(path.read_bytes()).hexdigest() == hashes[name], name
-    print("Original core, tests, Events registry, and FFI adapter source hashes unchanged.")
+    print("Original core, tests, and FFI adapter source hashes unchanged.")
 
 
 if __name__ == "__main__":

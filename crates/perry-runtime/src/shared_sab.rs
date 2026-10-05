@@ -25,6 +25,16 @@
 
 use std::alloc::{alloc_zeroed, handle_alloc_error, Layout};
 use std::collections::HashSet;
+
+std::thread_local! {
+    // Shared backings are never freed today. Attribute each allocation to its
+    // creator, once; receiving a shared alias contributes no new bytes.
+    static BACKING_BYTES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+pub(crate) fn current_thread_backing_bytes() -> u64 {
+    BACKING_BYTES.with(std::cell::Cell::get)
+}
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -83,6 +93,7 @@ pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
     if raw.is_null() {
         handle_alloc_error(layout);
     }
+    BACKING_BYTES.with(|bytes| bytes.set(bytes.get().saturating_add(size as u64)));
     // The `GcHeader` sits at `raw`; the JS-visible value is the `BufferHeader`
     // one header down, so `buf - GC_HEADER_SIZE` reads back this header.
     let buf = unsafe { raw.add(GC_HEADER_SIZE) } as *mut BufferHeader;

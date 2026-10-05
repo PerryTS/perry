@@ -332,6 +332,7 @@ pub extern "C" fn js_nm_install_domain() {
 #[no_mangle]
 pub extern "C" fn js_nm_install_events() {
     super::native_module::install_nm_ee_ops();
+    nm_register_ctor(NmBucket::Events, nm_ctor_events);
     nm_register_attach(
         NmBucket::Events,
         super::native_module::callable_exports::nm_attach_events,
@@ -690,8 +691,8 @@ pub(crate) fn nm_run_install_all_hook() {
 // the method-dispatch registry: populated by `js_nm_install_<module>()` (only
 // the 8 ctor-owning buckets register a fn), looked up by `js_new_function_construct`.
 use super::class_registry::{
-    nm_ctor_child_process, nm_ctor_cluster, nm_ctor_fs, nm_ctor_readline, nm_ctor_repl,
-    nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi,
+    nm_ctor_child_process, nm_ctor_cluster, nm_ctor_events, nm_ctor_fs, nm_ctor_readline,
+    nm_ctor_repl, nm_ctor_stream, nm_ctor_tls, nm_ctor_tty, nm_ctor_vm, nm_ctor_wasi,
 };
 
 type NmCtorFn = unsafe fn(&str, &str, *const f64, usize) -> Option<f64>;

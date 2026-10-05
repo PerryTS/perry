@@ -301,6 +301,66 @@ pub(crate) fn object_set_field_by_name_transition_chain_proven_value(
     object_set_field_by_name_transition_fast_impl_value(obj, key, value, false, true, refresh)
 }
 
+/// Add `key` to a class-less ordinary object born with a null
+/// `[[Prototype]]` (`Object.create(null)`, `{ __proto__: null }`, an
+/// emitter's `_events`) through the learned key-add edge, with none of the
+/// `[[Set]]` vet [`object_set_field_by_name_transition_only_fast_value`]
+/// runs, because the caller has proved what that vet establishes: the
+/// receiver is a live, unforwarded `GC_TYPE_OBJECT` of class 0 whose header
+/// carries no frozen, sealed, non-extensible or descriptor flag, it was born
+/// null-prototype and never relinked (so no chain can intercept the add), its
+/// own list lacks `key`, and `key` is an interned heap string. `false`, having
+/// changed nothing, on a cache miss or an edge the cache refuses.
+///
+/// # Safety
+/// As above. Nothing between the caller's proof and this call allocates.
+pub(crate) unsafe fn add_absent_key_to_null_proto_object(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> bool {
+    let prev_shape_id = super::shapes::object_shape_stamp(obj);
+    let Some(hit) = transition_cache_lookup(prev_shape_id, key) else {
+        return false;
+    };
+    if hit.0.is_null() {
+        return false;
+    }
+    let Some(edge) =
+        super::constfn_key_add::admit_or_store(obj, prev_shape_id, hit, value.to_bits())
+    else {
+        return false;
+    };
+    let Some((next_keys, slot_idx, target_shape_id)) = edge.transition() else {
+        return true;
+    };
+    if !super::shapes::install_cached_object_shape_transition(
+        obj,
+        prev_shape_id,
+        target_shape_id,
+        next_keys,
+    ) {
+        set_object_keys(obj, next_keys);
+    }
+    let live_slots = crate::object::object_live_slot_count(obj);
+    let alloc_limit = std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
+    let vbits = value.to_bits();
+    let vbits = if (vbits >> 48) == 0x7FFD && (vbits & 0x0000_FFFF_FFFF_FFFF) == 0 {
+        crate::value::TAG_UNDEFINED
+    } else {
+        vbits
+    };
+    if (slot_idx as usize) < alloc_limit {
+        if slot_idx >= live_slots {
+            set_object_live_slot_count(obj, slot_idx + 1);
+        }
+        store_object_field_slot(obj, slot_idx as usize, vbits);
+    } else {
+        overflow_set(obj as usize, slot_idx as usize, vbits);
+    }
+    true
+}
+
 /// Re-add a deleted property on a receiver whose ShapeId deliberately stayed
 /// stable across the tombstone delete (#9064).
 ///

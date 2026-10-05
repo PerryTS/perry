@@ -939,12 +939,12 @@ fn absorb(req: &mut Req, chunk: &[u8]) -> Result<(), ClientError> {
         if req.body.len() + chunk.len() > BODY_LIMIT {
             return Err(ClientError::new("UND_ERR_BODY_TOO_LARGE", "body too large"));
         }
-        req.body.extend_from_slice(chunk);
         if req.streaming {
             if let (Some(on_chunk), ctx) = (req.sink.on_chunk, req.sink.ctx) {
                 on_chunk(ctx, chunk);
             }
-            req.body.clear();
+        } else {
+            req.body.extend_from_slice(chunk);
         }
         return Ok(());
     }

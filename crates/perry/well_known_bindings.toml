@@ -89,12 +89,6 @@ node-builtin = true
 # its job: bundling the wrappers that *port* perry-stdlib's existing
 # in-tree implementations, not net-new functionality.
 
-[bindings.events]
-crate = "perry-ext-events"
-lib = "perry_ext_events"
-tracking = "#466"
-node-builtin = true
-
 [bindings.cheerio]
 crate = "perry-ext-cheerio"
 lib = "perry_ext_cheerio"

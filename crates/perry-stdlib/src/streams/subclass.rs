@@ -464,81 +464,58 @@ unsafe fn body_chunk_bytes(chunk_bits: u64) -> Option<Vec<u8>> {
     read_bytes_from_chunk(chunk_bits)
 }
 
-/// Drain a ReadableStream's body to bytes, DRIVING its `pull` source. Used by
-/// `new Response(stream)` / `new Request(url, { body: stream })` to materialize
-/// the body at construction time.
-///
-/// The previous implementation snapshotted only the chunks already queued at
-/// the synchronous call instant and force-closed the stream. That worked for a
-/// body whose data was enqueued in `start(controller)` (already queued), but
-/// any data produced by a `pull(controller)` callback — sync OR async — was
-/// silently dropped: `maybe_pull` defers the pull to a microtask that hadn't
-/// run yet, and an async pull defers its `enqueue` further (past `await`). The
-/// canonical victim is axios's `trackStream`, which wraps `response.body` in a
-/// new stream whose async `pull` does `await reader.read()`; `new Response(...)`
-/// then read an empty body and the request never settled.
-///
-/// Instead we loop: collect queued chunks, then ask for the next one
-/// (`maybe_pull`) and run the microtask queue so the (possibly async) pull's
-/// `enqueue`/`close` land, until the stream reaches a terminal state. An idle
-/// counter bounds the loop: a still-open stream that produces nothing through
-/// the microtask runner (a genuinely live source awaiting external I/O) can't
-/// be drained synchronously here and falls back to whatever has arrived. This
-/// mirrors the `await_maybe_promise` pump already used for `node:stream`
-/// consumers (streams.rs).
+/// Consume a body through the default-reader protocol. A real parked read is
+/// required for tee branches and transforms to produce their next chunk.
+/// Each delivered chunk loses its stream-queue owner before the next pull.
 #[doc(hidden)]
 pub fn drain_readable_into_bytes(stream_id: usize) -> Vec<u8> {
-    let mut out = Vec::new();
-    let mut idle = 0u32;
-    // Absolute cap mirrors `await_maybe_promise` — a backstop against a stream
-    // whose pull re-arms forever without ever closing.
-    for _ in 0..1_000_000 {
-        let (chunks, terminal) = {
-            let mut g = READABLE_STREAMS.lock().unwrap();
-            match g.get_mut(&stream_id) {
-                Some(s) => {
-                    let drained = s.drain_chunks();
-                    let terminal =
-                        matches!(s.state, ReadableState::Closed | ReadableState::Errored);
-                    (drained, terminal)
+    unsafe {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let reader = js_readable_stream_get_reader(stream_id as f64);
+        let done_key = scope.root_string_ptr(js_string_from_bytes(b"done".as_ptr(), 4));
+        let value_key = scope.root_string_ptr(js_string_from_bytes(b"value".as_ptr(), 5));
+        let mut out = Vec::new();
+        for _ in 0..1_000_000 {
+            // Keep only the current promise/result alive across producer
+            // callbacks; previous chunks have already become native bytes.
+            let pull_scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let promise = pull_scope.root_raw_mut_ptr(js_reader_read(reader));
+            for _ in 0..100_000 {
+                if js_promise_state(promise.get_raw_mut_ptr()) != 0 {
+                    break;
                 }
-                None => break,
-            }
-        };
-        // Consumer progress: release transform writes parked on backpressure.
-        unsafe { super::transform::transform_release_writes(stream_id) };
-        let mut got_chunk = false;
-        for chunk in chunks {
-            unsafe {
-                if let Some(bytes) = body_chunk_bytes(chunk) {
-                    out.extend_from_slice(&bytes);
-                    got_chunk = true;
+                if js_promise_run_microtasks() == 0 {
+                    break;
                 }
             }
-        }
-        if terminal {
-            break;
-        }
-        // Request the next chunk and let the (possibly async) pull run.
-        // `maybe_pull_force` ignores the highWaterMark/read-request gate so a
-        // `highWaterMark: 0` stream (which has no parked reader here) is still
-        // driven to completion instead of draining empty (CodeRabbit #5776).
-        unsafe {
-            maybe_pull_force(stream_id);
-        }
-        perry_runtime::promise::js_promise_run_microtasks();
-        if got_chunk {
-            idle = 0;
-        } else {
-            // No new chunk this round. Give the pull a few microtask turns to
-            // produce one (an async pull's enqueue lands a turn after its
-            // `await`); if it stays empty and unclosed, treat it as a live
-            // source we can't drain here and stop.
-            idle += 1;
-            if idle >= 16 {
+            // Retain the synchronous materializer's existing live-I/O/error
+            // boundary. Ordinary buffered, tee and microtask pull sources
+            // are driven by the parked read above.
+            if js_promise_state(promise.get_raw_mut_ptr()) != 1 {
                 break;
             }
+            let result = pull_scope.root_nanbox_f64(js_promise_value(promise.get_raw_mut_ptr()));
+            let obj = js_nanbox_get_pointer(result.get_nanbox_f64()) as *const ObjectHeader;
+            let done = js_object_get_field_by_name(obj, done_key.get_raw_const_ptr());
+            if perry_runtime::value::js_is_truthy(f64::from_bits(done.bits())) != 0 {
+                break;
+            }
+            let obj = js_nanbox_get_pointer(result.get_nanbox_f64()) as *const ObjectHeader;
+            let chunk = js_object_get_field_by_name(obj, value_key.get_raw_const_ptr());
+            if let Some(bytes) = body_chunk_bytes(chunk.bits()) {
+                out.extend_from_slice(&bytes);
+            }
         }
+        let _ = js_reader_release_lock(reader);
+        out
     }
-    out
+}
+
+pub(crate) fn readable_body_state(stream_id: usize) -> (bool, bool) {
+    READABLE_STREAMS
+        .lock()
+        .unwrap()
+        .get(&stream_id)
+        .map(|s| (s.reader_handle.is_some(), s.disturbed))
+        .unwrap_or((false, false))
 }

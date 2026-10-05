@@ -599,10 +599,8 @@ fn is_event_emitter_instance_value(value: f64) -> bool {
     {
         return true;
     }
-    if let Some(handle) = small_native_handle_id(value) {
-        if let Some(probe) = crate::object::event_emitter_handle_probe() {
-            return unsafe { probe(handle) };
-        }
+    // An emitter is an ordinary object (#10508); no registry id is one.
+    if small_native_handle_id(value).is_some() {
         return false;
     }
 
@@ -616,13 +614,12 @@ fn is_event_emitter_instance_value(value: f64) -> bool {
 }
 
 fn is_event_emitter_async_resource_instance_value(value: f64) -> bool {
-    let Some(handle) = small_native_handle_id(value) else {
+    if small_native_handle_id(value).is_some() {
         return false;
-    };
-    if let Some(probe) = crate::object::event_emitter_async_resource_handle_probe() {
-        return unsafe { probe(handle) };
     }
-    false
+    let constructor =
+        crate::object::bound_native_callable_export_value("events", "EventEmitterAsyncResource");
+    ordinary_has_instance_prototype_walk(value, constructor)
 }
 
 /// `x instanceof <non-constructor built-in>` — the RHS (e.g. `Math`, `JSON`,
@@ -1044,14 +1041,8 @@ mod generic_origin_chain_tests {
 mod primitive_lhs_native_brand_tests_11261 {
     use super::*;
 
-    /// A handle id no other runtime unit test mints. The probe below answers
-    /// `true` for exactly this id, so leaving it registered after the test
-    /// cannot change another test's verdict.
+    /// A handle-band id no other runtime unit test mints.
     const PROBE_HANDLE: i64 = 0x3_1261;
-
-    unsafe extern "C" fn probe_answers_for_one_handle(handle: i64) -> bool {
-        handle == PROBE_HANDLE
-    }
 
     fn truthy(v: f64) -> bool {
         v.to_bits() == crate::value::TAG_TRUE
@@ -1101,28 +1092,17 @@ mod primitive_lhs_native_brand_tests_11261 {
         }
     }
 
-    /// #11261: a plain number equal to a live emitter's handle id answered
-    /// `true` for `n instanceof EventEmitter`. The probe is live for the
-    /// POINTER-tagged handle (witness), and must not be consulted for the
-    /// number with the same value.
+    /// #11261: a plain number equal to an emitter handle id answered `true`
+    /// for `n instanceof EventEmitter`. Emitters are ordinary objects now
+    /// (#10508): the object is one, a number never is.
     #[test]
-    fn number_equal_to_a_live_emitter_handle_is_not_an_emitter() {
-        let previous = crate::object::event_emitter_handle_probe();
-        unsafe {
-            crate::object::js_register_event_emitter_handle_probe(probe_answers_for_one_handle)
-        };
-
-        let handle = f64::from_bits(crate::value::POINTER_TAG | PROBE_HANDLE as u64);
-        let witness = truthy(js_instanceof(handle, CLASS_ID_EVENT_EMITTER));
+    fn a_number_is_never_an_emitter() {
+        let emitter = crate::node_stream::js_event_emitter_object_new(f64::from_bits(
+            crate::value::TAG_UNDEFINED,
+        ));
+        let witness = truthy(js_instanceof(emitter, CLASS_ID_EVENT_EMITTER));
         let number = truthy(js_instanceof(PROBE_HANDLE as f64, CLASS_ID_EVENT_EMITTER));
-
-        if let Some(prev) = previous {
-            unsafe { crate::object::js_register_event_emitter_handle_probe(prev) };
-        }
-        assert!(
-            witness,
-            "the probe must be live: the handle itself is an emitter"
-        );
+        assert!(witness, "a constructed emitter is instanceof EventEmitter");
         assert!(
             !number,
             "a number is never instanceof EventEmitter (#11261)"

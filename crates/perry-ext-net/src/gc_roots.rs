@@ -30,7 +30,7 @@ pub(crate) fn ensure_gc_scanner_registered() {
 ///
 /// Without this, any GC cycle between `.on()` and the next dispatch would
 /// sweep the closure; the next `closure.call*()` would dereference freed
-/// memory. Same pattern as perry-stdlib's net mod and perry-ext-events.
+/// memory. Same pattern as perry-stdlib's net mod.
 pub(crate) fn scan_net_roots(visitor: &mut GcRootVisitor<'_>) {
     if let Ok(mut listeners) = statics::listeners().lock() {
         for per_socket in listeners.values_mut() {

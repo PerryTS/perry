@@ -6,8 +6,8 @@
 //! `crate::worker_threads::js_worker_threads_channels_*` keeps resolving.
 
 use super::{
-    call_callback1, deserialize_message, event_object, object_event_handler, EventListener,
-    SerializedMessage, BROADCAST_CHANNELS, MESSAGE_PORTS,
+    call_callback1, deserialize_nanbox_on_current_thread, event_object, object_event_handler,
+    EventListener, SerializedValue, BROADCAST_CHANNELS, MESSAGE_PORTS,
 };
 
 /// Drain queued MessageChannel inboxes, dispatching to `message` listeners and
@@ -25,7 +25,7 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
         raw_cbs: Vec<EventListener>,
         event_cbs: Vec<EventListener>,
         handler_cb: Option<u64>,
-        msg: SerializedMessage,
+        msg: SerializedValue,
     }
 
     loop {
@@ -91,7 +91,8 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 let handler_cb = dispatch
                     .handler_cb
                     .map(|bits| scope.root_nanbox_f64(f64::from_bits(bits)));
-                let value = deserialize_message(&dispatch.msg);
+                let value =
+                    f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&dispatch.msg) });
                 let value = scope.root_nanbox_f64(value);
                 for callback in raw_cbs {
                     call_callback1(
@@ -132,7 +133,7 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
         target_bits: u64,
         event_cbs: Vec<EventListener>,
         handler_cb: Option<u64>,
-        msg: SerializedMessage,
+        msg: SerializedValue,
     }
 
     loop {
@@ -182,7 +183,8 @@ pub extern "C" fn js_worker_threads_channels_process_pending() -> i32 {
                 let handler_cb = dispatch
                     .handler_cb
                     .map(|bits| scope.root_nanbox_f64(f64::from_bits(bits)));
-                let value = deserialize_message(&dispatch.msg);
+                let value =
+                    f64::from_bits(unsafe { deserialize_nanbox_on_current_thread(&dispatch.msg) });
                 let value = scope.root_nanbox_f64(value);
                 let event = event_object(
                     "message",

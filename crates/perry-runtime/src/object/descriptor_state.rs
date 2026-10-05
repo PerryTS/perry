@@ -1189,6 +1189,11 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
         // prototype is vetted per key instead of rejecting the receiver.
         if super::prototype_chain::object_static_prototype(addr).is_some() {
             plain_custom_prototype_may_intercept(addr, key)
+        } else if crate::value::addr_class::try_read_gc_header(addr)
+            .is_some_and(|header| header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0)
+        {
+            // Born with a null `[[Prototype]]` and never relinked: no chain.
+            false
         } else {
             object_proto_may_intercept_key(key)
         }

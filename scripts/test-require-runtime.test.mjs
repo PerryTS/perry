@@ -89,7 +89,7 @@ test('scoped CI prepares coherent providers for each standalone native consumer'
     assert.equal(calls.length, 1, suite);
     assert.match(calls[0], /^cargo:build --release /);
     for (const name of ['perry', 'perry-runtime', 'perry-stdlib', 'perry-runtime-static',
-      'perry-stdlib-static', 'perry-ext-events', 'perry-ext-http', 'perry-ext-net',
+      'perry-stdlib-static', 'perry-ext-http', 'perry-ext-net',
       'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
       assert((calls[0] + " ").includes(`-p ${name} `), name);
     }
@@ -152,7 +152,7 @@ test('full-tier shards prepare every bounded require consumer before executing f
     const calls = result.stdout.split('\n').filter(line => line.startsWith('cargo:'));
     assert.equal(calls.length, 1);
     for (const name of ['perry', 'perry-runtime', 'perry-stdlib', 'perry-runtime-static',
-      'perry-stdlib-static', 'perry-ext-events', 'perry-ext-http', 'perry-ext-net',
+      'perry-stdlib-static', 'perry-ext-http', 'perry-ext-net',
       'perry-ext-typescript', 'perry-ext-ws', 'perry-ext-zlib']) {
       assert((calls[0] + " ").includes(`-p ${name} `), name);
     }

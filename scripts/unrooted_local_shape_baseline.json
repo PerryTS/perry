@@ -2,9 +2,6 @@
   "per_file": {
     "crates/perry-ext-better-sqlite3/src/lib.rs": 13,
     "crates/perry-ext-cheerio/src/lib.rs": 7,
-    "crates/perry-ext-events/src/lib.rs": 5,
-    "crates/perry-ext-events/src/module_iterators.rs": 2,
-    "crates/perry-ext-events/src/tests.rs": 2,
     "crates/perry-ext-http/src/agent.rs": 3,
     "crates/perry-ext-http/src/client_request_surface.rs": 2,
     "crates/perry-ext-http/src/server/handle_dispatch.rs": 2,
@@ -24,12 +21,9 @@
     "crates/perry-stdlib/src/crypto/util.rs": 2,
     "crates/perry-stdlib/src/domain.rs": 3,
     "crates/perry-stdlib/src/ethers.rs": 5,
-    "crates/perry-stdlib/src/events.rs": 13,
-    "crates/perry-stdlib/src/events/constructors.rs": 1,
-    "crates/perry-stdlib/src/events/events_on.rs": 17,
+    "crates/perry-stdlib/src/events/events_on.rs": 12,
     "crates/perry-stdlib/src/events/module_helpers.rs": 1,
     "crates/perry-stdlib/src/events/once_helpers.rs": 1,
-    "crates/perry-stdlib/src/events/warnings.rs": 1,
     "crates/perry-stdlib/src/lodash.rs": 21,
     "crates/perry-stdlib/src/querystring.rs": 2,
     "crates/perry-stdlib/src/readline/mod.rs": 4,
@@ -60,5 +54,5 @@
     "crates/perry-stdlib/src/zlib.rs": 3
   },
   "schema_version": 3,
-  "total": 368
+  "total": 339
 }

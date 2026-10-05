@@ -26,7 +26,6 @@ members = [
     "crates/perry-perex",
     "crates/perry-ext-better-sqlite3",
     "crates/perry-ext-zlib",
-    "crates/perry-ext-events",
     "crates/perry-ext-cheerio",
     "crates/perry-ext-sharp",
     "crates/perry-ext-ethers",
@@ -169,26 +168,11 @@ codegen-units = 1
 [profile.release.package.perry-stdlib]
 opt-level = "s"       # Optimize for size in stdlib
 
-# perry-ext-events exports #[no_mangle] EventEmitter FFI symbols
-# (js_event_emitter_*) that generated native code calls directly when a program
-# constructs a native EventEmitter by name (e.g. eventemitter3's default
-# export). It is not a co-built wrapper, so the auto-optimize linker uses its
-# prebuilt standalone staticlib rather than rebuilding it alongside a crate that
-# references those symbols. Thin-LTO then internalizes and drops the whole C API
-# from that staticlib, so the program fails to link with undefined
-# _js_event_emitter_* symbols (#5140). Mirror the UI crates' settings (which
-# export #[no_mangle] extern "C" symbols for the same reason): more codegen
-# units + no strip keeps the exported C API in the staticlib.
-[profile.release.package.perry-ext-events]
-strip = false
-codegen-units = 1
-
 # Staticlib wrapper crates (#5422). perry-runtime / perry-stdlib are now
 # rlib-only; these wrappers re-export their #[no_mangle] C API into
 # libperry_runtime.a / libperry_stdlib.a. Thin-LTO would otherwise internalize
-# and drop the whole exported C surface (same failure as perry-ext-events,
-# #5140), so mirror its settings: more codegen units + no strip keep the C API
-# in the archive.
+# and drop the whole exported C surface (#5140), so: more codegen units + no
+# strip keep the C API in the archive.
 [profile.release.package.perry-runtime-static]
 strip = false
 codegen-units = 1
@@ -295,9 +279,6 @@ strip = false
 codegen-units = 1
 [profile.dist.package.perry-stdlib]
 opt-level = "s"
-[profile.dist.package.perry-ext-events]
-strip = false
-codegen-units = 1
 [profile.dist.package.perry-runtime-static]
 strip = false
 codegen-units = 1
@@ -579,7 +560,6 @@ perry-ext-argon2 = { path = "crates/perry-ext-argon2" }
 perry-perex = { path = "crates/perry-perex" }
 perry-ext-better-sqlite3 = { path = "crates/perry-ext-better-sqlite3" }
 perry-ext-zlib = { path = "crates/perry-ext-zlib" }
-perry-ext-events = { path = "crates/perry-ext-events" }
 perry-ext-cheerio = { path = "crates/perry-ext-cheerio" }
 perry-ext-sharp = { path = "crates/perry-ext-sharp" }
 perry-ext-ethers = { path = "crates/perry-ext-ethers" }

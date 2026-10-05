@@ -194,6 +194,29 @@ pub(crate) fn reassigned_locals_in_module(hir: &Module) -> HashSet<u32> {
     scan_whole_module(hir).writes
 }
 
+/// Module-wide: the bindings that are string ACCUMULATORS — written by a
+/// self-append (`x += s`, `x = x + a + b`) AND given a string literal by some
+/// `let` initialiser or assignment (`var out; ... out = ""; ... out += s`).
+///
+/// This is a lowering hint, never a type proof. It exists for untyped
+/// accumulators (`var output;` in TypeScript's own `createTextWriter`), whose
+/// declared type is `any`, so the declared-`string` gate never selected the
+/// amortized in-place append and every `output += s` copied the whole
+/// accumulator: a quadratic build that was 6.5 GB of the 7.0 GB a tsc
+/// transpile allocates, all of it born-tenured large strings, and 236 of its
+/// 237 full collections. The selected lowering is the tag-dispatched one, so
+/// whatever the binding actually holds at run time chooses append versus
+/// ordinary JS `+`; and an accumulator's ordinary reads demote a uniquely
+/// owned string exactly as a declared-`string` binding's do, which is what
+/// keeps the in-place append sound.
+pub(crate) fn string_accumulator_locals(hir: &Module) -> HashSet<u32> {
+    let scan = scan_whole_module(hir);
+    scan.self_appends
+        .intersection(&scan.string_literal_writes)
+        .copied()
+        .collect()
+}
+
 /// Single-id convenience over [`reassigned_locals`].
 #[cfg(test)]
 pub(crate) fn local_is_reassigned(stmts: &[Stmt], id: u32) -> bool {
@@ -279,6 +302,61 @@ struct ModuleScan {
     /// `WithSetFallback`, never through a `LocalSet` right-hand side, so a
     /// value judgment over `Let` initialisers and `LocalSet`s cannot see it.
     with_fallback_writes: HashSet<u32>,
+    /// `x = x + ...` targets (`x += ...` lowers to this): the leftmost leaf of
+    /// the left-associated `+` chain is a read of the binding being written.
+    self_appends: HashSet<u32>,
+    /// Bindings initialised or assigned a string literal somewhere.
+    string_literal_writes: HashSet<u32>,
+    /// `(receiver, key)` for every `recv[key] = v` whose key is a bare local.
+    /// A local key is length-safe only if it is provably an integer, which
+    /// needs per-body facts this walk does not have; [`collect_spec_abi_facts`]
+    /// resolves each pair and demotes the receiver when the key is unproven.
+    index_set_local_keys: Vec<(u32, u32)>,
+}
+
+/// The leftmost leaf of a left-associated `+` chain.
+fn add_chain_head(mut e: &Expr) -> &Expr {
+    while let Expr::Binary {
+        op: perry_hir::BinaryOp::Add,
+        left,
+        ..
+    } = e
+    {
+        e = left;
+    }
+    e
+}
+
+fn is_string_literal(e: &Expr) -> bool {
+    matches!(e, Expr::String(_) | Expr::WtfString(_))
+}
+
+/// How an element-store key relates to the property name `"length"`.
+enum StoreKey {
+    /// Can never stringify to `"length"` (a numeric literal, or an operator
+    /// result that is a Number, BigInt, Boolean or a fixed `typeof` string).
+    NeverLength,
+    /// A bare local: never `"length"` iff it is provably an integer.
+    Local(u32),
+    /// Anything else, including every string-valued or unknown expression.
+    MayBeLength,
+}
+
+/// Classify the key of an `IndexSet`. `a["length"] = n` and `a[k] = n` with
+/// `k === "length"` TRUNCATE an array through the element-store node (a
+/// for-of/for-in head target lowers to one), so only a key proven not to be a
+/// string may be treated as an element index. `+` is excluded: it yields a
+/// String for string operands.
+fn classify_store_key(index: &Expr) -> StoreKey {
+    match index {
+        Expr::Integer(_) | Expr::Number(_) => StoreKey::NeverLength,
+        Expr::Binary { op, .. } if !matches!(op, perry_hir::BinaryOp::Add) => StoreKey::NeverLength,
+        Expr::Unary { .. } | Expr::Compare { .. } | Expr::TypeOf(_) | Expr::Update { .. } => {
+            StoreKey::NeverLength
+        }
+        Expr::LocalGet(k) => StoreKey::Local(*k),
+        _ => StoreKey::MayBeLength,
+    }
 }
 
 fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
@@ -291,6 +369,20 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         }
         Expr::LocalSet(id, value) | Expr::GlobalSet(id, value) => {
             scan.writes.insert(*id);
+            if matches!(e, Expr::LocalSet(..)) {
+                if is_string_literal(value) {
+                    scan.string_literal_writes.insert(*id);
+                } else if matches!(
+                    value.as_ref(),
+                    Expr::Binary {
+                        op: perry_hir::BinaryOp::Add,
+                        ..
+                    }
+                ) && matches!(add_chain_head(value), Expr::LocalGet(head) if head == id)
+                {
+                    scan.self_appends.insert(*id);
+                }
+            }
             if depth > 0 {
                 scan.closure_refs.insert(*id);
             }
@@ -315,6 +407,15 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
             value,
         } => {
             record_receiver_use(object, depth, scan);
+            if let Expr::LocalGet(recv) = object.as_ref() {
+                match classify_store_key(index) {
+                    StoreKey::NeverLength => {}
+                    StoreKey::Local(k) => scan.index_set_local_keys.push((*recv, k)),
+                    StoreKey::MayBeLength => {
+                        scan.len_unsafe_uses.insert(*recv);
+                    }
+                }
+            }
             record_expr_use(index, depth, scan);
             record_expr_use(value, depth, scan);
         }
@@ -434,6 +535,9 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
                 scan.let_closures.insert(*id, *func_id);
             }
             if let Some(e) = init {
+                if is_string_literal(e) {
+                    scan.string_literal_writes.insert(*id);
+                }
                 record_expr_use(e, depth, scan);
             }
         }
@@ -648,6 +752,22 @@ fn judge_ctor_arg(
     }
 }
 
+/// The integer-local facts of one body (see [`judge_sites_in_body`]).
+fn body_integer_locals(stmts: &[Stmt], params: &[perry_hir::Param]) -> HashSet<u32> {
+    let binding_types = HashMap::new();
+    let numeric_locals = super::collect_numeric_typed_locals(stmts, params, &binding_types);
+    let empty = HashSet::new();
+    super::integer_locals::collect_integer_locals_with_seeds(
+        stmts,
+        &empty,
+        &empty,
+        &empty,
+        &numeric_locals,
+        &empty,
+        &super::not_bigint_locals::NotBigIntFacts::collect(stmts, params, &binding_types),
+    )
+}
+
 /// One body's sequential site walk: top-level `Stmt::Let`s of proven bindings
 /// make the binding "ready"; every direct `FuncRef` call anywhere below a
 /// top-level statement is judged against the currently-ready set. Closure
@@ -662,18 +782,7 @@ fn judge_sites_in_body(
     // Use the same transitive, all-writes range proof as canonical i32 slots.
     // Empty auxiliary sets only under-approximate clamp/flat-array cases; they
     // cannot admit a local the integer-local provenance judge would reject.
-    let binding_types = HashMap::new();
-    let numeric_locals = super::collect_numeric_typed_locals(stmts, params, &binding_types);
-    let empty = HashSet::new();
-    let integer_locals = super::integer_locals::collect_integer_locals_with_seeds(
-        stmts,
-        &empty,
-        &empty,
-        &empty,
-        &numeric_locals,
-        &empty,
-        &super::not_bigint_locals::NotBigIntFacts::collect(stmts, params, &binding_types),
-    );
+    let integer_locals = body_integer_locals(stmts, params);
     let mut ready: HashSet<u32> = HashSet::new();
     for s in stmts {
         judge_stmt(
@@ -855,7 +964,23 @@ fn judge_expr(
 
 /// Run the whole pre-pass on a module.
 pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
-    let scan = scan_whole_module(hir);
+    let mut scan = scan_whole_module(hir);
+
+    // An element store keyed by a local is length-safe only when that local is
+    // provably an integer: a string key `"length"` truncates the receiver.
+    // Local ids are module-unique, so the per-body integer facts union.
+    if !scan.index_set_local_keys.is_empty() {
+        let mut integer_ids: HashSet<u32> = body_integer_locals(&hir.init, &[]);
+        for f in &hir.functions {
+            integer_ids.extend(body_integer_locals(&f.body, &f.params));
+        }
+        let pending = std::mem::take(&mut scan.index_set_local_keys);
+        for (recv, key) in pending {
+            if !integer_ids.contains(&key) {
+                scan.len_unsafe_uses.insert(recv);
+            }
+        }
+    }
 
     // Array-literal-bound, never-reassigned, non-closure-referenced locals:
     // proven plain arrays. Value is `Some(len)` when additionally no use could

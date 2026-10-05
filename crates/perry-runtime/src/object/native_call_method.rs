@@ -17,7 +17,7 @@ mod disposal;
 mod function_shape;
 pub(crate) use function_shape::{
     call_function_intrinsic, function_intrinsic_facts, function_prototype_built,
-    FunctionIntrinsicFacts,
+    run_function_intrinsic, FunctionIntrinsicFacts,
 };
 mod handle_methods;
 mod memo_entries;
@@ -57,6 +57,7 @@ pub(crate) use namespace_override::{
     namespace_override_stack_restore, namespace_override_stack_savepoint,
 };
 pub use object_proto::js_value_to_locale_string;
+use object_proto::{call_builtin_object_proto_method, is_ordinary_object_receiver};
 pub(crate) use object_proto::{
     js_object_default_value_of, js_object_is_prototype_of_value,
     js_object_prototype_to_locale_string,
@@ -71,11 +72,10 @@ pub(super) use typed_array::dispatch_typed_array_method;
 /// ([`class_holder::try_class_holder_fast_dispatch`]) and of the compiled
 /// class-method sites' learned words (`direct_site`).
 ///
-/// Returns the receiver's `class_id` when `object` is an ORDINARY heap
-/// instance of a user class: everything the dispatch tower decides per RECEIVER
-/// rather than per (class, name) is pinned here, so two receivers that both
-/// satisfy `G` with the same class id and method name provably reach the same
-/// resolution.
+/// Answers when `object` is an ORDINARY heap instance of a user class whose
+/// shape states its [[Prototype]]: everything the dispatch tower decides per
+/// RECEIVER rather than per prototype chain is pinned here, so two receivers
+/// of one ShapeId that pass reach the same resolution.
 ///
 /// * NaN-boxed pointer above the handle band — excludes every small-handle
 ///   registry receiver (timers, sockets, zlib streams, TextDecoder, …) and
@@ -87,39 +87,26 @@ pub(super) use typed_array::dispatch_typed_array_method;
 ///   probes the tower runs ahead of the class walk that a `GC_TYPE_OBJECT`
 ///   receiver could in principle also answer. Both are latched (#7755), so in
 ///   a program using neither this is two atomic loads;
-/// * `meta` null — no `Object.setPrototypeOf` override, no per-key descriptor
-///   state, no exotic-kind tag. STRICTER than the tower, which resolves
-///   through a meta record;
+/// * a metadata record, if any, holds no flags (not an exotic read receiver,
+///   not itself a prototype) and no dictionary keys. Overflow (`spill`)
+///   storage holds VALUES of keys the shape's key list already names, and
+///   descriptor state lives with the keys (an accessor or attribute for
+///   `method_bytes` is a key of that name), so the indexed own-key lookup
+///   below still answers. An instance with more fields than its inline slots
+///   (an `EventEmitter` subclass, a wide constructor) carries exactly that;
 /// * no OWN key equal to the method name (an own field shadows the prototype),
 ///   using the shared content-validated key index;
-/// * no recorded static prototype for the address, so the tower's
-///   `resolve_inherited_field` probe had nothing to shadow with.
-#[inline]
-unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<(usize, u32)> {
-    class_receiver_guard::<false>(object, method_bytes)
-}
-
-/// [`class_receiver_fast_guard`], optionally accepting a receiver that carries
-/// an [`ObjectMeta`](crate::object::ObjectMeta) record for storage only.
+/// * its [[Prototype]] is the one its ShapeId names: the class's own (a CLASS
+///   identity, or no recorded prototype at all), or a recorded one whose
+///   serial the identity carries (MIXED: a per-evaluation class's prototype,
+///   or one set on the instance) — [`ClassReceiver::recorded_prototype`].
+///   A per-evaluation class's instances also carry that evaluation's private
+///   brand; the brand is a fact of the same prototype, so it is not consulted.
 ///
-/// With `META_STORAGE_OK`, a metadata record is accepted when every field
-/// that could change where a lookup of `method_bytes` goes is inert: no
-/// recorded `[[Prototype]]`, no flags (no prototype divergence or override,
-/// not an exotic read receiver, not itself a prototype) and no
-/// fresh-evaluation private brand. Overflow (`spill`) storage holds VALUES of
-/// keys the shape's key list already names, and descriptor state lives with
-/// the keys (an accessor or attribute for `method_bytes` is a key of that
-/// name), so the indexed own-key lookup below still answers. An instance with more
-/// fields than its inline slots (an `EventEmitter` subclass, a wide
-/// constructor) carries exactly that. Only the learned site words use this
-/// form: they are facts of one ShapeId, which every descriptor install
-/// changes, whereas the `(class, name)` cache this guard otherwise feeds is
-/// not.
-#[inline]
-unsafe fn class_receiver_guard<const META_STORAGE_OK: bool>(
-    object: f64,
-    method_bytes: &[u8],
-) -> Option<(usize, u32)> {
+/// Always inlined: the dispatch tower calls it for every receiver it sees,
+/// and almost all of them are refused by its first checks.
+#[inline(always)]
+unsafe fn class_receiver_fast_guard(object: f64, method_bytes: &[u8]) -> Option<ClassReceiver> {
     let bits = object.to_bits();
     if (bits >> 48) != (crate::value::POINTER_TAG >> 48) {
         return None;
@@ -150,22 +137,9 @@ unsafe fn class_receiver_guard<const META_STORAGE_OK: bool>(
     if !crate::object::object_is_regular(obj) {
         return None;
     }
-    // Null `meta` on a meta-capable object is what rules out BOTH a per-instance
-    // `[[Prototype]]` override AND any own descriptor entry — including an
-    // accessor installed on THIS instance for THIS name
-    // (`Object.defineProperty(instance, "m", { get() {…} })`), which would make
-    // the tower invoke the getter and call its result. That is a per-object
-    // divergence the class/name cache key cannot see, and
-    // `may_have_descriptor_entry` returns `false` for exactly this state.
     let meta = (*obj).meta;
-    if !meta.is_null() {
-        if !META_STORAGE_OK
-            || (*meta).prototype != 0
-            || (*meta).flags != 0
-            || (*meta).private_evaluation_brand != 0
-        {
-            return None;
-        }
+    if !meta.is_null() && (*meta).flags != 0 {
+        return None;
     }
     let class_id = (*obj).class_id;
     if class_id == 0 {
@@ -203,13 +177,32 @@ unsafe fn class_receiver_guard<const META_STORAGE_OK: bool>(
         }
     }
 
-    // A recorded prototype could carry a shadowing field; the tower consults it
-    // before the class walk, so a fast path may not.
-    if super::prototype_chain::object_static_prototype(obj_addr).is_some() {
-        return None;
-    }
+    // A recorded prototype is admitted only as the ShapeId states it.
+    let word = crate::object::shapes::object_prototype_word(obj);
+    let recorded_prototype = if word == 0 {
+        std::ptr::null()
+    } else {
+        crate::object::method_site::read_holder::recorded_class_link(obj, word)
+            .ok()?
+            .unwrap_or(std::ptr::null())
+    };
 
-    Some((obj_addr, class_id))
+    Some(ClassReceiver {
+        addr: obj_addr,
+        class_id,
+        recorded_prototype,
+    })
+}
+
+/// A receiver [`class_receiver_fast_guard`] admitted.
+#[derive(Clone, Copy)]
+struct ClassReceiver {
+    addr: usize,
+    class_id: u32,
+    /// Null when the receiver inherits from the prototype its class implies;
+    /// otherwise the recorded prototype its ShapeId names (a MIXED identity).
+    /// Only the former makes the class's compiled method body the answer.
+    recorded_prototype: *const ObjectHeader,
 }
 
 /// True for the method names whose tower probes depend on per-object state
@@ -1902,6 +1895,19 @@ pub(crate) unsafe fn native_call_method_tower(
         crate::object::own_override::call_own_user_method(object, method_name, refreshed_args)
     {
         return result;
+    }
+
+    // `hasOwnProperty` / `propertyIsEnumerable` on a receiver that is not an
+    // ordinary object (a primitive, function, class, array, collection, typed
+    // array, …): the kind dispatchers below answer by name, and for these two
+    // names their answers are wrong (`undefined`, or `true` for any key). The
+    // receiver's own property was consulted just above; its kind's prototype
+    // carries the builtin, so the builtin answers. An ordinary object goes on
+    // to the common arm, which reads the method off its prototype chain.
+    if matches!(method_name, "hasOwnProperty" | "propertyIsEnumerable")
+        && !is_ordinary_object_receiver(object())
+    {
+        return call_builtin_object_proto_method(object(), method_name, &refreshed_args());
     }
 
     if let Some(r) = primitive_methods::dispatch_primitive(

@@ -78,7 +78,10 @@ struct Sites {
 
 static SITES: Mutex<Option<Sites>> = Mutex::new(None);
 
-crate::perry_thread_local! {
+// Allocator hooks run before runtime TLS exists. Perry's TLS wrapper registers
+// slots in a Vec, which allocates and re-enters this very hook. Const Rust TLS
+// has neither registration nor destructors, including on fresh native threads.
+std::thread_local! {
     /// Bytes still to allocate before the next sample. Const-initialised so
     /// the TLS access itself never allocates.
     static CREDIT: Cell<i64> = const { Cell::new(1 << 20) };
@@ -318,12 +321,44 @@ unsafe impl<A: GlobalAlloc> GlobalAlloc for CensusAlloc<A> {
     }
 }
 
+#[cfg(target_vendor = "apple")]
 fn main_image_load_address() -> usize {
     unsafe extern "C" {
         fn _dyld_get_image_header(index: u32) -> *const core::ffi::c_void;
     }
     // SAFETY: image 0 is the main executable; the call takes no pointer.
     (unsafe { _dyld_get_image_header(0) }) as usize
+}
+
+#[cfg(all(unix, not(target_vendor = "apple")))]
+fn main_image_load_address() -> usize {
+    // This function is statically linked into the executable. Resolve its own
+    // address, rather than a libc symbol (which would identify libc's image).
+    let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+    let found = unsafe {
+        libc::dladdr(
+            main_image_load_address as *const () as *const libc::c_void,
+            &mut info,
+        )
+    };
+    if found == 0 {
+        0
+    } else {
+        info.dli_fbase as usize
+    }
+}
+
+#[cfg(windows)]
+fn main_image_load_address() -> usize {
+    unsafe extern "system" {
+        fn GetModuleHandleW(name: *const u16) -> *mut core::ffi::c_void;
+    }
+    unsafe { GetModuleHandleW(core::ptr::null()) as usize }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn main_image_load_address() -> usize {
+    0
 }
 
 /// Append one JSON document to `PERRY_ALLOC_CENSUS`.
@@ -430,5 +465,64 @@ pub(crate) fn mimalloc_stats_print() {
         }
         // SAFETY: mimalloc's own reporting entry; a null sink means stderr.
         unsafe { mi_stats_print(core::ptr::null_mut()) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn image_base_is_the_executables_elf_header() {
+        let base = main_image_load_address();
+        assert_ne!(base, 0);
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(base as *const u8, 4) },
+            b"\x7fELF"
+        );
+        assert!(base <= main_image_load_address as *const () as usize);
+    }
+
+    // Subprocess coverage is essential: allocator TLS is first touched before
+    // main, and must also work on a new thread with no Perry TLS registration.
+    #[test]
+    fn fresh_allocator_tls() {
+        const CHILD: &str = "PERRY_CENSUS_TLS_TEST_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            std::thread::spawn(|| {
+                let bytes = vec![7u8; 2 * 1024 * 1024];
+                std::hint::black_box(&bytes);
+                alloc_census_dump("fresh-thread");
+            })
+            .join()
+            .unwrap();
+            return;
+        }
+        let path =
+            std::env::temp_dir().join(format!("perry-census-tls-{}.jsonl", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "alloc_census::tests::fresh_allocator_tls",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("PERRY_ALLOC_CENSUS", &path)
+            .env("PERRY_ALLOC_CENSUS_INTERVAL", "4096")
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "allocator hook must reach main and the fresh thread"
+        );
+        let output = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(output.trim()).unwrap();
+        assert_eq!(doc["label"], "fresh-thread");
+        assert!(doc["totals"]["live_bytes"].as_i64().unwrap() >= 2 * 1024 * 1024);
+        #[cfg(any(unix, windows))]
+        assert!(doc["load_address"].as_u64().unwrap() > 0);
     }
 }

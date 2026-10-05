@@ -66,14 +66,15 @@ pub(crate) fn response_body_stream(resp_id: usize) -> f64 {
     {
         return id as f64;
     }
-    let bytes = match FETCH_RESPONSES.lock().unwrap().get(&resp_id) {
-        Some(r) if r.body_present => r.body.clone(),
+    let bytes = match FETCH_RESPONSES.lock().unwrap().get_mut(&resp_id) {
+        Some(r) if r.body_present => std::mem::take(&mut r.body),
         Some(_) => return f64::from_bits(TAG_NULL),
         None => return f64::from_bits(TAG_NULL),
     };
     let stream_id = crate::streams::alloc_readable_from_bytes(bytes);
     if let Some(resp) = FETCH_RESPONSES.lock().unwrap().get_mut(&resp_id) {
         resp.cached_body_stream_id = Some(stream_id);
+        resp.body_stream_id = Some(stream_id);
     }
     stream_id as f64
 }
@@ -174,3 +175,68 @@ pub unsafe extern "C" fn js_response_static_redirect(
 // The `Request` constructors (`js_request_new` / `js_request_new_from_init`)
 // live in the `request_ctor` sibling module (re-exported below) to keep this
 // file under the 2,000-line lint gate (#5458).
+
+#[cfg(test)]
+mod storage_tests {
+    use super::*;
+    #[test]
+    fn clone_after_body_transfer_drives_both_tee_branches() {
+        let expected = vec![9; 65536];
+        let id = alloc_response(
+            200,
+            "OK".into(),
+            HeadersStore::default(),
+            expected.clone(),
+            true,
+        );
+        response_body_stream(id);
+        let cloned = js_response_clone(handle_to_f64(id));
+        assert_eq!(consume_response_body(handle_to_f64(id)).unwrap(), expected);
+        assert_eq!(consume_response_body(cloned).unwrap(), expected);
+    }
+    #[test]
+    fn consumption_releases_the_responses_native_body_capacity() {
+        let expected = vec![7; 65536];
+        let id = alloc_response(
+            200,
+            "OK".into(),
+            HeadersStore::default(),
+            expected.clone(),
+            true,
+        );
+        assert_eq!(consume_response_body(handle_to_f64(id)).unwrap(), expected);
+        let retained = FETCH_RESPONSES.lock().unwrap()[&id].body.capacity();
+        assert_eq!(
+            retained, 0,
+            "consumed native body must not remain allocated"
+        );
+        assert!(consume_response_body(handle_to_f64(id)).is_err());
+    }
+    #[test]
+    fn body_stream_becomes_the_owner_and_body_methods_drain_it() {
+        let expected = vec![8; 65536];
+        let id = alloc_response(
+            200,
+            "OK".into(),
+            HeadersStore::default(),
+            expected.clone(),
+            true,
+        );
+        let stream = response_body_stream(id);
+        assert_eq!(stream, response_body_stream(id));
+        let retained = FETCH_RESPONSES.lock().unwrap()[&id].body.capacity();
+        assert_eq!(retained, 0);
+        assert_eq!(consume_response_body(handle_to_f64(id)).unwrap(), expected);
+    }
+}
+
+pub(crate) fn response_body_is_used(resp_id: usize) -> bool {
+    let state = FETCH_RESPONSES
+        .lock()
+        .unwrap()
+        .get(&resp_id)
+        .map(|r| (r.body_used, r.body_stream_id));
+    state.is_some_and(|(used, stream)| {
+        used || stream.is_some_and(|id| crate::streams::readable_body_state(id).1)
+    })
+}

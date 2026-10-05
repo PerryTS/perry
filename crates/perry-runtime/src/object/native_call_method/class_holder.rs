@@ -287,9 +287,9 @@ pub(crate) unsafe fn class_instance_prototype(obj: *const ObjectHeader) -> *cons
 }
 
 /// [`class_instance_prototype`] for a receiver that passed the class receiver
-/// guard (an ordinary, non-dictionary class instance whose meta record, if
-/// any, records no [[Prototype]]). Such a receiver's shape names its class's
-/// declared prototype (`shapes::class_proto_id`): the class's own link, or,
+/// guard with no recorded [[Prototype]] other than its class's own
+/// ([`super::ClassReceiver::recorded_prototype`] null). Such a receiver's
+/// shape names its class's declared prototype (`shapes::class_proto_id`): the class's own link, or,
 /// for a generic specialization (whose class keeps no link of its own), the
 /// generic origin's, which the shape names.
 ///
@@ -391,7 +391,8 @@ pub(super) unsafe fn try_class_holder_fast_dispatch(
     memo: MemoRef,
 ) -> Option<f64> {
     let name = key.bytes;
-    let (obj_addr, _class_id) = class_receiver_guard(object, key)?;
+    let recv = class_receiver_guard(object, key)?;
+    let obj_addr = recv.addr;
     // `constructor` is the class itself, which the tower's call path
     // reports as not callable without `new`.
     if name_is_not_a_prototype_method(name) || name == b"constructor" {
@@ -400,7 +401,11 @@ pub(super) unsafe fn try_class_holder_fast_dispatch(
     if is_iterator_helper_name(name) {
         return None;
     }
-    let start = guarded_class_instance_prototype(obj_addr as *const ObjectHeader);
+    let start = if recv.recorded_prototype.is_null() {
+        guarded_class_instance_prototype(obj_addr as *const ObjectHeader)
+    } else {
+        recv.recorded_prototype
+    };
     if start.is_null() {
         return None;
     }
@@ -538,7 +543,7 @@ fn is_user_function_value(value: u64, name: &[u8]) -> bool {
 /// The receiver predicate of the fast call (see [`class_receiver_fast_guard`]),
 /// with the own-key absence decided by the receiver's key list.
 #[inline]
-unsafe fn class_receiver_guard(object: f64, key: &MethodKey<'_>) -> Option<(usize, u32)> {
+unsafe fn class_receiver_guard(object: f64, key: &MethodKey<'_>) -> Option<super::ClassReceiver> {
     super::class_receiver_fast_guard(object, key.bytes)
 }
 

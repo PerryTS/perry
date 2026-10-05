@@ -143,18 +143,15 @@ extern "C" fn port_post_message(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
     value: f64,
-    _transfer: f64,
+    transfer: f64,
 ) -> f64 {
     let port_id = port_id_from_closure(closure);
     if port_id == PARENT_PORT_HANDLE as u64 && CURRENT_WORKER_ID.with(|id| id.get()) != 0 {
-        return js_worker_threads_post_message(value);
+        return js_worker_threads_post_message(value, transfer);
     }
-    // Validate the full submitted graph: a marked object nested inside an
-    // otherwise cloneable container rejects the whole message.
-    if message_value_is_uncloneable(value, &mut HashSet::new()) {
-        throw_data_clone_error("object could not be cloned.");
-    }
-    let serialized = serialize_message(value);
+    // A marked or uncloneable value anywhere in the graph rejects the whole
+    // message before anything is queued.
+    let serialized = clone_message(value, transfer);
     MESSAGE_PORTS.with(|ports| {
         let peer = {
             let ports = ports.borrow();

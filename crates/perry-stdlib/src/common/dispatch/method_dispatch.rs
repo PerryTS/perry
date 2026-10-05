@@ -10,7 +10,6 @@ use crate::common::feature_hooks::{Hook, MethodArm, RawMethodArm};
 static RAW_EXTERNAL_ZLIB: Hook<RawMethodArm> = Hook::empty();
 static RAW_EXTERNAL_HTTP_CLIENT: Hook<RawMethodArm> = Hook::empty();
 static ARM_STREAMS: Hook<MethodArm> = Hook::empty();
-static ARM_EVENTS: Hook<MethodArm> = Hook::empty();
 static ARM_NODEMAILER: Hook<MethodArm> = Hook::empty();
 static ARM_NODE_SQLITE: Hook<MethodArm> = Hook::empty();
 static ARM_CRYPTO: Hook<MethodArm> = Hook::empty();
@@ -52,6 +51,13 @@ unsafe fn try_dispatch_external_zlib_stream(
             | "off"
             | "removeListener"
             | "pipe"
+            | "iterator"
+            | "@@asyncIterator"
+            | "pause"
+            | "resume"
+            | "_perryDrain"
+            | "_perryIteratorState"
+            | "_perryIteratorError"
             | "flush"
             | "params"
             | "reset"
@@ -289,8 +295,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     // Dispatchers below gate on registry membership plus method vocabulary
     // because native handle id spaces are not unified (#91).
 
-    try_arm!(ARM_EVENTS, handle, method_name, &args);
-
     if let Some(value) = dispatch_async_local_storage_method(handle, method_name, &args) {
         return value;
     }
@@ -348,14 +352,6 @@ unsafe fn arm_streams(handle: i64, method_name: &str, args: &[f64]) -> Option<f6
     // .getReader()`, `const r = rs.getReader(); r.read()`, …).
     if let Some(v) = crate::streams::dispatch_stream_method(handle as f64, method_name, &args) {
         return Some(v);
-    }
-    None
-}
-
-#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-unsafe fn arm_events(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
-    if let Some(value) = dispatch_event_emitter_method(handle, method_name, &args) {
-        return Some(value);
     }
     None
 }
@@ -480,50 +476,6 @@ unsafe fn arm_node_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Optio
 
 #[cfg(feature = "crypto")]
 unsafe fn arm_crypto(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
-    // crypto Hash handle: createHash(...).update(...).digest().
-    // The order vs. net (below) does not matter once method-gated, but we
-    // keep hash before net to avoid changing the priority of in-registry
-    // matches relative to the v0.5.98/#88 ordering.
-    if matches!(
-        method_name,
-        "update"
-            | "digest"
-            | "copy"
-            | "write"
-            | "end"
-            | "on"
-            | "once"
-            | "addListener"
-            | "pipe"
-            | "setEncoding"
-            | "destroy"
-            | "close"
-    ) && with_handle::<crate::crypto::HashHandle, bool, _>(handle, |_| true).unwrap_or(false)
-    {
-        return Some(crate::crypto::dispatch_hash(handle, method_name, &args));
-    }
-
-    // crypto Hmac handle: createHmac(alg, key).update(...).digest(). Routes
-    // the runtime path the codegen falls back to whenever `alg` isn't a
-    // literal `"sha256"`. See #1076 for the silent-empty bug this closes.
-    if matches!(
-        method_name,
-        "update"
-            | "digest"
-            | "write"
-            | "end"
-            | "on"
-            | "once"
-            | "addListener"
-            | "pipe"
-            | "setEncoding"
-            | "destroy"
-            | "close"
-    ) && with_handle::<crate::crypto::HmacHandle, bool, _>(handle, |_| true).unwrap_or(false)
-    {
-        return Some(crate::crypto::dispatch_hmac(handle, method_name, &args));
-    }
-
     if matches!(method_name, "update" | "sign")
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
@@ -598,19 +550,6 @@ unsafe fn arm_crypto(handle: i64, method_name: &str, args: &[f64]) -> Option<f64
         ));
     }
 
-    // crypto Cipher handle: createCipheriv(...) / createDecipheriv(...)
-    // followed by .update(...).final() / .getAuthTag() / .setAuthTag() —
-    // issue #1075. Method-gated like the Hash handle above so handle id
-    // collisions across registries (net.Socket id=1 vs CipherHandle id=1)
-    // don't accidentally route a socket method here.
-    if matches!(
-        method_name,
-        "update" | "final" | "getAuthTag" | "setAuthTag" | "setAAD" | "setAutoPadding"
-    ) && with_handle::<crate::crypto::CipherHandle, bool, _>(handle, |_| true).unwrap_or(false)
-    {
-        return Some(crate::crypto::dispatch_cipher(handle, method_name, &args));
-    }
-
     // crypto Sign/Verify handle: createSign(alg)/createVerify(alg) followed by
     // .update(...).sign(key) / .verify(key, sig) — issue #1364. Method-gated
     // like the Hash/Cipher handles. `sign`/`verify` are distinctive enough to
@@ -654,7 +593,16 @@ unsafe fn arm_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Option<f64
     // binary — `optimized_libs.rs` now keeps `database-sqlite` for
     // exactly this reason (the duplicate `js_sqlite_*` symbols are
     // resolved by the linker to a single impl).
-    if matches!(method_name, "raw" | "all" | "get" | "run") {
+    // Handle id spaces are not unified, so a `get` on any other handle (a
+    // fetch Response's `headers`, …) reaches this arm too. Claim only handles
+    // the sqlite registry owns: since #11919 the sqlite entry points throw
+    // "The database connection is not open" for a handle they do not know.
+    extern "C" {
+        fn js_sqlite_is_stmt_handle(handle: i64) -> i32;
+        fn js_sqlite_is_db_handle(handle: i64) -> i32;
+    }
+    if matches!(method_name, "raw" | "all" | "get" | "run") && js_sqlite_is_stmt_handle(handle) != 0
+    {
         let result = dispatch_sqlite_stmt(handle, method_name, &args);
         if result.to_bits() != perry_runtime::JSValue::undefined().bits() {
             return Some(result);
@@ -675,8 +623,8 @@ unsafe fn arm_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Option<f64
     // typed receivers; this arm is the runtime fallback for Any-typed
     // class fields the codegen can't statically resolve. Refs #645 /
     // #488 / #643. Method-gated to avoid claiming small handles owned
-    // by other registries (HashHandle, FastifyApp, etc.).
-    if matches!(method_name, "prepare" | "exec" | "close") {
+    // by other registries (SignHandle, FastifyApp, etc.).
+    if matches!(method_name, "prepare" | "exec" | "close") && js_sqlite_is_db_handle(handle) != 0 {
         let result = dispatch_sqlite_db(handle, method_name, &args);
         if result.to_bits() != perry_runtime::JSValue::undefined().bits() {
             return Some(result);
@@ -749,7 +697,7 @@ unsafe fn arm_http_server(handle: i64, method_name: &str, args: &[f64]) -> Optio
     // valid dispatch — the typed-feedback emit site doesn't consult the
     // native_table, and the runtime had no `HttpServer` arm.
     //
-    // Method-gated so a handle id reused by another registry (HashHandle,
+    // Method-gated so a handle id reused by another registry (SignHandle,
     // FastifyApp, …) doesn't misroute. The list mirrors the
     // `class_filter: Some("HttpServer")` rows in http.rs.
     {
@@ -1114,10 +1062,6 @@ unsafe fn arm_fetch(handle: i64, method_name: &str, args: &[f64]) -> Option<f64>
 #[cfg(feature = "bundled-streams")]
 pub(super) fn install_streams() {
     ARM_STREAMS.set(arm_streams);
-}
-#[cfg(any(feature = "bundled-events", feature = "external-events-construct"))]
-pub(super) fn install_events() {
-    ARM_EVENTS.set(arm_events);
 }
 #[cfg(feature = "bundled-nodemailer")]
 pub(super) fn install_nodemailer() {

@@ -68,6 +68,11 @@ pub(crate) struct BufferAccessFacts {
 #[serde(rename_all = "snake_case")]
 pub(crate) enum BoundsProof {
     LoopGuard,
+    /// A loop region over a typed-array view proved the index range against
+    /// the length its guard (or last re-check) read, with nothing that can
+    /// run JS since (`stmt::region_loop`, decision 69). The access needs no
+    /// length load and no assume.
+    RegionGuard,
     MinLength,
     ExplicitGuard,
     // #854: bounds-proof variant matched by uses_unsound_explicit_assume_guard

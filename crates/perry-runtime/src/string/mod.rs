@@ -370,7 +370,7 @@ struct StaticDispatchString {
     bytes: *const u8,
 }
 
-const STATIC_DISPATCH_TAG: u64 = 0x7FF8_0000_0000_0000;
+pub(crate) const STATIC_DISPATCH_TAG: u64 = 0x7FF8_0000_0000_0000;
 const STATIC_DISPATCH_FLAG_WTF8: u32 = 1;
 
 /// Resolve a static property/method id into a byte view.

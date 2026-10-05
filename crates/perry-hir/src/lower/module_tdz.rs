@@ -101,7 +101,14 @@ pub(crate) fn apply(module: &mut Module, facts: &ModuleTdzFacts<'_>) {
     // own naming it. Name each exported binding once, right after its
     // declarator (a no-op there), so its global is seeded with the dead-zone
     // sentinel and its getter throws while the sentinel is still there.
-    if facts.exports_may_run_early {
+    //
+    // A CommonJS module has no such binding: what it exports are properties
+    // of `module.exports`, which an importer that runs first finds unset,
+    // never in a dead zone. The wrap's `export const X = _cjs.X` only names
+    // the property: its getter reads `module.exports` live and the declarator
+    // never stores X's global, so a sentinel seeded there would never be
+    // cleared and the check would throw after initialization (#11987).
+    if facts.exports_may_run_early && !module.is_commonjs_wrap() {
         let exported: HashSet<&str> = module
             .exports
             .iter()

@@ -697,16 +697,14 @@ pub extern "C" fn js_native_async_process_pending() -> i32 {
 /// settled *synchronously* (via `js_promise_resolve`/`js_promise_reject`)
 /// outside the deferred completion machinery.
 ///
-/// Ext crates such as `perry-ext-events` allocate their `events.once` Promise
-/// through perry-ffi's `JsPromise::new()` → `perry_ffi_promise_new()`, which
-/// registers a native-async token (and pins the Promise) so a worker can
-/// resolve it later. `events.once`, however, settles synchronously from
-/// `emit(...)` and deliberately bypasses the deferred resolve path (see the
-/// extern comment in perry-ext-events). That bypass never runs
+/// A crate that allocates a Promise through perry-ffi's `JsPromise::new()` →
+/// `perry_ffi_promise_new()` registers a native-async token (and pins the
+/// Promise) so a worker can resolve it later. A Promise such a crate settles
+/// synchronously instead (an `events.once` settled from `emit(...)` was the
+/// first) bypasses the deferred resolve path, which never runs
 /// `js_native_async_process_pending`, so the token stays in the registry
 /// forever and `js_native_async_has_active()` keeps reporting work — the
-/// process hangs after the awaited event already fired (the
-/// `events.once(emitter, name)` + `emit` hang). Calling this right after the
+/// process hangs after the awaited settlement already happened. Calling this right after the
 /// synchronous settle removes the orphaned token (mirroring the cleanup
 /// `js_native_async_process_pending` performs) so the event loop can drain.
 #[no_mangle]

@@ -12,70 +12,73 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::Once;
 
-// `events` is feature-gated behind `bundled-events`; when the well-known
-// bindings table routes `import 'events'` to perry-ext-events the in-tree
-// module may still be compiled into stdlib. Keep the local fast path for
-// bundled EventEmitter handles, but fall through to runtime hooks so external
-// EventEmitter implementations can participate in node:domain routing.
-#[inline]
-fn ee_is_event_emitter_handle_hook(handle: Handle) -> bool {
-    perry_runtime::object::event_emitter_handle_probe()
-        .is_some_and(|probe| unsafe { probe(handle) })
+/// node's `Domain.prototype.add`/`remove` bind an emitter by an own,
+/// non-enumerable `domain` data property (`ObjectDefineProperty(ee, 'domain',
+/// ...)` / `ee.domain = null`). An emitter is an ordinary object (#10508), so
+/// its domain is that property and its unhandled `'error'` emit reads it.
+unsafe fn set_member_domain(member: f64, domain: f64) {
+    let Some(obj) = member_object(member) else {
+        return;
+    };
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let member = scope.root_nanbox_f64(js_nanbox_pointer(obj as i64));
+    let domain = scope.root_nanbox_f64(domain);
+    let descriptor = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 4));
+    for (name, value) in [
+        ("writable", js_bool(true)),
+        ("enumerable", js_bool(false)),
+        ("configurable", js_bool(true)),
+        ("value", undefined()),
+    ] {
+        // `value` is re-read here: allocating the key strings can move it.
+        let value = if name == "value" {
+            domain.get_nanbox_f64()
+        } else {
+            value
+        };
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        perry_runtime::object::js_object_set_field_by_name(
+            descriptor.get_raw_mut_ptr::<ObjectHeader>(),
+            key,
+            value,
+        );
+    }
+    let key =
+        perry_runtime::value::js_nanbox_string(js_string_from_bytes(b"domain".as_ptr(), 6) as i64);
+    perry_runtime::object::js_object_define_property(
+        member.get_nanbox_f64(),
+        key,
+        js_nanbox_pointer(descriptor.get_raw_mut_ptr::<ObjectHeader>() as i64),
+    );
 }
 
-#[inline]
-fn ee_get_domain_hook(handle: Handle) -> Handle {
-    perry_runtime::object::event_emitter_get_domain()
-        .map(|get_domain| unsafe { get_domain(handle) })
-        .unwrap_or(0)
-}
-
-#[inline]
-fn ee_set_domain_hook(handle: Handle, domain: Handle) {
-    if let Some(set_domain) = perry_runtime::object::event_emitter_set_domain() {
-        let _ = unsafe { set_domain(handle, domain) };
+/// The member's own `domain` property, `undefined` when it has none.
+unsafe fn member_domain(member: f64) -> f64 {
+    match member_object(member) {
+        Some(obj) => {
+            let key = js_string_from_bytes(b"domain".as_ptr(), 6);
+            perry_runtime::object::js_object_get_field_by_name_f64(obj, key)
+        }
+        None => undefined(),
     }
 }
 
-#[cfg(feature = "bundled-events")]
-#[inline]
-fn ee_is_event_emitter_handle(handle: Handle) -> bool {
-    crate::events::is_event_emitter_handle(handle) || ee_is_event_emitter_handle_hook(handle)
-}
-#[cfg(not(feature = "bundled-events"))]
-#[inline]
-fn ee_is_event_emitter_handle(handle: Handle) -> bool {
-    ee_is_event_emitter_handle_hook(handle)
-}
-
-#[cfg(feature = "bundled-events")]
-#[inline]
-fn ee_get_domain(handle: Handle) -> Handle {
-    if crate::events::is_event_emitter_handle(handle) {
-        crate::events::js_event_emitter_get_domain(handle)
-    } else {
-        ee_get_domain_hook(handle)
+/// A member that can carry a `domain` property: an ordinary heap object.
+fn member_object(member: f64) -> Option<*const ObjectHeader> {
+    let value = JSValue::from_bits(member.to_bits());
+    if !value.is_pointer() {
+        return None;
     }
-}
-#[cfg(not(feature = "bundled-events"))]
-#[inline]
-fn ee_get_domain(handle: Handle) -> Handle {
-    ee_get_domain_hook(handle)
-}
-
-#[cfg(feature = "bundled-events")]
-#[inline]
-fn ee_set_domain(handle: Handle, domain: Handle) {
-    if crate::events::is_event_emitter_handle(handle) {
-        let _ = crate::events::js_event_emitter_set_domain(handle, domain);
-    } else {
-        ee_set_domain_hook(handle, domain);
+    let addr = value.as_pointer::<ObjectHeader>() as usize;
+    if !perry_runtime::value::addr_class::is_above_handle_band(addr) {
+        return None;
     }
-}
-#[cfg(not(feature = "bundled-events"))]
-#[inline]
-fn ee_set_domain(handle: Handle, domain: Handle) {
-    ee_set_domain_hook(handle, domain);
+    // SAFETY: a pointer-tagged value above the handle band is a heap cell.
+    let header = unsafe {
+        &*((addr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
+            as *const perry_runtime::gc::GcHeader)
+    };
+    (header.obj_type == perry_runtime::gc::GC_TYPE_OBJECT).then_some(addr as *const ObjectHeader)
 }
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -171,17 +174,6 @@ fn js_bool(value: bool) -> f64 {
 
 fn nanbox_handle(handle: Handle) -> f64 {
     js_nanbox_pointer(handle)
-}
-
-fn handle_from_value(value: f64) -> Handle {
-    let bits = value.to_bits();
-    if (bits >> 48) == 0x7FFD {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as Handle
-    } else if value.is_finite() && value > 0.0 && value.fract() == 0.0 {
-        value as Handle
-    } else {
-        bits as Handle
-    }
 }
 
 fn event_name_from_value(value: f64) -> Option<*const StringHeader> {
@@ -426,10 +418,7 @@ pub unsafe extern "C" fn js_domain_add(handle: Handle, member: f64) -> Handle {
             domain.members.push(member);
         }
     }
-    let member_handle = handle_from_value(member);
-    if ee_is_event_emitter_handle(member_handle) {
-        ee_set_domain(member_handle, handle);
-    }
+    set_member_domain(member, nanbox_handle(handle));
     handle
 }
 
@@ -440,9 +429,8 @@ pub unsafe extern "C" fn js_domain_remove(handle: Handle, member: f64) -> Handle
             .members
             .retain(|candidate| candidate.to_bits() != member.to_bits());
     }
-    let member_handle = handle_from_value(member);
-    if ee_is_event_emitter_handle(member_handle) && ee_get_domain(member_handle) == handle {
-        ee_set_domain(member_handle, 0);
+    if member_domain(member).to_bits() == nanbox_handle(handle).to_bits() {
+        set_member_domain(member, null());
     }
     handle
 }
@@ -542,14 +530,6 @@ pub unsafe fn dispatch_domain_method(handle: Handle, method: &str, args: &[f64])
 }
 
 pub fn dispatch_domain_property(handle: Handle, property: &str) -> Option<f64> {
-    if ee_is_event_emitter_handle(handle) && property == "domain" {
-        let domain = ee_get_domain(handle);
-        return Some(if domain == 0 {
-            null()
-        } else {
-            nanbox_handle(domain)
-        });
-    }
     if !is_domain_handle(handle) {
         return None;
     }

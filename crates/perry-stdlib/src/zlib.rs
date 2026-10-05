@@ -477,7 +477,7 @@ unsafe fn queue_zlib_callback(codec: Codec, data_value: f64, options: f64, callb
     //
     // The callback is a raw closure pointer with no other referent until the
     // event is queued, so it is parked in the job's root set and comes back
-    // rewritten: `ZLIB_PENDING_EVENTS`' own scanner covers it only once the
+    // rewritten: `tables().pending`' own scanner covers it only once the
     // event exists, which is now after the compression rather than before it.
     let parked = callback_value.get_nanbox_f64().to_bits();
     perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
@@ -494,7 +494,8 @@ unsafe fn queue_zlib_callback(codec: Codec, data_value: f64, options: f64, callb
                 Delivery::Cancelled => Err("zlib operation was cancelled".to_string()),
                 Delivery::Failed(_) => Err("zlib operation failed".to_string()),
             };
-            ZLIB_PENDING_EVENTS
+            tables()
+                .pending
                 .lock()
                 .unwrap()
                 .push(ZlibEvent::OneShotCallback(callback, result, async_ids));
@@ -688,7 +689,7 @@ pub unsafe extern "C" fn js_zlib_zstd_decompress(
 // This mirrors the net.Socket handle pattern (crates/perry-stdlib/src/net/
 // mod.rs) but compression is synchronous, so there's no tokio task: input is
 // buffered across `.write()` calls, the codec runs once on `.end()`, and the
-// resulting 'data'/'end' events are merely *deferred* onto ZLIB_PENDING_EVENTS
+// resulting 'data'/'end' events are merely *deferred* onto the agent's pending queue
 // (drained by js_zlib_process_pending on the next loop tick) so that listeners
 // registered after `.write()` still fire and `.pipe()` can forward chunks.
 // ============================================================================
@@ -726,12 +727,9 @@ enum ZlibEvent {
     ),
 }
 
-static ZLIB_STREAMS: std::sync::LazyLock<Mutex<HashMap<i64, ZlibStreamState>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-static ZLIB_LISTENERS: std::sync::LazyLock<Mutex<HashMap<i64, HashMap<String, Vec<i64>>>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-static ZLIB_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<ZlibEvent>>> =
-    std::sync::LazyLock::new(|| Mutex::new(Vec::new()));
+mod tables;
+use tables::tables;
+
 static NEXT_ZLIB_ID: std::sync::LazyLock<Mutex<i64>> =
     std::sync::LazyLock::new(|| Mutex::new(ZLIB_STREAM_HANDLE_ID_START));
 
@@ -747,7 +745,7 @@ thread_local! {
 }
 
 /// Register the zlib-stream GC root scanner once per thread. Listener closures
-/// (`s.on('data', cb)`) are only referenced from `ZLIB_LISTENERS`; without
+/// (`s.on('data', cb)`) are only referenced from `tables().listeners`; without
 /// rooting them a GC between `.on()` and the deferred dispatch would free the
 /// closure body (the same hazard net.Socket guards against — issue #35).
 fn ensure_zlib_gc_scanner() {
@@ -756,7 +754,7 @@ fn ensure_zlib_gc_scanner() {
     static THREAD_EXIT_HOOK: std::sync::Once = std::sync::Once::new();
     THREAD_EXIT_HOOK.call_once(|| {
         perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
-            release_zlib_in_freed_ranges,
+            tables::release_zlib_in_freed_ranges,
         )
     });
     ZLIB_GC_REGISTERED.with(|registered| {
@@ -768,78 +766,19 @@ fn ensure_zlib_gc_scanner() {
     });
 }
 
-/// #11471: an exiting thread's zlib records outlive its heap. The tables are
-/// process-global and not agent-tagged: `.pipe(dest)` destinations and
-/// `.on(event, cb)` listeners are the setting thread's heap objects, and
-/// `.flush(cb)` / `zlib.gzip(data, cb)` queue raw closure pointers that
-/// `js_zlib_process_pending` would later call. Left behind, surviving
-/// threads' `scan_zlib_roots` mark and rewrite freed (or reused) memory and a
-/// drained event dispatches onto it.
-///
-/// A zlib stream whose pipes or listeners lie in `freed` is dropped whole
-/// (state, listeners, and its queued Data/End/Error events); a queued
-/// callback event whose closure lies in `freed` is dropped. Handle ids are
-/// monotonic (never reused), so no other record can come to name a dropped
-/// id. `js_zlib_has_active_handles` reads the queue's emptiness directly, so
-/// shrinking it keeps the loop-liveness answer consistent. The dropped
-/// streams' async-hooks `destroy` is not emitted (that would run JS).
-///
-/// Runs in a TLS destructor: one lock at a time, poison-tolerant, no JS heap
-/// access.
-fn release_zlib_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
-    use std::sync::PoisonError;
-    let mut dead: std::collections::HashSet<i64> = std::collections::HashSet::new();
-    {
-        let g = ZLIB_STREAMS.lock().unwrap_or_else(PoisonError::into_inner);
-        for (&id, s) in g.iter() {
-            if s.pipes.iter().any(|&bits| freed.holds_bits(bits)) {
-                dead.insert(id);
-            }
-        }
-    }
-    {
-        let g = ZLIB_LISTENERS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        for (&id, per_event) in g.iter() {
-            if per_event.values().flatten().any(|&cb| freed.holds_i64(cb)) {
-                dead.insert(id);
-            }
-        }
-    }
-    if !dead.is_empty() {
-        ZLIB_STREAMS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(|id, _| !dead.contains(id));
-        ZLIB_LISTENERS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .retain(|id, _| !dead.contains(id));
-    }
-    ZLIB_PENDING_EVENTS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .retain(|ev| match ev {
-            ZlibEvent::Data(id, _) | ZlibEvent::End(id) | ZlibEvent::Error(id, _) => {
-                !dead.contains(id)
-            }
-            ZlibEvent::Callback(cb) | ZlibEvent::OneShotCallback(cb, _, _) => !freed.holds_i64(*cb),
-        });
-}
-
 /// #11471 test probe: (stream registered, listener count, queued events
 /// naming `id`).
 #[cfg(test)]
 pub(crate) fn zlib_tables_for_test(id: i64) -> (bool, usize, usize) {
-    let stream = ZLIB_STREAMS.lock().unwrap().contains_key(&id);
-    let listeners = ZLIB_LISTENERS
+    let stream = tables().streams.lock().unwrap().contains_key(&id);
+    let listeners = tables()
+        .listeners
         .lock()
         .unwrap()
         .get(&id)
         .map(|m| m.values().map(Vec::len).sum())
         .unwrap_or(0);
-    let events = ZLIB_PENDING_EVENTS
+    let events = tables().pending
         .lock()
         .unwrap()
         .iter()
@@ -851,7 +790,7 @@ pub(crate) fn zlib_tables_for_test(id: i64) -> (bool, usize, usize) {
 }
 
 fn scan_zlib_roots(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
-    if let Ok(mut listeners) = ZLIB_LISTENERS.lock() {
+    if let Ok(mut listeners) = tables().listeners.lock() {
         for per_stream in listeners.values_mut() {
             for cb_vec in per_stream.values_mut() {
                 for cb in cb_vec.iter_mut() {
@@ -861,7 +800,7 @@ fn scan_zlib_roots(visitor: &mut perry_runtime::gc::RuntimeRootVisitor<'_>) {
         }
     }
     // `.flush(cb)` and one-shot callbacks queued but not yet drained live only here.
-    if let Ok(mut pending) = ZLIB_PENDING_EVENTS.lock() {
+    if let Ok(mut pending) = tables().pending.lock() {
         for ev in pending.iter_mut() {
             match ev {
                 ZlibEvent::Callback(cb) | ZlibEvent::OneShotCallback(cb, _, _) => {
@@ -901,7 +840,7 @@ fn create_zlib_stream(codec: Codec, level: Compression) -> i64 {
     ensure_zlib_gc_scanner();
     let id = next_zlib_id();
     let async_ids = init_zlib_resource();
-    ZLIB_STREAMS.lock().unwrap().insert(
+    tables().streams.lock().unwrap().insert(
         id,
         ZlibStreamState {
             async_ids,
@@ -923,7 +862,7 @@ fn create_zlib_stream(codec: Codec, level: Compression) -> i64 {
 /// registry can't misroute (handle id-spaces are not unified — see the long
 /// comment in `js_handle_method_dispatch`).
 pub fn is_zlib_stream_handle(handle: i64) -> bool {
-    ZLIB_STREAMS.lock().unwrap().contains_key(&handle)
+    tables().streams.lock().unwrap().contains_key(&handle)
 }
 
 // ── factories ──────────────────────────────────────────────────────────────
@@ -1246,7 +1185,7 @@ pub unsafe fn zlib_stream_write(handle: i64, chunk: f64) {
         None => return,
     };
     let event = {
-        let mut g = ZLIB_STREAMS.lock().unwrap();
+        let mut g = tables().streams.lock().unwrap();
         match g.get_mut(&handle) {
             Some(s) if !s.ended => {
                 s.pending_bytes_written = s.pending_bytes_written.saturating_add(bytes.len());
@@ -1268,7 +1207,7 @@ pub unsafe fn zlib_stream_write(handle: i64, chunk: f64) {
         }
     };
     if let Some(ev) = event {
-        ZLIB_PENDING_EVENTS.lock().unwrap().push(ev);
+        tables().pending.lock().unwrap().push(ev);
         perry_runtime::event_pump::js_notify_main_thread();
     }
 }
@@ -1282,7 +1221,7 @@ pub unsafe fn zlib_stream_end(handle: i64, chunk: f64) {
 /// `stream.flush([kind], cb?)` — emit a Z_SYNC_FLUSH block, then queue the cb.
 pub fn zlib_stream_flush(handle: i64, cb: i64) {
     let data = {
-        let mut g = ZLIB_STREAMS.lock().unwrap();
+        let mut g = tables().streams.lock().unwrap();
         match g.get_mut(&handle) {
             Some(s) if !s.ended => match s.codec_state.as_mut() {
                 Some(cs) => {
@@ -1295,7 +1234,7 @@ pub fn zlib_stream_flush(handle: i64, cb: i64) {
         }
     };
     {
-        let mut pending = ZLIB_PENDING_EVENTS.lock().unwrap();
+        let mut pending = tables().pending.lock().unwrap();
         if !data.is_empty() {
             pending.push(ZlibEvent::Data(handle, data));
         }
@@ -1311,7 +1250,8 @@ pub fn zlib_stream_flush(handle: i64, cb: i64) {
 /// callback asynchronously when parameters are unchanged.
 pub fn zlib_stream_params(_handle: i64, cb: i64) {
     if cb != 0 {
-        ZLIB_PENDING_EVENTS
+        tables()
+            .pending
             .lock()
             .unwrap()
             .push(ZlibEvent::Callback(cb));
@@ -1321,7 +1261,7 @@ pub fn zlib_stream_params(_handle: i64, cb: i64) {
 
 /// `stream.reset()` — reset buffered codec state and byte accounting.
 pub fn zlib_stream_reset(handle: i64) {
-    let mut g = ZLIB_STREAMS.lock().unwrap();
+    let mut g = tables().streams.lock().unwrap();
     if let Some(s) = g.get_mut(&handle) {
         s.codec_state = make_codec_state(s.codec, s.level);
         s.input.clear();
@@ -1332,7 +1272,8 @@ pub fn zlib_stream_reset(handle: i64) {
 }
 
 pub fn zlib_stream_bytes_written(handle: i64) -> f64 {
-    ZLIB_STREAMS
+    tables()
+        .streams
         .lock()
         .unwrap()
         .get(&handle)
@@ -1341,14 +1282,14 @@ pub fn zlib_stream_bytes_written(handle: i64) -> f64 {
 }
 
 fn publish_zlib_bytes_written(handle: i64) {
-    if let Some(s) = ZLIB_STREAMS.lock().unwrap().get_mut(&handle) {
+    if let Some(s) = tables().streams.lock().unwrap().get_mut(&handle) {
         s.bytes_written = s.pending_bytes_written;
     }
 }
 
 fn finish_zlib_stream(handle: i64) {
     let (codec_state, codec, input) = {
-        let mut g = ZLIB_STREAMS.lock().unwrap();
+        let mut g = tables().streams.lock().unwrap();
         match g.get_mut(&handle) {
             Some(s) if !s.ended => {
                 s.ended = true;
@@ -1362,7 +1303,7 @@ fn finish_zlib_stream(handle: i64) {
         None => run_codec(codec, &input).map_err(|e| e.to_string()), // Unzip
     };
     {
-        let mut pending = ZLIB_PENDING_EVENTS.lock().unwrap();
+        let mut pending = tables().pending.lock().unwrap();
         match result {
             Ok(out) => {
                 if !out.is_empty() {
@@ -1391,7 +1332,8 @@ pub unsafe fn zlib_stream_on(handle: i64, event_value: f64, cb: i64) {
         Ok(s) => s.to_string(),
         Err(_) => return,
     };
-    ZLIB_LISTENERS
+    tables()
+        .listeners
         .lock()
         .unwrap()
         .entry(handle)
@@ -1413,7 +1355,7 @@ pub unsafe fn zlib_stream_off(handle: i64, event_value: f64, cb: i64) {
     let Ok(event) = std::str::from_utf8(std::slice::from_raw_parts(data, len)) else {
         return;
     };
-    if let Some(events) = ZLIB_LISTENERS.lock().unwrap().get_mut(&handle) {
+    if let Some(events) = tables().listeners.lock().unwrap().get_mut(&handle) {
         if let Some(list) = events.get_mut(event) {
             if let Some(at) = list.iter().rposition(|&c| c == cb) {
                 list.remove(at);
@@ -1426,7 +1368,7 @@ pub unsafe fn zlib_stream_off(handle: i64, event_value: f64, cb: i64) {
 /// to `dest`. Stored as NaN-boxed bits; forwarding happens during the deferred
 /// drain. Returns nothing here — the dispatch arm returns `dest` for chaining.
 pub unsafe fn zlib_stream_pipe(handle: i64, dest: f64) {
-    if let Some(s) = ZLIB_STREAMS.lock().unwrap().get_mut(&handle) {
+    if let Some(s) = tables().streams.lock().unwrap().get_mut(&handle) {
         s.pipes.push(dest.to_bits());
     }
 }
@@ -1443,7 +1385,8 @@ extern "C" {
 }
 
 fn listeners_for(id: i64, event: &str) -> Vec<i64> {
-    ZLIB_LISTENERS
+    tables()
+        .listeners
         .lock()
         .unwrap()
         .get(&id)
@@ -1452,7 +1395,8 @@ fn listeners_for(id: i64, event: &str) -> Vec<i64> {
 }
 
 fn pipes_for(id: i64) -> Vec<u64> {
-    ZLIB_STREAMS
+    tables()
+        .streams
         .lock()
         .unwrap()
         .get(&id)
@@ -1521,13 +1465,14 @@ unsafe fn build_zlib_error(msg: &str) -> f64 {
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
     let events: Vec<ZlibEvent> = {
-        let mut g = ZLIB_PENDING_EVENTS.lock().unwrap();
+        let mut g = tables().pending.lock().unwrap();
         std::mem::take(&mut *g)
     };
     let count = events.len() as i32;
     for ev in events {
         let event_ids = match &ev {
-            ZlibEvent::Data(id, _) | ZlibEvent::End(id) | ZlibEvent::Error(id, _) => ZLIB_STREAMS
+            ZlibEvent::Data(id, _) | ZlibEvent::End(id) | ZlibEvent::Error(id, _) => tables()
+                .streams
                 .lock()
                 .ok()
                 .and_then(|streams| streams.get(id).map(|stream| stream.async_ids)),
@@ -1590,8 +1535,8 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                         .into_iter()
                         .map(|callback| scope.root_raw_const_ptr(callback as *const ClosureHeader))
                         .collect::<Vec<_>>();
-                    ZLIB_LISTENERS.lock().unwrap().remove(&id);
-                    ZLIB_STREAMS.lock().unwrap().remove(&id);
+                    tables().listeners.lock().unwrap().remove(&id);
+                    tables().streams.lock().unwrap().remove(&id);
                     for callback in end_callbacks {
                         let callback = callback.get_raw_const_ptr::<ClosureHeader>();
                         if !callback.is_null() {
@@ -1698,8 +1643,8 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
                         .into_iter()
                         .map(|callback| scope.root_raw_const_ptr(callback as *const ClosureHeader))
                         .collect::<Vec<_>>();
-                    ZLIB_LISTENERS.lock().unwrap().remove(&id);
-                    ZLIB_STREAMS.lock().unwrap().remove(&id);
+                    tables().listeners.lock().unwrap().remove(&id);
+                    tables().streams.lock().unwrap().remove(&id);
                     let error = scope.root_nanbox_f64(build_zlib_error(&msg));
                     for callback in callbacks {
                         let callback = callback.get_raw_const_ptr::<ClosureHeader>();
@@ -1736,7 +1681,7 @@ pub unsafe extern "C" fn js_zlib_process_pending() -> i32 {
 /// Keep the event loop alive while zlib stream events are queued. Wired into
 /// `js_stdlib_has_active_handles`.
 pub fn js_zlib_has_active_handles() -> i32 {
-    if !ZLIB_PENDING_EVENTS.lock().unwrap().is_empty() {
+    if !tables().pending.lock().unwrap().is_empty() {
         1
     } else {
         0

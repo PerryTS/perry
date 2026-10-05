@@ -169,7 +169,12 @@ pub extern "C" fn js_response_clone(handle: f64) -> f64 {
     let Some((consumed, stream_id)) = state else {
         return f64::from_bits(TAG_UNDEFINED);
     };
-    if consumed {
+    if consumed
+        || stream_id.is_some_and(|id| {
+            let (locked, disturbed) = crate::streams::readable_body_state(id);
+            locked || disturbed
+        })
+    {
         unsafe { throw_fetch_type_error("Response.clone: Body has already been consumed.") };
     }
     let teed =

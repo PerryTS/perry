@@ -299,6 +299,22 @@ fn lower_stmts_from(
             }
             continue;
         }
+        // Decision 69: a straight-line run of typed-array view accesses (an
+        // unrolled loop) proves its indices against the length once, at its
+        // top, like a loop region does per loop.
+        if let Some(len) = region_loop::try_lower_view_run(ctx, &stmts[i..], lower_region_list)? {
+            let end = i + len;
+            if emit_shadow_clears {
+                for j in i..end {
+                    emit_shadow_clears_after_stmt(ctx, j);
+                }
+            }
+            i = end;
+            if ctx.block().is_terminated() {
+                break;
+            }
+            continue;
+        }
         lower_stmt(ctx, &stmts[i])?;
         region_loop::after_stmt(ctx, &stmts[i]);
         // Representation-selection Phase 2: a TOP-LEVEL `Stmt::Let` of a

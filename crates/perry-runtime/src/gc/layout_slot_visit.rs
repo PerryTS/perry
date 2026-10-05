@@ -250,6 +250,12 @@ pub(super) unsafe fn visit_gc_rewrite_slot_descriptors(
     header: *mut GcHeader,
     visit: impl FnMut(GcMutableSlotDescriptor),
 ) {
+    #[cfg(test)]
+    if (*header).obj_type == crate::gc::GC_TYPE_NATIVE_HANDLE
+        && crate::native_payload::callback_sabotage("rewrite")
+    {
+        return;
+    }
     visit_gc_rewrite_slot_descriptors_with::<false>(header, visit);
 }
 
@@ -507,6 +513,17 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             visit(fixed_slot(
                 &mut (*meta).private_evaluation_brand as *mut u64,
             ));
+            // #11919 P0: a native-payload object's `native_state` is its
+            // POINTER_TAG-boxed payload cell, reachable ONLY through this
+            // record, so it is a child edge exactly like `arguments`. Other
+            // families pack POD into the same word (text bits, timer/tui ids,
+            // a Set's malloc'd index, a class's private-storage serial) and
+            // none of those words carries the pointer tag, so they are never
+            // visited; `native_payload_cell_survives_a_moving_collection`
+            // reddens if this visit is removed.
+            if crate::native_payload::is_payload_state_word((*meta).native_state) {
+                visit(fixed_slot(&mut (*meta).native_state as *mut u64));
+            }
         }
         GcRewriteDescriptorKind::MetaOnly => {
             // #6759 phase 1: the cell's only traced edge is its metadata
@@ -531,6 +548,14 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
                 visit(fixed_slot(slots.add(i)));
             }
         }
+        GcRewriteDescriptorKind::NativeHandle => {
+            let cell = user_ptr as *mut crate::native_handle::NativeHandleHeader;
+            // One enumerator serves mark, relocation and dirty-slot rescan.
+            // Closed cells no longer keep an owner alive.
+            if (*cell).finalized == 0 && (*cell).owner != 0 {
+                visit(fixed_slot(&mut (*cell).owner as *mut u64));
+            }
+        }
         GcRewriteDescriptorKind::Leaf => {}
     }
 }
@@ -539,6 +564,12 @@ pub(super) unsafe fn visit_gc_rewrite_slots(
     header: *mut GcHeader,
     mut visit: impl FnMut(GcMutableSlot),
 ) {
+    #[cfg(test)]
+    if (*header).obj_type == crate::gc::GC_TYPE_NATIVE_HANDLE
+        && crate::native_payload::callback_sabotage("rewrite")
+    {
+        return;
+    }
     visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
         descriptor.visit_slots(&mut visit);
     });
@@ -553,6 +584,12 @@ pub(super) unsafe fn visit_gc_rewrite_slots_inline(
     header: *mut GcHeader,
     mut visit: impl FnMut(GcMutableSlot),
 ) {
+    #[cfg(test)]
+    if (*header).obj_type == crate::gc::GC_TYPE_NATIVE_HANDLE
+        && crate::native_payload::callback_sabotage("rewrite")
+    {
+        return;
+    }
     visit_gc_rewrite_slot_descriptors_with::<true>(header, |descriptor| unsafe {
         descriptor.visit_slots_inline(&mut visit);
     });

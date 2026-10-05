@@ -21,6 +21,15 @@ pub(crate) fn test_collect_native_export_after_alloc() {
     TEST_COLLECT_NATIVE_EXPORT_AFTER_ALLOC.with(|armed| armed.set(true));
 }
 
+/// The bound export already minted under its exact cache key
+/// (`"<module>\0<property>"`, canonical names only), without minting one or
+/// formatting a key: `None` when it has not been minted yet.
+pub(crate) fn minted_native_callable_export(canonical_key: &str) -> Option<f64> {
+    NATIVE_CALLABLE_EXPORTS
+        .with(|c| c.borrow().get(canonical_key).copied())
+        .map(f64::from_bits)
+}
+
 pub fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
     // Bound-native closures carry (module, method) metadata that the
     // generic property/call paths resolve through the vtable — and they
@@ -1575,11 +1584,12 @@ pub(crate) fn set_bound_native_closure_name(
     let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let name_handle = scope.root_string_ptr(ptr);
     let name_value = f64::from_bits(JSValue::string_ptr(name_handle.get_raw_mut_ptr()).bits());
-    crate::closure::closure_set_dynamic_prop(
-        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-        "name",
-        name_value,
-    );
+    let closure = closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize;
+    // A fresh builtin function's `name` is its first own property: its bag is
+    // born in that shape.
+    if !crate::closure::closure_define_first_props(closure, &[("name", name_value)]) {
+        crate::closure::closure_set_dynamic_prop(closure, "name", name_value);
+    }
     // Spec: a function's `name` property is { writable:false, enumerable:false,
     // configurable:true }. Storing it as a plain dynamic prop left it ENUMERABLE
     // by default, so `for (k in Buffer)` yielded "name" — even though

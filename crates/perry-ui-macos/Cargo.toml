@@ -40,6 +40,8 @@ objc2-app-kit = { version = "0.3", features = [
     "NSTextField",
     "NSTextFieldCell",
     "NSActionCell",
+    "NSDatePicker",
+    "NSDatePickerCell",
     "NSCell",
     "NSStackView",
     "NSControl",
@@ -140,4 +142,9 @@ harness = false
 [[test]]
 name = "native_fill_width"
 path = "tests/native_fill_width.rs"
+harness = false
+
+[[test]]
+name = "native_date_picker_fill_width"
+path = "tests/native_date_picker_fill_width.rs"
 harness = false

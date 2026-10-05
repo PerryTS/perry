@@ -954,7 +954,7 @@ fn tls_import_routes_net_wrapper() {
 /// tokio lane L4: perry-stdlib's bundled `net` / `ws` copies are deleted, so
 /// PERRY_DISABLE_WELL_KNOWN=1 must still put those two wrappers on the link
 /// line (there is no copy to revert to) while every other binding keeps
-/// reverting to perry-stdlib.
+/// reverting to perry-stdlib (`events` has no wrapper at all: #10508).
 #[test]
 fn disabled_flip_still_routes_sole_provider_wrappers() {
     let _guard = env_lock();
@@ -969,7 +969,7 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let mut archives = Vec::new();
-    for module in ["net", "ws", "events"] {
+    for module in ["net", "ws"] {
         let binding = super::super::well_known::lookup_well_known(module).expect("binding");
         let lib = dir
             .path()
@@ -1004,10 +1004,6 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
         libs.well_known_libs.contains(&archives[1]),
         "ws: {libs:?}",
         libs = libs.well_known_libs
-    );
-    assert!(
-        !libs.well_known_libs.contains(&archives[2]),
-        "events has a perry-stdlib copy and must revert under the disabled flip"
     );
     assert_eq!(
         routed,

@@ -537,6 +537,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE],
     );
+    module.declare_function(
+        "js_fs_write_sync_args",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
+    );
     // fs.accessSync(path) — returns i32 status (1=ok, 0=error).
     module.declare_function("js_fs_access_sync", I32, &[DOUBLE]);
     module.declare_function("js_fs_access_sync_mode", I32, &[DOUBLE, DOUBLE]);

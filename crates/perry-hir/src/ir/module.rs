@@ -259,4 +259,23 @@ impl Module {
             gen_param_prologue_len: std::collections::HashMap::new(),
         }
     }
+
+    /// True for a CommonJS file the driver rewrote into an ES module (the
+    /// CJS-to-ESM wrap): it imports the compiler-owned
+    /// `createRequire as __perry_cjs_create_require` preamble. Its body runs
+    /// inside `const _cjs = (function(){…})()`, and what it exports are
+    /// properties of `module.exports`, not bindings of its own.
+    pub fn is_commonjs_wrap(&self) -> bool {
+        self.imports.iter().any(|import| {
+            import
+                .source
+                .strip_prefix("node:")
+                .unwrap_or(&import.source)
+                == "module"
+                && import.specifiers.iter().any(|specifier| {
+                    matches!(specifier, crate::ir::ImportSpecifier::Named { imported, local }
+                        if imported == "createRequire" && local == "__perry_cjs_create_require")
+                })
+        })
+    }
 }

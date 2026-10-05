@@ -88,7 +88,19 @@ pub(crate) enum ExoticKind {
 /// [`try_read_tracked_gc_header`]: crate::value::addr_class::try_read_tracked_gc_header
 pub(crate) fn exotic_expando_kind(addr: usize) -> Option<ExoticKind> {
     let gc = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
-    let claimed = match gc.obj_type {
+    let claimed = exotic_kind_of_gc_type(gc.obj_type)?;
+    // The claim came from an unproven read; answer it only for an address the
+    // allocator owns (arena range or exact malloc-registry hit).
+    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
+    Some(claimed)
+}
+
+/// The exotic kind a managed header type denotes. Only a type read from an
+/// allocator-owned header (`try_read_tracked_gc_header`) proves the cell's
+/// kind; a caller that already holds one decides from it without a second
+/// read.
+pub(crate) fn exotic_kind_of_gc_type(obj_type: u8) -> Option<ExoticKind> {
+    match obj_type {
         crate::gc::GC_TYPE_DATE_CELL => Some(ExoticKind::Date),
         crate::gc::GC_TYPE_ERROR => Some(ExoticKind::Error),
         crate::gc::GC_TYPE_TEMPORAL => Some(ExoticKind::Temporal),
@@ -97,11 +109,7 @@ pub(crate) fn exotic_expando_kind(addr: usize) -> Option<ExoticKind> {
         crate::gc::GC_TYPE_SET => Some(ExoticKind::Set),
         crate::gc::GC_TYPE_REGEXP => Some(ExoticKind::RegExp),
         _ => None,
-    }?;
-    // The claim came from an unproven read; answer it only for an address the
-    // allocator owns (arena range or exact malloc-registry hit).
-    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
-    Some(claimed)
+    }
 }
 
 /// Classify a NaN-boxed (or raw-I64) value as an exotic-expando receiver.

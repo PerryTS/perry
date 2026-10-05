@@ -43,8 +43,8 @@ mod runtime_thread_exit_tests;
 // without duplicate _js_dotenv_* symbols at link time. Default-on
 // preserves byte-identical behavior for programs that don't opt into
 // the well-known path.
-// events feature-gated as of v0.5.546 so the well-known flip
-// can route to perry-ext-events.
+// The node:events module-level helpers. `EventEmitter` itself is an
+// ordinary object built by perry-runtime (#10508).
 #[cfg(feature = "bundled-events")]
 pub mod events;
 pub mod lodash;

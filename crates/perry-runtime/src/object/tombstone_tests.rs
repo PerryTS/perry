@@ -287,80 +287,34 @@ fn tombstone_off_compaction_does_not_reuse_growth_prefix_shape() {
     }
 }
 
-/// A one-live-key receiver used to miss tombstones entirely: transition-cache
-/// insertion eagerly marked every freshly appended keys array shared, so each
-/// delete cloned+compacted it and the next append repeated the cycle. The first
-/// delete now forks one owned tombstone so the stable-token re-add path can
-/// keep that private layout out of the transition cache.
+/// A last-key delete returns to the exact birth shape and keeps the canonical
+/// backing shared. A non-last delete still forks an owned tombstone list.
 #[test]
-fn small_churn_first_delete_forks_owned_tombstone() {
+fn small_churn_rolls_back_last_key_and_forks_non_last_key() {
     super::delete_rest::test_set_tombstone_deletes(Some(true));
     let _restore = scopeguard_tombstone_flag();
     let _global = crate::gc::global_side_table_test_lock();
     unsafe {
-        let mut obj = js_object_alloc(0, 0);
-        let first = crate::string::js_string_from_bytes(b"small_0".as_ptr(), 7);
-        js_object_set_field_by_name(obj, first, 0.0);
-
-        let first_delete = crate::string::js_string_from_bytes(b"small_0".as_ptr(), 7);
-        assert_eq!(
-            super::delete_rest::js_object_delete_field(obj, first_delete),
-            1
-        );
-        let owned_keys = crate::object::object_keys(obj).arr();
-        assert_eq!(
-            crate::array::keys_array_len_capped_to_capacity(owned_keys),
-            1
-        );
-        assert_eq!(super::shapes::object_shape_hole_count(obj), 1);
-        let keys_gc = crate::value::addr_class::try_read_gc_header(owned_keys as usize).unwrap();
-        assert_eq!(
-            keys_gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED,
-            0,
-            "first small-object delete must leave a private tombstone layout"
-        );
-
-        let sso = crate::value::JSValue::try_short_string(b"k0").unwrap();
-        assert!(
-            crate::object::try_readd_stable_tombstone(obj, f64::from_bits(sso.bits()), 1.0,)
-                .is_some()
-        );
-        let stable_shape = super::shapes::object_shape_stamp(obj);
-        assert_eq!(
-            super::delete_rest::js_object_delete_dynamic(obj, f64::from_bits(sso.bits())),
-            1
-        );
-        assert_ne!(
-            super::shapes::object_shape_stamp(obj),
-            stable_shape,
-            "the dynamic-key delete must transition the ShapeId too"
-        );
-        assert_eq!(super::shapes::object_shape_hole_count(obj), 2);
-
-        for n in 1..=14 {
-            let name = format!("k{n}");
-            let next = crate::value::JSValue::try_short_string(name.as_bytes()).unwrap();
-            let (_, next_obj, _) =
-                crate::object::try_readd_stable_tombstone(obj, f64::from_bits(next.bits()), 1.0)
-                    .expect("small stable receiver must re-add its next SSO key");
-            obj = next_obj;
-            assert_eq!(
-                super::delete_rest::js_object_delete_dynamic(obj, f64::from_bits(next.bits())),
-                1
-            );
-        }
-        let squeezed_keys = crate::object::object_keys(obj).arr();
-        assert_eq!(
-            crate::array::keys_array_len_capped_to_capacity(squeezed_keys),
-            0,
-            "the all-holes small epoch must squeeze back to logical length zero"
-        );
+        let obj = js_object_alloc(0, 0);
+        let parent = super::shapes::object_shape_stamp(obj);
+        let key = crate::string::js_string_from_bytes(b"small_0".as_ptr(), 7);
+        js_object_set_field_by_name(obj, key, 0.0);
+        let child = super::shapes::object_shape_stamp(obj);
+        assert_eq!(super::delete_rest::js_object_delete_field(obj, key), 1);
+        assert_eq!(super::shapes::object_shape_stamp(obj), parent);
         assert_eq!(super::shapes::object_shape_hole_count(obj), 0);
-        assert_ne!(
-            super::shapes::object_shape_stamp(obj),
-            stable_shape,
-            "slot reuse after squeeze must retire the previous IC token"
-        );
+        js_object_set_field_by_name(obj, key, 1.0);
+        assert_eq!(super::shapes::object_shape_stamp(obj), child);
+        let later = crate::string::js_string_from_bytes(b"small_1".as_ptr(), 7);
+        js_object_set_field_by_name(obj, later, 2.0);
+        let shared = crate::object::object_keys(obj).arr();
+        assert_eq!(super::delete_rest::js_object_delete_field(obj, key), 1);
+        let owned = crate::object::object_keys(obj).arr();
+        assert_ne!(owned, shared, "non-last deletion forks its key list");
+        assert_eq!(super::shapes::object_shape_hole_count(obj), 1);
+        let gc = crate::value::addr_class::try_read_gc_header(owned as usize).unwrap();
+        assert_eq!(gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED, 0);
+        assert_eq!(js_object_get_field_by_name(obj, later).as_number(), 2.0);
     }
 }
 
@@ -475,9 +429,35 @@ fn tombstone_receiver_20(prefix: &str) -> *mut crate::object::ObjectHeader {
         // so the first delete clones + compacts (ownership transfer) and only
         // the SECOND can take the O(1) tombstone lane. Spend the transfer here
         // so each test's delete under study is the tombstoning one.
-        let name = format!("{prefix}19");
+        let last_name = format!("{prefix}19");
+        let last = crate::string::js_string_from_bytes(last_name.as_ptr(), last_name.len() as u32);
+        let child = super::shapes::object_shape_stamp(obj);
+        // Read the exact parent recorded at this key-add edge, not a newly
+        // synthesized prefix with the child's bound.
+        let parent_obj = js_object_alloc(0, 24);
+        for i in 0..19 {
+            let name = format!("{prefix}{i:02}");
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            js_object_set_field_by_name(parent_obj, key, i as f64);
+        }
+        let parent = super::shapes::object_shape_stamp(parent_obj);
+        assert_eq!(super::delete_rest::js_object_delete_field(obj, last), 1);
+        assert_eq!(
+            super::shapes::object_shape_stamp(obj),
+            parent,
+            "last delete reinstalls its exact parent"
+        );
+        js_object_set_field_by_name(obj, last, 19.0);
+        assert_eq!(super::shapes::object_shape_stamp(obj), child);
+        let name = format!("{prefix}18");
         let warm = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let shared = crate::object::object_keys(obj).arr();
         assert_eq!(super::delete_rest::js_object_delete_field(obj, warm), 1);
+        assert_ne!(
+            crate::object::object_keys(obj).arr(),
+            shared,
+            "non-last delete forks its list"
+        );
         assert_eq!(
             super::shapes::object_shape_hole_count(obj),
             0,
@@ -599,7 +579,7 @@ fn delete_transition_leaves_tag_hole_in_the_vacated_slot() {
 /// shape: a cycle that returned to an earlier id would let a cache entry from
 /// before the first delete hit after the second.
 #[test]
-fn delete_readd_delete_never_returns_to_an_earlier_shape() {
+fn owned_tombstone_delete_readd_never_returns_to_an_earlier_shape() {
     super::delete_rest::test_set_tombstone_deletes(Some(true));
     let _restore = scopeguard_tombstone_flag();
     let _global = crate::gc::global_side_table_test_lock();
@@ -977,8 +957,17 @@ unsafe fn stable_receiver_one_hole(
     let obj = js_object_alloc(0, field_count);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     js_object_set_field_by_name(obj, key, 1.0);
+    let last_name = [name, b"_last"].concat();
+    let last = crate::string::js_string_from_bytes(last_name.as_ptr(), last_name.len() as u32);
+    js_object_set_field_by_name(obj, last, 2.0);
+    let shared = crate::object::object_keys(obj).arr();
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     assert_eq!(super::delete_rest::js_object_delete_field(obj, key), 1);
+    assert_ne!(
+        crate::object::object_keys(obj).arr(),
+        shared,
+        "non-last deletion forks"
+    );
     let gc = crate::value::addr_class::try_read_gc_header(obj as usize).unwrap();
     assert_ne!(
         gc._reserved & crate::gc::OBJ_FLAG_STABLE_TOMBSTONES,
@@ -993,11 +982,10 @@ unsafe fn stable_receiver_one_hole(
     (obj, shape)
 }
 
-/// The in-place raise #9064 exists for still keeps its id: a re-add into an
-/// unused inline slot below the floor (`live 1 -> 2`, floor 2) moves no slot
-/// across the boundary.
+/// A stable tombstone re-add into spill moves no slot across the inline
+/// boundary and keeps its private epoch's shape.
 #[test]
-fn stable_tombstone_readd_below_the_floor_keeps_its_shape_id() {
+fn stable_tombstone_readd_in_spill_keeps_its_shape_id() {
     super::delete_rest::test_set_tombstone_deletes(Some(true));
     let _restore = scopeguard_tombstone_flag();
     let _global = crate::gc::global_side_table_test_lock();
@@ -1005,8 +993,8 @@ fn stable_tombstone_readd_below_the_floor_keeps_its_shape_id() {
         let (obj, shape) = stable_receiver_one_hole(0, b"floor_a");
         assert_eq!(
             shape.live_inline_slot_count,
-            1,
-            "fixture premise: one inline slot live, under a floor of {}",
+            2,
+            "fixture premise: two inline slots live, at a floor of {}",
             crate::object::INLINE_SLOT_FLOOR
         );
         let before = super::shapes::object_shape_stamp(obj);
@@ -1015,13 +1003,17 @@ fn stable_tombstone_readd_below_the_floor_keeps_its_shape_id() {
         let (slot_word, obj, _) =
             crate::object::try_readd_stable_tombstone(obj, f64::from_bits(sso.bits()), 2.0)
                 .expect("a stable receiver re-adds an SSO key");
-        assert_eq!(slot_word, 1, "the re-add lands in inline slot 1");
+        assert_eq!(
+            slot_word,
+            2 | crate::proxy::IC_SLOT_OVERFLOW_BIT,
+            "the re-add lands in spill slot 2"
+        );
         let after = super::shapes::object_shape_descriptor(obj).unwrap();
         assert_eq!(after.live_inline_slot_count, 2);
         assert_eq!(
             super::shapes::object_shape_stamp(obj),
             before,
-            "a live raise that keeps the inline boundary must keep the id"
+            "a spill append that keeps the inline boundary must keep the id"
         );
     }
 }
@@ -1038,7 +1030,7 @@ fn stable_tombstone_updaters_refuse_to_move_the_inline_bound() {
         let id = super::shapes::object_shape_stamp(obj);
         let keys = shape.keys as usize as *mut crate::ArrayHeader;
         let floor = crate::object::INLINE_SLOT_FLOOR as u32;
-        assert!(shape.live_inline_slot_count < floor, "fixture premise");
+        assert_eq!(shape.live_inline_slot_count, floor, "fixture premise");
 
         assert_eq!(
             super::shapes::try_update_stable_tombstone_shape_cached(

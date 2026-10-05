@@ -1,5 +1,37 @@
 use super::*;
 
+#[test]
+fn scalar_reverse_edges_do_not_allocate_or_masquerade_as_owned_extensions() {
+    let mut record = ShapeRecord::new(0x1000, 1, 1, 0, ShapeObjectKind::Ordinary, 0);
+    for parent in [SHAPE_ID_BASE, u32::MAX, 0] {
+        record.note_rollback_parent(parent);
+        assert_eq!(record.rollback_parent(), parent);
+        assert!(!record.has_boxed_extras());
+        assert!(record.constfn_infos().is_empty());
+        assert!(record.brands().is_empty());
+        assert_eq!(record.deprecation_targets(), (0, 0));
+        let at = std::ptr::addr_of_mut!(record);
+        let descriptor = record.lift(at);
+        assert_eq!(descriptor.extras, 0);
+        assert!(descriptor.constfn_infos().is_empty());
+        assert!(descriptor.brands().is_empty());
+        assert_eq!(descriptor.deprecation_targets(), (0, 0));
+    }
+    // Retiring an integer edge must never try to free it as a pointer.
+    unsafe { record.release_extras() };
+
+    let mut branded = ShapeRecord::new(0x1000, 1, 1, 0, ShapeObjectKind::Ordinary, 0)
+        .with_special_facts(0, &[], &[17]);
+    branded.note_rollback_parent(SHAPE_ID_BASE);
+    assert!(branded.has_boxed_extras());
+    assert_eq!(branded.rollback_parent(), SHAPE_ID_BASE);
+    assert_eq!(branded.brands(), &[17]);
+    assert!(branded.constfn_infos().is_empty());
+    let at = std::ptr::addr_of_mut!(branded);
+    assert_eq!(branded.lift(at).brands(), &[17]);
+    unsafe { branded.release_extras() };
+}
+
 /// Every kind survives the record field, and the two store-fact kinds
 /// (charter step 3) occupy codes 5 and 6 — distinct values, so distinct
 /// ShapeIds for otherwise identical facts.
@@ -13,6 +45,7 @@ fn kind_codes_round_trip() {
         ShapeObjectKind::FunctionDictionary,
         ShapeObjectKind::OrdinaryUnmarked,
         ShapeObjectKind::OrdinaryNumericProof,
+        ShapeObjectKind::NativeNamespace,
     ] {
         assert!(kind.code() as u32 <= RECORD_KIND_MAX_CODE);
         let r = ShapeRecord::new(0x1000, 1, 1, 0, kind, 0);

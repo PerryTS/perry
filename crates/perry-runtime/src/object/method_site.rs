@@ -47,7 +47,11 @@
 //! `Object.prototype`, typed-array prototypes, exotic read receivers),
 //! accessors, spill slots, and any value that is not a plain closure the call can enter directly for
 //! this site's argument count (bound functions, rest / `arguments` bodies,
-//! runtime thunks, class constructors, closures that capture `this`).
+//! the no-op builtin thunk, class constructors, closures that capture `this`).
+//! A builtin method (`FN_BUILTIN`) whose thunk is direct-callable for the
+//! argument count IS admitted on an ordinary receiver, own or inherited: its
+//! prototype holds it in an inline slot like any method, the hit loads that
+//! slot on every call, so `Object.prototype.hasOwnProperty = f` is seen.
 //!
 //! # The one site-memo module (shared)
 //!
@@ -92,6 +96,7 @@ use crate::object::ObjectHeader;
 
 pub(crate) mod chain_memo;
 mod function_intrinsic;
+pub(crate) mod own_slot_memo;
 pub(crate) mod read_holder;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -268,6 +273,15 @@ per_test_global! {
     static MISSES: AtomicU64 = AtomicU64::new(0);
     static PRIMES_FUNCTION: AtomicU64 = AtomicU64::new(0);
     static PRIMES_CONSTFN: AtomicU64 = AtomicU64::new(0);
+    static PRIMES_BUILTIN: AtomicU64 = AtomicU64::new(0);
+}
+
+/// Count a published entry whose body is a builtin (`FN_BUILTIN`) thunk.
+#[inline]
+fn note_builtin_prime(info: &crate::closure::JsFunctionInfo) {
+    if info.flags & crate::closure::FN_BUILTIN != 0 {
+        PRIMES_BUILTIN.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Function-bag entries primed ([`METHOD_SITE_FUNCTION_BAG`]).
@@ -332,12 +346,13 @@ fn stats_report_enabled() -> bool {
                 let (hd, ha, hr) = read_holder::read_holder_stats();
                 let (ap, ah) = read_holder::read_accessor_stats();
                 let (cp, ch, cr) = read_holder::class_read_stats();
-                let (fp, fneg, fh) = function_intrinsic::function_intrinsic_stats();
+                let [fp, fneg, fu, fh, ff, fc] = function_intrinsic::function_intrinsic_stats();
                 eprintln!(
-                    "[method-site] fn_intrinsic_primes={fp} fn_intrinsic_negative={fneg} fn_intrinsic_hits={fh}"
+                    "[method-site] fn_intrinsic_primes={fp} fn_intrinsic_negative={fneg} fn_intrinsic_unbuilt_primes={fu} fn_intrinsic_hits={fh} fn_intrinsic_fast_hits={ff} fn_intrinsic_compiled_calls={fc}"
                 );
                 eprintln!(
-                    "[method-site] primes_own={a} primes_inherited={b} primes_function={} primes_constfn={} chain_memo_records={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} class_read_root_rewrites={cr} read_holder_rewrites={} read_accessor_rewrites={} read_accessor_same_shape_relinks={} read_holder_refused={hr}{refused}",
+                    "[method-site] primes_own={a} primes_inherited={b} primes_builtin={} primes_function={} primes_constfn={} chain_memo_records={} holder_rewrites={} misses={c} read_holder_primes={hd} read_absent_primes={ha} read_accessor_primes={ap} read_accessor_hits={ah} read_accessor_class_primes={} class_read_primes={cp} class_read_hits={ch} class_read_root_rewrites={cr} read_holder_rewrites={} read_accessor_rewrites={} read_accessor_same_shape_relinks={} read_holder_refused={hr}{refused}",
+                    PRIMES_BUILTIN.load(Ordering::Relaxed),
                     method_site_function_primes(),
                     PRIMES_CONSTFN.load(Ordering::Relaxed),
                     chain_memo::chain_memo_records(),
@@ -392,17 +407,24 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
     // A function receiver calling an intrinsic it inherits from
     // `%Function.prototype%` (`fn.bind(this)`): the site's function-intrinsic
     // entry answers from words, or the call primes one (`function_intrinsic`).
-    // Only once the realm has built `%Function.prototype%` can an entry
-    // exist, and only for a receiver whose ShapeId says it inherits from it,
-    // whatever the key: the base Function shape, or a keyed Function shape
-    // over `Function.prototype`. A class method, a class function object, a
-    // FunctionDictionary receiver or an async/generator function is refused
-    // on its ShapeId, before any site or name is read.
+    // First, an entry that names this site's own intrinsic and still holds
+    // runs it with no further lookup. Otherwise an entry is consulted or
+    // primed only for a receiver whose ShapeId says it inherits from the
+    // prototype, whatever the key: the base Function shape, or a keyed
+    // Function shape over `Function.prototype`, once the realm has built it.
+    // Before the realm builds it, a base receiver's `call`, `apply` or `bind`
+    // primes too: nothing can have replaced them yet. A class method, a class
+    // function object, a FunctionDictionary receiver or an async/generator
+    // function is refused on its ShapeId.
     if let MissReceiver::Function { word, base, keyed } = receiver {
-        if (base || keyed)
-            && crate::object::native_call_method::function_prototype_built()
-            && (base
-                || crate::closure::shape::keyed_function_shape_has_function_prototype(
+        if let Some(result) = function_intrinsic::fast_miss(slot, recv, word, args_ptr, argc) {
+            return result;
+        }
+        let built = crate::object::native_call_method::function_prototype_built();
+        if (base && (built || matches!(name, b"call" | b"apply" | b"bind")))
+            || (keyed
+                && built
+                && crate::closure::shape::keyed_function_shape_has_function_prototype(
                     (word >> 32) as u32,
                 ))
         {
@@ -411,6 +433,13 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
             {
                 return result;
             }
+        }
+    }
+    if let MissReceiver::Payload = receiver {
+        if let Some(result) =
+            crate::native_payload::try_payload_method_fast_dispatch(recv, name, args_ptr, argc)
+        {
+            return result;
         }
     }
     // Only an ordinary heap object can prime. Everything else (primitives,
@@ -426,6 +455,16 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
             args_ptr,
             argc,
         );
+    }
+    // Resolve the requested property from the shapes/prototype. If its
+    // callable body consumes the original arguments directly, bypass its
+    // rest-array construction. Aliases qualify by body; overrides decline.
+    if let MissReceiver::Ordinary = receiver {
+        if let Some(ops) = super::nm_ee_ops() {
+            if let Some(result) = (ops.emit_call)(recv, method_id, name, args_ptr, argc) {
+                return result;
+            }
+        }
     }
     // Dispatch first, then prime: the prime may allocate (marking a
     // prototype hop, the borrowed-builtin classifier's key), which can move
@@ -463,6 +502,8 @@ enum MissReceiver {
     /// `%Function.prototype%`), and whether it is keyed (neither that nor the
     /// FunctionDictionary shape).
     Function { word: u64, base: bool, keyed: bool },
+    /// An instance of a native-payload family (`native_payload.rs`).
+    Payload,
     /// Anything else: primitives, handles, arrays, strings.
     Other,
 }
@@ -482,7 +523,19 @@ fn miss_receiver(recv: f64) -> MissReceiver {
         return MissReceiver::Other;
     }
     match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => MissReceiver::Ordinary,
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            // #11919 P0: a native-payload instance's methods are builtins on
+            // its family prototype, which a site never memoizes: priming
+            // would fail on every call, and the tower would walk every probe
+            // before reaching them. The miss answers them directly.
+            // SAFETY: the header says a live ordinary object.
+            let class_id = unsafe { (*(addr as *const crate::object::ObjectHeader)).class_id };
+            if crate::native_class_ids::is_native_payload_class_id(class_id) {
+                MissReceiver::Payload
+            } else {
+                MissReceiver::Ordinary
+            }
+        }
         Some(h) if h.obj_type == crate::gc::GC_TYPE_CLOSURE => {
             // SAFETY: the header says a live closure; its first word is the
             // `capture_count | ShapeId` word.
@@ -515,7 +568,7 @@ fn prime_candidate(receiver: MissReceiver, name: &[u8]) -> bool {
             word, keyed: true, ..
         } => unsafe { function_shape_lists_key((word >> 32) as u32, name) },
         MissReceiver::Function { .. } => false,
-        MissReceiver::Other => false,
+        MissReceiver::Payload | MissReceiver::Other => false,
     }
 }
 
@@ -581,12 +634,19 @@ unsafe fn publish(slot: *mut MethodSiteSlot, entry: MethodEntry) -> bool {
     // objects of one shape holding different bodies each get an entry (the
     // emitted own hit falls through to the next way on a body mismatch).
     let inherited = entry.slot & METHOD_SITE_INHERITED != 0;
+    // A function-intrinsic entry replaces its word's (a holder-validated
+    // entry over one primed before the realm built the prototype).
+    let fn_intrinsic =
+        entry.slot & !METHOD_SITE_INDEX_MASK == function_intrinsic::METHOD_SITE_FUNCTION_INTRINSIC;
     let idx = site
         .entries
         .iter()
         .position(|e| {
             e.word == entry.word
-                && if inherited {
+                && if fn_intrinsic {
+                    e.slot & !METHOD_SITE_INDEX_MASK
+                        == function_intrinsic::METHOD_SITE_FUNCTION_INTRINSIC
+                } else if inherited {
                     e.slot & METHOD_SITE_INHERITED != 0
                 } else {
                     e.slot == entry.slot && e.info == entry.info
@@ -705,11 +765,17 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
                 }
             }
         };
+        // A builtin closure (`FN_BUILTIN`, e.g. `o.m = Array.prototype.pop`)
+        // is admitted like any body on an ordinary receiver: its thunk takes
+        // the receiver as `this` and is exactly what the call would run (see
+        // `direct_callable`). A class object is a function object: a borrowed
+        // builtin there keeps the dispatcher's native arm, as for any
+        // function-object receiver (`prime_function`).
         let Some(info) = direct_callable(value, argc) else {
             refuse(5);
             return;
         };
-        if !is_user_method(value, name) {
+        if own_only && !is_user_method(value, name) {
             refuse(13);
             return;
         }
@@ -760,6 +826,7 @@ unsafe fn prime(slot: *mut MethodSiteSlot, recv: f64, name: &[u8], argc: usize) 
         };
         if publish(slot, entry) {
             PRIMES_OWN.fetch_add(1, Ordering::Relaxed);
+            note_builtin_prime(info);
             if slot_word & METHOD_SITE_CONSTFN != 0 {
                 PRIMES_CONSTFN.fetch_add(1, Ordering::Relaxed);
             }
@@ -969,8 +1036,10 @@ unsafe fn field_bits(addr: usize, slot: u32) -> u64 {
     )
 }
 
-/// A borrowed builtin (`o.get = Map.prototype.get`) keeps the dispatcher's
-/// native arm, exactly as `own_override::resolve_own_user_method` decides.
+/// A function-object receiver holding a borrowed builtin
+/// (`F.get = Map.prototype.get`) keeps the dispatcher's native arm, exactly as
+/// `own_override::resolve_own_user_method` decides. Ordinary receivers call
+/// the builtin's thunk directly.
 fn is_user_method(value_bits: u64, name: &[u8]) -> bool {
     match std::str::from_utf8(name) {
         Ok(name) => crate::array::value_is_own_user_method(f64::from_bits(value_bits), name),
@@ -1173,14 +1242,14 @@ unsafe fn prime_inherited(
                     return;
                 }
                 let value = field_bits(next_addr, s);
+                // `%Object.prototype%.hasOwnProperty` and the other builtin
+                // methods are ordinary slots of their prototype (born wide,
+                // `global_this/proto_room.rs`): the hit loads the slot and
+                // compares the body, so a replaced builtin is seen at once.
                 let Some(info) = direct_callable(value, argc) else {
                     refuse(10);
                     return;
                 };
-                if !is_user_method(value, name) {
-                    refuse(13);
-                    return;
-                }
                 // A holder whose shape owns this slot's body (ConstFn) lets
                 // the hit call the body after the two word compares, with no
                 // kind or info check of the slot value: the holder word pins
@@ -1215,6 +1284,7 @@ unsafe fn prime_inherited(
                 };
                 if publish(slot, entry) {
                     PRIMES_INHERITED.fetch_add(1, Ordering::Relaxed);
+                    note_builtin_prime(info);
                     if constfn != 0 {
                         PRIMES_CONSTFN.fetch_add(1, Ordering::Relaxed);
                     }

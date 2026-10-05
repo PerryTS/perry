@@ -36,6 +36,11 @@ use std::cell::RefCell;
 
 #[path = "shapes_birth_width.rs"]
 mod shapes_birth_width;
+#[path = "shapes_last_key_rollback.rs"]
+mod shapes_last_key_rollback;
+pub(crate) use shapes_last_key_rollback::{
+    note_last_key_parent, publish_object_shape_last_key_rollback,
+};
 #[path = "shapes_linked_birth.rs"]
 mod shapes_linked_birth;
 #[path = "shapes_prototype.rs"]
@@ -472,6 +477,96 @@ impl ShapeRecordRef {
                 != 0;
         (!accessor).then_some(pos)
     }
+
+    /// The own DATA property named by the string value `key_bits` (whose
+    /// text is `key_bytes`) on an ordinary receiver carrying this shape:
+    /// `Some(Some(slot))` when it is inline slot `slot`, `Some(None)` when the
+    /// shape's own key list does not name it, `None` when the list alone
+    /// cannot answer (a class or dictionary layout, an accessor key, a
+    /// spilled key). Another key's attributes do not matter. An ordinary layout's key position is its slot in every
+    /// generation (a descriptor, prototype or tombstone epoch re-keys the
+    /// shape, not the layout).
+    ///
+    /// Unlike [`Self::inline_slot_of_key`] it answers through tombstones: a
+    /// `TAG_HOLE` entry names no key, and every live key keeps its position as
+    /// its slot. The caller still reads the slot and treats a `TAG_HOLE` value
+    /// as no answer. Identity compares first, then bytes, as for
+    /// [`stored_key_matches`]. Allocation-free, never calls user code.
+    #[inline]
+    pub(crate) unsafe fn own_data_slot_of_value(
+        self,
+        key_bits: u64,
+        key_bytes: &[u8],
+    ) -> Option<Option<u32>> {
+        let live = (*self.0.as_ptr()).live_inline_slot_count;
+        match self.own_data_position_of_value(key_bits, key_bytes)? {
+            Some(pos) if pos >= live => None,
+            found => Some(found),
+        }
+    }
+
+    /// [`Self::own_data_slot_of_value`]'s key POSITION, inline or not: a
+    /// position at or past the live inline count is the key's index in the
+    /// receiver's spill buffer (`object_field_at_with_live` reads either).
+    #[inline]
+    pub(crate) unsafe fn own_data_position_of_value(
+        self,
+        key_bits: u64,
+        key_bytes: &[u8],
+    ) -> Option<Option<u32>> {
+        let r = &*self.0.as_ptr();
+        if !r.object_kind().is_ordinary_layout() {
+            return None;
+        }
+        if r.keys == 0 {
+            return (r.logical_key_count == 0).then_some(None);
+        }
+        let (slots, len) =
+            super::keys_array_dense_slots_resolved(r.keys as usize as *const ArrayHeader);
+        let count = r.logical_key_count as usize;
+        if slots.is_null() || len < count {
+            return None;
+        }
+        // SSO is canonical (length and bytes in the bits), so an SSO entry
+        // names the key exactly when its bits are the key's SSO form.
+        let sso = crate::JSValue::try_short_string(key_bytes).map(|value| value.bits());
+        let pos = (0..count).find(|&i| {
+            let bits = (*slots.add(i)).to_bits();
+            bits == key_bits || stored_bits_name(key_bytes, sso, bits)
+        });
+        match pos {
+            None => Some(None),
+            // An accessor key's slot holds its pair, not a value.
+            Some(i)
+                if r.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
+                    && crate::object::key_attrs::keys_entry(
+                        r.keys as usize as *mut ArrayHeader,
+                        i as u32,
+                    ) & crate::object::key_attrs::ENTRY_ACCESSOR
+                        != 0 =>
+            {
+                None
+            }
+            Some(i) => Some(Some(i as u32)),
+        }
+    }
+}
+
+/// Does the key-list entry `bits` (a heap or SSO string; anything else, a
+/// tombstone included, names no key) spell `bytes`, whose SSO form (when it
+/// has one) is `sso`?
+#[inline]
+unsafe fn stored_bits_name(bytes: &[u8], sso: Option<u64>, bits: u64) -> bool {
+    match bits >> 48 {
+        0x7FFF => {
+            let sp = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
+            !sp.is_null()
+                && (*sp).byte_len as usize == bytes.len()
+                && bytes_eq(crate::string::string_data(sp), bytes.as_ptr(), bytes.len())
+        }
+        0x7FF9 => sso == Some(bits),
+        _ => false,
+    }
 }
 
 /// Does the key-list entry `bits` name `key`? A canonical list holds its
@@ -632,6 +727,89 @@ pub(crate) unsafe fn plain_positional_key_words(
     ))
 }
 
+/// Own-key presence of the string key `key_bits` (whose bytes are `key`) on
+/// a receiver of shape `shape_id`, for `[[GetOwnProperty]]` existence
+/// (`Object.hasOwn`, `Object.prototype.hasOwnProperty`): `Some((present,
+/// kind))`, or `None` when the record does not answer for its receivers' own
+/// keys and the caller asks the object.
+///
+/// The record answers when [`plain_positional_key_words`] would: POSBOUND is
+/// nonzero (an ordinary layout with a canonical key list, no tombstone holes,
+/// no accessor keys, no descriptor generation) and the [[Prototype]] identity
+/// is not per-object (no `process.env`, arguments object or module
+/// namespace, whose own properties are not their key list). A shape carrying
+/// a private key also declines: a private entry sits in the list but is no
+/// property. What remains is a list whose first `logical_key_count` entries
+/// ARE the receiver's own string keys, so presence is membership.
+///
+/// Membership is decided in the list itself, never in a side table: the key
+/// word is compared first (a canonical list holds its text's atom, which is
+/// the very word a pooled key literal evaluates to), and only when no word
+/// matches are the texts compared, because a word mismatch proves nothing (a
+/// list written before its atom existed, an SSO slot, a key built at run
+/// time). A list at or past `KEYS_INDEX_THRESHOLD` asks the shape's key index
+/// instead, exactly as every by-name lookup does.
+///
+/// `kind` is the record's object kind, for a caller whose answer also depends
+/// on WHICH object a runtime-born receiver is (`%Function.prototype%`).
+///
+/// Allocation-free and GC-free.
+///
+/// # Safety
+/// As [`positional_key_words`]; `key` is the text of the string `key_bits`.
+#[inline]
+pub(crate) unsafe fn plain_own_key_present(
+    dir: *const u8,
+    shape_id: u32,
+    key_bits: u64,
+    key: &[u8],
+) -> Option<(bool, ShapeObjectKind)> {
+    let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
+    if r.position_bound_raw() == 0
+        || r.proto_id == PROTO_ID_PER_OBJECT
+        || r.summary() & crate::object::key_attrs::SUMMARY_PRIVATE != 0
+    {
+        return None;
+    }
+    let kind = r.object_kind();
+    let keys = r.keys as usize as *const ArrayHeader;
+    let count = r.logical_key_count;
+    if count >= super::KEYS_INDEX_THRESHOLD {
+        return Some((
+            super::keys_find_slot_by_bytes(keys, count, key).is_some(),
+            kind,
+        ));
+    }
+    // A live descriptor's keys array is the resolved head (the collector
+    // rewrites it on move), holding at least `count` logical keys past its
+    // front offset; the min keeps a short array from being over-read anyway.
+    let n = (count as usize).min((*keys).length.min((*keys).capacity) as usize);
+    let words = crate::array::array_elements_ptr(keys) as *const u64;
+    for i in 0..n {
+        if *words.add(i) == key_bits {
+            return Some((true, kind));
+        }
+    }
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    for i in 0..n {
+        let stored = crate::JSValue::from_bits(*words.add(i));
+        if stored.is_string() {
+            let h = stored.as_string_ptr();
+            if !h.is_null()
+                && (*h).byte_len as usize == key.len()
+                && bytes_eq(super::string_header_payload(h), key.as_ptr(), key.len())
+            {
+                return Some((true, kind));
+            }
+        } else if let Some(text) = crate::string::js_string_key_bytes(stored, &mut sso) {
+            if text == key {
+                return Some((true, kind));
+            }
+        }
+    }
+    Some((false, kind))
+}
+
 /// A record's canonical keys array, for [`positional_key_words`]: its words
 /// are asked only once POSBOUND is known to be nonzero, so the front-offset
 /// arithmetic runs only on the path that reads a key.
@@ -741,7 +919,7 @@ pub(crate) enum ShapeObjectKind {
     /// The ordinary layout of [`ShapeObjectKind::Ordinary`], on a receiver
     /// whose own slots are NOT proven plain data: a class-less receiver no
     /// birth site marked ordinary (`URL`, `Object.prototype`, a typed-array
-    /// prototype, a runtime-born record) or a native-module receiver. Reads
+    /// prototype, or a runtime-born record). Reads
     /// treat it as `Ordinary`; a store is never admitted on it by shape.
     OrdinaryUnmarked,
     /// [`ShapeObjectKind::Ordinary`] carrying the Array-subclass packed-numeric
@@ -750,6 +928,10 @@ pub(crate) enum ShapeObjectKind {
     /// shape transition and a store word naming an `Ordinary` id can never
     /// match a proof-carrying receiver.
     OrdinaryNumericProof,
+    /// A native-module namespace whose own keys and reads come from its
+    /// export surface. The namespace brand is part of shape identity, so an
+    /// ordinary record with a module name in a data slot cannot impersonate it.
+    NativeNamespace,
 }
 
 impl ShapeObjectKind {
@@ -772,6 +954,7 @@ impl ShapeObjectKind {
             ShapeObjectKind::Ordinary
                 | ShapeObjectKind::OrdinaryUnmarked
                 | ShapeObjectKind::OrdinaryNumericProof
+                | ShapeObjectKind::NativeNamespace
         )
     }
 
@@ -787,6 +970,7 @@ impl ShapeObjectKind {
             ShapeObjectKind::FunctionDictionary => 4,
             ShapeObjectKind::OrdinaryUnmarked => 5,
             ShapeObjectKind::OrdinaryNumericProof => 6,
+            ShapeObjectKind::NativeNamespace => 7,
         }
     }
 }
@@ -804,6 +988,7 @@ const SHAPE_KIND_FUNCTION: u64 = 4;
 const SHAPE_KIND_FUNCTION_DICTIONARY: u64 = 5;
 const SHAPE_KIND_ORDINARY_UNMARKED: u64 = 6;
 const SHAPE_KIND_ORDINARY_NUMERIC_PROOF: u64 = 7;
+const SHAPE_KIND_NATIVE_NAMESPACE: u64 = 8;
 
 #[inline(always)]
 fn shape_kind_cache_slot(shape_id: u32) -> usize {
@@ -826,6 +1011,7 @@ fn cached_shape_object_kind(shape_id: u32) -> Option<ShapeObjectKind> {
         SHAPE_KIND_FUNCTION_DICTIONARY => Some(ShapeObjectKind::FunctionDictionary),
         SHAPE_KIND_ORDINARY_UNMARKED => Some(ShapeObjectKind::OrdinaryUnmarked),
         SHAPE_KIND_ORDINARY_NUMERIC_PROOF => Some(ShapeObjectKind::OrdinaryNumericProof),
+        SHAPE_KIND_NATIVE_NAMESPACE => Some(ShapeObjectKind::NativeNamespace),
         _ => None,
     }
 }
@@ -841,6 +1027,7 @@ fn publish_shape_object_kind(shape_id: u32, kind: ShapeObjectKind) {
         ShapeObjectKind::FunctionDictionary => SHAPE_KIND_FUNCTION_DICTIONARY,
         ShapeObjectKind::OrdinaryUnmarked => SHAPE_KIND_ORDINARY_UNMARKED,
         ShapeObjectKind::OrdinaryNumericProof => SHAPE_KIND_ORDINARY_NUMERIC_PROOF,
+        ShapeObjectKind::NativeNamespace => SHAPE_KIND_NATIVE_NAMESPACE,
     };
     cache[shape_kind_cache_slot(shape_id)] = (u64::from(shape_id) << 32) | tag;
 }
@@ -4468,6 +4655,65 @@ pub(crate) fn shape_is_keyless_birth(id: u32, proto_id: u64, slots: u32) -> bool
             && (*record).semantic_generation == 0
             && (*record).hole_count == 0
             && (*record).live_inline_slot_count == slots
+    }
+}
+
+/// [`shape_is_keyless_birth`] for a birth that stamps `id` on a fresh object
+/// of kind `kind` in place of publishing its birth descriptor: also the
+/// receiver kind, the default (empty) attribute summary and all-`Any` lanes,
+/// the remaining facts that publication derives from a newborn.
+#[inline]
+pub(crate) fn shape_is_keyless_birth_of(
+    id: u32,
+    proto_id: u64,
+    slots: u32,
+    kind: ShapeObjectKind,
+) -> bool {
+    if !shape_is_keyless_birth(id, proto_id, slots) {
+        return false;
+    }
+    let Some(record) = ShapeSlab::agent_record_present(id) else {
+        return false;
+    };
+    // SAFETY: a present record of this agent, read immediately.
+    unsafe {
+        let r = &*record;
+        r.object_kind() == kind && r.summary() == 0 && r.rep == 0 && r.special_constfn_mask() == 0
+    }
+}
+
+/// Does `id` name a present shape a construction may stamp on a fresh,
+/// unpublished object of kind `kind` and then fill slot by slot through the
+/// store funnel: an ordinary layout of exactly that kind at prototype
+/// identity `proto_id`, whose `count` keys are its `count` live inline
+/// slots, generation 0, no tombstones, default attributes and no special
+/// (ConstFn) lane? That is the construction's recorded FINAL shape (the one
+/// its full sequence of transitions reached). ShapeIds are never reused, so a
+/// present record still names the key list it was recorded with. One
+/// directory read; no descriptor copy.
+#[inline]
+pub(crate) fn shape_is_filled_birth(
+    id: u32,
+    proto_id: u64,
+    count: u32,
+    kind: ShapeObjectKind,
+) -> bool {
+    let Some(record) = ShapeSlab::agent_record_present(id) else {
+        return false;
+    };
+    // SAFETY: a present record of this agent, read immediately.
+    unsafe {
+        let r = &*record;
+        r.proto_id == proto_id
+            && r.object_kind() == kind
+            && kind.is_ordinary_layout()
+            && r.logical_key_count == count
+            && r.live_inline_slot_count == count
+            && r.semantic_generation == 0
+            && r.hole_count == 0
+            && r.summary() == 0
+            && r.special_constfn_mask() == 0
+            && r.keys != 0
     }
 }
 

@@ -364,21 +364,17 @@ pub(super) fn detect_optional_feature_usage(
     // #5140 — detect native `EventEmitter` construction. The `EventEmitter`
     // builtin-new path (`new EventEmitter()` / `EventEmitterAsyncResource`,
     // routed by the local binding NAME — so it fires for `eventemitter3`'s
-    // default export too, not only `node:events`) emits `js_event_emitter_*`
-    // calls. Those helpers live in perry-stdlib's `events` module behind
-    // `bundled-events`; a program that uses native EventEmitter without
-    // importing `node:events` otherwise fails to link with undefined
-    // `_js_event_emitter_*` symbols. Match the lowered `Expr::New` token.
+    // default export too, not only `node:events`) builds the runtime's
+    // ordinary-object emitter; such a program also gets the `events.*`
+    // module helpers. Match the lowered `Expr::New` token.
     {
         if hir_debug.contains("class_name: \"EventEmitter\"")
             || hir_debug.contains("class_name: \"EventEmitterAsyncResource\"")
         {
             ctx.uses_event_emitter = true;
             // Treat native EventEmitter use exactly like a `node:events` import
-            // so the full events wiring fires: the perry-ext-events well-known
-            // archive (which defines `js_event_emitter_*`) is linked, the
-            // `bundled-events` feature is enabled, and the construct dispatcher
-            // is registered (`external-events-construct`). Idempotent — a set.
+            // so the `bundled-events` module helpers are linked. Idempotent —
+            // a set.
             ctx.native_module_imports.insert("events".to_string());
         }
     }
