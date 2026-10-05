@@ -342,8 +342,21 @@ pub(crate) unsafe fn keys_find_accessor_slot_resolved(
         return None;
     }
     let n = (count as usize).min(entry_len).min(slot_len);
+    // Prefix summaries are cumulative: everything before the first prefix
+    // carrying SUMMARY_ACCESSOR is data. Method-heavy prototypes often put
+    // their few accessors last, so find that boundary without scanning every
+    // preceding attribute entry.
+    let (mut first, mut end) = (0, n);
+    while first < end {
+        let mid = first + (end - first) / 2;
+        if Word::decode(*entries.add(mid)).summary & SUMMARY_ACCESSOR == 0 {
+            first = mid + 1;
+        } else {
+            end = mid;
+        }
+    }
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    for i in (0..n).rev() {
+    for i in (first..n).rev() {
         if Word::decode(*entries.add(i)).entry & ENTRY_ACCESSOR == 0 {
             continue;
         }
