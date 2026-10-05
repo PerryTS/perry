@@ -262,15 +262,11 @@ extern "C" fn own_static_thunk(
     // The provider reads these slots across allocations; expose rewriteable
     // argument cells to the collector rather than copying unrooted doubles.
     let args = [a, b, c, d, e].map(std::cell::UnsafeCell::new);
-    struct Frame(u64);
-    impl Drop for Frame {
-        fn drop(&mut self) {
-            crate::gc::js_shadow_frame_pop(self.0);
+    let argument_scope = crate::gc::RuntimeHandleScope::new();
+    for arg in &args {
+        unsafe {
+            argument_scope.root_heap_word_cell(arg);
         }
-    }
-    let frame = Frame(crate::gc::js_shadow_frame_push(5));
-    for (index, arg) in args.iter().enumerate() {
-        crate::gc::js_shadow_slot_bind(index as u32, arg.get().cast());
     }
     let result = crate::exception::catch_js_throw(|| unsafe {
         let dispatch: crate::value::JsNativeNetDispatchFn = std::mem::transmute(ptr);
@@ -281,7 +277,7 @@ extern "C" fn own_static_thunk(
             args.len(),
         )
     });
-    drop(frame);
+    drop(argument_scope);
     match result {
         Ok(value) => value,
         Err(error) => crate::exception::js_throw(error),
