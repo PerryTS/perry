@@ -280,6 +280,17 @@ pub(crate) unsafe fn instance_chain_getter_value(
     name: &str,
     this_of: impl FnOnce() -> f64,
 ) -> Option<(crate::JSValue, usize)> {
+    // Only a bare CLASS link needs this declaration-prototype fallback.
+    // Recorded and ordinary prototype links are read by the generic getter's
+    // existing inherited-property walk, including their accessor lanes.
+    // Asking both paths repeats negative lookups on ordinary shaped objects.
+    let pid =
+        crate::object::shapes::shape_proto_id(crate::object::shapes::object_shape_stamp(obj))?;
+    if !(crate::object::shapes::PROTO_ID_CLASS..crate::object::shapes::PROTO_ID_MIXED)
+        .contains(&pid)
+    {
+        return None;
+    }
     // The generic getter keeps obj raw across its fallback arms. Prototype
     // materialization may allocate but cannot move that receiver here.
     let acc = instance_proto_accessor(obj, name)?.1;
