@@ -12,7 +12,7 @@ use super::*;
 const FIRST_RUNTIME_CLASS_ID: u32 = 0x7FFF_FF00;
 
 /// An allocation-free `[[HasProperty]]` for a string key and a chain whose
-/// objects have ordinary shapes. Declines at an exotic receiver,
+/// objects have ordinary shapes. Declines at a dictionary or exotic receiver,
 /// a class's virtual surface, or a not-yet-materialized default intrinsic.
 /// The generic operation remains responsible for coercion and proxy traps.
 #[inline(never)]
@@ -35,7 +35,11 @@ pub(super) unsafe fn try_shape_has_property(receiver: f64, key: f64) -> Option<b
         }
         let shape = super::super::super::shapes::object_shape_descriptor(obj)?;
         let proto_kind = shape.proto_id & super::super::super::shapes::PROTO_ID_UNIQUE;
-        if !shape.object_kind.is_ordinary_layout()
+        // Dictionary shapes publish no keys; their private list lives on the
+        // receiver. Their disjoint ShapeId band cannot prove presence/absence.
+        if !super::super::super::shapes::is_site_matchable_shape_id(
+            super::super::super::shapes::object_shape_stamp(obj),
+        ) || !shape.object_kind.is_ordinary_layout()
             || (*obj).class_id >= FIRST_RUNTIME_CLASS_ID
             // A null/unique edge does not encode a class's virtual surface.
             // Decline such class-bearing owners rather than infer absence.
@@ -93,6 +97,62 @@ pub(super) unsafe fn try_shape_has_property(receiver: f64, key: f64) -> Option<b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dictionary_presence_falls_back_for_own_and_inherited_keys() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        unsafe {
+            crate::object::ensure_object_intrinsics();
+            let obj = crate::object::object_alloc_plain(0);
+            for i in 0..6 {
+                let name = format!("dictionary_presence_{i}");
+                let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                crate::object::js_object_set_field_by_name(obj, key, i as f64);
+            }
+            let key = crate::string::js_string_from_bytes(b"x".as_ptr(), 1);
+            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+            crate::object::js_object_set_field_by_name(obj, key, undefined);
+            assert!(crate::object::dictionary::latch_object_to_dictionary(obj));
+            assert_eq!(
+                crate::object::shapes::object_shape_descriptor(obj)
+                    .unwrap()
+                    .keys,
+                0,
+                "the dictionary shape omits its private key list"
+            );
+            let receiver = crate::value::js_nanbox_pointer(obj as i64);
+            let boxed_key = crate::value::js_nanbox_string(key as i64);
+            let child = crate::object::object_alloc_plain(0);
+            let child_value = crate::value::js_nanbox_pointer(child as i64);
+            crate::object::js_object_set_prototype_of(child_value, receiver);
+            for value in [receiver, child_value] {
+                assert_eq!(try_shape_has_property(value, boxed_key), None);
+                assert_ne!(
+                    crate::value::js_is_truthy(js_in_operator(value, boxed_key)),
+                    0
+                );
+                assert_ne!(
+                    crate::value::js_is_truthy(js_object_has_property(value, boxed_key)),
+                    0
+                );
+            }
+            crate::object::js_object_delete_field(obj, key);
+            for value in [receiver, child_value] {
+                assert_eq!(
+                    crate::value::js_is_truthy(js_in_operator(value, boxed_key)),
+                    0
+                );
+            }
+            crate::object::js_object_set_field_by_name(obj, key, undefined);
+            for value in [receiver, child_value] {
+                assert_ne!(
+                    crate::value::js_is_truthy(js_in_operator(value, boxed_key)),
+                    0
+                );
+            }
+        }
+    }
 
     #[test]
     fn implicit_prototype_presence_does_not_read_undefined_or_invoke_getters() {
