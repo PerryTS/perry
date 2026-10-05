@@ -112,7 +112,7 @@ fn attach_prototype(constructor_value: f64, methods: &[(&str, u32)]) -> f64 {
 
         let name_string = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let name_handle = scope.root_string_ptr(name_string);
-        crate::closure::closure_set_dynamic_prop(
+        crate::closure::closure_define_dynamic_prop(
             method_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
             "name",
             f64::from_bits(JSValue::string_ptr(name_handle.get_raw_mut_ptr()).bits()),

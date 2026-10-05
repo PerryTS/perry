@@ -5,6 +5,35 @@
 
 use super::*;
 
+/// Restrict actual own properties, including synthesized data slots and
+/// accessors. The descriptor funnel materializes data values in the bag.
+unsafe fn restrict_function_keys(owner: usize, freeze: bool) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let value = crate::value::js_nanbox_pointer(owner as i64);
+    let names = js_object_get_own_property_names(value);
+    let names = crate::value::js_nanbox_get_pointer(names) as *const crate::array::ArrayHeader;
+    for i in 0..(*names).length {
+        let key = crate::array::js_array_get_f64(names, i);
+        let desc = js_object_get_own_property_descriptor(value, key);
+        let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let Some(bytes) =
+            crate::string::js_string_key_bytes(JSValue::from_bits(key.to_bits()), &mut scratch)
+        else {
+            continue;
+        };
+        let name = String::from_utf8_lossy(bytes).into_owned();
+        super::set_property_attrs(
+            owner,
+            name,
+            PropertyAttrs::new(
+                !freeze && desc_field_true(desc, b"writable"),
+                desc_field_true(desc, b"enumerable"),
+                false,
+            ),
+        );
+    }
+}
+
 /// Drop `writable`/`configurable` on every own **symbol-keyed** property of
 /// `obj`. The string-keyed table is handled by `mark_all_keys`; symbol props
 /// live in a separate side table, so `Object.freeze`/`Object.seal` must walk
@@ -223,23 +252,7 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
                 return obj_value;
             }
             if crate::closure::is_closure_ptr(obj as usize) {
-                let owner = obj as usize;
-                for builtin in ["name", "length"] {
-                    super::set_property_attrs(
-                        owner,
-                        builtin.to_string(),
-                        PropertyAttrs::new(false, false, false),
-                    );
-                }
-                for (name, _) in crate::closure::closure_dynamic_props_snapshot(owner) {
-                    let cur = super::get_property_attrs(owner, &name)
-                        .unwrap_or(PropertyAttrs::new(true, true, true));
-                    super::set_property_attrs(
-                        owner,
-                        name,
-                        PropertyAttrs::new(false, cur.enumerable(), false),
-                    );
-                }
+                restrict_function_keys(obj as usize, true);
                 mark_all_symbol_keys(
                     obj, /*drop_writable=*/ true, /*drop_configurable=*/ true,
                 );
@@ -338,25 +351,7 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
                 return obj_value;
             }
             if crate::closure::is_closure_ptr(obj as usize) {
-                let owner = obj as usize;
-                for builtin in ["name", "length"] {
-                    let cur = super::get_property_attrs(owner, builtin)
-                        .unwrap_or(PropertyAttrs::new(false, false, true));
-                    super::set_property_attrs(
-                        owner,
-                        builtin.to_string(),
-                        PropertyAttrs::new(cur.writable(), cur.enumerable(), false),
-                    );
-                }
-                for (name, _) in crate::closure::closure_dynamic_props_snapshot(owner) {
-                    let cur = super::get_property_attrs(owner, &name)
-                        .unwrap_or(PropertyAttrs::new(true, true, true));
-                    super::set_property_attrs(
-                        owner,
-                        name,
-                        PropertyAttrs::new(cur.writable(), cur.enumerable(), false),
-                    );
-                }
+                restrict_function_keys(obj as usize, false);
                 mark_all_symbol_keys(
                     obj, /*drop_writable=*/ false, /*drop_configurable=*/ true,
                 );

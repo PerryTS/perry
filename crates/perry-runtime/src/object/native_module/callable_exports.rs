@@ -1316,7 +1316,7 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
         );
         let name_string = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let name_handle = scope.root_string_ptr(name_string);
-        crate::closure::closure_set_dynamic_prop(
+        crate::closure::closure_define_dynamic_prop(
             method_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
             "name",
             f64::from_bits(JSValue::string_ptr(name_handle.get_raw_mut_ptr()).bits()),
@@ -1436,49 +1436,6 @@ pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32
         ("process", "getBuiltinModule") => Some(1),
         _ => native_callable_export_arity(module, method.as_str()),
     }
-}
-
-pub(crate) fn set_bound_native_closure_name(
-    closure: *mut crate::closure::ClosureHeader,
-    name: &str,
-) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let closure_handle = scope.root_raw_mut_ptr(closure);
-    let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let name_handle = scope.root_string_ptr(ptr);
-    let name_value = f64::from_bits(JSValue::string_ptr(name_handle.get_raw_mut_ptr()).bits());
-    let closure = closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize;
-    // A fresh builtin function's `name` is its first own property: its bag is
-    // born in that shape.
-    if !crate::closure::closure_define_first_props(closure, &[("name", name_value)]) {
-        crate::closure::closure_set_dynamic_prop(closure, "name", name_value);
-    }
-    // Spec: a function's `name` property is { writable:false, enumerable:false,
-    // configurable:true }. Storing it as a plain dynamic prop left it ENUMERABLE
-    // by default, so `for (k in Buffer)` yielded "name" — even though
-    // `getOwnPropertyDescriptor(Buffer,'name').enumerable` correctly reported
-    // false via the function-name special case. The inconsistency broke
-    // safe-buffer's `copyProps(Buffer, SafeBuffer)` (`for (k in Buffer)
-    // SafeBuffer[k] = Buffer[k]`): it copied "name" onto SafeBuffer, whose own
-    // `name` is read-only, throwing `Cannot assign to read only property 'name'`
-    // in strict mode (jsonwebtoken → Next.js). Pin the proper descriptor so
-    // enumeration matches reflection.
-    //
-    // #6809: MUST be the gate-neutral BUILTIN install. This runs during
-    // `populate_global_this_builtins` for every program that touches a
-    // builtin global (`console.log` suffices) — the user-install variant
-    // flipped `GLOBAL_DESCRIPTORS_IN_USE` process-wide at startup, which
-    // pushed EVERY subsequent dynamic property write onto the descriptor-
-    // interception slow walk (prototype-chain vetting incl. a dynamic
-    // `.constructor` read per write; measured as the dominant cost of the
-    // #6759 write micro). Reflection and enumeration read the descriptor
-    // table unconditionally, so the builtin variant preserves the
-    // safe-buffer semantics above.
-    crate::object::set_builtin_property_attrs(
-        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-        "name".to_string(),
-        crate::object::PropertyAttrs::new(false, false, true),
-    );
 }
 
 pub(crate) fn builtin_closure_is_non_constructable_value(value: f64) -> bool {

@@ -639,79 +639,77 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
                             attrs.configurable(),
                         );
                     }
-                    let resolved: Option<(f64, bool, bool, bool)> = match name {
-                        "length" => {
-                            let closure_value = crate::value::js_nanbox_pointer(ptr as i64);
-                            let arity = if let Some(arity) =
-                                super::native_module::bound_native_callable_value_arity(
-                                    closure_value,
-                                ) {
-                                arity
-                            } else if let Some(len) =
-                                super::native_module::builtin_closure_length(ptr)
-                            {
-                                // #3143: per-closure spec length for built-in
-                                // proto methods (shared func_ptr can't carry it).
-                                len
-                            } else {
-                                crate::closure::closure_length(
-                                    ptr as *const crate::closure::ClosureHeader,
-                                )
-                                .unwrap_or(0)
-                            };
-                            // Numbers are NaN-boxed as their raw f64 bits.
-                            Some((
-                                arity as f64,
-                                writable_default.unwrap_or(false),
-                                enumerable_default.unwrap_or(false),
-                                configurable_default,
-                            ))
-                        }
-                        "name" => {
-                            let dynv = crate::closure::closure_get_dynamic_prop(ptr, "name");
-                            if dynv.to_bits() != crate::value::TAG_UNDEFINED {
-                                // Function `.name` is spec'd non-writable; honor
-                                // a registered override but otherwise report
-                                // `writable: false` (#3143), not the old default
-                                // of `true`.
+                    let resolved: Option<(f64, bool, bool, bool)> = if let Some(value) =
+                        crate::closure::closure_get_own_dynamic_prop(ptr, name)
+                    {
+                        let attrs = registered.unwrap_or(PropertyAttrs::new(true, true, true));
+                        Some((
+                            value,
+                            attrs.writable(),
+                            attrs.enumerable(),
+                            attrs.configurable(),
+                        ))
+                    } else {
+                        match name {
+                            "length" => {
+                                let closure_value = crate::value::js_nanbox_pointer(ptr as i64);
+                                let arity = if let Some(arity) =
+                                    super::native_module::bound_native_callable_value_arity(
+                                        closure_value,
+                                    ) {
+                                    arity
+                                } else if let Some(len) =
+                                    super::native_module::builtin_closure_length(ptr)
+                                {
+                                    // #3143: per-closure spec length for built-in
+                                    // proto methods (shared func_ptr can't carry it).
+                                    len
+                                } else {
+                                    crate::closure::closure_length(
+                                        ptr as *const crate::closure::ClosureHeader,
+                                    )
+                                    .unwrap_or(0)
+                                };
+                                // Numbers are NaN-boxed as their raw f64 bits.
                                 Some((
-                                    dynv,
-                                    writable_default.unwrap_or(false),
-                                    enumerable_default.unwrap_or(false),
-                                    configurable_default,
-                                ))
-                            } else {
-                                let func_ptr = (*(ptr as *const crate::closure::ClosureHeader))
-                                    .code() as usize;
-                                let fname = crate::builtins::function_name_for_ptr(func_ptr)
-                                    .unwrap_or_default();
-                                let s = crate::string::js_string_from_bytes(
-                                    fname.as_ptr(),
-                                    fname.len() as u32,
-                                );
-                                Some((
-                                    crate::js_nanbox_string(s as i64),
+                                    arity as f64,
                                     writable_default.unwrap_or(false),
                                     enumerable_default.unwrap_or(false),
                                     configurable_default,
                                 ))
                             }
-                        }
-                        _ => {
-                            if crate::closure::closure_has_own_dynamic_prop(ptr, name) {
-                                let dynv = crate::closure::closure_get_own_dynamic_prop(ptr, name)
-                                    .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-                                let attrs = registered
-                                    .unwrap_or(super::PropertyAttrs::new(true, true, true));
-                                Some((
-                                    dynv,
-                                    attrs.writable(),
-                                    attrs.enumerable(),
-                                    attrs.configurable(),
-                                ))
-                            } else {
-                                None
+                            "name" => {
+                                let dynv = crate::closure::closure_get_dynamic_prop(ptr, "name");
+                                if dynv.to_bits() != crate::value::TAG_UNDEFINED {
+                                    // Function `.name` is spec'd non-writable; honor
+                                    // a registered override but otherwise report
+                                    // `writable: false` (#3143), not the old default
+                                    // of `true`.
+                                    Some((
+                                        dynv,
+                                        writable_default.unwrap_or(false),
+                                        enumerable_default.unwrap_or(false),
+                                        configurable_default,
+                                    ))
+                                } else {
+                                    let func_ptr = (*(ptr as *const crate::closure::ClosureHeader))
+                                        .code()
+                                        as usize;
+                                    let fname = crate::builtins::function_name_for_ptr(func_ptr)
+                                        .unwrap_or_default();
+                                    let s = crate::string::js_string_from_bytes(
+                                        fname.as_ptr(),
+                                        fname.len() as u32,
+                                    );
+                                    Some((
+                                        crate::js_nanbox_string(s as i64),
+                                        writable_default.unwrap_or(false),
+                                        enumerable_default.unwrap_or(false),
+                                        configurable_default,
+                                    ))
+                                }
                             }
+                            _ => None,
                         }
                     };
                     let Some((value, writable, enumerable, configurable)) = resolved else {

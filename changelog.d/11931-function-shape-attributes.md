@@ -1,0 +1,1 @@
+Store function name/length and constructor static attributes in the function own-property bag. Descriptor redefinitions, deletion and integrity operations use the same shape keys; function descriptor entries and the builtin length side table are removed. Preserve undefined redefinitions and accessor descriptors, and initialize intrinsic function keys in creation order.

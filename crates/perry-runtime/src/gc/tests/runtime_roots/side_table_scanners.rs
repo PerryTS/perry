@@ -530,13 +530,9 @@ fn test_builtin_closure_metadata_follows_forwarded_owner() {
         GC_TYPE_CLOSURE,
     ) as usize;
 
-    // The arena hands back uninitialized memory. A closure's `info` word is
-    // read as a pointer by `builtin_closure_length`'s bound-function probe,
-    // so a raw owner must carry the null (no-body) info, not stale bytes.
     for owner in [nursery_owner, relocated_owner] {
-        unsafe { (*(owner as *mut crate::closure::ClosureHeader)).info = std::ptr::null() };
+        unsafe { init_test_closure(owner as *mut u8) };
     }
-    crate::object::set_builtin_closure_length(nursery_owner, 3);
     crate::object::set_builtin_closure_non_constructable(nursery_owner);
 
     // These tables classify closures owned by the heap graph; their keys must
@@ -556,11 +552,6 @@ fn test_builtin_closure_metadata_follows_forwarded_owner() {
         &valid_ptrs,
     ));
 
-    assert_eq!(crate::object::builtin_closure_length(nursery_owner), None);
-    assert_eq!(
-        crate::object::builtin_closure_length(relocated_owner),
-        Some(3)
-    );
     assert!(!crate::object::builtin_closure_is_non_constructable(
         nursery_owner
     ));
@@ -569,10 +560,44 @@ fn test_builtin_closure_metadata_follows_forwarded_owner() {
     ));
 
     crate::object::prune_dead_builtin_closure_metadata_owners(&|owner| owner == relocated_owner);
-    assert_eq!(crate::object::builtin_closure_length(relocated_owner), None);
     assert!(!crate::object::builtin_closure_is_non_constructable(
         relocated_owner
     ));
     clear_marks();
     clear_mark_seeds();
+}
+
+#[test]
+fn builtin_closure_length_bag_survives_a_copying_minor() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
+    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
+
+    let scope = RuntimeHandleScope::new();
+    let owner =
+        crate::closure::js_closure_alloc(crate::fn_info!(test_no_capture_singleton_func, 0), 0);
+    let handle = scope.root_raw_const_ptr(owner);
+    crate::object::set_builtin_closure_length(owner as usize, 3);
+    let bag = unsafe { crate::closure::props::bag_of(owner as usize) };
+
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    let moved = handle.get_raw_const_ptr::<crate::closure::ClosureHeader>() as usize;
+    assert_ne!(moved, owner as usize, "the function must have moved");
+    assert_ne!(
+        unsafe { crate::closure::props::bag_of(moved) },
+        bag,
+        "its bag must have moved"
+    );
+    assert_eq!(crate::object::builtin_closure_length(moved), Some(3));
+    assert_eq!(
+        crate::object::get_property_attrs(moved, "length")
+            .unwrap()
+            .bits,
+        crate::object::PropertyAttrs::new(false, false, true).bits,
+    );
 }

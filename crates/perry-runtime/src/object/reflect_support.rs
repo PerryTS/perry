@@ -235,6 +235,17 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
 /// default of all-true applies). The booleans are `(writable, configurable)`.
 pub(crate) fn obj_value_attrs(value: f64, key: f64) -> Option<(bool, bool)> {
     unsafe {
+        if crate::symbol::js_is_symbol(key) != 0 {
+            let owner = super::class_ref_id(value)
+                .and_then(super::class_value::class_value_if_minted)
+                .map(|ptr| ptr as usize)
+                .unwrap_or_else(|| crate::symbol::obj_key_from_f64(value));
+            return crate::symbol::get_symbol_property_attrs(
+                owner,
+                crate::symbol::sym_key_from_f64(key),
+            )
+            .map(|attrs| (attrs.writable(), attrs.configurable()));
+        }
         let obj = extract_obj_ptr(value);
         if obj.is_null() {
             return None;
@@ -324,7 +335,15 @@ pub(crate) fn reflect_define_property(obj: f64, key: f64, descriptor: f64) -> f6
             f64::from_bits(obj_handle.get_heap_word_u64()),
             key_handle.get_nanbox_f64(),
         ) {
-            if !configurable {
+            if !configurable
+                && !unsafe {
+                    super::object_ops::reflect_nonconfigurable_define_allowed(
+                        f64::from_bits(obj_handle.get_heap_word_u64()),
+                        key_handle.get_nanbox_f64(),
+                        descriptor_handle.get_nanbox_f64(),
+                    )
+                }
+            {
                 return reflect_bool(false);
             }
         }

@@ -730,6 +730,15 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // (top16 == 0x7FFE, INT32_TAG).
     let bits = obj_f64.to_bits();
     if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+        // A legacy class word names the same function object as its minted
+        // pointer. Resolve its own bag through the ordinary symbol slot
+        // evaluator before consulting declaration metadata.
+        if let Some(owner) = crate::object::class_value::class_value_if_minted(class_id) {
+            let owner = f64::from_bits(crate::JSValue::pointer(owner.cast()).bits());
+            if let Some(value) = own_symbol_property_for_receiver(owner, sym_f64, receiver_f64) {
+                return value;
+            }
+        }
         let sym_key = sym_key_from_f64(sym_f64);
         if sym_key != 0 {
             if let Some(v) =

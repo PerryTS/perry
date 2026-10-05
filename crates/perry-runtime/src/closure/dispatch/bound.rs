@@ -493,10 +493,9 @@ pub(crate) fn rebind_explicit_this(target: f64, this_arg: f64) -> f64 {
 }
 
 /// Fallback target name for [`bound_function_lazy_name`]: the target-name
-/// snapshot captured at bind time (capture slot 3) was not a String (no
-/// override, or an explicit non-String `Object.defineProperty` value — both
-/// collapse to the same declared-name fallback, matching the prior eager
-/// behavior), so fall back to the target's *declared* name — the func-ptr
+/// snapshot captured at bind time (capture slot 3) is the no-override sentinel,
+/// proved by its untouched base shape (an explicit non-string name is captured
+/// as an empty string), so fall back to the target's *declared* name — the func-ptr
 /// registry for a closure, or the class registry for a class ref. Both
 /// registries are immutable for the life of the program, so resolving them
 /// lazily here instead of at bind time is observationally identical.
@@ -568,7 +567,7 @@ pub(crate) unsafe fn bound_function_lazy_name(ptr: usize) -> f64 {
         f64::from_bits(JSValue::string_ptr(name_ptr).bits())
     });
     let ptr = ptr_raw as usize;
-    crate::closure::closure_set_dynamic_prop(ptr, "name", name_value);
+    crate::closure::closure_define_dynamic_prop(ptr, "name", name_value);
     name_value
 }
 
@@ -694,7 +693,16 @@ pub unsafe extern "C" fn js_function_bind(
     // recognizes via `bound_target_declared_name`) is captured directly. This
     // is the ONLY work `.name` does at bind time now — see
     // `bound_function_lazy_name` for the deferred "bound " + name build.
-    let name_hint = if target_is_closure {
+    // An untouched base Function shape proves its intrinsic name has no
+    // override, accessor or deletion. Its immutable body name can keep the
+    // existing lazy snapshot; an actual own name still runs Get now.
+    let declared_name = target_is_closure && {
+        let target =
+            JSValue::from_bits(target_h.get_nanbox_f64().to_bits()).as_pointer::<ClosureHeader>();
+        (*target).shape_id == crate::closure::shape::birth_shape_for_body((*target).info)
+            && (*target).code() != crate::closure::BOUND_FUNCTION_FUNC_PTR
+    };
+    let name_hint = if target_is_closure && !declared_name {
         target_h
             .across_nanbox(|| {
                 let tclosure =
@@ -710,6 +718,16 @@ pub unsafe extern "C" fn js_function_bind(
     // partial-args array / bound-closure allocations below, and we'd write a
     // dangling capture slot 3 (exactly the "lazily-derived name retains a
     // stale address" failure mode this fix must avoid).
+    // Get(Target, name) yields an empty bound-name suffix for a non-string.
+    let name_hint = if target_is_closure
+        && !declared_name
+        && !JSValue::from_bits(name_hint.to_bits()).is_any_string()
+    {
+        let empty = crate::string::js_string_from_bytes(b"".as_ptr(), 0);
+        f64::from_bits(JSValue::string_ptr(empty).bits())
+    } else {
+        name_hint
+    };
     let name_h = scope.root_nanbox_f64(name_hint);
 
     let bound_arg_count = args_len.saturating_sub(1);
@@ -764,18 +782,27 @@ pub unsafe extern "C" fn js_function_bind(
     let target_len_f = if let Some(len) = accessor_len {
         len
     } else if let Some(target_closure) = target_closure {
-        match crate::closure::closure_get_own_dynamic_prop(target_closure as usize, "length") {
-            Some(v) => {
-                let jv = JSValue::from_bits(v.to_bits());
-                if jv.is_int32() {
-                    jv.as_int32() as f64
-                } else if jv.is_number() {
-                    jv.as_number()
-                } else {
-                    0.0
+        if !crate::closure::shape::closure_on_base_shape(target_closure)
+            && !crate::object::has_own_helpers::closure_own_key_present(
+                target_closure as usize,
+                "length",
+            )
+        {
+            0.0
+        } else {
+            match crate::closure::closure_get_own_dynamic_prop(target_closure as usize, "length") {
+                Some(v) => {
+                    let jv = JSValue::from_bits(v.to_bits());
+                    if jv.is_int32() {
+                        jv.as_int32() as f64
+                    } else if jv.is_number() {
+                        jv.as_number()
+                    } else {
+                        0.0
+                    }
                 }
+                None => crate::closure::closure_length(target_closure).unwrap_or(0) as f64,
             }
-            None => crate::closure::closure_length(target_closure).unwrap_or(0) as f64,
         }
     } else {
         // Constructor arity is not currently retained in the class registry.
@@ -831,7 +858,7 @@ pub unsafe extern "C" fn js_function_bind(
         // +Infinity (or beyond u32): store as an own dynamic prop, which the
         // `.length` read path prefers over the bound-length capture.
         bound_h.with_mut_ptr(|bound: *mut ClosureHeader| {
-            crate::closure::closure_set_dynamic_prop(
+            crate::closure::closure_define_dynamic_prop(
                 bound as usize,
                 "length",
                 f64::from_bits(JSValue::number(bound_len).bits()),

@@ -292,8 +292,8 @@ pub(crate) unsafe fn closure_become_dictionary(closure: *mut ClosureHeader) {
 /// the bag is empty; a KEYED Function shape (the bag's keys, count and inline
 /// bound, this body kind's prototype) while the bag is an ordinary tombstone-
 /// free object; FunctionDictionary otherwise. FunctionDictionary is sticky —
-/// it also records facts the bag cannot show (an accessor, a symbol key, a
-/// recorded prototype, a delete marker).
+/// it keeps fast paths conservative for accessors, symbol keys, recorded
+/// prototypes and delete markers. Property attributes remain in the bag.
 ///
 /// Keyed Function records are pinned (`RECORD_FLAG_EXTERNAL_CARRIER`): a
 /// closure is not a shape carrier the collector notes, so its record must not
@@ -326,6 +326,24 @@ pub(crate) fn refresh_closure_shape(ptr: usize) {
                     } else {
                         let proto_id =
                             shapes::shape_proto_id(base).unwrap_or(INTRINSIC_SERIAL_FUNCTION);
+                        // The keyed id is canonical in exactly these inputs:
+                        // when the closure already carries the id they name
+                        // (a value store, an attribute edit that changed
+                        // nothing), there is nothing to mint.
+                        let current = (*closure).shape_id;
+                        if current != base
+                            && shapes::shape_descriptor_by_id(current).is_some_and(|f| {
+                                f.object_kind == ShapeObjectKind::Function
+                                    && f.keys == d.keys
+                                    && f.logical_key_count == d.logical_key_count
+                                    && f.live_inline_slot_count == d.live_inline_slot_count
+                                    && f.semantic_generation == 0
+                                    && f.proto_id == proto_id
+                                    && f.brands() == d.brands()
+                            })
+                        {
+                            return;
+                        }
                         let id = shapes::publish_shape_result(
                             shapes::shape_descriptor_ensure_with_generation(
                                 d.keys as usize as *const crate::array::ArrayHeader,
@@ -686,11 +704,17 @@ mod tests {
             crate::closure::closure_get_own_dynamic_prop(a as usize, "kind"),
             Some(8.0)
         );
-        // Removing a key tombstones the bag: the function becomes dictionary.
+        // Attributed keys are removed by rebuilding the canonical list, so
+        // the function retains the keyed shape described by its own bag.
         assert!(crate::closure::closure_delete_own_dynamic_prop(
             a as usize, "tag"
         ));
-        assert_eq!(unsafe { (*a).shape_id }, function_dictionary_shape());
+        assert_eq!(kind_of(a), Some(ShapeObjectKind::Function));
+        let bag = unsafe { (*a).props };
+        let bag_desc = unsafe { shapes::object_shape_descriptor(bag) }.unwrap();
+        let fn_desc = shapes::shape_descriptor_by_id(unsafe { (*a).shape_id }).unwrap();
+        assert_eq!(fn_desc.keys, bag_desc.keys);
+        assert_eq!(fn_desc.logical_key_count, bag_desc.logical_key_count);
         assert_eq!(
             crate::closure::closure_get_own_dynamic_prop(a as usize, "tag"),
             None

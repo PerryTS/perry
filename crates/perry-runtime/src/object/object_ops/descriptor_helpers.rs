@@ -628,9 +628,29 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
     descriptor_value: f64,
     desc_view: Option<&DescView<'_>>,
 ) {
+    if !nonconfigurable_redefine_allowed(
+        cur_attrs,
+        cur_accessor,
+        cur_value,
+        descriptor_value,
+        desc_view,
+    ) {
+        throw_object_type_error_with_suffix("Cannot redefine property: ", key_name);
+    }
+}
+
+/// The shared invariant verdict for Object and Reflect definitions.
+#[inline(never)]
+unsafe fn nonconfigurable_redefine_allowed(
+    cur_attrs: PropertyAttrs,
+    cur_accessor: Option<AccessorDescriptor>,
+    cur_value: f64,
+    descriptor_value: f64,
+    desc_view: Option<&DescView<'_>>,
+) -> bool {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     if extract_obj_ptr(descriptor_value).is_null() && desc_view.is_none() {
-        return;
+        return true;
     }
     // #7963: the `desc_view.is_none()` arm allocates a field-name string per
     // probe (and `desc_has_field` can run a user `HasProperty`), so the
@@ -643,7 +663,6 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
     let cur_value_handle = scope.root_nanbox_f64(cur_value);
     let acc_get_handle = scope.root_nanbox_u64(cur_accessor.map(|a| a.get).unwrap_or(0));
     let acc_set_handle = scope.root_nanbox_u64(cur_accessor.map(|a| a.set).unwrap_or(0));
-    let reject = || throw_object_type_error_with_suffix("Cannot redefine property: ", key_name);
 
     let view_index = |name: &[u8]| -> usize {
         match name {
@@ -690,24 +709,24 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
     // Step 4: a non-configurable property cannot be made configurable, and its
     // enumerability cannot change.
     if read_bool(b"configurable") == Some(true) {
-        reject();
+        return false;
     }
     if let Some(want_enum) = read_bool(b"enumerable") {
         if want_enum != cur_attrs.enumerable() {
-            reject();
+            return false;
         }
     }
 
     // A generic descriptor (only enumerable/configurable) imposes no further
     // constraints once the two checks above pass.
     if !desc_is_accessor && !desc_is_data {
-        return;
+        return true;
     }
 
     // Step: a non-configurable property cannot switch between data and accessor.
     let cur_is_accessor = cur_accessor.is_some();
     if desc_is_accessor != cur_is_accessor {
-        reject();
+        return false;
     }
 
     if let Some(acc) = cur_accessor {
@@ -734,7 +753,7 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
             // `read` can allocate, so take the CURRENT accessor bits from the
             // root rather than the pre-call copy captured in `cur_accessor`.
             if want_fp != closure_func_ptr(acc_get_handle.get_nanbox_u64()) {
-                reject();
+                return false;
             }
         }
         if desc_has_set {
@@ -745,10 +764,10 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
                 closure_func_ptr(want.bits())
             };
             if want_fp != closure_func_ptr(acc_set_handle.get_nanbox_u64()) {
-                reject();
+                return false;
             }
         }
-        return;
+        return true;
     }
 
     // Both data. A non-writable data property cannot be made writable, and its
@@ -756,16 +775,77 @@ pub(crate) unsafe fn validate_nonconfigurable_redefine(
     // data property allows any value/writable change.
     if !cur_attrs.writable() {
         if read_bool(b"writable") == Some(true) {
-            reject();
+            return false;
         }
         if desc_has_value {
             let new_value = f64::from_bits(read(b"value").bits());
             // `read` can allocate; `cur_value` is a pre-call copy.
             if js_object_is(new_value, cur_value_handle.get_nanbox_f64()).to_bits() != TAG_TRUE {
-                reject();
+                return false;
             }
         }
     }
+    true
+}
+
+/// Reflect uses the same non-configurable descriptor validation as Object,
+/// returning its rejection instead of throwing. Reads through reflection so
+/// function names, lengths, symbols and statics all resolve their bag entries.
+pub(crate) unsafe fn reflect_nonconfigurable_define_allowed(
+    obj: f64,
+    key: f64,
+    descriptor: f64,
+) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_heap_word_u64(obj.to_bits());
+    let key = scope.root_nanbox_f64(key);
+    let descriptor = scope.root_nanbox_f64(descriptor);
+    let current_obj = f64::from_bits(obj.get_heap_word_u64());
+    let owner = if crate::symbol::js_is_symbol(key.get_nanbox_f64()) != 0 {
+        super::super::class_ref_id(current_obj)
+            .and_then(super::super::class_value::class_value_if_minted)
+            .map(|ptr| f64::from_bits(crate::JSValue::pointer(ptr.cast()).bits()))
+            .unwrap_or(current_obj)
+    } else {
+        current_obj
+    };
+    let current = scope.root_nanbox_f64(js_object_get_own_property_descriptor(
+        owner,
+        key.get_nanbox_f64(),
+    ));
+    let view = try_decode_descriptor(&scope, descriptor.get_nanbox_f64());
+    match &view {
+        Some(view) => validate_property_descriptor_view(view),
+        None => validate_property_descriptor(descriptor.get_nanbox_f64()),
+    }
+    let get = scope.root_nanbox_u64(desc_read_field(current.get_nanbox_f64(), b"get").bits());
+    let set = scope.root_nanbox_u64(desc_read_field(current.get_nanbox_f64(), b"set").bits());
+    let value = scope.root_nanbox_f64(f64::from_bits(
+        desc_read_field(current.get_nanbox_f64(), b"value").bits(),
+    ));
+    let accessor = (desc_has_field(current.get_nanbox_f64(), b"get")
+        || desc_has_field(current.get_nanbox_f64(), b"set"))
+    .then(|| AccessorDescriptor {
+        get: if get.get_nanbox_u64() == crate::value::TAG_UNDEFINED {
+            0
+        } else {
+            get.get_nanbox_u64()
+        },
+        set: if set.get_nanbox_u64() == crate::value::TAG_UNDEFINED {
+            0
+        } else {
+            set.get_nanbox_u64()
+        },
+    });
+    let writable = descriptor_writable(current.get_nanbox_f64());
+    let enumerable = descriptor_enumerable(current.get_nanbox_f64());
+    nonconfigurable_redefine_allowed(
+        PropertyAttrs::new(writable, enumerable, false),
+        accessor,
+        value.get_nanbox_f64(),
+        descriptor.get_nanbox_f64(),
+        view.as_ref(),
+    )
 }
 
 /// Store a data-property value for `Object.defineProperty`, bypassing the

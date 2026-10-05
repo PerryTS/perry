@@ -141,35 +141,76 @@ pub extern "C" fn js_object_alloc_null_proto(class_id: u32, field_count: u32) ->
 /// The caller holds a [`crate::gc::GcSuppressScope`] (every raw pointer here and
 /// in the caller stays valid across the allocations), and the keys of
 /// `entries` are distinct.
-pub(crate) unsafe fn object_alloc_null_proto_with_keys(
+/// Birth a function's bag with the final key entries; no intermediate
+/// attribute transitions or descriptor-table installs are needed.
+pub(crate) unsafe fn object_alloc_null_proto_with_key_attrs(
     entries: &[(&str, f64)],
+    attrs: &[u8],
 ) -> *mut ObjectHeader {
+    debug_assert!(attrs.is_empty() || attrs.len() == entries.len());
     debug_assert!(crate::gc::gc_is_suppressed());
     let count = entries.len() as u32;
-    let obj = js_object_alloc_null_proto(0, count);
     if count == 0 {
-        return obj;
+        return js_object_alloc_null_proto(0, 0);
     }
-    // A newborn is never a dictionary receiver: its list is a shared layout.
-    let Some(proof) = canonical_keys::SharedLayout::of_receiver(obj) else {
-        return obj;
+    // Under suppression the unpublished bag cannot move or be traced before
+    // its final keys and live bound are stamped. Publish no empty predecessor.
+    let obj = super::alloc_basic::object_alloc_unpublished(0, count);
+    let with_attrs = attrs.iter().any(|&entry| entry != 0);
+    let gc = (obj as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+    (*gc)._reserved |= crate::gc::OBJ_FLAG_NULL_PROTO;
+    if with_attrs {
+        // The descriptor bit is initialized with the final attributed keys;
+        // no descriptor is installed in an external table or process gate.
+        (*gc)._reserved |= crate::gc::OBJ_FLAG_HAS_DESCRIPTORS;
+    }
+    super::shapes::store_kind::premark_plain_ordinary(obj);
+    let proof = canonical_keys::SharedLayout::of_receiver(obj)
+        .expect("a newborn function bag is a shared layout");
+    let canonical = if let Some(hit) = canonical_keys::probe_born_layout(&proof, entries, attrs) {
+        hit
+    } else {
+        let list = super::key_attrs::alloc_key_list(count, true, with_attrs);
+        let slots = crate::array::array_elements_ptr(list);
+        for (i, (key, _)) in entries.iter().enumerate() {
+            let interned = if key.is_ascii() {
+                crate::string::intern_ascii_literal(key.as_bytes())
+            } else {
+                let s = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+                crate::string::js_string_intern(s, key_content_hash(s))
+            };
+            // GC_STORE_AUDIT(INIT): `list` is a fresh, unpublished key list read
+            // only by `canonicalize` below, under the caller's suppression.
+            *slots.add(i) = JSValue::string_ptr(interned as *mut crate::StringHeader).bits();
+        }
+        (*list).length = count;
+        let key_attrs = super::key_attrs::keys_attrs(list);
+        if !key_attrs.is_null() {
+            for (i, (&entry, &(key, _))) in attrs.iter().zip(entries).enumerate() {
+                super::key_attrs::attrs_write(key_attrs, i as u32, entry, key);
+            }
+        }
+        canonical_keys::canonicalize(&proof, list, count)
     };
-    let list = crate::array::js_array_alloc_key_list(count, true);
-    let slots = crate::array::array_elements_ptr(list);
-    for (i, (key, _)) in entries.iter().enumerate() {
-        let interned = if key.is_ascii() {
-            crate::string::intern_ascii_literal(key.as_bytes())
-        } else {
-            let s = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            crate::string::js_string_intern(s, key_content_hash(s))
-        };
-        // GC_STORE_AUDIT(INIT): `list` is a fresh, unpublished key list read
-        // only by `canonicalize` below, under the caller's suppression.
-        *slots.add(i) = JSValue::string_ptr(interned as *mut crate::StringHeader).bits();
-    }
-    (*list).length = count;
-    let canonical = canonical_keys::canonicalize(&proof, list, count);
     set_object_keys_with_live(obj, canonical.view(), count);
+    // The shape's keys are an external child edge. A previously traced
+    // newborn bag can acquire this edge while incremental marking is active.
+    crate::gc::runtime_shade_external_edge(
+        crate::value::js_nanbox_pointer(canonical.view().arr() as i64).to_bits(),
+    );
+    if !crate::gc::incremental_mark_barrier_globally_idle() {
+        let keys = canonical.view().arr();
+        let slots = crate::array::array_elements_ptr(keys);
+        for i in 0..count as usize {
+            crate::gc::runtime_shade_external_edge(*slots.add(i));
+        }
+        let attrs = super::key_attrs::keys_attrs(keys);
+        if !attrs.is_null() {
+            crate::gc::runtime_shade_external_edge(
+                crate::value::js_nanbox_pointer(attrs as i64).to_bits(),
+            );
+        }
+    }
     for (i, (_, value)) in entries.iter().enumerate() {
         store_object_field_slot(obj, i, value.to_bits());
     }

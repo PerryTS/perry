@@ -57,6 +57,34 @@ pub(crate) unsafe fn symbol_own_property_descriptor(obj_value: f64, key_value: f
         let proto = super::class_registry::class_decl_prototype_value(cid);
         return symbol_own_property_descriptor(proto, key_value);
     }
+    let owner = super::class_ref_id(obj_value)
+        .and_then(super::class_value::class_value_if_minted)
+        .map(|ptr| ptr as usize)
+        .unwrap_or(owner);
+    if owner != 0 {
+        let attrs = crate::symbol::get_symbol_property_attrs(owner, sym_key)
+            .unwrap_or(PropertyAttrs::new(true, true, true));
+        if let Some((get, set)) = crate::symbol::symbol_accessor_descriptor_bits(owner, sym_key) {
+            // A `0` get/set means "absent half" — surface it as `undefined`
+            // (not the number `0`) so a get-only accessor reflects
+            // `{ get, set: undefined }`.
+            let undef = crate::value::TAG_UNDEFINED;
+            return build_accessor_descriptor(
+                f64::from_bits(if get == 0 { undef } else { get }),
+                f64::from_bits(if set == 0 { undef } else { set }),
+                attrs.enumerable(),
+                attrs.configurable(),
+            );
+        }
+        if let Some(value_bits) = crate::symbol::symbol_property_root_bits(owner, sym_key) {
+            return build_data_descriptor(
+                f64::from_bits(value_bits),
+                attrs.writable(),
+                attrs.enumerable(),
+                attrs.configurable(),
+            );
+        }
+    }
     // Computed Symbol class members live in the class registries rather than
     // the generic per-object Symbol table for class CONSTRUCTORS. Instance
     // members above live in the materialized prototype's shape.
@@ -98,31 +126,6 @@ pub(crate) unsafe fn symbol_own_property_descriptor(obj_value: f64, key_value: f
             );
             return build_data_descriptor(value, true, false, true);
         }
-    }
-    if owner == 0 {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    let attrs = crate::symbol::get_symbol_property_attrs(owner, sym_key)
-        .unwrap_or(PropertyAttrs::new(true, true, true));
-    if let Some((get, set)) = crate::symbol::symbol_accessor_descriptor_bits(owner, sym_key) {
-        // A `0` get/set means "absent half" — surface it as `undefined`
-        // (not the number `0`) so a get-only accessor reflects
-        // `{ get, set: undefined }`.
-        let undef = crate::value::TAG_UNDEFINED;
-        return build_accessor_descriptor(
-            f64::from_bits(if get == 0 { undef } else { get }),
-            f64::from_bits(if set == 0 { undef } else { set }),
-            attrs.enumerable(),
-            attrs.configurable(),
-        );
-    }
-    if let Some(value_bits) = crate::symbol::symbol_property_root_bits(owner, sym_key) {
-        return build_data_descriptor(
-            f64::from_bits(value_bits),
-            attrs.writable(),
-            attrs.enumerable(),
-            attrs.configurable(),
-        );
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }

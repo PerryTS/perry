@@ -2,7 +2,8 @@
 //!
 //! `ClosureHeader::props` points at the function's BAG: a runtime-internal,
 //! null-prototype `ObjectHeader` whose keys and slots are the function's own
-//! string-keyed data properties in ordinary creation order. It is created on
+//! string and symbol properties, with attributes and accessor pairs, in creation
+//! order. It is created on
 //! the first own-property write and is a traced, rewritten raw-pointer child
 //! edge of the closure (`gc::layout`'s `ClosureCaptures` arm), so it moves
 //! and dies with the function — no address-keyed table, no re-key hook, no
@@ -41,6 +42,14 @@ pub(crate) unsafe fn bag_ensure(ptr: usize) -> *mut ObjectHeader {
     if !existing.is_null() {
         return existing;
     }
+    if bag_born_with_attrs(ptr, &[], &[]) {
+        return bag_of(ptr);
+    }
+    // Reading a lazy intrinsic name can itself materialize the bag.
+    let existing = bag_of(ptr);
+    if !existing.is_null() {
+        return existing;
+    }
     let bag = crate::object::js_object_alloc_null_proto(0, 0);
     install_bag(ptr, bag);
     bag
@@ -62,7 +71,7 @@ unsafe fn install_bag(ptr: usize, bag: *mut ObjectHeader) {
 
 /// The first own data properties of a function that has none yet, all at
 /// once: its bag is born holding `entries` in order, in ONE shape
-/// ([`crate::object::object_alloc_null_proto_with_keys`]), instead of growing
+/// ([`crate::object::alloc::object_alloc_null_proto_with_key_attrs`]), instead of growing
 /// one key-add transition per key. This is a define: no setter or attribute is
 /// consulted, as for every builtin install. False, with nothing done, when the
 /// function already has a bag (or a declared static could hold one of the
@@ -71,10 +80,13 @@ unsafe fn install_bag(ptr: usize, bag: *mut ObjectHeader) {
 /// # Safety
 /// `ptr` is a proven, live closure cell, and the keys of `entries` are
 /// distinct.
-pub(crate) unsafe fn bag_born_with(ptr: usize, entries: &[(&str, f64)]) -> bool {
+pub(crate) unsafe fn bag_born_with_attrs(
+    ptr: usize,
+    entries: &[(&str, f64)],
+    attrs: &[u8],
+) -> bool {
     let _no_move = crate::gc::GcSuppressScope::new();
     if !bag_of(ptr).is_null()
-        || entries.is_empty()
         || entries.iter().any(|(key, _)| {
             crate::object::class_value::holds_declared_static_method(ptr, key).is_some()
         })
@@ -85,7 +97,77 @@ pub(crate) unsafe fn bag_born_with(ptr: usize, entries: &[(&str, f64)]) -> bool 
         .iter()
         .enumerate()
         .all(|(i, (a, _))| entries[..i].iter().all(|(b, _)| a != b)));
-    let bag = crate::object::alloc::object_alloc_null_proto_with_keys(entries);
+    // A function's intrinsic data slots precede subsequently defined keys.
+    // Materializing them at bag birth preserves their creation order when
+    // a later definition makes either slot enumerable. Classes already birth
+    // their own declaration layout and use that layout unchanged.
+    let class = super::shape::is_class_info((*(ptr as *const ClosureHeader)).info);
+    let bag = if class {
+        crate::object::alloc::object_alloc_null_proto_with_key_attrs(entries, attrs)
+    } else {
+        let intrinsic_attrs = crate::object::key_attrs::attr_bits_to_entry(
+            crate::object::PropertyAttrs::new(false, false, true).bits,
+        );
+        let mut own = [("length", 0.0), ("name", 0.0)];
+        let mut own_attrs = [intrinsic_attrs; 2];
+        for (index, key) in ["length", "name"].into_iter().enumerate() {
+            if let Some(i) = entries.iter().position(|(name, _)| *name == key) {
+                own[index] = entries[i];
+                own_attrs[index] = attrs.get(i).copied().unwrap_or(intrinsic_attrs);
+            } else {
+                let closure = ptr as *const ClosureHeader;
+                let value = if index == 0 {
+                    crate::object::bound_native_callable_value_arity(
+                        crate::value::js_nanbox_pointer(ptr as i64),
+                    )
+                    .or_else(|| super::bound_function_length(ptr))
+                    .or_else(|| super::closure_length(closure))
+                    .unwrap_or(0) as f64
+                } else if (*closure).code() == super::BOUND_FUNCTION_FUNC_PTR {
+                    super::bound_function_lazy_name(ptr)
+                } else {
+                    let name = crate::builtins::function_name_for_ptr((*closure).code() as usize)
+                        .unwrap_or_default();
+                    let name =
+                        crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    crate::value::js_nanbox_string(name as i64)
+                };
+                own[index].1 = value;
+            }
+        }
+        if !bag_of(ptr).is_null() {
+            return false;
+        }
+        if entries.len() >= 2
+            && attrs.len() == entries.len()
+            && entries[..2]
+                .iter()
+                .zip(own)
+                .all(|(&(key, value), (intrinsic, expected))| {
+                    key == intrinsic && value.to_bits() == expected.to_bits()
+                })
+        {
+            crate::object::alloc::object_alloc_null_proto_with_key_attrs(entries, attrs)
+        } else if entries
+            .iter()
+            .all(|(key, _)| *key == "length" || *key == "name")
+        {
+            crate::object::alloc::object_alloc_null_proto_with_key_attrs(&own, &own_attrs)
+        } else {
+            let mut all = Vec::with_capacity(entries.len() + 2);
+            let mut all_attrs = Vec::with_capacity(entries.len() + 2);
+            all.extend(own);
+            all_attrs.extend(own_attrs);
+            for (i, &(key, value)) in entries.iter().enumerate() {
+                if key == "length" || key == "name" {
+                    continue;
+                }
+                all.push((key, value));
+                all_attrs.push(attrs.get(i).copied().unwrap_or(0));
+            }
+            crate::object::alloc::object_alloc_null_proto_with_key_attrs(&all, &all_attrs)
+        }
+    };
     install_bag(ptr, bag);
     true
 }
@@ -101,7 +183,9 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
                 crate::object::keys_find_slot_by_bytes_resolved(keys, d.logical_key_count, key)?;
             // An accessor key's slot holds its getter/setter pair, never a
             // data value.
-            if crate::object::key_attrs::key_is_accessor_at(keys, slot as u32) {
+            if d.summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
+                && crate::object::key_attrs::key_is_accessor_at(keys, slot as u32)
+            {
                 return None;
             }
             let value =
@@ -202,6 +286,10 @@ unsafe fn declared_value_replaced(ptr: usize, key: &str, declared: Option<f64>) 
 pub(crate) unsafe fn bag_define_value(ptr: usize, key: &str, value: f64) {
     let _no_move = crate::gc::GcSuppressScope::new();
     let declared = crate::object::class_value::holds_declared_static_method(ptr, key);
+    if bag_of(ptr).is_null() && bag_born_with_attrs(ptr, &[(key, value)], &[]) {
+        declared_value_replaced(ptr, key, declared);
+        return;
+    }
     let bag = bag_ensure(ptr);
     if !bag_has_own(ptr, key.as_bytes()) {
         // A NEW property — including one `delete` removed earlier: it is
@@ -214,6 +302,55 @@ pub(crate) unsafe fn bag_define_value(ptr: usize, key: &str, value: f64) {
     }
     let key_hdr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
     crate::object::object_ops::define_property_force_store_value(bag, key_hdr, value);
+    declared_value_replaced(ptr, key, declared);
+}
+
+/// [[DefineOwnProperty]] of own data property `key` with its value AND its
+/// attributes (`attrs`, `PropertyAttrs` bits) in one step: a new key is
+/// claimed carrying its final key entry (one key-add, no attribute rewrite
+/// after it); an existing key keeps its position, takes the value, and its
+/// entry is rewritten only when it differs. The caller has validated the
+/// descriptor and refreshes the function's shape.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell.
+pub(crate) unsafe fn bag_define_data_with_attrs(ptr: usize, key: &str, value: f64, attrs: u8) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let entry = crate::object::key_attrs::attr_bits_to_entry(attrs);
+    if bag_of(ptr).is_null() && bag_born_with_attrs(ptr, &[(key, value)], &[entry]) {
+        return;
+    }
+    let declared = crate::object::class_value::holds_declared_static_method(ptr, key);
+    let bag = bag_ensure(ptr);
+    let key_hdr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let present = bag_has_own(ptr, key.as_bytes());
+    if !present
+        && entry != 0
+        && crate::object::shapes::object_shape_descriptor(bag).is_some_and(|d| d.hole_count == 0)
+    {
+        // A fresh key on a tombstone-free bag: claimed with its entry, as an
+        // ordinary object's builtin define claims it.
+        crate::object::object_ops::ensure_key_in_keys_array_with_entry(bag, key_hdr, entry);
+        crate::object::object_ops::define_property_force_store_value(bag, key_hdr, value);
+        // The bag's descriptor bit, without flipping any process gate.
+        crate::object::descriptor_state::note_descriptor_target_edits(bag as usize, &[]);
+    } else {
+        if present {
+            crate::object::object_ops::define_property_force_store_value(bag, key_hdr, value);
+        } else {
+            // New (possibly after a delete): appended, so it enumerates last.
+            object_own_set(bag, key, value);
+        }
+        if crate::object::key_attrs::object_key_entry(bag, key.as_bytes()) != entry {
+            crate::object::descriptor_state::note_descriptor_target_edits(
+                bag as usize,
+                &[crate::object::key_attrs::AttrsEdit::Data(
+                    key.as_bytes(),
+                    attrs,
+                )],
+            );
+        }
+    }
     declared_value_replaced(ptr, key, declared);
 }
 

@@ -176,7 +176,7 @@ fn define_non_enum_accessor(obj: *mut ObjectHeader, name: &str, getter: f64) {
 }
 
 fn set_function_name(closure: *mut ClosureHeader, name: &str) {
-    crate::closure::closure_set_dynamic_prop(closure as usize, "name", string_value(name));
+    crate::closure::closure_define_dynamic_prop(closure as usize, "name", string_value(name));
 }
 
 fn function_value(info: *const crate::closure::JsFunctionInfo, name: &str) -> f64 {

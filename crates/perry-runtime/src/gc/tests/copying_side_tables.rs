@@ -159,6 +159,12 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     let _guard = CopyingNurseryTestGuard::new(1);
     crate::symbol::test_clear_symbol_side_table_roots();
     gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
+    // Class symbols now belong to the pinned function's traced bag. Install
+    // its production scanners, retaining every actual-relocation assertion.
+    gc_register_mutable_root_scanner(crate::gc::scan_pinned_object_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
+    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
 
     // Ordinary-object symbols are shape slots; arrays still use this scanner.
     let owner = crate::array::js_array_alloc(0) as usize;
@@ -183,7 +189,18 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
         );
     }
 
+    let static_owner = crate::object::class_value::class_value_ptr(0x5402) as usize;
+    let static_bag = unsafe { crate::closure::props::bag_of(static_owner) };
+    assert!(
+        !crate::symbol::test_symbol_property_owner_exists(static_owner),
+        "class symbol data must not also occupy the side table"
+    );
     let _ = gc_collect_minor();
+    assert_ne!(
+        unsafe { crate::closure::props::bag_of(static_owner) },
+        static_bag,
+        "the pinned function's bag must move"
+    );
 
     let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     let entries = crate::symbol::test_symbol_property_roots(owner_after);

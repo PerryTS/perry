@@ -792,6 +792,39 @@ unsafe fn probe(
     })
 }
 
+/// Find a born layout directly in the canonical trie before allocating its
+/// temporary key and attribute arrays. Exact keys and entries validate every
+/// edge; misses use the ordinary whole-list publication path.
+///
+/// # Safety
+/// The caller suppresses collection while the existing canonical strings are read.
+pub(crate) unsafe fn probe_born_layout(
+    _proof: &SharedLayout,
+    entries: &[(&str, f64)],
+    attrs: &[u8],
+) -> Option<CanonicalKeys> {
+    if entries.is_empty() || entries.iter().any(|(key, _)| !key.is_ascii()) {
+        return None;
+    }
+    debug_assert!(crate::gc::gc_is_suppressed());
+    with_table_or(None, |t| {
+        let mut parent = ROOT_NODE;
+        for (i, (key, _)) in entries.iter().enumerate() {
+            let slot = Appended::Key(crate::string::intern_lookup_bytes(key.as_bytes())?);
+            let entry = attrs.get(i).copied().unwrap_or(0);
+            parent = probe_node(t, parent, i as u32, slot, entry, slot.edge_hash(entry))?;
+        }
+        let node = &t.nodes[parent as usize];
+        let hit = node
+            .published
+            .then_some(CanonicalKeys::new(node.addr as *mut ArrayHeader, node.len));
+        if hit.is_some() {
+            t.note_reached(parent);
+        }
+        hit
+    })
+}
+
 /// Stamp the invariant every canonical array carries: it is shared from
 /// birth, so copy-on-write is the only append path rather than the fallback
 /// one (L8.3.15c).

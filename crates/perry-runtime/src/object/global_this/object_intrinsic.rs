@@ -141,18 +141,6 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
     if closure_ptr.is_null() {
         return None;
     }
-    install_builtin_constructor_statics("Object", closure_ptr);
-    super::super::native_module::set_bound_native_closure_name(closure_ptr, "Object");
-    if let Some(len) = builtin_constructor_spec_length("Object") {
-        super::super::native_module::set_builtin_closure_length(closure_ptr as usize, len);
-    }
-    for key in ["name", "length"] {
-        super::super::set_builtin_property_attrs(
-            closure_ptr as usize,
-            key.to_string(),
-            super::super::PropertyAttrs::new(false, false, true),
-        );
-    }
     // The intrinsic's terminal edge is published by its birth shape, like
     // any other null-parent object. No address or name exception is needed
     // by a presence walk.
@@ -161,13 +149,10 @@ fn build_object_intrinsics() -> Option<ObjectPair> {
         return None;
     }
     let ctor_value = crate::value::js_nanbox_pointer(closure_ptr as i64);
-    let proto_key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), 9);
-    super::super::define_builtin_data_property(
-        closure_ptr as *mut ObjectHeader,
-        proto_key,
-        crate::value::js_nanbox_pointer(proto_obj as i64),
-        "prototype".to_string(),
-        super::super::PropertyAttrs::new(false, false, false),
+    install_builtin_constructor_statics(
+        "Object",
+        closure_ptr,
+        Some(crate::value::js_nanbox_pointer(proto_obj as i64)),
     );
     let ctor_key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
     super::super::define_builtin_data_property(
@@ -219,6 +204,13 @@ mod tests {
                 proto_addr
             );
             assert!(crate::array::object_prototype_addr_matches(proto_addr));
+            // Every constructor own property, including prototype, fits the
+            // initial bag. Prototype-chain reads must not gain a spill just
+            // because length/name now carry their attributes in that bag.
+            let bag = unsafe { crate::closure::props::bag_of(ctor as usize) };
+            let layout = unsafe { super::super::shapes::object_shape_descriptor(bag) }
+                .expect("constructor own-property shape");
+            assert!(layout.live_inline_slot_count >= layout.logical_key_count);
             // Complete before any realm global: statics, prototype methods.
             let keys = crate::closure::closure_get_dynamic_prop(ctor as usize, "keys");
             assert!(
