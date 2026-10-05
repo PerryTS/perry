@@ -118,11 +118,9 @@ fn object_alloc_with_parent_impl(
         // A class-less newborn's birth shape is a function of its slot count
         // and kind alone: replay the one this site last published while its
         // record still names those facts (ShapeIds are never reused).
-        let memo = (class_id == 0 && parent_class_id == 0)
-            .then(|| keyless_birth_memo_index(premark_plain, field_count))
-            .flatten();
-        if let Some(index) = memo {
-            let id = KEYLESS_BIRTH.with(|births| births[index].get());
+        let memo = class_id == 0 && parent_class_id == 0;
+        if memo {
+            let id = KEYLESS_BIRTH.with(std::cell::Cell::get);
             if id != 0
                 && crate::object::shapes::shape_is_keyless_birth_of(
                     id,
@@ -142,32 +140,19 @@ fn object_alloc_with_parent_impl(
         }
         // #8113: the birth live-slot bound is published here and nowhere else.
         let id = crate::object::shapes::birth_publish_object_shape(ptr, field_count);
-        if let Some(index) = memo {
-            KEYLESS_BIRTH.with(|births| births[index].set(id));
+        if memo {
+            KEYLESS_BIRTH.with(|birth| birth.set(id));
         }
 
         ptr
     }
 }
 
-/// Class-less births with up to this many slots replay their birth shape.
-const KEYLESS_BIRTH_SLOTS: usize = 16;
-
 thread_local! {
-    /// The birth ShapeId a class-less allocation last published, per
-    /// (plain-marked, slot count): the memo `object_alloc_with_parent_impl`
-    /// replays (`shapes::shape_is_keyless_birth_of`). Integers only, so not
-    /// a GC root; per thread, like the ShapeIds it holds.
-    static KEYLESS_BIRTH: [std::cell::Cell<u32>; 2 * (KEYLESS_BIRTH_SLOTS + 1)] = const {
-        const EMPTY: std::cell::Cell<u32> = std::cell::Cell::new(0);
-        [EMPTY; 2 * (KEYLESS_BIRTH_SLOTS + 1)]
-    };
-}
-
-fn keyless_birth_memo_index(premark_plain: bool, field_count: u32) -> Option<usize> {
-    let slots = field_count as usize;
-    (slots <= KEYLESS_BIRTH_SLOTS)
-        .then(|| usize::from(premark_plain) * (KEYLESS_BIRTH_SLOTS + 1) + slots)
+    /// One memo at this allocation site, validated against all birth facts
+    /// on every use. A polymorphic allocation misses and replaces the memo;
+    /// there is no count/kind-indexed table.
+    static KEYLESS_BIRTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
 /// An object born on a known birth shape: `class_id`, `field_count` live
@@ -222,14 +207,28 @@ pub(crate) fn object_alloc_filled_birth(
     proto_bits: u64,
     count: u32,
 ) -> Option<*mut ObjectHeader> {
+    // Resolve the prototype identity BEFORE the allocating call. The caller
+    // roots the prototype, but its copied word here would not be rewritten
+    // if the allocation moved it. Only scalar identities cross the call.
+    // SAFETY: the caller holds the live prototype through its root.
+    let proto_id = unsafe { crate::object::shapes::stable_linked_proto_id(0, proto_bits) }?;
     let obj = object_alloc_unpublished(0, count);
     unsafe {
-        // The identity a link of a fresh class-less object to `proto_bits`
-        // records (`object_proto_id_for`); a prototype with no stable serial
-        // has none to replay.
-        let proto_id = crate::object::shapes::stable_linked_proto_id(0, proto_bits)?;
-        let kind = crate::object::shapes::store_kind::receiver_ordinary_kind(obj);
+        // This allocator creates an unmarked class-less object. Recheck the
+        // record AFTER allocation: the collector may have pruned the memo.
+        let kind = crate::object::shapes::ShapeObjectKind::OrdinaryUnmarked;
+        debug_assert_eq!(
+            crate::object::shapes::store_kind::receiver_ordinary_kind(obj),
+            kind
+        );
         if !crate::object::shapes::shape_is_filled_birth(shape_id, proto_id, count, kind) {
+            return None;
+        }
+        // The construction fills a pointer in its first slot. Refuse a
+        // recorded typed lane before using the newborn store shortcut.
+        if crate::object::field_rep::slot_rep(crate::object::shapes::shape_rep_by_id(shape_id), 0)
+            != crate::object::field_rep::REP_ANY
+        {
             return None;
         }
         if crate::arena::pointer_in_nursery(obj as usize) {

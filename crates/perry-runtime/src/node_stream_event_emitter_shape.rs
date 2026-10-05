@@ -118,33 +118,34 @@ pub(super) fn own_key(target: f64, key_bits: u64, bytes: &[u8]) -> OwnKey {
 }
 
 thread_local! {
-    /// `emit`'s site memo for a method-site miss (`emitter_emit_call`).
+    /// The method resolver's site memo. Each way also validates the pooled
+    /// method id; two names on identical receiver/holder words cannot alias.
     static EMIT_METHOD: crate::object::method_site::own_slot_memo::ProtoSlotMemo =
         const { crate::object::method_site::own_slot_memo::ProtoSlotMemo::new() };
 }
 
-/// `recv.emit` when the shapes answer it as an own data property of the
+/// `recv[name]` when the shapes answer it as an own data property of the
 /// `[[Prototype]]` `recv`'s shape names while `recv`'s own list lacks it
 /// (every emitter's), through the memo of the receiver words that proved it.
 /// `None` otherwise.
-pub(in crate::node_stream) fn shape_emit_method(recv: f64) -> Option<f64> {
+pub(in crate::node_stream) fn shape_method(recv: f64, key: i64, name: &[u8]) -> Option<f64> {
     let (obj, _) = ordinary_object(recv)?;
     // SAFETY: a live ordinary object (validated above).
-    if let Some((holder, slot)) = EMIT_METHOD.with(|memo| unsafe { memo.slot(obj) }) {
+    if let Some((holder, slot)) = EMIT_METHOD.with(|memo| unsafe { memo.slot(obj, key) }) {
         // SAFETY: the memo's words pin `slot` as an inline slot of `holder`.
         let bits = unsafe { slot_bits(holder, slot) };
         return (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits));
     }
-    let (_, _, own) = own_slot_of(recv, 0, b"emit")?;
+    let (_, _, own) = own_slot_of(recv, 0, name)?;
     if own.is_some() {
         return None;
     }
     let proto = shape_prototype(obj)?;
-    let (holder, _, slot) = own_slot_of(proto, 0, b"emit")?;
+    let (holder, _, slot) = own_slot_of(proto, 0, name)?;
     let slot = slot?;
-    // SAFETY: `own_slot_of` proved `emit` absent from `obj`'s own list and
+    // SAFETY: `own_slot_of` proved the requested name absent from `obj`'s own list and
     // own plain data at inline slot `slot` of the prototype its shape names.
-    EMIT_METHOD.with(|memo| unsafe { memo.prime(obj, holder, slot) });
+    EMIT_METHOD.with(|memo| unsafe { memo.prime(obj, holder, key, slot) });
     // SAFETY: `own_slot_of` resolved `slot` on the live holder.
     Some(f64::from_bits(unsafe { slot_bits(holder, slot) }))
 }
@@ -513,4 +514,78 @@ pub(super) fn reset_events_fast(target: f64, events: f64) -> bool {
         crate::object::store_object_field_slot(obj, count_slot as usize, 0f64.to_bits());
     }
     true
+}
+
+#[cfg(test)]
+mod method_body_tests {
+    use super::*;
+
+    #[test]
+    fn method_fast_dispatch_follows_the_resolved_body_for_aliases_and_overrides() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let target = crate::node_stream::js_event_emitter_object_new(undefined_value());
+        let proto = shape_prototype(ordinary_object(target).unwrap().0).unwrap();
+        let emit = get_named(proto, b"emit");
+        set_named(proto, b"dispatchAlias", emit);
+        set_named(proto, b"otherBody", 42.0);
+        let args = [f64::from_bits(
+            crate::value::JSValue::try_short_string(b"absent")
+                .unwrap()
+                .bits(),
+        )];
+        unsafe {
+            assert_eq!(
+                shape_method(target, 901, b"dispatchAlias")
+                    .unwrap()
+                    .to_bits(),
+                emit.to_bits()
+            );
+            assert_eq!(shape_method(target, 902, b"otherBody"), Some(42.0));
+            // The same receiver/holder words cannot answer another method
+            // from the memo's previous slot. The method id is part of each way.
+            assert_eq!(
+                shape_method(target, 901, b"dispatchAlias")
+                    .unwrap()
+                    .to_bits(),
+                emit.to_bits()
+            );
+            assert_eq!(
+                crate::node_stream::emitter_emit_call(
+                    target,
+                    901,
+                    b"dispatchAlias",
+                    args.as_ptr(),
+                    1
+                )
+                .map(f64::to_bits),
+                Some(crate::value::TAG_FALSE)
+            );
+            assert_eq!(
+                crate::node_stream::emitter_emit_call(target, 902, b"otherBody", args.as_ptr(), 1),
+                None
+            );
+            set_named(target, b"dispatchAlias", 13.0);
+            assert_eq!(
+                crate::node_stream::emitter_emit_call(
+                    target,
+                    901,
+                    b"dispatchAlias",
+                    args.as_ptr(),
+                    1
+                ),
+                None
+            );
+        }
+        // The prototype is process-global test state; remove only our keys.
+        let obj = ordinary_object(proto).unwrap().0;
+        crate::object::js_object_delete_field(
+            obj,
+            crate::string::intern_ascii_literal(b"otherBody"),
+        );
+        crate::object::js_object_delete_field(
+            obj,
+            crate::string::intern_ascii_literal(b"dispatchAlias"),
+        );
+    }
 }

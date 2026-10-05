@@ -38,7 +38,9 @@ use std::cell::RefCell;
 mod shapes_birth_width;
 #[path = "shapes_last_key_rollback.rs"]
 mod shapes_last_key_rollback;
-pub(crate) use shapes_last_key_rollback::publish_object_shape_last_key_rollback;
+pub(crate) use shapes_last_key_rollback::{
+    note_last_key_parent, publish_object_shape_last_key_rollback,
+};
 #[path = "shapes_linked_birth.rs"]
 mod shapes_linked_birth;
 #[path = "shapes_prototype.rs"]

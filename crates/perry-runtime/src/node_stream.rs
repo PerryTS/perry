@@ -547,8 +547,8 @@ extern "C" fn ns_emit_rest(
         raw_ptr_from_value(rest) as *const _,
     )
 }
-/// `recv.emit(...args)` for a method-call site's miss (`NmEeOps::emit_call`):
-/// when `recv`'s shapes resolve `emit` to an ordinary data property holding
+/// A method-call site's miss (`NmEeOps::emit_call`): when `recv`'s shapes
+/// resolve the requested name to an ordinary data property holding
 /// the emitter `emit` body (every emitter prototype and stream table installs
 /// the one body), run it with the call's arguments as they arrived -- the
 /// body's rest array would only be unpacked again. `None`, having done
@@ -559,15 +559,16 @@ extern "C" fn ns_emit_rest(
 /// `args_ptr` holds `argc` values (or is null with `argc == 0`).
 pub(crate) unsafe fn emitter_emit_call(
     recv: f64,
+    key: i64,
+    name: &[u8],
     args_ptr: *const f64,
     argc: usize,
 ) -> Option<f64> {
-    let value = match event_emitter::shape_emit_method(recv) {
+    let value = match event_emitter::shape_method(recv, key, name) {
         Some(value) => JSValue::from_bits(value.to_bits()),
-        None => crate::object::native_get::try_data_get_bytes(
-            JSValue::from_bits(recv.to_bits()),
-            b"emit",
-        )?,
+        None => {
+            crate::object::native_get::try_data_get_bytes(JSValue::from_bits(recv.to_bits()), name)?
+        }
     };
     let bits = value.bits();
     if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {

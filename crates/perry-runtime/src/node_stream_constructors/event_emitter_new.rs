@@ -257,11 +257,15 @@ thread_local! {
 fn born_emitter(proto: f64, inherited_max: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);
-    let max = scope.root_nanbox_f64(if crate::value::js_is_truthy(inherited_max) != 0 {
-        inherited_max
-    } else {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
-    });
+    let max = scope.root_nanbox_f64(
+        if inherited_max.to_bits() != crate::value::TAG_UNDEFINED
+            && crate::value::js_is_truthy(inherited_max) != 0
+        {
+            inherited_max
+        } else {
+            f64::from_bits(crate::value::TAG_UNDEFINED)
+        },
+    );
     let events = scope.root_nanbox_f64(crate::node_stream::new_events_object());
     let recorded = FINAL_SHAPE.with(std::cell::Cell::get);
     if recorded != 0 {
@@ -283,7 +287,17 @@ fn born_emitter(proto: f64, inherited_max: f64) -> f64 {
                     crate::object::field_rep::slot_rep(rep, slot)
                         == crate::object::field_rep::REP_ANY
                 };
-                crate::object::store_object_field_slot(obj, 0, events.bits());
+                // This unpublished birth was validated against its final
+                // shape. Slot 0 is Any: no lane generalization or numeric
+                // prefix retirement is needed. Keep the canonical store's
+                // alias and generational/incremental barrier work.
+                debug_assert!(any(0));
+                crate::gc::runtime_store_jsvalue_slot_layout_deferred(
+                    obj as usize,
+                    fields as usize,
+                    0,
+                    events.bits(),
+                );
                 // GC_STORE_AUDIT(INIT): non-pointer bits into an unobserved newborn.
                 *fields.add(1) = 0f64.to_bits();
                 let max = max.get_nanbox_u64();
@@ -329,16 +343,21 @@ pub extern "C" fn js_event_emitter_object_new(options: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let options = scope.root_nanbox_f64(options);
     let proto = scope.root_nanbox_f64(event_emitter_prototype_value("EventEmitter"));
-    let instance = scope.root_nanbox_f64(
-        if let Some(max) = plain_prototype_max(proto.get_nanbox_f64()) {
-            born_emitter(proto.get_nanbox_f64(), max)
-        } else {
-            let instance =
-                scope.root_nanbox_f64(crate::object::js_object_create(proto.get_nanbox_f64()));
-            init_event_emitter_state(instance.get_nanbox_f64());
-            instance.get_nanbox_f64()
-        },
-    );
+    let instance = if let Some(max) = plain_prototype_max(proto.get_nanbox_f64()) {
+        born_emitter(proto.get_nanbox_f64(), max)
+    } else {
+        let instance =
+            scope.root_nanbox_f64(crate::object::js_object_create(proto.get_nanbox_f64()));
+        init_event_emitter_state(instance.get_nanbox_f64());
+        instance.get_nanbox_f64()
+    };
+    // No capture option exists for the common no-options call. No allocation
+    // intervenes between the returned newborn and this return, so it needs
+    // no extra root just to invoke a capture initializer that would decline.
+    if options.get_nanbox_u64() == crate::value::TAG_UNDEFINED {
+        return instance;
+    }
+    let instance = scope.root_nanbox_f64(instance);
     init_event_emitter_capture(instance.get_nanbox_f64(), options.get_nanbox_f64());
     instance.get_nanbox_f64()
 }

@@ -1344,8 +1344,7 @@ fn transition_cache_insert(
     if next_keys == 0 {
         return;
     }
-    // Generated transition hits store without the owner layout note. They
-    // must not learn an edge from a numeric-proof predecessor.
+    // Generated hits skip the layout note: never learn from a numeric proof.
     if shapes::shape_object_kind_by_id(prev_shape_id)
         == Some(shapes::ShapeObjectKind::OrdinaryNumericProof)
     {
@@ -1370,8 +1369,7 @@ fn transition_cache_insert(
             }
         }
     }
-    // #9754 rule 1: log the slot BEFORE the entry is published when either
-    // address can matter to a minor.
+    // #9754: log BEFORE publishing if either address can matter to a minor.
     arm_transition_cache_young(slot, next_keys, kid, len_marker);
     with_transition_cache(|t| unsafe {
         // GC_STORE_AUDIT(ROOT): TRANSITION_CACHE_GLOBAL entries are scanned by scan_transition_cache_roots_mut.
@@ -1396,6 +1394,7 @@ fn transition_cache_insert(
         entry.target_len = target_len;
     });
     if target_len != 0 {
+        shapes::note_last_key_parent(target_shape_id, prev_shape_id);
         shape_carriers::note_shape_id(target_shape_id);
     }
     if !array_tail_owner.is_null() {
@@ -1408,10 +1407,8 @@ fn transition_cache_insert(
             slot_idx,
         );
     }
-    // Small dynamic shapes are stabilized eagerly because otherwise
-    // the original builder can grow the cached target in place and
-    // force future lookups to reject it. Large one-off dictionaries
-    // stay lazy to avoid cloning every growing prefix.
+    // Eagerly stabilize small shapes so growth cannot invalidate a cached
+    // target. Large one-off dictionaries stay lazy to avoid prefix copies.
 }
 
 /// GC root scanner: mark all JSValues stored in OVERFLOW_FIELDS.

@@ -24,12 +24,14 @@ fn deleting_the_last_added_key_rolls_back_and_a_re_add_returns() {
     unsafe {
         let obj = js_object_alloc_null_proto(0, 0);
         js_object_set_field_by_name(obj, key("rollback_a"), 1.0);
+        let exact_parent = shapes::object_shape_stamp(obj);
         js_object_set_field_by_name(obj, key("rollback_b"), 2.0);
         let with_both = shapes::object_shape_stamp(obj);
         assert_eq!(key_count(obj), 2);
 
         assert_eq!(js_object_delete_field(obj, key("rollback_b")), 1);
         let rolled_back = shapes::object_shape_stamp(obj);
+        assert_eq!(rolled_back, exact_parent, "the exact key-add parent");
         assert_ne!(rolled_back, with_both, "a delete must move the shape word");
         assert_eq!(key_count(obj), 1, "the list without its last key");
         let header = crate::value::addr_class::try_read_gc_header(obj as usize).unwrap();

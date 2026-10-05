@@ -59,7 +59,10 @@ pub(super) struct ShapeExtras {
     pub(super) brands: Box<[u64]>,
     pub(super) to_nopointer: std::sync::atomic::AtomicU32,
     pub(super) to_any: std::sync::atomic::AtomicU32,
+    /// Weak reverse key-add edge. Never shape identity or a GC carrier.
+    pub(super) rollback_parent: std::sync::atomic::AtomicU32,
 }
+const _: () = assert!(std::mem::align_of::<ShapeExtras>() >= 2);
 
 /// A brand list is strictly ascending: sorted with no duplicate, so equal
 /// sets are equal slices.
@@ -144,8 +147,8 @@ pub(crate) struct ShapeRecord {
     /// answers "is the guess a position of this shape" with one compare —
     /// `guess < position_bound` — instead of a flag test and a `min`.
     /// Offset 40; the special-lane mask uses the former padding at 44, and
-    /// `rep` follows at 48. The owned extension pointer at 56 makes the
-    /// record 64 bytes; ordinary shapes keep that pointer null.
+    /// `rep` follows at 48. The extension word at 56 makes the record
+    /// 64 bytes; ordinary shapes keep any reverse edge in that word.
     position_bound: u32,
     /// For a `REP_SPECIAL` lane, one means ConstFn and zero reserves the
     /// NoPointer interpretation for P5. This uses the old padding at 44;
@@ -156,8 +159,9 @@ pub(crate) struct ShapeRecord {
     /// [`field_rep::identity`](crate::object::field_rep::identity), folded into the
     /// facts key only when nonzero.
     pub(super) rep: u64,
-    /// Null for an ordinary shape. Otherwise a record-owned [`ShapeExtras`]
-    /// address, stored at fixed width so the slab layout agrees on ILP32/LP64.
+    /// Zero, a low-bit-tagged scalar rollback parent, or an aligned, owned
+    /// [`ShapeExtras`] address. Ordinary reverse edges need no allocation.
+    /// Fixed width keeps the slab layout identical on ILP32/LP64.
     extras: u64,
 }
 
@@ -218,6 +222,34 @@ const _: () = assert!(std::mem::offset_of!(ShapeRecord, rep) == 48);
 const _: () = assert!(std::mem::offset_of!(ShapeRecord, extras) == 56);
 
 impl ShapeRecord {
+    #[inline]
+    fn has_boxed_extras(&self) -> bool {
+        self.extras != 0 && self.extras & 1 == 0
+    }
+
+    pub(super) fn rollback_parent(&self) -> u32 {
+        if self.extras & 1 != 0 {
+            return (self.extras >> 1) as u32;
+        }
+        if self.extras == 0 {
+            return 0;
+        }
+        // SAFETY: this live record owns the extension.
+        unsafe { &*(self.extras as usize as *const ShapeExtras) }
+            .rollback_parent
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(super) fn note_rollback_parent(&mut self, parent: u32) {
+        if !self.has_boxed_extras() {
+            self.extras = (u64::from(parent) << 1) | 1;
+            return;
+        }
+        // SAFETY: this live record owns the extension.
+        unsafe { &*(self.extras as usize as *const ShapeExtras) }
+            .rollback_parent
+            .store(parent, std::sync::atomic::Ordering::Relaxed);
+    }
     const EMPTY: ShapeRecord = ShapeRecord {
         keys: 0,
         semantic_generation: 0,
@@ -488,7 +520,7 @@ impl ShapeRecord {
 
     #[inline]
     pub(crate) fn constfn_infos(&self) -> &[ConstFnSlotInfo] {
-        if self.extras == 0 {
+        if !self.has_boxed_extras() {
             &[]
         } else {
             // SAFETY: the live slab record owns this allocation; copies of
@@ -500,7 +532,7 @@ impl ShapeRecord {
     /// The private brands every receiver of this shape carries (#11791).
     #[inline]
     pub(crate) fn brands(&self) -> &[u64] {
-        if self.extras == 0 {
+        if !self.has_boxed_extras() {
             &[]
         } else {
             // SAFETY: the live slab record owns this allocation.
@@ -510,7 +542,7 @@ impl ShapeRecord {
 
     #[inline]
     pub(crate) fn deprecation_targets(&self) -> (u32, u32) {
-        if self.extras == 0 {
+        if !self.has_boxed_extras() {
             (0, 0)
         } else {
             // SAFETY: the extension is owned by this live record.
@@ -531,7 +563,7 @@ impl ShapeRecord {
         assert!(slot < crate::object::field_rep::REP_SLOTS);
         let bit = 1u32 << slot;
         assert_ne!(self.special_constfn_mask & bit, 0);
-        assert_ne!(self.extras, 0);
+        assert!(self.has_boxed_extras());
         // SAFETY: the record owns the extension for its entire live span.
         let extras = unsafe { &*(self.extras as usize as *const ShapeExtras) };
         extras
@@ -544,7 +576,7 @@ impl ShapeRecord {
     /// Called only when a record is retired, not when it is copied or rekeyed.
     /// The returned slab record owns the pointer until this call consumes it.
     pub(super) unsafe fn release_extras(self) {
-        if self.extras != 0 {
+        if self.has_boxed_extras() {
             drop(Box::from_raw(self.extras as usize as *mut ShapeExtras));
         }
     }
@@ -761,6 +793,7 @@ fn new_extras(infos: &[ConstFnSlotInfo], brands: &[u64]) -> u64 {
         brands: brands.into(),
         to_nopointer: std::sync::atomic::AtomicU32::new(0),
         to_any: std::sync::atomic::AtomicU32::new(0),
+        rollback_parent: std::sync::atomic::AtomicU32::new(0),
     });
     Box::into_raw(extras) as usize as u64
 }

@@ -104,6 +104,7 @@ impl OwnSlotMemo {
 /// pointer. The holder's word pins its key list, compared on every use.
 #[derive(Clone, Copy)]
 struct ProtoWay {
+    key: i64,
     word: u64,
     holder: u64,
     slot: u32,
@@ -117,6 +118,7 @@ pub(crate) struct ProtoSlotMemo {
 impl ProtoSlotMemo {
     pub(crate) const fn new() -> Self {
         const W: ProtoWay = ProtoWay {
+            key: 0,
             word: EMPTY,
             holder: EMPTY,
             slot: 0,
@@ -136,13 +138,14 @@ impl ProtoSlotMemo {
     pub(crate) unsafe fn slot(
         &self,
         obj: *const ObjectHeader,
+        key: i64,
     ) -> Option<(*const ObjectHeader, u32)> {
         let word = std::ptr::read(obj as *const u64);
         let way = self
             .ways
             .iter()
             .map(Cell::get)
-            .find(|way| way.word == word)?;
+            .find(|way| way.word == word && way.key == key)?;
         let proto =
             crate::value::JSValue::from_bits(crate::object::shapes::object_prototype_word(obj));
         if !proto.is_pointer() {
@@ -164,6 +167,7 @@ impl ProtoSlotMemo {
         &self,
         obj: *const ObjectHeader,
         holder: *const ObjectHeader,
+        key: i64,
         slot: u32,
     ) {
         if !crate::object::shapes::is_site_matchable_shape_id((*obj).parent_class_id)
@@ -174,6 +178,7 @@ impl ProtoSlotMemo {
         let word = std::ptr::read(obj as *const u64);
         let way = usize::from(self.next.get()) % WAYS;
         self.ways[way].set(ProtoWay {
+            key,
             word,
             holder: std::ptr::read(holder as *const u64),
             slot,

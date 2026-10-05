@@ -2837,6 +2837,60 @@
       "verdict": "covered_elsewhere",
       "scanner": "perry-runtime's pinned-object scanner (gc::pin::scan_pinned_object_roots_mut)",
       "why": "84439f8f1 deleted scan_class_value_roots_mut. The table (leaked page directory of *mut ClosureHeader) holds only class function objects minted by class_value_mint, which are born old and pinned with pin_user_ptr_non_young and never unpinned. A pinned object never moves and is a root of every marking and fix-up pass through scan_pinned_object_roots_mut, which also traces its children (props, prototype link capture 2). The prototype-link store goes through runtime_write_barrier_slot so a young referent keeps the class in the minor remembered set until promoted. So no table entry can dangle or go stale; covered by tests in object/class_value.rs (young prototype/static survival across moving minors, full-collection statics bag)."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_constructors/event_emitter_new.rs",
+      "name": "BAG_PROTOTYPE_SLOT",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11992: Fixed prototype-read site memo. Each way holds only the constructor property bag header identity word (class id and ShapeId) and a u32 inline slot. Every use reads the current bag and compares its word; no bag pointer or JS value is retained."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_constructors/event_emitter_new.rs",
+      "name": "FINAL_SHAPE",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11992: One newborn allocation-site memo containing a u32 ShapeId. Every use resolves the live shape record and validates prototype identity, kind, key count and inline layout; IDs are never reused and no heap address is stored."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
+      "name": "EMIT_METHOD",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11992: Fixed method-resolver site memo. Its two ways hold pooled method ids, receiver and prototype holder identity words (class id and ShapeId), and u32 slots. Hits re-resolve the current prototype through the receiver shape and validate both identity words before loading; no object address or JS value is retained."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
+      "name": "EVENTS_COUNT_SLOT",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11992: Fixed property-access site memo. Two ways contain only receiver header identity words (class id and ShapeId) and u32 slot indices. Every use compares the current live receiver word and reads its current value; no receiver pointer or JS value is retained."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
+      "name": "EVENTS_SLOT",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11992: Fixed property-access site memo. Two ways contain only receiver header identity words (class id and ShapeId) and u32 slot indices. Every use compares the current live receiver word and reads its current value; no receiver pointer or JS value is retained."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
+      "name": "MAX_LISTENERS_SLOT",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11992: Fixed property-access site memo. Two ways contain only receiver header identity words (class id and ShapeId) and u32 slot indices. Every use compares the current live receiver word and reads its current value; no receiver pointer or JS value is retained."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
+      "name": "NO_NEW_LISTENER",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11992: Fixed property-absence site memo. Four ways contain only receiver header identity words (class id and ShapeId). Every use compares the current live receiver word; no receiver pointer or JS value is retained."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_stream_event_emitter_shape.rs",
+      "name": "NO_REMOVE_LISTENER",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11992: Fixed property-absence site memo. Four ways contain only receiver header identity words (class id and ShapeId). Every use compares the current live receiver word; no receiver pointer or JS value is retained."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/alloc_basic.rs",
+      "name": "KEYLESS_BIRTH",
+      "verdict": "not_a_gc_pointer",
+      "why": "#11992: One allocation-site memo containing a u32 ShapeId, validated on every use against live birth facts including kind and slot count. IDs are never reused; no heap address is stored."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

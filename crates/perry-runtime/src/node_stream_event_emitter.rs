@@ -5,7 +5,7 @@ use crate::value::JSValue;
 
 #[path = "node_stream_event_emitter_shape.rs"]
 mod shape;
-pub(super) use shape::shape_emit_method;
+pub(super) use shape::shape_method;
 use shape::*;
 
 pub(super) extern "C" fn ns_set_max_listeners(
@@ -708,9 +708,10 @@ fn number_of(value: f64) -> f64 {
 }
 
 /// `{ __proto__: null }`, node's empty `_events`, born with its first
-/// listener's slot already live so that first key add widens nothing.
+/// two listener slots already live (the physical allocation floor), so a
+/// rollback reinstalls the exact parent without widening on the next add.
 pub(crate) fn new_events_object() -> f64 {
-    crate::value::js_nanbox_pointer(crate::object::js_object_alloc_null_proto(0, 1) as i64)
+    crate::value::js_nanbox_pointer(crate::object::js_object_alloc_null_proto(0, 2) as i64)
 }
 
 fn reset_events(target: f64) {
