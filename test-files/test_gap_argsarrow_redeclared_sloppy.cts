@@ -14,3 +14,12 @@ function missing(a) { var a = 13; return [a, arguments[0] === undefined].join(",
 console.log("redeclared-missing", missing());
 function strict(a) { "use strict"; var a = 17; return [a, arguments[0]].join(","); }
 console.log("redeclared-strict", strict(1));
+
+const nestedExpression = function(a, b) {
+  if (b) { var a = 19; }
+  const write = () => { arguments[0] = 23; };
+  write();
+  return [a, arguments[0]].join(",");
+};
+const emptyExpression = function(a) { var a; return [a, arguments[0]].join(","); };
+console.log("redeclared-expressions", nestedExpression(1, true), emptyExpression(29));

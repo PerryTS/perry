@@ -293,10 +293,9 @@ fn object_methods_use_their_own_arguments_mapping_rules() {
         assert_eq!(meta.simple_parameters, simple, "{name}");
         assert_eq!(meta.restricted_callee, strict || !simple, "{name}");
         if name == "mapped" {
-            assert_eq!(
-                meta.mapped_parameter_ids,
-                vec![(0, f.params[0].id), (1, f.params[1].id)]
-            );
+            let mut mapped = meta.mapped_parameter_ids.clone();
+            mapped.sort_unstable();
+            assert_eq!(mapped, vec![(0, f.params[0].id), (1, f.params[1].id)]);
         } else {
             assert!(meta.mapped_parameter_ids.is_empty(), "{name}");
         }
@@ -331,4 +330,45 @@ fn function_constructor_arguments_do_not_inherit_source_strictness() {
     }
     seen.sort();
     assert_eq!(seen, vec![(false, 1), (true, 0)]);
+}
+
+#[test]
+fn function_expression_var_redeclarations_share_parameter_ids() {
+    let m = lower(
+        r#"const f = function(a, b) {
+            var a = 11;
+            if (b) { var b = 12; }
+            return [a, b, arguments[0], arguments[1]];
+        };"#,
+        "function_expression_redeclared.cts",
+    );
+    let Stmt::Let {
+        init: Some(Expr::Closure { params, body, .. }),
+        ..
+    } = &m.init[0]
+    else {
+        panic!("function expression retained");
+    };
+    let mut declarations = Vec::new();
+    fn visit(stmts: &[Stmt], ids: &mut Vec<u32>) {
+        for s in stmts {
+            match s {
+                Stmt::Let { id, name, .. } if name == "a" || name == "b" => ids.push(*id),
+                Stmt::If {
+                    then_branch,
+                    else_branch,
+                    ..
+                } => {
+                    visit(then_branch, ids);
+                    if let Some(branch) = else_branch {
+                        visit(branch, ids);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    visit(body, &mut declarations);
+    declarations.sort_unstable();
+    assert_eq!(declarations, vec![params[0].id, params[1].id]);
 }
