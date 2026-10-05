@@ -21,6 +21,7 @@ PROGRAMS = {
     "hello": ("hello.ts", [], False),
     "fastify": ("fastify/inject.ts", ["500", "30"], True),
 }
+NODE = ["node", "--disable-warning=MODULE_TYPELESS_PACKAGE_JSON", "--experimental-strip-types"]
 MICROS = ["keys", "values_entries", "descriptors", "for_in", "spread_assign", "method_factory"]
 
 
@@ -59,7 +60,7 @@ def compile_arm(root, arm):
         binary = out / name
         run([str(target / "release/perry"), "compile", relative, "-o", str(binary)],
             cwd, env, out / f"{name}.compile.log")
-        expected = run(["node", "--experimental-strip-types", relative, *args], cwd, env,
+        expected = run([*NODE, relative, *args], cwd, env,
                        stderr_file=out / f"{name}.node.err")
         actual = run([str(binary), *args], cwd, env, stderr_file=out / f"{name}.perry.err")
         (out / f"{name}.node.out").write_bytes(expected)
@@ -117,7 +118,7 @@ def compare(root):
         trials = {arm: [] for arm in ["main", "head"]}
         _, _, node_env = environment(root, "main")
         node_err = root / "measure/main" / f"{name}.node.err"
-        run(["node", "--experimental-strip-types", relative, *args], cwd, node_env,
+        run([*NODE, relative, *args], cwd, node_env,
             stderr_file=node_err)
         for trial in range(5):
             for arm in (["main", "head"] if trial % 2 == 0 else ["head", "main"]):
@@ -141,7 +142,7 @@ def compare(root):
             for arm in (["main", "head", "node"] if trial % 2 == 0 else ["node", "head", "main"]):
                 source, _, env = environment(root, arm)
                 cwd = source / "benchmarks/object_metadata_12015"
-                cmd = (["node", "--experimental-strip-types", f"{name}.ts"] if arm == "node"
+                cmd = ([*NODE, f"{name}.ts"] if arm == "node"
                        else [str(root / "measure" / arm / name)])
                 # Two counts remove process startup; count=0 is legal.
                 low = stat(root, f"micro.{name}.{trial}.{arm}.low", [*cmd, "10000"], cwd, env)
