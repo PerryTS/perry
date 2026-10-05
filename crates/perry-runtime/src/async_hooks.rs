@@ -410,7 +410,7 @@ pub(crate) fn test_link_async_resource_subclass(
             trigger_async_id: 0,
         });
     let value = crate::value::js_nanbox_pointer(receiver as i64);
-    crate::native_payload::attach(
+    crate::native_payload::attach_to_object(
         value,
         &ASYNC_RESOURCE_FAMILY,
         AsyncResourcePayload { ids },
@@ -847,25 +847,44 @@ fn register_hook(callbacks: HookCallbacks, track_promises: bool) -> usize {
 
 fn ensure_async_hook_index(receiver: i64) -> Option<usize> {
     let value = crate::value::js_nanbox_pointer(receiver);
-    match unsafe {
+    let needs_attach = match unsafe {
         crate::native_payload::payload_mut_attached::<AsyncHookPayload>(value, &ASYNC_HOOK_FAMILY)
     } {
-        Ok(payload) if payload.index != usize::MAX => Some(payload.index),
-        Ok(_) | Err(crate::native_payload::PayloadMiss::Closed) => {
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let receiver = scope.root_nanbox_f64(value);
-            let (callbacks, track_promises) = callbacks_from_hook_state(receiver.get_nanbox_f64())?;
-            let index = register_hook(callbacks, track_promises);
-            crate::native_payload::attach(
+        Ok(payload) if payload.index != usize::MAX => return Some(payload.index),
+        // createHook already owns an OPEN payload whose record is unpublished.
+        // Initialize that payload in place: attach rejects OPEN cells, and
+        // dropping its rejected input would retire the record we just made.
+        Ok(_) => false,
+        Err(crate::native_payload::PayloadMiss::Closed) => true,
+        Err(crate::native_payload::PayloadMiss::Foreign) => return None,
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(value);
+    let (callbacks, track_promises) = callbacks_from_hook_state(receiver.get_nanbox_f64())?;
+    let index = register_hook(callbacks, track_promises);
+    if needs_attach {
+        if !crate::native_payload::attach_to_object(
+            receiver.get_nanbox_f64(),
+            &ASYNC_HOOK_FAMILY,
+            AsyncHookPayload { index },
+            0,
+        ) {
+            return None;
+        }
+    } else {
+        let payload = unsafe {
+            crate::native_payload::payload_mut_attached::<AsyncHookPayload>(
                 receiver.get_nanbox_f64(),
                 &ASYNC_HOOK_FAMILY,
-                AsyncHookPayload { index },
-                0,
-            );
-            Some(index)
-        }
-        Err(crate::native_payload::PayloadMiss::Foreign) => None,
+            )
+        };
+        let Ok(payload) = payload else {
+            retire_hook(index);
+            return None;
+        };
+        payload.index = index;
     }
+    Some(index)
 }
 
 #[no_mangle]
@@ -1351,7 +1370,7 @@ fn new_async_resource_with_public_value(
     }
     let public = scope.root_nanbox_f64(match public_resource {
         Some(owner) => {
-            crate::native_payload::attach(
+            crate::native_payload::attach_to_object(
                 owner.get_nanbox_f64(),
                 &ASYNC_RESOURCE_FAMILY,
                 payload,

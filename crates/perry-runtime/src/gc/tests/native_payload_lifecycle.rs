@@ -7,6 +7,38 @@ fn finalized() -> usize {
 }
 
 #[test]
+fn subclass_attachment_reopens_the_same_cell_and_rejects_open_or_finalized() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _reset = Reset::new();
+    let scope = RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(777, 0));
+    let value = || {
+        obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+            crate::value::js_nanbox_pointer(obj as i64)
+        })
+    };
+    assert!(np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
+    let cell_ptr = obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
+        ((*(*obj).meta).native_state & POINTER_MASK)
+            as *mut crate::native_handle::NativeHandleHeader
+    });
+    assert!(!np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
+    assert_eq!(DROPS.load(Ordering::SeqCst), 1, "rejected input is dropped");
+    assert!(np::close_attached::<Probe>(value(), &FAMILY));
+    assert!(np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
+    obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
+        assert_eq!(
+            ((*(*obj).meta).native_state & POINTER_MASK) as *mut _,
+            cell_ptr
+        );
+        assert_eq!((*obj).class_id, 777);
+    });
+    unsafe { crate::native_handle::finalize_native_handle_at_teardown(cell_ptr) };
+    assert!(!np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
+    assert_eq!(DROPS.load(Ordering::SeqCst), 4);
+}
+
+#[test]
 fn l4_release_then_unrooted_sweep_finalizes_without_another_drop() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _reset = Reset::new();

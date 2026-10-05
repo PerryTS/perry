@@ -24,3 +24,9 @@ fixes its inherited failure on main without changing stream production code.
 The DOMException worker-exit fixture initializes its observing heap before
 the worker runs, so allocator reuse cannot make the dead worker's stale
 header look like a new allocation owned by the observer.
+
+Integration with current main retains `alloc_with_prototype` and provides
+`attach_to_object` for existing subclass objects. Reopening preserves the
+existing cell and rejects open or finalized cells. AsyncHook's unpublished
+record index is initialized in its existing open payload, rather than
+replacing that payload through attach and retiring the new record.
