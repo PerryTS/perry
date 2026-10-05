@@ -1310,11 +1310,11 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                     // Class accessors are properties of the class prototype
                     // (charter step 3), so keyless receivers need the same
                     // fallback as shaped receivers.
-                    if let Some((v, _)) = super::super::class_registry::class_chain_getter_value(
-                        class_id,
-                        name,
-                        || super::accessors::class_getter_this(obj),
-                    ) {
+                    if let Some((v, _)) =
+                        super::super::class_registry::instance_chain_getter_value(obj, name, || {
+                            super::accessors::class_getter_this(obj)
+                        })
+                    {
                         return v;
                     }
                     if class_walk
@@ -1659,23 +1659,15 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // Set by the class-chain walk below; see `static_prototype_already_read`.
         let mut proto_read_miss = 0u64;
 
-        // Key not found in the keys_array — fall back to the class
-        // vtable's getter map. Refs #486 (hono): cross-module class
-        // getters (e.g. hono Context's `get req()` defined in
-        // `hono/dist/context.js` and read from a user `c.req.url`
-        // expression in main.ts) reach this point because the field
-        // dispatcher only looks for stored fields, not getter accessors.
-        // The getter is registered in `CLASS_VTABLE_REGISTRY` via
-        // `js_register_class_getter` at module init by codegen — invoke
-        // it with the same NaN-boxed `this` the codegen passes for
-        // method dispatch.
+        // An own-key miss resolves a class accessor from the prototype
+        // holder's shape and calls its pair with the original receiver.
         let class_id = (*obj).class_id;
         if class_id != 0 {
             // Class accessors (a base class's included) are accessor
             // properties of the class prototype chain (charter step 3).
             if let Ok(name) = std::str::from_utf8(key_bytes) {
                 if let Some((v, _)) =
-                    super::super::class_registry::class_chain_getter_value(class_id, name, || {
+                    super::super::class_registry::instance_chain_getter_value(obj, name, || {
                         super::accessors::class_getter_this(obj)
                     })
                 {

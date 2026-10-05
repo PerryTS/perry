@@ -150,8 +150,8 @@ fn method_direct_call_contract(
 }
 
 /// Borrow the key text for the guard's side-table lookups. Every consumer
-/// (`class_getter_in_chain`, `descriptor_blocks_class_field_*`,
-/// `get_accessor_descriptor`, `get_property_attrs`) reads Rust-side tables
+/// (`descriptor_blocks_class_field_*`, `get_accessor_descriptor`,
+/// `get_property_attrs`) reads Rust-side tables
 /// and allocates nothing on the GC heap, so the payload cannot move while the
 /// borrow is live; the `String` this used to return was one `malloc` + UTF-8
 /// scan per guarded class-field access.
@@ -160,60 +160,6 @@ fn key_as_str<'a>(key: *const crate::StringHeader) -> Option<&'a str> {
         return None;
     }
     unsafe { crate::string::header_str_checked(key) }
-}
-
-fn class_setter_in_chain(class_id: u32, key_name: &str) -> bool {
-    if class_id == 0 {
-        return false;
-    }
-    let Ok(registry) = crate::object::CLASS_VTABLE_REGISTRY.read() else {
-        return true;
-    };
-    let Some(registry) = registry.as_ref() else {
-        return false;
-    };
-    let mut cid = class_id;
-    for _ in 0..32 {
-        if registry
-            .get(&cid)
-            .map(|vtable| vtable.declares_setter(key_name))
-            .unwrap_or(false)
-        {
-            return true;
-        }
-        match crate::object::get_parent_class_id(cid) {
-            Some(parent) if parent != 0 && parent != cid => cid = parent,
-            _ => break,
-        }
-    }
-    false
-}
-
-fn class_getter_in_chain(class_id: u32, key_name: &str) -> bool {
-    if class_id == 0 {
-        return false;
-    }
-    let Ok(registry) = crate::object::CLASS_VTABLE_REGISTRY.read() else {
-        return true;
-    };
-    let Some(registry) = registry.as_ref() else {
-        return false;
-    };
-    let mut cid = class_id;
-    for _ in 0..32 {
-        if registry
-            .get(&cid)
-            .map(|vtable| vtable.declares_getter(key_name))
-            .unwrap_or(false)
-        {
-            return true;
-        }
-        match crate::object::get_parent_class_id(cid) {
-            Some(parent) if parent != 0 && parent != cid => cid = parent,
-            _ => break,
-        }
-    }
-    false
 }
 
 fn descriptor_blocks_class_field_get(obj_addr: usize, class_id: u32, key_name: &str) -> bool {
@@ -315,7 +261,6 @@ fn class_field_get_contract(
                 expected_field_index,
                 require_raw_f64,
             )
-            && !class_getter_in_chain(class_id, key_name)
             && !descriptor_blocks_class_field_get(object_addr, class_id, key_name);
         (shape_addr, class_id, gc_type, valid)
     }
@@ -568,7 +513,6 @@ fn class_field_set_contract(
                         expected_field_index,
                         true,
                     )))
-            && !class_setter_in_chain(class_id, key_name)
             && !descriptor_blocks_class_field_set(object_addr, class_id, key_name);
         (shape_addr, class_id, gc_type, valid)
     }

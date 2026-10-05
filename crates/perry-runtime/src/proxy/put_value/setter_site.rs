@@ -1,4 +1,4 @@
-//! One direct compiled class setter at a static-key PutValue site.
+//! One compiled class setter at a static-key PutValue site.
 //!
 //! The packed store's first eight words are own-data ways and word eight is
 //! the key-add chain verdict. Word nine names this bounded, collecting-path
@@ -9,6 +9,7 @@
 //!   receiver's prototype identity, hence the holder (a recorded serial, or a
 //!   bare class whose registry link retires the holder's ShapeId if it is ever
 //!   replaced: `class_registry::retire_displaced_decl_prototype`);
+//! * each intermediate ShapeId proves absence and pins the next holder;
 //! * the holder's ShapeId proves the key's slot is still an accessor lane;
 //! * the lane still holds the primed pair, which names the compiled setter.
 //!
@@ -18,6 +19,9 @@ use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 const SITE_TAG: u64 = crate::codegen_abi::SETTER_SITE_TAG;
+// The emitted arm admits only SITE_TAG; deep entries take the collecting
+// hit, which can validate every intermediate ShapeId without changing ABI.
+const DEEP_SITE_TAG: u64 = SITE_TAG ^ (1 << 48);
 const _: () = assert!(PACKED_SET_SETTER_WORD == crate::codegen_abi::PACKED_SET_SETTER_WORD);
 const _: () = assert!(crate::value::POINTER_MASK == crate::codegen_abi::SETTER_SITE_ADDRESS_MASK);
 
@@ -37,6 +41,9 @@ struct Entry {
     raw_set: usize,
     /// The interned key (a strong root).
     key: usize,
+    /// Every intermediate holder's shape pins absence and the next link.
+    hops: [(usize, u32); crate::object::method_site::read_holder::HOLDER_MAX_DEPTH - 1],
+    depth: usize,
 }
 const _: () = {
     use crate::codegen_abi as abi;
@@ -100,34 +107,12 @@ unsafe fn entry(slot: *mut PackedSetWaysSlot) -> Option<&'static mut Entry> {
         return None;
     }
     let word = (*cache)[PACKED_SET_SETTER_WORD];
-    if word & !crate::value::POINTER_MASK != SITE_TAG {
+    let tag = word & !crate::value::POINTER_MASK;
+    if tag != SITE_TAG && tag != DEEP_SITE_TAG {
         return None;
     }
     let ptr = (word & crate::value::POINTER_MASK) as usize as *mut Entry;
     (!ptr.is_null()).then_some(&mut *ptr)
-}
-
-unsafe fn class_link(recv: *const crate::ObjectHeader) -> Option<*const crate::ObjectHeader> {
-    use crate::object::shapes::{
-        object_proto_id, object_shape_stamp, shape_proto_id, PROTO_ID_CLASS, PROTO_ID_MIXED,
-        PROTO_ID_UNIQUE,
-    };
-    let pid = shape_proto_id(object_shape_stamp(recv))?;
-    if object_proto_id(recv) != pid {
-        return None;
-    }
-    let holder = if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
-        let p = crate::JSValue::from_bits(crate::object::shapes::object_prototype_word(recv));
-        if !p.is_pointer() {
-            return None;
-        }
-        p.as_pointer::<crate::ObjectHeader>()
-    } else if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
-        crate::object::class_decl_prototype_object((*recv).class_id)
-    } else {
-        return None;
-    };
-    (!holder.is_null() && holder != recv).then_some(holder)
 }
 
 unsafe fn candidate(
@@ -190,50 +175,25 @@ unsafe fn candidate(
         return None;
     }
 
-    let holder = class_link(recv)?;
-    let holder_gc = crate::value::addr_class::try_read_gc_header(holder as usize)?;
-    if holder_gc.obj_type != crate::gc::GC_TYPE_OBJECT
-        || holder_gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
-        || crate::object::dictionary::is_dictionary(holder)
-    {
+    let holder = crate::object::method_site::read_holder::accessor_walk(recv, name)?;
+    if holder.slot & crate::codegen_abi::PIC_HOLDER_SLOT_SPILL_BIT as u32 != 0 {
         return None;
     }
-    let shape = crate::object::shapes::object_shape_descriptor(holder)?;
-    if !shape.object_kind.is_ordinary_layout() {
-        return None;
-    }
-    let keys = shape.keys as usize as *const crate::array::ArrayHeader;
-    if keys.is_null() {
-        return None;
-    }
-    let slot =
-        crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)?;
-    if slot >= shape.live_inline_slot_count
-        || crate::object::key_attrs::keys_entry(keys, slot)
-            & crate::object::key_attrs::ENTRY_ACCESSOR
-            == 0
-    {
-        return None;
-    }
-    let lane = lane_bits(holder as usize, slot);
+    let lane = lane_bits(holder.holder, holder.slot);
     let acc = crate::object::accessor_pair::pair_of_value(lane)?;
     if acc.raw_set == 0 {
         return None;
     }
-    // The direct declared pair is the only admitted route. A registered
-    // ancestor or a closure-backed replacement keeps the generic walk.
-    let name_str = std::str::from_utf8(name).ok()?;
-    if !crate::object::class_chain_has_instance_accessor(class_id, name_str) {
-        return None;
-    }
     Some(Entry {
         key: key as usize,
-        holder: holder as usize,
+        holder: holder.holder,
         receiver_shape: crate::object::shapes::object_shape_stamp(recv),
-        holder_shape: crate::object::shapes::object_shape_stamp(holder),
-        slot,
+        holder_shape: holder.shape,
+        slot: holder.slot,
         pair: (lane & crate::value::POINTER_MASK) as usize,
         raw_set: acc.raw_set,
+        hops: holder.hops,
+        depth: holder.depth - 1,
     })
 }
 
@@ -260,6 +220,9 @@ unsafe fn validated_raw_set(
     let stamp = crate::object::shapes::object_shape_stamp(recv);
     (stamp != 0
         && e.receiver_shape == stamp
+        && e.hops[..e.depth].iter().all(|&(addr, shape)| {
+            crate::object::shapes::object_shape_stamp(addr as *const crate::ObjectHeader) == shape
+        })
         && e.key == key as usize
         && crate::object::shapes::object_shape_stamp(e.holder as *const crate::ObjectHeader)
             == e.holder_shape
@@ -338,17 +301,23 @@ pub(super) unsafe fn try_set(
     }
     let fresh = candidate(recv, key)?;
     let raw_set = fresh.raw_set;
+    let tag = if fresh.depth == 0 {
+        SITE_TAG
+    } else {
+        DEEP_SITE_TAG
+    };
     let cache = packed_set_cache_resolve(slot);
     if !cache.is_null() {
-        if let Some(e) = entry(slot) {
+        let addr = if let Some(e) = entry(slot) {
             *e = fresh;
+            e as *mut Entry as usize as u64
         } else {
             let ptr = Box::into_raw(Box::new(fresh));
             ENTRIES.with(|cell| (*cell.get()).push(ptr));
-            let addr = ptr as usize as u64;
-            assert_eq!(addr & !crate::value::POINTER_MASK, 0);
-            (*cache)[PACKED_SET_SETTER_WORD] = SITE_TAG | addr;
-        }
+            ptr as usize as u64
+        };
+        assert_eq!(addr & !crate::value::POINTER_MASK, 0);
+        (*cache)[PACKED_SET_SETTER_WORD] = tag | addr;
         if stats_enabled() {
             PRIMES.fetch_add(1, Ordering::Relaxed);
         }
@@ -371,6 +340,11 @@ pub(crate) fn scan_roots(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             }
             if visitor.visit_tagged_usize_slot(&mut e.pair, crate::value::POINTER_TAG) {
                 ROOT_REWRITES.fetch_add(1, Ordering::Relaxed);
+            }
+            for (addr, _) in &mut e.hops[..e.depth] {
+                if visitor.visit_tagged_usize_slot(addr, crate::value::POINTER_TAG) {
+                    ROOT_REWRITES.fetch_add(1, Ordering::Relaxed);
+                }
             }
         }
     });
@@ -398,6 +372,88 @@ mod tests {
         bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| {
             (hash ^ u64::from(*byte)).wrapping_mul(0x0000_0100_0000_01b3)
         })
+    }
+
+    #[test]
+    fn deep_setter_rechecks_intermediate_shapes() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "deep_setter_rechecks_intermediate_shapes",
+        ) {
+            return;
+        }
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        const CID: u32 = 0x0C3C_79B6;
+        unsafe { crate::object::js_register_class_id(CID) };
+        FIRST.store(0, Ordering::Relaxed);
+        SECOND.store(0, Ordering::Relaxed);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let far = crate::object::js_object_alloc(0, 1);
+        let near = crate::object::js_object_alloc(0x0C3C_79B7, 1);
+        crate::object::set_builtin_accessor_pair(
+            far as usize,
+            "points".to_owned(),
+            crate::object::accessor_pair::Accessor {
+                raw_set: first as *const () as usize,
+                ..Default::default()
+            },
+            crate::object::PropertyAttrs::new(true, false, true),
+        );
+        crate::object::object_ops::js_object_set_prototype_of(
+            crate::value::js_nanbox_pointer(near as i64),
+            crate::value::js_nanbox_pointer(far as i64),
+        );
+        crate::object::test_seed_class_decl_prototype_object_root(CID, near as usize);
+        let keys = crate::object::js_build_class_keys_array(CID, 1, b"own".as_ptr(), 3, 0);
+        let recv_shape = crate::object::shapes::js_object_shape_id_for_class_keys(
+            keys as usize as u64,
+            1,
+            CID,
+            0,
+        );
+        let recv = crate::object::js_object_alloc_class_inline_keys_stamped(
+            CID, 0, 1, keys, recv_shape, 0,
+        );
+        let target = crate::value::js_nanbox_pointer(recv as i64);
+        let key = crate::string::js_string_from_bytes(b"points".as_ptr(), 6);
+        let key = crate::string::js_string_intern(key, fnv1a(b"points"));
+        let _far = scope.root_raw_mut_ptr(far);
+        let _near = scope.root_raw_mut_ptr(near);
+        let _recv = scope.root_raw_mut_ptr(recv);
+        let _key = scope.root_string_ptr(key);
+        let cache: &'static mut PackedSetWays = Box::leak(Box::new(packed_set_cache_empty()));
+        let mut slot: PackedSetWaysSlot = cache;
+        unsafe {
+            assert_eq!(try_set(&mut slot, target, key, 5.0), Some(5.0));
+            let e = entry(&mut slot).expect("deep setter entry");
+            assert_eq!(e.receiver_shape, recv_shape);
+            assert_eq!(e.depth, 1);
+            assert_eq!(
+                (*slot)[PACKED_SET_SETTER_WORD] & !crate::value::POINTER_MASK,
+                DEEP_SITE_TAG,
+                "the emitted direct arm must decline",
+            );
+            assert_eq!(try_hit(&mut slot, target, key, 6.0), Some(6.0));
+            assert_eq!(FIRST.load(Ordering::Relaxed), 2);
+            crate::object::set_builtin_accessor_pair(
+                near as usize,
+                "points".to_owned(),
+                crate::object::accessor_pair::Accessor {
+                    raw_set: second as *const () as usize,
+                    ..Default::default()
+                },
+                crate::object::PropertyAttrs::new(true, false, true),
+            );
+            assert_eq!(try_hit(&mut slot, target, key, 7.0), None);
+            assert_eq!(try_set(&mut slot, target, key, 7.0), Some(7.0));
+            assert_eq!(SECOND.load(Ordering::Relaxed), 1);
+            assert_eq!(entry(&mut slot).unwrap().depth, 0);
+            assert_eq!(entry(&mut slot).unwrap().receiver_shape, recv_shape);
+            assert_eq!(
+                (*slot)[PACKED_SET_SETTER_WORD] & !crate::value::POINTER_MASK,
+                SITE_TAG,
+            );
+        }
     }
 
     #[test]

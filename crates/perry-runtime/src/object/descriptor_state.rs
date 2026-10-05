@@ -467,21 +467,15 @@ pub(crate) fn object_proto_may_intercept_key(key: f64) -> bool {
 /// `[[Set]]` walk is required instead of a direct own-data store. Conservative:
 /// any uncertainty returns `true` (take the slow path).
 ///
-/// All interception sources are checked so the fast path stays correct:
-///   1. A class getter/setter named `key` anywhere in the `extends` chain. These
-///      live in the per-class vtable, NOT the address-keyed descriptor tables, so
-///      the prototype-object scan in (2) cannot see them.
-///   2. An address-keyed accessor / non-writable descriptor on any *class*
-///      prototype object (`Object.defineProperty(C.prototype, …)`), detected via
-///      `OBJ_FLAG_HAS_DESCRIPTORS` on that prototype object.
-///   3. `Object.prototype` at the chain tail — delegated per-key to
-///      [`object_proto_may_intercept_key`].
+/// Every interception source is a property of a prototype object. The walk
+/// reads accessor and non-writable data attributes from each holder's shape,
+/// including declared class accessors and `Object.prototype` at the tail.
 ///
 /// Own-instance descriptors / frozen / sealed are excluded by the caller before
 /// this is reached.
 pub(crate) unsafe fn class_instance_set_may_intercept(
     obj_addr: usize,
-    class_id: u32,
+    _class_id: u32,
     key: f64,
 ) -> bool {
     // Decode the key once — used for both the class-chain and per-prototype
@@ -491,11 +485,7 @@ pub(crate) unsafe fn class_instance_set_may_intercept(
         // Non-decodable / non-string key: do not risk the fast path.
         None => return true,
     };
-    // (1) A class getter/setter for this exact key anywhere in the class chain.
-    if class_registry::class_chain_has_instance_accessor(class_id, &name) {
-        return true;
-    }
-    // (2)/(3) Walk the prototype OBJECTS from the instance's [[Prototype]].
+    // Walk the actual prototype objects; their shapes own all accessors.
     let mut proto = js_object_get_prototype_of(crate::value::js_nanbox_pointer(obj_addr as i64));
     let mut depth = 0u32;
     loop {
@@ -1059,11 +1049,6 @@ pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: 
         }
         let class_id = (*proto_obj).class_id;
         if class_id == crate::object::NATIVE_MODULE_CLASS_ID {
-            return true;
-        }
-        // A class instance or class prototype on the chain keeps its accessors
-        // in the class registry, not only in the descriptor tables.
-        if class_id != 0 && class_registry::class_chain_has_instance_accessor(class_id, name) {
             return true;
         }
         if super::key_attrs::attrs_live_in_keys(p) {

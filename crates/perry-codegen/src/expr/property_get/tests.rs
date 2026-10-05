@@ -1837,7 +1837,7 @@ mod array_length;
 
 /// The #10498 class-accessor arms only where a compiled class of the program
 /// may declare the accessor: the runtime admits an entry only for a declared
-/// accessor (`class_chain_has_instance_accessor`), so any other site's arm is
+/// getter name, so any other site's arm is
 /// code that can never be taken and work on every miss.
 #[test]
 fn class_accessor_arms_are_emitted_only_for_declared_accessor_names() {

@@ -44,7 +44,7 @@ pub(crate) use construct::{ordinary_compiled_function_has_instance, OrdinaryInst
 mod decl_accessors;
 pub(crate) use decl_accessors::{
     class_chain_getter_value, class_chain_setter_apply, decl_prototype_own_accessor,
-    install_decl_prototype_accessor,
+    install_decl_prototype_accessor, instance_chain_getter_value, instance_chain_setter_apply,
 };
 mod decl_prototype_birth;
 mod dispatch;
@@ -66,7 +66,6 @@ mod prototype_methods;
 pub(crate) mod prototype_objects;
 mod registration;
 mod state;
-pub(crate) mod verdict_classes;
 mod vm_brand;
 
 // Static accessors are accessor properties of the class function object
@@ -226,8 +225,7 @@ pub(crate) use dispatch::{
 // ── parent_static.rs ────────────────────────────────────────────────────────
 pub(crate) use parent_static::{
     call_private_static_method_for_owner, call_registered_static_method, call_static_method,
-    class_chain_has_instance_accessor, class_dynamic_static_accessor_descriptor,
-    class_dynamic_static_accessor_getter_value, class_has_instance_getter,
+    class_dynamic_static_accessor_descriptor, class_dynamic_static_accessor_getter_value,
     class_has_own_static_method, class_has_own_symbol_member, class_has_symbol_member_in_chain,
     class_instance_setter_apply, class_method_bind_length, class_object_own_field_bytes,
     class_object_owns_key_bytes, class_object_pinned_parent, class_own_static_method_code,

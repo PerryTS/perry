@@ -506,9 +506,6 @@ pub unsafe extern "C" fn js_register_prototype_method(
     if class_instance_setter_apply(class_id, &name, proto_ref, value) {
         return;
     }
-    if class_has_instance_getter(class_id, &name) {
-        return;
-    }
     // `C.prototype.__proto__ = v` is not a method install: it is a `[[Set]]`
     // that reaches `Object.prototype`'s `__proto__` accessor, whose setter
     // relinks the prototype exactly like `Object.setPrototypeOf`.

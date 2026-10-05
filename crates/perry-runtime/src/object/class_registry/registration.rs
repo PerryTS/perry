@@ -468,7 +468,6 @@ pub unsafe extern "C" fn js_register_class_getter(
     let vtable = reg.entry(class_id as u32).or_default();
     vtable.declare_accessor_half(&name, func_ptr as usize, false);
     VTABLE_GEN.fetch_add(1, Ordering::Release);
-    super::verdict_classes::note_verdict_class_accessor_change(class_id as u32);
     drop(registry);
     super::decl_accessors::note_instance_accessor_registered(class_id as u32, &name);
 }
@@ -518,7 +517,6 @@ pub unsafe extern "C" fn js_register_class_setter(
         u32::try_from(spec_length).ok(),
     );
     VTABLE_GEN.fetch_add(1, Ordering::Release);
-    super::verdict_classes::note_verdict_class_accessor_change(class_id as u32);
     drop(registry);
     super::decl_accessors::note_instance_accessor_registered(class_id as u32, &name);
 }

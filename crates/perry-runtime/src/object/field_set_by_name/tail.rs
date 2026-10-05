@@ -403,8 +403,8 @@ pub(crate) fn set_field_by_name_object_tail(
                         // No static accessor of this name: fall through to the
                         // ordinary own-property store below.
                     } else {
-                        match super::class_registry::class_chain_setter_apply(
-                            class_id, name, this_f64, value,
+                        match super::class_registry::instance_chain_setter_apply(
+                            obj, name, this_f64, value,
                         ) {
                             Some(true) => return,
                             // This entry point is the strict one (issue #615:

@@ -4,6 +4,70 @@ use super::*;
 // `array_proto_*_thunk` without routing through the trunk re-exports.
 use super::array_error::*;
 
+/// The prototype's Fetch getter delegates to the native storage of its
+/// receiver, including a source-compiled subclass's stashed native handle.
+/// A real accessor lane must carry this body rather than a no-op placeholder.
+#[cfg(feature = "global-webfetch")]
+extern "C" fn fetch_prototype_getter(
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let closure = scope.root_raw_const_ptr(closure);
+    let receiver = scope.root_nanbox_f64(this.as_f64());
+    let value = crate::JSValue::from_bits(receiver.get_nanbox_f64().to_bits());
+    let handle = if value.is_pointer() {
+        let addr = value.as_pointer::<ObjectHeader>() as usize;
+        if crate::value::addr_class::is_fetch_handle_band(addr) {
+            Some(addr as i64)
+        } else {
+            unsafe { crate::object::field_get_set::fetch_subclass_handle_id(addr) }
+        }
+    } else {
+        None
+    };
+    let Some(handle) = handle else {
+        crate::object::object_ops::throw_object_type_error(b"Illegal invocation");
+    };
+    let key = closure.with_const_ptr(|closure: *const crate::closure::ClosureHeader| {
+        let bits = crate::closure::js_closure_get_capture_ptr(closure, 0) as u64;
+        (bits & crate::value::POINTER_MASK) as *const crate::StringHeader
+    });
+    let key = scope.root_string_ptr(key);
+    let result = key
+        .across_const::<crate::StringHeader, _>(|| {
+            key.with_const_ptr(|key| {
+                crate::object::js_object_get_field_by_name(handle as *const ObjectHeader, key)
+            })
+        })
+        .0;
+    f64::from_bits(result.bits())
+}
+
+#[cfg(feature = "global-webfetch")]
+unsafe fn install_fetch_prototype_getter(proto: *mut ObjectHeader, name: &str) {
+    // Realm installation runs no user code. Keep the receiver and the new
+    // key/getter stable until the accessor pair roots them in the prototype.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let getter = crate::closure::js_closure_alloc(
+        crate::fn_info!(fetch_prototype_getter, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+        1,
+    );
+    if !getter.is_null() {
+        crate::closure::js_closure_set_capture_ptr(
+            getter,
+            0,
+            crate::JSValue::string_ptr(key).bits() as i64,
+        );
+        install_builtin_getter(
+            proto,
+            name,
+            crate::value::js_nanbox_pointer(getter as i64).to_bits(),
+        );
+    }
+}
+
 fn web_method_receiver(this: crate::closure::JsThis, name: &str) -> *mut ObjectHeader {
     let receiver = this.as_f64();
     if crate::object::web_builtin_to_string_tag(receiver) == Some(name) {
@@ -1211,14 +1275,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             };
             unsafe {
                 for name in accessors {
-                    let getter = crate::closure::js_closure_alloc(
-                        crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(0)),
-                        0,
-                    );
-                    if !getter.is_null() {
-                        let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
-                        install_builtin_getter(proto_obj, name, getter_bits);
-                    }
+                    install_fetch_prototype_getter(proto_obj, name);
                 }
             }
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);

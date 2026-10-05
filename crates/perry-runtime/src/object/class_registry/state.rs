@@ -421,16 +421,6 @@ impl ClassVTable {
     pub(crate) fn accessor_decl(&self, name: &str) -> Option<AccessorDecl> {
         self.accessors.get(name).copied()
     }
-
-    #[inline]
-    pub(crate) fn declares_getter(&self, name: &str) -> bool {
-        self.accessor_decl(name).is_some_and(|d| d.get != 0)
-    }
-
-    #[inline]
-    pub(crate) fn declares_setter(&self, name: &str) -> bool {
-        self.accessor_decl(name).is_some_and(|d| d.set != 0)
-    }
 }
 
 /// Vtable registry of the calling thread's image (#8546 — see
@@ -1130,7 +1120,11 @@ pub(super) fn install_class_decl_prototype_method_field(
     let method = method_handle.get_nanbox_f64();
     proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {
         key_handle.with_const_ptr::<crate::StringHeader, _>(|key| {
-            js_object_set_field_by_name(proto, key, method)
+            // A ClassBody member defines an own property. It must not run an
+            // inherited setter while this prototype is being initialized.
+            unsafe {
+                crate::object::object_ops::define_property_force_store_value(proto, key, method)
+            }
         })
     });
     proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| {

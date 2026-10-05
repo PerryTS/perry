@@ -85,9 +85,6 @@ pub(super) fn inherited_field_if_overridden(
     if !individual && !superseded {
         return InheritedRead::NotWalked;
     }
-    if individual && class_prototype_declares_own_getter(obj, key) {
-        return InheritedRead::NotWalked;
-    }
     if let Some(value) = crate::object::prototype_chain::resolve_inherited_field(obj as usize, key)
     {
         return InheritedRead::Hit(value);
@@ -131,39 +128,4 @@ pub(super) fn static_prototype_already_read(obj: *const ObjectHeader, read_miss:
     let noted = JSValue::from_bits(read_miss);
     let proto = JSValue::from_bits(proto_bits);
     proto.is_pointer() && noted.is_pointer() && proto.as_pointer::<u8>() == noted.as_pointer::<u8>()
-}
-
-/// A class prototype object's ClassBody getters are not stored on the object:
-/// they live only in its template's vtable, which the tail consults after this
-/// override. A per-evaluation prototype (`ClassExprFresh`, #9502/#11043) also
-/// carries an individual `[[Prototype]]`: the evaluated parent's prototype.
-/// Walking that chain first let an ancestor's accessor shadow the class's own
-/// one, so `class F extends Base { get type() {…} }` declared in a function
-/// answered `new F().type` with `Base`'s getter. luxon's zones hit this
-/// (`FixedOffsetZone.utcInstance.type` threw "Zone is an abstract class") once
-/// an in-body `new FixedOffsetZone()` constructed through the evaluation (#11142).
-///
-/// Only the class's OWN vtable is consulted. An inherited getter must still come
-/// from the evaluated heritage chain, which can differ between evaluations of
-/// one template.
-fn class_prototype_declares_own_getter(
-    obj: *const ObjectHeader,
-    key: *const crate::string::StringHeader,
-) -> bool {
-    let Some(class_id) =
-        crate::object::class_registry::class_id_for_decl_prototype_object(obj as usize)
-    else {
-        return false;
-    };
-    let key_copy = unsafe { super::HeapKeyBytes::copy_of_key(key) };
-    let Ok(name) = std::str::from_utf8(key_copy.as_bytes()) else {
-        return false;
-    };
-    let Ok(guard) = crate::object::class_registry::CLASS_VTABLE_REGISTRY.read() else {
-        return false;
-    };
-    guard
-        .as_ref()
-        .and_then(|registry| registry.get(&class_id))
-        .is_some_and(|vtable| vtable.declares_getter(name))
 }

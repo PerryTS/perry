@@ -108,14 +108,12 @@ pub(crate) fn decl_prototype_own_accessor(class_id: u32, name: &str) -> Option<f
         return None;
     }
     let obj = js.as_pointer::<ObjectHeader>();
-    let declared = !class_proto_key_deleted(class_id, name)
-        && class_own_accessor_ptrs(class_id, name).is_some();
-    // SAFETY: `obj` is the live decl prototype; nothing below allocates.
-    let holds = declared
-        || unsafe {
-            crate::object::key_attrs::attrs_live_in_keys(obj as usize)
-                && crate::object::key_attrs::object_key_is_accessor(obj, name.as_bytes())
-        };
+    // The live shape alone decides whether the key is an accessor. A
+    // declaration cannot resurrect a deleted or replaced property.
+    let holds = unsafe {
+        crate::object::key_attrs::attrs_live_in_keys(obj as usize)
+            && crate::object::key_attrs::object_key_is_accessor(obj, name.as_bytes())
+    };
     holds.then_some(proto)
 }
 
@@ -125,11 +123,63 @@ pub(crate) fn decl_prototype_own_accessor(class_id: u32, name: &str) -> Option<f
 /// own property named `name` — an accessor answers, a data property shadows
 /// (`None`). This is the one lookup the class-accessor readers use (S3).
 pub(crate) fn class_proto_accessor(class_id: u32, name: &str) -> Option<(usize, Accessor)> {
+    prototype_accessor(class_decl_prototype_value(class_id), name)
+}
+
+/// Resolve an accessor on the actual prototype chain of an instance. The
+/// receiver's shape names the start; each holder's shape names its keys and
+/// attributes. A data property stops the lookup, including after a relink.
+pub(crate) unsafe fn instance_proto_accessor(
+    obj: *const ObjectHeader,
+    name: &str,
+) -> Option<(usize, Accessor)> {
+    // The walk runs no user code. Materialization is rare and cannot move
+    // these raw pointers; an ordinary miss needs no handle-scope allocation.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let proto = accessor_prototype(obj)?;
+    prototype_accessor(proto, name)
+}
+
+/// Follow only the link named by the shape. In particular, a native object's
+/// dynamic `constructor` lookup must not re-enter this accessor walk while
+/// the realm is still initializing.
+unsafe fn accessor_prototype(obj: *const ObjectHeader) -> Option<f64> {
+    use crate::object::shapes as sh;
+    let word = sh::object_prototype_word(obj);
+    if word != 0 {
+        let value = crate::JSValue::from_bits(word);
+        return (value.is_pointer() && value.as_pointer::<ObjectHeader>() != obj.cast_mut())
+            .then_some(f64::from_bits(word));
+    }
+    match sh::shape_proto_id(sh::object_shape_stamp(obj))? {
+        sh::PROTO_ID_NULL => None,
+        sh::PROTO_ID_DEFAULT => {
+            let addr = crate::array::object_prototype_addr_if_resolved();
+            (addr != 0 && addr != obj as usize)
+                .then(|| crate::value::js_nanbox_pointer(addr as i64))
+        }
+        pid if (sh::PROTO_ID_CLASS..sh::PROTO_ID_MIXED).contains(&pid) => {
+            let proto = class_decl_prototype_object(pid as u32);
+            if proto.is_null() {
+                class_decl_prototype_value_for_instance_class(pid as u32)
+            } else {
+                // The general prototype builder publishes its class link
+                // before installing own members and the parent link. Until
+                // that link is stamped, the class identity leads back to
+                // this same object; it cannot be an ancestor holder.
+                (proto != obj.cast_mut()).then(|| crate::value::js_nanbox_pointer(proto as i64))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn prototype_accessor(start: f64, name: &str) -> Option<(usize, Accessor)> {
     use crate::object::key_attrs as ka;
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let cur = scope.root_nanbox_f64(class_decl_prototype_value(class_id));
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let mut cur = start;
     for _ in 0..10_000 {
-        let value = cur.get_nanbox_f64();
+        let value = cur;
         let js = crate::JSValue::from_bits(value.to_bits());
         if !js.is_pointer() {
             return None;
@@ -138,28 +188,74 @@ pub(crate) fn class_proto_accessor(class_id: u32, name: &str) -> Option<(usize, 
         if !unsafe { ka::attrs_live_in_keys(obj as usize) } {
             return None;
         }
-        // SAFETY: `obj` is a live ordinary object (checked above); nothing
-        // between here and the slot read allocates.
-        let own = unsafe {
-            let keys = crate::object::object_keys(obj);
-            crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), name.as_bytes())
-                .is_some()
-        };
-        if own {
-            if unsafe { ka::object_key_entry(obj, name.as_bytes()) } & ka::ENTRY_ACCESSOR == 0 {
+        // The holder shape owns the logical key count, slot and attributes.
+        // Nothing from the class registration participates in the answer.
+        let shape = unsafe { crate::object::shapes::object_shape_record(obj) }?;
+        let keys = shape.keys() as usize as *const crate::array::ArrayHeader;
+        // Most class prototypes contain only data methods. Their shape's
+        // summary proves no accessor can answer here, without a name scan.
+        // If a farther accessor answers, the second walk proves that none of
+        // these skipped data holders shadows it.
+        let slot = (shape.summary() & ka::SUMMARY_ACCESSOR != 0)
+            .then(|| unsafe {
+                crate::object::keys_find_slot_by_bytes_resolved(
+                    keys,
+                    shape.logical_key_count(),
+                    name.as_bytes(),
+                )
+            })
+            .flatten();
+        if let Some(slot) = slot {
+            if unsafe { ka::keys_entry(keys, slot) } & ka::ENTRY_ACCESSOR == 0 {
                 return None;
             }
-            let acc = unsafe { own_accessor(obj as usize, name.as_bytes()) }?;
+            if unsafe { accessor_is_shadowed(start, obj, name) } {
+                return None;
+            }
+            let acc = unsafe { crate::object::accessor_pair::slot_accessor(obj, slot) };
             return Some((obj as usize, acc));
         }
-        let next = crate::object::js_object_get_prototype_of(cur.get_nanbox_f64());
-        cur.set_nanbox_f64(next);
+        let next = unsafe { accessor_prototype(obj) }?;
+        cur = next;
     }
     None
 }
 
-/// `[[Get]]` of `name` on an instance of `class_id` when the class chain
-/// declares an accessor for it: `None` when no accessor answers (the caller
+/// Called only after an accessor was found. No user code ran in either walk;
+/// the same shape links lead to its holder. Uncertainty declines the answer.
+unsafe fn accessor_is_shadowed(start: f64, holder: *const ObjectHeader, name: &str) -> bool {
+    let mut cur = start;
+    for _ in 0..10_000 {
+        let value = crate::JSValue::from_bits(cur.to_bits());
+        if !value.is_pointer() {
+            return true;
+        }
+        let obj = value.as_pointer::<ObjectHeader>();
+        if obj == holder {
+            return false;
+        }
+        let Some(shape) = crate::object::shapes::object_shape_record(obj) else {
+            return true;
+        };
+        if crate::object::keys_find_slot_by_bytes_resolved(
+            shape.keys() as usize as *const crate::array::ArrayHeader,
+            shape.logical_key_count(),
+            name.as_bytes(),
+        )
+        .is_some()
+        {
+            return true;
+        }
+        let Some(next) = accessor_prototype(obj) else {
+            return true;
+        };
+        cur = next;
+    }
+    true
+}
+
+/// `[[Get]]` of `name` through the class prototype chain.
+/// `None` when no accessor answers (the caller
 /// keeps resolving), otherwise the getter's result — `undefined` for a
 /// setter-only accessor. `this_of` supplies the receiver and is called only
 /// when an accessor answers (it may consume the inherited-read receiver
@@ -173,30 +269,47 @@ pub(crate) unsafe fn class_chain_getter_value(
     name: &str,
     this_of: impl FnOnce() -> f64,
 ) -> Option<(crate::JSValue, usize)> {
-    // The per-class declarations say whether ANY class on the chain has an
-    // accessor named `name`; most reads stop here without materializing.
-    if !super::parent_static::class_chain_has_instance_accessor(class_id, name) {
-        return None;
-    }
-    let (_holder, acc) = class_proto_accessor(class_id, name)?;
+    let acc = {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        class_proto_accessor(class_id, name)?.1
+    };
+    Some(invoke_instance_getter(acc, this_of()))
+}
+
+/// Generic instance read, resolved through the receiver's current chain.
+/// The receiver override is consumed only when an accessor actually answers.
+pub(crate) unsafe fn instance_chain_getter_value(
+    obj: *const ObjectHeader,
+    name: &str,
+    this_of: impl FnOnce() -> f64,
+) -> Option<(crate::JSValue, usize)> {
+    // The generic getter keeps obj raw across its fallback arms. Prototype
+    // materialization may allocate but cannot move that receiver here.
+    let acc = {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        instance_proto_accessor(obj, name)?.1
+    };
+    Some(invoke_instance_getter(acc, this_of()))
+}
+
+unsafe fn invoke_instance_getter(acc: Accessor, this: f64) -> (crate::JSValue, usize) {
     if acc.raw_get != 0 {
         let scope = crate::gc::RuntimeHandleScope::new();
-        let this = scope.root_nanbox_f64(this_of());
+        let this = scope.root_nanbox_f64(this);
         // The compiled getter reads `this` from its parameter.
         let _boundary = crate::object::prototype_chain::UserCodeResolutionBoundary::enter();
         let f = crate::closure::body_call::js_method_body_fn!(acc.raw_get as *const u8;);
         let v = f(this.get_nanbox_f64());
-        return Some((crate::JSValue::from_bits(v.to_bits()), acc.raw_get));
+        return (crate::JSValue::from_bits(v.to_bits()), acc.raw_get);
     }
     if acc.get != 0 {
-        let this = this_of();
-        return Some((crate::object::invoke_accessor_getter(acc.get, this), 0));
+        return (crate::object::invoke_accessor_getter(acc.get, this), 0);
     }
-    Some((crate::JSValue::undefined(), 0))
+    (crate::JSValue::undefined(), 0)
 }
 
-/// `[[Set]]` of `name` on an instance of `class_id` when the class chain
-/// declares an accessor for it: `None` when no accessor answers (the caller
+/// `[[Set]]` of `name` through the class prototype chain.
+/// `None` when no accessor answers (the caller
 /// keeps resolving), `Some(true)` when a setter ran, `Some(false)` when the
 /// accessor has no setter — the write must not create a data property.
 /// `this` is the receiver the setter sees.
@@ -209,24 +322,38 @@ pub(crate) unsafe fn class_chain_setter_apply(
     this: f64,
     value: f64,
 ) -> Option<bool> {
-    if !super::parent_static::class_chain_has_instance_accessor(class_id, name) {
-        return None;
-    }
+    let acc = {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        class_proto_accessor(class_id, name)?.1
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_h = scope.root_nanbox_f64(this);
     let value_h = scope.root_nanbox_f64(value);
-    let (_holder, acc) = class_proto_accessor(class_id, name)?;
+    invoke_instance_setter(acc, this_h.get_nanbox_f64(), value_h.get_nanbox_f64())
+}
+
+/// Generic instance write, resolved through the receiver's current chain.
+pub(crate) unsafe fn instance_chain_setter_apply(
+    obj: *const ObjectHeader,
+    name: &str,
+    this: f64,
+    value: f64,
+) -> Option<bool> {
+    let acc = instance_proto_accessor(obj, name)?.1;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this);
+    let value_h = scope.root_nanbox_f64(value);
+    invoke_instance_setter(acc, this_h.get_nanbox_f64(), value_h.get_nanbox_f64())
+}
+
+unsafe fn invoke_instance_setter(acc: Accessor, this: f64, value: f64) -> Option<bool> {
     if acc.raw_set != 0 {
         let f = crate::closure::body_call::js_method_body_fn!(acc.raw_set as *const u8; value);
-        let _ = f(this_h.get_nanbox_f64(), value_h.get_nanbox_f64());
+        let _ = f(this, value);
         return Some(true);
     }
     if acc.set != 0 {
-        crate::object::invoke_accessor_setter(
-            acc.set,
-            this_h.get_nanbox_f64(),
-            value_h.get_nanbox_f64(),
-        );
+        crate::object::invoke_accessor_setter(acc.set, this, value);
         return Some(true);
     }
     Some(false)

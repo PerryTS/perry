@@ -87,7 +87,7 @@ fn al_set_length(recv: f64, len: i64) {
             };
         if class_id != 0 && !own_length {
             match unsafe {
-                crate::object::class_chain_setter_apply(class_id, "length", recv, len as f64)
+                crate::object::instance_chain_setter_apply(raw, "length", recv, len as f64)
             } {
                 Some(true) => return,
                 Some(false) => crate::collection_iter::throw_type_error(
