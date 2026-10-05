@@ -248,7 +248,7 @@ mod tests {
         };
         for (symbol, triggers) in INSTALLS {
             let installed = installed_feature(symbol).replace('_', "-");
-            let mut expected: BTreeSet<String> = table
+            let expected: BTreeSet<String> = table
                 .keys()
                 .filter(|f| closure(&table, f).contains(&installed))
                 .cloned()

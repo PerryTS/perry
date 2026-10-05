@@ -292,6 +292,8 @@ pub(in crate::codegen) fn compile_static_method(
         compiler_private_async_i1_control_locals: &cross_module
             .compiler_private_async_i1_control_locals,
         scope_map: &cross_module.scope_map,
+        string_accumulator_locals: &cross_module.string_accumulator_locals,
+        string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
         guard_free_closure_bindings: std::collections::HashSet::new(),
