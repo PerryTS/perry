@@ -8,7 +8,26 @@ pub extern "C" fn js_proxy_get(proxy_boxed: f64, key: f64) -> f64 {
     proxy_get_with_receiver(proxy_boxed, key, proxy_boxed)
 }
 
+#[inline]
 pub(crate) fn proxy_get_with_receiver(proxy_boxed: f64, key: f64, receiver: f64) -> f64 {
+    proxy_get_with_receiver_impl(proxy_boxed, key, receiver, false)
+}
+
+/// A named prototype walk carries a resolution guard into Proxy dispatch.
+/// Only its user trap starts a fresh resolution; transparent target forwarding
+/// must keep the guard. Ordinary Proxy reads retain their existing work.
+#[inline]
+pub(crate) fn proxy_get_from_prototype(proxy_boxed: f64, key: f64, receiver: f64) -> f64 {
+    proxy_get_with_receiver_impl(proxy_boxed, key, receiver, true)
+}
+
+#[inline(never)]
+fn proxy_get_with_receiver_impl(
+    proxy_boxed: f64,
+    key: f64,
+    receiver: f64,
+    from_prototype: bool,
+) -> f64 {
     let _proxy_pin = pin_proxy_for_native_call(proxy_boxed);
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
@@ -58,6 +77,8 @@ pub(crate) fn proxy_get_with_receiver(proxy_boxed: f64, key: f64, receiver: f64)
     let key_h = scope.root_nanbox_f64(key);
     let trap = handler_trap(handler_h.get_nanbox_f64(), "get");
     if is_callable(trap) {
+        let _boundary =
+            from_prototype.then(crate::object::prototype_chain::UserCodeResolutionBoundary::enter);
         let result = call_trap(
             handler_h.get_nanbox_f64(),
             trap,
@@ -81,7 +102,12 @@ pub(crate) fn proxy_get_with_receiver(proxy_boxed: f64, key: f64, receiver: f64)
     let target = target_h.get_nanbox_f64();
     let key = key_h.get_nanbox_f64();
     if lookup(target).is_some() {
-        return proxy_get_with_receiver(target, key, receiver.get_nanbox_f64());
+        return proxy_get_with_receiver_impl(
+            target,
+            key,
+            receiver.get_nanbox_f64(),
+            from_prototype,
+        );
     }
     // `p.apply` / `p.call` / `p.bind` VALUE reads on a callable-wrapping
     // proxy resolve to Function.prototype's methods with the PROXY as the

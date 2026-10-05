@@ -25,7 +25,7 @@ pub use apply_construct::{call_proxy_value_with_this, js_proxy_apply, js_proxy_c
 pub(crate) use apply_construct::{is_callable_function, is_constructor_function};
 mod get;
 pub use get::js_proxy_get;
-pub(crate) use get::proxy_get_with_receiver;
+pub(crate) use get::{proxy_get_from_prototype, proxy_get_with_receiver};
 mod has_delete;
 pub(crate) use has_delete::reflect_ordinary_delete_property_key;
 pub use has_delete::{js_proxy_delete, js_proxy_has};

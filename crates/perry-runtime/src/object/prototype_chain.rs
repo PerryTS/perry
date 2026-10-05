@@ -1205,7 +1205,7 @@ pub(crate) fn resolve_inherited_field_from_prototype(
             let key_val = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
             let receiver = super::field_get_set::accessor_receiver_override_take()
                 .unwrap_or_else(|| crate::value::js_nanbox_pointer(obj_ptr as i64));
-            let v = crate::proxy::proxy_get_with_receiver(proto_val, key_val, receiver);
+            let v = crate::proxy::proxy_get_from_prototype(proto_val, key_val, receiver);
             return Some(crate::value::JSValue::from_bits(v.to_bits()));
         }
     }
@@ -1547,3 +1547,7 @@ mod latch_drain_tests_7737 {
         prune_dead_object_prototype_owners(&|o| o == owner);
     }
 }
+
+#[cfg(test)]
+#[path = "proxy_reentry_tests.rs"]
+mod proxy_reentry_tests;
