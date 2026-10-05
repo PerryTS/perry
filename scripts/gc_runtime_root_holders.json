@@ -34,6 +34,12 @@
   ],
   "holders": [
     {
+      "file": "crates/perry-runtime/src/turnloop_net/transport.rs",
+      "name": "LINK_RESOURCES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread numeric census of driver resources whose terminal completions still hold a link_ref. Incremented in hold, decremented in release; read only as a live-resource count. It stores neither a cell address nor a JS value; the cell refs themselves are traced and pinned by native_payload::link_ref."
+    },
+    {
       "file": "crates/perry-ext-http/src/lib.rs",
       "name": "HTTP_PENDING_EVENTS",
       "verdict": "not_a_gc_pointer",

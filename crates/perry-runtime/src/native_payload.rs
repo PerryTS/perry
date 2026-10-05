@@ -862,44 +862,68 @@ fn attach_cell<T: 'static>(
     vtable: &'static PayloadVTable,
     external_bytes: usize,
 ) -> Result<(), AttachMiss> {
-    unsafe {
-        if (*cell).magic != crate::native_handle::NATIVE_HANDLE_MAGIC
-            || (*cell).creator_thread_id != crate::native_handle::current_thread_id()
-        {
-            return Err(AttachMiss::Foreign);
-        }
-        if (*cell).finalized != 0 && !lifecycle_sabotage("attach_finalized") {
-            return Err(AttachMiss::Finalized);
-        }
-        if (*cell).flags & CLOSING != 0 || (*cell).busy != 0 {
-            return Err(AttachMiss::Closing);
-        }
-        if !(*cell).resource_ptr.is_null() {
-            return Err(AttachMiss::Open);
-        }
-        let tag = type_tag::<T>(family.class_id);
-        if (*cell).type_id != family.class_id as u64
-            && ((*cell).type_id != tag
-                || crate::native_handle::cell_drop_fn(cell).map(|f| f as usize)
-                    != Some(vtable.drop as usize))
-        {
-            return Err(AttachMiss::Foreign);
-        }
-        // alloc_closed cannot know T. Establish the layout/vtable on first
-        // attach; subsequent opens keep both unchanged.
-        if (*cell).type_id == family.class_id as u64 {
-            (*cell).type_id = tag;
-            (*cell).finalizer = vtable as *const PayloadVTable as *mut c_void;
-            (*cell).flags |= VTABLE_WORD;
-        }
-        let resource = Box::into_raw(Box::new(payload)) as *mut c_void;
-        crate::native_handle::native_handle_attach_rust_payload(cell, resource);
-        // Root the owner before reporting bytes: pacing can collect. The
-        // payload is already installed and reachable through the owner.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let _owner = scope.root_nanbox_f64(value);
-        crate::native_handle::native_handle_set_external_bytes(cell, external_bytes);
+    let resource = Box::into_raw(Box::new(payload)) as *mut c_void;
+    let result = unsafe {
+        attach_external_cell(
+            value,
+            cell,
+            type_tag::<T>(family.class_id),
+            resource,
+            vtable,
+            external_bytes,
+        )
+    };
+    if result.is_err() {
+        unsafe { drop(Box::from_raw(resource as *mut T)) };
     }
+    result
+}
+
+/// Shared CLOSED -> OPEN installation for in-tree and C-ABI families.
+/// Ownership of resource transfers only on success.
+/// # Safety
+/// cell is a live cell, resource has tag's layout and vtable's payload type.
+pub(crate) unsafe fn attach_external_cell(
+    value: f64,
+    cell: *mut NativeHandleHeader,
+    tag: u64,
+    resource: *mut c_void,
+    vtable: &'static PayloadVTable,
+    external_bytes: usize,
+) -> Result<(), AttachMiss> {
+    if (*cell).magic != crate::native_handle::NATIVE_HANDLE_MAGIC
+        || (*cell).creator_thread_id != crate::native_handle::current_thread_id()
+    {
+        return Err(AttachMiss::Foreign);
+    }
+    if (*cell).finalized != 0 && !lifecycle_sabotage("attach_finalized") {
+        return Err(AttachMiss::Finalized);
+    }
+    if (*cell).flags & CLOSING != 0 || (*cell).busy != 0 {
+        return Err(AttachMiss::Closing);
+    }
+    if !(*cell).resource_ptr.is_null() {
+        return Err(AttachMiss::Open);
+    }
+
+    if (*cell).type_id != tag as u32 as u64
+        && ((*cell).type_id != tag
+            || crate::native_handle::cell_drop_fn(cell).map(|f| f as usize)
+                != Some(vtable.drop as usize))
+    {
+        return Err(AttachMiss::Foreign);
+    }
+    // alloc_closed cannot know T. Establish the layout/vtable on first
+    // attach; subsequent opens keep both unchanged.
+    if (*cell).type_id == tag as u32 as u64 {
+        (*cell).type_id = tag;
+        (*cell).finalizer = vtable as *const PayloadVTable as *mut c_void;
+        (*cell).flags |= VTABLE_WORD;
+    }
+    crate::native_handle::native_handle_attach_rust_payload(cell, resource);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let _owner = scope.root_nanbox_f64(value);
+    crate::native_handle::native_handle_set_external_bytes(cell, external_bytes);
     Ok(())
 }
 
@@ -954,6 +978,16 @@ pub fn close(value: f64, family: &NativePayloadFamily) -> CloseOutcome {
 #[repr(transparent)]
 pub struct OwnerLink(pub(crate) usize);
 
+/// Cell addresses carried in transport tokens must fit below 2^56.
+pub(crate) const LINK_ADDRESS_LIMIT: u64 = 1 << 56;
+
+/// The OPEN payload behind a live owner-thread link. No allocation or JS.
+/// # Safety
+/// The cell is kept alive by an outstanding resource or link_ref.
+pub(crate) unsafe fn link_open_payload(link: OwnerLink) -> *mut c_void {
+    crate::native_handle::rust_payload_ptr_on_owner_thread(link.0 as *mut NativeHandleHeader)
+}
+
 /// Obtain a link in any non-finalized state with the traced owner edge enabled.
 pub fn owner_link(value: f64, family: &NativePayloadFamily) -> Result<OwnerLink, PayloadMiss> {
     if !family.links_owner {
@@ -971,6 +1005,10 @@ pub fn owner_link(value: f64, family: &NativePayloadFamily) -> Result<OwnerLink,
             return Err(PayloadMiss::Foreign);
         }
     }
+    assert!(
+        (cell as u64) < LINK_ADDRESS_LIMIT && cell as usize & 7 == 0,
+        "a payload cell must be 8-aligned below 2^56 to travel in a link token"
+    );
     Ok(OwnerLink(cell as usize))
 }
 
@@ -1779,7 +1817,7 @@ pub fn js_state(value: f64, family: &NativePayloadFamily, create: bool) -> f64 {
     js_state_for_class(value, family.class_id, create)
 }
 
-fn js_state_for_class(value: f64, class_id: u32, create: bool) -> f64 {
+pub(crate) fn js_state_for_class(value: f64, class_id: u32, create: bool) -> f64 {
     let undefined = undefined();
     let Some(obj) = instance_of(value, class_id) else {
         return undefined;

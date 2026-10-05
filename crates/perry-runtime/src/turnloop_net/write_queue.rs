@@ -32,34 +32,42 @@ fn invalid(syscall: &'static str) -> NodeError {
 
 /// Submit `bytes` as one driver write. The caller records the
 /// [`PendingWrite`]s it covers.
-fn submit_bytes(
+pub(super) fn submit_bytes(
     driver: &mut turnloop::Loop,
-    id: i64,
+    name: Name,
     entry: &mut Entry,
     bytes: Vec<u8>,
 ) -> Result<(), Error> {
     let len = bytes.len();
-    driver.write(entry.handle, WriteBuf::Owned(bytes), token(OP_WRITE, id))?;
+    driver.write(entry.handle, WriteBuf::Owned(bytes), name.token(OP_WRITE))?;
     census::note_submit(OP_WRITE);
     entry.queued += len;
     entry.inflight += 1;
     Ok(())
 }
 
-fn submit_shutdown(
+/// Submit the write-side shutdown. Returns whether it went to a Windows pipe
+/// drain job instead (a job, not a handle operation: a link route must hold a
+/// ref for it until its terminal completion).
+pub(super) fn submit_shutdown(
     driver: &mut turnloop::Loop,
-    id: i64,
+    name: Name,
     entry: &mut Entry,
     user: u64,
-) -> Result<(), Error> {
+) -> Result<bool, Error> {
     #[cfg(windows)]
-    if windows_pipe::is_pipe(driver, entry) {
-        windows_pipe::submit(driver, id, entry)?;
+    let drain = if windows_pipe::is_pipe(driver, entry) {
+        windows_pipe::submit(driver, name, entry)?;
+        true
     } else {
-        driver.shutdown(entry.handle, token(OP_SHUTDOWN, id))?;
-    }
+        driver.shutdown(entry.handle, name.token(OP_SHUTDOWN))?;
+        false
+    };
     #[cfg(not(windows))]
-    driver.shutdown(entry.handle, token(OP_SHUTDOWN, id))?;
+    let drain = {
+        driver.shutdown(entry.handle, name.token(OP_SHUTDOWN))?;
+        false
+    };
     census::note_submit(OP_SHUTDOWN);
     // The user token rides the pending-write queue's tail slot so the
     // `Shutdown` completion can echo it back; a zero-length entry never
@@ -69,7 +77,7 @@ fn submit_shutdown(
         len: 0,
         last: true,
     });
-    Ok(())
+    Ok(drain)
 }
 
 /// Accept one caller write: straight to the driver when nothing is ahead of
@@ -101,7 +109,8 @@ pub(super) fn accept_write(
             let waiting = backlogs.get(&id).is_some_and(|b| !b.is_idle());
             if !entry.connecting && !waiting && entry.inflight < MAX_INFLIGHT_WRITES {
                 let len = bytes.len();
-                submit_bytes(driver, id, entry, bytes).map_err(|e| map_error(e, "write"))?;
+                submit_bytes(driver, Name::Id(id), entry, bytes)
+                    .map_err(|e| map_error(e, "write"))?;
                 entry.writes.push_back(PendingWrite {
                     user,
                     len,
@@ -189,7 +198,7 @@ pub(super) fn flush(
         }
         let bytes = std::mem::take(&mut backlog.bytes);
         let mut writes = std::mem::take(&mut backlog.writes);
-        match submit_bytes(driver, id, entry, bytes) {
+        match submit_bytes(driver, Name::Id(id), entry, bytes) {
             Ok(()) => {
                 if let Some(tail) = writes.last_mut() {
                     tail.last = true;
@@ -216,7 +225,7 @@ pub(super) fn flush(
     }
     if failure.is_none() {
         if let Some(user) = backlog.shutdown.take() {
-            if let Err(e) = submit_shutdown(driver, id, entry, user) {
+            if let Err(e) = submit_shutdown(driver, Name::Id(id), entry, user) {
                 failure = Some(FlushFailure {
                     error: map_error(e, "shutdown"),
                     users: vec![user],

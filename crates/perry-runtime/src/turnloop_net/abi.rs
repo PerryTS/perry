@@ -12,6 +12,7 @@
 //! the P1 coexistence contract: a worker agent has no loop until P3/P4, so its
 //! binding keeps the tokio transport, and the two paths never share a socket.
 
+use std::ffi::c_void;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
@@ -94,9 +95,14 @@ unsafe fn str_arg<'a>(ptr: *const u8, len: usize) -> &'a str {
 /// Revision of this ABI. Bumped whenever a signature or a struct field
 /// changes; a binding compiled against a different revision is refused rather
 /// than allowed to misread a completion.
-pub const PERRY_NET_ABI_VERSION: u8 = 2;
+///
+/// 3: link routes (NET-TRANSPORT-DESIGN P0): `NetCompletion::flags`, the
+/// `js_perry_net_link_*` family and the opaque `TransportCore` block.
+pub const PERRY_NET_ABI_VERSION: u8 = 3;
 
-/// A digest of [`NetCompletion`]'s layout plus [`PERRY_NET_ABI_VERSION`].
+/// A digest of [`NetCompletion`]'s layout, the opaque `TransportCore` block
+/// a binding reserves ([`super::TRANSPORT_CORE_WORDS`]) and
+/// [`PERRY_NET_ABI_VERSION`].
 ///
 /// A binding declares its own `#[repr(C)]` copy of the completion struct — it
 /// has no Cargo edge to this crate — so the two definitions can drift apart
@@ -106,13 +112,23 @@ pub const PERRY_NET_ABI_VERSION: u8 = 2;
 /// registration instead of a corrupt read.
 #[no_mangle]
 pub extern "C" fn js_perry_net_abi_layout() -> u64 {
+    net_abi_layout(super::TRANSPORT_CORE_WORDS)
+}
+
+/// The digest for a given core block size; perry-ffi computes the same
+/// expression from its own struct and its own block constant. Fields, in bit
+/// ranges: completion size 12 | `id` 6 | `data` 7 | `code` 7 | `syscall` 7 |
+/// completion align 4 | core words 9 | core align 4 | version 8.
+pub(crate) const fn net_abi_layout(core_words: usize) -> u64 {
     use std::mem::{align_of, offset_of, size_of};
-    (size_of::<NetCompletion>() as u64) << 48
-        | (offset_of!(NetCompletion, id) as u64) << 40
-        | (offset_of!(NetCompletion, data) as u64) << 32
-        | (offset_of!(NetCompletion, code) as u64) << 24
-        | (offset_of!(NetCompletion, syscall) as u64) << 16
-        | (align_of::<NetCompletion>() as u64) << 8
+    (size_of::<NetCompletion>() as u64 & 0xFFF) << 52
+        | (offset_of!(NetCompletion, id) as u64 & 0x3F) << 46
+        | (offset_of!(NetCompletion, data) as u64 & 0x7F) << 39
+        | (offset_of!(NetCompletion, code) as u64 & 0x7F) << 32
+        | (offset_of!(NetCompletion, syscall) as u64 & 0x7F) << 25
+        | (align_of::<NetCompletion>() as u64 & 0xF) << 21
+        | (core_words as u64 & 0x1FF) << 12
+        | (align_of::<super::TransportCore>() as u64 & 0xF) << 8
         | PERRY_NET_ABI_VERSION as u64
 }
 
@@ -657,4 +673,497 @@ pub unsafe extern "C" fn js_perry_net_completion_bytes(
         unsafe { std::ptr::write(out_len, c.len) };
     }
     c.data
+}
+
+// ── Link routes (NET-TRANSPORT-DESIGN P0) ───────────────────────────────────
+//
+// Every call takes the payload's `TransportCore` (offset 0 of the binding's
+// `TransportPayload<E>`) and its owner link (`js_perry_payload_owner_link`)
+// instead of an id. The runtime checks that the link's payload is OPEN on this
+// thread and that `core` is its first field before touching either.
+
+use super::transport::{self, TransportCore};
+use crate::native_payload::OwnerLink;
+
+/// Install a link-routed binding's completion sink (no id allocator: the sink
+/// installs accepted connections itself). Returns nonzero on success.
+#[no_mangle]
+pub extern "C" fn js_perry_net_register_link_sink(subsystem: i32, sink: SinkFn) -> i32 {
+    if subsystem < 0 || subsystem as usize >= super::MAX_SUBSYSTEMS {
+        return 0;
+    }
+    i32::from(super::register_link_sink(subsystem as u8, sink))
+}
+
+/// Construct an idle core for link route `route` in the binding's opaque
+/// block. Returns [`PERRY_NET_ERR`] (and writes nothing) for a route outside
+/// the sink table.
+///
+/// # Safety
+/// `core` is writable for `TRANSPORT_CORE_WORDS` words and 8-aligned.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_core_init(core: *mut c_void, route: i32) -> i32 {
+    if core.is_null() || route < 0 || route as usize >= super::MAX_SUBSYSTEMS {
+        return PERRY_NET_ERR;
+    }
+    // SAFETY: forwarded contract.
+    unsafe { transport::core_init(core.cast::<TransportCore>(), route as u8) };
+    PERRY_NET_OK
+}
+
+/// Drop a core in place. Frees memory only (it runs in a collection, at
+/// release or at thread teardown): it never reaches the loop.
+///
+/// # Safety
+/// `core` was initialized by [`js_perry_net_core_init`] and is dead after.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_core_drop(core: *mut c_void) {
+    if !core.is_null() {
+        // SAFETY: forwarded contract.
+        unsafe { transport::core_drop(core.cast::<TransportCore>()) };
+    }
+}
+
+fn link_arg(link: usize) -> OwnerLink {
+    OwnerLink(link)
+}
+
+/// Link form of [`js_perry_net_tcp_listen`].
+///
+/// # Safety
+/// `core`/`link` name one OPEN payload of this thread; `host` as there.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_tcp_listen(
+    core: *mut c_void,
+    link: usize,
+    host: *const u8,
+    host_len: usize,
+    port: u16,
+    backlog: u32,
+    reuse_port: i32,
+    nodelay: i32,
+    err: *mut PerryNetError,
+) -> i32 {
+    // SAFETY: forwarded contract from this function's own safety note.
+    let host = unsafe { str_arg(host, host_len) };
+    let host = if host.is_empty() { "0.0.0.0" } else { host };
+    let Ok(addr) = parse_bind_addr(host, port) else {
+        PerryNetError::write(
+            err,
+            NodeError {
+                code: "EINVAL",
+                errno: 0,
+                syscall: "listen",
+            },
+        );
+        return PERRY_NET_ERR;
+    };
+    // SAFETY: forwarded contract.
+    let result = unsafe {
+        transport::tcp_listen(
+            core.cast(),
+            link_arg(link),
+            addr,
+            backlog,
+            reuse_port != 0,
+            nodelay != 0,
+        )
+    };
+    finish(result.map(|_| ()), err)
+}
+
+/// Link form of [`js_perry_net_pipe_listen`].
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_pipe_listen(
+    core: *mut c_void,
+    link: usize,
+    path: *const u8,
+    path_len: usize,
+    backlog: u32,
+    err: *mut PerryNetError,
+) -> i32 {
+    // SAFETY: forwarded contract.
+    let path = unsafe { str_arg(path, path_len) };
+    finish(
+        unsafe {
+            transport::pipe_listen(core.cast(), link_arg(link), &PathBuf::from(path), backlog)
+        },
+        err,
+    )
+}
+
+/// Link form of [`js_perry_net_accept_start`].
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_accept_start(
+    core: *mut c_void,
+    link: usize,
+    err: *mut PerryNetError,
+) -> i32 {
+    finish(
+        unsafe { transport::accept_start(core.cast(), link_arg(link)) },
+        err,
+    )
+}
+
+/// Install the connection of the accept completion the sink is handling into
+/// a fresh payload's core (+1 ref on that payload's cell). A connection the
+/// sink does not install is closed by the runtime when the sink returns.
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`]; `completion` is the sink's argument
+/// and the sink call is still on the stack.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_install_accepted(
+    core: *mut c_void,
+    link: usize,
+    completion: *const NetCompletion,
+    err: *mut PerryNetError,
+) -> i32 {
+    finish(
+        unsafe { transport::install_accepted(core.cast(), link_arg(link), completion) },
+        err,
+    )
+}
+
+/// Link form of [`js_perry_net_tcp_connect`].
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_tcp_connect(
+    core: *mut c_void,
+    link: usize,
+    host: *const u8,
+    host_len: usize,
+    port: u16,
+    nodelay: i32,
+    err: *mut PerryNetError,
+) -> i32 {
+    // SAFETY: forwarded contract.
+    let host = unsafe { str_arg(host, host_len) };
+    let host = if host.is_empty() { "127.0.0.1" } else { host };
+    finish(
+        unsafe { transport::tcp_connect(core.cast(), link_arg(link), host, port, nodelay != 0) },
+        err,
+    )
+}
+
+/// Link form of [`js_perry_net_pipe_connect`].
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_pipe_connect(
+    core: *mut c_void,
+    link: usize,
+    path: *const u8,
+    path_len: usize,
+    err: *mut PerryNetError,
+) -> i32 {
+    // SAFETY: forwarded contract.
+    let path = unsafe { str_arg(path, path_len) };
+    finish(
+        unsafe { transport::pipe_connect(core.cast(), link_arg(link), &PathBuf::from(path)) },
+        err,
+    )
+}
+
+/// Link form of [`js_perry_net_adopt_stream`]: `socket` is consumed on every
+/// outcome.
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`] and [`js_perry_net_adopt_stream`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_adopt_stream(
+    core: *mut c_void,
+    link: usize,
+    socket: i64,
+    err: *mut PerryNetError,
+) -> i32 {
+    if socket < 0 {
+        return finish(
+            Err(super::map_error(
+                turnloop::Error::new(turnloop::ErrorKind::InvalidInput),
+                "adopt",
+            )),
+            err,
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::fd::FromRawFd;
+        // SAFETY: the caller transfers ownership of an open descriptor.
+        let fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(socket as i32) };
+        finish(
+            unsafe { transport::adopt_stream(core.cast(), link_arg(link), fd) },
+            err,
+        )
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::FromRawSocket;
+        // SAFETY: the caller transfers ownership of an open socket.
+        let sock = unsafe { std::os::windows::io::OwnedSocket::from_raw_socket(socket as u64) };
+        finish(
+            unsafe { transport::adopt_stream(core.cast(), link_arg(link), sock) },
+            err,
+        )
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = (core, link);
+        finish(
+            Err(super::map_error(
+                turnloop::Error::new(turnloop::ErrorKind::Unsupported),
+                "adopt",
+            )),
+            err,
+        )
+    }
+}
+
+/// Link form of [`js_perry_net_read_start`].
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_read_start(
+    core: *mut c_void,
+    link: usize,
+    err: *mut PerryNetError,
+) -> i32 {
+    finish(
+        unsafe { transport::read_start(core.cast(), link_arg(link)) },
+        err,
+    )
+}
+
+/// Link form of [`js_perry_net_write`] (the bytes are copied).
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`] and [`js_perry_net_write`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_write(
+    core: *mut c_void,
+    link: usize,
+    bytes: *const u8,
+    len: usize,
+    user: u64,
+    out_queued: *mut usize,
+    err: *mut PerryNetError,
+) -> i32 {
+    let owned = if bytes.is_null() || len == 0 {
+        Vec::new()
+    } else {
+        // SAFETY: the caller promises a readable range for `len` bytes.
+        unsafe { std::slice::from_raw_parts(bytes, len) }.to_vec()
+    };
+    match unsafe { transport::write(core.cast(), link_arg(link), owned, user) } {
+        Ok(queued) => {
+            if !out_queued.is_null() {
+                // SAFETY: the caller supplies a writable `usize`.
+                // GC_STORE_AUDIT(POINTER_FREE): a queued-byte count into a caller out-param.
+                unsafe { std::ptr::write(out_queued, queued) };
+            }
+            PERRY_NET_OK
+        }
+        Err(e) => finish(Err(e), err),
+    }
+}
+
+/// Link form of [`js_perry_net_shutdown`].
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_shutdown(
+    core: *mut c_void,
+    link: usize,
+    user: u64,
+    err: *mut PerryNetError,
+) -> i32 {
+    finish(
+        unsafe { transport::shutdown(core.cast(), link_arg(link), user) },
+        err,
+    )
+}
+
+/// Release the core's driver resources (the handle moves into the driver's
+/// close). `*out_closed` is 1 when a `NET_CLOSED` completion for this link
+/// will follow, 0 when there was no handle. The binding then releases the
+/// payload.
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`]; `out_closed` null or writable.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_close(
+    core: *mut c_void,
+    link: usize,
+    out_closed: *mut i32,
+    err: *mut PerryNetError,
+) -> i32 {
+    match unsafe { transport::close(core.cast(), link_arg(link)) } {
+        Ok(closed) => {
+            if !out_closed.is_null() {
+                // SAFETY: caller-supplied writable `i32`.
+                // GC_STORE_AUDIT(POINTER_FREE): a flag into a caller out-param.
+                unsafe { std::ptr::write(out_closed, i32::from(closed)) };
+            }
+            PERRY_NET_OK
+        }
+        Err(e) => finish(Err(e), err),
+    }
+}
+
+/// Link form of [`js_perry_net_set_ref`].
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_set_ref(
+    core: *mut c_void,
+    link: usize,
+    referenced: i32,
+) -> i32 {
+    match unsafe { transport::set_ref(core.cast(), link_arg(link), referenced != 0) } {
+        Ok(()) => PERRY_NET_OK,
+        Err(_) => PERRY_NET_ERR,
+    }
+}
+
+/// Link form of [`js_perry_net_queued_bytes`].
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_queued_bytes(core: *mut c_void, link: usize) -> usize {
+    unsafe { transport::queued_bytes(core.cast(), link_arg(link)) }
+}
+
+/// Arm or move the socket's deadline (link form of [`js_perry_net_timer_arm`]).
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_deadline_arm(
+    core: *mut c_void,
+    link: usize,
+    delay_ms: u64,
+    err: *mut PerryNetError,
+) -> i32 {
+    finish(
+        unsafe { transport::deadline_arm(core.cast(), link_arg(link), delay_ms) },
+        err,
+    )
+}
+
+/// Park the socket's deadline (link form of [`js_perry_net_timer_park`]).
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_deadline_park(
+    core: *mut c_void,
+    link: usize,
+    err: *mut PerryNetError,
+) -> i32 {
+    finish(
+        unsafe { transport::deadline_park(core.cast(), link_arg(link)) },
+        err,
+    )
+}
+
+/// Cancel the socket's deadline (link form of [`js_perry_net_timer_cancel`]).
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_deadline_cancel(
+    core: *mut c_void,
+    link: usize,
+    err: *mut PerryNetError,
+) -> i32 {
+    finish(
+        unsafe { transport::deadline_cancel(core.cast(), link_arg(link)) },
+        err,
+    )
+}
+
+/// Link form of [`js_perry_net_local_address`].
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`] and [`write_addr`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_local_address(
+    core: *mut c_void,
+    link: usize,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+    out_port: *mut u16,
+    out_family: *mut i32,
+) -> i32 {
+    // SAFETY: forwarded contract.
+    unsafe {
+        write_addr(
+            transport::local_addr(core.cast(), link_arg(link)),
+            out,
+            cap,
+            out_len,
+            out_port,
+            out_family,
+        )
+    }
+}
+
+/// Link form of [`js_perry_net_peer_address`].
+///
+/// # Safety
+/// As [`js_perry_net_link_tcp_listen`] and [`write_addr`].
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_peer_address(
+    core: *mut c_void,
+    link: usize,
+    out: *mut u8,
+    cap: usize,
+    out_len: *mut usize,
+    out_port: *mut u16,
+    out_family: *mut i32,
+) -> i32 {
+    // SAFETY: forwarded contract.
+    unsafe {
+        write_addr(
+            transport::peer_addr(core.cast(), link_arg(link)),
+            out,
+            cap,
+            out_len,
+            out_port,
+            out_family,
+        )
+    }
+}
+
+/// Change the link sink without cancelling or replacing outstanding I/O.
+/// # Safety
+/// As js_perry_net_link_tcp_listen; route names a registered link sink.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_net_link_set_route(
+    core: *mut c_void,
+    link: usize,
+    route: i32,
+    err: *mut PerryNetError,
+) -> i32 {
+    if !(0..super::MAX_SUBSYSTEMS as i32).contains(&route) {
+        return finish(Err(super::transport::bad("route")), err);
+    }
+    finish(
+        super::transport::set_route(core.cast(), link_arg(link), route as u8),
+        err,
+    )
 }

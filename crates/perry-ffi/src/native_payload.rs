@@ -241,3 +241,7 @@ pub fn set_external_bytes(
 ) {
     unsafe { js_perry_payload_external_bytes(value, vtable, bytes) };
 }
+
+#[path = "native_payload_links.rs"]
+mod links;
+pub use links::*;

@@ -349,3 +349,55 @@ writable buffer, readable queue, listeners and pipes.
 * **Overrides.** A JS `_transform`/`_flush` captured at init (an option, or a
   subclass override) takes precedence over the hooks; the family prototype's
   builtin `_transform` runs the same step for `super._transform(...)`.
+
+## Families in a binding crate (the C ABI)
+
+A binding crate links only `perry-ffi`, so it cannot instantiate the generic
+`native_payload::alloc::<T>`. It declares its family as a `static`
+`perry_ffi::native_payload::PayloadFamily::new::<T>(class_id, name,
+links_owner, vtable).with_installer(install)` and calls the same operations
+through `perry_ffi::native_payload`: `alloc`, `alloc_closed`, `get_mut`
+(checked by class id, layout and vtable), `close`, `reopen`,
+`lifecycle`, `owner_link`, `link_ref`/`link_unref`, `link_event_owner`,
+`js_state`, `set_external_bytes`, and `prototype_method` for the installer.
+They forward to `native_payload_abi.rs`, which runs the in-tree code: one
+cell, one lifecycle, one owner link. The descriptor's first word is perry-ffi's
+layout digest; the runtime refuses a descriptor with another one. Every rule
+above holds unchanged.
+
+## Families that own a transport (NET-TRANSPORT-DESIGN)
+
+A socket, server or other turnloop transport is an A family whose payload is
+`TransportPayload<E>`: the runtime's `TransportCore` first (an opaque fixed
+block in perry-ffi, its size folded into `js_perry_net_abi_layout`), then the
+family's fields `E`. One allocation per socket; no id, no map.
+
+1. Register the sink with `register_link_sink(route, sink)`. Every completion
+   carries `NET_FLAG_LINK` and its `id` is the payload's owner link
+   (`NetCompletion::link`); dispatch reaches the owner through
+   `link_event_owner`, with no lookup.
+2. Submit with `(&mut payload.core, owner_link)` (`link_tcp_listen`,
+   `link_tcp_connect`, `link_write`, ...). Hold no `&mut T` across a sink
+   call; fetch the payload again after any JS runs.
+3. The runtime holds one `link_ref` per terminal completion the driver owes
+   (a handle's `Closed`, a resolve, a deadline) from submission to dispatch.
+   A listening server or open socket with no JS reference therefore lives
+   until it is closed, as in Node, and the sweep never drops a payload that
+   names a live descriptor. The family takes no refs of its own for I/O.
+4. `close`/`destroy` is a JS method: `link_close` (the handle moves into the
+   driver's close; `Ok(false)` means there was no handle, so schedule the
+   `close` event yourself), then `native_payload::close`. Reopen uses `reopen`
+   in perry-ffi, distinct from the `attach` operation used by subclass
+   constructors. A pipe server
+   unlinks its path synchronously here. Never touch the driver from `Drop`.
+5. Reopen (`connect()` / `listen()` after close) installs a fresh payload
+   in the same cell (`attach` in-tree, `reopen` in perry-ffi). Staleness is the driver's generational handle:
+   an old `Closed` still delivers its `close` once and touches nothing else.
+6. An HTTP upgrade calls `link_set_route`: one store changes the sink, while
+   the outstanding multishot read retains its token and operation.
+7. An accepted connection arrives as `NET_ACCEPT`: allocate the child payload
+   inside the sink and call `link_install_accepted`; one not installed is
+   closed when the sink returns.
+8. Worker teardown discards link completions (no JS, no token dereferenced);
+   `Loop::drop` releases the descriptors and the heap teardown drops the
+   payloads.

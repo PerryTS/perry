@@ -46,6 +46,8 @@ pub const NET_CLOSED: i32 = 7;
 pub const NET_ERROR: i32 = 8;
 /// Completion kind: a subsystem-owned deadline expired (P5); `id` names it.
 pub const NET_TIMER: i32 = 9;
+/// `NetCompletion::flags`: a link route's completion (`id` is an owner link).
+pub const NET_FLAG_LINK: i32 = 1;
 
 /// This module's view of the runtime's completion record.
 ///
@@ -60,11 +62,14 @@ pub struct NetCompletion {
     pub errno: i32,
     /// Nonzero when the operation that produced this will produce no more.
     pub terminal: i32,
-    /// Layout padding; see the runtime's definition.
-    pub _reserved: i32,
-    /// The socket or listener this concerns.
+    /// [`NET_FLAG_LINK`] on a link route's completions; zero otherwise.
+    pub flags: i32,
+    /// The socket or listener this concerns. On a link route: its owner link
+    /// ([`NetCompletion::link`]).
     pub id: i64,
-    /// For [`NET_ACCEPT`], the accepted connection's id; else zero.
+    /// For [`NET_ACCEPT`], the accepted connection's id; else zero. On a link
+    /// route: an install slot for [`link_install_accepted`], valid during the
+    /// sink call only.
     pub conn: i64,
     /// The write/end completion token the caller supplied; zero if none.
     pub user: u64,
@@ -85,6 +90,14 @@ pub struct NetCompletion {
 }
 
 impl NetCompletion {
+    /// The payload this completion is for, on a link route.
+    pub fn link(&self) -> Option<crate::native_payload::OwnerLink> {
+        (self.flags & NET_FLAG_LINK != 0 && self.id != 0).then(|| {
+            // SAFETY: the runtime put a cell address from `owner_link` here.
+            unsafe { crate::native_payload::OwnerLink::from_raw(self.id as usize) }
+        })
+    }
+
     /// Borrow the read payload.
     ///
     /// # Safety
@@ -306,16 +319,24 @@ const OK: i32 = 0;
 const ENOLOOP: i32 = -2;
 
 /// Revision of the ABI this file is written against; must match the runtime's.
-const ABI_VERSION: u8 = 2;
+const ABI_VERSION: u8 = 3;
 
 fn layout_digest() -> u64 {
+    layout_digest_for(TRANSPORT_CORE_WORDS)
+}
+
+/// The runtime's `net_abi_layout` expression, over this crate's own structs
+/// and block size.
+const fn layout_digest_for(core_words: usize) -> u64 {
     use std::mem::{align_of, offset_of, size_of};
-    (size_of::<NetCompletion>() as u64) << 48
-        | (offset_of!(NetCompletion, id) as u64) << 40
-        | (offset_of!(NetCompletion, data) as u64) << 32
-        | (offset_of!(NetCompletion, code) as u64) << 24
-        | (offset_of!(NetCompletion, syscall) as u64) << 16
-        | (align_of::<NetCompletion>() as u64) << 8
+    (size_of::<NetCompletion>() as u64 & 0xFFF) << 52
+        | (offset_of!(NetCompletion, id) as u64 & 0x3F) << 46
+        | (offset_of!(NetCompletion, data) as u64 & 0x7F) << 39
+        | (offset_of!(NetCompletion, code) as u64 & 0x7F) << 32
+        | (offset_of!(NetCompletion, syscall) as u64 & 0x7F) << 25
+        | (align_of::<NetCompletion>() as u64 & 0xF) << 21
+        | (core_words as u64 & 0x1FF) << 12
+        | (align_of::<TransportCore>() as u64 & 0xF) << 8
         | ABI_VERSION as u64
 }
 
@@ -918,6 +939,666 @@ pub fn peer_address(id: i64) -> Option<Endpoint> {
     })
 }
 
+// ── Link routes (NET-TRANSPORT-DESIGN P0) ───────────────────────────────────
+//
+// A converted binding owns each socket in a native payload
+// (`crate::native_payload`): its payload type is `TransportPayload<E>`, the
+// runtime's transport state first and the binding's own fields after it. Every
+// call names the socket by `(&mut payload.core, owner_link)` instead of an id;
+// every completion's `id` is that owner link ([`NetCompletion::link`]). While
+// the driver owes a terminal completion (a handle's close, a resolve, a
+// deadline) the payload's cell is pinned, so a listening server or open socket
+// with no JS reference lives until it is closed, as in Node.
+
+/// Words of the opaque block that holds the runtime's transport state. Part of
+/// the ABI digest: a runtime with another block size refuses this binding.
+#[cfg(not(windows))]
+pub const TRANSPORT_CORE_WORDS: usize = 39;
+/// See the non-Windows definition.
+#[cfg(windows)]
+pub const TRANSPORT_CORE_WORDS: usize = 48;
+
+/// The runtime's transport state for one socket or listener, held inline in
+/// the binding's payload (one allocation per socket). Opaque: only the
+/// runtime reads it. Dropping it frees memory only.
+#[repr(C, align(8))]
+pub struct TransportCore {
+    // Rust may leave struct padding and reserved tail words uninitialized.
+    // The binding never reads words; MaybeUninit makes moving the opaque
+    // storage valid without pretending those bytes are initialized integers.
+    words: [std::mem::MaybeUninit<u64>; TRANSPORT_CORE_WORDS],
+}
+
+impl TransportCore {
+    /// An idle core whose completions go to the link sink `route`.
+    pub fn new(route: u8) -> Self {
+        let mut core = std::mem::MaybeUninit::<Self>::uninit();
+        runtime_call!(
+            {
+                // Refuse a different block layout BEFORE the runtime writes it.
+                assert!(
+                    unsafe { js_perry_net_abi_layout() == layout_digest() }
+                        && crate::native_payload::abi_matches(),
+                    "transport core ABI mismatch"
+                );
+                // SAFETY: `core` is writable for the whole block and 8-aligned.
+                let rc =
+                    unsafe { js_perry_net_core_init(core.as_mut_ptr().cast(), i32::from(route)) };
+                assert_eq!(rc, OK, "link route {route} is outside the sink table");
+                // SAFETY: runtime fields are initialized; padding/reserved bytes
+                // remain valid MaybeUninit storage and are never read here.
+                unsafe { core.assume_init() }
+            },
+            {
+                let _ = route;
+                // SAFETY: an all-zero block; the fallback build never reads it.
+                unsafe {
+                    core.as_mut_ptr().write_bytes(0, 1);
+                    core.assume_init()
+                }
+            }
+        )
+    }
+
+    fn raw(&mut self) -> *mut std::ffi::c_void {
+        (self as *mut Self).cast()
+    }
+}
+
+impl Drop for TransportCore {
+    fn drop(&mut self) {
+        runtime_call!(
+            {
+                // SAFETY: initialized by `new`, dropped exactly once.
+                unsafe { js_perry_net_core_drop(self.raw()) }
+            },
+            {}
+        )
+    }
+}
+
+/// A family payload that owns a transport: the core first (the runtime reads
+/// it at offset 0 of the payload a link names), then the binding's fields.
+#[repr(C)]
+pub struct TransportPayload<E> {
+    /// The runtime's transport state.
+    pub core: TransportCore,
+    /// The binding's own fields.
+    pub ext: E,
+}
+
+impl<E> TransportPayload<E> {
+    /// An idle transport for the link sink `route`, plus the binding's fields.
+    pub fn new(route: u8, ext: E) -> Self {
+        Self {
+            core: TransportCore::new(route),
+            ext,
+        }
+    }
+}
+
+use crate::native_payload::OwnerLink;
+
+#[cfg(any(not(test), feature = "runtime-link"))]
+extern "C" {
+    fn js_perry_net_register_link_sink(subsystem: i32, sink: SinkFn) -> i32;
+    fn js_perry_net_link_set_route(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        route: i32,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_core_init(core: *mut std::ffi::c_void, route: i32) -> i32;
+    fn js_perry_net_core_drop(core: *mut std::ffi::c_void);
+    fn js_perry_net_link_tcp_listen(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        host: *const u8,
+        host_len: usize,
+        port: u16,
+        backlog: u32,
+        reuse_port: i32,
+        nodelay: i32,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_pipe_listen(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        path: *const u8,
+        path_len: usize,
+        backlog: u32,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_accept_start(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_install_accepted(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        completion: *const NetCompletion,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_tcp_connect(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        host: *const u8,
+        host_len: usize,
+        port: u16,
+        nodelay: i32,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_pipe_connect(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        path: *const u8,
+        path_len: usize,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_adopt_stream(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        socket: i64,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_read_start(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_write(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        bytes: *const u8,
+        len: usize,
+        user: u64,
+        out_queued: *mut usize,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_shutdown(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        user: u64,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_close(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        out_closed: *mut i32,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_set_ref(core: *mut std::ffi::c_void, link: usize, referenced: i32) -> i32;
+    fn js_perry_net_link_queued_bytes(core: *mut std::ffi::c_void, link: usize) -> usize;
+    fn js_perry_net_link_deadline_arm(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        delay_ms: u64,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_deadline_park(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_deadline_cancel(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        err: *mut RawNetError,
+    ) -> i32;
+    fn js_perry_net_link_local_address(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        out: *mut u8,
+        cap: usize,
+        out_len: *mut usize,
+        out_port: *mut u16,
+        out_family: *mut i32,
+    ) -> i32;
+    fn js_perry_net_link_peer_address(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        out: *mut u8,
+        cap: usize,
+        out_len: *mut usize,
+        out_port: *mut u16,
+        out_family: *mut i32,
+    ) -> i32;
+}
+
+/// Install a link-routed binding's completion sink (no id allocator: the sink
+/// allocates the payload of an accepted connection itself and calls
+/// [`link_install_accepted`]). Refused, leaving the route unusable, when the
+/// runtime's completion or core layout differs from this crate's.
+pub fn register_link_sink(subsystem: u8, sink: SinkFn) -> bool {
+    runtime_call!(
+        {
+            // SAFETY: plain registration calls in the linked runtime.
+            let ok = unsafe {
+                if js_perry_net_abi_layout() != layout_digest()
+                    || !crate::native_payload::abi_matches()
+                {
+                    return false;
+                }
+                js_perry_net_register_link_sink(i32::from(subsystem), sink) != 0
+            };
+            if ok {
+                REGISTERED.store(true, Ordering::Release);
+            }
+            ok
+        },
+        {
+            let _ = (subsystem, sink, layout_digest());
+            false
+        }
+    )
+}
+
+/// Run one link call with an error out-param.
+#[cfg(any(not(test), feature = "runtime-link"))]
+fn link_call(f: impl FnOnce(*mut RawNetError) -> i32) -> Result<(), NetError> {
+    let mut raw = RawNetError::blank();
+    let rc = f(&mut raw);
+    check(rc, raw)
+}
+
+/// Bind and listen on `host:port` (link form of [`tcp_listen`]). The handle
+/// pins the payload until its close completes.
+pub fn link_tcp_listen(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    host: &str,
+    port: u16,
+    backlog: u32,
+    reuse_port: bool,
+    nodelay: bool,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| unsafe {
+                js_perry_net_link_tcp_listen(
+                    core.raw(),
+                    link.raw(),
+                    host.as_ptr(),
+                    host.len(),
+                    port,
+                    backlog,
+                    i32::from(reuse_port),
+                    i32::from(nodelay),
+                    err,
+                )
+            })
+        },
+        {
+            let _ = (core, link, host, port, backlog, reuse_port, nodelay);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Listen on a Unix-domain socket path or a Windows named pipe. Unlink the
+/// path yourself, synchronously, at close.
+pub fn link_pipe_listen(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    path: &str,
+    backlog: u32,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| unsafe {
+                js_perry_net_link_pipe_listen(
+                    core.raw(),
+                    link.raw(),
+                    path.as_ptr(),
+                    path.len(),
+                    backlog,
+                    err,
+                )
+            })
+        },
+        {
+            let _ = (core, link, path, backlog);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Start the listener's multishot accept.
+pub fn link_accept_start(core: &mut TransportCore, link: OwnerLink) -> Result<(), NetError> {
+    runtime_call!(
+        { link_call(|err| unsafe { js_perry_net_link_accept_start(core.raw(), link.raw(), err) }) },
+        {
+            let _ = (core, link);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Inside the sink, for a [`NET_ACCEPT`] completion: install the accepted
+/// connection into a fresh payload's core. A connection not installed before
+/// the sink returns is closed by the runtime.
+pub fn link_install_accepted(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    completion: &NetCompletion,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| unsafe {
+                js_perry_net_link_install_accepted(core.raw(), link.raw(), completion, err)
+            })
+        },
+        {
+            let _ = (core, link, completion);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Connect a TCP client (link form of [`tcp_connect`]).
+pub fn link_tcp_connect(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    host: &str,
+    port: u16,
+    nodelay: bool,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| unsafe {
+                js_perry_net_link_tcp_connect(
+                    core.raw(),
+                    link.raw(),
+                    host.as_ptr(),
+                    host.len(),
+                    port,
+                    i32::from(nodelay),
+                    err,
+                )
+            })
+        },
+        {
+            let _ = (core, link, host, port, nodelay);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Connect to a Unix-domain socket or a Windows named pipe.
+pub fn link_pipe_connect(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    path: &str,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| unsafe {
+                js_perry_net_link_pipe_connect(
+                    core.raw(),
+                    link.raw(),
+                    path.as_ptr(),
+                    path.len(),
+                    err,
+                )
+            })
+        },
+        {
+            let _ = (core, link, path);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Adopt an already-connected stream socket; consumed on every outcome.
+#[cfg(any(unix, windows))]
+pub fn link_adopt_stream(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    socket: AdoptedSocket,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            #[cfg(unix)]
+            let raw_socket = {
+                use std::os::fd::IntoRawFd;
+                i64::from(socket.into_raw_fd())
+            };
+            #[cfg(windows)]
+            let raw_socket = {
+                use std::os::windows::io::IntoRawSocket;
+                socket.into_raw_socket() as i64
+            };
+            link_call(|err| unsafe {
+                js_perry_net_link_adopt_stream(core.raw(), link.raw(), raw_socket, err)
+            })
+        },
+        {
+            // Consumed on every outcome: dropping it closes it.
+            drop(socket);
+            let _ = (core, link);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Start the multishot read.
+pub fn link_read_start(core: &mut TransportCore, link: OwnerLink) -> Result<(), NetError> {
+    runtime_call!(
+        { link_call(|err| unsafe { js_perry_net_link_read_start(core.raw(), link.raw(), err) }) },
+        {
+            let _ = (core, link);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Queue bytes (copied); returns the socket's total queued bytes.
+pub fn link_write(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    bytes: &[u8],
+    user: u64,
+) -> Result<usize, NetError> {
+    runtime_call!(
+        {
+            let mut queued = 0usize;
+            link_call(|err| unsafe {
+                js_perry_net_link_write(
+                    core.raw(),
+                    link.raw(),
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    user,
+                    &mut queued,
+                    err,
+                )
+            })
+            .map(|()| queued)
+        },
+        {
+            let _ = (core, link, bytes, user);
+            Err(unavailable())
+        }
+    )
+}
+
+/// `end()`: shut the write side down behind the queued writes.
+pub fn link_shutdown(core: &mut TransportCore, link: OwnerLink, user: u64) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| unsafe {
+                js_perry_net_link_shutdown(core.raw(), link.raw(), user, err)
+            })
+        },
+        {
+            let _ = (core, link, user);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Release the transport: the handle moves into the driver's close, the
+/// deadline and a pending resolve go with it. `Ok(true)`: a [`NET_CLOSED`]
+/// for this link follows; `Ok(false)`: there was no handle, so a binding that
+/// owes a `close` event schedules it itself. Then release the payload
+/// (`native_payload::close`); never close from `Drop`.
+pub fn link_close(core: &mut TransportCore, link: OwnerLink) -> Result<bool, NetError> {
+    runtime_call!(
+        {
+            let mut closed = 0i32;
+            link_call(|err| unsafe {
+                js_perry_net_link_close(core.raw(), link.raw(), &mut closed, err)
+            })
+            .map(|()| closed != 0)
+        },
+        {
+            let _ = (core, link);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Node's `ref()`/`unref()`; remembered for handles installed later.
+pub fn link_set_ref(core: &mut TransportCore, link: OwnerLink, referenced: bool) -> bool {
+    runtime_call!(
+        {
+            // SAFETY: `core`/`link` name one payload of this thread.
+            unsafe {
+                js_perry_net_link_set_ref(core.raw(), link.raw(), i32::from(referenced)) == OK
+            }
+        },
+        {
+            let _ = (core, link, referenced);
+            false
+        }
+    )
+}
+
+/// Bytes accepted and not yet reported written (`writableLength`).
+pub fn link_queued_bytes(core: &mut TransportCore, link: OwnerLink) -> usize {
+    runtime_call!(
+        {
+            // SAFETY: `core`/`link` name one payload of this thread.
+            unsafe { js_perry_net_link_queued_bytes(core.raw(), link.raw()) }
+        },
+        {
+            let _ = (core, link);
+            0
+        }
+    )
+}
+
+/// Arm or move the socket's deadline; its expiry arrives as [`NET_TIMER`].
+pub fn link_deadline_arm(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    delay_ms: u64,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| unsafe {
+                js_perry_net_link_deadline_arm(core.raw(), link.raw(), delay_ms, err)
+            })
+        },
+        {
+            let _ = (core, link, delay_ms);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Disarm the deadline, keeping its handle for a cheap re-arm.
+pub fn link_deadline_park(core: &mut TransportCore, link: OwnerLink) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| unsafe { js_perry_net_link_deadline_park(core.raw(), link.raw(), err) })
+        },
+        {
+            let _ = (core, link);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Cancel the deadline. Idempotent.
+pub fn link_deadline_cancel(core: &mut TransportCore, link: OwnerLink) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| unsafe {
+                js_perry_net_link_deadline_cancel(core.raw(), link.raw(), err)
+            })
+        },
+        {
+            let _ = (core, link);
+            Err(unavailable())
+        }
+    )
+}
+
+#[cfg(any(not(test), feature = "runtime-link"))]
+fn link_endpoint(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    f: unsafe extern "C" fn(
+        *mut std::ffi::c_void,
+        usize,
+        *mut u8,
+        usize,
+        *mut usize,
+        *mut u16,
+        *mut i32,
+    ) -> i32,
+) -> Option<Endpoint> {
+    let mut buf = [0u8; 64];
+    let mut len: usize = 0;
+    let mut port: u16 = 0;
+    let mut family: i32 = 4;
+    // SAFETY: `buf` is writable for its own length and every out-param is a
+    // live local.
+    let rc = unsafe {
+        f(
+            core.raw(),
+            link.raw(),
+            buf.as_mut_ptr(),
+            buf.len(),
+            &mut len,
+            &mut port,
+            &mut family,
+        )
+    };
+    if rc != OK {
+        return None;
+    }
+    Some(Endpoint {
+        address: String::from_utf8_lossy(&buf[..len]).into_owned(),
+        port,
+        family,
+    })
+}
+
+/// The local endpoint (`server.address()`, `socket.localAddress`).
+pub fn link_local_address(core: &mut TransportCore, link: OwnerLink) -> Option<Endpoint> {
+    runtime_call!(
+        { link_endpoint(core, link, js_perry_net_link_local_address) },
+        {
+            let _ = (core, link);
+            None
+        }
+    )
+}
+
+/// The peer endpoint (`socket.remoteAddress`).
+pub fn link_peer_address(core: &mut TransportCore, link: OwnerLink) -> Option<Endpoint> {
+    runtime_call!(
+        { link_endpoint(core, link, js_perry_net_link_peer_address) },
+        {
+            let _ = (core, link);
+            None
+        }
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -931,13 +1612,26 @@ mod tests {
         let digest = layout_digest();
         assert_eq!(digest as u8, ABI_VERSION);
         assert_eq!(
-            (digest >> 48) as usize,
+            (digest >> 52) as usize,
             std::mem::size_of::<NetCompletion>()
         );
         assert_eq!(
-            ((digest >> 32) & 0xff) as usize,
+            ((digest >> 39) & 0x7f) as usize,
             std::mem::offset_of!(NetCompletion, data)
         );
+        // The opaque core block is part of the contract: a binding built
+        // against another block size computes another digest.
+        assert_eq!(((digest >> 12) & 0x1ff) as usize, TRANSPORT_CORE_WORDS);
+        assert_ne!(digest, layout_digest_for(TRANSPORT_CORE_WORDS + 1));
+    }
+
+    /// The runtime and this crate agree on the completion and the core block
+    /// (linked runs). Sabotage: change `TRANSPORT_CORE_WORDS` here by one.
+    #[cfg(feature = "runtime-link")]
+    #[test]
+    fn the_runtime_agrees_on_the_completion_and_core_layout() {
+        // SAFETY: a plain getter in the linked runtime.
+        assert_eq!(unsafe { js_perry_net_abi_layout() }, layout_digest());
     }
 
     #[test]
@@ -947,4 +1641,24 @@ mod tests {
         let raw = b"127.0.0.1";
         assert_eq!(String::from_utf8_lossy(&raw[..5]), "127.0");
     }
+}
+
+/// Switch a transport's completion sink by storing its route. Outstanding
+/// reads retain their original tokens and are neither cancelled nor submitted again.
+pub fn link_set_route(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    route: u8,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            link_call(|err| unsafe {
+                js_perry_net_link_set_route(core.raw(), link.raw(), i32::from(route), err)
+            })
+        },
+        {
+            let _ = (core, link, route);
+            Err(unavailable())
+        }
+    )
 }

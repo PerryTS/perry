@@ -923,6 +923,7 @@ fn writes_between_connect_attempts_reach_the_attempt_that_succeeds() {
                 remaining: [dead, live].into_iter().collect(),
                 retrying: false,
                 last_error: None,
+                op: None,
             },
         )
     });
