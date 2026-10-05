@@ -107,6 +107,12 @@ pub(crate) fn resolve_fetch_inputs(
         }
     }
 
+    // Fetch supplies this transport default; Request.headers itself stays empty
+    // when the init did not specify headers. Preserve an explicit empty value.
+    custom_headers
+        .entry("accept".to_string())
+        .or_insert_with(|| "*/*".to_string());
+
     let redirect = match pending_redirect {
         1 => super::FetchRedirectMode::Follow,
         2 => super::FetchRedirectMode::Error,

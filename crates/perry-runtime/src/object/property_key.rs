@@ -251,6 +251,17 @@ unsafe fn get_property_key_resolved(obj_value: f64, key: f64) -> f64 {
             js_object_get_field_by_name(obj_value.to_bits() as *const ObjectHeader, key_str).bits(),
         );
     }
+    // Native handles expose properties through the by-name dispatcher too.
+    // extract_obj_ptr deliberately rejects them to protect heap-only callers;
+    // applying that guard here silently lost Request.signal (and any dictionary
+    // members supplied by a native Request used as init).
+    let receiver = crate::value::JSValue::from_bits(obj_value.to_bits());
+    if receiver.is_pointer() {
+        let handle = receiver.as_pointer::<ObjectHeader>();
+        if !handle.is_null() && crate::value::addr_class::is_handle_band(handle as usize) {
+            return f64::from_bits(js_object_get_field_by_name(handle, key_str).bits());
+        }
+    }
     let obj = extract_obj_ptr(obj_value);
     if obj.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);

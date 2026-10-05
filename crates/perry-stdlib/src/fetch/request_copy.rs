@@ -19,10 +19,30 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
     let _source_pin = lifecycle::pin_handles(&[native_input]);
     let source_id = handle_id(native_input);
     let source = REQUEST_REGISTRY.lock().unwrap().get(&source_id).cloned();
-    let Some(mut request) = source else {
+    let from_request = source.is_some();
+    let mut request = source.unwrap_or_else(|| {
         let url = js_request_input_to_url(input_root.get_nanbox_f64());
-        return js_request_new_from_init(url, init_root.get_nanbox_f64());
-    };
+        RequestRecord {
+            url: string_from_header(url).unwrap_or_default(),
+            method: "GET".to_string(),
+            body: None,
+            body_used: false,
+            headers: HeadersStore::default(),
+            destination: String::new(),
+            referrer: "about:client".to_string(),
+            referrer_policy: String::new(),
+            mode: "cors".to_string(),
+            credentials: "same-origin".to_string(),
+            cache: "default".to_string(),
+            redirect: "follow".to_string(),
+            integrity: String::new(),
+            keepalive: false,
+            duplex: "half".to_string(),
+            signal: f64::from_bits(TAG_UNDEFINED),
+            cached_headers_id: None,
+            body_error: None,
+        }
+    });
     let signal_root = scope.root_nanbox_f64(request.signal);
     let body_error_root = scope.root_nanbox_f64(
         request
@@ -71,15 +91,18 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
     if let Some(value) = string_field(b"credentials") {
         request.credentials = value;
     }
-    if let Some(value) = string_field(b"duplex") {
-        request.duplex = value;
+    let duplex = string_field(b"duplex");
+    if let Some(value) = duplex.as_ref() {
+        if value != "half" {
+            throw_fetch_type_error("Request duplex must be half");
+        }
+        request.duplex = value.clone();
     }
     let headers = field(b"headers");
     if headers.to_bits() != TAG_UNDEFINED {
         let headers_root = scope.root_nanbox_f64(headers);
-        let handle = js_headers_new();
+        let handle = js_headers_from_value(headers_root.get_nanbox_f64());
         let _headers_pin = lifecycle::pin_handles(&[handle]);
-        js_headers_init_from_value(handle, headers_root.get_nanbox_f64());
         request.headers = HEADERS_REGISTRY
             .lock()
             .unwrap()
@@ -95,6 +118,13 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
         request.keepalive = body_metadata::bool_from_js(keepalive);
     }
     if let Some(value) = string_field(b"method") {
+        if value.is_empty()
+            || !value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&byte))
+        {
+            throw_fetch_type_error(&format!("'{value}' is not a valid HTTP method."));
+        }
         if is_forbidden_method(&value.to_ascii_uppercase()) {
             throw_fetch_type_error(&format!("'{value}' HTTP method is unsupported."));
         }
@@ -110,7 +140,49 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
     let referrer_policy = string_field(b"referrerPolicy");
     let signal = field(b"signal");
     if signal.to_bits() != TAG_UNDEFINED {
-        signal_root.set_nanbox_f64(body_metadata::signal_or_default(signal));
+        if signal.to_bits() != TAG_NULL
+            && perry_runtime::url::js_abort_signal_resolve_ptr(signal).is_null()
+        {
+            throw_fetch_type_error("Request signal must be an AbortSignal");
+        }
+        signal_root.set_nanbox_f64(signal);
+    }
+
+    for (name, value, allowed) in [
+        (
+            "cache",
+            request.cache.as_str(),
+            &[
+                "default",
+                "no-store",
+                "reload",
+                "no-cache",
+                "force-cache",
+                "only-if-cached",
+            ][..],
+        ),
+        (
+            "credentials",
+            request.credentials.as_str(),
+            &["omit", "same-origin", "include"][..],
+        ),
+        (
+            "mode",
+            request.mode.as_str(),
+            &["cors", "same-origin", "no-cors"][..],
+        ),
+        (
+            "redirect",
+            request.redirect.as_str(),
+            &["follow", "error", "manual"][..],
+        ),
+    ] {
+        if !allowed.contains(&value) {
+            throw_fetch_type_error(&format!("Invalid Request {name}: {value}"));
+        }
+    }
+    if request.cache == "only-if-cached" && request.mode != "same-origin" {
+        throw_fetch_type_error("only-if-cached requires same-origin mode");
     }
 
     if has_init_member.get() {
@@ -137,6 +209,19 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
             let outer_content_type = take_pending_fetch_body_content_type();
             let ptr = js_response_body_init_ptr(body_root.get_nanbox_f64()) as *const StringHeader;
             let stream = take_pending_fetch_body_stream_id();
+            if stream.is_some() {
+                if request.keepalive {
+                    throw_fetch_type_error("keepalive");
+                }
+                if duplex.is_none() {
+                    throw_fetch_type_error(
+                        "RequestInit: duplex option is required when sending a body.",
+                    );
+                }
+                if !matches!(request.mode.as_str(), "same-origin" | "cors") {
+                    throw_fetch_type_error("Streaming requests require same-origin or cors mode");
+                }
+            }
             let content_type = take_pending_fetch_body_content_type().map(str::to_owned);
             set_pending_fetch_body_content_type(outer_content_type);
             // Non-body handles (e.g. Headers) are synthetic addresses, not
@@ -164,7 +249,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
                 request.headers.set("content-type", &content_type);
             }
         }
-    } else if request.body.is_some() {
+    } else if from_request && request.body.is_some() {
         // Transfer only after validation. An override body leaves the input's
         // body untouched; inheriting consumes it, including an empty body.
         let used = {
@@ -182,7 +267,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
             );
         }
     }
-    request.signal = signal_root.get_nanbox_f64();
+    request.signal = body_metadata::signal_or_default(signal_root.get_nanbox_f64());
     request.body_error = body_error.then(|| body_error_root.get_nanbox_f64());
     let id = alloc_fetch_handle_id();
     gc::ensure_gc_registered();

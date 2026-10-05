@@ -3,7 +3,6 @@
 //! Split out of `global_this.rs` so the singleton installer stays under the
 //! repository's 2,000-line lint gate.
 
-use super::*;
 use std::cell::Cell;
 use std::ptr::null_mut;
 use std::sync::atomic::{AtomicPtr, Ordering};
@@ -268,26 +267,6 @@ pub extern "C" fn js_register_global_fetch_constructors(
     GLOBAL_FETCH_RESPONSE_STATIC_ERROR.store(response_static_error as *mut (), Ordering::Release);
 }
 
-fn fetch_option(init: f64, name: &[u8]) -> f64 {
-    let raw = crate::value::js_nanbox_get_pointer(init);
-    if raw < 0x10000 {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_get_field_by_name_f64(raw as *const ObjectHeader, key)
-}
-
-fn fetch_option_string_ptr(init: f64, name: &[u8]) -> *const crate::StringHeader {
-    let value = fetch_option(init, name);
-    if matches!(
-        value.to_bits(),
-        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
-    ) {
-        return std::ptr::null();
-    }
-    crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader
-}
-
 /// Codegen entry point for the `fetch(url, { headers })` request path: stringify
 /// the already-evaluated `headers` value into the flat `{name:value}` JSON that
 /// `js_fetch_with_options` parses, treating a `Headers` handle safely (no
@@ -297,14 +276,6 @@ fn fetch_option_string_ptr(init: f64, name: &[u8]) -> *const crate::StringHeader
 #[no_mangle]
 pub extern "C" fn js_fetch_headers_to_json(headers: f64) -> i64 {
     headers_init_json_ptr(headers) as i64
-}
-
-fn fetch_headers_json_ptr(init: f64) -> *const crate::StringHeader {
-    let headers = fetch_option(init, b"headers");
-    // `init.headers` may be a `Headers` instance (a fetch-band handle), a plain
-    // object, or null/undefined — `headers_init_json_ptr` normalizes all three
-    // (Headers handle read from its registry, null/undefined → `{}`).
-    headers_init_json_ptr(headers)
 }
 
 #[cfg(feature = "external-fetch-symbols")]
@@ -681,24 +652,42 @@ pub(super) extern "C" fn global_this_fetch_thunk(
         .into_iter()
         .next()
         .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
-    let input_ptr = js_fetch_input_ptr(input);
-    let url_ptr = if input_ptr == 0 {
-        crate::value::js_get_string_pointer_unified(input)
-    } else {
-        input_ptr
-    } as *const crate::StringHeader;
-    let method_ptr = fetch_option_string_ptr(init, b"method");
-    let body_ptr = fetch_option_string_ptr(init, b"body");
-    let headers_json_ptr = fetch_headers_json_ptr(init);
-    let redirect = fetch_option(init, b"redirect");
-
-    // Hand the `init.signal` (if any) to `js_fetch_with_options` so an
-    // `AbortController` / `AbortSignal.timeout` can cancel this request.
-    js_fetch_set_pending_signal(fetch_option(init, b"signal"));
-    js_fetch_set_pending_redirect(redirect);
-
-    let promise =
-        unsafe { call_fetch_with_options(url_ptr, method_ptr, body_ptr, headers_json_ptr) };
+    // Request performs dictionary conversion once for every call shape and
+    // applies init over a Request input, including replacing its headers.
+    // Keep heap arguments rooted across getters, BodyInit conversion and GC.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let input = scope.root_nanbox_f64(input);
+    let init = scope.root_nanbox_f64(init);
+    let outcome = crate::exception::catch_js_throw(|| {
+        let request = call_global_request_new(input.get_nanbox_f64(), init.get_nanbox_f64());
+        let request = scope.root_nanbox_f64(request);
+        let key = crate::string::js_string_from_bytes(b"signal".as_ptr(), 6);
+        let signal = unsafe {
+            super::js_object_get_property_key(
+                request.get_nanbox_f64(),
+                crate::value::js_nanbox_string(key as i64),
+            )
+        };
+        js_fetch_set_pending_signal(signal);
+        js_fetch_set_pending_redirect(f64::from_bits(crate::value::TAG_UNDEFINED));
+        unsafe {
+            call_fetch_with_options(
+                js_fetch_input_ptr(request.get_nanbox_f64()) as *const crate::StringHeader,
+                null_mut(),
+                null_mut(),
+                null_mut(),
+            )
+        }
+    });
+    let promise = match outcome {
+        Ok(promise) => promise,
+        Err(error) => {
+            let error = scope.root_nanbox_f64(error);
+            let promise = crate::promise::js_promise_new_cross_thread();
+            crate::promise::js_promise_reject(promise, error.get_nanbox_f64());
+            promise
+        }
+    };
     if promise.is_null() {
         f64::from_bits(crate::value::TAG_NULL)
     } else {
@@ -708,7 +697,7 @@ pub(super) extern "C" fn global_this_fetch_thunk(
 
 #[cfg(test)]
 mod redirect_mode_tests {
-    use super::*;
+    use super::{js_fetch_set_pending_redirect, js_fetch_take_pending_redirect};
 
     #[test]
     fn pending_redirect_mode_is_parsed_and_consumed_once() {

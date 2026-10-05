@@ -152,130 +152,14 @@ pub unsafe extern "C" fn js_request_new(
     handle_to_f64(id)
 }
 
-/// `new Request(url, init)` where `init` is a *runtime* object value rather
-/// than a statically-analyzable object literal (#5458). Codegen's
-/// `extract_options_fields` fast path only recognizes inline `{...}` literals,
-/// recorded option-object locals, and `__AnonShape_` synthesis; for any other
-/// init shape — a call-expression result (`new Request(url, f())`), a spread
-/// literal (`{ ...e }`), or a dynamic object — it previously evaluated and
-/// **discarded** the init, silently dropping `method`/`body`/`headers`. That
-/// made every non-GET method default back to `"GET"`, mis-dispatching POST
-/// requests to GET handlers (or 404) in Hono and any other framework that
-/// builds a `RequestInit` indirectly. This helper reads each field off the
-/// init object at runtime and delegates to `js_request_new` so all construction
-/// and validation logic stays in one place.
+/// Compatibility entry point for callers with a URL pointer. Dictionary
+/// conversion is shared with Request copies and fetch, so every init shape
+/// has the same getter, HeadersInit and BodyInit behavior.
 ///
 /// # Safety
 /// `url_ptr` must be null or a valid string header; `init` must be a valid
-/// NaN-boxed `JSValue`. Called only from codegen-emitted FFI.
+/// NaN-boxed JS value.
 #[no_mangle]
 pub unsafe extern "C" fn js_request_new_from_init(url_ptr: *const StringHeader, init: f64) -> f64 {
-    let _fetch_roots = lifecycle::pin_handles(&[init]);
-    let raw = perry_runtime::value::js_nanbox_get_pointer(init);
-    // Non-object init (undefined / number / small handle): behave like
-    // `new Request(url)` with no init — every field keeps its default.
-    if raw < 0x10000 {
-        return js_request_new(
-            url_ptr,
-            std::ptr::null(),
-            std::ptr::null(),
-            0.0,
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            std::ptr::null(),
-            f64::from_bits(TAG_FALSE),
-            std::ptr::null(),
-            f64::from_bits(TAG_UNDEFINED),
-        );
-    }
-    let obj = raw as *const perry_runtime::object::ObjectHeader;
-
-    // Read `init[name]` as a NaN-boxed JSValue (TAG_UNDEFINED when absent).
-    let field = |name: &[u8]| -> f64 {
-        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        perry_runtime::object::js_object_get_field_by_name_f64(obj, key)
-    };
-    // Read `init[name]` as a raw `*const StringHeader`, null for absent /
-    // undefined / null so `js_request_new`'s `string_from_header` applies the
-    // correct per-field default.
-    let str_field = |name: &[u8]| -> *const StringHeader {
-        let v = field(name);
-        if matches!(v.to_bits(), TAG_UNDEFINED | TAG_NULL) {
-            return std::ptr::null();
-        }
-        perry_runtime::value::js_get_string_pointer_unified(v) as *const StringHeader
-    };
-
-    // `headers`: build a fresh Headers store from whatever the init carries
-    // (a Headers handle, a plain object, or an iterable of `[name, value]`).
-    // Only `undefined` means "absent". `headers: null` is a HeadersInit that
-    // fails conversion — `new Headers(null)` throws a TypeError, and so does
-    // `new Request(url, { headers: null })` in Node — so it must reach
-    // `js_headers_init_from_value`, which raises it. #10380 routed every
-    // literal RequestInit through this function, and folding null into the
-    // absent case turned that TypeError into a silently header-less request
-    // (#11560). `request_copy.rs`'s override path already tests exactly
-    // `TAG_UNDEFINED`.
-    let headers_val = field(b"headers");
-    let headers_handle = if headers_val.to_bits() == TAG_UNDEFINED {
-        0.0
-    } else {
-        let h = js_headers_new();
-        js_headers_init_from_value(h, headers_val);
-        h
-    };
-
-    let keepalive = field(b"keepalive");
-    let keepalive = if keepalive.to_bits() == TAG_UNDEFINED {
-        f64::from_bits(TAG_FALSE)
-    } else {
-        keepalive
-    };
-
-    // Reflective Request construction also reaches this path (#10380).
-    // Keep its BodyInit conversion: a ReadableStream is a handle whose
-    // bytes must be drained, rather than interpreted as a string pointer.
-    let body_value = field(b"body");
-    let (body_ptr, content_type) = if matches!(body_value.to_bits(), TAG_UNDEFINED | TAG_NULL) {
-        // No conversion happened here: pending metadata can belong to an
-        // outer Response whose init getter is constructing this Request.
-        (std::ptr::null(), None)
-    } else {
-        let outer_content_type = take_pending_fetch_body_content_type();
-        let ptr = js_response_body_init_ptr(body_value) as *const StringHeader;
-        // Consume our metadata while restoring any enclosing constructor's.
-        // Later getters and stream pulls can perform more nested conversions.
-        let content_type = take_pending_fetch_body_content_type();
-        set_pending_fetch_body_content_type(outer_content_type);
-        (ptr, content_type)
-    };
-    let result = js_request_new(
-        url_ptr,
-        str_field(b"method"),
-        body_ptr,
-        headers_handle,
-        str_field(b"referrer"),
-        str_field(b"referrerPolicy"),
-        str_field(b"mode"),
-        str_field(b"credentials"),
-        str_field(b"cache"),
-        str_field(b"redirect"),
-        str_field(b"integrity"),
-        keepalive,
-        str_field(b"duplex"),
-        field(b"signal"),
-    );
-    if let Some(content_type) = content_type {
-        let mut registry = REQUEST_REGISTRY.lock().unwrap();
-        if let Some(request) = registry.get_mut(&handle_id(result)) {
-            if !request.headers.has("content-type") {
-                request.headers.set("content-type", content_type);
-            }
-        }
-    }
-    result
+    js_request_new_from_input(perry_runtime::value::js_nanbox_string(url_ptr as i64), init)
 }
