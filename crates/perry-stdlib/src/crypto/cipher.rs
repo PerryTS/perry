@@ -637,6 +637,7 @@ pub(super) static CIPHERIV_FAMILY: perry_runtime::native_payload::NativePayloadF
         name: "Cipheriv",
         constructor_export: Some(("crypto", "Cipheriv")),
         constructor_length: 4,
+        links_owner: false,
         install_prototype: install_cipheriv_prototype,
     };
 
@@ -646,6 +647,7 @@ pub(super) static DECIPHERIV_FAMILY: perry_runtime::native_payload::NativePayloa
         name: "Decipheriv",
         constructor_export: Some(("crypto", "Decipheriv")),
         constructor_length: 4,
+        links_owner: false,
         install_prototype: install_decipheriv_prototype,
     };
 

@@ -628,3 +628,66 @@ console.log(run(N), objs[0].m === objs[7].m);
          (own={own} inherited={inherited} misses={misses})"
     );
 }
+
+/// Sabotage: prime a builtin holder slot as a ConstFn entry (the hit calls the
+/// primed body without loading the slot) -> the replaced builtins are not seen.
+#[test]
+fn a_builtin_object_prototype_method_is_served_inline_and_a_replacement_is_seen() {
+    let (stdout, own, inherited, misses) = run(
+        r#"// ONE site per builtin method over plain objects (Object.prototype holds the
+// method); the builtin is replaced and restored mid-loop, and own methods and
+// null-prototype receivers share the same sites.
+const N = process.argv.length > 99 ? 1 : 6000;
+const P: any = Object.prototype;
+const savedHop = P.hasOwnProperty, savedTs = P.toString, savedVo = P.valueOf;
+const plain: any = { a: 1, k: 2 };
+const shadow: any = { a: 1, k: 3, toString() { return "own-ts"; }, valueOf() { return 40; }, hasOwnProperty(k: string) { return "own-hop:" + k; } };
+const bare: any = Object.create(null); bare.a = 1;
+const bareOwn: any = Object.create(null); bareOwn.a = 1;
+bareOwn.hasOwnProperty = (k: string) => "null-own:" + k;
+bareOwn.toString = () => "null-ts";
+bareOwn.valueOf = () => 5;
+function hop(o: any, k: string) { return o.hasOwnProperty(k); }
+function ts(o: any) { return o.toString(); }
+function vo(o: any) { return o.valueOf(); }
+const out: any[] = [];
+let s = 0;
+for (let i = 0; i < N; i++) {
+  if (i === 1000) P.hasOwnProperty = function (this: any, k: string) { return "replaced-hop:" + k + ":" + this.a; };
+  if (i === 2000) P.toString = function (this: any) { return "replaced-ts:" + this.a; };
+  if (i === 3000) P.valueOf = function (this: any) { return 100 + this.a; };
+  if (i === 4000) { P.hasOwnProperty = savedHop; P.toString = savedTs; P.valueOf = savedVo; }
+  const o = i % 3 === 0 ? shadow : plain;
+  const h = hop(o, i & 1 ? "a" : "zz");
+  const t = ts(o);
+  const v = vo(o);
+  s += (h === true ? 1 : 0) + (typeof v === "number" ? v : 0) + t.length;
+  if (i % 1000 < 3) out.push([h, t, typeof v === "object" ? "obj" : v].join("|"));
+}
+let bareRes: any[] = [];
+for (let i = 0; i < 3; i++) {
+  bareRes.push(hop(bareOwn, "a"), ts(bareOwn), vo(bareOwn));
+  try { bareRes.push(hop(bare, "a")); } catch (e) { bareRes.push(e instanceof TypeError ? "TypeError" : "other"); }
+  try { bareRes.push(ts(bare)); } catch (e) { bareRes.push(e instanceof TypeError ? "TypeError" : "other"); }
+}
+console.log(s);
+console.log(out.join(","));
+console.log(bareRes.join(","));
+"#,
+    );
+    assert_eq!(
+        stdout,
+        r#"217600
+own-hop:zz|own-ts|40,true|[object Object]|obj,false|[object Object]|obj,replaced-hop:zz:1|[object Object]|obj,replaced-hop:a:1|[object Object]|obj,own-hop:zz|own-ts|40,replaced-hop:zz:1|replaced-ts:1|obj,own-hop:a|own-ts|40,replaced-hop:zz:1|replaced-ts:1|obj,own-hop:zz|own-ts|40,replaced-hop:a:1|replaced-ts:1|101,replaced-hop:zz:1|replaced-ts:1|101,false|[object Object]|obj,true|[object Object]|obj,own-hop:zz|own-ts|40,false|[object Object]|obj,own-hop:a|own-ts|40,false|[object Object]|obj
+null-own:a,null-ts,5,TypeError,TypeError,null-own:a,null-ts,5,TypeError,TypeError,null-own:a,null-ts,5,TypeError,TypeError"#
+    );
+    // Three sites (hasOwnProperty, toString, valueOf) over a plain object whose
+    // methods are %Object.prototype%'s builtins, sharing each site with an
+    // object that owns the method. Each replacement and the restore re-prime
+    // once; everything else is served inline.
+    assert!(
+        inherited >= 3 && misses <= 60,
+        "builtin methods must be served by the inherited entry \
+         (own={own} inherited={inherited} misses={misses})"
+    );
+}

@@ -17,7 +17,7 @@ mod disposal;
 mod function_shape;
 pub(crate) use function_shape::{
     call_function_intrinsic, function_intrinsic_facts, function_prototype_built,
-    FunctionIntrinsicFacts,
+    run_function_intrinsic, FunctionIntrinsicFacts,
 };
 mod handle_methods;
 mod memo_entries;
@@ -57,6 +57,7 @@ pub(crate) use namespace_override::{
     namespace_override_stack_restore, namespace_override_stack_savepoint,
 };
 pub use object_proto::js_value_to_locale_string;
+use object_proto::{call_builtin_object_proto_method, is_ordinary_object_receiver};
 pub(crate) use object_proto::{
     js_object_default_value_of, js_object_is_prototype_of_value,
     js_object_prototype_to_locale_string,
@@ -1894,6 +1895,19 @@ pub(crate) unsafe fn native_call_method_tower(
         crate::object::own_override::call_own_user_method(object, method_name, refreshed_args)
     {
         return result;
+    }
+
+    // `hasOwnProperty` / `propertyIsEnumerable` on a receiver that is not an
+    // ordinary object (a primitive, function, class, array, collection, typed
+    // array, …): the kind dispatchers below answer by name, and for these two
+    // names their answers are wrong (`undefined`, or `true` for any key). The
+    // receiver's own property was consulted just above; its kind's prototype
+    // carries the builtin, so the builtin answers. An ordinary object goes on
+    // to the common arm, which reads the method off its prototype chain.
+    if matches!(method_name, "hasOwnProperty" | "propertyIsEnumerable")
+        && !is_ordinary_object_receiver(object())
+    {
+        return call_builtin_object_proto_method(object(), method_name, &refreshed_args());
     }
 
     if let Some(r) = primitive_methods::dispatch_primitive(

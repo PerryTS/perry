@@ -42,6 +42,12 @@ pub(crate) unsafe fn bag_ensure(ptr: usize) -> *mut ObjectHeader {
         return existing;
     }
     let bag = crate::object::js_object_alloc_null_proto(0, 0);
+    install_bag(ptr, bag);
+    bag
+}
+
+/// Give the closure at `ptr` its bag `bag` with the store barrier.
+unsafe fn install_bag(ptr: usize, bag: *mut ObjectHeader) {
     let closure = ptr as *mut ClosureHeader;
     // A closure is born `GC_LAYOUT_POINTER_FREE` when its captures hold no
     // pointer; some collector paths treat that state as "no child edge at
@@ -52,7 +58,36 @@ pub(crate) unsafe fn bag_ensure(ptr: usize) -> *mut ObjectHeader {
     // barrier, mirroring `object_meta_ensure`'s `meta` install.
     (*closure).props = bag;
     crate::gc::runtime_write_barrier_slot(ptr, &(*closure).props as *const _ as usize, bag as u64);
-    bag
+}
+
+/// The first own data properties of a function that has none yet, all at
+/// once: its bag is born holding `entries` in order, in ONE shape
+/// ([`crate::object::object_alloc_null_proto_with_keys`]), instead of growing
+/// one key-add transition per key. This is a define: no setter or attribute is
+/// consulted, as for every builtin install. False, with nothing done, when the
+/// function already has a bag (or a declared static could hold one of the
+/// keys); the caller then installs the ordinary way.
+///
+/// # Safety
+/// `ptr` is a proven, live closure cell, and the keys of `entries` are
+/// distinct.
+pub(crate) unsafe fn bag_born_with(ptr: usize, entries: &[(&str, f64)]) -> bool {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    if !bag_of(ptr).is_null()
+        || entries.is_empty()
+        || entries.iter().any(|(key, _)| {
+            crate::object::class_value::holds_declared_static_method(ptr, key).is_some()
+        })
+    {
+        return false;
+    }
+    debug_assert!(entries
+        .iter()
+        .enumerate()
+        .all(|(i, (a, _))| entries[..i].iter().all(|(b, _)| a != b)));
+    let bag = crate::object::alloc::object_alloc_null_proto_with_keys(entries);
+    install_bag(ptr, bag);
+    true
 }
 
 /// Own data lookup in an ordinary (or dictionary-mode) bag by key bytes.

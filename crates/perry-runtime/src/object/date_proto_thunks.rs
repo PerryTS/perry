@@ -425,19 +425,14 @@ extern "C" fn date_utc_static(
 
 /// Install `now` / `parse` / `UTC` as own data properties on the `Date`
 /// constructor closure. Called from `install_builtin_constructor_statics`.
-pub(crate) fn install_date_constructor_statics(ctor: *mut crate::closure::ClosureHeader) {
-    if ctor.is_null() {
-        return;
-    }
+pub(crate) fn install_date_constructor_statics(s: &mut super::global_this::ConstructorStatics) {
     // (name, fn-ptr, spec `.length`, has_rest)
-    super::global_this::install_constructor_static(
-        ctor,
+    s.method(
         "now",
         crate::fn_info!(date_now_static, 0; with_declared(0)),
         0,
     );
-    super::global_this::install_constructor_static(
-        ctor,
+    s.method(
         "parse",
         crate::fn_info!(date_parse_static, 1; with_declared(1)),
         1,
@@ -447,12 +442,7 @@ pub(crate) fn install_date_constructor_statics(ctor: *mut crate::closure::Closur
     // registration reserves 7 fixed slots and `Date.UTC(2020, 0)` (fewer than 7
     // args) puts nothing in the rest array → js_date_utc([]) → NaN. The spec
     // `.length` stays 7. (#4596)
-    super::global_this::install_constructor_static(
-        ctor,
-        "UTC",
-        crate::fn_info!(date_utc_static, 1; with_rest(0)),
-        7,
-    );
+    s.method("UTC", crate::fn_info!(date_utc_static, 1; with_rest(0)), 7);
 }
 
 /// Legacy `Date.prototype.getYear` — `getFullYear() - 1900` (NaN-preserving).

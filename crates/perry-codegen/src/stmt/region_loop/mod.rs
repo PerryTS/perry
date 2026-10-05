@@ -69,8 +69,8 @@ mod plan;
 mod verify;
 
 pub(crate) use self::arrays::{
-    alias_clone, emit_poll_refresh, is_bare_index_get, is_f64_index_read, try_lower_bare_index_get,
-    try_lower_bare_index_set, unalias_clone,
+    alias_clone, emit_poll_refresh, is_bare_index_get, is_f64_index_read, note_view_access,
+    try_lower_bare_index_get, try_lower_bare_index_set, unalias_clone, view_bounds_proven,
 };
 use self::arrays::{ArrayRecv, ArrayUse, Env};
 use self::bare::note;
@@ -278,6 +278,8 @@ pub(crate) struct Pending {
     spill_mode: bool,
     /// Loop regions: array receivers (S3), guarded in the preheader.
     arrays: Vec<ArrayRecv>,
+    /// The index expressions of bare VIEW accesses.
+    view_index: HashSet<usize>,
     /// Statements after which F-body sets the dirty flag.
     dirty_after: HashSet<usize>,
     /// Loop regions with array receivers: the body region split inside
@@ -319,6 +321,9 @@ pub(crate) struct Active {
     /// Array receivers (S3) and the emitted bare element reads.
     arrays: Vec<ArrayRecv>,
     emitted_arr: Vec<(usize, usize)>,
+    /// The index expressions of bare VIEW accesses
+    /// (`arrays::view_bounds_proven`).
+    view_index: HashSet<usize>,
     dirty_after: HashSet<usize>,
 }
 
@@ -543,6 +548,11 @@ fn begin_with(
         // A re-check every iteration re-derives the array's facts every
         // iteration: that is the straight-line read's cost, plus a split.
         let p = p.filter(|p| !p.arrays.is_empty() && p.recheck != Recheck::Always);
+        // A region over typed-array views alone saves one length compare per
+        // bare access and costs a guard, a split and, with a dirty flag, a
+        // re-check: one bare access does not pay for it (fannkuch's copy
+        // loops: +5% instructions).
+        let p = p.filter(|p| p.arrays.iter().any(|(_, u)| !u.view) || p.view_index.len() >= 2);
         if let Some(p) = p {
             let bare = p.bare.len() + inner.as_ref().map_or(0, |(_, ip)| ip.bare.len());
             if pays(ctx, "loop", body_nodes(body), bare) {
@@ -559,9 +569,21 @@ fn begin_with(
     }
     // The bound scope stands only for a region whose guard checks the bound.
     if let Some(sc) = bound_scope {
-        let guarded = nested
-            .as_ref()
-            .is_some_and(|(p, _)| p.arrays.iter().any(|(_, u)| u.counter || u.element));
+        let guarded = nested.as_ref().is_some_and(|(p, _)| {
+            p.arrays.iter().any(|(_, u)| {
+                u.counter
+                        || u.element
+                        // A view guard compares `B + c <= length` (an f64
+                        // compare a non-Number `B` fails).
+                        || matches!(
+                            (u.view_sym, env.counter),
+                            (Some((b, _)), Some(arrays::Counter {
+                                bound: arrays::Bound::Local(cb),
+                                ..
+                            })) if b == cb
+                        )
+            })
+        });
         if !guarded {
             nested = None;
             ctx.receiver_descriptors.dematerialize_scope(sc);
@@ -679,13 +701,27 @@ fn begin_with(
         }
         let mut arrs: Vec<ArrayRecv> = Vec::new();
         for (r, u) in &p.arrays {
+            let view = match (u.view, r) {
+                (true, Recv::Local(id)) => {
+                    let v = arrays::view_of(ctx, *id).expect("a view candidate has a view");
+                    Some(arrays::ViewGuard {
+                        end: u.view_end,
+                        sym: u.view_sym,
+                        data_slot: v.data_slot.clone(),
+                        length_offset: v.length_offset_from_data,
+                    })
+                }
+                _ => None,
+            };
             let a = ArrayRecv {
                 recv: *r,
                 max_index: u.max_index,
                 dense: u.dense(),
-                store: u.store,
+                store: u.store && !u.view,
                 typed: u.dense() && !arrays::declared_plain_array(ctx, *r),
-                counter: env.counter.filter(|_| u.counter || u.element),
+                counter: env
+                    .counter
+                    .filter(|_| u.counter || u.element || u.view_counter),
                 aliases: env
                     .aliases
                     .iter()
@@ -693,6 +729,7 @@ fn begin_with(
                     .map(|(a, _)| *a)
                     .collect(),
                 base_slot: ctx.func.alloca_entry(I64),
+                view,
             };
             let pass = arrays::emit_guard(ctx, &a)?;
             all = ctx.block().and(I1, &all, &pass);
@@ -704,6 +741,7 @@ fn begin_with(
             body,
             &loop_control,
             &receivers,
+            &p.view_reads,
             &p.bare_reads,
             &p.number_local_uses,
             &p.declared_locals,
@@ -742,6 +780,7 @@ fn begin_with(
             token,
             spill_mode: false,
             arrays: arrs,
+            view_index: p.view_index,
             dirty_after: p.dirty_after,
             inner,
             parent_valid: None,
@@ -762,6 +801,67 @@ fn begin_with(
     }
     stat(5, 1);
     Ok(None)
+}
+
+/// A view run at the head of `stmts` (`arrays::view_run_plan`): lowered as
+/// a body region with no receiver of its own, its views guarded once at its
+/// top. Returns how many statements it lowered.
+pub(crate) fn try_lower_view_run(
+    ctx: &mut FnCtx<'_>,
+    stmts: &[Stmt],
+    lower_list: fn(&mut FnCtx<'_>, &[Stmt]) -> Result<()>,
+) -> Result<Option<usize>> {
+    if disabled()
+        || crate::codegen::full_outline_ic_enabled()
+        || crate::expr::typed_feedback_emission_enabled()
+        || !ctx.pending_labels.is_empty()
+        || in_call_free_clone(ctx)
+        || !ctx.region_loop_facts.is_empty()
+        || !ctx.region_loops.is_empty()
+    {
+        return Ok(None);
+    }
+    let Some((len, p, _env)) = arrays::view_run_plan(ctx, stmts) else {
+        return Ok(None);
+    };
+    let run = &stmts[..len];
+    let arrs: Vec<ArrayRecv> = p
+        .arrays
+        .iter()
+        .filter_map(|(r, u)| {
+            let Recv::Local(id) = r else { return None };
+            let v = arrays::view_of(ctx, *id)?;
+            Some(ArrayRecv {
+                recv: *r,
+                max_index: 0,
+                dense: false,
+                store: false,
+                typed: false,
+                counter: None,
+                aliases: Vec::new(),
+                base_slot: String::new(),
+                view: Some(arrays::ViewGuard {
+                    end: u.view_end,
+                    sym: u.view_sym,
+                    data_slot: v.data_slot.clone(),
+                    length_offset: v.length_offset_from_data,
+                }),
+            })
+        })
+        .collect();
+    if arrs.len() != p.arrays.len() {
+        return Ok(None);
+    }
+    let view_index = p.view_index.clone();
+    let mut pending = body_pending(p, run, 0);
+    pending.arrays = arrs;
+    pending.view_index = view_index;
+    ctx.region_loops.push(pending);
+    let idx = ctx.region_loops.len() - 1;
+    let r = lower_split(ctx, run, idx, lower_list);
+    ctx.region_loops.truncate(idx);
+    r?;
+    Ok(Some(len))
 }
 
 /// The body region of `body`: the first `const o = <expr>` whose binding the
@@ -846,6 +946,7 @@ fn number_facts(
     tail: &[Stmt],
     loop_control: &[&Expr],
     receivers: &[Receiver],
+    view_reads: &HashSet<usize>,
     bare_reads: &[(usize, Recv, String)],
     number_local_uses: &HashSet<u32>,
     declared_locals: &HashSet<u32>,
@@ -861,6 +962,7 @@ fn number_facts(
                     .map(|_| *ptr)
             })
         })
+        .chain(view_reads.iter().copied())
         .collect();
     number_facts_from_reads(
         ctx,
@@ -897,6 +999,10 @@ fn number_facts_from_reads(
                 && !ctx.boxed_vars.contains(id)
                 && !ctx.module_globals.contains_key(id)
                 && !ctx.number_by_construction_locals.contains(id)
+                // A typed-array view binding is never a Number: an entry test
+                // of it could only fail.
+                && !ctx.receiver_descriptors.contains_buffer_view(*id)
+                && !ctx.spec_ta_bindings.contains_key(id)
         })
         .collect();
     let empty_inits = HashMap::new();
@@ -992,6 +1098,7 @@ fn body_pending(p: Plan, body: &[Stmt], split_at: usize) -> Pending {
         token,
         spill_mode: false,
         arrays: Vec::new(),
+        view_index: HashSet::new(),
         dirty_after: HashSet::new(),
         inner: None,
         parent_valid: None,
@@ -1214,6 +1321,7 @@ pub(crate) fn lower_split(
     let trees = ctx.region_loops[idx].trees.clone();
     let dirty_slot = ctx.region_loops[idx].dirty_slot.clone();
     let arrs = ctx.region_loops[idx].arrays.clone();
+    let view_index = ctx.region_loops[idx].view_index.clone();
     let dirty_after = ctx.region_loops[idx].dirty_after.clone();
     // The layouts F-body must serve: a loop region's split copy was chosen by
     // its preheader (one layout); a body region chooses per iteration, so it
@@ -1348,6 +1456,11 @@ pub(crate) fn lower_split(
                 all = ctx.block().and(I1, &all, &pass);
                 decode_slots(ctx, rv, &word);
             }
+            // A view run's views (`try_lower_view_run`).
+            for a in &arrs {
+                let pass = arrays::emit_guard(ctx, a)?;
+                all = ctx.block().and(I1, &all, &pass);
+            }
             stat(1, 1);
             decide = (ctx.current_block, all);
         }
@@ -1363,6 +1476,7 @@ pub(crate) fn lower_split(
             tail,
             &[],
             &receivers,
+            &HashSet::new(),
             &bare_reads,
             &number_local_uses,
             &declared_locals,
@@ -1404,6 +1518,7 @@ pub(crate) fn lower_split(
             spill: mode,
             arrays: arrs.clone(),
             emitted_arr: Vec::new(),
+            view_index: view_index.clone(),
             dirty_after: dirty_after.clone(),
         });
         let r = match &inner {

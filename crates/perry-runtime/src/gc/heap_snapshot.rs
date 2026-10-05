@@ -289,7 +289,8 @@ pub fn gc_build_v8_heap_snapshot_json() -> String {
     }
 
     let mut strings = StringTable::new();
-    let root_name = strings.intern("(GC roots)");
+    let thread_id = crate::agent::current_thread_native_id();
+    let root_name = strings.intern(&format!("(GC roots, thread {thread_id})"));
 
     // Per-node labels, computed before the edge pass so the string
     // table fills in node order.
@@ -459,8 +460,8 @@ pub fn gc_build_v8_heap_snapshot_json() -> String {
         r#""location_fields":["object_index","script_id","line","column"]},"#,
     ));
     out.push_str(&format!(
-        r#""node_count":{},"edge_count":{},"trace_function_count":0,"extra_native_bytes":0}},"#,
-        node_count, edge_count
+        r#""node_count":{},"edge_count":{},"trace_function_count":0,"extra_native_bytes":0,"pid":{},"thread_id":{},"agent_id":{}}},"#,
+        node_count, edge_count, std::process::id(), thread_id, crate::agent::current_agent()
     ));
 
     out.push_str(r#""nodes":["#);
@@ -548,5 +549,21 @@ mod tests {
         );
         // Edges array must be non-empty (root edges at minimum).
         assert!(!json.contains(r#""edges":[]"#));
+    }
+}
+
+#[cfg(test)]
+mod thread_metadata_tests {
+    #[test]
+    fn snapshot_metadata_and_root_name_identify_the_calling_thread() {
+        let json = super::gc_build_v8_heap_snapshot_json();
+        let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let tid = crate::agent::current_thread_native_id();
+        assert_eq!(doc["snapshot"]["thread_id"].as_u64(), Some(tid));
+        assert!(doc["strings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s == &format!("(GC roots, thread {tid})")));
     }
 }

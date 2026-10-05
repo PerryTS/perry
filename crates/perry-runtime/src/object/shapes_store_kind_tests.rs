@@ -26,7 +26,7 @@ const PLAIN_CLASS: u32 = 0x5F3A;
 
 /// Every birth derives its kind from its record: class-less unmarked births
 /// are `OrdinaryUnmarked`, marked (`object_alloc_plain`) and class births are
-/// `Ordinary`, a native-module receiver is `OrdinaryUnmarked`.
+/// `Ordinary`, a native-module receiver is `NativeNamespace`.
 #[test]
 fn births_carry_the_kind_their_record_derives() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -58,7 +58,7 @@ fn births_carry_the_kind_their_record_derives() {
 
         let native = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 0);
         let native = with_key(native, "sk_a");
-        assert_eq!(kind_of(native), ShapeObjectKind::OrdinaryUnmarked);
+        assert_eq!(kind_of(native), ShapeObjectKind::NativeNamespace);
         assert!(store_facts_agree(native));
         assert!(!shape_admits_plain_store(object_shape_id(native)));
         assert!(shape_admits_plain_store(object_shape_id(instance)));
@@ -113,7 +113,7 @@ fn a_class_id_rewrite_moves_the_store_kind() {
 
         (*other).class_id = crate::object::NATIVE_MODULE_CLASS_ID;
         restamp_object_store_kind(other);
-        assert_eq!(kind_of(other), ShapeObjectKind::OrdinaryUnmarked);
+        assert_eq!(kind_of(other), ShapeObjectKind::NativeNamespace);
         assert!(store_facts_agree(other));
 
         // A rewrite that keeps the prototype identity (an anonymous-shape

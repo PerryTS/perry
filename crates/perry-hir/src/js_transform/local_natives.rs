@@ -1319,6 +1319,12 @@ pub fn detect_native_instance_creation_with_context(
     local_ids: &HashMap<LocalId, (String, String)>,
 ) -> Option<(String, String)> {
     match expr {
+        // Only the fetch intrinsics prove that the result is a native Response.
+        // An ExternFuncRef named `fetch` can instead be an imported user function
+        // (e.g. npm-registry-fetch) returning an ordinary JavaScript object.
+        Expr::FetchWithOptions { .. }
+        | Expr::FetchGetWithAuth { .. }
+        | Expr::FetchPostWithAuth { .. } => Some(("fetch".to_string(), "Response".to_string())),
         Expr::NativeMethodCall {
             module,
             object: None,
@@ -1431,13 +1437,6 @@ pub fn detect_native_instance_creation_with_context(
                             _ => None,
                         };
                     }
-                }
-            }
-            // Check for global fetch() call
-            if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
-                if name == "fetch" {
-                    // fetch() returns a Response
-                    return Some(("fetch".to_string(), "Response".to_string()));
                 }
             }
             None

@@ -65,6 +65,7 @@ mod map_store;
 mod mark_slot_hoists;
 mod minor_fixed_cost;
 mod native_payload;
+mod native_payload_callbacks;
 mod noncollecting_root_lock;
 mod object_create;
 mod old_free_intrusive;

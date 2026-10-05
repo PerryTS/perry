@@ -93,6 +93,11 @@ fn physics_body() -> Vec<Stmt> {
 /// `function probe(a, b, n, f) { for (let i = 0; i < n; i++) { body } return 0; }`
 /// with `a`/`b` of type `elem`, and `update` replacing `i++` when given.
 fn probe_ir(name: &str, elem: Type, body: Vec<Stmt>, update: Option<Expr>) -> String {
+    let m = probe_module(name, elem, body, update);
+    String::from_utf8(compile_module(&m, opts()).expect("module compiles")).expect("UTF-8 IR")
+}
+
+fn probe_module(name: &str, elem: Type, body: Vec<Stmt>, update: Option<Expr>) -> Module {
     let mut m = Module::new(name);
     m.functions = vec![Function {
         id: 1,
@@ -138,7 +143,7 @@ fn probe_ir(name: &str, elem: Type, body: Vec<Stmt>, update: Option<Expr>) -> St
         was_unrolled: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
-    String::from_utf8(compile_module(&m, opts()).expect("module compiles")).expect("UTF-8 IR")
+    m
 }
 
 fn number_array() -> Type {
@@ -564,4 +569,94 @@ fn an_array_only_read_for_element_values_is_not_a_region_array() {
         ir.contains("rloop.arr."),
         "a value read in a call-free body keeps its array a region array:\n{ir}"
     );
+}
+
+/// Counter-indexed element VALUES of a module const need only the element
+/// facts, and their cached base must be refreshed from the rewritten global
+/// after a poll. The runtime witness is
+/// test_gap_region_module_class_elements.ts under the GC schedule instrument.
+#[test]
+fn a_const_module_array_forms_an_element_region_and_refreshes_after_poll() {
+    const O: u32 = 10;
+    let body = vec![
+        Stmt::Let {
+            id: O,
+            name: "o".to_string(),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(at(A)),
+        },
+        Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::LocalGet(O)),
+                right: Box::new(Expr::Undefined),
+            },
+            then_branch: vec![Stmt::Return(Some(Expr::Integer(1)))],
+            else_branch: None,
+        },
+    ];
+    for mutable in [false, true] {
+        let ty = Type::Array(Box::new(Type::Any));
+        let mut m = probe_module("rarr_module_elements", ty.clone(), body.clone(), None);
+        m.functions[0].params.retain(|p| p.id != A);
+        m.init = vec![Stmt::Let {
+            id: A,
+            name: "a".to_string(),
+            ty,
+            mutable,
+            init: Some(Expr::Array(Vec::new())),
+        }];
+        let ir = String::from_utf8(compile_module(&m, opts()).expect("module compiles"))
+            .expect("UTF-8 IR");
+        crate::testing::verify_ir(&ir, "rarr_module_elements")
+            .unwrap_or_else(|e| panic!("LLVM rejected the module: {e}\n{ir}"));
+        if mutable {
+            assert!(
+                !ir.contains("rloop.fast"),
+                "a mutable module binding cannot be guarded once:\n{ir}"
+            );
+            continue;
+        }
+        let functions = probe_fn_irs(&ir);
+        let admitted: Vec<_> = functions
+            .iter()
+            .filter(|f| f.contains("rloop.fast"))
+            .collect();
+        assert!(
+            !admitted.is_empty(),
+            "the const's element-only loop formed no region:\n{ir}"
+        );
+        // Labels repeat across specialised and generic clones; inspect each
+        // function on its own so a successor never resolves in another clone.
+        for function in admitted {
+            let f = f_body(function).join("\n");
+            assert!(
+                f.contains("load i64")
+                    && f.contains("inttoptr i64")
+                    && !f.contains("index_get_guard"),
+                "the F-body must read the NaN-boxed element directly:\n{f}"
+            );
+            let refreshes: Vec<_> = probe_blocks(function)
+                .into_iter()
+                .filter(|(label, _)| label.starts_with("rloop.arr.refresh."))
+                .collect();
+            assert!(
+                !refreshes.is_empty(),
+                "the region needs a poll refresh:\n{function}"
+            );
+            for (_, lines) in refreshes {
+                let text = lines.join("\n");
+                // Native roots can express the load as ptr addrspace(1);
+                // shadow roots use double. Both read the rewritten global.
+                let reloads_global = lines
+                    .iter()
+                    .any(|l| l.contains(" = load ") && l.contains("ptr @perry_global_"));
+                assert!(
+                    reloads_global && text.contains("store i64"),
+                    "the poll refresh must derive and store the base from the global root:\n{text}"
+                );
+            }
+        }
+    }
 }

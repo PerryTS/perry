@@ -117,6 +117,7 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "sessionStorage"
             | "WebSocket"
             | "FinalizationRegistry"
+            | "performance"
             | "Performance"
             | "PerformanceEntry"
             | "PerformanceMark"

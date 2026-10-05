@@ -1,0 +1,1 @@
+`o.hasOwnProperty(k)` / `Object.hasOwn(o, k)` on an ordinary object is answered from its shape (key identity, then text, then the shape key index), skipping the per-call probes: 981 → 325 instructions per call; qs -1.0%, commander -0.2%. (#12009)

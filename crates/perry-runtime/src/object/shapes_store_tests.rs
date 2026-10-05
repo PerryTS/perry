@@ -45,6 +45,7 @@ fn kind_codes_round_trip() {
         ShapeObjectKind::FunctionDictionary,
         ShapeObjectKind::OrdinaryUnmarked,
         ShapeObjectKind::OrdinaryNumericProof,
+        ShapeObjectKind::NativeNamespace,
     ] {
         assert!(kind.code() as u32 <= RECORD_KIND_MAX_CODE);
         let r = ShapeRecord::new(0x1000, 1, 1, 0, kind, 0);

@@ -130,14 +130,15 @@ fn number_operand_reads(e: &Expr, out: &mut Vec<(usize, Recv, String)>) {
 
 /// Local value operands whose incoming Number-ness can be discharged by
 /// the region's strict entry tests. A receiver beneath PropertyGet is an
-/// object, not a candidate Number value.
+/// object, not a candidate Number value; so is the receiver of an element
+/// read, and its key is a property key (the read's VALUE is the operand).
 fn number_operand_locals(e: &Expr, out: &mut HashSet<u32>) {
     match e {
         Expr::LocalGet(id) => {
             out.insert(*id);
             return;
         }
-        Expr::PropertyGet { .. } => return,
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. } => return,
         _ => {}
     }
     perry_hir::walker::walk_expr_children(e, &mut |child| number_operand_locals(child, out));
@@ -183,6 +184,14 @@ pub(super) struct Planner<'p, 'a> {
     number_local_uses: HashSet<u32>,
     bare_reads: Vec<(usize, Recv, String)>,
     bare_arrays: HashSet<Recv>,
+    /// The index expressions of bare VIEW accesses (their bounds are the
+    /// region guard's, `arrays::view_bounds_proven`).
+    view_index: HashSet<usize>,
+    /// Bare VIEW element reads (Numbers by construction: the 5L fixed
+    /// point's leaves), and every VIEW read a guard covers whether or not
+    /// it is reached fresh (the fixed point's optimistic start).
+    view_reads: Vec<usize>,
+    view_cands: Vec<usize>,
     /// A body region nested in this loop region (array regions): while its
     /// tail is walked, its bare accesses run no JS and its fact trees only
     /// set the loop's dirty flag.
@@ -262,7 +271,7 @@ impl Planner<'_, '_> {
             }
             Expr::LocalGet(id) if self.proof_locals.contains(id) => true,
             // A bare element read of a dense raw-f64 array: a double.
-            Expr::IndexGet { .. } => self.f64_element(e),
+            Expr::IndexGet { .. } => self.f64_element(e) || self.view_element(e),
             Expr::Binary { left, right, .. } => self.prim(left) && self.prim(right),
             Expr::Unary { op, operand } if !matches!(op, UnaryOp::Not) => self.prim(operand),
             _ => prim(e) || crate::type_analysis::is_numeric_expr(self.ctx, e),
@@ -282,6 +291,30 @@ impl Planner<'_, '_> {
                 .is_some_and(|u| u.dense())
     }
 
+    /// A planned-bare element read of a VIEW receiver: a Number (every
+    /// proven view kind holds Numbers; a float lane is canonicalised).
+    fn view_element(&self, e: &Expr) -> bool {
+        let Expr::IndexGet { object, .. } = e else {
+            return false;
+        };
+        self.bare.contains(&(e as *const Expr as usize))
+            && self
+                .env
+                .array(object)
+                .and_then(|r| self.arrays.get(&r))
+                .is_some_and(|u| u.view)
+    }
+
+    /// A bare VIEW access at `index` of `r`, with the facts fresh?
+    fn view_access(&self, r: Recv, index: &Expr, st: &St) -> bool {
+        self.arrays.get(&r).is_some_and(|u| u.view)
+            && self
+                .env
+                .view_end(index)
+                .is_some_and(|end| self.arrays[&r].view_covers(end))
+            && st.as_ref().is_some_and(|m| m.get(&r) == Some(&FRESH))
+    }
+
     /// A canonical double by construction, for a bare element STORE: the
     /// mirror of `expr_produces_canonical_raw_f64` over this plan's bare
     /// element reads (lowering asks that predicate again with the facts
@@ -290,7 +323,7 @@ impl Planner<'_, '_> {
     fn num(&self, e: &Expr) -> bool {
         match e {
             Expr::Number(_) | Expr::Integer(_) => true,
-            Expr::IndexGet { .. } => self.f64_element(e),
+            Expr::IndexGet { .. } => self.f64_element(e) || self.view_element(e),
             // Every binary operator over two Numbers yields a Number.
             Expr::Binary { left, right, .. } => self.num(left) && self.num(right),
             Expr::Unary { op, operand } => {
@@ -314,6 +347,30 @@ impl Planner<'_, '_> {
         let Some((object, index, value)) = arrays::element_store(e) else {
             return self.stale(e, st);
         };
+        // A VIEW store of a primitive: ToNumber of a primitive runs no JS,
+        // and an element store changes no length.
+        if let Some(r) = self.env.array(object) {
+            if self.arrays.get(&r).is_some_and(|u| u.view) {
+                // ...and only a value the native element store takes (else
+                // the store is a runtime call).
+                let native = match r {
+                    Recv::Local(id) => arrays::view_of(self.ctx, id).is_some_and(|v| {
+                        crate::expr::typed_array_store_value_is_native(self.ctx, &v, value)
+                    }),
+                    Recv::This => false,
+                };
+                if self.view_access(r, index, st) && self.prim(value) && native {
+                    if self.record {
+                        self.bare.insert(e as *const Expr as usize);
+                        self.view_index.insert(index as *const Expr as usize);
+                        self.bare_arrays.insert(r);
+                    }
+                } else {
+                    self.stale(e, st);
+                }
+                return;
+            }
+        }
         let r = self
             .env
             .array(object)
@@ -472,6 +529,27 @@ impl Planner<'_, '_> {
                     .env
                     .array(object)
                     .filter(|r| self.arrays.contains_key(r));
+                if let Some(r) = r.filter(|r| self.arrays[r].view) {
+                    let covered = self
+                        .env
+                        .view_end(index)
+                        .is_some_and(|end| self.arrays[&r].view_covers(end));
+                    if covered && self.record {
+                        self.view_cands.push(e as *const Expr as usize);
+                    }
+                    if self.view_access(r, index, &st) {
+                        if self.record {
+                            self.view_reads.push(e as *const Expr as usize);
+                            self.bare.insert(e as *const Expr as usize);
+                            self.view_index
+                                .insert(index.as_ref() as *const Expr as usize);
+                            self.bare_arrays.insert(r);
+                        }
+                    } else {
+                        self.stale(e, &mut st);
+                    }
+                    return st;
+                }
                 match r {
                     Some(r)
                         if self.env.index(index).is_some()
@@ -616,8 +694,9 @@ impl Planner<'_, '_> {
             | Expr::FuncRef(_)
             | Expr::This => st,
             // A local ++/-- ToNumerics its operand (valueOf on an object).
+            // A ranged local (a view proof's counter) is an integer Number.
             Expr::Update { id, .. } => {
-                if !self.ctx.integer_locals.contains(id) {
+                if !self.ctx.integer_locals.contains(id) && !self.env.ranges.contains_key(id) {
                     self.stale(e, &mut st);
                 }
                 st
@@ -1169,6 +1248,12 @@ pub(super) struct Plan {
     pub(super) recheck: Recheck,
     /// Array receivers with a bare access, and what their accesses need.
     pub(super) arrays: Vec<(Recv, ArrayUse)>,
+    /// The index expressions of bare VIEW accesses.
+    pub(super) view_index: HashSet<usize>,
+    /// Bare VIEW element reads (Numbers by construction) and every covered
+    /// VIEW read (see `Planner::view_reads`).
+    pub(super) view_reads: HashSet<usize>,
+    view_cands: HashSet<usize>,
     /// Statements after which F-body sets the dirty flag (`Planner::mark_dirty`).
     pub(super) dirty_after: HashSet<usize>,
     /// The expressions the final walk judged able to run JS.
@@ -1231,6 +1316,9 @@ pub(super) fn plan(
                 .map(|_| *ptr)
         })
         .collect();
+    // VIEW reads start optimistic (every covered read), and the descending
+    // fixed point keeps the ones a walk really makes bare.
+    proof_reads.extend(seed.view_cands.iter().copied());
     if proof_reads.is_empty() {
         return Some(seed);
     }
@@ -1274,6 +1362,7 @@ pub(super) fn plan(
                             .map(|_| *ptr)
                     })
             })
+            .chain(p.view_reads.iter().copied())
             .collect();
         let (locals, _) = number_facts_from_reads(
             ctx,
@@ -1359,6 +1448,9 @@ fn plan_once<'p, 'a>(
         number_local_uses: HashSet::new(),
         bare_reads: Vec::new(),
         bare_arrays: HashSet::new(),
+        view_index: HashSet::new(),
+        view_reads: Vec::new(),
+        view_cands: Vec::new(),
         inner: inner.map(|(_, b, t, s)| (b, t, s)),
         in_inner: false,
         record_dirty: false,
@@ -1432,6 +1524,9 @@ fn plan_once<'p, 'a>(
         };
     }
     let bare = std::mem::take(&mut p.bare);
+    let view_index = std::mem::take(&mut p.view_index);
+    let view_reads: HashSet<usize> = std::mem::take(&mut p.view_reads).into_iter().collect();
+    let view_cands: HashSet<usize> = std::mem::take(&mut p.view_cands).into_iter().collect();
     let number_reads = std::mem::take(&mut p.number_reads);
     let bare_reads = std::mem::take(&mut p.bare_reads);
     let mut number_local_uses = std::mem::take(&mut p.number_local_uses);
@@ -1582,6 +1677,9 @@ fn plan_once<'p, 'a>(
         trees,
         recheck,
         arrays: plan_arrays,
+        view_index,
+        view_reads,
+        view_cands,
         dirty_after,
         stale_at: p.stale_at.take(),
     })

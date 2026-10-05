@@ -6,6 +6,119 @@ pub(super) unsafe fn object_has_null_proto_flag(object: *const ObjectHeader) -> 
     ((*gc_header)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO) != 0
 }
 
+/// Resolve `method_name` through an ORDINARY object's prototype chain and call
+/// it with the receiver as `this` — Get, then Call, as for any method.
+///
+/// * `Some(Some(result))`: the chain holds the method; it was called.
+/// * `Some(None)`: the receiver is an ordinary object whose chain ends in
+///   `null` without the method; the caller falls through to the miss, which
+///   throws "is not a function".
+/// * `None`: the receiver is not an ordinary object with a modeled chain; the
+///   caller answers for the receiver's kind.
+/// An ordinary object: a heap `ObjectHeader` (plain object, class instance,
+/// `Object.create(..)` result, Error, …) whose method lookup is this
+/// dispatcher's own-property / class / prototype-chain walk. Primitives,
+/// functions, classes, arrays, collections, buffers and handles are not.
+pub(super) unsafe fn is_ordinary_object_receiver(object: f64) -> bool {
+    let receiver = JSValue::from_bits(object.to_bits());
+    if !receiver.is_pointer()
+        || crate::object::class_value::legacy_class_value_word(object.to_bits()).is_some()
+    {
+        return false;
+    }
+    let obj = receiver.as_pointer::<ObjectHeader>();
+    if obj.is_null()
+        || crate::value::addr_class::is_small_handle(obj as usize)
+        || !is_valid_obj_ptr(obj as *const u8)
+    {
+        return false;
+    }
+    let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT
+}
+
+/// The builtin `Object.prototype.hasOwnProperty` /
+/// `Object.prototype.propertyIsEnumerable` applied to `object`.
+pub(super) fn call_builtin_object_proto_method(
+    object: f64,
+    method_name: &str,
+    args: &[f64],
+) -> f64 {
+    let key = args
+        .first()
+        .copied()
+        .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED));
+    if method_name == "hasOwnProperty" {
+        super::object_ops::js_object_has_own(object, key)
+    } else {
+        super::js_object_property_is_enumerable(object, key)
+    }
+}
+
+pub(super) unsafe fn call_ordinary_receiver_inherited_method(
+    object_handle: &crate::gc::RuntimeHandle,
+    method_name: &str,
+    arg_handles: &[crate::gc::RuntimeHandle],
+) -> Option<Option<f64>> {
+    call_ordinary_receiver_inherited_method_unless(object_handle, method_name, arg_handles, None)
+}
+
+/// [`call_ordinary_receiver_inherited_method`], except that a resolved method
+/// whose body is `native` is not called: `None` is returned and the caller
+/// answers with that very builtin itself (no rebound closure per call).
+pub(super) unsafe fn call_ordinary_receiver_inherited_method_unless(
+    object_handle: &crate::gc::RuntimeHandle,
+    method_name: &str,
+    arg_handles: &[crate::gc::RuntimeHandle],
+    native: Option<fn(*const u8) -> bool>,
+) -> Option<Option<f64>> {
+    if !is_ordinary_object_receiver(object_handle.get_nanbox_f64()) {
+        return None;
+    }
+    // The thread's canonical interned key: no allocation per call.
+    let key_ptr =
+        crate::string::canonical_key(method_name.as_bytes()) as *const crate::StringHeader;
+    if key_ptr.is_null() {
+        return None;
+    }
+    let receiver = object_handle.get_nanbox_f64();
+    let obj = JSValue::from_bits(receiver.to_bits()).as_pointer::<ObjectHeader>();
+    let inherited = super::prototype_chain::resolve_inherited_field(obj as usize, key_ptr)
+        .or_else(|| super::field_get_set::ordinary_object_prototype_property_value(obj, key_ptr));
+    if let Some(method) = inherited {
+        let method = f64::from_bits(method.bits());
+        if let Some(is_native) = native {
+            let addr = (method.to_bits() & crate::value::POINTER_MASK) as usize;
+            if JSValue::from_bits(method.to_bits()).is_pointer()
+                && crate::closure::is_closure_ptr(addr)
+                && is_native((*(addr as *const crate::closure::ClosureHeader)).code())
+            {
+                return None;
+            }
+        }
+        if crate::collection_iter::is_callable(method)
+            && !is_self_redispatching_proto_method(method, method_name)
+        {
+            let receiver = object_handle.get_nanbox_f64();
+            let bound = crate::closure::clone_closure_rebind_this(method.to_bits(), receiver);
+            let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
+            return Some(Some(crate::closure::native_call_value_this(
+                f64::from_bits(bound),
+                crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
+                args.as_ptr(),
+                args.len(),
+            )));
+        }
+        return None;
+    }
+    if object_has_null_proto_flag(obj)
+        || super::prototype_chain::prototype_chain_ends_in_explicit_null(obj as usize)
+    {
+        return Some(None);
+    }
+    None
+}
+
 pub(super) unsafe fn call_object_to_string_method(object: f64) -> Option<f64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let object_handle = scope.root_nanbox_f64(object);

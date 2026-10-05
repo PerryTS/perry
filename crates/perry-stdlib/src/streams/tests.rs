@@ -178,6 +178,7 @@ fn root_scanner_emits_callbacks_chunks_and_promises() {
                 error_value: 0x7FFF_0000_0000_4567,
                 pending_error_after_chunks: None,
                 canceled: false,
+                disturbed: false,
             },
         );
     }

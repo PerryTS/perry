@@ -874,18 +874,20 @@ pub extern "C" fn js_fetch_response_ok(handle: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_response_body_used(handle: f64) -> f64 {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let response_id = handle_id(handle);
-    let guard = FETCH_RESPONSES.lock().unwrap();
-    tagged_bool(
-        guard
-            .get(&response_id)
-            .map(|resp| resp.body_used)
-            .unwrap_or(false),
-    )
+    tagged_bool(response_body_is_used(handle_id(handle)))
 }
 
 fn consume_response_body(handle: f64) -> Result<Vec<u8>, &'static str> {
     let response_id = handle_id(handle);
+    let stream_id = FETCH_RESPONSES
+        .lock()
+        .unwrap()
+        .get(&response_id)
+        .and_then(|r| r.body_stream_id);
+    let stream_unusable = stream_id.is_some_and(|id| {
+        let (locked, disturbed) = crate::streams::readable_body_state(id);
+        locked || disturbed
+    });
     let (body, stream_id) = {
         let mut guard = FETCH_RESPONSES.lock().unwrap();
         let resp = guard
@@ -894,11 +896,11 @@ fn consume_response_body(handle: f64) -> Result<Vec<u8>, &'static str> {
         if !resp.body_present {
             return Ok(Vec::new());
         }
-        if resp.body_used {
+        if resp.body_used || stream_unusable {
             return Err(BODY_ALREADY_USED_MESSAGE);
         }
         resp.body_used = true;
-        (resp.body.clone(), resp.body_stream_id)
+        (std::mem::take(&mut resp.body), resp.body_stream_id)
     };
     if let Some(stream_id) = stream_id {
         return Ok(crate::streams::drain_readable_into_bytes(stream_id));

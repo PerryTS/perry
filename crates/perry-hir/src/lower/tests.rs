@@ -75,6 +75,28 @@ fn a_lexical_fetch_result_is_not_registered_as_a_native_response() {
     );
 }
 
+#[test]
+fn an_imported_fetch_result_keeps_userland_method_dispatch() {
+    let source = r#"
+        import { fetch } from "./registry-fetch";
+        async function run() {
+            const response = await fetch("http://localhost/");
+            return response.json();
+        }
+    "#;
+    let module =
+        perry_parser::parse_typescript(source, "imported-fetch.ts").expect("source parses");
+    let mut hir =
+        super::lower_module(&module, "imported-fetch", "imported-fetch.ts").expect("source lowers");
+    crate::ir::clear_current_module_source();
+    crate::js_transform::fix_local_native_instances(&mut hir);
+    let dump = format!("{hir:?}");
+    assert!(
+        !dump.contains("NativeMethodCall { module: \"fetch\", class_name: Some(\"Response\")"),
+        "an imported fetch function must keep userland Response dispatch: {dump}"
+    );
+}
+
 mod buffer_static_values;
 mod class_decl_self_binding;
 mod fresh_class_extends_renamed;

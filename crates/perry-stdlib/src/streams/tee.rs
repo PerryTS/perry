@@ -407,13 +407,16 @@ extern "C" fn tee_pull_microtask(
                 // regardless of which branch's read triggered the pull.
                 // Byte tees clone the chunk for branch-b (CloneAsUint8Array)
                 // so the two branches never share a mutable buffer.
+                let scope = perry_runtime::gc::RuntimeHandleScope::new();
+                let bits = scope.root_nanbox_u64(bits);
                 let b_bits = if is_byte {
-                    byob::clone_byte_chunk(bits)
+                    byob::clone_byte_chunk(bits.get_nanbox_u64())
                 } else {
-                    bits
+                    bits.get_nanbox_u64()
                 };
-                tee_deliver(a, bits, is_byte);
-                tee_deliver(b, b_bits, is_byte);
+                let b_bits = scope.root_nanbox_u64(b_bits);
+                tee_deliver(a, bits.get_nanbox_u64(), is_byte);
+                tee_deliver(b, b_bits.get_nanbox_u64(), is_byte);
                 // Chain the next cycle while the source has backlog or a
                 // pending close; the demand gate at the cycle's entry keeps
                 // pre-fill from ever happening.
@@ -565,6 +568,7 @@ pub(crate) unsafe fn tee_readable_stream_ids(id: usize) -> (usize, usize) {
                     error_value: branch_error_value,
                     pending_error_after_chunks: None,
                     canceled: false,
+                    disturbed: false,
                 },
             );
         }

@@ -629,3 +629,70 @@ fn a_property_read_or_mutable_computed_length_is_not_a_length_form() {
         );
     }
 }
+
+/// `var A = [1,2,3]; A[<key>] = 0; const P = new Int32Array(A); f(P)` with the
+/// extra `pre` statements ahead of the store. Returns P's proven length.
+fn store_key_const_len(pre: Vec<Stmt>, key: Expr) -> Option<Option<i64>> {
+    let mut body = vec![let_stmt(
+        1,
+        true,
+        Expr::Array(vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)]),
+    )];
+    body.extend(pre);
+    body.push(Stmt::Expr(Expr::IndexSet {
+        object: Box::new(Expr::LocalGet(1)),
+        index: Box::new(key),
+        value: Box::new(Expr::Integer(0)),
+    }));
+    body.push(let_stmt(
+        2,
+        false,
+        ta_new(TYPED_ARRAY_KIND_INT32, Some(Expr::LocalGet(1))),
+    ));
+    body.push(Stmt::Expr(call(7, vec![Expr::LocalGet(2)])));
+    let facts = collect_spec_abi_facts(&module_with_init(body));
+    facts.ta_bindings.get(&2).map(|b| b.const_len)
+}
+
+#[test]
+fn element_store_with_a_numeric_key_keeps_the_constant_length() {
+    // Growing or overwriting through a numeric key never shrinks the array.
+    assert_eq!(store_key_const_len(vec![], Expr::Integer(1)), Some(Some(3)));
+    assert_eq!(
+        store_key_const_len(
+            vec![let_stmt(3, false, Expr::Integer(2))],
+            Expr::LocalGet(3)
+        ),
+        Some(Some(3))
+    );
+}
+
+#[test]
+fn element_store_that_may_be_length_demotes_the_constant_length() {
+    // #11973: `for (a["length"] of [2]) {}` lowers to `a["length"] = 2` as an
+    // `IndexSet`, which truncates `a`. The literal key, a local holding the
+    // string, and a `+` that builds the string must all demote; the binding
+    // stays proven non-view.
+    assert_eq!(
+        store_key_const_len(vec![], Expr::String("length".into())),
+        Some(None)
+    );
+    assert_eq!(
+        store_key_const_len(
+            vec![let_stmt(3, false, Expr::String("length".into()))],
+            Expr::LocalGet(3)
+        ),
+        Some(None)
+    );
+    assert_eq!(
+        store_key_const_len(
+            vec![],
+            Expr::Binary {
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::String("len".into())),
+                right: Box::new(Expr::String("gth".into())),
+            }
+        ),
+        Some(None)
+    );
+}

@@ -497,10 +497,11 @@ pub(super) fn try_module_static_methods(
             // `now()` keeps its dedicated Expr; the rest lower to a
             // receiver-less NativeMethodCall on the perf_hooks module, which
             // the codegen dispatches to the `js_perf_*` runtime helpers. This
-            // is purely syntactic (matches the identifier `performance`), so
-            // it fires whether `performance` is the global or the named
-            // import from node:perf_hooks.
-            if obj_ident.sym.as_ref() == "performance" {
+            // applies only to the unshadowed global. Imports and local objects
+            // use normal receiver dispatch, preserving their actual methods.
+            if obj_ident.sym.as_ref() == "performance"
+                && !ctx.shadows_unqualified_global("performance")
+            {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let m = method_ident.sym.as_ref();
                     if m == "now" {

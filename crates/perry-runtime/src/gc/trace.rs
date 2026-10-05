@@ -1801,6 +1801,12 @@ pub(super) unsafe fn trace_heap_rewrite_slots(
     valid_ptrs: &ValidPointerSet,
     worklist: &mut Vec<*mut GcHeader>,
 ) {
+    #[cfg(test)]
+    if (*header).obj_type == GC_TYPE_NATIVE_HANDLE
+        && crate::native_payload::callback_sabotage("mark")
+    {
+        return;
+    }
     // #10182: two per-object facts read once instead of once per slot —
     // whether the proxy registry observes this trace (it changes only when a
     // proxy is created, and none is created inside one object's visit), and

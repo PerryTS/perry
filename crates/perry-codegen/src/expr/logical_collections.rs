@@ -1420,11 +1420,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         } => {
             let obj = lower_expr(ctx, object)?;
             // The rooting window between these two operands is empty:
-            // lowering `this` only reads the current binding and cannot GC.
+            // loading the lexical brand context cannot collect.
             let brand_owner = if *receiver_is_brand_owner {
                 obj.clone()
             } else {
-                lower_expr(ctx, &Expr::This)?
+                super::this_super_call::load_private_brand_owner(ctx)
             };
             let class_id = if *declaring_class_id != 0 {
                 *declaring_class_id
@@ -1460,11 +1460,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // PropertySet / method-call lowering then operates on the result.
             let obj = lower_expr(ctx, object)?;
             // The rooting window between these two operands is empty:
-            // lowering `this` only reads the current binding and cannot GC.
+            // loading the lexical brand context cannot collect.
             let brand_owner = if *receiver_is_brand_owner {
                 obj.clone()
             } else {
-                lower_expr(ctx, &Expr::This)?
+                super::this_super_call::load_private_brand_owner(ctx)
             };
             // Prefer the declaring class's unique HIR id carried on the node.
             // Resolving `class_name` through `class_ids` is ambiguous: that map

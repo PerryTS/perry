@@ -8,6 +8,16 @@ pub(crate) fn get_field_by_name_object_tail(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> JSValue {
+    // Direct tail callers usually resolve a slot or method before the URL
+    // fallback. Defer classification until that fallback actually needs it.
+    get_field_by_name_object_tail_with_kind(obj, key, None)
+}
+
+pub(super) fn get_field_by_name_object_tail_with_kind(
+    obj: *const ObjectHeader,
+    key: *const crate::StringHeader,
+    ordinary_receiver: Option<bool>,
+) -> JSValue {
     if crate::hot_diag::receiver_repr_on() {
         let addr = (obj as u64 & 0x0000_FFFF_FFFF_FFFF) as usize;
         crate::hot_diag::receiver_repr_note_decoded_pointer(addr);
@@ -1882,24 +1892,13 @@ pub(crate) fn get_field_by_name_object_tail(
             }
         }
 
-        // #5961: native URLSearchParams is an ordinary object (class_id == 0,
-        // leading `_entries` slot) whose method surface normally exists only
-        // via static type-directed lowering. A type-erased receiver lands
-        // here instead — resolve the methods dynamically so `sp.append(...)`
-        // stays callable, and `size` reads as a number.
-        if !key.is_null() && crate::url::search_params::shape_is_url_search_params(obj) {
-            if let Ok(name) = std::str::from_utf8(key_bytes) {
-                if name == "size" {
-                    let n = crate::url::search_params::js_url_search_params_size(
-                        obj as *mut ObjectHeader,
-                    );
-                    return JSValue::from_bits((n as f64).to_bits());
-                }
-                if let Some(v) =
-                    crate::url::search_params::url_search_params_method_value(obj, name)
-                {
-                    return JSValue::from_bits(v.to_bits());
-                }
+        let ordinary_receiver = ordinary_receiver.unwrap_or_else(|| {
+            super::exotic_named_read::named_read_receiver_kind(obj)
+                == super::exotic_named_read::NamedReadKind::Ordinary
+        });
+        if !ordinary_receiver {
+            if let Some(value) = super::exotic_named_read::search_params_read(obj, key, key_bytes) {
+                return value;
             }
         }
 

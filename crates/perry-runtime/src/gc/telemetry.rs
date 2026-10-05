@@ -1340,6 +1340,9 @@ impl GcCycleTrace {
         });
         serde_json::json!({
             "event": "gc_cycle",
+            "pid": std::process::id(),
+            "thread_id": crate::agent::current_thread_native_id(),
+            "agent_id": crate::agent::current_agent(),
             "collection_kind": self.collection_kind.as_str(),
             "pause_us": self.pause_us,
             "phase_us": self.phase_us,
@@ -1738,3 +1741,42 @@ pub(super) fn steps_json(before: GcStepSnapshot, after: GcStepSnapshot) -> serde
 // already uses for pointer-typed locals. The GC tracer in Phase B+
 // will call `try_mark_value` on each non-zero slot, matching the
 // closure-capture tracer's pattern.
+
+#[cfg(all(test, perry_diagnostics))]
+mod thread_identity_tests {
+    use super::*;
+
+    fn record() -> serde_json::Value {
+        let trigger = GcTriggerSnapshot {
+            kind: GcTriggerKind::Manual,
+            steps_before: Some(GcStepSnapshot::current()),
+        };
+        GcCycleTrace::new(GcCollectionKind::Full, trigger)
+            .unwrap()
+            .into_json(GcStepSnapshot::current())
+    }
+
+    #[test]
+    fn gc_records_name_the_emitting_thread_and_heap() {
+        let main = record();
+        assert_eq!(
+            main["thread_id"].as_u64(),
+            Some(crate::agent::current_thread_native_id())
+        );
+        assert_eq!(main["pid"].as_u64(), Some(std::process::id() as u64));
+        let worker = std::thread::spawn(|| {
+            let agent = crate::agent::enter_worker_agent();
+            let event = record();
+            assert_eq!(event["agent_id"].as_u64(), Some(agent));
+            assert_eq!(
+                event["thread_id"].as_u64(),
+                Some(crate::agent::current_thread_native_id())
+            );
+            event
+        })
+        .join()
+        .unwrap();
+        assert_ne!(main["thread_id"], worker["thread_id"]);
+        assert_ne!(main["agent_id"], worker["agent_id"]);
+    }
+}

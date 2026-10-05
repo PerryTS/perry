@@ -131,6 +131,7 @@ fn rewrite_visitor_name(kind: GcRewriteDescriptorKind) -> &'static str {
         GcRewriteDescriptorKind::NativePodView => "NativePodViewFields",
         GcRewriteDescriptorKind::ObjectMeta => "ObjectMeta",
         GcRewriteDescriptorKind::MetaOnly => "MetaOnlyFields",
+        GcRewriteDescriptorKind::NativeHandle => "NativeHandleOwner",
         GcRewriteDescriptorKind::Buffer => "BufferBacking",
     }
 }
