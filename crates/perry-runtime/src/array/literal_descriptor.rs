@@ -15,10 +15,11 @@ pub struct LiteralShape {
     raw_mask_len: u32,
     pointer_mask: *const u64,
     pointer_mask_len: u32,
+    /// Capacity only; descriptor payload still contains exactly field_count values.
+    /// This occupies existing LP64 padding, preserving the 64-byte record stride.
+    allocation_width: u32,
     /// The birth rep codegen gave the shape id (charter step 5).
     rep: u64,
-    /// Capacity only; descriptor payload still contains exactly field_count values.
-    allocation_width: u32,
 }
 
 struct Reader<'a> {
@@ -128,6 +129,17 @@ pub extern "C" fn js_value_from_literal_descriptor(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn literal_shape_reservation_fits_existing_lp64_record() {
+        // Codegen emits arrays of these C records. Keep the original stride
+        // and offsets of existing fields when adding capacity metadata.
+        assert_eq!(std::mem::size_of::<LiteralShape>(), 64);
+        assert_eq!(std::mem::offset_of!(LiteralShape, allocation_width), 52);
+        assert_eq!(std::mem::offset_of!(LiteralShape, pointer_mask), 40);
+        assert_eq!(std::mem::offset_of!(LiteralShape, rep), 56);
+    }
 
     #[test]
     fn literal_descriptor_preserves_shape_freshness_and_traced_children() {

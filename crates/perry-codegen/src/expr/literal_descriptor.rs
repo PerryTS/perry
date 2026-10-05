@@ -12,7 +12,7 @@ use crate::types::{DOUBLE, I32, PTR};
 const MIN_NODES: usize = 256;
 const MAX_DEPTH: usize = 128;
 // Must match runtime::array::literal_descriptor::LiteralShape (repr(C)).
-const SHAPE_TYPE: &str = "{ i32, i32, ptr, ptr, ptr, i32, ptr, i32, i64, i32 }";
+const SHAPE_TYPE: &str = "{ i32, i32, ptr, ptr, ptr, i32, ptr, i32, i32, i64 }";
 
 #[derive(Default)]
 struct Descriptor {
@@ -70,7 +70,7 @@ impl Descriptor {
             );
         self.shapes.push(format!(
             "{SHAPE_TYPE} {{ i32 {class_id}, i32 {argc}, ptr @{keys}, ptr @{shape_id}, \
-             ptr {raw_mask}, i32 {}, ptr {pointer_mask}, i32 {}, i64 {rep}, i32 {width} }}",
+             ptr {raw_mask}, i32 {}, ptr {pointer_mask}, i32 {}, i32 {width}, i64 {rep} }}",
             layout.raw_f64_mask_words.len(),
             layout.pointer_mask_words.len(),
         ));

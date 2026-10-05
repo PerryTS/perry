@@ -395,7 +395,7 @@ fn born_wide_descriptor_keeps_payload_count_and_allocation_width_distinct() {
         "payload arity remains the key count"
     );
     assert!(
-        shape.contains(", i32 3 }"),
+        shape.contains(", i32 3, i64 "),
         "descriptor must carry the shared birth width: {shape}"
     );
     assert_literal_width(&module, 3);
