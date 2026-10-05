@@ -446,6 +446,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
     if obj_ptr == 0 {
         return;
     }
+    crate::typedarray_named::note_prototype_mutation(obj_ptr, user_override);
     // Whatever else this link does, the TARGET is now somebody's prototype, so
     // a later structural mutation of it is invisible to everything below it.
     // The inherited-read cache refuses to record an unmarked hop, so a link

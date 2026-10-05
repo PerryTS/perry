@@ -33,9 +33,8 @@ use crate::native_value::{
 };
 use crate::rooting;
 use crate::type_analysis::{
-    is_array_expr, is_map_expr, is_numeric_typed_array_class, is_set_expr, is_string_expr,
-    is_url_search_params_expr, is_url_search_params_subclass_expr, receiver_class_name,
-    receiver_is_error_type,
+    is_array_expr, is_map_expr, is_set_expr, is_string_expr, is_url_search_params_expr,
+    is_url_search_params_subclass_expr, receiver_class_name, receiver_is_error_type,
 };
 use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
 
@@ -304,12 +303,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // barrier-free module and use full property semantics otherwise.
             if ctx.module_has_shape_barrier_sites {
                 let recv = lower_expr(ctx, object)?;
+                let key_idx = ctx.strings.intern("length");
+                let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                let key_box = ctx.block().load(DOUBLE, &key_global);
+                let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+                let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
                 return Ok(ctx.block().call(
                     DOUBLE,
-                    "js_value_length_property_f64",
-                    &[(DOUBLE, &recv)],
+                    "js_value_length_property_key_ic_f64",
+                    &[(DOUBLE, &recv), (PTR, "null"), (I64, &key_raw)],
                 ));
             }
+            let native_idx = ctx.new_block("named.native");
+            let slow_idx = ctx.new_block("named.slow");
+            let done_idx = ctx.new_block("named.done");
+            let native_label = ctx.block_label(native_idx);
+            let slow_label = ctx.block_label(slow_idx);
+            let done_label = ctx.block_label(done_idx);
+            let invalidated =
+                ctx.block()
+                    .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
+            let pristine = ctx.block().icmp_eq(I8, &invalidated, "0");
+            ctx.block().cond_br(&pristine, &native_label, &slow_label);
+            ctx.current_block = native_idx;
             let arr_id = match object.as_ref() {
                 Expr::LocalGet(id) => *id,
                 _ => unreachable!(),
@@ -359,29 +375,31 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 false,
                 Vec::new(),
             );
-            Ok(crate::native_value::materialize_js_value(
+            let fast_len = crate::native_value::materialize_js_value(
                 ctx,
                 lowered,
                 MaterializationReason::FunctionAbi,
-            ))
-        }
-
-        // TypedArray `.length` can be shadowed by an own property, so use
-        // the runtime length helper only when lowering has not already
-        // registered the receiver as a native Buffer/TypedArray view above.
-        Expr::PropertyGet {
-            object, property, ..
-        } if property == "length"
-            && receiver_class_name(ctx, object)
-                .as_deref()
-                .is_some_and(is_numeric_typed_array_class) =>
-        {
-            let recv_box = lower_expr(ctx, object)?;
-            Ok(ctx.block().call(
+            );
+            let fast_end = ctx.block().label.clone();
+            ctx.block().br(&done_label);
+            ctx.current_block = slow_idx;
+            let recv = lower_expr(ctx, object)?;
+            let key_idx = ctx.strings.intern("length");
+            let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+            let key_box = ctx.block().load(DOUBLE, &key_global);
+            let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+            let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
+            let slow_len = ctx.block().call(
                 DOUBLE,
-                "js_value_length_property_f64",
-                &[(DOUBLE, &recv_box)],
-            ))
+                "js_value_length_property_key_ic_f64",
+                &[(DOUBLE, &recv), (PTR, "null"), (I64, &key_raw)],
+            );
+            let slow_end = ctx.block().label.clone();
+            ctx.block().br(&done_label);
+            ctx.current_block = done_idx;
+            Ok(ctx
+                .block()
+                .phi(DOUBLE, &[(&fast_len, &fast_end), (&slow_len, &slow_end)]))
         }
 
         // `arr.length` / `str.length` — INLINE. Both ArrayHeader and
@@ -570,24 +588,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             ctx.block()
                 .cond_br(&take_fast, &fast_label, &typed_array_label);
 
-            // An owning `TypedArrayHeader` also stores `length: u32` at payload
-            // offset 0. The slow path used to resolve it by NAME — heap-copying
-            // "length" and parsing it as a numeric index on every read. The
-            // header is authoritative for a typed array whose own storage byte
-            // says inline (#10516: header byte 10, `TA_STORAGE_INLINE`) while
-            // no typed array has an own named property that could shadow the
-            // prototype getter.
+            // Byte views and typed arrays keep a live length at payload +0,
+            // including shared storage: detach/resize update that word. Admit
+            // only these proven type bytes, not native-arena views. Own named
+            // metadata or prototype edits withdraw the accessor proof before
+            // publication; the cold edge uses its pooled literal key.
             ctx.current_block = typed_array_idx;
             let is_typed_array = ctx.block().icmp_eq(I8, &gc_type, "11"); // GC_TYPE_TYPED_ARRAY
+            let is_buffer = ctx.block().icmp_eq(I8, &gc_type, "10"); // GC_TYPE_BUFFER
+            let is_u8 = ctx.block().icmp_eq(I8, &gc_type, "26"); // GC_TYPE_BUFFER_UINT8ARRAY
+            let is_byte_view = ctx.block().or(I1, &is_buffer, &is_u8);
+            let is_typed_array = ctx.block().or(I1, &is_typed_array, &is_byte_view);
             let ta_header_ok = ctx.block().and(I1, &is_typed_array, &not_forwarded);
-            let storage_addr = ctx.block().add(I64, &recv_handle, "10");
-            let storage_ptr = ctx.block().inttoptr(I64, &storage_addr);
-            let storage = ctx.block().load(I8, &storage_ptr);
-            let inline_storage = ctx.block().icmp_eq(I8, &storage, "0");
-            let own_props = ctx.block().load(I8, "@PERRY_TA_OWN_PROPS_PRESENT");
-            let no_own_props = ctx.block().icmp_eq(I8, &own_props, "0");
-            let ta_ok = ctx.block().and(I1, &ta_header_ok, &inline_storage);
-            let ta_ok = ctx.block().and(I1, &ta_ok, &no_own_props);
+            let named_invalidated =
+                ctx.block()
+                    .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
+            let named_pristine = ctx.block().icmp_eq(I8, &named_invalidated, "0");
+            let ta_ok = ctx.block().and(I1, &ta_header_ok, &named_pristine);
             ctx.block().cond_br(&ta_ok, &fast_label, &slow_label);
 
             ctx.current_block = fast_idx;

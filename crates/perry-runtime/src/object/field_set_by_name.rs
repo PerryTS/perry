@@ -46,6 +46,16 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    if !key.is_null() {
+        unsafe {
+            let bytes = std::slice::from_raw_parts(
+                crate::string::string_data(key),
+                (*key).byte_len as usize,
+            );
+            let owner = (obj as u64 & crate::value::POINTER_MASK) as usize;
+            crate::typedarray_named::note_named_mutation(owner, bytes);
+        }
+    }
     // Guard hoisted to the call site (see `cannot_be_private_member_name`):
     // an ordinary key never calls into the private-member path.
     if !super::cannot_be_private_member_name(key)

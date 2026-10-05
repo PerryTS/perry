@@ -224,6 +224,9 @@ pub(crate) fn is_function_prototype_object_value(value: f64) -> bool {
 /// %Function.prototype% and the walk would not be. Every other name keeps
 /// the walk.
 pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
+    if name == "Buffer" {
+        return crate::object::native_module::buffer_original_prototype_value();
+    }
     if name == "Function" {
         let addr = crate::array::function_prototype_addr();
         if addr != 0 {

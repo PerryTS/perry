@@ -135,6 +135,11 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // nullish receivers.
     module.declare_function("js_value_length_property_f64", DOUBLE, &[DOUBLE]);
     module.declare_function("js_value_length_property_ic_f64", DOUBLE, &[DOUBLE, PTR]);
+    module.declare_function(
+        "js_value_length_property_key_ic_f64",
+        DOUBLE,
+        &[DOUBLE, PTR, I64],
+    );
 
     // Shadow stack for precise root tracking (gen-GC Phase A per
     // docs/generational-gc-plan.md). Declared now so codegen can

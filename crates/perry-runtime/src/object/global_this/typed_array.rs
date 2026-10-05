@@ -681,7 +681,7 @@ pub(crate) fn ensure_typed_array_intrinsic(
     let _no_move = crate::gc::GcSuppressScope::new();
     let ctor = crate::closure::js_closure_alloc(
         crate::fn_info!(typed_array_constructor_call_thunk, 1; with_declared(0)),
-        0,
+        1,
     );
     let proto = js_object_alloc(0, 0);
     if ctor.is_null() || proto.is_null() {
@@ -789,3 +789,19 @@ pub(crate) fn typed_array_intrinsic_proto_ptr() -> *mut ObjectHeader {
 // ---------------------------------------------------------------------------
 // #3664: generator / async-generator intrinsic prototype towers.
 // ---------------------------------------------------------------------------
+
+/// The original Uint8Array prototype is owned by the traced intrinsic
+/// constructor, independent of writable globalThis.Uint8Array.
+pub(crate) fn typed_array_uint8_intrinsic_prototype_value() -> f64 {
+    let (ctor, _) = ensure_typed_array_intrinsic();
+    let value = crate::closure::js_closure_get_capture_f64(ctor, 0);
+    if crate::value::JSValue::from_bits(value.to_bits()).is_pointer() {
+        return value;
+    }
+    // Populate the per-kind prototypes only when a real property walk needs
+    // them. populate stores Uint8Array's original prototype in capture 0.
+    crate::object::js_get_global_this();
+    let ctor = crate::object::TYPED_ARRAY_INTRINSIC_PTR.load(std::sync::atomic::Ordering::Relaxed)
+        as *const crate::closure::ClosureHeader;
+    crate::closure::js_closure_get_capture_f64(ctor, 0)
+}

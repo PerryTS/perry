@@ -261,7 +261,7 @@ fn guarded_length_read_emits_array_subclass_scalar_ic() {
         assert!(ir.contains(block), "missing {block} from length IC:\n{ir}");
     }
     assert!(
-        ir.contains("call double @js_value_length_property_ic_f64"),
+        ir.contains("call double @js_value_length_property_key_ic_f64"),
         "the cold arm must prime the scalar cache while retaining property semantics:\n{ir}"
     );
     assert!(
@@ -298,7 +298,7 @@ fn typed_array_length_uses_property_semantics_after_define_property() {
     let ir = String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
         .expect("LLVM IR should be UTF-8");
     assert!(
-        ir.contains("call double @js_value_length_property_f64"),
+        ir.contains("call double @js_value_length_property_key_ic_f64"),
         "a descriptor-capable module must not bypass an own typed-array length:\n{ir}"
     );
 }
@@ -323,8 +323,10 @@ fn typed_array_length_keeps_native_load_without_shape_barrier() {
     let ir = String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
         .expect("LLVM IR should be UTF-8");
     assert!(
-        !ir.contains("call double @js_value_length_property_f64"),
-        "a barrier-free native view should retain its direct length load:\n{ir}"
+        ir.contains("load atomic i8, ptr @PERRY_TYPED_NAMED_PROPS_INVALIDATED acquire")
+            && ir.contains("load i32")
+            && ir.contains("call double @js_value_length_property_key_ic_f64"),
+        "a native view should retain its guarded direct load and pooled fallback:\n{ir}"
     );
 }
 
@@ -1884,4 +1886,24 @@ fn class_accessor_arms_are_emitted_only_for_declared_accessor_names() {
     )));
     assert!(!setter.contains(read_arm), "{setter}");
     assert!(setter.contains(store_arm), "{setter}");
+}
+
+#[test]
+fn guarded_length_reads_admit_byte_views_and_use_a_pooled_cold_key() {
+    let ir = emit_guarded_length_read();
+    let typed = ir
+        .split("\nplen.typed_array")
+        .nth(1)
+        .unwrap_or_else(|| panic!("expected the typed metadata guard:\n{ir}"));
+    let typed = typed.split("\n\n").next().unwrap();
+    assert!(
+        typed.contains(", 10") && typed.contains(", 26"),
+        "Buffer and Uint8Array type bytes must be admitted:\n{typed}"
+    );
+    assert!(
+        typed.contains("@PERRY_TYPED_NAMED_PROPS_INVALIDATED"),
+        "metadata overrides must withdraw the proof:\n{typed}"
+    );
+    assert!(!ir.contains("call double @js_value_length_property_ic_f64"));
+    assert!(ir.contains("call double @js_value_length_property_key_ic_f64"));
 }

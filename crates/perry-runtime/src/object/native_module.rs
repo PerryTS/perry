@@ -43,7 +43,9 @@ pub(crate) use callable_exports::minted_native_callable_export;
 pub(crate) use callable_exports::test_collect_native_export_after_alloc;
 pub(crate) use callable_exports::{
     bound_native_callable_module_and_method, bound_native_callable_value_arity,
-    buffer_constructor_value, builtin_closure_is_non_constructable_value, builtin_closure_length,
+    buffer_constructor_value, buffer_intrinsic_prototype_parent, buffer_intrinsic_prototype_value,
+    buffer_original_prototype_value, builtin_closure_is_non_constructable_value,
+    builtin_closure_length, cached_buffer_intrinsic_prototype_value,
     fs_namespace_descriptor_getter_value, fs_namespace_descriptor_setter_value,
     is_buffer_constructor_value, is_cluster_emitter_method, module_builtin_modules_value,
     module_cjs_cache_value, module_cjs_extensions_value, module_cjs_global_paths_value,

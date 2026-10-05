@@ -438,10 +438,19 @@ pub(super) fn emit_array_subclass_length_ic(
     ctx.block().br(&merge_label);
 
     ctx.current_block = miss_idx;
+    let key_idx = ctx.strings.intern("length");
+    let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let key_box = ctx.block().load(DOUBLE, &key_global);
+    let key_bits = ctx.block().bitcast_double_to_i64(&key_box);
+    let key_raw = ctx.block().and(I64, &key_bits, POINTER_MASK_I64);
     let miss_length = ctx.block().call(
         DOUBLE,
-        "js_value_length_property_ic_f64",
-        &[(DOUBLE, recv_box), (PTR, &ic_slot.slot_ref)],
+        "js_value_length_property_key_ic_f64",
+        &[
+            (DOUBLE, recv_box),
+            (PTR, &ic_slot.slot_ref),
+            (I64, &key_raw),
+        ],
     );
     let miss_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);

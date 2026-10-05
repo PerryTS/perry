@@ -481,6 +481,13 @@ fn populate_global_this_builtins_inner(singleton_at_entry: *mut ObjectHeader) {
                         | "BigUint64Array"
                 )
             {
+                if name == "Uint8Array" {
+                    crate::closure::js_closure_set_capture_f64(
+                        typed_array_intrinsic_ctor,
+                        0,
+                        crate::value::js_nanbox_pointer(proto_obj as i64),
+                    );
+                }
                 let intrinsic_bits =
                     crate::value::js_nanbox_pointer(typed_array_intrinsic_ctor as i64).to_bits();
                 crate::closure::closure_set_static_prototype(closure_ptr as usize, intrinsic_bits);

@@ -417,7 +417,7 @@ pub fn js_typed_array_byte_offset(ta: *const TypedArrayHeader) -> u32 {
     // An out-of-bounds view (its resizable buffer shrank past it) reports 0.
     view_meta_of(addr)
         .map(|m| {
-            if is_view_out_of_bounds(addr) {
+            if crate::buffer::is_detached_buffer(m.backing) || is_view_out_of_bounds(addr) {
                 0
             } else {
                 m.byte_offset

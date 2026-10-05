@@ -225,6 +225,7 @@ pub mod tls_os_pool;
 pub mod typed_feedback;
 pub mod typedarray;
 pub mod typedarray_half;
+pub(crate) mod typedarray_named;
 pub(crate) mod typedarray_props;
 pub mod typedarray_view;
 // turnloop P1: Perry's stream networking on turnloop handles
