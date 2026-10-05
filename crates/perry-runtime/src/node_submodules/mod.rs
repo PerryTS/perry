@@ -961,6 +961,7 @@ pub extern "C" fn js_node_submod_install_fs_promises() {
 }
 #[no_mangle]
 pub extern "C" fn js_node_submod_install_readline_promises() {
+    crate::object::js_nm_install_readline();
     SUBMOD_REGISTRY[SubmodBucket::ReadlinePromises as usize].store(
         &SUBMOD_READLINE_PROMISES as *const SubmoduleSpec as *mut SubmoduleSpec,
         Ordering::Relaxed,
@@ -1218,7 +1219,10 @@ fn special_export_value(submod_key: &str, name: &str) -> Option<f64> {
         "stream_web"
             if matches!(
                 name,
-                "TextEncoderStream"
+                "ReadableStream"
+                    | "WritableStream"
+                    | "TransformStream"
+                    | "TextEncoderStream"
                     | "TextDecoderStream"
                     | "CompressionStream"
                     | "DecompressionStream"
@@ -1320,6 +1324,26 @@ fn ensure_export_singleton(
             f64::from_bits(JSValue::pointer(yield_fn as *const u8).bits()),
         );
     }
+    let allocated = if submod.key == "readline_promises" && export.name == "Interface" {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let ctor = scope.root_raw_mut_ptr(allocated);
+        // Reuse readline's imported decorator without pinning its parent
+        // machinery from the always-linked submodule value resolver.
+        if let Some(attach) = crate::object::nm_attach_lookup("readline") {
+            let value = ctor
+                .with_mut_ptr(|p: *mut ClosureHeader| crate::value::js_nanbox_pointer(p as i64));
+            unsafe {
+                attach(
+                    "InterfacePromises",
+                    value,
+                    crate::value::js_nanbox_get_pointer(value) as usize,
+                );
+            }
+        }
+        ctor.get_raw_mut_ptr()
+    } else {
+        allocated
+    };
     let allocated = if submod.key == "trace_events" {
         let scope = crate::gc::RuntimeHandleScope::new();
         let allocated_handle = scope.root_raw_mut_ptr(allocated);
@@ -1871,3 +1895,35 @@ pub unsafe extern "C" fn js_node_submodule_namespace(
 
 #[cfg(test)]
 mod tests;
+
+/// Install the provider's ReadableStream.from on the actual constructor
+/// shapes, with no property-read dispatch or provider side table.
+/// # Safety
+/// `info` must have static lifetime and describe a one-argument JS method.
+#[no_mangle]
+pub unsafe extern "C" fn js_install_readable_stream_from(info: *const JsFunctionInfo) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let method = scope.root_raw_mut_ptr(js_closure_alloc(&*info, 0));
+    method.with_mut_ptr(|p| crate::object::set_bound_native_closure_name(p, "from"));
+    method.with_mut_ptr(|p: *mut ClosureHeader| {
+        crate::object::set_builtin_closure_length(p as usize, 1);
+        crate::object::set_builtin_closure_non_constructable(p as usize);
+    });
+    // The module export aliases the global constructor. Decorate that one
+    // shape without arming an unimported submodule or allocating a namespace.
+    let ctor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
+        b"ReadableStream".as_ptr(),
+        14,
+    ));
+    let addr = crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize;
+    crate::closure::closure_set_dynamic_prop(
+        addr,
+        "from",
+        method.with_mut_ptr(|p: *mut ClosureHeader| crate::value::js_nanbox_pointer(p as i64)),
+    );
+    crate::object::set_builtin_property_attrs(
+        addr,
+        "from".to_string(),
+        crate::object::PropertyAttrs::new(true, false, true),
+    );
+}

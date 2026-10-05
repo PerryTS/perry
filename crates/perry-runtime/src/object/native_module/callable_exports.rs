@@ -141,6 +141,14 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
         |c: *mut crate::closure::ClosureHeader| crate::value::js_nanbox_pointer(c as i64),
     ));
 
+    // Publish the rooted constructor before resolving its children/parent.
+    // Stream.Readable forms a cycle with its constructor parent;
+    // recursive materialization must reuse this exact constructor shape.
+    NATIVE_CALLABLE_EXPORTS.with(|c| {
+        c.borrow_mut().insert(key, value.get_nanbox_u64());
+        crate::gc::runtime_write_barrier_root_nanbox(value.get_nanbox_u64());
+    });
+
     // Per-module prototype/statics decoration, routed through the attach
     // registry (see `native_module_registry::nm_attach_lookup`): each
     // module's handler is registered by its `js_nm_install_<module>()`, and
@@ -177,10 +185,6 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
 
     let value = value.get_nanbox_f64();
 
-    NATIVE_CALLABLE_EXPORTS.with(|c| {
-        c.borrow_mut().insert(key, value.to_bits());
-        crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
-    });
     value
 }
 
@@ -1908,61 +1912,12 @@ pub(crate) unsafe fn nm_attach_async_hooks(
     value
 }
 
-#[allow(unused_mut)]
-pub(crate) unsafe fn nm_attach_events(
-    property_name: &str,
-    mut value: f64,
-    closure_addr: usize,
-) -> f64 {
-    if property_name == "EventEmitter" {
-        let async_resource_ctor =
-            bound_native_callable_export_value("events", "EventEmitterAsyncResource");
-        for method in [
-            "addAbortListener",
-            "once",
-            "on",
-            "getEventListeners",
-            "getMaxListeners",
-            "listenerCount",
-            "setMaxListeners",
-        ] {
-            let method_value = bound_native_callable_export_value("events", method);
-            crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
-        }
-        crate::closure::closure_set_dynamic_prop(closure_addr, "EventEmitter", value);
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "EventEmitterAsyncResource",
-            async_resource_ctor,
-        );
-        crate::closure::closure_set_dynamic_prop(closure_addr, "defaultMaxListeners", 10.0);
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "usingDomains",
-            f64::from_bits(JSValue::bool(false).bits()),
-        );
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "captureRejections",
-            f64::from_bits(JSValue::bool(false).bits()),
-        );
-        crate::closure::closure_set_dynamic_prop(closure_addr, "captureRejectionSymbol", {
-            let name = "nodejs.rejection";
-            let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            unsafe { crate::symbol::js_symbol_for(f64::from_bits(JSValue::string_ptr(ptr).bits())) }
-        });
-        crate::closure::closure_set_dynamic_prop(closure_addr, "errorMonitor", {
-            let name = "events.errorMonitor";
-            let ptr = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            unsafe { crate::symbol::js_symbol_for(f64::from_bits(JSValue::string_ptr(ptr).bits())) }
-        });
-        crate::closure::closure_set_dynamic_prop(
-            closure_addr,
-            "init",
-            bound_native_callable_export_value("events", "init"),
-        );
+pub(crate) unsafe fn nm_attach_events(name: &str, value: f64, _addr: usize) -> f64 {
+    if name == "EventEmitter" {
+        super::constructor_shapes::install_event_emitter_statics(value)
+    } else {
+        value
     }
-    value
 }
 
 #[allow(unused_mut)]

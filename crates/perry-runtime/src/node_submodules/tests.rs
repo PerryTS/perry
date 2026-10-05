@@ -1070,3 +1070,73 @@ fn stream_promises_finished_with_signal_resolves_for_finished_writable_side_stub
         crate::value::TAG_UNDEFINED
     );
 }
+
+extern "C" fn statics2_readable_from_fixture(
+    _closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
+    value
+}
+#[test]
+fn statics2_readable_from_installed_on_constructor_shapes() {
+    unsafe {
+        js_node_submod_install_stream_web();
+        js_install_readable_stream_from(
+            crate::fn_info!(statics2_readable_from_fixture, 1; with_declared(1)),
+        );
+        let ctor = js_node_submodule_export_as_function(
+            b"stream_web".as_ptr(),
+            10,
+            b"ReadableStream".as_ptr(),
+            14,
+        );
+        let method = crate::closure::closure_get_own_dynamic_prop(
+            crate::value::js_nanbox_get_pointer(ctor) as usize,
+            "from",
+        )
+        .expect("from must be own");
+        assert_eq!(
+            crate::closure::js_closure_call1(
+                crate::value::js_nanbox_get_pointer(method) as *const ClosureHeader,
+                crate::closure::JsThis::from_f64(f64::from_bits(crate::value::TAG_UNDEFINED)),
+                17.0
+            ),
+            17.0
+        );
+    }
+}
+
+#[test]
+fn statics2_readline_promises_uses_imported_constructor_parent() {
+    unsafe {
+        js_node_submod_install_readline_promises();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let ctor = scope.root_nanbox_f64(js_node_submodule_export_as_function(
+            b"readline_promises".as_ptr(),
+            17,
+            b"Interface".as_ptr(),
+            9,
+        ));
+        let parent = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
+            ctor.get_nanbox_f64(),
+        ));
+        let regular = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+            "readline",
+            "Interface",
+        ));
+        assert_eq!(
+            parent.get_nanbox_u64(),
+            crate::object::js_object_get_prototype_of(regular.get_nanbox_f64()).to_bits()
+        );
+        let key = crate::string::js_string_from_bytes(b"getMaxListeners".as_ptr(), 15);
+        let method = crate::object::js_object_get_field_by_name(
+            crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64())
+                as *const crate::object::ObjectHeader,
+            key,
+        );
+        assert!(crate::closure::is_closure_ptr(
+            crate::value::js_nanbox_get_pointer(f64::from_bits(method.bits())) as usize
+        ));
+    }
+}

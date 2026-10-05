@@ -103,12 +103,19 @@ fn instanceof_lhs_is_primitive(value: f64) -> bool {
         return false;
     }
     let jv = crate::JSValue::from_bits(bits);
+    if jv.is_number() {
+        // Web stream objects use the existing numeric handle representation.
+        // Recognize a live object before the primitive short circuit.
+        return !(crate::value::addr_class::is_stream_id_band(value as usize)
+            && value.fract() == 0.0
+            && crate::object::stream_handle_kind_probe()
+                .is_some_and(|probe| unsafe { probe(value as usize) } != 0));
+    }
     jv.is_undefined()
         || jv.is_null()
         || jv.is_bool()
         || jv.is_any_string()
         || jv.is_bigint()
-        || jv.is_number()
         || (jv.is_int32() && class_ref_id(value).is_none())
 }
 

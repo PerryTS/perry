@@ -124,9 +124,17 @@ pub unsafe extern "C" fn js_crypto_ecdh_convert_key(
         String::from_utf8(bytes_from_ptr(arg_ptr(output_encoding_val))).unwrap_or_default();
     let format = String::from_utf8(bytes_from_ptr(arg_ptr(format_val))).unwrap_or_default();
     let key_bytes = decode_ecdh_input(arg_ptr(key_val), &input_encoding);
+    // OpenSSL's empty-key conversion returns the empty string even when no
+    // output encoding was supplied. Keep direct and saved calls identical.
+    if key_bytes.is_empty() {
+        return perry_runtime::js_nanbox_string(js_string_from_bytes(b"".as_ptr(), 0) as i64);
+    }
     let public = match P256PublicKey::from_sec1_bytes(&key_bytes) {
         Ok(public) => public,
-        Err(_) => return f64::from_bits(0x7FFC_0000_0000_0001),
+        Err(_) => perry_runtime::fs::validate::throw_error_with_code(
+            "Failed to convert Buffer to EC_POINT",
+            "ERR_CRYPTO_OPERATION_FAILED",
+        ),
     };
     let compressed = format.eq_ignore_ascii_case("compressed");
     let converted = public.to_encoded_point(compressed).as_bytes().to_vec();
@@ -543,4 +551,53 @@ pub unsafe fn dispatch_verify_property(handle: i64, property: &str) -> f64 {
         ) -> f64;
     }
     js_class_method_bind(this_f64, name_bytes.as_ptr(), name_bytes.len())
+}
+
+#[cfg(test)]
+mod statics2_tests {
+    use super::*;
+    #[test]
+    fn statics2_convert_key_invalid_point_throws() {
+        unsafe {
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let key = scope.root_nanbox_f64(nanbox_ptr(alloc_buffer_from_slice(&[1])));
+            let curve = scope.root_nanbox_f64(perry_runtime::js_nanbox_string(
+                js_string_from_bytes(b"prime256v1".as_ptr(), 10) as i64,
+            ));
+            let u = f64::from_bits(0x7FFC_0000_0000_0001);
+            let error = perry_runtime::exception::catch_js_throw(|| {
+                js_crypto_ecdh_convert_key(key.get_nanbox_f64(), curve.get_nanbox_f64(), u, u, u)
+            });
+            let error = scope.root_nanbox_f64(error.expect_err("invalid point must throw"));
+            let name = js_string_from_bytes(b"code".as_ptr(), 4);
+            let code = perry_runtime::js_object_get_field_by_name(
+                perry_runtime::js_nanbox_get_pointer(error.get_nanbox_f64()) as *const ObjectHeader,
+                name,
+            );
+            assert_eq!(
+                bytes_from_ptr(perry_runtime::js_get_string_pointer_unified(f64::from_bits(
+                    code.bits()
+                )) as i64),
+                b"ERR_CRYPTO_OPERATION_FAILED"
+            );
+        }
+    }
+    #[test]
+    fn statics2_convert_key_empty_matches_openssl() {
+        unsafe {
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let empty = scope.root_nanbox_f64(nanbox_ptr(alloc_buffer_from_slice(&[])));
+            let curve = scope.root_nanbox_f64(perry_runtime::js_nanbox_string(
+                js_string_from_bytes(b"prime256v1".as_ptr(), 10) as i64,
+            ));
+            let u = f64::from_bits(0x7FFC_0000_0000_0001);
+            let result =
+                js_crypto_ecdh_convert_key(empty.get_nanbox_f64(), curve.get_nanbox_f64(), u, u, u);
+            assert!(JSValue::from_bits(result.to_bits()).is_any_string());
+            assert!(
+                bytes_from_ptr(perry_runtime::js_get_string_pointer_unified(result) as i64)
+                    .is_empty()
+            );
+        }
+    }
 }

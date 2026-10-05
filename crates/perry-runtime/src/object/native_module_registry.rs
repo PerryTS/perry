@@ -62,11 +62,12 @@ enum NmBucket {
     Vm,
     Wasi,
     Zlib,
+    WorkerThreads,
 }
-const NM_BUCKET_COUNT: usize = 40;
+const NM_BUCKET_COUNT: usize = 41;
 // #6580 merge: inserting BunFfi shifted every later NmBucket up one; keep this array
-// big enough to index every variant (Zlib is the last). Guard against silent overflow.
-const _: () = assert!((NmBucket::Zlib as usize) < NM_BUCKET_COUNT);
+// big enough to index every variant (WorkerThreads is the last). Guard against silent overflow.
+const _: () = assert!((NmBucket::WorkerThreads as usize) < NM_BUCKET_COUNT);
 
 static NM_DISPATCH_REGISTRY: [AtomicPtr<()>; NM_BUCKET_COUNT] =
     [const { AtomicPtr::new(std::ptr::null_mut()) }; NM_BUCKET_COUNT];
@@ -132,6 +133,7 @@ fn nm_module_index(name: &str) -> Option<NmBucket> {
         | "v8.DefaultSerializer"
         | "v8.DefaultDeserializer" => Some(NmBucket::V8),
         "vm" => Some(NmBucket::Vm),
+        "worker_threads" => Some(NmBucket::WorkerThreads),
         "wasi" => Some(NmBucket::Wasi),
         "zlib" => Some(NmBucket::Zlib),
         _ => None,
@@ -264,9 +266,10 @@ pub extern "C" fn js_nm_install_bun() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_child_process() {
+    js_nm_install_events();
     nm_register_attach(
         NmBucket::ChildProcess,
-        super::native_module::callable_exports::nm_attach_child_process,
+        super::native_module::constructor_shapes::nm_attach_child_process,
     );
     NM_DISPATCH_REGISTRY[NmBucket::ChildProcess as usize].store(
         nm_dispatch_child_process as NmDispatchFn as *mut (),
@@ -276,13 +279,14 @@ pub extern "C" fn js_nm_install_child_process() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_cluster() {
+    js_nm_install_events();
     nm_register_const(
         NmBucket::Cluster,
         super::native_module::constants::nm_const_cluster,
     );
     nm_register_attach(
         NmBucket::Cluster,
-        super::native_module::callable_exports::nm_attach_cluster,
+        super::native_module::constructor_shapes::nm_attach_cluster,
     );
     NM_DISPATCH_REGISTRY[NmBucket::Cluster as usize].store(
         nm_dispatch_cluster as NmDispatchFn as *mut (),
@@ -299,9 +303,10 @@ pub extern "C" fn js_nm_install_console() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_crypto() {
+    js_nm_install_stream();
     nm_register_attach(
         NmBucket::Crypto,
-        super::native_module::callable_exports::nm_attach_crypto,
+        super::native_module::constructor_shapes::nm_attach_crypto,
     );
     NM_DISPATCH_REGISTRY[NmBucket::Crypto as usize].store(
         nm_dispatch_crypto as NmDispatchFn as *mut (),
@@ -310,6 +315,11 @@ pub extern "C" fn js_nm_install_crypto() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_dgram() {
+    js_nm_install_events();
+    nm_register_attach(
+        NmBucket::Dgram,
+        super::native_module::constructor_shapes::nm_attach_dgram,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Dgram as usize].store(
         nm_dispatch_dgram as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -324,6 +334,11 @@ pub extern "C" fn js_nm_install_dns() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_domain() {
+    js_nm_install_events();
+    nm_register_attach(
+        NmBucket::Domain,
+        super::native_module::constructor_shapes::nm_attach_domain,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Domain as usize].store(
         nm_dispatch_domain as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -335,7 +350,7 @@ pub extern "C" fn js_nm_install_events() {
     nm_register_ctor(NmBucket::Events, nm_ctor_events);
     nm_register_attach(
         NmBucket::Events,
-        super::native_module::callable_exports::nm_attach_events,
+        super::native_module::constructor_shapes::nm_attach_events,
     );
     NM_DISPATCH_REGISTRY[NmBucket::Events as usize].store(
         nm_dispatch_events as NmDispatchFn as *mut (),
@@ -344,15 +359,23 @@ pub extern "C" fn js_nm_install_events() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_fs() {
+    js_nm_install_stream();
+    nm_register_attach(
+        NmBucket::Fs,
+        super::native_module::constructor_shapes::nm_attach_fs,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Fs as usize]
         .store(nm_dispatch_fs as NmDispatchFn as *mut (), Ordering::Relaxed);
     nm_register_ctor(NmBucket::Fs, nm_ctor_fs);
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_http() {
+    js_nm_install_stream();
+    js_nm_install_net();
+    js_nm_install_tls();
     nm_register_attach(
         NmBucket::Http,
-        super::native_module::callable_exports::nm_attach_http,
+        super::native_module::constructor_shapes::nm_attach_http,
     );
     nm_register_const(
         NmBucket::Http,
@@ -365,6 +388,11 @@ pub extern "C" fn js_nm_install_http() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_inspector() {
+    js_nm_install_events();
+    nm_register_attach(
+        NmBucket::Inspector,
+        super::native_module::constructor_shapes::nm_attach_inspector,
+    );
     nm_register_const(
         NmBucket::Inspector,
         super::native_module::constants::nm_const_inspector,
@@ -387,6 +415,11 @@ pub extern "C" fn js_nm_install_module() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_net() {
+    js_nm_install_stream();
+    nm_register_attach(
+        NmBucket::Net,
+        super::native_module::constructor_shapes::nm_attach_net,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Net as usize].store(
         nm_dispatch_net as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -465,6 +498,11 @@ pub extern "C" fn js_nm_install_querystring() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_readline() {
+    js_nm_install_events();
+    nm_register_attach(
+        NmBucket::Readline,
+        super::native_module::constructor_shapes::nm_attach_readline,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Readline as usize].store(
         nm_dispatch_readline as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -473,6 +511,12 @@ pub extern "C" fn js_nm_install_readline() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_repl() {
+    js_nm_install_events();
+    js_nm_install_readline();
+    nm_register_attach(
+        NmBucket::Repl,
+        super::native_module::constructor_shapes::nm_attach_repl,
+    );
     NM_DISPATCH_REGISTRY[NmBucket::Repl as usize].store(
         nm_dispatch_repl as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -499,10 +543,11 @@ pub extern "C" fn js_nm_install_sqlite() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_stream() {
+    js_nm_install_events();
     super::native_module::install_nm_ee_ops();
     nm_register_attach(
         NmBucket::Stream,
-        super::native_module::callable_exports::nm_attach_stream,
+        super::native_module::constructor_shapes::nm_attach_stream,
     );
     NM_DISPATCH_REGISTRY[NmBucket::Stream as usize].store(
         nm_dispatch_stream as NmDispatchFn as *mut (),
@@ -527,10 +572,12 @@ pub extern "C" fn js_nm_install_timers() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_tls() {
+    js_nm_install_stream();
+    js_nm_install_net();
     nm_register_const(NmBucket::Tls, super::native_module::constants::nm_const_tls);
     nm_register_attach(
         NmBucket::Tls,
-        super::native_module::callable_exports::nm_attach_tls,
+        super::native_module::constructor_shapes::nm_attach_tls,
     );
     NM_DISPATCH_REGISTRY[NmBucket::Tls as usize].store(
         nm_dispatch_tls as NmDispatchFn as *mut (),
@@ -540,9 +587,11 @@ pub extern "C" fn js_nm_install_tls() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_tty() {
+    js_nm_install_stream();
+    js_nm_install_net();
     nm_register_attach(
         NmBucket::Tty,
-        super::native_module::callable_exports::nm_attach_tty,
+        super::native_module::constructor_shapes::nm_attach_tty,
     );
     NM_DISPATCH_REGISTRY[NmBucket::Tty as usize].store(
         nm_dispatch_tty as NmDispatchFn as *mut (),
@@ -593,6 +642,11 @@ pub extern "C" fn js_nm_install_wasi() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_zlib() {
+    js_nm_install_stream();
+    nm_register_attach(
+        NmBucket::Zlib,
+        super::native_module::constructor_shapes::nm_attach_zlib,
+    );
     nm_register_const(
         NmBucket::Zlib,
         super::native_module::constants::nm_const_zlib,
@@ -600,6 +654,15 @@ pub extern "C" fn js_nm_install_zlib() {
     NM_DISPATCH_REGISTRY[NmBucket::Zlib as usize].store(
         nm_dispatch_zlib as NmDispatchFn as *mut (),
         Ordering::Relaxed,
+    );
+}
+
+#[no_mangle]
+pub extern "C" fn js_nm_install_worker_threads() {
+    js_nm_install_events();
+    nm_register_attach(
+        NmBucket::WorkerThreads,
+        super::native_module::constructor_shapes::nm_attach_worker,
     );
 }
 
@@ -647,6 +710,7 @@ pub extern "C" fn js_nm_install_all() {
     js_nm_install_vm();
     js_nm_install_wasi();
     js_nm_install_zlib();
+    js_nm_install_worker_threads();
 }
 
 // ── Dynamic-require install-all hook ───────────────────────────────────────

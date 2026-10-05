@@ -77,6 +77,7 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         "vm" => Some("js_nm_install_vm"),
         "wasi" => Some("js_nm_install_wasi"),
         "zlib" => Some("js_nm_install_zlib"),
+        "worker_threads" => Some("js_nm_install_worker_threads"),
         _ => None,
     }
 }
@@ -145,6 +146,7 @@ pub(crate) const NM_INSTALL_SYMBOLS: &[&str] = &[
     "js_nm_install_vm",
     "js_nm_install_wasi",
     "js_nm_install_zlib",
+    "js_nm_install_worker_threads",
     "js_nm_install_all",
 ];
 
@@ -208,6 +210,13 @@ pub(crate) const NM_SUBMOD_INSTALL_SYMBOLS: &[&str] = &[
 mod tests {
     use super::{native_provider_install_symbols, nm_install_symbol};
 
+    #[test]
+    fn worker_constructor_import_installs_its_parent_surface() {
+        assert_eq!(
+            nm_install_symbol("node:worker_threads"),
+            Some("js_nm_install_worker_threads")
+        );
+    }
     #[test]
     fn provider_installs_cover_net_and_the_http_family_once() {
         assert_eq!(

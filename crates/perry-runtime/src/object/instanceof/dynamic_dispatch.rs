@@ -125,11 +125,10 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
             let matched = small_native_handle_id(value)
                 .zip(crate::object::http_agent_handle_probe())
                 .is_some_and(|(handle, probe)| unsafe { probe(handle) });
-            return f64::from_bits(if matched {
-                crate::value::TAG_TRUE
-            } else {
-                TAG_FALSE
-            });
+            if matched || ordinary_has_instance_prototype_walk(value, type_ref) {
+                return f64::from_bits(crate::value::TAG_TRUE);
+            }
+            return f64::from_bits(TAG_FALSE);
         }
     }
     let bits = type_ref.to_bits();
@@ -389,7 +388,13 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, type_ref: f64) -> f64 {
         }
         // #11919 P0: a native-payload family answers by its class id.
         if let Some(class_id) = crate::native_payload::export_class_id(&module, &method) {
-            return js_instanceof(value, class_id);
+            let result = js_instanceof(value, class_id);
+            if result.to_bits() == crate::value::TAG_TRUE
+                || ordinary_has_instance_prototype_walk(value, type_ref)
+            {
+                return f64::from_bits(crate::value::TAG_TRUE);
+            }
+            return result;
         }
         if module == "perf_hooks" {
             let class_id = match method.as_str() {

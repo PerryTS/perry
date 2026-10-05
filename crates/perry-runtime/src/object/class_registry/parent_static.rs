@@ -246,6 +246,19 @@ pub extern "C" fn js_register_class_parent_dynamic(class_id: u32, mut parent_val
                 _ => {}
             }
         }
+        // A native superclass is also the constructor's actual [[Prototype]].
+        // Keep this edge on the class function shape, alongside instance
+        // heritage, so static reads and their receivers use ordinary lookup.
+        if !crate::object::class_value::class_value_is_first_evaluation(class_id) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let parent = scope.root_nanbox_f64(parent_value);
+            // Materialize the child before passing a raw parent to the store.
+            crate::object::class_value::class_value_ptr(class_id);
+            class_static_prototype_root_store(
+                class_id,
+                crate::value::js_nanbox_get_pointer(parent.get_nanbox_f64()) as *mut ObjectHeader,
+            );
+        }
         return;
     }
     // Spec: a non-`null` superclass that is not a constructor throws a TypeError

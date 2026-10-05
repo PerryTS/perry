@@ -116,8 +116,53 @@ unsafe extern "C" fn js_ext_net_native_dispatch(
         "setDefaultAutoSelectFamilyAttemptTimeout" => {
             crate::ip::js_net_set_default_auto_select_family_attempt_timeout(arg(0))
         }
+        "BlockList.isBlockList" => crate::js_net_block_list_is_block_list(arg(0)),
+        "SocketAddress.isSocketAddress" => {
+            let bits = arg(0).to_bits();
+            let yes = bits & !POINTER_MASK == POINTER_TAG
+                && crate::js_ext_net_is_socket_address_handle((bits & POINTER_MASK) as i64) != 0;
+            f64::from_bits(if yes {
+                0x7FFC_0000_0000_0004
+            } else {
+                0x7FFC_0000_0000_0003
+            })
+        }
+        "SocketAddress.parse" => {
+            crate::js_net_socket_address_parse(js_value_to_str_ptr_for_ffi(arg(0)))
+        }
         "BlockList" => handle_value(crate::js_net_block_list_new()),
         "SocketAddress" => handle_value(crate::js_net_socket_address_new(arg(0))),
         _ => undefined,
+    }
+}
+
+#[cfg(test)]
+mod statics2_tests {
+    use super::*;
+    unsafe fn call(name: &str, arg: f64) -> f64 {
+        js_ext_net_native_dispatch(name.as_ptr(), name.len(), &arg, 1)
+    }
+    #[test]
+    fn statics2_dispatch_uses_real_net_brands() {
+        unsafe {
+            let list = call("BlockList", f64::from_bits(TAG_UNDEFINED));
+            assert_eq!(
+                call("BlockList.isBlockList", list).to_bits(),
+                0x7FFC_0000_0000_0004
+            );
+            assert_eq!(
+                call("BlockList.isBlockList", 1.0).to_bits(),
+                0x7FFC_0000_0000_0003
+            );
+            let address = call("SocketAddress", f64::from_bits(TAG_UNDEFINED));
+            assert_eq!(
+                call("SocketAddress.isSocketAddress", address).to_bits(),
+                0x7FFC_0000_0000_0004
+            );
+            assert_eq!(
+                call("SocketAddress.isSocketAddress", list).to_bits(),
+                0x7FFC_0000_0000_0003
+            );
+        }
     }
 }
