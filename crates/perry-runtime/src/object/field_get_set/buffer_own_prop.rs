@@ -25,6 +25,13 @@ pub(super) fn buffer_own_prop_or_method(
     key_bytes: &[u8],
 ) -> Option<JSValue> {
     let name = std::str::from_utf8(key_bytes).ok()?;
+    // IntegerIndexedExotic [[Get]] is answered by the holder's bytes before
+    // ordinary expandos, including canonical-invalid indices.
+    if let Some(value) =
+        unsafe { crate::typedarray_props::byte_buffer_index_get_by_name(obj as usize, name) }
+    {
+        return Some(JSValue::from_bits(value.to_bits()));
+    }
     if let Some(accessor) = super::get_accessor_descriptor(obj as usize, name) {
         if accessor.get == 0 {
             return Some(JSValue::undefined());
@@ -82,3 +89,7 @@ pub(super) fn data_view_constructor(
 #[cfg(test)]
 #[path = "data_view_constructor_tests.rs"]
 mod data_view_constructor_tests;
+
+#[cfg(test)]
+#[path = "buffer_proto_index_tests.rs"]
+mod buffer_proto_index_tests;
