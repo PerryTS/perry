@@ -1,5 +1,7 @@
 #[cfg(any(feature = "crypto", feature = "http-client"))]
 use super::super::handle::with_handle;
+#[cfg(feature = "external-zlib-pump")]
+use super::nanbox_handle_value;
 use crate::common::feature_hooks::{Hook, PropertyArm};
 
 // One slot per optional-feature position in `js_handle_property_dispatch`, in
