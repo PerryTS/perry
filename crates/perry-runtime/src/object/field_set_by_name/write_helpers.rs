@@ -117,6 +117,19 @@ pub(super) unsafe fn closure_set_field_by_name(
             "ERR_INVALID_ARG_TYPE",
         );
     }
+    if let Some(accessor) = super::get_accessor_descriptor(obj as usize, name_str) {
+        if accessor.set == 0 {
+            crate::collection_iter::throw_type_error(&format!(
+                "Cannot set property {name_str} of #<Function> which has only a getter"
+            ));
+        }
+        super::invoke_accessor_setter(
+            accessor.set,
+            crate::value::js_nanbox_pointer(obj as i64),
+            value,
+        );
+        return;
+    }
     if let Some(attrs) = super::get_property_attrs(obj as usize, name_str) {
         if !attrs.writable() {
             return;

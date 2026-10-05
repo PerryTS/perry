@@ -232,7 +232,9 @@ pub extern "C" fn js_ext_net_is_block_list_handle(handle: i64) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_net_block_list_is_block_list(value: f64) -> f64 {
     js_bool(
-        handle_from_value(value).is_some_and(|h| block_lists().lock().unwrap().contains_key(&h)),
+        JsValue::from_bits(value.to_bits()).is_pointer()
+            && handle_from_value(value)
+                .is_some_and(|h| block_lists().lock().unwrap().contains_key(&h)),
     )
 }
 
@@ -444,4 +446,12 @@ pub extern "C" fn js_net_socket_address_get_port(handle: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_net_socket_address_get_flowlabel(handle: i64) -> f64 {
     with_socket_address(handle, 0, |s| s.flowlabel) as f64
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn js_net_socket_address_parse_value(input: f64) -> f64 {
+    extern "C" {
+        fn js_net_validate_socket_address_parse_input(input: f64) -> i64;
+    }
+    js_net_socket_address_parse(js_net_validate_socket_address_parse_input(input))
 }

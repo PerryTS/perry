@@ -244,6 +244,8 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_net_block_list_from_json", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_net_socket_address_new", I64, &[DOUBLE]);
     module.declare_function("js_net_socket_address_parse", DOUBLE, &[I64]);
+    module.declare_function("js_net_socket_address_parse_value", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_net_validate_socket_address_parse_input", I64, &[DOUBLE]);
     module.declare_function("js_net_socket_address_get_address", I64, &[I64]);
     module.declare_function("js_net_socket_address_get_family", I64, &[I64]);
     module.declare_function("js_net_socket_address_get_port", DOUBLE, &[I64]);

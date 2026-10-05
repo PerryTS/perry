@@ -4005,3 +4005,5 @@ perry_updater_verify_signature_v2	Reenters
 perry_updater_write_sentinel	Reenters
 redirect_lazy_to_materialized	Reenters
 setInterval	Reenters
+js_net_socket_address_parse_value	Reenters
+js_net_validate_socket_address_parse_input	Reenters

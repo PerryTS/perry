@@ -648,27 +648,48 @@ pub(crate) fn closure_set_via_function_prototype_descriptor(
     value: f64,
     receiver: f64,
 ) -> bool {
+    // Constructor inheritance is stored on the closure's actual prototype.
+    // A writable own data property shadows descriptors further up the chain.
+    let mut cur = ptr;
+    for _ in 0..128 {
+        let Some(bits) = closure_static_prototype(cur) else {
+            break;
+        };
+        let next = crate::value::js_nanbox_get_pointer(f64::from_bits(bits)) as usize;
+        if next == 0 || next == cur {
+            break;
+        }
+        if let Some(handled) = set_via_own_descriptor(next, prop, value, receiver) {
+            return handled;
+        }
+        if !is_closure_ptr(next) {
+            return false;
+        }
+        cur = next;
+    }
     let Some(proto_ptr) = function_prototype_fallback_target(ptr, prop) else {
         return false;
     };
-    if let Some(acc) = crate::object::get_accessor_descriptor(proto_ptr, prop) {
+    set_via_own_descriptor(proto_ptr, prop, value, receiver).unwrap_or(false)
+}
+
+fn set_via_own_descriptor(ptr: usize, prop: &str, value: f64, receiver: f64) -> Option<bool> {
+    if let Some(acc) = crate::object::get_accessor_descriptor(ptr, prop) {
         if acc.set == 0 {
-            // Getter-only: matches `al_set_length`'s getter-only `length` throw
-            // (array/generic.rs) — a strict-mode write to an accessor with no
-            // setter is a TypeError, not a silent no-op.
             crate::collection_iter::throw_type_error(&format!(
                 "Cannot set property {prop} of #<Function> which has only a getter"
             ));
         }
         unsafe { crate::object::invoke_accessor_setter(acc.set, receiver, value) };
-        return true;
+        return Some(true);
     }
-    if let Some(attrs) = crate::object::get_property_attrs(proto_ptr, prop) {
-        if !attrs.writable() {
-            return true;
-        }
+    if let Some(attrs) = crate::object::get_property_attrs(ptr, prop) {
+        return Some(!attrs.writable());
     }
-    false
+    if is_closure_ptr(ptr) && closure_has_own_dynamic_prop(ptr, prop) {
+        return Some(false);
+    }
+    None
 }
 
 /// Set a dynamic property on a closure (an own data property in its bag).

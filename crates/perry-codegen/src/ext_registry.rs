@@ -431,6 +431,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     ("js_net_block_list_from_json",                 OwnerKind::WellKnown("net")),
     ("js_net_socket_address_new",                   OwnerKind::WellKnown("net")),
     ("js_net_socket_address_parse",                 OwnerKind::WellKnown("net")),
+    ("js_net_socket_address_parse_value",           OwnerKind::WellKnown("net")),
     ("js_net_socket_address_get_address",           OwnerKind::WellKnown("net")),
     ("js_net_socket_address_get_family",            OwnerKind::WellKnown("net")),
     ("js_net_socket_address_get_port",              OwnerKind::WellKnown("net")),
