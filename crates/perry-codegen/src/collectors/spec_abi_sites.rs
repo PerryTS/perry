@@ -194,6 +194,29 @@ pub(crate) fn reassigned_locals_in_module(hir: &Module) -> HashSet<u32> {
     scan_whole_module(hir).writes
 }
 
+/// Module-wide: the bindings that are string ACCUMULATORS — written by a
+/// self-append (`x += s`, `x = x + a + b`) AND given a string literal by some
+/// `let` initialiser or assignment (`var out; ... out = ""; ... out += s`).
+///
+/// This is a lowering hint, never a type proof. It exists for untyped
+/// accumulators (`var output;` in TypeScript's own `createTextWriter`), whose
+/// declared type is `any`, so the declared-`string` gate never selected the
+/// amortized in-place append and every `output += s` copied the whole
+/// accumulator: a quadratic build that was 6.5 GB of the 7.0 GB a tsc
+/// transpile allocates, all of it born-tenured large strings, and 236 of its
+/// 237 full collections. The selected lowering is the tag-dispatched one, so
+/// whatever the binding actually holds at run time chooses append versus
+/// ordinary JS `+`; and an accumulator's ordinary reads demote a uniquely
+/// owned string exactly as a declared-`string` binding's do, which is what
+/// keeps the in-place append sound.
+pub(crate) fn string_accumulator_locals(hir: &Module) -> HashSet<u32> {
+    let scan = scan_whole_module(hir);
+    scan.self_appends
+        .intersection(&scan.string_literal_writes)
+        .copied()
+        .collect()
+}
+
 /// Single-id convenience over [`reassigned_locals`].
 #[cfg(test)]
 pub(crate) fn local_is_reassigned(stmts: &[Stmt], id: u32) -> bool {
@@ -279,6 +302,28 @@ struct ModuleScan {
     /// `WithSetFallback`, never through a `LocalSet` right-hand side, so a
     /// value judgment over `Let` initialisers and `LocalSet`s cannot see it.
     with_fallback_writes: HashSet<u32>,
+    /// `x = x + ...` targets (`x += ...` lowers to this): the leftmost leaf of
+    /// the left-associated `+` chain is a read of the binding being written.
+    self_appends: HashSet<u32>,
+    /// Bindings initialised or assigned a string literal somewhere.
+    string_literal_writes: HashSet<u32>,
+}
+
+/// The leftmost leaf of a left-associated `+` chain.
+fn add_chain_head(mut e: &Expr) -> &Expr {
+    while let Expr::Binary {
+        op: perry_hir::BinaryOp::Add,
+        left,
+        ..
+    } = e
+    {
+        e = left;
+    }
+    e
+}
+
+fn is_string_literal(e: &Expr) -> bool {
+    matches!(e, Expr::String(_) | Expr::WtfString(_))
 }
 
 fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
@@ -291,6 +336,20 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         }
         Expr::LocalSet(id, value) | Expr::GlobalSet(id, value) => {
             scan.writes.insert(*id);
+            if matches!(e, Expr::LocalSet(..)) {
+                if is_string_literal(value) {
+                    scan.string_literal_writes.insert(*id);
+                } else if matches!(
+                    value.as_ref(),
+                    Expr::Binary {
+                        op: perry_hir::BinaryOp::Add,
+                        ..
+                    }
+                ) && matches!(add_chain_head(value), Expr::LocalGet(head) if head == id)
+                {
+                    scan.self_appends.insert(*id);
+                }
+            }
             if depth > 0 {
                 scan.closure_refs.insert(*id);
             }
@@ -434,6 +493,9 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
                 scan.let_closures.insert(*id, *func_id);
             }
             if let Some(e) = init {
+                if is_string_literal(e) {
+                    scan.string_literal_writes.insert(*id);
+                }
                 record_expr_use(e, depth, scan);
             }
         }

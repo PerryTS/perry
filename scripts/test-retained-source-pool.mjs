@@ -11,8 +11,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const pin = fs.readFileSync(path.join(root, '.node-version'), 'utf8').trim().replace(/^v/, '');
 assert.equal(process.versions.node, pin, 'use the pinned Node oracle');
 assert(process.env.PERRY_BIN && process.env.PERRY_RUNTIME_DIR, 'explicit matched toolchain required');
-const raw = process.argv.includes('--expect-unshared');
-assert(process.argv.slice(2).every(arg => arg === '--expect-unshared'), 'unknown argument');
+assert.equal(process.argv.length, 2, 'no arguments expected');
 const work = fs.mkdtempSync(path.join(os.tmpdir(), 'perry-retained-source-'));
 const source = path.join(work, 'source.ts');
 fs.copyFileSync(path.join(root, 'test-files/test_gap_retained_source_pool.ts'), source);
@@ -20,7 +19,7 @@ fs.copyFileSync(path.join(root, 'test-files/test_gap_retained_source_pool.ts'), 
 const env = { ...process.env, PERRY_LL_OPT_LEVEL: 'z', PERRY_GC_INSTRUMENTS: '1' };
 for (const key of ['PERRY_WORKSPACE_ROOT', 'PERRY_LIB_DIR', 'PERRY_RS4GC', 'PERRY_SHADOW_STACK',
   'PERRY_INLINE_SHADOW_SLOT', 'PERRY_FULL_OUTLINE_IC', 'PERRY_SAVE_LL']) delete env[key];
-const report = { work, expectedSharing: !raw, results: [] };
+const report = { work, results: [] };
 function run(label, executable, args, cwd, overrides = {}, timeout = 15000) {
   const result = spawnSync(executable, args, { cwd, env: { ...env, ...overrides },
     encoding: 'utf8', timeout, killSignal: 'SIGKILL', maxBuffer: 16 * 1024 * 1024 });
@@ -53,14 +52,22 @@ try {
     const ir = candidates.find(text => text.includes('RETAINED_SOURCE_PARENT') &&
       text.includes('call void @js_register_class_source_static('));
     assert(ir, 'fixture source registrations must actually be emitted');
-    const sourceCalls = ir.split('\n').filter(line => line.includes('call void @js_register_function_source_static('));
-    // Native LLVM construction can fold the GEP into a constant expression;
-    // the textual construction path leaves it as an SSA pointer operand.
-    const sharedCalls = sourceCalls.filter(line => /, ptr %[^,]+, i32 /.test(line) ||
-      /, ptr getelementptr[^\n]*, i64 [1-9]\d*\)/.test(line)).length;
-    assert(sourceCalls.length >= 3, 'outer, inner and method registrations must be live');
-    if (raw) assert.equal(sharedCalls, 0, 'baseline unexpectedly shares source ranges');
-    else assert(sharedCalls >= 2, 'nested function and class method must use nonzero parent offsets');
+    const sourceCalls = ir.split('\n').filter(line =>
+      line.includes('call void @js_register_function_source_static('));
+    const sourceBatchCalls = ir.split('\n').filter(line =>
+      line.includes('call void @js_register_function_sources_static('));
+    const sourceTable = ir.split('\n').find(line =>
+      line.startsWith('@__perry_function_source_descriptors_'));
+    const sourceDescriptors = sourceTable ? sourceTable.split(
+      '{ i32, i32, i32, i32 } { i32 trunc (i64 sub (i64 ptrtoint (ptr @').length - 1 : 0;
+    const sourceInfos = ir.split('\n').filter(line => line.includes('$info =') &&
+      line.includes('.perry.retained_source') && line.includes('ptrtoint'));
+    assert(ir.includes('section ".perry_src"') || ir.includes('section "__TEXT,__perry_src"'),
+      'retained source must occupy its own read-only section');
+    assert.equal(sourceCalls.length, 0, 'executable source registration must use one batch path');
+    assert.equal(sourceBatchCalls.length, 1, 'raw method registration batch must remain live');
+    assert.equal(sourceDescriptors, 1, 'only the raw method may occupy the source descriptor table');
+    assert(sourceInfos.length >= 2, 'outer and inner must carry relative source info records');
     // Hide the input while executing; reflection must come from the image.
     fs.renameSync(source, source + '.hidden');
     let actual;
@@ -72,7 +79,9 @@ try {
     assert.equal(actual.stdout, oracle, 'native reflection differs from pinned Node');
     const moving = actual.stderr.match(/\[gc-schedule\] done:.*copying_minors=(\d+) moved_objects=(\d+) loop_polls=(\d+)/);
     assert(moving && moving.slice(1).every(n => Number(n) > 0), 'moving GC must actually execute');
-    const row = { mode, sharedCalls, executableBytes: fs.statSync(output).size,
+    const row = { mode, sourceBatchCalls: sourceBatchCalls.length, sourceDescriptors,
+      sourceInfos: sourceInfos.length,
+      executableBytes: fs.statSync(output).size,
       copyingMinors: Number(moving[1]), movedObjects: Number(moving[2]), loopPolls: Number(moving[3]) };
     report.results.push(row);
     console.log('PASS ' + JSON.stringify(row));

@@ -2304,11 +2304,16 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                     && !crate::closure::closure_has_own_dynamic_prop(cur_ptr, &name)
                 {
                     let closure = cur_ptr as *const crate::closure::ClosureHeader;
-                    let func_ptr = crate::closure::get_valid_func_ptr(closure);
-                    let is_non_strict_ordinary_function = !func_ptr.is_null()
-                        && crate::builtins::function_is_non_strict_ordinary_for_ptr(
-                            func_ptr as usize,
-                        );
+                    let is_non_strict_ordinary_function = crate::closure::closure_info(closure)
+                        .is_some_and(|info| {
+                            if info.flags & crate::codegen_abi::FN_HAS_SOURCE != 0 {
+                                info.flags & crate::codegen_abi::FN_NON_STRICT_ORDINARY != 0
+                            } else {
+                                crate::builtins::function_is_non_strict_ordinary_for_ptr(
+                                    info.code as usize,
+                                )
+                            }
+                        });
                     if is_non_strict_ordinary_function {
                         return false;
                     }
