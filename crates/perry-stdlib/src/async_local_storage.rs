@@ -183,7 +183,7 @@ fn ensure_async_local_storage_token(receiver: i64) -> Option<i64> {
         Err(PayloadMiss::Closed) => {
             let scope = perry_runtime::gc::RuntimeHandleScope::new();
             let receiver = scope.root_nanbox_f64(value);
-            native_payload::attach(
+            native_payload::attach_to_object(
                 receiver.get_nanbox_f64(),
                 &ASYNC_LOCAL_STORAGE_FAMILY,
                 perry_runtime::async_context::AsyncLocalStoragePayload::default(),
@@ -205,7 +205,7 @@ pub extern "C" fn js_async_local_storage_subclass_init(this_value: f64) -> f64 {
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(this_value);
     let _ = canonical_prototype();
-    native_payload::attach(
+    native_payload::attach_to_object(
         receiver.get_nanbox_f64(),
         &ASYNC_LOCAL_STORAGE_FAMILY,
         perry_runtime::async_context::AsyncLocalStoragePayload::default(),

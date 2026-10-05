@@ -355,7 +355,7 @@ fn pin_object_non_young_call_sites_are_never_young() {
         ));
         crate::gc::pin_object_non_young(cell_header);
         crate::gc::unpin_object(cell_header);
-        crate::native_handle::native_handle_dispose_rust_payload(cell);
+        crate::native_handle::native_handle_release_rust_payload(cell);
 
         // Control: a plain nursery object IS young, so the predicate the two
         // assertions above rely on is not vacuously false for everything.
