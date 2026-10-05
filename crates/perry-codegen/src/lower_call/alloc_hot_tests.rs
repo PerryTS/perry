@@ -535,10 +535,9 @@ fn the_inline_allocator_stores_its_header_prefix_as_one_vector_image() {
         "the inline allocation site must store the `<2 x i64>` header image:\n{ir}"
     );
     let merge_at = ir.find("\nalloc.merge").unwrap();
-    let merge_end = ir[merge_at + 1..]
-        .find("\nshadow.root.barrier")
-        .map_or(ir.len(), |at| merge_at + 1 + at);
-    let allocation_merge = &ir[merge_at..merge_end];
+    let merge_tail = &ir[merge_at..];
+    let merge_end = merge_tail.find("\n\n").unwrap_or(merge_tail.len());
+    let allocation_merge = &merge_tail[..merge_end];
     assert!(
         !allocation_merge.contains("shl i64 1,") && !allocation_merge.contains("lshr i64"),
         "ordinary inline objects must not pay to update the Map-only object-start bitmap:\n{allocation_merge}"

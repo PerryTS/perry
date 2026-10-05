@@ -1421,6 +1421,39 @@ fn full_cycle_global_root_store_after_root_scan_preserves_new_value() {
 }
 
 #[test]
+fn final_remark_preserves_unshaded_generated_global_root() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+
+    let mut root_slot = 0_u64;
+    js_gc_register_global_root(&mut root_slot as *mut u64 as i64);
+    let child = gc_malloc(
+        std::mem::size_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    );
+    unsafe {
+        init_test_closure(child);
+    }
+
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::ArenaBytes));
+    state.set_progress_kind(GcProgressKind::NormalIncremental);
+    run_cycle_until_phase(&mut state, GcCyclePhase::BlockPersistence);
+
+    // Match generated module-global code after #11929: publish the value into
+    // its registered root with no per-store shading call. This malloc object
+    // cannot be retained by arena block persistence, so FinalRootRemark is the
+    // only operation that can discover it now.
+    root_slot = ptr_bits(child as usize);
+    run_cycle_in_single_unit_steps(&mut state);
+    std::hint::black_box(root_slot);
+
+    assert!(
+        malloc_user_ptr_tracked(child),
+        "FinalRootRemark must retain an unshaded compiler-managed global root"
+    );
+}
+
+#[test]
 fn full_cycle_path_module_root_store_after_root_scan_preserves_new_value() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();

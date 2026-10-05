@@ -52,9 +52,10 @@
 //!   at the store site, in the same position the call occupied, and written
 //!   immediately. Nothing re-reads the slot at a later safepoint.
 //!
-//! The incremental-mark root shading barrier is emitted inline too, behind the
-//! same `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT` gate the runtime and
-//! `emit_persistent_shadow_root_barrier` already use.
+//! Generated roots need no incremental-mark insertion barrier: every budgeted
+//! cycle rescans them in `FinalRootRemark`, and synchronous cycles have no
+//! mutator window between root scan and sweep. Runtime callers of
+//! `js_shadow_slot_bind` retain that API's conservative barrier.
 
 use super::*;
 
@@ -237,7 +238,7 @@ fn emit_inline_slot_write(ctx: &mut FnCtx<'_>, slot_idx: u32, what: InlineSlotWr
                 .or(I64, &bound, &SHADOW_SLOT_ACTIVE_BIT.to_string());
             ctx.block().store(I64, &value, &entry);
             ctx.block().store(I64, &meta, &meta_ptr);
-            emit_inline_root_shading_barrier(ctx, &value, &done_label);
+            ctx.block().br(&done_label);
         }
         InlineSlotWrite::Clear => {
             // Codegen's "dead from here" clear: drop the liveness bit but keep
@@ -258,34 +259,6 @@ fn emit_inline_slot_write(ctx: &mut FnCtx<'_>, slot_idx: u32, what: InlineSlotWr
 
     ctx.current_block = done_idx;
     true
-}
-
-/// The incremental-mark root shading barrier, gated inline on
-/// `PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT`.
-///
-/// Identical in kind to `emit_persistent_shadow_root_barrier` and to the
-/// runtime's own `root_shading_barrier`: a zero count *proves* this thread's
-/// `INCREMENTAL_MARK_BARRIER_VALID_PTRS` is null, because
-/// `incremental_mark_barrier_enable` increments the count before installing
-/// the thread-local and disable clears the thread-local before decrementing
-/// the count. Skipping the call on a zero count is therefore observationally
-/// identical, not a weaker barrier. The LLVM `monotonic` load matches the
-/// runtime's Rust `Relaxed` readers; this gate does not publish other memory.
-///
-/// Terminates the current block with a branch to `done_label`.
-fn emit_inline_root_shading_barrier(ctx: &mut FnCtx<'_>, value_bits: &str, done_label: &str) {
-    let active =
-        ctx.block()
-            .load_atomic_monotonic(I32, "@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT", 4);
-    let needed = ctx.block().icmp_ne(I32, &active, "0");
-    let barrier_idx = ctx.new_block("ss.barrier");
-    let barrier_label = ctx.block_label(barrier_idx);
-    ctx.block().cond_br(&needed, &barrier_label, done_label);
-
-    ctx.current_block = barrier_idx;
-    ctx.block()
-        .call_void("js_write_barrier_root_nanbox", &[(I64, value_bits)]);
-    ctx.block().br(done_label);
 }
 
 #[cfg(test)]
@@ -440,21 +413,6 @@ mod tests {
         blocks
     }
 
-    /// The register mirroring the value into the entry: the first "value
-    /// word" store in an inline store block (always emitted before the meta
-    /// word — see `pointer_store_roots_inline_with_the_runtime_entry_layout`'s
-    /// "value first" comment).
-    fn stored_value_reg(blk: &str) -> String {
-        blk.lines()
-            .find_map(|l| {
-                l.trim()
-                    .strip_prefix("store i64 %r")
-                    .and_then(|rest| rest.split(',').next())
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_else(|| panic!("no value-word store in block:\n{blk}"))
-    }
-
     /// The frame push must go through `js_shadow_frame_enter` and derive the
     /// pop handle from `frame_top`, because the state pointer — not the handle
     /// — is what the inline stores need.
@@ -585,38 +543,29 @@ mod tests {
         );
     }
 
-    /// The incremental-mark root shading barrier must survive inlining, gated
-    /// on the counter the runtime uses.
+    /// A generated root bind keeps the root metadata but emits no root-shading
+    /// gate or call. FinalRootRemark is the collection-side insertion barrier.
     ///
-    /// Sabotage check: drop the `emit_inline_root_shading_barrier` call — a
-    /// pointer written into a root after the collector scanned roots is then
-    /// never shaded, and an in-flight incremental cycle frees a live object.
-    ///
-    /// The barrier's argument register is derived from the bind block's own
-    /// value-word store (`stored_value_reg`) rather than pinned to a literal
-    /// number: #10812's entry-level stack-guard check adds registers ahead of
-    /// the function body, so the exact number shifts, but the barrier must
-    /// still shade the *same* register the bind just stored.
+    /// Sabotage check: restoring either the active-count load or the call makes
+    /// this witness fail on the exact code-size regression from #11929.
     #[test]
-    fn inline_bind_keeps_the_gated_root_shading_barrier() {
+    fn inline_bind_uses_final_remark_instead_of_per_store_shading() {
         // This test asserts on the SHADOW-STACK lowering. Native roots are the
         // default now, so it has to say which lowering it is testing.
         let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
         let body = roots_body(&rooted_local_ir());
+        let bind = bind_block(&body);
         assert!(
-            body.contains(
-                "load atomic i32, ptr @PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT monotonic"
-            ),
-            "inline bind must use the runtime's relaxed ordering for the incremental-mark gate; \
-             body:\n{body}"
+            bind.contains("store i64 %") && bind.contains("ptrtoint ptr %"),
+            "the value mirror and bound-address metadata must remain:\n{bind}"
         );
-        let value_reg = stored_value_reg(&bind_block(&body));
         assert!(
-            body.contains(&format!(
-                "call void @js_write_barrier_root_nanbox(i64 %r{value_reg})"
-            )),
-            "inline bind must shade the value it just stored (%r{value_reg}) when a \
-             cycle is in flight; body:\n{body}"
+            !body.contains("@PERRY_INCREMENTAL_MARK_BARRIER_ACTIVE_COUNT"),
+            "generated root bind retained an active-cycle gate:\n{body}"
+        );
+        assert!(
+            !body.contains("call void @js_write_barrier_root_nanbox("),
+            "generated root bind retained per-store shading:\n{body}"
         );
     }
 
