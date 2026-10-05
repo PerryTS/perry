@@ -82,6 +82,7 @@ pub(super) fn optimize_and_emit(
     // `try` is one — 26% of the gap suite (128 of 479 files) contains a `try`,
     // which the explicit bridge refuses outright (#7327/#7330).
     if native_roots {
+        native_homes::retain(module);
         // Sizes before the rewrite: the budget message below names them, and
         // the per-unit report compares them with the post-rewrite census.
         let budget = rs4gc_instruction_budget();
@@ -167,6 +168,12 @@ pub(super) fn optimize_and_emit(
         .map_err(|e| anyhow!("pass pipeline `{pipeline}` failed:\n{}", e.to_string()))?;
     if let Some(stats) = stats.as_deref_mut() {
         stats.optimize_secs = optimize_started.elapsed().as_secs_f64();
+    }
+    if native_roots {
+        native_homes::publish(module)?;
+        module
+            .verify()
+            .map_err(|e| anyhow!("native root homes: {e}"))?;
     }
     // Include small units as well as budget offenders, so before/after size
     // audits do not lose their subject when a fix brings it below the cap.

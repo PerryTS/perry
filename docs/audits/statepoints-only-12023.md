@@ -4,7 +4,7 @@
 | codegen/helpers.rs root_home_size_candidate, DEFAULT_ROOT_HOME_RELOCATIONS, ROOT_HOME_MIN_SAFEPOINTS, root_home_relocation_threshold | NOT | #11960 source-size heuristic, any supported native target. |
 | codegen/helpers.rs root_spill_relocation_threshold, DEFAULT_ROOT_SPILL_RELOCATIONS, PERRY_ROOT_SPILL_RELOCATIONS | NOT | #8620 estimated 32M relocation ceiling and override. |
 | codegen/helpers.rs maybe_spill_roots_to_shadow_frame; call sites in codegen/{functions,closures,classes,helpers}, stmt/function_decl and other inventory entries | NOT | Per-function requests implement the two heuristics above. |
-| inprocess.rs enforce_rs4gc_preflight_budget / enforce_rs4gc_instruction_budget, RewriteBudget::Spill, spill diagnostics | NOT | Constructed-IR budget asks for shadow retry. |
+| inprocess.rs enforce_rs4gc_preflight_budget / enforce_rs4gc_instruction_budget, RewriteBudget::Error, spill diagnostics | NOT | Constructed-IR budget asks for shadow retry. |
 | native_emit.rs apply_budget_spill_retry and text/native/split retry loops; codegen/mod.rs and linker retry transport | NOT | Post-RS4GC and preflight errors switch rooting per function. |
 | function.rs force_shadow_frame, request_shadow_frame_spill, spills_roots_to_shadow_frame | NOT | Per-function override bypasses target-selected statepoints. |
 | helpers.rs PERRY_RS4GC, rs4gc_env_override | NOT | User-selected shadow backend on targets with working statepoints. |
@@ -35,7 +35,7 @@ when allocation resolves their live ranges through branch joins.
 
 | N | native SSA symbol B | current base symbol B | relocates | max per point | final frame B | long-copy instructions / machine instructions |
 |---:|---:|---:|---:|---:|---:|---:|
-| 25 | 39,433 | 33,745 | 1,973 | 25 | 456 | 0 / 7,465 |
+| 25 | 38,250 | 31,991 | 1,973 | 25 | 456 | 0 / 7,465 |
 | 50 | 120,452 | 64,512 | 7,698 | 50 | 856 | 5,232 / 21,045 |
 | 100 | 492,807 | 130,716 | 30,398 | 100 | 1,672 | 49,404 / 78,201 |
 | 200 | 1,799,657 | 263,625 | 120,798 | 200 | 3,304 | 219,514 / 275,452 |
@@ -83,3 +83,19 @@ to it. Existing derived-pointer pairs remain independent.
 The standalone q witnesses, their outputs and the symbol-size ratio are
 checked by scripts/check_statepoint_linear_size.py; q200 is capped at
 248,858 B, with a 2.5x maximum size increase for each doubling in N.
+
+The integrated native-home backend passes the executable q gate:
+22,328 / 45,064 / 90,314 / 175,830 bytes, compile CPU
+3.40 / 4.44 / 6.94 / 10.96 seconds. The stable-root witness and q200
+pass forced evacuation, evacuation+mark verification, scheduled moving
+safepoints and budgeted old reclaim. This is before the v7 range compression.
+
+The compact-map v7 range tag compresses a contiguous frame range in constant
+space even when the transient SSA roots change between calls. The compiler
+checks its count, base register and offset without expanding that range.
+The shared runtime decoder skips it in constant time and yields individual
+slots only when visiting the selected live set. A size gate now checks both
+the machine function and its compact-map section.
+
+The stdlib fetch/lifecycle, ext-streams and ext-http shadow uses in the
+extended inventory are test fixtures inside cfg(test), not production callers.
