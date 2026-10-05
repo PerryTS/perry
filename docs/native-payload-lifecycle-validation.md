@@ -1,5 +1,9 @@
 # Native payload lifecycle runtime validation (#11919)
 
+Current-main rebase integration and RSS attribution are recorded in
+[native-payload-lifecycle-rss.md](native-payload-lifecycle-rss.md). The results
+below describe the earlier base and its original measurement protocol.
+
 Lane base: `51a20469efd7bf418e3a52b9b6aa887eef4f2290`. Final verification and
 A/B code base: `014f3e553d574e9e136b57b8ac57c89519755459`. Final head includes current
 main `a6c147b7b00b51f18f56ce2e056cf190deca893d`; the two intervening commits
