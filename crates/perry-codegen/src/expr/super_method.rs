@@ -59,6 +59,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // ClassRef — resolves the parent's static method. Routing here
                 // beats the bogus numeric `0.0` ("value is not a function").
                 let cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
+                if cid != 0 && crate::expr::method_site::args_may_observe_lookup(ctx, args) {
+                    // #11910: `super.m` is read (a getter runs) before
+                    // arguments that can observe it; the value is called with
+                    // `this` after them.
+                    return lower_super_lookup_first(ctx, cid, method, args);
+                }
                 if cid != 0 {
                     let this_box = match ctx.this_stack.last().cloned() {
                         Some(slot) => ctx.block().load(DOUBLE, &slot),
@@ -307,6 +313,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // the same reason: the register read above it is a copy the
             // collector cannot rewrite, and `this` is immutable so the
             // re-ordered slot read observes the same binding.
+            if crate::lower_call::lookup_first::spread_args_may_observe_lookup(ctx, args) {
+                // #11910: `super.m` is read before the spread runs.
+                let this_value = |ctx: &mut FnCtx<'_>| match ctx.this_stack.last().cloned() {
+                    Some(slot) => ctx.block().load(DOUBLE, &slot),
+                    None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+                };
+                let this_box = this_value(ctx);
+                let value = emit_super_get(ctx, cid, method, &this_box);
+                let mut group = crate::rooting::open_rooted_group(1);
+                let root = group.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &value, true);
+                let r =
+                    crate::expr::call_spread::bundle_args_rooted(ctx, args, false, |ctx, acc| {
+                        let value = group.reread_emitted(ctx, root);
+                        let this_box = this_value(ctx);
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_method_site_call_value_apply",
+                            &[(DOUBLE, &value), (DOUBLE, &this_box), (I64, acc)],
+                        ))
+                    });
+                group.release(ctx);
+                return r;
+            }
             let name_global = emit_string_literal_global(ctx, method);
             crate::expr::call_spread::bundle_args_rooted(ctx, args, false, |ctx, current| {
                 let args_array = nanbox_pointer_inline(ctx.block(), current);
@@ -624,4 +653,71 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // conversion needed.
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
+}
+
+/// `super.m(args)` resolved at run time, with arguments that can observe the
+/// read: `super.m` (the home object's current prototype, `this` as receiver)
+/// is read first and the value called with `this` after the arguments.
+fn lower_super_lookup_first(
+    ctx: &mut FnCtx<'_>,
+    home_cid: u32,
+    method: &str,
+    args: &[Expr],
+) -> Result<String> {
+    let this_value = |ctx: &mut FnCtx<'_>| match ctx.this_stack.last().cloned() {
+        Some(slot) => ctx.block().load(DOUBLE, &slot),
+        None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
+    };
+    crate::rooting::with_rooted_group(ctx, args.len() + 1, |ctx, group| {
+        let this_box = this_value(ctx);
+        let value = emit_super_get(ctx, home_cid, method, &this_box);
+        let collects: Vec<bool> = args
+            .iter()
+            .map(|a| crate::rooting::operand_may_collect(ctx, a))
+            .collect();
+        let value_root = group.adopt_emitted(
+            ctx,
+            crate::rooting::Repr::Boxed,
+            &value,
+            collects.iter().any(|&c| c),
+        );
+        let mut idx = Vec::with_capacity(args.len());
+        for (i, a) in args.iter().enumerate() {
+            idx.push(group.lower(ctx, a, collects[i + 1..].iter().any(|&c| c))?);
+        }
+        let value = group.reread_emitted(ctx, value_root);
+        let mut vals = Vec::with_capacity(idx.len());
+        for i in idx {
+            vals.push(group.reread(ctx, i)?);
+        }
+        let this_box = this_value(ctx);
+        let (args_ptr, argc) = crate::lower_call::emit_method_args_buffer(ctx, &vals);
+        Ok(ctx.block().call(
+            DOUBLE,
+            "js_method_site_call_value",
+            &[
+                (DOUBLE, &value),
+                (DOUBLE, &this_box),
+                (PTR, &args_ptr),
+                (I64, &argc),
+            ],
+        ))
+    })
+}
+
+/// `super.m` read off the home object's current prototype with `this` as
+/// the receiver: a getter runs, a method is returned.
+fn emit_super_get(ctx: &mut FnCtx<'_>, home_cid: u32, method: &str, this_box: &str) -> String {
+    let key_idx = ctx.strings.intern(method);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let key_box = ctx.block().load(DOUBLE, &key_handle_global);
+    ctx.block().call(
+        DOUBLE,
+        "js_super_accessor_get",
+        &[
+            (I32, &home_cid.to_string()),
+            (DOUBLE, &key_box),
+            (DOUBLE, this_box),
+        ],
+    )
 }

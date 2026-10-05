@@ -1865,7 +1865,12 @@ js_message_channel_new	f64
 js_message_port_constructor_error	f64	
 js_method_direct_shape_class	i32u	f64,ptr,i32u
 js_method_direct_shape_guard	i32s	f64,i32u,i32u,i32u
+js_method_site_call_split	f64	f64,ptr,i64,f64,i64,ptr,usize
+js_method_site_call_value	f64	f64,f64,ptr,usize
+js_method_site_call_value_apply	f64	f64,f64,i64
+js_method_site_lookup	f64	ptr,f64,i64,usize,ptr
 js_method_site_miss	f64	ptr,i64,f64,i64,ptr,usize
+js_method_site_prepare	f64	ptr,f64,i64,usize
 js_method_site_stats	f64	i32s
 js_microtasks_pending	i32s	
 js_migrate_stdin_listeners_to_provider	void	

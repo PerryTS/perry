@@ -198,7 +198,7 @@ unsafe fn default_link_prototype(obj: *const ObjectHeader) -> Option<f64> {
         .then(|| f64::from_bits(crate::value::js_nanbox_pointer(proto as i64).to_bits()))
 }
 
-fn get_prototype_of_resolved(obj_value: f64) -> f64 {
+pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     // #2820: `Object.getPrototypeOf(null | undefined)` throws TypeError
     // (`Cannot convert undefined or null to object`). Class refs and heap

@@ -17,7 +17,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             condition,
             then_expr,
             else_expr,
-        } => lower_conditional(ctx, condition, then_expr, else_expr),
+        } => {
+            // #11910: `recv.m?.(args)` reads `recv.m` once.
+            if let Some(r) = crate::lower_call::try_lower_optional_method_call(
+                ctx, condition, then_expr, else_expr,
+            )? {
+                return Ok(r);
+            }
+            lower_conditional(ctx, condition, then_expr, else_expr)
+        }
 
         // `arr.push(x)` (Phase B.7) — special HIR variant that already
         // tells us the array LocalId and the value. We load the array

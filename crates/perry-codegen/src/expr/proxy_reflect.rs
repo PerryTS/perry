@@ -305,6 +305,34 @@ pub(crate) fn try_lower_proxy_method_call(
     }
     downgrade_unknown_call_expr(ctx, proxy);
     downgrade_unknown_call_args(ctx, args);
+    // #11910: the `get` trap runs before arguments that can observe it.
+    if crate::expr::method_site::args_may_observe_lookup(ctx, args) {
+        use crate::lower_call::lookup_first::{lower, Args, Key};
+        return lower(
+            ctx,
+            proxy,
+            Key::Name(method_name),
+            Args::List(args),
+            |ctx, p| {
+                let method_idx = ctx.strings.intern(method_name);
+                let entry = ctx.strings.entry(method_idx);
+                let bytes_global = format!("@{}", entry.bytes_global);
+                let name_len = entry.byte_len.to_string();
+                ctx.block().call(
+                    DOUBLE,
+                    "js_native_call_method",
+                    &[
+                        (DOUBLE, p.recv.as_str()),
+                        (PTR, &bytes_global),
+                        (I64, &name_len),
+                        (PTR, &p.args_ptr),
+                        (I64, &p.argc),
+                    ],
+                )
+            },
+        )
+        .map(Some);
+    }
     // The receiver is live across EVERY argument's lowering, and argument `i`
     // across every argument after it. The stack buffer below is not a root —
     // `alloca_entry_array` is the plain-alloca shape `--unrooted-allocas`

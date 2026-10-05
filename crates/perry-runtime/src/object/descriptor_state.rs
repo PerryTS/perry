@@ -1546,6 +1546,18 @@ fn note_accessor_descriptor_key(key: &str) {
     }
 }
 
+/// Does the table-route owner `obj` (an array, a native cell: no keys or
+/// meta summary of its own) hold ANY accessor? Every table insert indexes its
+/// owner (`accessor_keys_by_owner`), so one address-keyed probe answers
+/// without building a key string.
+pub(crate) fn table_owner_has_accessors(obj: usize) -> bool {
+    state()
+        .descriptors
+        .accessor_keys_by_owner
+        .borrow()
+        .contains_key(&obj)
+}
+
 /// Store an accessor descriptor for (obj, key).
 pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDescriptor) {
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
@@ -1569,6 +1581,10 @@ pub(crate) fn set_accessor_descriptor(obj: usize, key: String, acc: AccessorDesc
         note_accessor_function_replaced(obj, &key, previous.map(descriptor_from), acc);
         return;
     }
+    // An array's header bit is the fact readers check before this table
+    // (`OBJ_FLAG_ARRAY_DESCRIPTORS`): arm it for every accessor install, an
+    // index key included, not only the ones that come through defineProperty.
+    crate::array::note_array_own_non_index_key(obj);
     note_young_descriptor_owner(st, obj, Some(&acc));
     owner_index_add(&st.descriptors.accessor_keys_by_owner, obj, &key);
     st.descriptors

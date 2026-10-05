@@ -200,6 +200,13 @@ pub(crate) fn try_lower_instance_method_call(
             None => true,
             Some(name) => !ctx.classes.contains_key(name),
         };
+    // #11910: arguments that can observe when the method is read. The
+    // tower's implementor arms read nothing (a proven class id under intact
+    // prototype guards names its body); every other receiver must have its
+    // method read before the arguments, through the split method site.
+    let split = needs_dynamic_dispatch
+        && crate::expr::method_site::args_may_observe_lookup(ctx, args)
+        && crate::expr::method_site::method_site_enabled(ctx, property, args.len());
     if needs_dynamic_dispatch {
         // Find all (class_id → fn_name) for `property` — including
         // INHERITED methods. Per JS spec, `subInstance.method()` for a
@@ -319,10 +326,66 @@ pub(crate) fn try_lower_instance_method_call(
                     && impl_meta
                         .iter()
                         .any(|&(has_rest, has_synthetic, _, _)| has_rest || has_synthetic));
-            let mut roots = crate::rooting::open_rooted_group(1 + args.len());
-            let recv_collects =
-                post_args_may_collect || crate::rooting::any_operand_may_collect(ctx, args.iter());
+            // The oversized-module outline dispatches by name after the
+            // arguments: a split call takes the split method site instead.
+            if split && collapse_dynamic {
+                return Ok(None);
+            }
+            let mut roots = crate::rooting::open_rooted_group(1 + args.len() + usize::from(split));
+            let recv_collects = split
+                || post_args_may_collect
+                || crate::rooting::any_operand_may_collect(ctx, args.iter());
             let recv_idx = roots.lower(ctx, object, recv_collects)?;
+            // #11910: before the arguments, a receiver no implementor arm
+            // claims (the same class-id and prototype-guard probe the tower
+            // runs) performs the split site's lookup half; an implementor
+            // skips it. The probe's (class id, ShapeId) is that read: the
+            // tower below the arguments dispatches on it instead of probing
+            // again, so an argument that patches the prototype or adds an own
+            // method cannot change which body the read named.
+            let mut pre_probe: Option<(String, String)> = None;
+            let pre_lookup = if split {
+                let recv = roots.reread(ctx, recv_idx)?;
+                let key_idx = ctx.strings.intern(property);
+                let guard_slot = (ctx.strings.entry(key_idx).dispatch_hash & 0xffff).to_string();
+                let (cid, shape_id) =
+                    crate::lower_call::method_override::emit_inline_direct_method_shape_probe(
+                        ctx,
+                        &recv,
+                        &guard_slot,
+                    );
+                pre_probe = Some((cid.clone(), shape_id));
+                let claimed = {
+                    let blk = ctx.block();
+                    let mut hit: Option<String> = None;
+                    for (class_id, _) in implementors.iter() {
+                        let eq = blk.icmp_eq(I32, &cid, &class_id.to_string());
+                        hit = Some(match hit {
+                            None => eq,
+                            Some(prev) => blk.or(I1, &prev, &eq),
+                        });
+                    }
+                    hit.unwrap_or_else(|| "false".to_string())
+                };
+                let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+                let method_id =
+                    crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
+                crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
+                let lookup = crate::expr::method_site::emit_method_site_lookup_unless(
+                    ctx,
+                    &recv,
+                    &method_id,
+                    args.len(),
+                    &claimed,
+                );
+                let value = lookup.value.clone();
+                let any_arg_collects = crate::rooting::any_operand_may_collect(ctx, args.iter());
+                let value_root =
+                    roots.adopt_emitted(ctx, crate::rooting::Repr::Boxed, &value, any_arg_collects);
+                Some((lookup, value_root, method_id))
+            } else {
+                None
+            };
             // #1758 / epic #1785: the raw user args (no `this`, no issue-#235
             // padding, no rest-bundling) drive every concrete callee below. A
             // `perry_static_*` implementor (a class-object value reaching this
@@ -343,6 +406,36 @@ pub(crate) fn try_lower_instance_method_call(
             for &idx in &arg_idxs {
                 static_user_args.push(roots.reread(ctx, idx)?);
             }
+            // #11910: an unclaimed receiver calls what its lookup read; the
+            // tower below serves the implementor arms. The split call's last
+            // block joins the tower's outer merge.
+            let split_arm = match pre_lookup {
+                Some((lookup, value_root, method_id)) => {
+                    let value = roots.reread_emitted(ctx, value_root);
+                    let split_idx = ctx.new_block("idisp.split_call");
+                    let tower_arm_idx = ctx.new_block("idisp.tower_arm");
+                    let split_label = ctx.block_label(split_idx);
+                    let tower_arm_label = ctx.block_label(tower_arm_idx);
+                    let skipped = crate::expr::method_site::emit_lookup_skipped(&lookup);
+                    ctx.block()
+                        .cond_br(&skipped, &tower_arm_label, &split_label);
+                    ctx.current_block = split_idx;
+                    let r = crate::lower_call::console_promise::emit_split_call_half(
+                        ctx,
+                        &lookup,
+                        &recv_box,
+                        &value,
+                        &static_user_args,
+                        property,
+                        call_byte_offset,
+                        &method_id,
+                    );
+                    let end_idx = ctx.current_block;
+                    ctx.current_block = tower_arm_idx;
+                    Some((r, end_idx))
+                }
+                None => None,
+            };
             // #5391 path 4: oversized modules full-outline the class-id switch
             // tower. The tower emits one icmp + case block per class implementing
             // `property` (scaling __text with implementor count) whose default arm
@@ -403,6 +496,12 @@ pub(crate) fn try_lower_instance_method_call(
             let probe_override_label = ctx.block_label(probe_override_idx);
             let probe_dispatch_label = ctx.block_label(probe_dispatch_idx);
             let probe_outer_merge_label = ctx.block_label(probe_outer_merge_idx);
+            if let Some((_, end_idx)) = split_arm.as_ref() {
+                let here = ctx.current_block;
+                ctx.current_block = *end_idx;
+                ctx.block().br(&probe_outer_merge_label);
+                ctx.current_block = here;
+            }
 
             // #8406: an exact compiler-published (class id, ShapeId) pair can
             // prove that no post-construction own-method override was added.
@@ -434,12 +533,16 @@ pub(crate) fn try_lower_instance_method_call(
             let mut shape_probe_cid: Option<String> = None;
             let mut site_arm: Option<(String, String)> = None;
             if !shape_probe_arms.is_empty() {
-                let (cid, shape_id) =
-                    crate::lower_call::method_override::emit_inline_direct_method_shape_probe(
-                        ctx,
-                        &recv_box,
-                        &method_guard_slot_str,
-                    );
+                let (cid, shape_id) = match pre_probe.take() {
+                    Some(read) => read,
+                    None => {
+                        crate::lower_call::method_override::emit_inline_direct_method_shape_probe(
+                            ctx,
+                            &recv_box,
+                            &method_guard_slot_str,
+                        )
+                    }
+                };
                 shape_probe_cid = Some(cid.clone());
                 let own_idx = ctx.new_block("idisp.own_probe");
                 let test_idxs: Vec<usize> = (1..shape_probe_arms.len())
@@ -622,6 +725,10 @@ pub(crate) fn try_lower_instance_method_call(
                 // invalidation and every non-instance receiver to the runtime
                 // fallback instead of re-entering this hard-coded tower.
                 probed_cid
+            } else if let Some((read_cid, _)) = pre_probe.take() {
+                // #11910: the pre-argument probe already read it, under the
+                // same prototype guards.
+                read_cid
             } else {
                 // A tower too wide for the shape probe still hard-codes the
                 // body each class id inherits along the declared `extends`
@@ -836,6 +943,12 @@ pub(crate) fn try_lower_instance_method_call(
             ];
             if let Some((v_site, after_site)) = site_arm.as_ref() {
                 outer_inputs.push((v_site.as_str(), after_site.as_str()));
+            }
+            let split_end = split_arm.as_ref().map(|(_, idx)| ctx.block_label(*idx));
+            if let (Some((v_split, _)), Some(after_split)) =
+                (split_arm.as_ref(), split_end.as_ref())
+            {
+                outer_inputs.push((v_split.as_str(), after_split.as_str()));
             }
             let v_probe_phi = ctx.block().phi(DOUBLE, &outer_inputs);
             // The release has to post-dominate BOTH arms of the override probe

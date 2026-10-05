@@ -265,6 +265,34 @@ pub fn try_lower_index_get_call(
             group.release(ctx);
             return Ok(Some(boxed));
         }
+        // #11910: the method is read before arguments that can observe it;
+        // the by-name half is the dynamic-key dispatcher below (a string key
+        // takes the same route there).
+        if crate::expr::method_site::args_may_observe_lookup(ctx, args) {
+            use super::lookup_first::{lower, Args, Key};
+            return lower(
+                ctx,
+                object,
+                Key::Value(index),
+                Args::List(args),
+                |ctx, p| {
+                    let memo_slot = super::direct_method_guard::emit_chain_memo_slot(ctx);
+                    let key = p.key.as_deref().expect("computed key");
+                    ctx.block().call(
+                        DOUBLE,
+                        "js_native_call_method_value_memo",
+                        &[
+                            (DOUBLE, &p.recv),
+                            (DOUBLE, key),
+                            (crate::types::PTR, &p.args_ptr),
+                            (I64, &p.argc),
+                            (crate::types::PTR, &memo_slot),
+                        ],
+                    )
+                },
+            )
+            .map(Some);
+        }
         let is_static_string = matches!(index.as_ref(), Expr::String(_))
             || crate::type_analysis::is_string_expr(ctx, index)
             || crate::type_analysis::string_value_is_runtime_guaranteed(ctx, index);

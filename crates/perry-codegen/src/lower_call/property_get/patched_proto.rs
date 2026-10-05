@@ -101,6 +101,31 @@ pub(super) fn lower(
     args: &[Expr],
     call_byte_offset: u32,
 ) -> Result<String> {
+    // #11910: the prototype lookup runs before arguments that can observe it.
+    if crate::expr::method_site::args_may_observe_lookup(ctx, args) {
+        use crate::lower_call::lookup_first::{lower, Args, Key};
+        return lower(
+            ctx,
+            object,
+            Key::Name(property),
+            Args::List(args),
+            |ctx, p| {
+                let (name_global, name_len) = method_name_bytes(ctx, property);
+                crate::expr::calls::emit_call_location_at(ctx, call_byte_offset);
+                ctx.block().call(
+                    DOUBLE,
+                    "js_native_call_method_patched_proto",
+                    &[
+                        (DOUBLE, &p.recv),
+                        (PTR, &name_global),
+                        (I64, &name_len),
+                        (PTR, &p.args_ptr),
+                        (I64, &p.argc),
+                    ],
+                )
+            },
+        );
+    }
     let mut operands: Vec<&Expr> = Vec::with_capacity(args.len() + 1);
     operands.push(object);
     operands.extend(args.iter());
@@ -143,6 +168,28 @@ pub(crate) fn lower_spread(
     property: &str,
     args: &[CallArg],
 ) -> Result<String> {
+    if crate::lower_call::lookup_first::spread_args_may_observe_lookup(ctx, args) {
+        use crate::lower_call::lookup_first::{lower, Args, Key};
+        return lower(
+            ctx,
+            object,
+            Key::Name(property),
+            Args::Spread(args),
+            |ctx, p| {
+                let (name_global, name_len) = method_name_bytes(ctx, property);
+                ctx.block().call(
+                    DOUBLE,
+                    "js_native_call_method_patched_proto_apply",
+                    &[
+                        (DOUBLE, &p.recv),
+                        (PTR, &name_global),
+                        (I64, &name_len),
+                        (I64, &p.array),
+                    ],
+                )
+            },
+        );
+    }
     let recv_box = crate::expr::lower_expr(ctx, object)?;
     // Bundling the arguments allocates; the receiver is re-read from a root.
     let mut receiver_group = rooting::open_rooted_group(1);

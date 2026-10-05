@@ -219,7 +219,7 @@ const _: () = assert!(std::mem::offset_of!(crate::arena::InlineArenaState, data)
 
 /// Rows of [`HotTls::prototype_addrs`]; `array::prototype_addr` sizes its
 /// builtin-name table from this.
-pub(crate) const INLINE_PROTOTYPE_ADDR_ROWS: usize = 3;
+pub(crate) const INLINE_PROTOTYPE_ADDR_ROWS: usize = 6;
 
 impl HotTls {
     /// Read a claimed slot. `idx` must have passed the `< HOT_SLOT_CAPACITY`

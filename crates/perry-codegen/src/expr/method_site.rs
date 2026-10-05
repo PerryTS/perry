@@ -39,6 +39,22 @@
 //! universal by-name dispatch, so every receiver the memo cannot describe —
 //! primitives, native handles, Proxy, accessors, bound functions — keeps
 //! exactly the behaviour it had.
+//!
+//! #11910 (the split site): when the arguments can observe WHEN the method is
+//! read ([`args_may_observe_lookup`]), ECMA-262 13.3.6.1 requires the read
+//! before them, so the site splits into one runtime call on each side:
+//!
+//! ```text
+//!   LOOKUP (before the args):
+//!     v = js_method_site_lookup(slot, recv, method_id, argc, &code)
+//!         (memo hit -> v = closure, code = body; else js_method_site_prepare:
+//!          the one [[Get]] that can run a getter/trap, or a by-name answer)
+//!     v rooted across the arguments
+//!   CALL (after the args):
+//!     code != 0: r = code(v, recv, args...)   (ConstFn lanes call @B directly)
+//!     code == 0: r = js_method_site_call_split(v, slot, site, recv, method_id, args)
+//!                (BY_NAME -> miss, BY_NAME_DIRECT -> by-id dispatch, else call v)
+//! ```
 
 use super::FnCtx;
 use crate::types::{DOUBLE, I1, I32, I64, I8, PTR};
@@ -71,6 +87,81 @@ pub(crate) fn method_site_enabled(ctx: &FnCtx<'_>, property: &str, argc: usize) 
         || property.starts_with("@@")
         || property == "constructor"
         || argc > 16)
+}
+
+/// Can evaluating `args` observe WHEN the method is read (#11910)? Only an
+/// argument that runs code, writes state or reads state that code run by the
+/// read (a getter, a Proxy trap) could write. Such a call takes the split site
+/// ([`emit_method_site_lookup`]); every other call keeps the fused one.
+///
+/// Order-free: literals, `this`, a function reference, a closure or a literal
+/// of order-free parts (creation runs no user code), a local no other
+/// function can write: not boxed (a boxed local is captured and written by
+/// some closure) and not a module global (any function may write it), and
+/// operators over order-free parts that run no user code (`!`, `typeof`, `void`,
+/// `===`, `&&`, `?:`, and arithmetic the type analysis proved primitive).
+pub(crate) fn args_may_observe_lookup(ctx: &FnCtx<'_>, args: &[perry_hir::Expr]) -> bool {
+    args.iter().any(|a| !arg_is_order_free(ctx, a))
+}
+
+fn arg_is_order_free(ctx: &FnCtx<'_>, e: &perry_hir::Expr) -> bool {
+    use perry_hir::{CompareOp, Expr, UnaryOp};
+    let private = |id: &perry_hir::types::LocalId| {
+        !ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id)
+    };
+    match e {
+        Expr::Undefined
+        | Expr::Null
+        | Expr::Bool(_)
+        | Expr::Number(_)
+        | Expr::Integer(_)
+        | Expr::String(_)
+        | Expr::This
+        | Expr::FuncRef(_)
+        | Expr::Closure { .. } => true,
+        Expr::LocalGet(id) => private(id),
+        // `i++` on a number local nothing else can see: a numeric add and a
+        // store no getter can observe.
+        Expr::Update { id, .. } => private(id) && crate::rooting::expr_is_inert_primitive(ctx, e),
+        Expr::Array(items) => items.iter().all(|i| arg_is_order_free(ctx, i)),
+        Expr::Object(props) => props.iter().all(|(_, v)| arg_is_order_free(ctx, v)),
+        // ToBoolean, `typeof` and strict equality never run user code.
+        Expr::TypeOf(operand)
+        | Expr::Void(operand)
+        | Expr::Unary {
+            op: UnaryOp::Not,
+            operand,
+        } => arg_is_order_free(ctx, operand),
+        Expr::Compare {
+            op: CompareOp::Eq | CompareOp::Ne,
+            left,
+            right,
+        }
+        | Expr::Logical { left, right, .. } => {
+            arg_is_order_free(ctx, left) && arg_is_order_free(ctx, right)
+        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            arg_is_order_free(ctx, condition)
+                && arg_is_order_free(ctx, then_expr)
+                && arg_is_order_free(ctx, else_expr)
+        }
+        // Every other operator converts its operands (ToPrimitive /
+        // ToNumeric), which runs user code unless the type analysis proved
+        // them primitives.
+        Expr::Unary { operand, .. } => {
+            crate::rooting::expr_is_inert_primitive(ctx, e) && arg_is_order_free(ctx, operand)
+        }
+        Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
+            crate::rooting::expr_is_inert_primitive(ctx, e)
+                && arg_is_order_free(ctx, left)
+                && arg_is_order_free(ctx, right)
+        }
+        _ => false,
+    }
 }
 
 /// Emit the site. `recv_box` and `lowered_args` are already evaluated and
@@ -649,51 +740,17 @@ pub(crate) fn emit_method_site(
     // code. The ConstFn prime admits only bodies declaring at most `argc`, so
     // a candidate's own arity never needs more arguments than the call has.
     let mut cf_results: Vec<(String, String)> = Vec::new();
-    let mut seen: Vec<&str> = Vec::new();
-    for lane in lanes {
-        if seen.contains(&lane.body.as_str()) || lane.arity > lowered_args.len() {
-            continue;
-        }
-        seen.push(&lane.body);
-        let direct_idx = ctx.new_block("msite.constfn_direct");
-        let next_idx = ctx.new_block("msite.constfn_body");
-        let direct_l = ctx.block_label(direct_idx);
-        let next_l = ctx.block_label(next_idx);
-        {
-            let blk = ctx.block();
-            let body_addr = blk.ptrtoint(&format!("@{}", lane.body), I64);
-            let same = blk.icmp_eq(I64, &cf_func, &body_addr);
-            blk.cond_br(&same, &direct_l, &next_l);
-        }
-        ctx.current_block = direct_idx;
-        let blk = ctx.block();
-        let args: Vec<String> = lowered_args.iter().take(lane.arity).cloned().collect();
-        let r = crate::expr::body_call::emit_js_body_call(
-            blk,
-            crate::expr::body_call::JsBody::Symbol(&lane.body),
-            &cf_handle,
-            &cf_recv_bits,
-            &args,
-        );
-        let end = blk.label.clone();
-        if !blk.is_terminated() {
-            blk.br(&merge_l);
-        }
-        cf_results.push((r, end));
-        ctx.current_block = next_idx;
-    }
-    let cf_fptr = ctx.block().inttoptr(I64, &cf_func);
-    let cf_value = crate::expr::body_call::emit_js_body_call(
-        ctx.block(),
-        crate::expr::body_call::JsBody::Pointer(&cf_fptr),
+    emit_constfn_calls(
+        ctx,
+        lanes,
+        &cf_func,
         &cf_handle,
         &cf_recv_bits,
         lowered_args,
+        lowered_args,
+        &merge_l,
+        &mut cf_results,
     );
-    let cf_end = ctx.block().label.clone();
-    if !ctx.block().is_terminated() {
-        ctx.block().br(&merge_l);
-    }
 
     // miss (heap object): prime + the universal dispatcher.
     ctx.current_block = miss_idx;
@@ -735,11 +792,309 @@ pub(crate) fn emit_method_site(
     ctx.current_block = merge_idx;
     let mut incoming: Vec<(&str, &str)> = vec![
         (&hit_value, &hit_end),
-        (&cf_value, &cf_end),
         (&miss_value, &miss_end),
         (&prim_value, &prim_end),
     ];
     incoming.extend(lane_hits.iter().map(|(v, l)| (v.as_str(), l.as_str())));
     incoming.extend(cf_results.iter().map(|(v, l)| (v.as_str(), l.as_str())));
+    ctx.block().phi(DOUBLE, &incoming)
+}
+
+/// A ConstFn entry's call: when its code is one of the site's compile-time
+/// candidate bodies, call that body DIRECTLY (so it can be inlined), else
+/// call the entry's code with `fallback_args`. Shared by the fused site and
+/// the split call half.
+#[allow(clippy::too_many_arguments)]
+fn emit_constfn_calls(
+    ctx: &mut FnCtx<'_>,
+    lanes: &[crate::codegen::static_constfn::StaticMethodLane],
+    cf_func: &str,
+    cf_handle: &str,
+    cf_recv_bits: &str,
+    lowered_args: &[String],
+    fallback_args: &[String],
+    merge_l: &str,
+    cf_results: &mut Vec<(String, String)>,
+) {
+    let mut seen: Vec<&str> = Vec::new();
+    for lane in lanes {
+        if seen.contains(&lane.body.as_str()) || lane.arity > lowered_args.len() {
+            continue;
+        }
+        seen.push(&lane.body);
+        let direct_idx = ctx.new_block("msite.constfn_direct");
+        let next_idx = ctx.new_block("msite.constfn_body");
+        let direct_l = ctx.block_label(direct_idx);
+        let next_l = ctx.block_label(next_idx);
+        {
+            let blk = ctx.block();
+            let body_addr = blk.ptrtoint(&format!("@{}", lane.body), I64);
+            let same = blk.icmp_eq(I64, cf_func, &body_addr);
+            blk.cond_br(&same, &direct_l, &next_l);
+        }
+        ctx.current_block = direct_idx;
+        let blk = ctx.block();
+        let args: Vec<String> = lowered_args.iter().take(lane.arity).cloned().collect();
+        let r = crate::expr::body_call::emit_js_body_call(
+            blk,
+            crate::expr::body_call::JsBody::Symbol(&lane.body),
+            cf_handle,
+            cf_recv_bits,
+            &args,
+        );
+        let end = blk.label.clone();
+        if !blk.is_terminated() {
+            blk.br(merge_l);
+        }
+        cf_results.push((r, end));
+        ctx.current_block = next_idx;
+    }
+    let cf_fptr = ctx.block().inttoptr(I64, cf_func);
+    let cf_value = crate::expr::body_call::emit_js_body_call(
+        ctx.block(),
+        crate::expr::body_call::JsBody::Pointer(&cf_fptr),
+        cf_handle,
+        cf_recv_bits,
+        fallback_args,
+    );
+    let cf_end = ctx.block().label.clone();
+    if !ctx.block().is_terminated() {
+        ctx.block().br(merge_l);
+    }
+    cf_results.push((cf_value, cf_end));
+}
+
+/// What a split site's lookup half read (#11910), consumed by
+/// [`emit_method_site_call`] after the arguments.
+pub(crate) struct SiteLookup {
+    /// `double`: the hit's loaded closure (the callee environment), the
+    /// method value the read produced, or a by-name answer. A GC value: the
+    /// caller roots it across the arguments.
+    pub(crate) value: String,
+    /// `i64`: the hit's code address, `0` when the lookup did not hit. A code
+    /// address, never a heap reference.
+    code: String,
+    /// `i1`: [`emit_method_site_lookup_unless`] skipped the lookup.
+    skip: Option<String>,
+    slot_ref: String,
+    lanes: Vec<crate::codegen::static_constfn::StaticMethodLane>,
+}
+
+/// The site's lookup half, emitted BEFORE a call's arguments when they can
+/// run code (#11910: ECMA-262 13.3.6.1 reads `o.m` before the arguments).
+/// One call, shared by every split site: `js_method_site_lookup` performs the
+/// fused site's memo hit (the same entry words, compares and slot load) and
+/// otherwise `js_method_site_prepare`'s spec read, which runs a getter, a
+/// Proxy trap or a nullish receiver's TypeError now, or answers "by name" for
+/// a receiver whose read nothing can observe. The caller roots
+/// [`SiteLookup::value`] across the arguments and then calls
+/// [`emit_method_site_call`].
+pub(crate) fn emit_method_site_lookup(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    method_id: &str,
+    argc: usize,
+    lanes: &[crate::codegen::static_constfn::StaticMethodLane],
+) -> SiteLookup {
+    let site_no = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let cache_name = crate::expr::inline_cache_global_name(ctx, site_no);
+    ctx.ic_globals.push(cache_name.clone());
+    let slot_ref = format!("@{cache_name}");
+    let code_slot = ctx.func.method_site_code_slot();
+    let blk = ctx.block();
+    let value = blk.call(
+        DOUBLE,
+        "js_method_site_lookup",
+        &[
+            (PTR, &slot_ref),
+            (DOUBLE, recv_box),
+            (I64, method_id),
+            (I64, &argc.to_string()),
+            (PTR, &code_slot),
+        ],
+    );
+    let code = blk.load(I64, &code_slot);
+    SiteLookup {
+        value,
+        code,
+        skip: None,
+        slot_ref,
+        lanes: lanes.to_vec(),
+    }
+}
+
+/// [`emit_method_site_lookup`] behind a guard: when `skip` (an `i1`) holds,
+/// no lookup runs, and [`emit_lookup_skipped`] answers `skip` itself before
+/// the call half. The interface tower's implementor arms read nothing and
+/// skip it.
+pub(crate) fn emit_method_site_lookup_unless(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    method_id: &str,
+    argc: usize,
+    skip: &str,
+) -> SiteLookup {
+    let lookup_idx = ctx.new_block("msite.lookup");
+    let join_idx = ctx.new_block("msite.lookup_join");
+    let lookup_l = ctx.block_label(lookup_idx);
+    let join_l = ctx.block_label(join_idx);
+    let skip_end = ctx.block().label.clone();
+    ctx.block().cond_br(skip, &join_l, &lookup_l);
+    ctx.current_block = lookup_idx;
+    let looked = emit_method_site_lookup(ctx, recv_box, method_id, argc, &[]);
+    let looked_end = ctx.block().label.clone();
+    ctx.block().br(&join_l);
+    ctx.current_block = join_idx;
+    let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let blk = ctx.block();
+    let value = blk.phi(
+        DOUBLE,
+        &[(&looked.value, &looked_end), (&undefined, &skip_end)],
+    );
+    let code = blk.phi(I64, &[(&looked.code, &looked_end), ("0", &skip_end)]);
+    SiteLookup {
+        value,
+        code,
+        skip: Some(skip.to_string()),
+        ..looked
+    }
+}
+
+/// Did [`emit_method_site_lookup_unless`] skip its lookup? An `i1`.
+pub(crate) fn emit_lookup_skipped(lookup: &SiteLookup) -> String {
+    lookup.skip.clone().unwrap_or_else(|| "false".to_string())
+}
+
+/// Is the method the lookup read nullish (an optional call short-circuits)?
+/// A hit holds a closure and a read value is tested; a by-name answer read
+/// nothing, so `by_name_guard` (the source guard, whose re-read nothing can
+/// observe) answers. Returns an `i1`.
+pub(crate) fn emit_lookup_nullish(
+    ctx: &mut FnCtx<'_>,
+    value: &str,
+    by_name_guard: impl FnOnce(&mut FnCtx<'_>) -> anyhow::Result<String>,
+) -> anyhow::Result<String> {
+    let named_idx = ctx.new_block("msite.opt_named");
+    let read_idx = ctx.new_block("msite.opt_read");
+    let join_idx = ctx.new_block("msite.opt_join");
+    let named_l = ctx.block_label(named_idx);
+    let read_l = ctx.block_label(read_idx);
+    let join_l = ctx.block_label(join_idx);
+    let bits = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(value);
+        let named = emit_by_name_test(blk, &bits);
+        blk.cond_br(&named, &named_l, &read_l);
+        bits
+    };
+    ctx.current_block = named_idx;
+    let g = by_name_guard(ctx)?;
+    let named_end = ctx.block().label.clone();
+    ctx.block().br(&join_l);
+    ctx.current_block = read_idx;
+    let r = {
+        let blk = ctx.block();
+        let undef = blk.icmp_eq(I64, &bits, &crate::nanbox::TAG_UNDEFINED.to_string());
+        let null = blk.icmp_eq(I64, &bits, &crate::nanbox::TAG_NULL.to_string());
+        let r = blk.or(I1, &undef, &null);
+        blk.br(&join_l);
+        r
+    };
+    let read_end = ctx.block_label(read_idx);
+    ctx.current_block = join_idx;
+    Ok(ctx.block().phi(I1, &[(&g, &named_end), (&r, &read_end)]))
+}
+
+/// `bits | 2 == BY_NAME_DIRECT`: either by-name answer (no JS value, and no
+/// hit's closure, has either pattern).
+fn emit_by_name_test(blk: &mut crate::block::LlBlock, bits: &str) -> String {
+    let either = blk.or(I64, bits, "2");
+    blk.icmp_eq(
+        I64,
+        &either,
+        &crate::runtime_abi::METHOD_SITE_BY_NAME_DIRECT.to_string(),
+    )
+}
+
+/// The call half of a split site: `value` is [`SiteLookup::value`] re-read
+/// from its root below the arguments, `recv_box` likewise. A hit calls its
+/// code directly with the receiver as `this` (a compile-time candidate body
+/// by name, so it can be inlined); anything else is one runtime call,
+/// `js_method_site_call_split`, which dispatches by name or calls the read
+/// value. `args_buffer` emits the dispatcher's argument buffer, on that path
+/// only.
+pub(crate) fn emit_method_site_call(
+    ctx: &mut FnCtx<'_>,
+    lookup: &SiteLookup,
+    recv_box: &str,
+    value: &str,
+    lowered_args: &[String],
+    feedback_site: &str,
+    method_id: &str,
+    args_buffer: impl FnOnce(&mut FnCtx<'_>) -> (String, String),
+) -> String {
+    use crate::expr::receiver_range::{emit_handle, RECEIVER_BIAS};
+    let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let hit_idx = ctx.new_block("msite.split_hit");
+    let named_idx = ctx.new_block("msite.split_named");
+    let merge_idx = ctx.new_block("msite.split_merge");
+    let hit_l = ctx.block_label(hit_idx);
+    let named_l = ctx.block_label(named_idx);
+    let merge_l = ctx.block_label(merge_idx);
+    {
+        let blk = ctx.block();
+        let hit = blk.icmp_ne(I64, &lookup.code, "0");
+        blk.cond_br(&hit, &hit_l, &named_l);
+    }
+    // hit: the plain entry's body may declare more parameters than the call
+    // passes, so the code is called with the padded arguments.
+    ctx.current_block = hit_idx;
+    let mut results: Vec<(String, String)> = Vec::new();
+    let (handle, recv_bits) = {
+        let blk = ctx.block();
+        let value_bits = blk.bitcast_double_to_i64(value);
+        let ub = blk.sub(I64, &value_bits, &(RECEIVER_BIAS as i64).to_string());
+        let h = emit_handle(blk, &ub);
+        (h, blk.bitcast_double_to_i64(recv_box))
+    };
+    let mut padded: Vec<String> = lowered_args.to_vec();
+    let pad = crate::runtime_abi::method_site_padded_argc(lowered_args.len()) - lowered_args.len();
+    padded.extend(std::iter::repeat_n(undefined, pad));
+    emit_constfn_calls(
+        ctx,
+        &lookup.lanes,
+        &lookup.code,
+        &handle,
+        &recv_bits,
+        lowered_args,
+        &padded,
+        &merge_l,
+        &mut results,
+    );
+    // not a hit: one runtime call dispatches by name or calls the read value
+    // (every call in emitted code carries a stack map, so the site keeps one).
+    ctx.current_block = named_idx;
+    let (args_ptr, argc) = args_buffer(ctx);
+    let r = ctx.block().call(
+        DOUBLE,
+        "js_method_site_call_split",
+        &[
+            (DOUBLE, value),
+            (PTR, &lookup.slot_ref),
+            (I64, feedback_site),
+            (DOUBLE, recv_box),
+            (I64, method_id),
+            (PTR, &args_ptr),
+            (I64, &argc),
+        ],
+    );
+    results.push((r, ctx.block().label.clone()));
+    ctx.block().br(&merge_l);
+    ctx.current_block = merge_idx;
+    let incoming: Vec<(&str, &str)> = results
+        .iter()
+        .map(|(v, l)| (v.as_str(), l.as_str()))
+        .collect();
     ctx.block().phi(DOUBLE, &incoming)
 }

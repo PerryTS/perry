@@ -16,7 +16,18 @@ pub(crate) fn lower_scoped_binding(
     body: &Expr,
 ) -> Result<String> {
     let value = lower_expr(ctx, value)?;
-    let root = temp_root::temp_root_push_double(ctx, &value);
+    lower_scoped_body(ctx, id, &value, body)
+}
+
+/// The body half of [`lower_scoped_binding`], for a value the caller lowered
+/// itself (an optional method call bound for the rest of its chain).
+pub(crate) fn lower_scoped_body(
+    ctx: &mut FnCtx<'_>,
+    id: LocalId,
+    value: &str,
+    body: &Expr,
+) -> Result<String> {
+    let root = temp_root::temp_root_push_double(ctx, value);
     ctx.scoped_temp_roots.push((id, root.clone()));
     let result = lower_expr(ctx, body);
     ctx.scoped_temp_roots.pop();

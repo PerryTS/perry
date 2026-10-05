@@ -492,6 +492,741 @@ pub unsafe extern "C-unwind" fn js_method_site_miss(
     result_h.get_nanbox_f64()
 }
 
+/// What [`js_method_site_prepare`] returns when the method read is not
+/// observable and the call should dispatch by name AFTER its arguments
+/// through the site's miss (which may prime): a bit pattern no JS value takes
+/// (the array-hole marker never leaves an array).
+pub const METHOD_SITE_BY_NAME: u64 = crate::codegen_abi::METHOD_SITE_BY_NAME;
+const _: () = assert!(METHOD_SITE_BY_NAME == crate::value::TAG_HOLE);
+/// [`METHOD_SITE_BY_NAME`] for a receiver no site entry can describe (a
+/// primitive, a native cell such as a Map or an array): the call goes
+/// straight to the universal dispatcher. Also a bit pattern no JS value takes.
+pub const METHOD_SITE_BY_NAME_DIRECT: u64 = crate::codegen_abi::METHOD_SITE_BY_NAME_DIRECT;
+const _: () = assert!(
+    METHOD_SITE_BY_NAME_DIRECT & !0xFF == crate::value::TAG_HOLE & !0xFF
+        && METHOD_SITE_BY_NAME_DIRECT != crate::value::TAG_HOLE
+        && METHOD_SITE_BY_NAME_DIRECT != crate::value::TAG_TDZ
+        && METHOD_SITE_BY_NAME_DIRECT > crate::value::TAG_TRUE
+);
+
+/// The lookup half of a method call whose arguments can run code
+/// (`o.m(f())`, #11910). ECMA-262 13.3.6.1 reads `o.m` BEFORE the arguments,
+/// so a getter, a Proxy `get` trap or a nullish receiver's TypeError must run
+/// first. The emitted site performs its hit (shape compare + slot load) before
+/// the arguments and calls this only when the hit does not answer.
+///
+/// Returns the method value to call after the arguments, or one of the
+/// by-name answers when the read cannot be observed and the receiver keeps
+/// its by-name dispatch after the arguments:
+///
+/// * an ordinary object performs its one [[Get]] here (any getter or trap on
+///   its chain runs now) and hands back a plain closure as the value, so an
+///   argument that reassigns `o.m` cannot change which function runs; any
+///   other value is called by name ([`METHOD_SITE_BY_NAME`]) unless the read
+///   ran code, in which case the value itself is returned;
+/// * a native cell (a collection, an array, a buffer, a function object) has
+///   its methods answered by name and reads no prototype slot (#11394
+///   handles a patched builtin prototype at compile time); the one read the
+///   dispatcher performs that can run code is the receiver's OWN accessor,
+///   which is answered here, from the cell's descriptor summary;
+/// * a primitive's chain is its wrapper prototype and `Object.prototype`:
+///   their shapes say whether either holds the key as an accessor.
+///
+/// # Safety
+/// `slot` is null or a live method-site slot.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_method_site_prepare(
+    slot: *mut MethodSiteSlot,
+    recv: f64,
+    method_id: i64,
+    argc: usize,
+) -> f64 {
+    prepare(slot, recv, method_id, argc)
+}
+
+/// [`js_method_site_prepare`]'s body, shared with [`lookup_entry`]'s miss.
+/// Kept out of line so the runtime carries one copy of it, not two.
+#[inline(never)]
+unsafe fn prepare(slot: *mut MethodSiteSlot, recv: f64, method_id: i64, argc: usize) -> f64 {
+    let direct = f64::from_bits(METHOD_SITE_BY_NAME_DIRECT);
+    let bits = recv.to_bits();
+    let nullish = bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL;
+    let is_pointer = bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG;
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    // One header read classifies a heap receiver; only an ordinary object
+    // or a function object needs more than the accessor facts below.
+    let header = if is_pointer
+        && !crate::value::addr_class::is_proxy_id_band(addr)
+        && crate::value::addr_class::is_above_handle_band(addr)
+    {
+        crate::value::addr_class::try_read_gc_header(addr)
+    } else {
+        None
+    };
+    // A pre-growth alias the program still holds (an array's forwarding
+    // stub) is answered from the live head: growth carried the descriptor
+    // bit to its header and re-keyed the array's own properties to it.
+    let (header, addr) = match header {
+        Some(h)
+            if h.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+                && h.obj_type == crate::gc::GC_TYPE_ARRAY =>
+        {
+            let live =
+                crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader) as usize;
+            if live != 0 && live != addr {
+                (crate::value::addr_class::try_read_gc_header(live), live)
+            } else {
+                (Some(h), addr)
+            }
+        }
+        h => (h, addr),
+    };
+    let kind = header.map(|h| {
+        if h.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+            u8::MAX
+        } else {
+            h.obj_type
+        }
+    });
+    let cell = matches!(kind, Some(t) if t != crate::gc::GC_TYPE_OBJECT
+        && t != crate::gc::GC_TYPE_CLOSURE && t != u8::MAX);
+    // A primitive's or a native cell's read can run code only through an
+    // accessor (its own, or its builtin prototypes'), and none exists until
+    // the program defines one: one load answers every other program.
+    if (cell || (!is_pointer && !nullish))
+        && !crate::state::state().descriptors.accessors_in_use.get()
+    {
+        return direct;
+    }
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
+    else {
+        return direct;
+    };
+    let name = std::slice::from_raw_parts(name_ref.ptr, name_ref.len);
+    if !is_pointer {
+        return if nullish || primitive_chain_has_accessor(recv, name) {
+            spec_get(recv, name)
+        } else {
+            direct
+        };
+    }
+    match kind {
+        Some(crate::gc::GC_TYPE_OBJECT) => prepare_ordinary(slot, recv, addr, name, argc),
+        // A function object: `call` / `apply` / `bind` and its own keys go
+        // through the miss, which memoizes the function intrinsics and
+        // primes function-bag entries.
+        Some(crate::gc::GC_TYPE_CLOSURE) => prepare_function(recv, addr, name),
+        _ if cell => {
+            // An array that never had an own descriptor installed says so in
+            // its header (`OBJ_FLAG_ARRAY_DESCRIPTORS`, armed on the live
+            // head by every install, carried by growth and monotone for the
+            // allocation; a pre-growth alias was resolved to that head above).
+            let own = if kind == Some(crate::gc::GC_TYPE_ARRAY)
+                && header.is_some_and(|h| h._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0)
+            {
+                None
+            } else {
+                own_getter_value(addr, recv, name)
+            };
+            match own {
+                Some(value) => value,
+                None if cell_chain_has_accessor(recv, kind, name) => spec_get(recv, name),
+                None => direct,
+            }
+        }
+        // A Proxy, a native handle or a forwarded alias: the full walk (rare).
+        _ => {
+            if lookup_is_observable(recv, name) {
+                spec_get(recv, name)
+            } else {
+                direct
+            }
+        }
+    }
+}
+
+/// The lookup half of a split method site (#11910), in one call shared by
+/// every such site: the site's memo hit first, exactly as the fused site's
+/// emitted hit decides it (`perry-codegen/src/expr/method_site.rs`: receiver
+/// word against each entry's word, the entry's kind, the slot load, and for a
+/// plain entry the closure-of-this-body proof), else
+/// [`js_method_site_prepare`].
+///
+/// A hit returns the loaded closure (the callee environment) and stores the
+/// entry's code address through `code_out`, which the call half after the
+/// arguments calls directly with the receiver as `this`. Anything else stores
+/// `0` and returns what [`js_method_site_prepare`] answered: the method value,
+/// or one of the by-name answers, which [`js_method_site_call_split`] turns
+/// into the call.
+///
+/// # Safety
+/// `slot` is a live method-site slot; `code_out` is writable.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_method_site_lookup(
+    slot: *mut MethodSiteSlot,
+    recv: f64,
+    method_id: i64,
+    argc: usize,
+    code_out: *mut u64,
+) -> f64 {
+    *code_out = 0;
+    if bare_collection(recv.to_bits()) {
+        return f64::from_bits(METHOD_SITE_BY_NAME_DIRECT);
+    }
+    lookup_entry(slot, recv, method_id, argc, code_out)
+}
+
+/// [`js_method_site_lookup`] past the bare-collection answer: the memo hit,
+/// else [`prepare`]. Out of line, so that answer (the one a hot split site
+/// on a collection takes on every call, `counts.set(k, f(v))`) runs in a
+/// frameless leaf instead of paying this body's prologue.
+#[inline(never)]
+unsafe fn lookup_entry(
+    slot: *mut MethodSiteSlot,
+    recv: f64,
+    method_id: i64,
+    argc: usize,
+    code_out: *mut u64,
+) -> f64 {
+    if let Some((value, code)) = memo_hit(slot, recv.to_bits()) {
+        *code_out = code;
+        return f64::from_bits(value);
+    }
+    prepare(slot, recv, method_id, argc)
+}
+
+/// A Map or a Set with no metadata record: it has no own property, and the
+/// dispatcher answers its methods by name without reading any prototype slot
+/// (a patched builtin prototype takes the compile-time route, #11394), so its
+/// read is unobservable and no memo entry describes it.
+#[inline(always)]
+unsafe fn bare_collection(bits: u64) -> bool {
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
+        || !crate::value::addr_class::is_above_handle_band(addr)
+    {
+        return false;
+    }
+    let header = &*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        return false;
+    }
+    match header.obj_type {
+        crate::gc::GC_TYPE_MAP => (*(addr as *const crate::map::MapHeader)).meta.is_null(),
+        crate::gc::GC_TYPE_SET => (*(addr as *const crate::set::SetHeader)).meta.is_null(),
+        _ => false,
+    }
+}
+
+/// The fused site's emitted hit, read from the same entry words: `Some((the
+/// loaded closure, the entry's code))` exactly when the emitted site would
+/// call the memoized code. A plain entry whose slot no longer holds a
+/// closure of the recorded body resumes at the next way; every other failed
+/// check misses.
+#[inline]
+unsafe fn memo_hit(slot: *mut MethodSiteSlot, bits: u64) -> Option<(u64, u64)> {
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
+        || !crate::value::addr_class::is_above_handle_band(addr)
+    {
+        return None;
+    }
+    // Paired with the runtime's publication of the site record, and with the
+    // sticky worker gate (see the emitted site).
+    let site = (*(slot as *const std::sync::atomic::AtomicPtr<MethodSite>)).load(Ordering::Acquire);
+    if site.is_null() || WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
+        return None;
+    }
+    let word = std::ptr::read(addr as *const u64);
+    for e in &(*site).entries {
+        if e.word != word {
+            continue;
+        }
+        let s = e.slot;
+        let index = (s & METHOD_SITE_INDEX_MASK) as u32;
+        let value = match s >> 59 {
+            0 => field_bits(addr, s as u32),
+            1 => return Some((field_bits(addr, index), e.code)),
+            0x11 => {
+                let holder = e.closure;
+                if std::ptr::read(holder as *const u64) != e.gen {
+                    return None;
+                }
+                return Some((field_bits(holder, index), e.code));
+            }
+            _ if s & METHOD_SITE_INHERITED != 0 => {
+                let holder = e.closure;
+                if std::ptr::read(holder as *const u64) != e.gen {
+                    return None;
+                }
+                field_bits(holder, index)
+            }
+            _ if s & METHOD_SITE_SPILL != 0 => {
+                let meta = (*(addr as *const ObjectHeader)).meta;
+                if meta.is_null() || (*meta).spill == 0 {
+                    return None;
+                }
+                let spill = (*meta).spill as usize as *const crate::array::ArrayHeader;
+                if index >= (*spill).length {
+                    return None;
+                }
+                let elems = (spill as *const u8).add(crate::codegen_abi::ARRAY_HEADER_SIZE);
+                std::ptr::read((elems as *const u64).add(index as usize))
+            }
+            _ if s & METHOD_SITE_FUNCTION_BAG != 0 => {
+                let props = (*(addr as *const crate::closure::ClosureHeader)).props;
+                if props.is_null() {
+                    return None;
+                }
+                field_bits(props as usize, index)
+            }
+            _ => return None,
+        };
+        if closure_of_body(value, e.info) {
+            return Some((value, e.code));
+        }
+    }
+    None
+}
+
+/// Is `value` a live closure (not a forwarded stub) whose body info is
+/// `info`? The emitted own-function check.
+#[inline]
+unsafe fn closure_of_body(value: u64, info: u64) -> bool {
+    let h = (value & crate::value::POINTER_MASK) as usize;
+    if value & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
+        || !crate::value::addr_class::is_above_handle_band(h)
+    {
+        return false;
+    }
+    let header = &*((h - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    header.obj_type == crate::gc::GC_TYPE_CLOSURE
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && (*(h as *const crate::closure::ClosureHeader)).info as u64 == info
+}
+
+/// The call half of a split method site when the lookup did not hit: `value`
+/// is what [`js_method_site_lookup`] returned. [`METHOD_SITE_BY_NAME`]
+/// dispatches through the site's miss (which may prime the memo),
+/// [`METHOD_SITE_BY_NAME_DIRECT`] through the universal dispatcher, and any
+/// other value is the method itself, called with `recv` as `this`.
+///
+/// # Safety
+/// As [`js_method_site_miss`].
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_method_site_call_split(
+    value: f64,
+    slot: *mut MethodSiteSlot,
+    site_id: u64,
+    recv: f64,
+    method_id: i64,
+    args_ptr: *const f64,
+    argc: usize,
+) -> f64 {
+    match value.to_bits() {
+        METHOD_SITE_BY_NAME => js_method_site_miss(slot, site_id, recv, method_id, args_ptr, argc),
+        METHOD_SITE_BY_NAME_DIRECT => {
+            crate::typed_feedback::js_typed_feedback_native_call_method_by_id(
+                site_id, recv, method_id, args_ptr, argc,
+            )
+        }
+        _ => js_method_site_call_value(value, recv, args_ptr, argc),
+    }
+}
+
+/// Does a native cell's chain hold `name` as an accessor the dispatcher would
+/// run? An array's chain is `Array.prototype` (whose shape pins its own
+/// [[Prototype]]) and `Object.prototype`, unless some array has had its
+/// prototype replaced; any other cell kind is answered for `Object.prototype`
+/// and, only when that holds the key as an accessor, by the full walk.
+unsafe fn cell_chain_has_accessor(recv: f64, kind: Option<u8>, name: &[u8]) -> bool {
+    let object = crate::array::object_prototype_addr_if_resolved();
+    if object == 0 {
+        return lookup_is_observable(recv, name);
+    }
+    if kind == Some(crate::gc::GC_TYPE_ARRAY) {
+        // An array whose [[Prototype]] was replaced sets the process latch.
+        let array = crate::array::array_prototype_addr();
+        if super::prototype_chain::array_static_proto_recorded() {
+            return lookup_is_observable(recv, name);
+        }
+        return match builtin_prototype_has_accessor(array, object, name) {
+            Some(held) => {
+                held || super::key_attrs::object_key_is_accessor(
+                    object as *const ObjectHeader,
+                    name,
+                )
+            }
+            None => lookup_is_observable(recv, name),
+        };
+    }
+    super::key_attrs::object_key_is_accessor(object as *const ObjectHeader, name)
+        && lookup_is_observable(recv, name)
+}
+
+/// Does the builtin prototype `proto` (`Array.prototype`, a primitive's
+/// wrapper prototype, `%Function.prototype%`) hold `name` as an accessor,
+/// given that its own [[Prototype]] is the realm's `Object.prototype`
+/// (`object`)? `None` when that link is not known (the caller walks):
+///
+/// * an ordinary object answers from its shape: the link it pins is the realm
+///   default, or a recorded link naming `object`, and its key summary holds
+///   the accessor bit;
+/// * an array exotic (`Array.prototype` is one) inherits the realm default
+///   unless the array-prototype latch is set (checked by the caller); its
+///   header's `OBJ_FLAG_ARRAY_DESCRIPTORS` or, when that is set, the
+///   descriptor owner index says it owns no accessor, and only an owner with
+///   one has its descriptor record probed for `name`.
+unsafe fn builtin_prototype_has_accessor(proto: usize, object: usize, name: &[u8]) -> Option<bool> {
+    if proto == 0 {
+        return None;
+    }
+    match crate::value::addr_class::try_read_gc_header(proto) {
+        Some(h) if h.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 => None,
+        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            let p = proto as *const ObjectHeader;
+            let linked = match read_holder::admitted_proto_id(p) {
+                Some(super::shapes::PROTO_ID_DEFAULT) => true,
+                Some(_) => {
+                    let (_, word) = read_holder::stated_link(p);
+                    word & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+                        && (word & crate::value::POINTER_MASK) as usize == object
+                }
+                None => false,
+            };
+            linked.then(|| super::key_attrs::object_key_is_accessor(p, name))
+        }
+        Some(h)
+            if h.obj_type == crate::gc::GC_TYPE_ARRAY
+                && !super::prototype_chain::array_static_proto_recorded() =>
+        {
+            // `Array.prototype` carries the bit for its own named properties,
+            // so the bit alone rarely answers; the descriptor owner index (by
+            // address, no key string built) says whether it owns any accessor.
+            if h._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
+                || !super::descriptor_state::table_owner_has_accessors(proto)
+            {
+                return Some(false);
+            }
+            let key = std::str::from_utf8(name).ok()?;
+            Some(super::descriptor_state::get_accessor_descriptor(proto, key).is_some())
+        }
+        _ => None,
+    }
+}
+
+/// [`js_method_site_prepare`] for a function object. Its ShapeId answers for
+/// its own keys: installing an accessor (or a [[Prototype]]) moves a function
+/// object to the FunctionDictionary shape (`note_function_own_state_changed`),
+/// so the base Function shape and a keyed shape over `%Function.prototype%`
+/// hold no own accessor, and their chain is `%Function.prototype%` then
+/// `Object.prototype`, whose shapes answer for an inherited one.
+unsafe fn prepare_function(recv: f64, addr: usize, name: &[u8]) -> f64 {
+    let by_name = f64::from_bits(METHOD_SITE_BY_NAME);
+    if let MissReceiver::Function { word, base, keyed } = miss_receiver(recv) {
+        let function_proto = crate::array::function_prototype_addr_if_resolved();
+        let object = crate::array::object_prototype_addr_if_resolved();
+        if (base
+            || (keyed
+                && crate::closure::shape::keyed_function_shape_has_function_prototype(
+                    (word >> 32) as u32,
+                )))
+            && object != 0
+        {
+            if let Some(held) = builtin_prototype_has_accessor(function_proto, object, name) {
+                let inherited = held
+                    || super::key_attrs::object_key_is_accessor(
+                        object as *const ObjectHeader,
+                        name,
+                    );
+                return if inherited {
+                    spec_get(recv, name)
+                } else {
+                    by_name
+                };
+            }
+        }
+    }
+    if let Some(value) = own_getter_value(addr, recv, name) {
+        return value;
+    }
+    if lookup_is_observable(recv, name) {
+        spec_get(recv, name)
+    } else {
+        by_name
+    }
+}
+
+/// [`js_method_site_prepare`] for a heap object whose header says object.
+unsafe fn prepare_ordinary(
+    slot: *mut MethodSiteSlot,
+    recv: f64,
+    addr: usize,
+    name: &[u8],
+    argc: usize,
+) -> f64 {
+    let by_name = f64::from_bits(METHOD_SITE_BY_NAME);
+    // Namespace objects, class objects, dictionaries and other exotic readers
+    // keep their dispatcher; only an observable read is performed here.
+    if ordinary_receiver(addr).is_none() {
+        return if lookup_is_observable(recv, name) {
+            spec_get(recv, name)
+        } else {
+            by_name
+        };
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_h = scope.root_nanbox_f64(recv);
+    if !slot.is_null()
+        && WORKER_AGENTS_EXIST.load(Ordering::SeqCst) == 0
+        && !site_is_megamorphic(slot)
+    {
+        let _no_move = crate::gc::GcSuppressScope::new();
+        prime(slot, recv_h.get_nanbox_f64(), name, argc);
+    }
+    // The one [[Get]]: a getter or a Proxy trap on the chain runs here,
+    // before the arguments.
+    let value = spec_get(recv_h.get_nanbox_f64(), name);
+    let vb = value.to_bits();
+    if vb & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+        && crate::closure::is_closure_ptr((vb & crate::value::POINTER_MASK) as usize)
+    {
+        return value;
+    }
+    // An own data property (the receiver's shape lists the key and no
+    // descriptor makes it an accessor) ran nothing: a heap value is called
+    // as read, anything else by name.
+    let recv = recv_h.get_nanbox_f64();
+    let obj = addr_of(recv) as *const ObjectHeader;
+    if own_data_key(obj, name) {
+        return if vb & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
+            value
+        } else {
+            by_name
+        };
+    }
+    // Anything else (an inherited intrinsic, a missing method) is answered
+    // by name after the arguments, with the dispatcher's own TypeError for a
+    // missing one. That re-reads the key, so a read that ran code keeps the
+    // value it produced.
+    if lookup_is_observable(recv, name) {
+        value
+    } else {
+        by_name
+    }
+}
+
+fn addr_of(v: f64) -> usize {
+    (v.to_bits() & crate::value::POINTER_MASK) as usize
+}
+
+/// Does the ordinary object `obj`'s shape list `name` as an own DATA key?
+unsafe fn own_data_key(obj: *const ObjectHeader, name: &[u8]) -> bool {
+    let Some(shape) = super::shapes::object_shape_descriptor(obj) else {
+        return false;
+    };
+    let keys = shape.keys as usize as *const crate::array::ArrayHeader;
+    !keys.is_null()
+        && super::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name).is_some()
+        && !key_may_be_accessor(obj, name)
+}
+
+/// The receiver's OWN accessor for `name`, run now with the receiver as
+/// `this`: the one read of a native cell the by-name dispatcher performs that
+/// can run code (`native_call_method`'s accessor arm, gated alike). `None`
+/// when the cell has no such getter.
+unsafe fn own_getter_value(addr: usize, recv: f64, name: &[u8]) -> Option<f64> {
+    if !crate::state::state().descriptors.accessors_in_use.get() {
+        return None;
+    }
+    let key = std::str::from_utf8(name).ok()?;
+    let acc = super::descriptor_state::get_accessor_descriptor(addr, key)?;
+    let getter = (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+    if acc.get == 0 || getter.is_null() {
+        return None;
+    }
+    Some(crate::closure::js_closure_call0(
+        getter,
+        crate::closure::JsThis::from_f64(recv),
+    ))
+}
+
+/// Does a primitive's chain hold `name` as an accessor? The chain is its
+/// wrapper prototype, whose shape pins its own [[Prototype]], and then
+/// `Object.prototype`; each shape's summary answers a prototype with no
+/// accessor in one load. Symbols, bigints, an unbuilt realm and a wrapper
+/// prototype that no longer inherits from the realm default take the full
+/// walk.
+unsafe fn primitive_chain_has_accessor(recv: f64, name: &[u8]) -> bool {
+    let wrapper = crate::array::primitive_wrapper_prototype_addr(recv);
+    let object = crate::array::object_prototype_addr_if_resolved();
+    if object == 0 {
+        return lookup_is_observable(recv, name);
+    }
+    match builtin_prototype_has_accessor(wrapper, object, name) {
+        Some(held) => {
+            held || super::key_attrs::object_key_is_accessor(object as *const ObjectHeader, name)
+        }
+        None => lookup_is_observable(recv, name),
+    }
+}
+
+/// Call the value [`js_method_site_prepare`] returned with `recv` as `this`:
+/// an object-literal method's baked `this` capture is rebound to the receiver
+/// first (#6475), exactly as the by-name dispatcher does. Only that rebind
+/// allocates, so only then are the arguments copied and rooted across it.
+///
+/// # Safety
+/// `args_ptr` holds `argc` values.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_method_site_call_value(
+    func: f64,
+    recv: f64,
+    args_ptr: *const f64,
+    argc: usize,
+) -> f64 {
+    // The value a getter or a trap returned is called as is: a nullish one
+    // is not callable (the generic value call would answer `undefined`).
+    let fb = func.to_bits();
+    if fb == crate::value::TAG_UNDEFINED || fb == crate::value::TAG_NULL {
+        crate::closure::throw_not_callable();
+    }
+    let fptr = (fb & crate::value::POINTER_MASK) as usize;
+    let rebinds = fb & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+        && crate::closure::is_closure_ptr(fptr)
+        && crate::closure::closure_reads_this_from_capture(
+            fptr as *const crate::closure::ClosureHeader,
+        );
+    if !rebinds {
+        return crate::closure::native_call_value_this(
+            func,
+            crate::closure::JsThis::from_f64(recv),
+            args_ptr,
+            argc,
+        );
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_h = scope.root_nanbox_f64(recv);
+    let original: Vec<f64> = if argc > 0 && !args_ptr.is_null() {
+        std::slice::from_raw_parts(args_ptr, argc).to_vec()
+    } else {
+        Vec::new()
+    };
+    let arg_handles = scope.root_nanbox_f64_slice(&original);
+    let bound = crate::closure::clone_closure_rebind_this(fb, recv_h.get_nanbox_f64());
+    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
+    let this = recv_h.get_nanbox_f64();
+    crate::closure::native_call_value_this(
+        f64::from_bits(bound),
+        crate::closure::JsThis::from_f64(this),
+        args.as_ptr(),
+        args.len(),
+    )
+}
+
+/// [`js_method_site_call_value`] for a spread call: `args` is the array the
+/// caller bundled every argument into.
+///
+/// # Safety
+/// `args` is null or a live array.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_method_site_call_value_apply(
+    func: f64,
+    recv: f64,
+    args: i64,
+) -> f64 {
+    let arr = args as *const crate::array::ArrayHeader;
+    let len = if arr.is_null() {
+        0
+    } else {
+        crate::array::js_array_length(arr) as usize
+    };
+    let buf: Vec<f64> = (0..len)
+        .map(|i| crate::array::js_array_get_f64(arr, i as u32))
+        .collect();
+    js_method_site_call_value(func, recv, buf.as_ptr(), buf.len())
+}
+
+/// Can reading `name` off `recv` run code or throw? A nullish receiver throws,
+/// a Proxy anywhere on the chain traps, and an accessor anywhere on the chain
+/// runs its getter. Accessors are looked for only once a program has defined
+/// one (`accessors_in_use`); a primitive's chain (its builtin prototypes) is
+/// walked only then.
+unsafe fn lookup_is_observable(recv: f64, name: &[u8]) -> bool {
+    let bits = recv.to_bits();
+    if bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL {
+        return true;
+    }
+    let accessors = crate::state::state().descriptors.accessors_in_use.get();
+    let is_pointer = |b: u64| b & !crate::value::POINTER_MASK == crate::value::POINTER_TAG;
+    if !is_pointer(bits) && !accessors {
+        return false;
+    }
+    let name_str = std::str::from_utf8(name).ok();
+    let mut cur = recv;
+    // A prototype chain is acyclic; the bound only guards a corrupt one.
+    for _ in 0..256 {
+        let b = cur.to_bits();
+        if is_pointer(b) {
+            let addr = (b & crate::value::POINTER_MASK) as usize;
+            if crate::value::addr_class::is_proxy_id_band(addr) {
+                return true;
+            }
+            // Every cell kind answers: an ordinary object from its shape's
+            // summary and keys, any other cell (an array exotic prototype, a
+            // collection) from its descriptor meta or tables.
+            if accessors && crate::value::addr_class::is_above_handle_band(addr) {
+                match name_str {
+                    Some(n) => {
+                        if super::descriptor_state::get_accessor_descriptor(addr, n).is_some() {
+                            return true;
+                        }
+                    }
+                    None => return true,
+                }
+            }
+        }
+        // The internal read: `js_object_get_prototype_of` is the user-facing
+        // one and publishes an exposed iterator prototype (#10086).
+        let proto = crate::object::object_ops::get_prototype_of_resolved(cur);
+        let pb = proto.to_bits();
+        if pb == crate::value::TAG_NULL || pb == crate::value::TAG_UNDEFINED || pb == b {
+            return false;
+        }
+        cur = proto;
+    }
+    false
+}
+
+/// The spec [[Get]] of `name` on `recv`: runs a getter (with `recv` as
+/// `this`), a Proxy trap, or throws for a nullish receiver.
+unsafe fn spec_get(recv: f64, name: &[u8]) -> f64 {
+    // A nullish receiver throws node's TypeError before any argument runs.
+    match recv.to_bits() {
+        crate::value::TAG_NULL => {
+            crate::error::js_throw_type_error_property_access(1, name.as_ptr(), name.len())
+        }
+        crate::value::TAG_UNDEFINED => {
+            crate::error::js_throw_type_error_property_access(0, name.as_ptr(), name.len())
+        }
+        _ => {}
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_h = scope.root_nanbox_f64(recv);
+    // The canonical interned key: no allocation per read.
+    let key = crate::string::canonical_key(name);
+    let value = crate::object::js_object_get_field_by_name_f64(
+        recv_h.get_nanbox_f64().to_bits() as usize as *const ObjectHeader,
+        key,
+    );
+    if value.to_bits() == METHOD_SITE_BY_NAME || value.to_bits() == METHOD_SITE_BY_NAME_DIRECT {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    } else {
+        value
+    }
+}
+
 /// What one read of a miss receiver's header says.
 #[derive(Clone, Copy)]
 enum MissReceiver {

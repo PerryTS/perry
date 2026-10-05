@@ -333,10 +333,40 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                 }
                 if !skip {
-                    if let Some(result) =
-                        super::call_spread_short::try_lower(ctx, object, property, args)?
-                    {
-                        return Ok(result);
+                    // #11910: the method is read before arguments that can
+                    // observe it. The short-spread form (#8772) evaluates the
+                    // spread before its class guard, so it serves only
+                    // order-free spreads.
+                    let observes =
+                        crate::lower_call::lookup_first::spread_args_may_observe_lookup(ctx, args);
+                    if !observes {
+                        if let Some(result) =
+                            super::call_spread_short::try_lower(ctx, object, property, args)?
+                        {
+                            return Ok(result);
+                        }
+                    }
+                    if observes {
+                        use crate::lower_call::lookup_first::{lower, Args, Key};
+                        return lower(
+                            ctx,
+                            object,
+                            Key::Name(property),
+                            Args::Spread(args),
+                            |ctx, p| {
+                                let key_idx = ctx.strings.intern(property);
+                                let dispatch_global = ctx.strings.static_dispatch_global(key_idx);
+                                let method_id = crate::strings::emit_static_dispatch_id(
+                                    ctx.block(),
+                                    &dispatch_global,
+                                );
+                                ctx.block().call(
+                                    DOUBLE,
+                                    "js_native_call_method_apply_by_id",
+                                    &[(DOUBLE, &p.recv), (I64, &method_id), (I64, &p.array)],
+                                )
+                            },
+                        );
                     }
                     let recv_box = lower_expr(ctx, object)?;
                     // Argument bundling allocates. Keep the receiver in a
@@ -383,6 +413,25 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         if !ctx.imported_vars.contains(name) && !ctx.namespace_imports.contains(name)
                             && ctx.class_ids.contains_key(name));
                 if !(crate::type_analysis::is_numeric_expr(ctx, index) && !object_is_class_ref) {
+                    // #11910: the method is read before arguments that can
+                    // observe it.
+                    if crate::lower_call::lookup_first::spread_args_may_observe_lookup(ctx, args) {
+                        use crate::lower_call::lookup_first::{lower, Args, Key};
+                        return lower(
+                            ctx,
+                            object,
+                            Key::Value(index),
+                            Args::Spread(args),
+                            |ctx, p| {
+                                let key = p.key.as_deref().expect("computed key");
+                                ctx.block().call(
+                                    DOUBLE,
+                                    "js_native_call_method_value_apply",
+                                    &[(DOUBLE, &p.recv), (DOUBLE, key), (I64, &p.array)],
+                                )
+                            },
+                        );
+                    }
                     let rooted_operands: [&perry_hir::Expr; 2] = [object, index];
                     let (rooted_values, rooted_group) =
                         crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;

@@ -100,6 +100,10 @@ pub struct LlFunction {
     /// function-wide, then appends `"  %r<N> = alloca <ty>"` to this list.
     /// `to_ir()` prepends the list to entry-block instructions in order.
     entry_allocas: Vec<String>,
+    /// The `i64` the split method sites' lookup writes its code address
+    /// into (`expr/method_site.rs`), allocated once per function: each site
+    /// loads it right after the call.
+    method_site_code_slot: Option<String>,
     /// Hoisted setup instructions (loads, stores, calls) that must run
     /// AFTER the entry block's "init prelude" — `js_gc_init` and the
     /// `__perry_init_strings_*` calls — but BEFORE any user code, so
@@ -303,6 +307,7 @@ impl LlFunction {
             reg_counter: Rc::new(RegCounter::new()),
             fp_flags,
             entry_allocas: Vec::new(),
+            method_site_code_slot: None,
             entry_post_init_setup: Vec::new(),
             entry_init_boundary: None,
             shadow_frame_slot: None,
@@ -564,6 +569,18 @@ impl LlFunction {
 
     pub fn pop_eh_scope(&self) {
         self.reg_counter.pop_eh_scope();
+    }
+
+    /// The function's one `i64` slot for a split method site's code address
+    /// (`expr/method_site.rs`). Sites share it: each loads it right after the
+    /// lookup that wrote it.
+    pub fn method_site_code_slot(&mut self) -> String {
+        if let Some(slot) = &self.method_site_code_slot {
+            return slot.clone();
+        }
+        let slot = self.alloca_entry(crate::types::I64);
+        self.method_site_code_slot = Some(slot.clone());
+        slot
     }
 
     /// Allocate a fresh stack slot in the function entry block. Returns

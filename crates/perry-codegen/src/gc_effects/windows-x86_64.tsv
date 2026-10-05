@@ -1643,7 +1643,12 @@ js_message_channel_new	Reenters
 js_message_port_constructor_error	Reenters
 js_method_direct_shape_class	Leaf
 js_method_direct_shape_guard	Leaf
+js_method_site_call_split	Reenters
+js_method_site_call_value	Reenters
+js_method_site_call_value_apply	Reenters
+js_method_site_lookup	Reenters
 js_method_site_miss	Reenters
+js_method_site_prepare	Reenters
 js_method_site_stats	Leaf
 js_microtasks_pending	Leaf
 js_migrate_stdin_listeners_to_provider	Reenters

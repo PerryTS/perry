@@ -664,6 +664,28 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[PTR, I64, DOUBLE, I64, PTR, I64],
     );
+    // #11910: the split site's lookup half and its call half's runtime path.
+    module.declare_function("js_method_site_prepare", DOUBLE, &[PTR, DOUBLE, I64, I64]);
+    module.declare_function(
+        "js_method_site_lookup",
+        DOUBLE,
+        &[PTR, DOUBLE, I64, I64, PTR],
+    );
+    module.declare_function(
+        "js_method_site_call_split",
+        DOUBLE,
+        &[DOUBLE, PTR, I64, DOUBLE, I64, PTR, I64],
+    );
+    module.declare_function(
+        "js_method_site_call_value",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, PTR, I64],
+    );
+    module.declare_function(
+        "js_method_site_call_value_apply",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64],
+    );
     module.declare_function(
         "js_put_value_set_dyn_ic",
         DOUBLE,
