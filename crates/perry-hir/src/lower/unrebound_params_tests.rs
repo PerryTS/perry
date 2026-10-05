@@ -233,3 +233,28 @@ fn shadowing_or_unrelated_names_do_not_matter() {
         function(&m, "f").body
     );
 }
+
+#[test]
+fn arguments_mentions_invalidate_every_parameter_not_just_index_zero() {
+    let m = lower(
+        "function direct(a, b, c) { const args = arguments; a.x += 1; b.x += 1; c.x += 1; }\n\
+         function arrows(a, b, c) { const g = () => () => arguments; a.x += 1; b.x += 1; c.x += 1; }\n\
+         function strict(a, b, c) { \"use strict\"; const args = arguments; a.x += 1; b.x += 1; c.x += 1; }\n\
+         module.exports = { direct, arrows, strict };\n",
+        "arguments_all_params.cts",
+    );
+    for name in ["direct", "arrows", "strict"] {
+        let f = function(&m, name);
+        assert_eq!(temps(&f.body, "base").len(), 3, "{name}");
+        let objects = written_objects(&f.body);
+        for param in f.params.iter().filter(|p| p.arguments_object.is_none()) {
+            assert!(
+                !objects
+                    .iter()
+                    .any(|o| matches!(o, Expr::LocalGet(id) if *id == param.id)),
+                "{name}: {} needs a receiver snapshot",
+                param.name
+            );
+        }
+    }
+}

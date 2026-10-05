@@ -60,8 +60,9 @@ pub(crate) fn collect_boxed_vars(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
 ///
 /// A param is boxed when it is referenced inside some closure in `body`
 /// AND mutated — either inside a closure or in the enclosing scope. The
-/// synthesized `arguments` param is excluded: it carries its own
-/// mapped-box handling (`materialize_arguments_object`).
+/// synthesized `arguments` param is excluded, but its mapped parameters
+/// share cells even without a syntactic local write. Publish those cells
+/// module-wide so capture creation and closure bodies agree on their storage.
 pub(crate) fn collect_boxed_param_ids(
     params: &[perry_hir::Param],
     body: &[perry_hir::Stmt],
@@ -70,6 +71,7 @@ pub(crate) fn collect_boxed_param_ids(
     if params.is_empty() {
         return out;
     }
+    crate::codegen::arguments::add_arguments_mapped_boxes(params, Some(body), &mut out);
     let mut closure_refs: HashSet<u32> = HashSet::new();
     let mut closure_writes: HashSet<u32> = HashSet::new();
     collect_closure_refs_and_writes_in_stmts(body, &mut closure_refs, &mut closure_writes);
@@ -1857,3 +1859,7 @@ mod tests {
         assert_eq!(refine_type_from_init_simple(&Expr::ProcessExit(None)), None);
     }
 }
+
+#[cfg(test)]
+#[path = "boxed_vars_mapped_tests.rs"]
+mod mapped_arguments_tests;
