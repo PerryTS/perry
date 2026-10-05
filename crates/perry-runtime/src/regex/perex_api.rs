@@ -269,24 +269,22 @@ impl<'b, 's> Reuse<'b, 's> {
             crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *const RegExpHeader;
         // A receiver that is not a RegExp with a published program runs no
         // builtin search here; its failure belongs to the ordinary path.
-        let program = (crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64))
-            .is_some()
-            && unsafe { !(*crate::regex::regexp_data_ptr(re)).perex_program.is_null() })
-        .then(|| {
-            // Rooting pushes a handle slot and never collects, so `re` and
-            // its program edge are still current for every read below.
+        let program = crate::regex::regexp_data_of(receiver.get_nanbox_f64()).and_then(|data| {
+            if unsafe { (*data).perex_program.is_null() } {
+                return None;
+            }
+            // These roots only push handle slots; no collection or callback
+            // occurs between the matcher read and establishing program ownership.
             let receiver = scope.root_raw_const_ptr(re);
-            let cell = scope
-                .root_raw_const_ptr(unsafe { (*crate::regex::regexp_data_ptr(re)).perex_program });
-            let owner = unsafe { GcProgram::from_receiver(scope, &receiver) }.ok()?;
+            let owner = unsafe { GcProgram::from_data(scope, data) }.ok()?;
+            let cell = owner.root();
             let bound = bind_program(owner, budget).ok()?;
             Some(ReusedProgram {
                 receiver,
                 cell,
                 bound,
             })
-        })
-        .flatten();
+        });
         Self {
             input,
             subject,

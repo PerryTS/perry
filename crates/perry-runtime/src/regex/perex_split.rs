@@ -255,10 +255,8 @@ fn canonical_split(
         crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut super::RegExpHeader,
     );
     let (unicode, sticky) = re.with_const_ptr::<super::RegExpHeader, _>(|re| unsafe {
-        (
-            (*crate::regex::regexp_data_ptr(re)).unicode,
-            (*crate::regex::regexp_data_ptr(re)).sticky,
-        )
+        let data = &*crate::regex::regexp_data_ptr(re);
+        (data.unicode, data.sticky)
     });
     // Without `y` the splitter's program is the receiver's own, which binds in
     // constant work once validated (#10166); with it, compile one without.

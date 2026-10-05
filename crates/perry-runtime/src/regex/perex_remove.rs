@@ -36,10 +36,11 @@ pub(super) fn try_remove(
     }
     let re = crate::value::js_nanbox_get_pointer(search) as *mut RegExpHeader;
     let (global, sticky, unicode, stored) = unsafe {
+        let data = &*crate::regex::regexp_data_ptr(re);
         (
-            (*crate::regex::regexp_data_ptr(re)).global,
-            (*crate::regex::regexp_data_ptr(re)).sticky,
-            (*crate::regex::regexp_data_ptr(re)).unicode,
+            data.global,
+            data.sticky,
+            data.unicode,
             JSValue::from_bits(crate::regex::get_last_index(re).to_bits()),
         )
     };
