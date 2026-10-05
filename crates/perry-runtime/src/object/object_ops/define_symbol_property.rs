@@ -139,5 +139,5 @@ pub(super) unsafe fn define_symbol_property(
             }),
         ),
     );
-    return current_obj();
+    current_obj()
 }
