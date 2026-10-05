@@ -305,8 +305,12 @@ fn object_methods_use_their_own_arguments_mapping_rules() {
 #[test]
 fn function_constructor_arguments_do_not_inherit_source_strictness() {
     let m = lower(
-        r#"const loose = new Function("a", "arguments[0] = 7; return a;");
-           const strict = new Function("a", '"use strict"; arguments[0] = 7; return a;');"#,
+        r#"function enclosingStrict() {
+            "use strict";
+            const loose = new Function("a", "arguments[0] = 7; return a;");
+            const strict = new Function("a", '"use strict"; arguments[0] = 7; return a;');
+            return [loose, strict];
+        }"#,
         "function_constructor_arguments.ts",
     );
     fn visit(expr: &Expr, seen: &mut Vec<(bool, usize)>) {
@@ -322,7 +326,7 @@ fn function_constructor_arguments_do_not_inherit_source_strictness() {
         crate::walker::walk_expr_children(expr, &mut |child| visit(child, seen));
     }
     let mut seen = Vec::new();
-    for stmt in &m.init {
+    for stmt in &function(&m, "enclosingStrict").body {
         crate::walker::stmt_any_expr(stmt, &mut |expr| {
             visit(expr, &mut seen);
             false
