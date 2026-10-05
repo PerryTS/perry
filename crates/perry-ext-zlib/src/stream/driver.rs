@@ -121,7 +121,13 @@ impl Gzip {
                 GzipStage::Header(header) => {
                     // flate2 parses the optional fields/header CRC without
                     // decoding a body when the output slice is empty.
-                    header.read(&mut [])?;
+                    let consumed = header.read(&mut [])?;
+                    if consumed != 0 {
+                        return Err(io::Error::new(
+                            ErrorKind::InvalidData,
+                            "gzip header decoder wrote bytes to an empty buffer",
+                        ));
+                    }
                     let old = std::mem::replace(&mut self.stage, GzipStage::Done(Input::default()));
                     if let GzipStage::Header(header) = old {
                         self.stage = GzipStage::Body(Inflate::new(header.into_inner(), false));

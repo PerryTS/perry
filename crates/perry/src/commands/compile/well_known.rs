@@ -663,7 +663,10 @@ mod tests {
             .expect("native ext release step remains present");
         let command: String = step
             .lines()
-            .skip_while(|line| !line.trim_start().starts_with("cargo build "))
+            .skip_while(|line| {
+                let command = line.trim_start();
+                !command.starts_with("cargo build ") && !command.starts_with("mbx build ")
+            })
             .take_while(|line| !line.contains("|| echo"))
             .collect::<Vec<_>>()
             .join(" ");
