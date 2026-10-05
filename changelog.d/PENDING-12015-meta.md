@@ -16,6 +16,9 @@ fix. All program and gap outputs match Node 26.5.1. Runtime, stdlib and codegen
 have no new failures against main; five new unit tests have observed red
 sabotage variants. Test counters are isolated with per_test_global! and excluded
 from production builds.
+Native, shadow and dependency GC dominance checks pass their existing CI floors
+and budgets; all configured planted violations are caught. Owned build targets
+were removed after retaining the measurements and verification logs.
 
 RSS medians have small increases on four drivers (up to 1 MiB) and a 1.34 MiB
 reduction on QS stringify, so the literal all-negative RSS/symmetric-window goal
