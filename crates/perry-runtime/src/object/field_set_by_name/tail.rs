@@ -98,6 +98,15 @@ pub(crate) fn set_field_by_name_object_tail(
                 crate::array::js_array_set_f64_extend_strict(arr, index, value);
                 return;
             }
+            // Descriptor entries follow growth to the live owner, as named
+            // reads do. An alias can still carry the old descriptor flag.
+            let arr = if (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+                crate::array::clean_arr_ptr_mut(arr)
+            } else {
+                arr
+            };
+            let obj = arr.cast::<ObjectHeader>();
+            let flags = crate::array::array_object_flags_resolved(arr);
             // Own-accessor short-circuit — an Array can carry a named accessor
             // property installed via `Object.defineProperty(arr, k, {get,set})`.
             // A `[[Set]]` on such a property must invoke the setter (a
@@ -116,7 +125,7 @@ pub(crate) fn set_field_by_name_object_tail(
             // fresh array reusing a freed address (its `_reserved` zeroed at
             // allocation) skips this lookup and can't fire a previous tenant's
             // stale accessor.
-            if (*gc_header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
+            if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
                 && crate::state::state().descriptors.accessors_in_use.get()
             {
                 if let Some(acc) = get_accessor_descriptor(obj as usize, name) {

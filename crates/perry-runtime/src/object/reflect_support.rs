@@ -255,7 +255,9 @@ pub(crate) fn obj_value_attrs(value: f64, key: f64) -> Option<(bool, bool)> {
         let lazy_index = super::canonical_array_index(&k).is_some()
             && crate::value::addr_class::try_read_tracked_gc_header(obj as usize)
                 .is_some_and(|gc| (*gc.as_ptr()).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY);
-        let owner = if lazy_index {
+        let is_array = crate::value::addr_class::try_read_gc_header(obj as usize)
+            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY);
+        let owner = if is_array || lazy_index {
             super::array_object_ops::array_header(obj) as usize
         } else {
             obj as usize
