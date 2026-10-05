@@ -41,11 +41,8 @@ fn identical_content_and_canonical_flags_share_programs() {
             a.with_const_ptr(|p: *const RegExpHeader| p),
             b.with_const_ptr(|p: *const RegExpHeader| p)
         );
-        a.with_mut_ptr(|p| crate::regex::js_regexp_set_last_index(p, 17.0));
-        assert_eq!(
-            b.with_const_ptr(|p| crate::regex::js_regexp_get_last_index(p)),
-            0.0
-        );
+        a.with_mut_ptr(|p| crate::regex::set_last_index(p, 17.0));
+        assert_eq!(b.with_const_ptr(|p| crate::regex::get_last_index(p)), 0.0);
     }
 }
 
@@ -55,8 +52,9 @@ fn identity_hit_does_not_compile_or_hash_the_pattern() {
     let _reset = Reset::new();
     let scope = RuntimeHandleScope::new();
     let re = regex(&scope, "identity", "g");
-    let source = scope
-        .root_string_ptr(re.with_const_ptr(|p: *const RegExpHeader| unsafe { (*p).pattern_ptr }));
+    let source = scope.root_string_ptr(re.with_const_ptr(|p: *const RegExpHeader| unsafe {
+        (*crate::regex::regexp_data_ptr(p)).pattern_ptr
+    }));
     let flags = CanonicalFlags::parse(b"g").unwrap();
     let cached =
         get_or_compile(&scope, &source, flags, || panic!("identity hit recompiled")).unwrap();
@@ -130,7 +128,7 @@ fn invalid_pattern_never_enters_the_cache() {
 }
 
 #[test]
-fn content_hit_seals_the_new_original_source_against_unique_append() {
+fn content_hit_shares_immutable_data_without_retaining_duplicate_source() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _reset = Reset::new();
     let scope = RuntimeHandleScope::new();
@@ -142,8 +140,23 @@ fn content_hit_seals_the_new_original_source_against_unique_append() {
         source.with_const_ptr(|p| flags.with_const_ptr(|f| crate::regex::js_regexp_new(p, f))),
     );
     assert_eq!(program(&first), program(&second));
+    let first_data =
+        first.with_const_ptr::<crate::regex::RegExpHeader, _>(crate::regex::regexp_data_ptr);
+    let second_data =
+        second.with_const_ptr::<crate::regex::RegExpHeader, _>(crate::regex::regexp_data_ptr);
+    assert_eq!(first_data, second_data);
+    second.with_const_ptr::<crate::regex::RegExpHeader, _>(|r| unsafe {
+        source.with_const_ptr::<StringHeader, _>(|source| {
+            assert_ne!((*crate::regex::regexp_data_ptr(r)).pattern_ptr, source);
+        });
+        assert_eq!(
+            (*(*crate::regex::regexp_data_ptr(r)).pattern_ptr).refcount,
+            0,
+            "the data cell's retained original source must be sealed"
+        );
+    });
     assert_eq!(
         source.with_const_ptr::<StringHeader, _>(|p| unsafe { (*p).refcount }),
-        0
+        1
     );
 }

@@ -46,7 +46,9 @@ fn unregistered_address_misses_every_probe() {
     assert_eq!(crate::buffer::buffer_ab_alias(addr), None);
     assert!(!crate::symbol::is_registered_symbol(addr));
     assert!(!crate::shared_sab::is_shared_sab(addr));
-    assert!(!crate::regex::is_registered_regex(addr));
+    assert!(
+        !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((addr) as i64)).is_some()
+    );
     assert!(!crate::map::is_registered_map(addr));
     assert!(!crate::set::is_registered_set(addr));
     assert!(!crate::object::is_registered_class_prototype_object(addr));

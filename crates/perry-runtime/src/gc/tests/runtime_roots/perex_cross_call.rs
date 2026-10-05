@@ -3,11 +3,14 @@
 //! validated, so a search per JavaScript call binds both in constant work.
 use super::*;
 use crate::regex::perex_api as api;
-use crate::regex::perex_owner::{cell_witness, set_cell_witness, GcProgram};
+#[cfg(debug_assertions)]
+use crate::regex::perex_owner::GcProgram;
+use crate::regex::perex_owner::{cell_witness, set_cell_witness};
 use crate::regex::perex_runtime::EngineError;
 use crate::regex::RegExpHeader;
 use crate::string::{StringHeader, STRING_FLAG_WTF8_VALIDATED};
 use crate::value::js_nanbox_string;
+#[cfg(debug_assertions)]
 use perex::binding::ImmutableProgram;
 
 fn text<'s>(scope: &'s RuntimeHandleScope, bytes: &[u8]) -> RuntimeHandle<'s> {
@@ -40,12 +43,14 @@ fn search(
 
 /// The witness in the RegExp's current program cell.
 fn witness(re: &RuntimeHandle<'_>) -> Option<perex::binding::ProgramWitness> {
-    re.with_const_ptr::<RegExpHeader, _>(|re| unsafe { cell_witness((*re).perex_program) })
+    re.with_const_ptr::<RegExpHeader, _>(|re| unsafe {
+        cell_witness((*crate::regex::regexp_data_ptr(re)).perex_program)
+    })
 }
 
 fn set_witness(re: &RuntimeHandle<'_>, value: Option<perex::binding::ProgramWitness>) {
     re.with_const_ptr::<RegExpHeader, _>(|re| unsafe {
-        set_cell_witness((*re).perex_program, value)
+        set_cell_witness((*crate::regex::regexp_data_ptr(re)).perex_program, value)
     });
 }
 

@@ -405,17 +405,7 @@ pub extern "C" fn js_object_get_own_property_descriptor(obj_value: f64, key_valu
             // Builtin own slots: RegExp `lastIndex` (writable, non-enum,
             // non-config) and Error `message`/`stack` (writable, non-enum,
             // configurable).
-            if kind == ExoticKind::RegExp && name == "lastIndex" {
-                let attrs = super::get_property_attrs(addr, &name)
-                    .unwrap_or(PropertyAttrs::new(true, false, false));
-                let re = addr as *const crate::regex::RegExpHeader;
-                return build_data_descriptor(
-                    f64::from_bits((*re).last_index),
-                    attrs.writable(),
-                    attrs.enumerable(),
-                    attrs.configurable(),
-                );
-            }
+
             if kind == ExoticKind::Error && matches!(name.as_str(), "message" | "stack") {
                 let attrs = super::get_property_attrs(addr, &name)
                     .unwrap_or(PropertyAttrs::new(true, false, true));
@@ -1150,7 +1140,6 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
         if let Some((addr, kind)) = super::exotic_expando::exotic_expando_kind_of_value(obj_value) {
             use super::exotic_expando::ExoticKind;
             let mut names = match kind {
-                ExoticKind::RegExp => vec!["lastIndex".to_string()],
                 ExoticKind::Error => {
                     // V8 creates the lazy own `stack` before Error's optional
                     // `message`. The header keeps both payload slots, but only
@@ -1454,7 +1443,11 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                     continue;
                 };
                 if super::field_get_set::is_internal_runtime_key_bytes(bytes)
-                    || (hide_private && super::key_attrs::object_key_is_private(obj, bytes))
+                    || (hide_private
+                        && super::key_attrs::entry_is_private(super::key_attrs::keys_entry(
+                            keys,
+                            pos(i),
+                        )))
                 {
                     continue;
                 }
@@ -1507,7 +1500,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
             }
             if hide_private || hide_wasi_state {
                 if let Some(b) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
-                    if (hide_private && super::field_get_set::own_key_hidden_bytes(obj, b))
+                    if (hide_private && super::field_get_set::own_slot_hidden(obj, pos(i), key_val))
                         || (hide_wasi_state && b.starts_with(b"__wasi"))
                     {
                         continue;

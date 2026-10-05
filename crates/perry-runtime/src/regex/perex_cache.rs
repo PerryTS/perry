@@ -1,6 +1,7 @@
 //! Bounded LRU of immutable Perex programs. Identity hits read no source bytes;
 //! different string allocations use a content hash followed by exact equality.
-//! Both GC pointers are mutable roots. No RegExp header or lastIndex is cached.
+//! Source, program and immutable data cells are mutable roots. Instances and
+//! lastIndex are never cached.
 use super::flags::CanonicalFlags;
 use super::perex_owner::GcProgram;
 use super::perex_runtime::EngineError;
@@ -18,6 +19,7 @@ type ContentKey = (u64, CanonicalFlags);
 struct Entry {
     source: *const StringHeader,
     program: *const u8,
+    data: *const super::RegExpData,
     key: ContentKey,
     bytes: usize,
     used: u64,
@@ -44,11 +46,11 @@ fn fingerprint(bytes: &[u8]) -> u64 {
 }
 
 impl Cache {
-    fn hit(&mut self, index: usize) -> *const u8 {
+    fn hit(&mut self, index: usize) -> (*const u8, *const super::RegExpData) {
         self.clock += 1;
         let entry = self.entries[index].as_mut().unwrap();
         entry.used = self.clock;
-        entry.program
+        (entry.program, entry.data)
     }
 
     fn remove(&mut self, index: usize) {
@@ -100,28 +102,10 @@ impl Cache {
     }
 }
 
-pub(super) fn get_or_compile<'s>(
-    scope: &'s RuntimeHandleScope,
-    source: &RuntimeHandle<'s>,
+fn lookup(
+    source: &RuntimeHandle<'_>,
     flags: CanonicalFlags,
-    compile: impl FnOnce() -> Result<GcProgram<'s>, EngineError>,
-) -> Result<GcProgram<'s>, EngineError> {
-    // Publication retains OriginalSource even on a content hit where this
-    // particular string has never been bound by HeapSubject before.
-    source.with_mut_ptr::<StringHeader, _>(|p| crate::string::js_string_addref(p));
-    if crate::hot_diag::regex_on() {
-        source.with_const_ptr::<StringHeader, _>(|p| {
-            crate::hot_diag::regex_with(|d| {
-                d.note_new(
-                    p as usize,
-                    super::string_as_bytes(p),
-                    flags.as_str(),
-                    false,
-                    false,
-                )
-            });
-        });
-    }
+) -> Option<(*const u8, *const super::RegExpData)> {
     let identity = source.with_const_ptr::<StringHeader, _>(|p| (p as usize, flags));
     let hit = REGEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
@@ -145,7 +129,7 @@ pub(super) fn get_or_compile<'s>(
             crate::hot_diag::regex_counters(|d| d.program_identity_hits += 1);
         }
         // No collecting operation between lookup and establishing this root.
-        return Ok(unsafe { GcProgram::from_cached(scope, program) });
+        return Some(program);
     }
     let hash = unsafe { source.with_string_bytes(fingerprint) };
     let key = (hash, flags);
@@ -168,9 +152,93 @@ pub(super) fn get_or_compile<'s>(
             d.program_content_hits += u64::from(hit.is_some());
         });
     }
-    if let Some(program) = hit {
+    hit
+}
+
+/// The same content lookup as compilation, when its entry already owns the
+/// immutable source/flags/program cell. Instances and lastIndex are never cached.
+pub(super) fn data<'s>(
+    scope: &'s RuntimeHandleScope,
+    source: &RuntimeHandle<'_>,
+    flags: CanonicalFlags,
+) -> Option<RuntimeHandle<'s>> {
+    let (_, data) = lookup(source, flags)?;
+    if data.is_null() {
+        return None;
+    }
+    if crate::hot_diag::regex_on() {
+        source.with_const_ptr::<StringHeader, _>(|p| {
+            crate::hot_diag::regex_with(|d| {
+                d.note_new(
+                    p as usize,
+                    super::string_as_bytes(p),
+                    flags.as_str(),
+                    false,
+                    false,
+                )
+            });
+        });
+    }
+    Some(scope.root_raw_const_ptr(data))
+}
+
+pub(super) fn install_data(
+    source: &RuntimeHandle<'_>,
+    flags: CanonicalFlags,
+    data: &RuntimeHandle<'_>,
+) {
+    let identity = source.with_const_ptr::<StringHeader, _>(|p| (p as usize, flags));
+    REGEX_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        let Some(index) = cache.identities.get(&identity).copied() else {
+            return;
+        };
+        let added = std::mem::size_of::<super::RegExpData>();
+        if cache.bytes + added > BYTE_LIMIT {
+            return;
+        }
+        let entry = cache.entries[index].as_mut().unwrap();
+        if !entry.data.is_null() {
+            return;
+        }
+        data.with_const_ptr::<super::RegExpData, _>(|data| unsafe {
+            // GC_STORE_AUDIT(ROOT): the cache's mutable scanner visits this slot.
+            crate::gc::runtime_store_root_raw_mut_ptr_slot(
+                &mut entry.data as *mut *const super::RegExpData as *mut *mut super::RegExpData,
+                data as *mut super::RegExpData,
+            );
+        });
+        entry.bytes += std::mem::size_of::<super::RegExpData>();
+        cache.bytes += std::mem::size_of::<super::RegExpData>();
+    });
+}
+
+pub(super) fn get_or_compile<'s>(
+    scope: &'s RuntimeHandleScope,
+    source: &RuntimeHandle<'s>,
+    flags: CanonicalFlags,
+    compile: impl FnOnce() -> Result<GcProgram<'s>, EngineError>,
+) -> Result<GcProgram<'s>, EngineError> {
+    // Publication retains OriginalSource even on a content hit where this
+    // particular string has never been bound by HeapSubject before.
+    source.with_mut_ptr::<StringHeader, _>(|p| crate::string::js_string_addref(p));
+    if crate::hot_diag::regex_on() {
+        source.with_const_ptr::<StringHeader, _>(|p| {
+            crate::hot_diag::regex_with(|d| {
+                d.note_new(
+                    p as usize,
+                    super::string_as_bytes(p),
+                    flags.as_str(),
+                    false,
+                    false,
+                )
+            });
+        });
+    }
+    if let Some((program, _)) = lookup(source, flags) {
         return Ok(unsafe { GcProgram::from_cached(scope, program) });
     }
+    let key = (unsafe { source.with_string_bytes(fingerprint) }, flags);
     let program = compile()?;
     let bytes = program
         .with_words(|words| words.len() * 4)
@@ -179,6 +247,7 @@ pub(super) fn get_or_compile<'s>(
     let mut entry = Entry {
         source: std::ptr::null(),
         program: std::ptr::null(),
+        data: std::ptr::null(),
         key,
         bytes,
         used: 0,
@@ -215,6 +284,7 @@ pub(crate) fn scan_roots_mut(visitor: &mut RuntimeRootVisitor<'_>) {
             let old = entry.source;
             visitor.visit_tagged_raw_const_ptr_slot(&mut entry.source, crate::value::STRING_TAG);
             visitor.visit_raw_const_ptr_slot(&mut entry.program);
+            visitor.visit_raw_const_ptr_slot(&mut entry.data);
             moved |= old != entry.source;
         }
         if moved {

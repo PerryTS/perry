@@ -620,7 +620,6 @@ fn object_has_property_generic(obj: f64, key: f64) -> f64 {
             return nanbox_true;
         }
         let builtin_own = match kind {
-            ExoticKind::RegExp => name == "lastIndex",
             ExoticKind::Error => matches!(name, "message" | "stack"),
             // Temporal built-in fields (year/month/calendar/…) are prototype
             // getters, not own data properties (like Date). Promise's

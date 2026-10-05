@@ -3177,12 +3177,10 @@ js_regexp_exec	ptr	ptr,ptr
 js_regexp_exec_get_groups	i64	
 js_regexp_exec_get_index	f64	
 js_regexp_get_flags	ptr	ptr
-js_regexp_get_last_index	f64	ptr
 js_regexp_get_source	ptr	ptr
 js_regexp_new	ptr	ptr,ptr
 js_regexp_new_factory_site	ptr	ptr,ptr,i64,i64
 js_regexp_new_site	ptr	ptr,ptr,i64
-js_regexp_set_last_index	void	ptr,f64
 js_regexp_site_factory_call_method	f64	i64,f64,f64
 js_regexp_site_factory_call_value	f64	i64,f64
 js_regexp_site_test_dispatch	f64	i64,f64,f64,f64

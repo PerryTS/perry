@@ -1,5 +1,9 @@
 // Storage names for fresh ClassDefinitionEvaluations (#11163).
 
+// Identity 0 belongs exclusively to runtime-intrinsic private names.
+// A template that needs no fresh evaluation uses a separate scalar namespace.
+const PRIVATE_TEMPLATE_EVALUATION_ID: u64 = u64::MAX;
+
 // A scalar identity survives moving GC without retaining its class object.
 static NEXT_PRIVATE_EVALUATION_ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1);
@@ -11,7 +15,7 @@ fn private_storage_evaluation_id(class_id: u32, receiver: Option<f64>, owner: Op
         .or_else(|| current_private_lexical_brand(class_id))
         .or_else(|| receiver.and_then(|value| private_evaluation_brand(value, class_id)))
     else {
-        return 0;
+        return PRIVATE_TEMPLATE_EVALUATION_ID;
     };
     let object = JSValue::from_bits(brand).as_pointer::<ObjectHeader>();
     unsafe {
@@ -21,7 +25,13 @@ fn private_storage_evaluation_id(class_id: u32, receiver: Option<f64>, owner: Op
         }
         // Metadata allocation can move the class; object_meta_ensure roots it.
         let meta = crate::object::object_meta_ensure(object as *mut ObjectHeader);
-        let id = NEXT_PRIVATE_EVALUATION_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let id = NEXT_PRIVATE_EVALUATION_ID
+            .try_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |id| id.checked_add(1).filter(|next| *next != PRIVATE_TEMPLATE_EVALUATION_ID),
+            )
+            .expect("private evaluation identity exhausted");
         (*meta).native_state = id;
         id
     }
@@ -72,15 +82,13 @@ fn private_evaluation_field_get(
     if !private_template_may_be_evaluated(class_id) {
         let receiver = private_member_receiver(obj);
         let name = intern_private_name(name.as_bytes()).unwrap();
-        return private_storage_key_by_id(class_id, 0, name).get_cached(receiver);
+        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name).get_cached(receiver);
     }
     let owner = take_private_field_owner(class_id, name, false);
     let _owner = PrivateHintBrandScope::new(owner);
     let receiver = private_member_receiver(obj);
     if super::super::class_registry::is_class_object_value(receiver)
         || super::super::native_module::class_ref_id(receiver).is_some()
-        || (current_private_lexical_brand(class_id).is_none()
-            && private_evaluation_brand(receiver, class_id).is_none())
     {
         return None;
     }
@@ -102,15 +110,13 @@ fn private_evaluation_field_set(
     if !private_template_may_be_evaluated(class_id) {
         let receiver = private_member_receiver(obj);
         let name = intern_private_name(name.as_bytes()).unwrap();
-        return private_storage_key_by_id(class_id, 0, name).set_cached(receiver, value);
+        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name).set_cached(receiver, value);
     }
     let owner = take_private_field_owner(class_id, name, true);
     let _owner = PrivateHintBrandScope::new(owner);
     let receiver = private_member_receiver(obj);
     if super::super::class_registry::is_class_object_value(receiver)
         || super::super::native_module::class_ref_id(receiver).is_some()
-        || (current_private_lexical_brand(class_id).is_none()
-            && private_evaluation_brand(receiver, class_id).is_none())
     {
         return false;
     }

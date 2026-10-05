@@ -36,7 +36,9 @@ export function describe(value: any): string {
             return "[" + parts.join(",") + "]";
         }
         if (v instanceof Date) return "Date(" + v.getTime() + ")";
-        if (v instanceof RegExp) return "RegExp(/" + v.source + "/" + v.flags + " last=" + v.lastIndex + ")";
+        if (v instanceof RegExp) return "RegExp(/" + v.source + "/" + v.flags + " last=" + v.lastIndex +
+            " own=" + Object.getOwnPropertyNames(v).join(",") + " ctor=" + v.constructor.name +
+            " keys=" + Object.keys(v).join(",") + ")";
         if (v instanceof Map) return "Map{" + Array.from(v).map(([k, x]) => go(k) + "=>" + go(x)).join(",") + "}";
         if (v instanceof Set) return "Set{" + Array.from(v).map(go).join(",") + "}";
         if (v instanceof Error) {

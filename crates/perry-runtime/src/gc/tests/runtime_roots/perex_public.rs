@@ -17,6 +17,7 @@ pub(super) fn register_host_roots() {
     // The isolation guard removes the production registry. Restore both the
     // transient handles and the metadata families these public operations use.
     register_runtime_handle_root_scanner_for_tests();
+    gc_register_mutable_root_scanner(crate::object::scan_builtin_closure_metadata_roots_mut);
     gc_register_mutable_root_scanner(crate::array::scan_template_raw_roots_mut);
     // gc_init registers this in production. The isolation guard clears that
     // registry, so restore the intrinsic-address rewrites before callbacks
@@ -202,10 +203,11 @@ fn perex_public_exec_uses_installed_program_and_exact_duplicate_or_astral_names(
         )
         .unwrap();
         unsafe {
-            program.install(&receiver);
+            crate::regex::test_install_program(&receiver, &program);
         }
-        let before =
-            receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe { (*r).perex_program as usize });
+        let before = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
+            (*crate::regex::regexp_data_ptr(r)).perex_program as usize
+        });
         let input = text(&scope, subject.as_bytes());
         let cycles = copying_minor_cycles();
         let found = receiver
@@ -222,7 +224,9 @@ fn perex_public_exec_uses_installed_program_and_exact_duplicate_or_astral_names(
         let result = scope.root_raw_mut_ptr(found.array);
         assert!(copying_minor_cycles() > cycles);
         assert_ne!(
-            receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe { (*r).perex_program as usize }),
+            receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
+                (*crate::regex::regexp_data_ptr(r)).perex_program as usize
+            }),
             before
         );
         let groups = scope.root_nanbox_f64(named(&result, "groups"));
@@ -263,8 +267,8 @@ fn perex_public_exec_and_test_share_lastindex_and_empty_match_behavior() {
     assert_eq!(named(&result, "groups").to_bits(), TAG_UNDEFINED);
     let receiver = regex(&scope, "(?:)", "g");
     let input = text(&scope, "😀".as_bytes());
-    receiver.with_mut_ptr::<RegExpHeader, _>(|receiver| unsafe {
-        (*receiver).last_index = 1.0f64.to_bits();
+    receiver.with_mut_ptr::<RegExpHeader, _>(|receiver| {
+        crate::regex::set_last_index(receiver, f64::from_bits(1.0f64.to_bits()));
     });
     let result = exec(&receiver, &input);
     assert!(!result.is_null());
@@ -288,7 +292,7 @@ fn perex_public_throwing_lastindex_write_releases_native_scratch_and_roots() {
     let input = text(&scope, b"a");
     assert_eq!(test(&receiver, &input), 1);
     receiver.with_mut_ptr::<RegExpHeader, _>(|receiver| {
-        unsafe { (*receiver).last_index = 0.0f64.to_bits() };
+        crate::regex::set_last_index(receiver, 0.0);
         crate::object::set_property_attrs(
             receiver as usize,
             "lastIndex".to_string(),
@@ -349,8 +353,11 @@ fn perex_public_nonglobal_test_propagates_lastindex_coercion_throw() {
     });
     // Re-read after the store above, which may have grown and moved `coercer`.
     coercer.with_mut_ptr::<ObjectHeader, _>(|coercer| {
-        receiver.with_mut_ptr::<RegExpHeader, _>(|receiver| unsafe {
-            (*receiver).last_index = js_nanbox_pointer(coercer as i64).to_bits();
+        receiver.with_mut_ptr::<RegExpHeader, _>(|receiver| {
+            crate::regex::set_last_index(
+                receiver,
+                f64::from_bits(js_nanbox_pointer(coercer as i64).to_bits()),
+            );
         })
     });
     let before = address::<StringHeader>(&input);

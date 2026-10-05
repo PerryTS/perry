@@ -28,7 +28,6 @@ use std::cell::{Cell, RefCell};
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExoticKind {
     Date,
-    RegExp,
     Error,
     /// A `Temporal.*` reference value (any of the 8 brand sub-kinds). Like
     /// `Date`, it is a non-movable, pointer-free cell that is NOT an
@@ -107,7 +106,6 @@ pub(crate) fn exotic_kind_of_gc_type(obj_type: u8) -> Option<ExoticKind> {
         crate::gc::GC_TYPE_PROMISE => Some(ExoticKind::Promise),
         crate::gc::GC_TYPE_MAP => Some(ExoticKind::Map),
         crate::gc::GC_TYPE_SET => Some(ExoticKind::Set),
-        crate::gc::GC_TYPE_REGEXP => Some(ExoticKind::RegExp),
         _ => None,
     }
 }
@@ -154,19 +152,6 @@ impl ExoticExpandoTables {
 
 pub(crate) fn expando_in_use() -> bool {
     crate::state::state().exotic_expando.in_use.get()
-}
-
-/// Plain assignments on exotic receivers can live here without an ObjectMeta.
-/// Builtin-operation guards must check this table as well as the header.
-#[cfg(feature = "regex-engine")]
-pub(crate) fn has_expando_values(addr: usize) -> bool {
-    let tables = &crate::state::state().exotic_expando;
-    tables.in_use.get()
-        && tables
-            .entries
-            .borrow()
-            .get(&addr)
-            .is_some_and(|values| !values.is_empty())
 }
 
 fn expando_store(addr: usize, key: &str, bits: u64) {
@@ -344,15 +329,7 @@ pub(crate) unsafe fn exotic_set_property(
     receiver: f64,
 ) -> bool {
     // RegExp `lastIndex` is a writable data property living in the header.
-    if kind == ExoticKind::RegExp && name == "lastIndex" {
-        if let Some(attrs) = super::get_property_attrs(addr, name) {
-            if !attrs.writable() {
-                return false;
-            }
-        }
-        crate::regex::js_regexp_set_last_index(addr as *mut crate::regex::RegExpHeader, value);
-        return true;
-    }
+
     if super::descriptors_in_use() {
         if let Some(acc) = super::get_accessor_descriptor(addr, name) {
             if acc.set == 0 {
@@ -385,7 +362,6 @@ pub(crate) unsafe fn exotic_set_property(
         // consult here. Skip straight to the own-property store.
         let proto_name = match kind {
             ExoticKind::Date => "Date",
-            ExoticKind::RegExp => "RegExp",
             ExoticKind::Error => "Error",
             ExoticKind::Temporal => "",
             // Promise.prototype's `then`/`catch`/`finally` are methods, not
@@ -499,7 +475,6 @@ pub(crate) unsafe fn exotic_define_own_property(
     name: &str,
     descriptor_value: f64,
 ) {
-    let is_last_index = kind == ExoticKind::RegExp && name == "lastIndex";
     // Error instances expose `message`/`stack` as builtin own properties
     // (writable, non-enumerable, configurable) even before any user write.
     let is_error_builtin = kind == ExoticKind::Error && matches!(name, "message" | "stack");
@@ -509,17 +484,11 @@ pub(crate) unsafe fn exotic_define_own_property(
         None
     };
     let existing_value = value_lookup(kind, addr, name);
-    let exists = is_last_index
-        || is_error_builtin
-        || existing_accessor.is_some()
-        || existing_value.is_some();
+    let exists = is_error_builtin || existing_accessor.is_some() || existing_value.is_some();
 
     let cur_attrs = if exists {
         Some(super::get_property_attrs(addr, name).unwrap_or({
-            if is_last_index {
-                // lastIndex: writable, non-enumerable, non-configurable.
-                super::PropertyAttrs::new(true, false, false)
-            } else if is_error_builtin {
+            if is_error_builtin {
                 super::PropertyAttrs::new(true, false, true)
             } else {
                 super::PropertyAttrs::new(true, true, true)
@@ -542,13 +511,9 @@ pub(crate) unsafe fn exotic_define_own_property(
 
     if let Some(cur) = cur_attrs {
         if !cur.configurable() {
-            let cur_value = existing_value.map(f64::from_bits).unwrap_or_else(|| {
-                if is_last_index {
-                    f64::from_bits((*(addr as *const crate::regex::RegExpHeader)).last_index)
-                } else {
-                    f64::from_bits(crate::value::TAG_UNDEFINED)
-                }
-            });
+            let cur_value = existing_value
+                .map(f64::from_bits)
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
             super::validate_nonconfigurable_redefine(
                 name,
                 cur,
@@ -626,14 +591,7 @@ pub(crate) unsafe fn exotic_define_own_property(
     }
     if has_value {
         let v = super::desc_read_field(descriptor_value, b"value");
-        if is_last_index {
-            crate::regex::js_regexp_set_last_index(
-                addr as *mut crate::regex::RegExpHeader,
-                f64::from_bits(v.bits()),
-            );
-        } else {
-            value_store(kind, addr, name, v.bits());
-        }
+        value_store(kind, addr, name, v.bits());
     } else if !exists {
         // New property with absent [[Value]] reads as undefined.
         value_store(kind, addr, name, crate::value::TAG_UNDEFINED);

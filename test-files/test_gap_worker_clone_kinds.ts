@@ -66,6 +66,19 @@ cyc.self = cyc;
 cyc.arr = [cyc];
 await send("cycle", cyc);
 await send("date-regexp", [new Date(1700000000000), /a+b/gi]);
+const readonlyRegExp: any = /b+/gy;
+readonlyRegExp.lastIndex = 7;
+readonlyRegExp.note = "sender only";
+Object.defineProperty(readonlyRegExp, "lastIndex", { writable: false });
+await send("regexp-readonly", readonlyRegExp);
+class RegExpChild extends RegExp {
+    #stamp = 1;
+    stamp() { return this.#stamp; }
+}
+const childRegExp: any = new RegExpChild("c+", "gi");
+childRegExp.lastIndex = 9;
+childRegExp.note = "sender only";
+await send("regexp-subclass", childRegExp);
 const key = { k: 1 };
 await send("map-set", new Map<any, any>([[key, "v"], ["s", new Set([1, "a", key])]]));
 const err: any = new TypeError("bad", { cause: { why: 1 } });

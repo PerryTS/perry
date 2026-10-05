@@ -298,8 +298,8 @@ pub(super) fn lower_builtin_new<'a>(
         }
         // `new RegExp(pattern)` / `new RegExp(pattern, flags)` — call
         // js_regexp_new directly so the resulting object is a real
-        // RegExpHeader (registered in REGEX_POINTERS, .test/.exec/etc
-        // dispatch correctly). Refs #486 — hono's `buildWildcardRegExp`
+        // ordinary RegExp receiver with its private matcher and lastIndex
+        // slot (.test/.exec dispatch through the real prototype). Refs #486 — hono's `buildWildcardRegExp`
         // does `new RegExp(path === "*" ? "" : ...)`. Pre-fix, the
         // generic Expr::New path fell through to the placeholder
         // js_object_alloc(0,0) and the resulting "fake regex" never

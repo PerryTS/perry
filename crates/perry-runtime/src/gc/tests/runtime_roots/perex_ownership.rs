@@ -47,10 +47,10 @@ fn perex_program_survives_only_through_a_moving_regexp_edge() {
         let program = compile(&compile_scope, "a+", "");
         expected = program.with_words(|words| words.to_vec()).unwrap();
         unsafe {
-            program.install(&receiver);
+            crate::regex::test_install_program(&receiver, &program);
         }
         program_before = receiver.with_const_ptr::<crate::regex::RegExpHeader, _>(|r| unsafe {
-            (*r).perex_program as usize
+            (*crate::regex::regexp_data_ptr(r)).perex_program as usize
         });
         assert!(crate::arena::pointer_in_nursery(program_before));
         assert_eq!(
@@ -69,7 +69,7 @@ fn perex_program_survives_only_through_a_moving_regexp_edge() {
         handle_address::<crate::regex::RegExpHeader>(&receiver)
     );
     let program_after = receiver.with_const_ptr::<crate::regex::RegExpHeader, _>(|r| unsafe {
-        (*r).perex_program as usize
+        (*crate::regex::regexp_data_ptr(r)).perex_program as usize
     });
     assert_ne!(
         program_before, program_after,
@@ -212,10 +212,10 @@ fn perex_unreferenced_program_is_reclaimed_without_a_native_owner_or_cache() {
         ));
         let program = compile(&scope, "reclaim", "");
         unsafe {
-            program.install(&receiver);
+            crate::regex::test_install_program(&receiver, &program);
         }
         address = receiver.with_const_ptr::<crate::regex::RegExpHeader, _>(|r| unsafe {
-            (*r).perex_program as usize
+            (*crate::regex::regexp_data_ptr(r)).perex_program as usize
         });
         assert!(build_valid_pointer_set().contains(&address));
         assert!(crate::arena::pointer_in_nursery(address));
@@ -240,7 +240,7 @@ fn perex_failed_emission_does_not_replace_a_live_receiver_program() {
         scope.root_raw_mut_ptr(crate::regex::test_alloc_nursery_regexp_for_move("old", ""));
     let old = compile(&scope, "old", "");
     unsafe {
-        old.install(&receiver);
+        crate::regex::test_install_program(&receiver, &old);
     }
     let expected = old.with_words(|words| words.to_vec()).unwrap();
     let mut witnessed_limit = false;

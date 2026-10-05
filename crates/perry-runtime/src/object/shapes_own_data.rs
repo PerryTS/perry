@@ -10,6 +10,7 @@ pub(crate) struct OwnDataShape {
     pub(crate) logical_key_count: u32,
     pub(crate) live_inline_slot_count: u32,
     plain_bound: u32,
+    pub(crate) summary: u8,
 }
 
 /// A live ordinary layout, a proven other layout (`Some(None)`), or no proof
@@ -45,6 +46,7 @@ pub(crate) unsafe fn own_data_shape(dir: *const u8, shape_id: u32) -> Option<Opt
         logical_key_count: record.logical_key_count,
         live_inline_slot_count: record.live_inline_slot_count,
         plain_bound,
+        summary: record.summary(),
     }))
 }
 

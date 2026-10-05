@@ -430,7 +430,7 @@ fn render_incompatible_receiver(bits: u64) -> String {
     if crate::date::is_registered_date_bits(bits) {
         return "[object Date]".to_string();
     }
-    if crate::regex::is_registered_regex(ptr) {
+    if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((ptr) as i64)).is_some() {
         return "[object RegExp]".to_string();
     }
     // Heap-header classification — only a real heap pointer above the

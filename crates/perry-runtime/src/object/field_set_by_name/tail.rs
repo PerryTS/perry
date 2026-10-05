@@ -835,7 +835,7 @@ pub(crate) fn set_field_by_name_object_tail(
             let name_len = (*key).byte_len as usize;
             let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
             let key_hash = key_bytes_hash(name_ptr, name_len);
-            if let Some(i) = keys_index_lookup(obj, keys_view, name_bytes, key_hash) {
+            if let Some(i) = keys_index_lookup_property(obj, keys_view, name_bytes, key_hash) {
                 let i = i as usize;
                 if is_frozen {
                     let key_str = key_to_str_for_diag(key);
@@ -1015,8 +1015,9 @@ pub(crate) fn set_field_by_name_object_tail(
         // shape hash index instead of walking every key (and probing each for
         // per-index accessors via `js_array_get`); the original match below
         // still gates the hit, so this cannot widen what is accepted.
-        if let Some(i) = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key)
-            .map(|v| v as usize)
+        if let Some(i) =
+            crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
+                .map(|v| v as usize)
         {
             let key_val = crate::array::js_array_get(keys, i as u32);
             // #1781: SSO-aware match — keys are stored as either a

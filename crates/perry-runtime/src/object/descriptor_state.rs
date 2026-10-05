@@ -914,6 +914,14 @@ unsafe fn own_descriptor_may_cover_key(addr: usize, key: f64) -> bool {
 /// Index-shaped keys stay on the slow walk: a boxed `String` wrapper
 /// synthesizes non-writable index attributes that the summary never records.
 pub(crate) unsafe fn own_descriptors_skip_key(addr: usize, key: f64) -> bool {
+    // An Ordinary shape proves the store layout, including numeric keys.
+    // Unmarked native layouts still take the synthetic-property checks.
+    if super::shapes::object_shape_descriptor(addr as *const ObjectHeader).is_some_and(|shape| {
+        shape.object_kind == super::shapes::ShapeObjectKind::Ordinary && shape.summary == 0
+    }) && crate::value::JSValue::from_bits(key.to_bits()).is_any_string()
+    {
+        return true;
+    }
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some(bytes) = crate::string::js_string_key_bytes(
         crate::value::JSValue::from_bits(key.to_bits()),

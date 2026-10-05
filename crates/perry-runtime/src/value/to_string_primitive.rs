@@ -473,24 +473,6 @@ unsafe fn call_own_method_for_primitive(method: f64, receiver: f64) -> Option<f6
     call_own_method(method, receiver).filter(|ret| is_primitive_value(*ret))
 }
 
-/// `OrdinaryToPrimitive(O, "default"|"number")` step 1 for an exotic instance:
-/// the `valueOf` step, restricted to the receiver's OWN property.
-///
-/// The "default" hint (`"" + re`) tries `valueOf` BEFORE `toString`, unlike the
-/// "string" hint. `RegExp.prototype` has no `valueOf`, so only an OWN one can
-/// yield a primitive here — the inherited `Object.prototype.valueOf` returns
-/// `this`, an object, and OrdinaryToPrimitive then moves on to `toString`.
-/// `None` therefore means "caller continues with the toString step".
-pub(crate) unsafe fn exotic_own_value_of_primitive(
-    addr: usize,
-    kind: crate::object::exotic_expando::ExoticKind,
-    receiver: f64,
-) -> Option<f64> {
-    let own =
-        crate::object::exotic_expando::exotic_get_own_property(addr, kind, "valueOf", receiver)?;
-    call_own_method_for_primitive(own, receiver)
-}
-
 /// `ToPrimitive(O, "number"|"default")`: consult a user
 /// `[Symbol.toPrimitive]("number")` method first, then fall back to the
 /// ordinary `valueOf`/`toString` order.

@@ -665,33 +665,6 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     sym_f64: f64,
     receiver_f64: f64,
 ) -> f64 {
-    #[cfg(feature = "regex-engine")]
-    if crate::regex::is_registered_regex(crate::value::js_nanbox_get_pointer(obj_f64) as usize) {
-        // RegExpHeader is not an ObjectHeader. Resolve its own symbols and
-        // actual prototype without entering the ordinary class-field walk.
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let receiver = scope.root_nanbox_f64(obj_f64);
-        let symbol = scope.root_nanbox_f64(sym_f64);
-        let this_h = scope.root_nanbox_f64(receiver_f64);
-        if let Some(value) = own_symbol_property_for_receiver(
-            receiver.get_nanbox_f64(),
-            symbol.get_nanbox_f64(),
-            this_h.get_nanbox_f64(),
-        ) {
-            return value;
-        }
-        let proto = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
-            receiver.get_nanbox_f64(),
-        ));
-        if !crate::proxy::reflect_value_is_object(proto.get_nanbox_f64()) {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        return crate::proxy::js_reflect_get(
-            proto.get_nanbox_f64(),
-            symbol.get_nanbox_f64(),
-            this_h.get_nanbox_f64(),
-        );
-    }
     // A Proxy is a small registered id (its band overlaps the small-handle
     // band); dereferencing it as a heap object to read a symbol-keyed property
     // is an EXC_BAD_ACCESS. Route a SYMBOL-keyed read through the proxy `get`
@@ -1495,34 +1468,26 @@ unsafe fn declared_prototype_chain_symbol(
 
 /// Locate a declared prototype property without invoking its getter. An
 /// explicit prototype replaces the class default, including when it is null.
-unsafe fn declared_prototype_symbol_holder(
-    receiver: f64,
-    sym: f64,
-    mut class_id: u32,
-) -> Option<f64> {
+unsafe fn declared_prototype_symbol_holder(receiver: f64, sym: f64, class_id: u32) -> Option<f64> {
     let receiver_addr = (receiver.to_bits() & crate::value::POINTER_MASK) as usize;
-    // A receiver whose shape names a prototype other than its class's is
-    // read along its own chain, not the declared one.
+    // An explicit receiver prototype is handled by the ordinary recorded walk.
     if crate::object::prototype_chain::object_prototype_is_foreign(receiver_addr) {
         return None;
     }
+    let mut declared = crate::object::class_decl_prototype_object(class_id);
+    // The declaration prototype's shape is the heritage authority, including
+    // native parents and a user relink. A parent class id cannot describe a
+    // native prototype's ordinary symbol properties.
     for _ in 0..32 {
-        let declared = crate::object::class_decl_prototype_object(class_id);
-        if !declared.is_null() {
-            let proto_value = crate::value::js_nanbox_pointer(declared as i64);
-            if has_own_symbol_property(proto_value, sym) {
-                return Some(proto_value);
-            }
-            if crate::object::prototype_chain::any_class_chain_relinked()
-                && crate::object::decl_prototype_relinked(class_id, declared)
-            {
-                return None;
-            }
+        if declared.is_null() {
+            return None;
         }
-        match crate::object::get_parent_class_id(class_id) {
-            Some(parent) if parent != 0 && parent != class_id => class_id = parent,
-            _ => break,
+        let proto_value = crate::value::js_nanbox_pointer(declared as i64);
+        if has_own_symbol_property(proto_value, sym) {
+            return Some(proto_value);
         }
+        let bits = crate::object::prototype_chain::object_static_prototype(declared as usize)?;
+        declared = object_header_ptr_from_value_bits(bits)? as *mut crate::object::ObjectHeader;
     }
     None
 }

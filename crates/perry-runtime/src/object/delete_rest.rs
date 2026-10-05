@@ -141,9 +141,7 @@ pub extern "C" fn js_object_delete_field(
                         return 0;
                     }
                 }
-                if kind == ExoticKind::RegExp && name == "lastIndex" {
-                    return 0;
-                }
+
                 super::exotic_expando::value_remove(kind, obj as usize, name);
                 if kind == ExoticKind::Error {
                     crate::error::js_error_delete_builtin_own_property(
@@ -368,7 +366,7 @@ pub extern "C" fn js_object_delete_field(
         // dominant residue (16.0 M of 90.8 M accessor calls) after the
         // [[Set]]/[[Get]] walks were fixed.
         let found_idx: Option<usize> =
-            crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key)
+            crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
                 .map(|i| i as usize);
 
         let i = match found_idx {
@@ -998,7 +996,7 @@ unsafe fn try_delete_stable_sso(obj: *mut ObjectHeader, key: JSValue) -> Option<
     {
         tail
     } else if let Some(slot) =
-        super::keys_find_slot_by_bytes(keys, shape.logical_key_count, key_bytes)
+        super::keys_find_property_slot_by_bytes(keys, shape.logical_key_count, key_bytes)
     {
         slot
     } else {

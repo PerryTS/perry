@@ -6,11 +6,6 @@ use super::to_string_primitive::{
     exotic_own_to_string, function_to_string_via_prototype, ordinary_to_primitive_string,
     throw_cannot_convert_to_primitive, ExoticOwnToString, FunctionToStringOutcome,
 };
-// The only caller left in this file after the split sits behind `regex-engine`,
-// so an unconditional import is unused under a feature set that turns it off
-// (`cargo check -p perry --bins`, which is the `warnings` gate's product step).
-#[cfg(feature = "regex-engine")]
-use super::to_string_primitive::call_own_method;
 use super::*;
 use std::cell::Cell;
 use std::sync::atomic::Ordering;
@@ -284,27 +279,7 @@ pub(crate) fn js_jsvalue_to_string_impl(
             }
             // A RegExp stringifies to `/source/flags` (RegExp.prototype.toString),
             // not "[object Object]" — covers `String(re)` and `` `${re}` ``.
-            if crate::regex::is_regex_pointer(ptr) {
-                // …unless an own `toString` shadows the prototype method
-                // (#6370). This is the SAME lookup the `re.toString()` method
-                // fold performs (#6358); doing it here too is what makes the
-                // two agree, and it reaches every implicit ToString —
-                // `String(re)`, `` `${re}` ``, `[re].join("")`,
-                // `"".concat(re)`, `[re].toString()`.
-                match unsafe {
-                    exotic_own_to_string(
-                        ptr as usize,
-                        crate::object::exotic_expando::ExoticKind::RegExp,
-                        value,
-                    )
-                } {
-                    ExoticOwnToString::Primitive(primitive) => {
-                        return js_jsvalue_to_string_impl(primitive, reject_symbol)
-                    }
-                    ExoticOwnToString::UseBuiltin => {}
-                }
-                return crate::regex::js_regexp_to_string(ptr as *const crate::regex::RegExpHeader);
-            }
+
             unsafe {
                 let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
@@ -550,23 +525,6 @@ fn to_string_method_impl(value: f64, skip_to_primitive: bool) -> *mut crate::str
     // A non-callable own `toString` (`re.toString = 5`) declines here and lands
     // in `js_jsvalue_to_string` below, whose own-property arm (#6370) reports
     // the same TypeError the coercion path does.
-    #[cfg(feature = "regex-engine")]
-    if jsval.is_pointer() {
-        let p = jsval.as_pointer::<u8>();
-        if crate::regex::is_regex_pointer(p) {
-            let own = unsafe {
-                crate::object::exotic_expando::exotic_get_own_property(
-                    p as usize,
-                    crate::object::exotic_expando::ExoticKind::RegExp,
-                    "toString",
-                    value,
-                )
-            };
-            if let Some(result) = own.and_then(|own| unsafe { call_own_method(own, value) }) {
-                return js_jsvalue_to_string(result);
-            }
-        }
-    }
     // Arm the one-shot skip so the object dispatch inside `js_jsvalue_to_string`
     // bypasses `[Symbol.toPrimitive]` for the explicit `.toString()` caller.
     if skip_to_primitive {

@@ -442,52 +442,52 @@ fn global_test_advances_and_resets_last_index() {
     let re = js_regexp_new(make_string("a"), make_string("g"));
     let s = make_string("aXa");
     assert_eq!(js_regexp_test(re, s), 1);
-    assert_eq!(js_regexp_get_last_index(re), 1.0);
+    assert_eq!(get_last_index(re), 1.0);
     assert_eq!(js_regexp_test(re, s), 1);
-    assert_eq!(js_regexp_get_last_index(re), 3.0);
+    assert_eq!(get_last_index(re), 3.0);
     assert_eq!(js_regexp_test(re, s), 0);
-    assert_eq!(js_regexp_get_last_index(re), 0.0);
+    assert_eq!(get_last_index(re), 0.0);
 
     // `lastIndex > length` is "no match" and resets.
-    js_regexp_set_last_index(re, 10.0);
+    set_last_index(re, 10.0);
     assert_eq!(js_regexp_test(re, s), 0);
-    assert_eq!(js_regexp_get_last_index(re), 0.0);
+    assert_eq!(get_last_index(re), 0.0);
 
     // sticky anchors at lastIndex.
     let sticky = js_regexp_new(make_string("a"), make_string("y"));
     let t = make_string("ba");
     assert_eq!(js_regexp_test(sticky, t), 0);
-    assert_eq!(js_regexp_get_last_index(sticky), 0.0);
-    js_regexp_set_last_index(sticky, 1.0);
+    assert_eq!(get_last_index(sticky), 0.0);
+    set_last_index(sticky, 1.0);
     assert_eq!(js_regexp_test(sticky, t), 1);
-    assert_eq!(js_regexp_get_last_index(sticky), 2.0);
+    assert_eq!(get_last_index(sticky), 2.0);
 
     // lastIndex counts UTF-16 code units, not bytes.
     let astral = js_regexp_new(make_string("b"), make_string("g"));
     let u = make_string("😀b😀b");
     assert_eq!(js_regexp_test(astral, u), 1);
-    assert_eq!(js_regexp_get_last_index(astral), 3.0);
+    assert_eq!(get_last_index(astral), 3.0);
     assert_eq!(js_regexp_test(astral, u), 1);
-    assert_eq!(js_regexp_get_last_index(astral), 6.0);
+    assert_eq!(get_last_index(astral), 6.0);
     assert_eq!(js_regexp_test(astral, u), 0);
 
     // The fancy-regex fallback (lookbehind) takes the same path.
     let fancy = js_regexp_new(make_string("(?<=x)a"), make_string("g"));
     let f = make_string("xa xa a");
     assert_eq!(js_regexp_test(fancy, f), 1);
-    assert_eq!(js_regexp_get_last_index(fancy), 2.0);
+    assert_eq!(get_last_index(fancy), 2.0);
     assert_eq!(js_regexp_test(fancy, f), 1);
-    assert_eq!(js_regexp_get_last_index(fancy), 5.0);
+    assert_eq!(get_last_index(fancy), 5.0);
     assert_eq!(js_regexp_test(fancy, f), 0);
-    assert_eq!(js_regexp_get_last_index(fancy), 0.0);
+    assert_eq!(get_last_index(fancy), 0.0);
 
     // The backtracking matcher (quantified capture) likewise.
     let repeat = js_regexp_new(make_string("(a?b??)*c"), make_string("g"));
     let r = make_string("abc c");
     assert_eq!(js_regexp_test(repeat, r), 1);
-    assert_eq!(js_regexp_get_last_index(repeat), 3.0);
+    assert_eq!(get_last_index(repeat), 3.0);
     assert_eq!(js_regexp_test(repeat, r), 1);
-    assert_eq!(js_regexp_get_last_index(repeat), 5.0);
+    assert_eq!(get_last_index(repeat), 5.0);
     assert_eq!(js_regexp_test(repeat, r), 0);
 }
 
@@ -555,7 +555,7 @@ fn quantified_capture_pattern_does_not_backtrack_on_a_non_matching_subject() {
 /// `true` for every RegExp, so `set_last_index_throwing` built a `String` and
 /// SipHashed `(usize, String)` on every global/sticky `test()`/`exec()`.
 #[test]
-fn a_fresh_regexp_proves_lastindex_absent_without_probing_the_tables() {
+fn a_fresh_regexp_carries_lastindex_attributes_in_its_keys() {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
     let pattern = scope.root_string_ptr(make_string("x"));
@@ -567,15 +567,16 @@ fn a_fresh_regexp_proves_lastindex_absent_without_probing_the_tables() {
     // that would have answered through the ordinary `GC_TYPE_OBJECT` path.
     let gc = unsafe { crate::value::addr_class::try_read_gc_header(re as usize) }
         .expect("RegExp must be a GC allocation");
-    assert_eq!(gc.obj_type, crate::gc::GC_TYPE_REGEXP);
+    assert_eq!(gc.obj_type, crate::gc::GC_TYPE_OBJECT);
 
     assert!(
-        !crate::object::test_may_have_descriptor_entry(re as usize, "lastIndex", false),
+        crate::object::test_may_have_descriptor_entry(re as usize, "lastIndex", false),
         "a fresh RegExp has no descriptors, so the meta summary must prove \
          `lastIndex` absent instead of sending the caller to the table"
     );
     assert!(
-        crate::object::get_property_attrs(re as usize, "lastIndex").is_none(),
+        crate::object::get_property_attrs(re as usize, "lastIndex")
+            .is_some_and(|a| a.writable() && !a.enumerable() && !a.configurable()),
         "and the answer the fast path skips must be the same one"
     );
 }

@@ -1128,6 +1128,11 @@ pub(super) fn get_field_ic_miss_impl(
             let key_count = std::cmp::min(shape.logical_key_count as usize, keys_slots);
             let alloc_limit = shape.live_inline_slot_count as usize;
             for i in (0..key_count).rev() {
+                if crate::object::key_attrs::entry_is_private(crate::object::key_attrs::keys_entry(
+                    keys, i as u32,
+                )) {
+                    continue;
+                }
                 // #10595: back-to-front so a shadowed field's most-derived slot wins; see keys_lookup.rs.
                 let k_bits = (*keys_data.add(i)).to_bits();
                 let k_ptr = (k_bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::StringHeader;
@@ -1791,7 +1796,7 @@ unsafe fn private_element_holder(value: f64) -> Option<*mut ObjectHeader> {
 /// so the two spaces never meet. Scalars: a brand retains no class object.
 #[inline]
 fn private_brand_id(class_id: u32, evaluation_id: u64) -> u64 {
-    if evaluation_id == 0 {
+    if evaluation_id == PRIVATE_TEMPLATE_EVALUATION_ID {
         u64::from(class_id)
     } else {
         PRIVATE_FRESH_EVALUATION_BRAND | evaluation_id
@@ -1945,7 +1950,11 @@ pub extern "C" fn js_private_field_add(
         if keys.is_null() {
             None
         } else {
-            crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), storage.as_bytes())
+            crate::object::keys_find_private_slot_by_bytes(
+                keys.arr(),
+                keys.count(),
+                storage.as_bytes(),
+            )
         }
     });
     if let Some(slot) = slot {

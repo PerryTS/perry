@@ -1100,9 +1100,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         }
         // Only lastIndex is an own header property. Other properties follow
         // expandos and the actual prototype, including observable accessors.
-        if gc_type == crate::gc::GC_TYPE_REGEXP {
-            return super::super::regex_proto_thunks::regexp_get_property(obj, key);
-        }
+
         if gc_type != crate::gc::GC_TYPE_OBJECT {
             return JSValue::undefined();
         }
@@ -1584,8 +1582,9 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // #8936/#8950's resolver narrows the candidate to one slot via the
         // shape hash index instead of walking every key; the original match
         // below still gates the hit, so this cannot widen what is accepted.
-        if let Some(i) = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key)
-            .map(|v| v as usize)
+        if let Some(i) =
+            crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
+                .map(|v| v as usize)
         {
             let key_val = crate::array::keys_array_slot(keys, i as u32);
             // #1781: accept inline SSO short keys here too — the

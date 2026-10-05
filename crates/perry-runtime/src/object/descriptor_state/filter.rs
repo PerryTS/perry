@@ -101,10 +101,7 @@ pub(crate) fn test_may_have_descriptor_entry(owner: usize, key: &str, accessor: 
 /// else.
 #[cold]
 unsafe fn note_regexp_descriptor_probe(owner: usize, answer: bool) {
-    let Some(header) = crate::value::addr_class::try_read_gc_header(owner) else {
-        return;
-    };
-    if header.obj_type != crate::gc::GC_TYPE_REGEXP {
+    if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(owner as i64)).is_none() {
         return;
     }
     crate::hot_diag::regex_with(|d| {

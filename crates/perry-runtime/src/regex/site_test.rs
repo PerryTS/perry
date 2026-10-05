@@ -11,7 +11,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use super::{is_valid_regex_ptr, js_regexp_new_impl, RegExpHeader};
+use super::{js_regexp_new_impl, RegExpHeader};
 
 struct Entry {
     header: *mut RegExpHeader,
@@ -158,7 +158,7 @@ fn take_approval(site_key: usize, header: *mut RegExpHeader) -> bool {
 }
 
 fn canonical_rooted_header(header: *mut RegExpHeader) -> Option<*mut RegExpHeader> {
-    if !is_valid_regex_ptr(header) {
+    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((header) as i64)).is_some() {
         return None;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -460,15 +460,14 @@ fn site_test_dispatch_impl(receiver: f64, method: f64, argument: f64) -> f64 {
             return f64::from_bits(crate::value::TAG_FALSE);
         }
         let header = value.as_pointer::<RegExpHeader>() as *mut RegExpHeader;
-        if !is_valid_regex_ptr(header) {
+        if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((header) as i64)).is_some()
+        {
             return f64::from_bits(crate::value::TAG_FALSE);
         }
         // A fresh literal begins every evaluation at zero.  `test` may write
         // the cached header's lastIndex, but no reference to this header leaves
         // the transformed expression and the next call resets it again.
-        unsafe {
-            (*header).last_index = crate::value::JSValue::number(0.0).bits();
-        }
+        crate::regex::set_last_index(header, 0.0);
         return f64::from_bits(
             crate::value::JSValue::bool(super::js_regexp_test(header, string) != 0).bits(),
         );
@@ -634,7 +633,7 @@ mod tests {
         let subject = string("xx");
         assert_ne!(super::super::js_regexp_test(re, subject), 0);
         assert_eq!(
-            unsafe { (*re).last_index },
+            crate::regex::get_last_index(re).to_bits(),
             crate::value::JSValue::number(1.0).bits()
         );
         assert_ne!(
@@ -643,7 +642,7 @@ mod tests {
             "the second test must start at the first test's lastIndex, not at zero"
         );
         assert_eq!(
-            unsafe { (*re).last_index },
+            crate::regex::get_last_index(re).to_bits(),
             crate::value::JSValue::number(2.0).bits()
         );
     }
@@ -880,9 +879,12 @@ mod tests {
         let _ = crate::gc::gc_collect_minor();
         let moved = test_header(site).expect("the site header remains rooted");
         assert_ne!(moved, old, "the scanner must rewrite the cached address");
-        assert!(super::super::regex_header_has_magic(
-            moved as *const RegExpHeader
-        ));
+        assert!(
+            crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+                (moved as *const RegExpHeader) as i64
+            ))
+            .is_some()
+        );
         test_reset();
     }
 }

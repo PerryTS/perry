@@ -56,9 +56,7 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
     if crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some() {
         return None;
     }
-    if crate::regex::regex_header_has_magic(ptr as *const crate::regex::RegExpHeader) {
-        return None;
-    }
+
     if crate::builtins::boxed_primitive_json_value(value).is_some() {
         return None;
     }
@@ -517,11 +515,12 @@ unsafe fn stringify_object_walk(
     // descriptor is installed, which made every later stringify pay a
     // per-key thread-local HashMap probe (`json_key_non_enumerable` +
     // `json_object_getter_value`) on objects that never had a descriptor.
-    let filter_non_enum = crate::object::object_has_descriptors(ptr as usize)
-        && (crate::object::descriptors_in_use()
-            || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
-                & crate::object::key_attrs::SUMMARY_KEY_BITS
-                != 0);
+    let filter_non_enum =
+        crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
+            & crate::object::key_attrs::SUMMARY_KEY_BITS
+            != 0
+            || (crate::object::object_has_descriptors(ptr as usize)
+                && crate::object::descriptors_in_use());
     buf.push('{');
     let mut first = true;
     // `pos(j)` maps the j-th enumerated slot to its key/field index: spec
@@ -547,7 +546,7 @@ unsafe fn stringify_object_walk(
         // not serializable own properties.
         if hide_private_keys
             && obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
-                crate::object::instance_private_key_hidden(obj, JSValue::from_bits(key_bits))
+                crate::object::field_get_set::own_slot_hidden(obj, f, JSValue::from_bits(key_bits))
             })
         {
             continue;

@@ -95,7 +95,6 @@ fn excluded_by_the_header_arms(addr: usize, obj_type: u8) -> bool {
     match obj_type {
         crate::gc::GC_TYPE_SET => crate::set::is_registered_set(addr),
         crate::gc::GC_TYPE_MAP => crate::map::is_registered_map(addr),
-        crate::gc::GC_TYPE_REGEXP => true,
         _ => false,
     }
 }
@@ -197,15 +196,14 @@ fn exotic_receivers_are_still_excluded() {
 /// ordinary-object arm or consulting an `ObjectHeader` payload word.
 #[cfg(feature = "regex-engine")]
 #[test]
-fn regexp_receiver_is_still_excluded() {
+fn regexp_receiver_is_an_ordinary_object() {
     let pattern = crate::string::js_string_from_str("a+b");
     let flags = crate::string::js_string_from_str("g");
     let re = crate::regex::js_regexp_new(pattern, flags) as usize;
     assert!(re != 0, "test premise: RegExp allocated");
     assert!(
-        classify(re).is_none(),
-        "a RegExp has GC_TYPE_REGEXP and must be excluded before ordinary-object \
-         header reads"
+        classify(re).is_some_and(|(_, kind)| kind == crate::gc::GC_TYPE_OBJECT),
+        "a RegExp must use ordinary-object dispatch"
     );
 }
 
@@ -299,7 +297,7 @@ fn the_magic_screen_covers_every_symbol_and_no_ordinary_object() {
             .collect();
         assert_eq!(
             excluding,
-            vec![crate::gc::GC_TYPE_REGEXP],
+            Vec::<u8>::new(),
             "leaked symbol {sym:#x}: the production `obj_type` match must exclude it for \
              EXACTLY the one byte value whose arm excludes unconditionally \
              (GC_TYPE_REGEXP), and for no other. Got {excluding:?}. More values ⇒ some \

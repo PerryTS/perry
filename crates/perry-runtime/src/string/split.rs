@@ -320,7 +320,11 @@ pub extern "C" fn js_string_split_n(
     // on a match. Otherwise the regex header would be read as a
     // StringHeader and segfault on the first byte of its program-set pointer.
     #[cfg(feature = "regex-engine")]
-    if crate::regex::is_regex_pointer(delimiter as *const u8) {
+    if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+        (delimiter as *const u8) as i64,
+    ))
+    .is_some()
+    {
         return crate::regex::js_string_split_regex_n(
             s,
             delimiter as *const crate::regex::RegExpHeader,
@@ -776,7 +780,7 @@ pub extern "C" fn js_string_split_value(
     #[cfg(feature = "regex-engine")]
     if sep_jv.is_pointer() {
         let ptr = crate::value::js_nanbox_get_pointer(separator) as *const u8;
-        if crate::regex::is_regex_pointer(ptr) {
+        if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((ptr) as i64)).is_some() {
             let ((limit_i32, separator), s) = s_handle.across_const::<StringHeader, _>(|| {
                 separator_handle.across_nanbox(|| {
                     if lim_jv.is_undefined() {

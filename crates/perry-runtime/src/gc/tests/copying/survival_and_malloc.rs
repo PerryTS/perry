@@ -930,13 +930,11 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
     let old_addr = re as usize;
     assert!(crate::arena::pointer_in_nursery(old_addr));
     // Identity is the header: the fixture registers the address nowhere.
-    assert!(crate::regex::is_registered_regex(old_addr));
-
-    crate::object::exotic_expando::test_seed_exotic_expando_entry(
-        old_addr,
-        "tag",
-        crate::value::JSValue::int32(42).bits(),
+    assert!(
+        crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((old_addr) as i64)).is_some()
     );
+
+    set_regexp_expando(old_addr, "tag", crate::value::JSValue::int32(42));
     js_shadow_slot_set(0, ptr_bits(old_addr));
 
     let cycles = crate::gc::copying_minor_cycles();
@@ -949,11 +947,23 @@ fn test_movable_regexp_evacuation_migrates_all_address_owned_state() {
     let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(new_addr, 0, "rooted RegExp must survive the copied minor");
     assert_ne!(new_addr, old_addr, "the RegExp must be evacuated");
-    assert!(crate::regex::regex_header_has_magic(new_addr as *const _));
-    assert!(crate::regex::is_registered_regex(new_addr));
+    assert!(
+        crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(new_addr as i64)).is_some()
+    );
+    assert!(
+        crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((new_addr) as i64)).is_some()
+    );
 
     // The expando owner key moves with the header (`ExoticExpandoOwner`).
-    assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(new_addr));
+    assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(new_addr));
+    assert_eq!(
+        crate::object::js_object_get_field_by_name(
+            new_addr as *const crate::ObjectHeader,
+            crate::string::intern_ascii_literal(b"tag")
+        )
+        .bits(),
+        crate::value::JSValue::int32(42).bits()
+    );
     assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(old_addr));
 
     let source = crate::regex::js_regexp_get_source(new_addr as *const _);
@@ -1032,25 +1042,14 @@ fn test_copied_minor_promotable_census_filtered_walk_matches_unfiltered() {
 /// Set a user property on a RegExp through the production `[[Set]]` path, so
 /// the entry is the one a program's `re.tag = v` would create.
 fn set_regexp_expando(addr: usize, key: &str, value: crate::value::JSValue) {
-    assert!(
-        matches!(
-            crate::object::exotic_expando::exotic_expando_kind(addr),
-            Some(crate::object::exotic_expando::ExoticKind::RegExp)
-        ),
-        "test premise: the header classifies as a RegExp exotic"
+    assert!(crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(addr as i64)).is_some());
+    let key = crate::string::intern_ascii_literal(key.as_bytes());
+    crate::object::js_object_set_field_by_name(
+        addr as *mut crate::ObjectHeader,
+        key,
+        f64::from_bits(value.bits()),
     );
-    let receiver = f64::from_bits(ptr_bits(addr));
-    let stored = unsafe {
-        crate::object::exotic_expando::exotic_set_property(
-            addr,
-            crate::object::exotic_expando::ExoticKind::RegExp,
-            key,
-            f64::from_bits(value.bits()),
-            receiver,
-        )
-    };
-    assert!(stored, "test premise: the RegExp accepted the expando");
-    assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
+    assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(addr));
 }
 
 /// #9819 follow-up: `js_regexp_new` allocates the header in the NURSERY. A
@@ -1113,22 +1112,28 @@ fn nursery_regexp_that_dies_young_is_finalized_by_the_copied_minor() {
     let live_new = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(live_new, 0, "the rooted RegExp must survive");
     assert_ne!(live_new, live_addr, "the rooted RegExp must be evacuated");
-    assert!(crate::regex::regex_header_has_magic(live_new as *const _));
-    assert!(crate::regex::is_registered_regex(live_new));
+    assert!(
+        crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(live_new as i64)).is_some()
+    );
+    assert!(
+        crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((live_new) as i64)).is_some()
+    );
 
     assert!(
         !crate::object::exotic_expando::test_exotic_expando_entry_exists(dead_addr),
         "a nursery RegExp that died must lose its expando entry in the copied minor"
     );
     assert!(
-        crate::object::exotic_expando::test_exotic_expando_entry_exists(live_new),
+        !crate::object::exotic_expando::test_exotic_expando_entry_exists(live_new),
         "the surviving RegExp's expando must follow it to its new address"
     );
     assert_eq!(
-        crate::object::exotic_expando::value_lookup(
-            crate::object::exotic_expando::ExoticKind::RegExp,
-            live_new,
-            "tag",
+        Some(
+            crate::object::js_object_get_field_by_name(
+                live_new as *const crate::ObjectHeader,
+                crate::string::intern_ascii_literal(b"tag")
+            )
+            .bits()
         ),
         Some(crate::value::JSValue::int32(42).bits()),
         "the surviving RegExp keeps its own value, not the dead one's"

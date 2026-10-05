@@ -1193,7 +1193,7 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
         }
         // Private elements (`#x`) live in a class instance's keys_array but are
         // never copied by object spread / Object.assign.
-        if hide_private && crate::object::instance_private_key_hidden(src, key_val) {
+        if hide_private && crate::object::field_get_set::own_slot_hidden(src, i as u32, key_val) {
             continue;
         }
         let key_f64 = f64::from_bits(key_val.bits());

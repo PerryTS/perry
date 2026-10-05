@@ -898,10 +898,7 @@ pub(crate) unsafe fn stringify_value_pretty(
         // Perry's `RegExpHeader` is not an `ObjectHeader`, so without this the
         // generic object walk below read its internal slots as fields and emitted
         // `{"field0":null}`. Detected by the header magic (never a raw deref).
-        if crate::regex::regex_header_has_magic(ptr as *const crate::regex::RegExpHeader) {
-            buf.push_str("{}");
-            return;
-        }
+
         // #6519: a nested WHATWG `URL` must serialize as its `href` string, not
         // be walked as a plain object (its `searchParams` back-reference trips
         // the circular-structure detector). Mirrors the compact-path branch in

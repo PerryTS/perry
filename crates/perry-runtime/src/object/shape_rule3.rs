@@ -235,7 +235,7 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
     ),
     (
         gc::GC_TYPE_REGEXP,
-        "RegExpHeader",
+        "RegExpData",
         "high half of pattern_ptr",
         Rule3Word::StructurallySmall,
     ),

@@ -364,18 +364,14 @@ pub extern "C" fn js_set_function_prototype(func: f64, proto: f64) -> u32 {
         }
         return 0;
     }
-    // Validate the proto pointer points at a real Object. If it's a
-    // builtin header (Set/Map/Regex) or null, bail — Perry can't
-    // currently model those as prototype sources.
+    // Validate an ordinary prototype source. Headerless Set/Map backings
+    // cannot participate in the class-layout machinery.
     let proto_ptr = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
     if proto_ptr.is_null() {
         return 0;
     }
     let proto_addr = proto_ptr as usize;
-    if crate::set::is_registered_set(proto_addr)
-        || crate::map::is_registered_map(proto_addr)
-        || crate::regex::is_regex_pointer(proto_ptr as *const u8)
-    {
+    if crate::set::is_registered_set(proto_addr) || crate::map::is_registered_map(proto_addr) {
         return 0;
     }
     unsafe {

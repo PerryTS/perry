@@ -37,6 +37,8 @@ pub use put_value::{js_proxy_set, js_put_value_set};
 pub(crate) use put_value::{
     js_put_value_set_ic_miss, proxy_set_with_receiver, IC_SLOT_OVERFLOW_BIT,
 };
+#[cfg(any(test, feature = "regex-engine"))]
+pub(crate) use put_value::{js_put_value_set_packed_fast, PackedSetWays};
 pub use put_value::{js_put_value_set_packed_miss, PackedSetSite, PACKED_SET_EMPTY};
 pub(crate) use put_value::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
 pub(crate) use put_value::{store_census, C_REP_CONVERGE, C_REP_MIGRATE, C_REP_VALIDITY_BUMP};
@@ -1542,7 +1544,14 @@ fn own_set_descriptor(target: f64, key: f64) -> Option<OwnSetDescriptor> {
         }
         return None;
     }
-    if crate::object::object_has_descriptors(obj_ptr) || crate::closure::is_closure_ptr(obj_ptr) {
+    if crate::object::object_has_descriptors(obj_ptr)
+        || unsafe {
+            crate::object::key_attrs::attrs_live_in_keys(obj_ptr)
+                && crate::object::key_attrs::object_summary(obj_ptr as *const crate::ObjectHeader)
+                    != 0
+        }
+        || crate::closure::is_closure_ptr(obj_ptr)
+    {
         if let Some(acc) = crate::object::get_accessor_descriptor(obj_ptr, &key_name) {
             return Some(OwnSetDescriptor::Accessor {
                 setter_bits: acc.set,
@@ -1919,8 +1928,7 @@ fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, receiver: f64) 
                     // bytes only and cannot allocate.
                     if header.obj_type == crate::gc::GC_TYPE_OBJECT
                         && header._reserved & SLOW_FLAGS == 0
-                        && (header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS == 0
-                            || crate::object::own_descriptors_skip_key(addr, key))
+                        && crate::object::own_descriptors_skip_key(addr, key)
                     {
                         let class_id = (*(addr as *const crate::ObjectHeader)).class_id;
                         // #6943: BOTH arms below reach a GC-capable

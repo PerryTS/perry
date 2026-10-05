@@ -67,7 +67,7 @@ fn nonstateful_searches_leave_position_hints_for_global_searches_untouched() {
     let identity = hints::identity_of(&input).unwrap();
     assert_eq!(search_from(&plain, &input, 42), Some((0, 1)));
     assert_eq!(
-        unsafe { (*receiver_ptr(&plain)).last_index },
+        crate::regex::get_last_index(receiver_ptr(&plain)).to_bits(),
         42.0f64.to_bits()
     );
     assert!(

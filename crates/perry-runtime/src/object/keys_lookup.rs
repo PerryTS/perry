@@ -253,6 +253,20 @@ pub(crate) unsafe fn keys_index_lookup(
     shapes::shape_slot_lookup(keys.arr(), key_bytes, key_hash, key_count, true)
 }
 
+#[inline]
+pub(crate) unsafe fn keys_index_lookup_property(
+    obj: *const ObjectHeader,
+    keys: ObjectKeys,
+    bytes: &[u8],
+    hash: u64,
+) -> Option<u32> {
+    let slot = keys_index_lookup(obj, keys, bytes, hash)?;
+    if !super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys.arr(), slot)) {
+        return Some(slot);
+    }
+    keys_find_slot_in_namespace(keys.arr(), keys.count(), bytes, false)
+}
+
 /// Record a new (key_hash → slot) entry on the POST-append keys array's
 /// shape after a key was appended. Caller passes `crate::object::object_keys_array(obj)`
 /// (the definitive post-append array — a clone or grow-realloc lands
@@ -350,4 +364,88 @@ mod tests_10595 {
             assert_eq!(keys_find_slot_by_key_ptr(keys, 1, lookup), None);
         }
     }
+}
+
+// Property strings and private names occupy separate namespaces even when
+// their diagnostic spellings are equal. These variants are for property
+// operations; the unfiltered lookup remains for layout and private storage.
+#[inline]
+pub(crate) unsafe fn keys_find_property_slot_by_bytes(
+    keys: *const crate::array::ArrayHeader,
+    count: u32,
+    bytes: &[u8],
+) -> Option<u32> {
+    let slot = keys_find_slot_by_bytes(keys, count, bytes)?;
+    if !super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys, slot)) {
+        return Some(slot);
+    }
+    keys_find_slot_in_namespace(keys, count, bytes, false)
+}
+
+#[inline]
+pub(crate) unsafe fn keys_find_private_slot_by_bytes(
+    keys: *const crate::array::ArrayHeader,
+    count: u32,
+    bytes: &[u8],
+) -> Option<u32> {
+    let slot = keys_find_slot_by_bytes(keys, count, bytes)?;
+    if super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys, slot)) {
+        return Some(slot);
+    }
+    keys_find_slot_in_namespace(keys, count, bytes, true)
+}
+
+unsafe fn keys_find_slot_in_namespace(
+    keys: *const crate::array::ArrayHeader,
+    count: u32,
+    bytes: &[u8],
+    private: bool,
+) -> Option<u32> {
+    let (slots, len) = keys_array_dense_slots(keys);
+    if slots.is_null() {
+        return None;
+    }
+    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    for i in (0..(count as usize).min(len)).rev() {
+        if super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys, i as u32))
+            != private
+        {
+            continue;
+        }
+        let value = crate::JSValue::from_bits((*slots.add(i)).to_bits());
+        if crate::string::js_string_key_bytes(value, &mut sso).is_some_and(|key| key == bytes) {
+            return Some(i as u32);
+        }
+    }
+    None
+}
+
+#[inline]
+pub(crate) unsafe fn keys_find_property_slot_by_key_ptr(
+    keys: *const crate::array::ArrayHeader,
+    count: u32,
+    key: *const crate::StringHeader,
+) -> Option<u32> {
+    let slot = keys_find_slot_by_key_ptr(keys, count, key)?;
+    if !super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys, slot)) {
+        return Some(slot);
+    }
+    keys_find_property_slot_by_bytes(
+        keys,
+        count,
+        std::slice::from_raw_parts(string_header_payload(key), (*key).byte_len as usize),
+    )
+}
+
+#[inline]
+pub(crate) unsafe fn keys_find_property_slot_by_bytes_resolved(
+    keys: *const crate::array::ArrayHeader,
+    count: u32,
+    bytes: &[u8],
+) -> Option<u32> {
+    let slot = keys_find_slot_by_bytes_resolved(keys, count, bytes)?;
+    if !super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys, slot)) {
+        return Some(slot);
+    }
+    keys_find_slot_in_namespace(keys, count, bytes, false)
 }

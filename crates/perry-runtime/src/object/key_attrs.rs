@@ -159,7 +159,7 @@ pub(crate) const fn entry_to_attr_bits(entry: u8) -> u8 {
 /// inline store may overwrite without the runtime.
 #[inline]
 pub(crate) const fn entry_is_plain_writable_data(entry: u8) -> bool {
-    entry & (ENTRY_ACCESSOR | ENTRY_NON_WRITABLE) == 0
+    entry & (ENTRY_ACCESSOR | ENTRY_NON_WRITABLE | ENTRY_PRIVATE) == 0
 }
 
 /// One element of an attributes array: the entry at this position, and the
@@ -751,7 +751,23 @@ pub(crate) unsafe fn object_key_is_private(
     if object_summary(obj) & SUMMARY_PRIVATE == 0 {
         return false;
     }
-    entry_is_private(object_key_entry_filtered(obj, key, false))
+    let keys = crate::object::object_keys(obj);
+    !keys.is_null()
+        && crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key).is_some()
+        && crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key).is_none()
+}
+
+/// Private-field presence, independent of an equally spelled public property.
+pub(crate) unsafe fn object_key_has_private_entry(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+) -> bool {
+    if object_summary(obj) & SUMMARY_PRIVATE == 0 {
+        return false;
+    }
+    let keys = crate::object::object_keys(obj);
+    !keys.is_null()
+        && crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key).is_some()
 }
 
 /// The entry `obj`'s own key `key` carries: 0 when the key is default or
@@ -797,7 +813,7 @@ unsafe fn object_key_entry_filtered(
     }
     #[cfg(feature = "attr-census")]
     crate::object::attr_census::note_global("read.key_entry_lookup");
-    match crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), key) {
+    match crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key) {
         Some(pos) => keys_entry(keys.arr(), pos),
         None => 0,
     }
@@ -971,7 +987,9 @@ unsafe fn fold_edits(edits: &[AttrsEdit<'_>], slot: crate::JSValue, old: u8) -> 
     let mut entry = old;
     for edit in edits {
         match edit.key() {
-            Some(k) if k != bytes => {}
+            Some(k)
+                if k != bytes || matches!(edit, AttrsEdit::Private(_)) != entry_is_private(old) => {
+            }
             _ => entry = edit.apply(entry),
         }
     }
@@ -1016,7 +1034,12 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
         }
         let keys = crate::object::object_keys(obj);
         if !keys.is_null()
-            && crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), key).is_some()
+            && (if matches!(edit, AttrsEdit::Private(_)) {
+                crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key)
+            } else {
+                crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key)
+            })
+            .is_some()
         {
             continue;
         }
@@ -1052,8 +1075,12 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
         // than walk the list (an install on a wide object is one lookup).
         for edit in edits {
             let key = edit.key().unwrap_or_default();
-            if let Some(pos) = crate::object::keys_find_slot_by_bytes(keys.arr(), count as u32, key)
-            {
+            let position = if matches!(edit, AttrsEdit::Private(_)) {
+                crate::object::keys_find_private_slot_by_bytes(keys.arr(), count as u32, key)
+            } else {
+                crate::object::keys_find_property_slot_by_bytes(keys.arr(), count as u32, key)
+            };
+            if let Some(pos) = position {
                 if first_change.map_or(true, |f| pos < f) && changes_at(pos as usize) {
                     first_change = Some(pos);
                 }

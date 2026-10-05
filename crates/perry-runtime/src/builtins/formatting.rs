@@ -664,7 +664,11 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 // would read garbage one word before the BufferHeader).
                 let buf_ptr = ptr as *const crate::buffer::BufferHeader;
                 format_buffer_value(buf_ptr)
-            } else if crate::regex::is_registered_regex(ptr as usize) {
+            } else if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+                (ptr as usize) as i64,
+            ))
+            .is_some()
+            {
                 // RegExp literals have their own GC kind and no enumerable
                 // keys; render `/source/flags` instead (#800).
                 collections::format_regexp(ptr as *const crate::regex::RegExpHeader)
@@ -1453,7 +1457,10 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                 } else if crate::value::addr_class::is_handle_band(ptr as usize) {
                     "[object Object]".to_string()
                 } else if crate::symbol::is_registered_symbol(ptr as usize)
-                    || crate::regex::is_registered_regex(ptr as usize)
+                    || crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+                        (ptr as usize) as i64,
+                    ))
+                    .is_some()
                     || crate::buffer::is_registered_buffer(ptr as usize)
                     || crate::typedarray::lookup_typed_array_kind(ptr as usize).is_some()
                 {

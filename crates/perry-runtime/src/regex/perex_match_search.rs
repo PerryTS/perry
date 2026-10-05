@@ -34,10 +34,10 @@ pub(crate) fn flags(receiver: f64) -> Result<*mut StringHeader, EngineError> {
     // answer is that text. Each Get went through `js_reflect_get` in a trap
     // frame: ~70k instructions for a two-flag RegExp (#10518).
     let re = crate::value::js_nanbox_get_pointer(receiver) as *const super::RegExpHeader;
-    if super::is_valid_regex_ptr(re)
+    if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some()
         && crate::object::regex_proto_thunks::regexp_view_flags_is_canonical(receiver)
     {
-        let text = unsafe { (*re).flags_ptr } as *mut StringHeader;
+        let text = unsafe { (*crate::regex::regexp_data_ptr(re)).flags_ptr } as *mut StringHeader;
         if !text.is_null() {
             // Shared with the header: keep a later append from reusing it.
             crate::string::js_string_addref(text);
@@ -90,11 +90,16 @@ pub(super) fn match_flags(
 ) -> Result<(bool, bool), EngineError> {
     let value = receiver.get_nanbox_f64();
     let re = crate::value::js_nanbox_get_pointer(value) as *const super::RegExpHeader;
-    if super::is_valid_regex_ptr(re)
+    if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some()
         && crate::object::regex_proto_thunks::regexp_view_flags_is_canonical(value)
     {
         // Nothing between the check and the read allocates or calls out.
-        return Ok(unsafe { ((*re).global, (*re).unicode) });
+        return Ok(unsafe {
+            (
+                (*crate::regex::regexp_data_ptr(re)).global,
+                (*crate::regex::regexp_data_ptr(re)).unicode,
+            )
+        });
     }
     let scope = RuntimeHandleScope::new();
     let flags = scope.root_nanbox_f64(dispatch::get(receiver, b"flags")?);

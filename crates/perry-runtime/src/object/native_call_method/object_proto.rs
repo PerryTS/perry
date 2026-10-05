@@ -451,7 +451,12 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     // `RegExp.prototype.isPrototypeOf(re)` returned false). Handle it directly.
     {
         let tv = JSValue::from_bits(target.to_bits());
-        if tv.is_pointer() && crate::regex::is_regex_pointer(tv.as_pointer::<u8>()) {
+        if tv.is_pointer()
+            && crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+                (tv.as_pointer::<u8>()) as i64,
+            ))
+            .is_some()
+        {
             for name in ["RegExp", "Object"] {
                 let proto = crate::object::builtin_prototype_value(name);
                 if let Some(proto_addr) = heap_addr(proto) {

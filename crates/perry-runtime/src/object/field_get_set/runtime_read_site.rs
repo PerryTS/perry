@@ -143,7 +143,7 @@ impl RuntimeReadSite {
     ///
     /// # Safety
     /// As [`Self::read_slow`].
-    #[cfg(test)]
+    #[cfg(any(test, feature = "regex-engine"))]
     pub(crate) unsafe fn read(&self, obj: *mut ObjectHeader, key: &'static [u8]) -> f64 {
         match self.read_leaf(obj) {
             Some(v) => v,

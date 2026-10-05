@@ -243,7 +243,12 @@ unsafe fn ensure_key_in_keys_array_inner(
         let name_len = (*key).byte_len as usize;
         let name_bytes = std::slice::from_raw_parts(name_ptr, name_len);
         let key_hash = super::super::key_bytes_hash(name_ptr, name_len);
-        if super::super::keys_index_lookup(obj, keys, name_bytes, key_hash).is_some() {
+        let existing = if super::super::key_attrs::entry_is_private(entry) {
+            super::super::keys_find_private_slot_by_bytes(keys.arr(), key_count as u32, name_bytes)
+        } else {
+            super::super::keys_index_lookup_property(obj, keys, name_bytes, key_hash)
+        };
+        if existing.is_some() {
             return; // already present
         }
     } else {
@@ -254,7 +259,12 @@ unsafe fn ensure_key_in_keys_array_inner(
             // wasn't seen here, so `Object.defineProperty(obj, "id", ...)`
             // on an object that already had `id` as an SSO key
             // double-inserted instead of overwriting.
-            if crate::string::js_string_key_matches(stored, key) {
+            if crate::string::js_string_key_matches(stored, key)
+                && super::super::key_attrs::entry_is_private(super::super::key_attrs::keys_entry(
+                    keys.arr(),
+                    i as u32,
+                )) == super::super::key_attrs::entry_is_private(entry)
+            {
                 return; // already present
             }
         }
@@ -874,6 +884,9 @@ unsafe fn own_key_lookup(
     // growing destination does not scan every preceding key before appending;
     // stale/incomplete indexes retain the dense-slot correctness fallback.
     // Slots and counts are u32 throughout, so there is no 65,536-key ceiling.
-    super::super::keys_find_slot_by_key_ptr(keys, key_count, key)
-        .is_some_and(|slot| !properties_only || !slot_is_private_entry(keys, slot))
+    if properties_only {
+        super::super::keys_find_property_slot_by_key_ptr(keys, key_count, key).is_some()
+    } else {
+        super::super::keys_find_slot_by_key_ptr(keys, key_count, key).is_some()
+    }
 }

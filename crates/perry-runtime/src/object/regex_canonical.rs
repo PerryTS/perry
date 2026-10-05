@@ -40,6 +40,11 @@ impl Method {
 #[derive(Clone, Copy, Default, PartialEq)]
 struct Proof {
     shape: u32,
+    receiver_shape: u32,
+    own_exec: bool,
+    own_flags: bool,
+    own_constructor: bool,
+    own_test: bool,
     exec_index: Option<u32>,
     constructor_index: Option<u32>,
     flags: bool,
@@ -156,17 +161,16 @@ fn exec_proof(value: f64) -> bool {
         return false;
     }
     let re = receiver.as_pointer::<RegExpHeader>();
-    if !crate::regex::is_valid_regex_ptr(re)
-        || unsafe { !(*re).meta.is_null() }
-        || super::exotic_expando::has_expando_values(re as usize)
+    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some()
+        || receiver_facts(re).0
     {
         return false;
     }
-    if super::prototype_chain::object_static_prototype_known_non_meta(re as usize).is_some() {
-        return false;
-    }
     let proto = thunks::recorded_regexp_prototype();
-    if proto.is_null() {
+    if proto.is_null()
+        || unsafe { crate::object::shapes::object_prototype_word(re) }
+            != js_nanbox_pointer(proto as i64).to_bits()
+    {
         return false;
     }
     let shape = unsafe { super::shapes::object_shape_stamp(proto) };
@@ -238,8 +242,56 @@ pub(crate) fn method(value: f64, method: Method) -> bool {
     hit
 }
 
+/// Own override presence is a fact of an immutable receiver shape. Like the
+/// retained prototype proof, this memo holds only scalar identities/facts and
+/// reads the receiver's current shape each time. S3 removes both proofs.
+pub(super) fn receiver_facts(receiver: *const ObjectHeader) -> (bool, bool, bool, bool) {
+    let shape = unsafe { super::shapes::object_shape_stamp(receiver) };
+    PROOF.with(|cell| {
+        let mut proof = cell.get();
+        if proof.receiver_shape != shape || shape == 0 {
+            let keys = unsafe { super::object_keys(receiver) };
+            let owns = |name: &[u8]| unsafe {
+                super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name).is_some()
+            };
+            // Dictionary appends retain their opaque generation: a shape
+            // there proves no names, so an absence verdict cannot be cached.
+            proof.receiver_shape = if unsafe { super::dictionary::is_dictionary(receiver) } {
+                0
+            } else {
+                shape
+            };
+            proof.own_exec = owns(b"exec");
+            proof.own_test = owns(b"test");
+            proof.own_constructor = owns(b"constructor");
+            proof.own_flags = [
+                b"flags".as_slice(),
+                b"global",
+                b"ignoreCase",
+                b"multiline",
+                b"dotAll",
+                b"sticky",
+                b"unicode",
+                b"unicodeSets",
+                b"hasIndices",
+            ]
+            .iter()
+            .any(|name| owns(name));
+            cell.set(proof);
+        }
+        (
+            proof.own_exec,
+            proof.own_flags,
+            proof.own_constructor,
+            proof.own_test,
+        )
+    })
+}
+
 fn method_proof(value: f64, method: Method) -> bool {
-    if !exec_proof(value) {
+    if !exec_proof(value)
+        || receiver_facts(crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader).1
+    {
         return false;
     }
     let symbol = crate::symbol::well_known_symbol_if_cached(method.symbol());
@@ -275,7 +327,9 @@ pub(crate) fn split(value: f64) -> bool {
 }
 
 fn split_proof(value: f64) -> bool {
-    if !method_proof(value, Method::Split) {
+    if !method_proof(value, Method::Split)
+        || receiver_facts(crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader).2
+    {
         return false;
     }
     // `method` just refreshed the proof for the current prototype shape.

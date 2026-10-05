@@ -415,22 +415,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let handle = blk.call(I64, "js_string_from_char_code_array", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
-        Expr::RegExpSetLastIndex { regex, value } => {
-            let rooted_operands: [&perry_hir::Expr; 2] = [regex, value];
-            let (rooted_values, rooted_group) =
-                crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
-            let r_box = rooted_values[0].clone();
-            let v = rooted_values[1].clone();
-            let blk = ctx.block();
-            let r_handle = unbox_to_i64(blk, &r_box);
-            blk.call_void(
-                "js_regexp_set_last_index",
-                &[(I64, &r_handle), (DOUBLE, &v)],
-            );
-            let rooted_result = v;
-            rooted_group.release(ctx);
-            Ok(rooted_result)
-        }
+        Expr::RegExpSetLastIndex { regex, value } => lower_expr(
+            ctx,
+            &Expr::PropertySet {
+                object: regex.clone(),
+                property: "lastIndex".into(),
+                value: value.clone(),
+            },
+        ),
         Expr::ProcessStdin => Ok(ctx.block().call(DOUBLE, "js_process_stdin", &[])),
         Expr::ProcessStdout => Ok(ctx.block().call(DOUBLE, "js_process_stdout", &[])),
         Expr::ProcessStderr => Ok(ctx.block().call(DOUBLE, "js_process_stderr", &[])),

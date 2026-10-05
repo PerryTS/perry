@@ -276,7 +276,13 @@ pub extern "C" fn js_util_types_is_date(value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_util_types_is_reg_exp(value: f64) -> f64 {
     let v = JSValue::from_bits(value.to_bits());
-    nanbox_bool(v.is_pointer() && crate::regex::is_regex_pointer(v.as_pointer::<u8>()))
+    nanbox_bool(
+        v.is_pointer()
+            && crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+                (v.as_pointer::<u8>()) as i64,
+            ))
+            .is_some(),
+    )
 }
 
 #[no_mangle]

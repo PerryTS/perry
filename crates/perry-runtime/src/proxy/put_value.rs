@@ -285,7 +285,7 @@ pub extern "C" fn js_put_value_set(
                 return value;
             }
         }
-        // Date / RegExp / Error exotic cells: route to the expando-aware
+        // Date / Error exotic cells: route to the expando-aware
         // setter — the ordinary path below would bit-cast them. Throws on a
         // rejected strict write. (See `object::exotic_expando`.)
         if let Some(v) = crate::object::exotic_expando::exotic_put_value_set(
@@ -475,10 +475,13 @@ pub use packed_add::PackedSetSite;
 pub(crate) use packed_add::{
     census as store_census, C_REP_CONVERGE, C_REP_MIGRATE, C_REP_VALIDITY_BUMP,
 };
+#[cfg(any(test, feature = "regex-engine"))]
+pub(crate) use packed_set::js_put_value_set_packed_fast;
 pub(crate) use packed_set::scan_setter_site_roots_mut;
+#[cfg(any(test, feature = "regex-engine"))]
+pub(crate) use packed_set::PackedSetWays;
 pub use packed_set::{js_put_value_set_packed_miss, PACKED_SET_EMPTY};
 pub(crate) use packed_set::{packed_set_cache_resolve, PackedSetWaysSlot, PACKED_SET_CHAIN_WORD};
-
 /// Words in a per-site static-key write cache (`[shape_token, slot]` × the
 /// four inline ways) and in its outlined poly tail. Both are views of the
 /// same `PicCacheSlot` family the read PIC uses; the arena hands out exactly

@@ -44,9 +44,12 @@ pub(super) fn is_regexp(value: &RuntimeHandle<'_>) -> Result<bool, EngineError> 
     if marker.to_bits() != crate::value::TAG_UNDEFINED {
         return Ok(crate::value::js_is_truthy(marker) != 0);
     }
-    Ok(super::is_registered_regex(
-        crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
-    ))
+    Ok(
+        crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+            (crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize) as i64,
+        ))
+        .is_some(),
+    )
 }
 
 pub(crate) fn get(owner: &RuntimeHandle<'_>, name: &[u8]) -> Result<f64, EngineError> {
@@ -126,8 +129,12 @@ pub(crate) fn execute(
     // about half of every `test` call (#10166). Anything else takes the Get.
     let receiver_ptr =
         crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut RegExpHeader;
-    let known_builtin = super::is_valid_regex_ptr(receiver_ptr)
-        && crate::object::regex_proto_thunks::regexp_view_uses_builtin(receiver.get_nanbox_f64());
+    let known_builtin =
+        crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((receiver_ptr) as i64))
+            .is_some()
+            && crate::object::regex_proto_thunks::regexp_view_uses_builtin(
+                receiver.get_nanbox_f64(),
+            );
     if !known_builtin {
         #[cfg(test)]
         EXEC_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
@@ -137,7 +144,7 @@ pub(crate) fn execute(
         }
     }
     let re = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut RegExpHeader;
-    if !super::is_valid_regex_ptr(re) {
+    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some() {
         return Err(EngineError::Type(
             "RegExp builtin exec requires a RegExp receiver",
         ));
@@ -223,30 +230,7 @@ pub(crate) fn get_symbol(owner: &RuntimeHandle<'_>, name: &str) -> Result<f64, E
 }
 
 pub(crate) fn set_last_index(owner: &RuntimeHandle<'_>, value: f64) -> Result<(), EngineError> {
-    let scope = RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(value);
-    let re = crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()) as *mut RegExpHeader;
-    if super::is_valid_regex_ptr(re) {
-        if !super::last_index_writable(re) {
-            return Err(EngineError::Type(super::LAST_INDEX_READ_ONLY));
-        }
-        super::js_regexp_set_last_index(re, value.get_nanbox_f64());
-        return Ok(());
-    }
-    let result = api::caught(|| {
-        let key = crate::string::canonical_key(b"lastIndex");
-        crate::proxy::js_reflect_set(
-            owner.get_nanbox_f64(),
-            js_nanbox_string(key as i64),
-            value.get_nanbox_f64(),
-            owner.get_nanbox_f64(),
-        )
-    });
-    if crate::value::js_is_truthy(result?) != 0 {
-        Ok(())
-    } else {
-        Err(EngineError::Type("Cannot set RegExp lastIndex"))
-    }
+    api::caught(|| super::set_last_index_value(owner.get_nanbox_f64(), value))
 }
 
 /// Abstract ToNumber, including object conversion with the number hint.

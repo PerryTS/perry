@@ -829,10 +829,7 @@ pub(crate) unsafe fn stringify_value_depth(
         // Perry's `RegExpHeader` is not an `ObjectHeader`, so without this the
         // generic object walk read its internal slots as fields and emitted
         // `{"field0":null}`. Detected by the header magic (never a raw deref).
-        if crate::regex::regex_header_has_magic(ptr as *const crate::regex::RegExpHeader) {
-            buf.push_str("{}");
-            return;
-        }
+
         // Apply Date.prototype.toJSON before any object/array handling so the
         // small cell is never deref'd as an `ObjectHeader`/`ArrayHeader`. The
         // shared algorithm performs the observable `toISOString` lookup.

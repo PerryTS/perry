@@ -17,62 +17,65 @@ pub(super) fn string_payload(s: *const StringHeader) -> Vec<u8> {
 }
 
 #[test]
-fn regexp_has_dedicated_gc_kind_and_is_not_a_shaped_object() {
+fn regexp_is_an_ordinary_shaped_object_with_private_data() {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
-    let pattern = scope.root_string_ptr(make_string("x"));
-    let flags = scope.root_string_ptr(make_string("g"));
-    let re = pattern.with_mut_ptr::<StringHeader, _>(|pattern| {
-        flags.with_mut_ptr::<StringHeader, _>(|flags| js_regexp_new(pattern, flags))
+    let re = scope.root_raw_mut_ptr(test_alloc_nursery_regexp_for_move("x", "g"));
+    re.with_const_ptr::<RegExpHeader, _>(|re| unsafe {
+        let gc = crate::value::addr_class::try_read_gc_header(re as usize).unwrap();
+        assert_eq!(gc.obj_type, crate::gc::GC_TYPE_OBJECT);
+        assert_eq!((*re).class_id, 0);
+        assert!(crate::object::object_is_shaped(re));
+        let data = regexp_data_of(crate::value::js_nanbox_pointer(re as i64)).unwrap();
+        assert_eq!(
+            crate::value::addr_class::try_read_gc_header(data as usize)
+                .unwrap()
+                .obj_type,
+            crate::gc::GC_TYPE_REGEXP,
+        );
+        let keys = crate::object::object_keys(re);
+        assert_eq!(keys.count(), 2);
+        assert_eq!(
+            crate::object::key_attrs::keys_entry(keys.arr(), 0),
+            crate::object::key_attrs::PRIVATE_FIELD_ENTRY
+        );
+        assert_eq!(
+            crate::object::key_attrs::keys_entry(keys.arr(), 1),
+            crate::object::key_attrs::ENTRY_NON_ENUMERABLE
+                | crate::object::key_attrs::ENTRY_NON_CONFIGURABLE
+        );
+        assert_eq!(get_last_index(re), 0.0);
+        assert_eq!(
+            crate::object::shapes::object_prototype_word(re),
+            crate::object::builtin_prototype_value("RegExp").to_bits()
+        );
     });
-    let gc = unsafe { crate::value::addr_class::try_read_gc_header(re as usize) }
-        .expect("RegExp must be a GC allocation");
-    assert_eq!(gc.obj_type, crate::gc::GC_TYPE_REGEXP);
-    assert!(regex_header_has_magic(re));
-    assert!(!unsafe { crate::object::object_is_shaped(re.cast::<crate::object::ObjectHeader>()) });
 }
 
 #[test]
-#[cfg(target_pointer_width = "64")]
-fn regexp_header_is_one_56_byte_per_object_record() {
-    assert_eq!(
-        std::mem::size_of::<RegExpHeader>(),
-        56,
-        "the three per-program matcher pointers must stay collapsed into one handle"
-    );
-}
-
-/// #11503: identity is the header (`GC_TYPE_REGEXP` + size + magic), not an
-/// address registry. The fixture header is registered NOWHERE, so every probe
-/// answering "yes" proves no registry is consulted, and clearing the magic
-/// proves the GC kind alone is not taken as proof either.
-#[test]
-fn regexp_identity_is_the_header_not_an_address_registry() {
+fn regexp_brand_requires_the_private_entry_not_a_public_spelling() {
     let _lock = crate::gc::global_side_table_test_lock();
-    let re = test_alloc_nursery_regexp_for_move("identity", "g");
-    let addr = re as usize;
-    assert!(is_registered_regex(addr));
-    assert!(is_valid_regex_ptr(re));
-    assert!(is_regex_pointer(re as *const u8));
-
-    unsafe { (*re).magic = 0 };
-    assert!(!is_registered_regex(addr));
-    assert!(!is_valid_regex_ptr(re));
-    assert!(!is_regex_pointer(re as *const u8));
-    unsafe { (*re).magic = REGEXP_MAGIC };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ordinary = scope.root_raw_mut_ptr(crate::object::object_alloc_plain(2));
+    let key = crate::string::intern_ascii_literal(b"#<perry:private-value:0:@0:[[RegExpMatcher]]>");
+    ordinary.with_mut_ptr::<ObjectHeader, _>(|object| {
+        crate::object::js_object_set_field_by_name(object, key, 1.0);
+        assert!(regexp_data_of(crate::value::js_nanbox_pointer(object as i64)).is_none());
+    });
+    assert!(regexp_data_of(f64::from_bits(crate::value::TAG_NULL)).is_none());
+    let data = scope.root_raw_const_ptr(ordinary.with_const_ptr::<ObjectHeader, _>(|o| o));
+    assert!(regexp_data_of(
+        data.with_const_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64))
+    )
+    .is_none());
 }
 
-/// A RegExp's only address-keyed state is its expando entry. Death is handled
-/// by the dead-owner fan-out, so the type needs no finalize hook and uses the
-/// shared expando-owner move hook rather than a RegExp-specific one.
 #[test]
-fn regexp_gc_type_needs_no_bespoke_side_table_hooks() {
-    let info = crate::gc::gc_type_info(crate::gc::GC_TYPE_REGEXP).expect("RegExp GC type");
-    assert_eq!(
-        info.move_hook_kind,
-        crate::gc::GcMoveHookKind::ExoticExpandoOwner
-    );
+fn regexp_data_needs_no_object_metadata_or_expando_move_hook() {
+    let info = crate::gc::gc_type_info(crate::gc::GC_TYPE_REGEXP).unwrap();
+    assert_eq!(info.move_hook_kind, crate::gc::GcMoveHookKind::None);
     assert_eq!(info.finalize_hook_kind, crate::gc::GcFinalizeHookKind::None);
+    assert_eq!(std::mem::size_of::<RegExpData>(), 32);
 }
 
 // Program lifetime and compilation-churn reclamation are exercised with the
@@ -904,4 +907,36 @@ fn global_exec_walks_astral_string_by_code_units() {
     // Exhausted → null, lastIndex reset.
     assert!(js_regexp_exec(re, make_string(subject)).is_null());
     assert_eq!(regex_last_index_offset(re), 0);
+}
+
+#[test]
+fn flag_getter_through_an_intermediate_prototype_keeps_the_instance_receiver() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_string_ptr(js_string_from_str("a"));
+    let flags = scope.root_string_ptr(js_string_from_str("g"));
+    let receiver = scope.root_raw_mut_ptr(
+        source.with_mut_ptr(|source| flags.with_mut_ptr(|flags| js_regexp_new(source, flags))),
+    );
+    let prototype = scope.root_raw_mut_ptr(crate::object::object_alloc_plain(0));
+    let intrinsic = crate::object::builtin_prototype_value("RegExp");
+    prototype.with_mut_ptr::<crate::object::ObjectHeader, _>(|prototype| {
+        crate::object::prototype_chain::object_set_static_prototype(
+            prototype as usize,
+            intrinsic.to_bits(),
+        );
+    });
+    receiver.with_mut_ptr::<RegExpHeader, _>(|receiver| {
+        crate::object::prototype_chain::object_set_static_prototype(
+            receiver as usize,
+            prototype.with_const_ptr::<crate::object::ObjectHeader, _>(|prototype| {
+                crate::value::js_nanbox_pointer(prototype as i64).to_bits()
+            }),
+        );
+    });
+    let key = scope.root_string_ptr(js_string_from_str("flags"));
+    let value = receiver.with_mut_ptr::<RegExpHeader, _>(|receiver| {
+        key.with_const_ptr(|key| crate::object::js_object_get_field_by_name(receiver, key))
+    });
+    assert!(value.is_string());
+    assert_eq!(string_as_str(value.as_string_ptr()), "g");
 }

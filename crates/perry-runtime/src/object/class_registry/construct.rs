@@ -42,6 +42,7 @@ mod compiled_function;
 pub(crate) use compiled_function::{
     forget_birth_record_of_class, ordinary_compiled_function_has_instance, OrdinaryInstanceof,
 };
+mod native_receiver;
 mod rooted_arguments;
 pub(crate) use rooted_arguments::construct_rooted_arguments;
 #[cfg(feature = "regex-engine")]
@@ -142,7 +143,12 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
     // of throwing.
     {
         let jv = crate::value::JSValue::from_bits(func_value.to_bits());
-        if jv.is_pointer() && crate::regex::is_registered_regex(jv.as_pointer::<u8>() as usize) {
+        if jv.is_pointer()
+            && crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(
+                (jv.as_pointer::<u8>() as usize) as i64,
+            ))
+            .is_some()
+        {
             super::super::object_ops::throw_object_type_error(b"is not a constructor");
         }
     }
@@ -1625,26 +1631,10 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
             let proto = new_target_custom_object_prototype(nt.get_nanbox_f64())
                 .map(|bits| scope.root_heap_word_u64(bits));
             let result = js_new_function_construct(func.get_nanbox_f64(), args_ptr, args_len);
-            if let Some(proto) = proto {
-                let bits = result.to_bits();
-                let addr = if (bits >> 48) == 0x7FFD {
-                    (bits & crate::value::POINTER_MASK) as usize
-                } else if (bits >> 48) == 0
-                    && crate::buffer::buffer_family_type_owned(bits as usize).is_some()
-                {
-                    // ArrayBuffer and SharedArrayBuffer are represented by a
-                    // raw BufferHeader pointer rather than a NaN-boxed object.
-                    bits as usize
-                } else {
-                    0
-                };
-                if addr != 0 {
-                    super::super::prototype_chain::object_set_static_prototype(
-                        addr,
-                        proto.get_heap_word_u64(),
-                    );
-                }
+            if ta_name == "RegExp" {
+                return native_receiver::finish_regexp(&scope, result, &nt, proto);
             }
+            native_receiver::apply_prototype(result, proto);
             return result;
         }
     }

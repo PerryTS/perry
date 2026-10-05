@@ -300,10 +300,10 @@ fn private_shape_proof_learn(
     // The template namespace: the callers established that no fresh
     // evaluation is involved.
     let present = if is_field {
-        let storage = private_storage_key_by_id(class_id, 0, interned);
-        unsafe { crate::object::key_attrs::object_key_is_private(object, storage.as_bytes()) }
+        let storage = private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, interned);
+        unsafe { crate::object::key_attrs::object_key_has_private_entry(object, storage.as_bytes()) }
     } else {
-        unsafe { crate::object::shapes::object_has_brand(object, private_brand_id(class_id, 0)) }
+        unsafe { crate::object::shapes::object_has_brand(object, private_brand_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID)) }
     };
     if !present {
         return None;
@@ -405,9 +405,9 @@ unsafe fn private_field_site_word(
     if keys.is_null() {
         return 0;
     }
-    let storage = private_storage_key_by_id(class_id, 0, name);
+    let storage = private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name);
     let Some(slot) =
-        crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), storage.as_bytes())
+        crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), storage.as_bytes())
     else {
         return 0;
     };

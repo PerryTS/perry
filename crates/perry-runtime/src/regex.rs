@@ -16,6 +16,8 @@ mod escape;
 #[cfg(feature = "regex-engine")]
 mod flags;
 #[cfg(feature = "regex-engine")]
+mod instance;
+#[cfg(feature = "regex-engine")]
 mod perex_split_compat;
 #[cfg(feature = "regex-engine")]
 pub use perex_split_compat::{js_string_split_n, js_string_split_regex, js_string_split_regex_n};
@@ -31,6 +33,8 @@ pub(crate) mod perex_api;
 pub(crate) mod perex_cache;
 #[cfg(feature = "regex-engine")]
 mod perex_construct;
+#[cfg(all(test, feature = "regex-engine"))]
+pub(crate) use perex_construct::test_install_program;
 #[cfg(feature = "regex-engine")]
 pub(crate) mod perex_dispatch;
 #[cfg(feature = "regex-engine")]
@@ -167,20 +171,32 @@ crate::perry_thread_local! {
     static LAST_EXEC_GROUPS: RefCell<*mut ObjectHeader> = const { RefCell::new(ptr::null_mut()) };
 }
 
-/// Check whether `ptr` is a RegExpHeader pointer. Called by `js_string_split`
-/// to detect the `s.split(re)` case without a separate runtime FFI entry point.
-///
-/// Identity is the header alone: a `GC_TYPE_REGEXP` GcHeader carrying the
-/// `RegExpHeader.magic` sentinel (see [`regex_header_has_magic`]). There is no
-/// address-keyed owner registry to consult — #11503 deleted
-/// `REGEX_SOURCE_TABLE`, whose only payload was a `registered_owner: bool` that
-/// every live header's own GcHeader already answers, and which cost an insert
-/// per construction, a rekey per evacuation and a walk per collection.
-pub(crate) fn is_regex_pointer(ptr: *const u8) -> bool {
-    if ptr.is_null() || (ptr as usize) < 0x1000 {
-        return false;
-    }
-    regex_header_has_magic(ptr as *const RegExpHeader)
+/// The intrinsic private entry is the RegExp brand. A property with the same
+/// spelling, a prototype, proxy or unrelated ordinary object cannot supply it.
+#[inline]
+pub fn regexp_data_of(value: f64) -> Option<*const RegExpData> {
+    #[cfg(test)]
+    REGEX_PTR_VALIDATION_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let slot = MATCHER_READ.with(|site| site.read(value))?;
+    let slot = crate::value::JSValue::from_bits(slot.to_bits());
+    slot.is_pointer().then(|| slot.as_pointer::<RegExpData>())
+}
+
+/// Raw-receiver ABI retained for the typed HIR calls until S5.
+pub type RegExpHeader = ObjectHeader;
+pub(crate) const REGEXP_MATCHER: &str = "[[RegExpMatcher]]";
+crate::perry_thread_local! {
+    static MATCHER_READ: crate::object::IntrinsicPrivateReadSite =
+        const { crate::object::IntrinsicPrivateReadSite::new(REGEXP_MATCHER) };
+}
+
+/// Read an already branded receiver's immutable data before the next
+/// collecting action. Handles must be re-read after such an action.
+#[inline]
+#[track_caller]
+pub(crate) fn regexp_data_ptr(receiver: *const RegExpHeader) -> *const RegExpData {
+    regexp_data_of(crate::value::js_nanbox_pointer(receiver as i64))
+        .expect("RegExp receiver must have its intrinsic private matcher")
 }
 
 /// Test support: construct a RegExp through the PRODUCTION path
@@ -209,10 +225,12 @@ pub(crate) fn test_original_strings_and_program(
     re: *const RegExpHeader,
 ) -> (*const StringHeader, *const StringHeader, bool) {
     unsafe {
-        let program = crate::value::addr_class::try_read_gc_header((*re).perex_program as usize);
+        let program = crate::value::addr_class::try_read_gc_header(
+            (*crate::regex::regexp_data_ptr(re)).perex_program as usize,
+        );
         (
-            (*re).pattern_ptr,
-            (*re).flags_ptr,
+            (*crate::regex::regexp_data_ptr(re)).pattern_ptr,
+            (*crate::regex::regexp_data_ptr(re)).flags_ptr,
             program.is_some_and(|gc| gc.obj_type == crate::gc::GC_TYPE_REGEX_PROGRAM),
         )
     }
@@ -220,106 +238,34 @@ pub(crate) fn test_original_strings_and_program(
 
 #[cfg(all(test, feature = "regex-engine"))]
 pub(crate) fn test_regexp_program_address(re: *const RegExpHeader) -> usize {
-    unsafe { (*re).perex_program as usize }
+    unsafe { (*crate::regex::regexp_data_ptr(re)).perex_program as usize }
 }
 
-/// Build a minimal nursery-resident RegExp payload for the copying collector's
-/// relocation contract tests, without compiling a program. Identity is the
-/// header's own `GC_TYPE_REGEXP` kind plus [`REGEXP_MAGIC`], exactly as for a
-/// production header, so nothing beyond the allocation needs registering.
+/// Construct through the production object/slot layout for relocation tests.
 #[cfg(all(test, feature = "regex-engine"))]
 pub(crate) fn test_alloc_nursery_regexp_for_move(source: &str, flags: &str) -> *mut RegExpHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = scope.root_string_ptr(js_string_from_str(source));
-    let flags_root = scope.root_string_ptr(js_string_from_str(flags));
-    unsafe {
-        let ptr = crate::arena::arena_alloc_gc(
-            std::mem::size_of::<RegExpHeader>(),
-            std::mem::align_of::<RegExpHeader>(),
-            crate::gc::GC_TYPE_REGEXP,
-        ) as *mut RegExpHeader;
-        // Neither `gc_malloc` nor the arena zeroes reused memory, so this
-        // must be set explicitly or the GC follows a garbage pointer.
-        (*ptr).meta = std::ptr::null_mut();
-        // Both strings are rooted and read after the allocation above.
-        source.with_const_ptr::<StringHeader, _>(|source| (*ptr).pattern_ptr = source);
-        flags_root.with_const_ptr::<StringHeader, _>(|flags| (*ptr).flags_ptr = flags);
-        (*ptr).perex_program = std::ptr::null();
-        (*ptr).case_insensitive = flags.contains('i');
-        (*ptr).global = flags.contains('g');
-        (*ptr).multiline = flags.contains('m');
-        (*ptr).sticky = flags.contains('y');
-        (*ptr).dot_all = flags.contains('s');
-        (*ptr).unicode = flags.contains('u') || flags.contains('v');
-        (*ptr).has_indices = flags.contains('d');
-        (*ptr).last_index = crate::value::JSValue::number(0.0).bits();
-        (*ptr).magic = REGEXP_MAGIC;
-        ptr
-    }
+    let flags = scope.root_string_ptr(js_string_from_str(flags));
+    source.with_const_ptr::<StringHeader, _>(|source| {
+        flags.with_const_ptr::<StringHeader, _>(|flags| js_regexp_new(source, flags))
+    })
 }
 
-/// Bounds-checked read of `RegExpHeader.magic`. Confirms the preceding
-/// `GcHeader` exists, is a `GC_TYPE_REGEXP`, and the allocation is large enough
-/// to hold a full `RegExpHeader` before dereferencing the `magic` field.
-/// Returns true iff the field equals [`REGEXP_MAGIC`]. Immune to which linked
-/// `perry-runtime` copy's thread-locals are live.
-///
-/// SAFETY: this is called from `is_regex_pointer` / `is_registered_regex` with
-/// ARBITRARY payloads — including small-handle-band ids (`< 0x100000`), null,
-/// NaN-box tag remnants, and small-buffer slab addresses that carry NO
-/// `GcHeader`. Dereferencing `addr - GC_HEADER_SIZE` directly SIGSEGVs on those
-/// (regression caught by `object_to_string_rejects_handle_band_ids`). Route the
-/// header read through [`addr_class::try_read_gc_header`], which magnitude-
-/// classifies FIRST (rejecting the handle band + implausible heap addresses +
-/// slab addresses) and only then touches memory.
+/// RegExpData's only edges are the original strings and the compiled program.
 #[inline]
-pub(crate) fn regex_header_has_magic(re: *const RegExpHeader) -> bool {
-    let addr = re as usize;
-    unsafe {
-        let Some(gc) = crate::value::addr_class::try_read_gc_header(addr) else {
-            return false;
-        };
-        if gc.obj_type != crate::gc::GC_TYPE_REGEXP {
-            return false;
-        }
-        // `size` in the GcHeader covers the GcHeader + payload. Require enough
-        // payload to reach the `magic` field.
-        if (gc.size as usize) < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<RegExpHeader>() {
-            return false;
-        }
-        (*re).magic == REGEXP_MAGIC
-    }
+pub(crate) unsafe fn regex_gc_slot_ptrs(data: *mut RegExpData) -> (*mut u64, usize) {
+    let source = std::ptr::addr_of_mut!((*data).pattern_ptr) as *mut u64;
+    debug_assert_eq!(
+        std::ptr::addr_of_mut!((*data).flags_ptr) as usize - source as usize,
+        8
+    );
+    (source, 2)
 }
 
-/// The source/flags range and lastIndex slot of a `RegExpHeader`:
-///   * `pattern_ptr` — the original-source `StringHeader`,
-///   * `flags_ptr`   — the flags `StringHeader`,
-///   * `last_index`  — a writable JSValue (`re.lastIndex = …`) that may be a
-///     NaN-boxed heap pointer.
-/// The layout visitor separately enumerates `meta` and the GC-managed
-/// `perex_program` edge. Boolean flags and `magic` are not GC edges.
-///
-/// `pattern_ptr` and `flags_ptr` are consecutive equal-width fields, so under
-/// `#[repr(C)]` they are adjacent and form a 2-slot contiguous range; the
-/// returned tuple is `(range_start, range_slot_count, last_index_slot)`. Offsets
-/// are taken from the actual struct via `addr_of_mut!` (no hardcoded layout).
-#[inline]
-pub(crate) unsafe fn regex_gc_slot_ptrs(re: *mut RegExpHeader) -> (*mut u64, usize, *mut u64) {
-    let pattern = std::ptr::addr_of_mut!((*re).pattern_ptr) as *mut u64;
-    let flags = std::ptr::addr_of_mut!((*re).flags_ptr) as *mut u64;
-    let last_index = std::ptr::addr_of_mut!((*re).last_index) as *mut u64;
-    // `pattern_ptr` then `flags_ptr` must be adjacent for the 2-slot range to be
-    // exact; assert so a future field reorder is caught in debug builds.
-    debug_assert_eq!(flags as usize - pattern as usize, 8);
-    (pattern, 2, last_index)
-}
-
-/// The header's compiled-program edge: a GC allocation owned only through this
-/// slot, so the layout visitor must enumerate it for marking and relocation or
-/// the program is collected (or left dangling after a move) under a live RegExp.
 #[inline]
 pub(crate) unsafe fn regex_program_slot(user_ptr: *mut u8) -> Option<*mut u64> {
-    Some(std::ptr::addr_of_mut!((*user_ptr.cast::<RegExpHeader>()).perex_program) as *mut u64)
+    Some(std::ptr::addr_of_mut!((*user_ptr.cast::<RegExpData>()).perex_program) as *mut u64)
 }
 
 /// The pattern and flags strings a RegExp was made from, for a structured
@@ -328,66 +274,55 @@ pub(crate) unsafe fn regexp_source_and_flags(
     re: *const RegExpHeader,
 ) -> (Option<*const StringHeader>, Option<*const StringHeader>) {
     let valid = |s: *const StringHeader| is_valid_ptr(s).then_some(s);
-    (valid((*re).pattern_ptr), valid((*re).flags_ptr))
+    (
+        valid((*crate::regex::regexp_data_ptr(re)).pattern_ptr),
+        valid((*crate::regex::regexp_data_ptr(re)).flags_ptr),
+    )
 }
 
-/// Header for heap-allocated RegExp objects
+/// Immutable original source, canonical flags and program of a RegExp.
+/// Never exposed as a JS receiver; the ordinary instance owns this cell through
+/// its intrinsic private slot. Recompilation publishes a new cell.
 #[repr(C)]
-pub struct RegExpHeader {
-    /// Original pattern string (for debugging/serialization)
+pub struct RegExpData {
     pattern_ptr: *const StringHeader,
-    /// Flags string (e.g., "gi" for global+ignoreCase)
     flags_ptr: *const StringHeader,
-    /// Cached flags for quick access
     pub case_insensitive: bool,
     pub global: bool,
     pub multiline: bool,
-    /// #2828: additional observable flags. `sticky`/`unicode`/`has_indices`
-    /// are exposed via getters (matching behavior is scoped — see notes in
-    /// `js_regexp_new`); `dot_all` IS honored at compile time via `(?s)`.
     pub sticky: bool,
     pub dot_all: bool,
     pub unicode: bool,
     pub has_indices: bool,
-    /// `lastIndex` is a writable data property holding an *arbitrary* JSValue
-    /// (spec: `Set(R, "lastIndex", v)` with no coercion on write). Stored as the
-    /// raw NaN-boxed bits; `exec`/`test` apply `ToLength` on read to derive the
-    /// match offset. Initialized to the number `0`.
-    pub last_index: u64,
-    /// Wall 18 (nestjs / get-intrinsic): self-identifying sentinel.
-    ///
-    /// `is_valid_regex_ptr` / `is_regex_pointer` / `is_registered_regex` used to
-    /// rely SOLELY on thread-local owner registration. That breaks when a
-    /// statically-linked app pulls a second copy of `perry-runtime` (every
-    /// `perry-ext-*` archive bundles its own — the link emits duplicate-symbol
-    /// warnings): `js_regexp_new` inserts into copy-A's thread-local while the
-    /// `.source`/`.flags`/dynamic-`.replace` reader resolves to copy-B's
-    /// (empty) thread-local, so a perfectly valid regex reports `.source ===
-    /// "(?:)"`, `is_regex_pointer === false`, and `str.replace(re, fn)` (via a
-    /// `function-bind` bound `String.prototype.replace`) treats `re` as a plain
-    /// string pattern → never matches → get-intrinsic's `stringToPath` returns
-    /// `[]` → `intrinsic %% does not exist!` → express adapter load `exit(1)`.
-    ///
-    /// Storing the marker and traced program on the heap header keeps identity
-    /// and execution independent of the runtime copy performing dispatch.
-    pub magic: u64,
-    /// #6759 phase 1 (header unification): per-object metadata record, or
-    /// null. Its edge is found through the actual Rust struct layout.
-    ///
-    /// RegExp's rewrite descriptor DELEGATES to the layout visitor, so unlike
-    /// Error/Map/Set the edge belongs in `gc_child_slots`
-    /// (`GcLayoutSlotKind::RegExpFields`) — that is the marking path here.
-    /// #6812 is precisely the bug of putting it in the wrong one.
-    pub meta: *mut crate::object::ObjectMeta,
-    /// The single immutable GC-managed program, traced and rewritten by the
-    /// RegExp layout visitor.
     pub(crate) perex_program: *const u8,
 }
 
-/// Self-identifying sentinel stamped into every `RegExpHeader.magic` by
-/// `js_regexp_new`. ASCII `"PRYREGEX"` little-endian — distinctive enough that
-/// a random heap object is astronomically unlikely to collide.
-pub const REGEXP_MAGIC: u64 = 0x5845_4745_5259_5250;
+impl RegExpData {
+    /// Boolean prototype getters borrow this immutable cell without a safepoint.
+    pub(crate) unsafe fn has_flag(&self, flag: char) -> bool {
+        match flag {
+            'g' => self.global,
+            'i' => self.case_insensitive,
+            'm' => self.multiline,
+            's' => self.dot_all,
+            'y' => self.sticky,
+            'd' => self.has_indices,
+            // The program's unicode bit covers both u and v; the original flags
+            // distinguish the two observable getters.
+            'u' | 'v' => {
+                let flags = &*self.flags_ptr;
+                let bytes = std::slice::from_raw_parts(
+                    self.flags_ptr
+                        .cast::<u8>()
+                        .add(std::mem::size_of::<StringHeader>()),
+                    flags.byte_len as usize,
+                );
+                bytes.contains(&(flag as u8))
+            }
+            _ => false,
+        }
+    }
+}
 
 /// `ToLength(Get(R, "lastIndex"))` → a non-negative integer match offset. The
 /// stored value may be any JSValue (e.g. `re.lastIndex = { valueOf() {…} }`), so
@@ -395,7 +330,7 @@ pub const REGEXP_MAGIC: u64 = 0x5845_4745_5259_5250;
 /// clamped to ≥ 0.
 #[cfg(feature = "regex-engine")]
 pub(crate) fn regex_last_index_offset(re: *const RegExpHeader) -> usize {
-    let stored = f64::from_bits(unsafe { (*re).last_index });
+    let stored = get_last_index(re);
     if crate::value::JSValue::from_bits(stored.to_bits()).is_number() {
         return stored.max(0.0).floor().min(9_007_199_254_740_991.0) as usize;
     }
@@ -407,23 +342,7 @@ pub(crate) fn regex_last_index_offset(re: *const RegExpHeader) -> usize {
 #[cfg(feature = "regex-engine")]
 #[inline]
 pub(crate) fn store_last_index_number(re: *mut RegExpHeader, n: usize) {
-    unsafe {
-        (*re).last_index = crate::value::JSValue::number(n as f64).bits();
-    }
-}
-
-/// The TypeError message for a write to a non-writable `lastIndex`.
-#[cfg(feature = "regex-engine")]
-pub(crate) const LAST_INDEX_READ_ONLY: &str =
-    "Cannot assign to read only property 'lastIndex' of object";
-
-/// Whether `lastIndex` on this RegExp is writable (the default). A lookup in
-/// the descriptor state; it runs no user code.
-#[cfg(feature = "regex-engine")]
-pub(crate) fn last_index_writable(re: *const RegExpHeader) -> bool {
-    crate::object::get_property_attrs(re as usize, "lastIndex")
-        .map(|a| a.writable())
-        .unwrap_or(true)
+    set_last_index(re, n as f64);
 }
 
 /// Spec `Set(R, "lastIndex", n, true)` — the lastIndex updates in
@@ -435,52 +354,13 @@ pub(crate) fn last_index_writable(re: *const RegExpHeader) -> bool {
 /// `lastIndex` is writable (the default) this just stores the number.
 #[cfg(feature = "regex-engine")]
 pub(crate) fn set_last_index_throwing(re: *mut RegExpHeader, n: usize) {
-    if !last_index_writable(re) {
-        let message = LAST_INDEX_READ_ONLY.as_bytes();
-        let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-        let err = crate::error::js_typeerror_new(msg);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
-    }
-    store_last_index_number(re, n);
+    set_last_index(re, n as f64);
 }
 
 /// Check if a pointer is valid (not null and not a small invalid value from bad NaN-unboxing)
 #[inline]
 pub(crate) fn is_valid_ptr<T>(p: *const T) -> bool {
     !p.is_null() && (p as usize) >= 0x1000
-}
-
-/// Check if a RegExpHeader pointer is legitimate — it must point to a
-/// header we allocated via `js_regexp_new` (a `GC_TYPE_REGEXP` cell carrying
-/// [`REGEXP_MAGIC`]). The LLVM backend's `new RegExp(pat, flags)` currently falls through
-/// to the generic `lower_new` path which allocates an empty object and
-/// NaN-boxes it as a regex; subsequent `.exec()` / `.test()` calls would
-/// read garbage from that object if we didn't gate them on this check.
-#[inline]
-pub(crate) fn is_valid_regex_ptr(p: *const RegExpHeader) -> bool {
-    #[cfg(test)]
-    REGEX_PTR_VALIDATION_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    is_valid_ptr(p) && regex_header_has_magic(p)
-}
-
-#[cfg(test)]
-static REGEX_PTR_VALIDATION_CALLS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-
-/// How many times a pointer has been validated. A bounded view call must
-/// validate its regex exactly once; counting is how that stays true.
-#[cfg(test)]
-pub(crate) fn test_regex_ptr_validation_calls() -> u64 {
-    REGEX_PTR_VALIDATION_CALLS.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-/// Public: is `addr` a RegExpHeader we allocated via `js_regexp_new`?
-/// Used by the console/`util.inspect` formatter to print regex literals
-/// as `/source/flags` instead of `{}` (they're GC_TYPE_REGEXP allocations
-/// with no enumerable string keys). Header-gated (GC kind + size + magic) so a
-/// generic object is never mis-read as a RegExpHeader.
-pub fn is_registered_regex(addr: usize) -> bool {
-    regex_header_has_magic(addr as *const RegExpHeader)
 }
 
 /// Internal helper: Get string data from StringHeader
@@ -596,7 +476,9 @@ pub extern "C" fn js_regexp_construct_call(pattern: f64, flags: f64) -> *mut Reg
 #[cfg(feature = "regex-engine")]
 #[no_mangle]
 pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader) -> i32 {
-    if !is_valid_regex_ptr(re) || !is_valid_ptr(s) {
+    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some()
+        || !is_valid_ptr(s)
+    {
         return 0;
     }
     if crate::hot_diag::regex_on() {
@@ -613,8 +495,8 @@ pub extern "C" fn js_regexp_test(re: *const RegExpHeader, s: *const StringHeader
 #[cfg(feature = "regex-engine")]
 pub(super) fn diag_note_op(re: *const RegExpHeader, op: crate::hot_diag::RegexOp) {
     unsafe {
-        let pattern_ptr = (*re).pattern_ptr;
-        let flags_ptr = (*re).flags_ptr;
+        let pattern_ptr = (*crate::regex::regexp_data_ptr(re)).pattern_ptr;
+        let flags_ptr = (*crate::regex::regexp_data_ptr(re)).flags_ptr;
         let pattern = if is_valid_ptr(pattern_ptr) {
             string_as_bytes(pattern_ptr)
         } else {
@@ -626,47 +508,6 @@ pub(super) fn diag_note_op(re: *const RegExpHeader, op: crate::hot_diag::RegexOp
             ""
         };
         crate::hot_diag::regex_with(|d| d.note_op(pattern_ptr as usize, pattern, flags, op));
-    }
-}
-
-/// Dispatch methods on a registered RegExp receiver.
-#[cfg(feature = "regex-engine")]
-pub(crate) fn dispatch_regex_receiver_method(
-    ptr: *const u8,
-    method: &str,
-    arg0: f64,
-) -> Option<f64> {
-    if !is_regex_pointer(ptr) {
-        return None;
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let re = scope.root_raw_const_ptr(ptr as *const RegExpHeader);
-    match method {
-        "test" => {
-            let s_ptr = crate::value::js_jsvalue_to_string_coerce(arg0);
-            // The receiver is re-read after the coercion; `js_regexp_test` roots
-            // both arguments before it allocates.
-            let matched = re.with_const_ptr(|re| js_regexp_test(re, s_ptr)) != 0;
-            Some(f64::from_bits(crate::value::JSValue::bool(matched).bits()))
-        }
-        // exec: the match array, or `null` on no match (spec-correct).
-        "exec" => {
-            let s_ptr = crate::value::js_jsvalue_to_string_coerce(arg0);
-            let arr = re.with_mut_ptr(|re| js_regexp_exec(re, s_ptr));
-            Some(if arr.is_null() {
-                f64::from_bits(crate::value::TAG_NULL)
-            } else {
-                f64::from_bits(crate::value::JSValue::pointer(arr as *const u8).bits())
-            })
-        }
-        // `regex.toString()` → `/source/flags` (RegExp.prototype.toString).
-        "toString" => {
-            let s = re.with_const_ptr(|p| js_regexp_to_string(p));
-            Some(f64::from_bits(
-                crate::value::js_nanbox_string(s as i64).to_bits(),
-            ))
-        }
-        _ => None,
     }
 }
 
@@ -726,7 +567,7 @@ pub(crate) fn test_last_exec_groups() -> usize {
 /// Get regex.source — returns the pattern string
 #[no_mangle]
 pub extern "C" fn js_regexp_get_source(re: *const RegExpHeader) -> *mut StringHeader {
-    if !is_valid_regex_ptr(re) {
+    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some() {
         return js_string_from_str("(?:)");
     }
     #[cfg(feature = "regex-engine")]
@@ -735,9 +576,9 @@ pub extern "C" fn js_regexp_get_source(re: *const RegExpHeader) -> *mut StringHe
     }
     #[cfg(not(feature = "regex-engine"))]
     unsafe {
-        if is_valid_ptr((*re).pattern_ptr) {
+        if is_valid_ptr((*crate::regex::regexp_data_ptr(re)).pattern_ptr) {
             // Return a copy of the pattern string
-            let pattern_str = string_as_str((*re).pattern_ptr);
+            let pattern_str = string_as_str((*crate::regex::regexp_data_ptr(re)).pattern_ptr);
             // Escaping only inserts ASCII into text that came from a `&str`, so
             // the result is UTF-8 and the lossy conversion never substitutes.
             let escaped = escape_regexp_source(pattern_str.as_bytes());
@@ -758,11 +599,12 @@ pub extern "C" fn js_regexp_empty_source() -> *mut StringHeader {
 /// Get regex.flags — returns the flags string
 #[no_mangle]
 pub extern "C" fn js_regexp_get_flags(re: *const RegExpHeader) -> *mut StringHeader {
-    if !is_valid_regex_ptr(re) {
+    let Some(data) = crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(re as i64))
+    else {
         return js_string_from_str("");
-    }
+    };
     unsafe {
-        let flags = (*re).flags_ptr;
+        let flags = (*data).flags_ptr;
         if !is_valid_ptr(flags) {
             return js_string_from_str("");
         }
@@ -796,32 +638,41 @@ pub extern "C" fn js_regexp_to_string(re: *const RegExpHeader) -> *mut StringHea
 
 /// Get regex.lastIndex — returns the stored value (NaN-boxed JSValue bits as
 /// f64). Usually a number, but `re.lastIndex = obj` round-trips the object.
-#[no_mangle]
-pub extern "C" fn js_regexp_get_last_index(re: *const RegExpHeader) -> f64 {
-    if !is_valid_regex_ptr(re) {
-        return 0.0;
-    }
-    unsafe { f64::from_bits((*re).last_index) }
+#[cfg(feature = "regex-engine")]
+pub(crate) fn get_last_index(re: *const RegExpHeader) -> f64 {
+    LAST_INDEX_READ.with(|site| unsafe { site.read(re as *mut ObjectHeader, b"lastIndex") })
 }
 
-/// Set regex.lastIndex — stores the value verbatim (no coercion on write, per
-/// spec `Set(R, "lastIndex", v)`).
-#[no_mangle]
-pub extern "C" fn js_regexp_set_last_index(re: *mut RegExpHeader, value: f64) {
-    if !is_valid_regex_ptr(re) {
-        return;
-    }
-    unsafe {
-        (*re).last_index = value.to_bits();
-        crate::gc::runtime_write_barrier_gc_slot(
-            re as usize,
-            std::ptr::addr_of!((*re).last_index) as usize,
-            value.to_bits(),
-        );
-    }
+crate::perry_thread_local! {
+    #[cfg(feature = "regex-engine")]
+    static LAST_INDEX_READ: crate::object::field_get_set::runtime_read_site::RuntimeReadSite =
+        const { crate::object::field_get_set::runtime_read_site::RuntimeReadSite::new() };
+}
+
+#[cfg(feature = "regex-engine")]
+static LAST_INDEX_STORE: crate::object::field_get_set::runtime_store_site::RuntimeStoreSite =
+    crate::object::field_get_set::runtime_store_site::RuntimeStoreSite::new();
+
+/// Builtin spec Set(R, lastIndex, value, true), through the ordinary store site.
+#[cfg(feature = "regex-engine")]
+pub(crate) fn set_last_index(re: *mut RegExpHeader, value: f64) {
+    set_last_index_value(crate::value::js_nanbox_pointer(re as i64), value);
+}
+
+#[cfg(feature = "regex-engine")]
+pub(super) fn set_last_index_value(receiver: f64, value: f64) {
+    LAST_INDEX_STORE.store(receiver, b"lastIndex", value);
 }
 
 #[cfg(all(test, feature = "regex-engine"))]
 mod tests;
 #[cfg(all(test, feature = "regex-engine"))]
 mod tests_part2;
+
+#[cfg(test)]
+static REGEX_PTR_VALIDATION_CALLS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+pub(crate) fn test_regex_ptr_validation_calls() -> u64 {
+    REGEX_PTR_VALIDATION_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+}
