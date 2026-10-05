@@ -1,7 +1,8 @@
 //! ArrayBuffer detach state and `ArrayBuffer.prototype.transfer` /
 //! `transferToFixedLength` / `detached` (ES2024).
 //!
-//! Buffer bytes live INLINE after the `BufferHeader` in a GC old-arena
+//! Owned native bytes are freed (or taken by the transfer message). Legacy
+//! buffer bytes live INLINE after the `BufferHeader` in a GC old-arena
 //! allocation, so a detached buffer's storage cannot be individually freed
 //! while the JS object is alive. Detach therefore (1) zeroes the header —
 //! the pre-existing structuredClone-transfer convention, which makes
@@ -81,6 +82,8 @@ pub fn detach_array_buffer(addr: usize) {
     if backing != addr {
         crate::typedarray_view::zero_views_of_detached_backing(backing);
     }
+    // Native-owned bytes are released on detach unless the message took them.
+    drop(super::header::take_owned_backing(backing));
     // External ArrayBuffers borrow addon-owned memory. Detaching severs the
     // JavaScript view but must never decommit pages which Perry did not
     // allocate; the registered finalizer still receives the original pointer.

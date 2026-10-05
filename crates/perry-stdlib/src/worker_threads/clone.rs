@@ -7,7 +7,8 @@ use super::*;
 
 /// Clone `value` as Node's `postMessage(value, transfer)` does. `transfer` is
 /// an array, `{ transfer: [...] }`, or undefined. ArrayBuffers in it are
-/// detached once the clone succeeded. Throws `DataCloneError` on failure.
+/// detached once the clone succeeded; their native backing ownership moves
+/// through the queued SerializedValue to the receiving heap. Throws `DataCloneError` on failure.
 pub(super) fn clone_message(value: f64, transfer: f64) -> SerializedValue {
     match try_clone_message(value, transfer) {
         Ok(message) => message,
@@ -84,4 +85,35 @@ fn transfer_buffers(transfer: f64) -> Result<Vec<usize>, String> {
         }
     }
     Ok(buffers)
+}
+
+#[cfg(test)]
+mod transfer_tests {
+    use super::*;
+
+    #[test]
+    fn worker_data_adopts_transfer_once_and_roots_repeated_reads() {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let source = perry_runtime::buffer::js_array_buffer_new(16);
+        let original = perry_runtime::buffer::buffer_data(source);
+        let message = unsafe {
+            perry_runtime::thread::serialize_message(
+                JSValue::pointer(source.cast()).bits(),
+                &[source as usize],
+                None,
+            )
+            .unwrap()
+        };
+        CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = Some(WorkerData::Serialized(message)));
+        let first = js_worker_threads_get_worker_data();
+        let root = scope.root_nanbox_f64(first);
+        perry_runtime::gc::js_gc_collect();
+        let second = js_worker_threads_get_worker_data();
+        assert_eq!(root.get_nanbox_f64().to_bits(), second.to_bits());
+        let buffer = perry_runtime::value::js_nanbox_get_pointer(second)
+            as *const perry_runtime::buffer::BufferHeader;
+        assert_eq!(perry_runtime::buffer::buffer_data(buffer), original);
+        assert_eq!(unsafe { (*buffer).length }, 16);
+        CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = None);
+    }
 }

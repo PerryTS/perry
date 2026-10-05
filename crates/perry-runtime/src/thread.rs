@@ -303,9 +303,11 @@ pub enum SerializedValue {
     /// cycles (`a.self = a`) as they were.
     Ref(u32),
 
-    /// An `ArrayBuffer`: a copy of all its bytes. A transferred buffer also
-    /// crosses as a copy; the sender's buffer is detached afterwards.
+    /// An untransferred `ArrayBuffer`: a copy of all its bytes.
     ArrayBuffer(Vec<u8>),
+
+    /// Exclusive native backing, committed before the message is published.
+    TransferredArrayBuffer(crate::buffer::TransferredBacking),
 
     /// A typed array or `DataView` over `buffer` (an `ArrayBuffer`, a
     /// `SharedArrayBuffer` or a `Ref` to one). `kind` is a typed array
@@ -363,7 +365,8 @@ pub enum SerializedValue {
 /// `KIND_*`).
 pub const VIEW_KIND_DATA_VIEW: u8 = 0xFF;
 
-// Safety: SerializedValue contains no raw pointers to arena memory.
+// Safety: published SerializedValue contains no raw pointers to arena memory.
+// Private pending transfer sources are removed before serialize_message returns.
 // `info` in Closure points to a body's static JsFunctionInfo, which is
 // process-global and immutable.
 unsafe impl Send for SerializedValue {}

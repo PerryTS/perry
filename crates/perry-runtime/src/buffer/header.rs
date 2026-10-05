@@ -863,6 +863,7 @@ pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHea
         (*ptr).header.length = length;
         (*ptr).header.capacity = length;
         (*ptr).data = data;
+        std::ptr::write(&mut (*ptr).owned, None);
         #[cfg(feature = "node-api-host")]
         {
             (*ptr).finalizer = None;
@@ -877,12 +878,64 @@ pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHea
     ptr.cast()
 }
 
+/// Allocate native backing from birth, so ordinary ArrayBuffer transfer moves
+/// the original byte pointer. The wrapper alone lives in the old arena.
+pub(crate) fn buffer_alloc_owned(capacity: u32, length: u32) -> *mut BufferHeader {
+    let capacity = crate::object::shape_rule3::checked_plus_four_word(
+        capacity,
+        b"Array buffer allocation failed",
+    );
+    buffer_adopt_backing(super::backing::Backing::zeroed(capacity), length)
+}
+
+pub(crate) fn buffer_adopt_backing(
+    backing: super::backing::Backing,
+    length: u32,
+) -> *mut BufferHeader {
+    assert!(length <= backing.capacity());
+    let capacity = backing.capacity();
+    let ptr = buffer_alloc_foreign(backing.data(), length);
+    unsafe {
+        (*ptr).capacity = capacity;
+        (*(ptr as *mut ForeignBuffer)).owned = Some(backing);
+    }
+    // Pressure accounting may collect: publish a consistent cell and root it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let root = scope.root_raw_mut_ptr(ptr);
+    crate::gc::gc_note_external_side_alloc(capacity as usize);
+    root.get_raw_mut_ptr()
+}
+
+pub(crate) fn take_owned_backing(addr: usize) -> Option<super::backing::Backing> {
+    if !is_foreign_backed_buffer(addr) {
+        return None;
+    }
+    let backing = unsafe { (*(addr as *mut ForeignBuffer)).owned.take() };
+    if let Some(ref backing) = backing {
+        crate::gc::gc_note_external_side_free(backing.capacity() as usize);
+    }
+    backing
+}
+
+/// TLS destruction cannot consult ownership tables or GC accounting. Both
+/// the normal finalizer and this path take the same in-cell owner exactly once.
+pub(crate) unsafe fn drop_owned_backing_at_thread_exit(header: *mut crate::gc::GcHeader) {
+    if is_buffer_family_type((*header).obj_type)
+        && (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && (*header)._reserved & crate::gc::GC_BUFFER_FOREIGN_DATA != 0
+    {
+        let cell = header.cast::<u8>().add(crate::gc::GC_HEADER_SIZE) as *mut ForeignBuffer;
+        drop((*cell).owned.take());
+    }
+}
+
 /// Foreign bytes remain owned by the caller. The data pointer is a raw native
 /// address, never a GC edge; Buffer's collector descriptor traces no byte slots.
 #[repr(C)]
 struct ForeignBuffer {
     header: BufferHeader,
     data: *mut u8,
+    owned: Option<super::backing::Backing>,
     #[cfg(feature = "node-api-host")]
     finalizer: Option<crate::node_api_host::FinalizerRecord>,
 }
@@ -992,6 +1045,7 @@ pub(crate) fn is_foreign_backed_buffer(addr: usize) -> bool {
 /// tenant of the address writes its own. Without this the attribute entries
 /// would leak and a recycled address would inherit them (the #6080 ABA class).
 pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
+    drop(take_owned_backing(addr));
     #[cfg(feature = "node-api-host")]
     enqueue_foreign_finalizer(addr);
     // #10873: a recycled address must not inherit resizability.
