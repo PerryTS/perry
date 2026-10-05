@@ -3822,9 +3822,7 @@ js_zlib_inflate	Reenters
 js_zlib_inflate_raw	Reenters
 js_zlib_inflate_raw_sync	Reenters
 js_zlib_inflate_sync	Reenters
-js_zlib_is_callback	Leaf
 js_zlib_native_dispatch	Reenters
-js_zlib_pipe_drain_callback	AllocOnly
 js_zlib_process_pending	Reenters
 js_zlib_resolve_level	Reenters
 js_zlib_stream_error	Reenters
