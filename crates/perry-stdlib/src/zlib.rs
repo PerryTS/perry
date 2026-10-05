@@ -1350,9 +1350,8 @@ pub unsafe fn zlib_stream_off(handle: i64, event_value: f64, cb: i64) {
     if event_ptr.is_null() {
         return;
     }
-    let len = (*event_ptr).byte_len as usize;
-    let data = (event_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
-    let Ok(event) = std::str::from_utf8(std::slice::from_raw_parts(data, len)) else {
+    let event = perry_runtime::OwnedStringBytes::copy_from_header(event_ptr);
+    let Ok(event) = std::str::from_utf8(event.as_bytes()) else {
         return;
     };
     if let Some(events) = tables().listeners.lock().unwrap().get_mut(&handle) {

@@ -415,14 +415,12 @@ impl<'s> Reader<'s> {
         cause: Option<&SerializedValue>,
     ) -> u64 {
         let kind = crate::error::error_kind_for_name(name);
-        let message = message.map_or(ptr::null_mut(), |bytes| {
-            (string_bits(bytes) & POINTER_MASK) as *mut crate::string::StringHeader
-        });
+        let message = message.map_or(ptr::null_mut(), |bytes| heap_string(bytes));
         let undefined = f64::from_bits(TAG_UNDEFINED);
         let err = crate::error::js_error_new_kind_with_options(kind, message, undefined);
         self.fill(slot, JSValue::pointer(err as *const u8).bits(), Made::Value);
         if let Some(stack) = stack {
-            let text = (string_bits(stack) & POINTER_MASK) as *mut crate::string::StringHeader;
+            let text = heap_string(stack);
             crate::error::error_set_stack(self.ptr(slot), text);
         }
         if let Some(cause) = cause {
@@ -434,15 +432,18 @@ impl<'s> Reader<'s> {
 }
 
 unsafe fn string_bits(bytes: &[u8]) -> u64 {
-    let ptr = crate::string::js_string_from_bytes(
+    JSValue::string_ptr(heap_string(bytes)).bits()
+}
+
+unsafe fn heap_string(bytes: &[u8]) -> *mut crate::string::StringHeader {
+    crate::string::js_string_from_bytes(
         if bytes.is_empty() {
             ptr::null()
         } else {
             bytes.as_ptr()
         },
         bytes.len() as u32,
-    );
-    JSValue::string_ptr(ptr).bits()
+    )
 }
 
 /// Perry's Uint8Array is a `BufferHeader` plus a brand; restore both (#10103).

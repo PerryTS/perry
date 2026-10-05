@@ -29,12 +29,10 @@ fn string_of(value: f64) -> String {
         "expected a string, got {:#x}",
         value.to_bits()
     );
-    let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
-    unsafe {
-        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        String::from_utf8_lossy(std::slice::from_raw_parts(data, (*ptr).byte_len as usize))
-            .into_owned()
-    }
+    crate::string::with_string_value_bytes(value, |bytes| {
+        String::from_utf8_lossy(bytes).into_owned()
+    })
+    .expect("a string value has bytes")
 }
 
 #[test]
