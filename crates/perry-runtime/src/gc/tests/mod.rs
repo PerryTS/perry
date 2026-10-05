@@ -1,5 +1,6 @@
 mod adopt_census;
 mod alloc;
+mod allocation_pacing;
 mod arena_right_size;
 mod arguments_objects;
 mod array_named_props;

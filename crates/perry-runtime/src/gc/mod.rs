@@ -22,6 +22,8 @@
 //! start or resume a budgeted cycle and allocation-side checks spend bounded
 //! mutator-assist work instead of running a whole automatic collection.
 
+pub(crate) mod allocation_pacing;
+
 use std::alloc::{alloc, dealloc, realloc, Layout};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -392,6 +394,7 @@ fn gc_collect_minor_with_trigger_inner(
     // PERRY_GC_SAFEPOINT_ONLY: held for the whole collection so every
     // consumer of the scan decision (root scan, copying eligibility,
     // evacuation pinning, verifier) sees the same healed answer.
+    let _allocation_guard = allocation_pacing::CollectorStepGuard::enter();
     let _contract_heal = policy::contract_scan_heal_guard();
     gc_drain_active_budgeted_cycle();
     // Barriers-off ⇒ the remembered set is not being maintained, and a
@@ -851,6 +854,7 @@ fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcColl
     // PERRY_GC_SAFEPOINT_ONLY: see gc_collect_minor_with_trigger. Manual
     // gc() engages its own force_full_scan first, which this detects as
     // already-Scan and no-ops.
+    let _allocation_guard = allocation_pacing::CollectorStepGuard::enter();
     let _contract_heal = policy::contract_scan_heal_guard();
     gc_drain_active_budgeted_cycle();
     GC_TRIGGER_BUMPED.with(|c| c.set(false));

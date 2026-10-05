@@ -82,6 +82,7 @@ pub extern "C" fn js_inline_arena_slow_alloc(
         {
             let arena = &mut *arena_ptr;
             let current = arena.current;
+            arena.note_allocation(offset.saturating_sub(arena.blocks[current].offset), false);
             super::alloc_sample::note_inline_sync(arena.blocks[current].offset, offset);
             arena.blocks[current].offset = offset;
         }
@@ -115,6 +116,10 @@ pub fn sync_inline_arena_state() {
             ARENA.with(|a| {
                 let arena = &mut *(*a).get();
                 let current = arena.current;
+                arena.note_allocation(
+                    state.offset.saturating_sub(arena.blocks[current].offset),
+                    false,
+                );
                 super::alloc_sample::note_inline_sync(arena.blocks[current].offset, state.offset);
                 arena.blocks[current].offset = state.offset;
             });
@@ -139,6 +144,10 @@ pub fn arena_start_fresh_general_block() {
             let arena = &mut *(*a).get();
             if !inline.data.is_null() {
                 let current = arena.current;
+                arena.note_allocation(
+                    inline.offset.saturating_sub(arena.blocks[current].offset),
+                    false,
+                );
                 super::alloc_sample::note_inline_sync(arena.blocks[current].offset, inline.offset);
                 arena.blocks[current].offset = inline.offset;
             }

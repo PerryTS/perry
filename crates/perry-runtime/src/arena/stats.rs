@@ -276,3 +276,21 @@ pub fn pointer_in_old_gen(addr: usize) -> bool {
 pub(crate) fn arena_free_list_bytes() -> usize {
     arena_free_bytes()
 }
+
+/// Cumulative successful arena bytes, including synchronized generated bumps
+/// and reused holes. Collector bytes are included here and removed by the pacer.
+pub(crate) fn allocation_totals() -> (usize, usize) {
+    let mut bytes = 0usize;
+    let mut large = 0usize;
+    let mut add = |arena: &UnsafeCell<Arena>| unsafe {
+        let arena = &*arena.get();
+        bytes = bytes.saturating_add(arena.allocated_bytes);
+        large = large.saturating_add(arena.large_allocated_bytes);
+    };
+    ARENA.with(&mut add);
+    OLD_ARENA.with(&mut add);
+    LONGLIVED_ARENA.with(&mut add);
+    SURVIVOR_ARENA_0.with(&mut add);
+    SURVIVOR_ARENA_1.with(&mut add);
+    (bytes, large)
+}

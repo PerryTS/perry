@@ -28,6 +28,7 @@ pub fn arena_alloc(size: usize, align: usize) -> *mut u8 {
             let offset = (*inline_ptr).offset;
             let arena = &mut *arena_ptr;
             let current = arena.current;
+            arena.note_allocation(offset.saturating_sub(arena.blocks[current].offset), false);
             super::alloc_sample::note_inline_sync(arena.blocks[current].offset, offset);
             arena.blocks[current].offset = offset;
         }
@@ -125,6 +126,7 @@ fn arena_alloc_no_collect(size: usize, align: usize) -> *mut u8 {
             let offset = (*inline_ptr).offset;
             let arena = &mut *arena_ptr;
             let current = arena.current;
+            arena.note_allocation(offset.saturating_sub(arena.blocks[current].offset), false);
             super::alloc_sample::note_inline_sync(arena.blocks[current].offset, offset);
             arena.blocks[current].offset = offset;
         }
@@ -238,6 +240,7 @@ pub fn arena_alloc_gc_old(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     // capacity only ever grows. Exact fit keeps `GcHeader::size` equal to
     // what per-object promotion accounting records for this allocation.
     if let Some(user_ptr) = crate::gc::old_free_take_exact(total, None) {
+        OLD_ARENA.with(|a| unsafe { (&mut *a.get()).note_allocation(total, total >= 16 * 1024) });
         let raw = (user_ptr - GC_HEADER_SIZE) as *mut u8;
         unsafe {
             let header = raw as *mut GcHeader;
@@ -311,6 +314,7 @@ pub(crate) fn arena_alloc_gc_old_excluding_pages(
     // #7437: same hole reuse as `arena_alloc_gc_old`, but never into a page
     // this defrag pass is evacuating.
     if let Some(user_ptr) = crate::gc::old_free_take_exact(total, Some(excluded_pages)) {
+        OLD_ARENA.with(|a| unsafe { (&mut *a.get()).note_allocation(total, total >= 16 * 1024) });
         let raw = (user_ptr - GC_HEADER_SIZE) as *mut u8;
         unsafe {
             let header = raw as *mut GcHeader;
@@ -482,6 +486,7 @@ pub fn arena_alloc_gc(size: usize, align: usize, obj_type: u8) -> *mut u8 {
     };
 
     if let Some(user_ptr) = reused {
+        ARENA.with(|a| unsafe { (&mut *a.get()).note_allocation(total, total >= 16 * 1024) });
         // Reusing a free-list slot: the GcHeader is already in place (before user_ptr)
         // Just update it
         unsafe {

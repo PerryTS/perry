@@ -603,6 +603,7 @@ pub(super) struct GcCycleState {
 
 impl GcCycleState {
     pub(super) fn new_full(trigger: GcTriggerSnapshot) -> Self {
+        super::allocation_pacing::begin_full();
         // Build the lazy stack-map index HERE, not only at the entry points.
         //
         // #9191 made the index lazy and wired the four collection entries by
@@ -759,6 +760,7 @@ impl GcCycleState {
     }
 
     pub(super) fn step(&mut self, budget: GcWorkBudget) -> GcCycleStepResult {
+        let _allocation_guard = super::allocation_pacing::CollectorStepGuard::enter();
         let phase_before = self.phase;
         if self.phase == GcCyclePhase::Complete {
             return GcCycleStepResult {
@@ -1830,6 +1832,10 @@ impl GcCycleState {
         super::policy::note_collection_finished_arena_occupancy(self.minor.is_none());
         if self.minor.is_none() {
             finish_full_old_reclaim_baseline();
+            super::allocation_pacing::finish_full(
+                arena_live_bytes.saturating_add(super::policy::external_side_live_bytes()),
+                self.freed_bytes as usize,
+            );
         }
 
         let malloc_swept = self

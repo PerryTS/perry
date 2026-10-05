@@ -390,6 +390,14 @@ pub(crate) fn empty_checkpoint_eligible_for_test() -> bool {
 }
 
 fn finish_gc_boundary() {
+    let outermost = MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1;
+    let _burst_boundary = outermost.then(crate::gc::allocation_pacing::BurstBoundaryGuard::enter);
+    let precise_boundary = crate::gc::gc_moving_safepoint_enabled() && outermost;
+    // Give an owed full the precise path before the ordinary poll can start
+    // a nursery-only budgeted cycle that we would immediately have to drain.
+    if precise_boundary && crate::gc::allocation_pacing::burst_boundary() {
+        crate::gc::gc_safepoint_moving_minor();
+    }
     crate::gc::gc_runtime_safepoint_poll();
 
     // Phase 1 of the moving-GC project (see project_gc_one_great_moving_gc): at
@@ -399,9 +407,8 @@ fn finish_gc_boundary() {
     // nursery pressure is due so programs that yield to the event loop get
     // compacting, O(survivors) young collection instead of the non-moving
     // alloc-point fallback. Gated (default off); additive.
-    if crate::gc::gc_moving_safepoint_enabled()
-        && MICROTASK_RUN_DEPTH.with(|depth| depth.get().pump) == 1
-    {
+    if precise_boundary {
+        crate::gc::allocation_pacing::burst_boundary();
         crate::gc::gc_safepoint_moving_minor();
     }
 }
