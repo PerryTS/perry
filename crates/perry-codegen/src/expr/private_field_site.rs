@@ -218,8 +218,7 @@ fn lower_brand_owner(
     if site.receiver_is_brand_owner {
         Ok(obj.to_string())
     } else {
-        // Lowering `this` only reads the current binding and cannot GC.
-        lower_expr(ctx, &Expr::This)
+        Ok(super::this_super_call::load_private_brand_owner(ctx))
     }
 }
 
