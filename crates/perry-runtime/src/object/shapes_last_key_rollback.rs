@@ -7,6 +7,8 @@ use super::*;
 
 /// Learn the reverse of an admitted canonical key-add edge. Prefix equality
 /// is checked once at the write; all uses still validate the live records.
+#[cold]
+#[inline(never)]
 pub(crate) fn note_last_key_parent(from: u32, parent: u32) {
     unsafe {
         let (Some(from_record), Some(parent_record)) = (
