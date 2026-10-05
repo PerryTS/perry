@@ -276,16 +276,17 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         crate::gc::GC_TYPE_CLOSURE,
     ) as *mut ClosureHeader;
     unsafe {
-        // GC_STORE_AUDIT(INIT): fresh class function object; captures 0 and 1
-        // are INT32s (class id, evaluation state), capture 2 (the prototype
-        // link) starts `undefined` and the props edge is null. The arena birth
-        // leaves the layout UNKNOWN (never marked pointer-free) so the tracer reads capture 2 once it holds a pointer; that
-        // store goes through the slot barrier.
         (*ptr).capture_count = CLASS_VALUE_CAPTURES as u32;
         (*ptr).shape_id = crate::closure::shape::function_class_shape();
         (*ptr).info = &CLASS_CONSTRUCTOR_INFO;
         (*ptr).props = std::ptr::null_mut();
         let captures = crate::closure::closure_capture_slots_mut(ptr);
+        // Captures 0 and 1 are INT32s (class id, evaluation state) and capture
+        // 2, the prototype link, starts `undefined`. The arena birth leaves
+        // the layout UNKNOWN, not pointer-free, so the tracer reads capture 2
+        // once `class_decl_prototype_link_store` installs a pointer there
+        // through the slot barrier.
+        // GC_STORE_AUDIT(INIT): fresh class function object; no pointer yet.
         std::ptr::write(captures, crate::value::INT32_TAG | class_id as u64);
         std::ptr::write(
             captures.add(CLASS_PROTOTYPE_LINK_CAPTURE),
@@ -874,7 +875,7 @@ pub(crate) fn class_decl_prototype_link_store(
     let previous = class_decl_prototype_link(class_id);
     let closure = class_value_ptr(class_id);
     let bits = crate::value::POINTER_TAG | (proto as u64 & crate::value::POINTER_MASK);
-    // GC_STORE_AUDIT(SLOT): the class function object is pinned and old; its
+    // GC_STORE_AUDIT(BARRIERED): the class function object is pinned and old; its
     // link slot is a traced capture slot, so the slot barrier remembers a
     // young `proto` for the next minor and shades it for an incremental mark.
     unsafe {
