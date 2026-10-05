@@ -12,102 +12,85 @@ use super::super::LoweringContext;
 
 pub(super) fn try_module_class_static(
     ctx: &mut LoweringContext,
-    // #854: kept for the uniform `try_*` dispatch-helper signature; this arm
-    // works off `expr`, not the raw `CallExpr`.
-    _call: &ast::CallExpr,
+    call: &ast::CallExpr,
     expr: &ast::Expr,
     args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
-    // Check for module.Class.staticMethod() pattern (e.g.,
-    // ethers.Wallet.createRandom()). Modelled after the
-    // process.hrtime.bigint() handler above.
-    //
-    // Some "module.foo.method()" shapes are NOT class statics —
-    // they're sub-namespaces with dedicated codegen arms in
-    // `crates/perry-codegen/src/expr.rs` (e.g. fs.promises.X
-    // routes to the sync counterpart + js_promise_resolved).
-    // Skip them here so the existing codegen path keeps working.
-    // v0.5.385 (#299) introduced this arm; v0.5.386 (this fix)
-    // adds the exclusion list after fs.promises.readFile silently
-    // started returning `undefined` because the new HIR shape
-    // bypassed the old codegen arm and fell into the
-    // "unhandled fs.<method>()" warn-and-undef path.
+    // A native class call is valid only when the dispatcher has a matching
+    // static entry. Otherwise ns.Class.method must read the actual exported
+    // value, just like a user-module class or a method read used as a value.
+    // Do not invent a receiver-less NativeMethodCall from syntax alone
+    // (#11896): it bypasses the object's statics and returns undefined.
     if let ast::Expr::Member(outer_member) = expr {
         if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
             if let ast::Expr::Ident(mod_ident) = inner_member.obj.as_ref() {
-                let mod_name = mod_ident.sym.to_string();
-                if let Some((module_name, _)) = ctx.lookup_native_module(&mod_name) {
-                    if let ast::MemberProp::Ident(class_ident) = &inner_member.prop {
-                        let class_name = class_ident.sym.to_string();
+                if let Some((module_name, None)) = ctx.lookup_native_module(mod_ident.sym.as_ref())
+                {
+                    if let (
+                        ast::MemberProp::Ident(class_ident),
+                        ast::MemberProp::Ident(method_ident),
+                    ) = (&inner_member.prop, &outer_member.prop)
+                    {
+                        let class_name = class_ident.sym.as_ref();
+                        let method_name = method_ident.sym.as_ref();
+                        let normalized = module_name.strip_prefix("node:").unwrap_or(module_name);
                         // `Buffer.prototype.m(...)` calls a method of the
                         // prototype OBJECT; `prototype` is never a module
                         // class, so this is an ordinary method call.
                         if class_name == "prototype" {
                             return Ok(Err(args));
                         }
-                        // The `node:process` namespace exposes stream VALUES,
-                        // not classes. Let the stream-call arm below handle
-                        // them, including a namespace import named `process`.
-                        let process_stream =
-                            matches!(
-                                module_name.strip_prefix("node:").unwrap_or(module_name),
-                                "process" | "process.namespace" | "process.default"
-                            ) && matches!(class_name.as_str(), "stdin" | "stdout" | "stderr");
-                        let is_sub_namespace = matches!(
-                            (module_name, class_name.as_str()),
-                            ("fs", "promises")
-                                | ("fs", "constants")
-                                | ("path", "posix")
-                                | ("path", "win32")
-                                // #1320: `PerformanceObserver.supportedEntryTypes`
-                                // is a static *array value*, not a class — so
-                                // `…supportedEntryTypes.includes(x)` is a value
-                                // method, not a class static. Fall through to
-                                // value-method dispatch instead of building a
-                                // bogus NativeMethodCall(class="supportedEntryTypes").
+                        // Preserve the value/subnamespace routes already used on main,
+                        // including Buffer's dedicated lowering (#11941). Manifest
+                        // rows for these values need not be class-call table entries.
+                        if matches!(
+                            (normalized, class_name),
+                            ("fs", "promises" | "constants")
+                                | ("path", "posix" | "win32")
                                 | ("perf_hooks", "supportedEntryTypes")
-                                // `module.builtinModules` is an Array value,
-                                // so `module.builtinModules.slice()` must
-                                // dispatch as an array method, not a
-                                // `module.builtinModules.slice` class static.
-                                | ("module", "builtinModules")
-                                | ("node:module", "builtinModules")
-                                | ("repl", "builtinModules")
-                                | ("node:repl", "builtinModules")
-                                // `process.version` is a string value. Let
-                                // String.prototype methods dispatch through
-                                // the normal value-method path instead of
-                                // building NativeMethodCall(class="version").
-                                | ("process", "version")
-                                | ("process.namespace", "version")
-                                | ("process.default", "version")
-                                | ("node:process", "version")
-                                | ("node:process.namespace", "version")
-                                | ("node:process.default", "version")
-                                // `os.EOL` / `os.devNull` are string-valued
-                                // module properties, so `os.devNull.includes(x)`
-                                // is a String method on the property value.
-                                | ("os", "EOL")
-                                | ("os", "devNull")
-                                // Bun's utility namespaces are object-valued
-                                // exports. Their methods are native closures,
-                                // not class statics on the `bun` dispatcher.
-                                | ("bun", "YAML")
-                                | ("bun", "TOML")
-                                | ("bun", "semver")
-                                | ("bun", "JSONL")
-                                | ("bun", "hash")
-                                | ("bun", "plugin")
-                                // `ns.Buffer.compare(a, b)` through a namespace
-                                // import: `Buffer` is the module's class VALUE and
-                                // its statics are dispatched by the Buffer lowering
-                                // (`Buffer.from` / `alloc` / ...) or by the runtime
-                                // static on the value. A NativeMethodCall with class
-                                // `Buffer` has no codegen entry, so every such call
-                                // evaluated to `undefined`.
+                                | ("module" | "repl", "builtinModules")
+                                | (
+                                    "process" | "process.namespace" | "process.default",
+                                    "stdin" | "stdout" | "stderr" | "version"
+                                )
+                                | ("os", "EOL" | "devNull")
+                                | (
+                                    "bun",
+                                    "YAML" | "TOML" | "semver" | "JSONL" | "hash" | "plugin"
+                                )
                                 | ("buffer", "Buffer")
-                                | ("node:buffer", "Buffer")
-                        ) || process_stream;
+                        ) {
+                            return Ok(Err(args));
+                        }
+                        // util.inherits-era Server.call initializes and aliases
+                        // the supplied instance to the native server (#4973).
+                        if matches!(normalized, "http" | "https")
+                            && class_name == "Server"
+                            && method_name == "call"
+                            && !args.is_empty()
+                        {
+                            let mut it = args.into_iter();
+                            let this_arg = it.next().unwrap();
+                            let mut rest: Vec<Expr> = it.collect();
+                            rest.resize(2, Expr::Undefined);
+                            let mut call_args = vec![this_arg];
+                            call_args.extend(rest);
+                            let extern_name = if normalized == "https" {
+                                "js_https_server_construct_with_this"
+                            } else {
+                                "js_http_server_construct_with_this"
+                            };
+                            return Ok(Ok(Expr::Call {
+                                callee: Box::new(Expr::ExternFuncRef {
+                                    name: extern_name.to_string(),
+                                    param_types: Vec::new(),
+                                    return_type: Type::Any,
+                                }),
+                                args: call_args,
+                                type_args: Vec::new(),
+                                byte_offset: 0,
+                            }));
+                        }
                         // Unimplemented-API gate (#463) for the chained
                         // `mod.X.Y()` case. The lower_member gate fires
                         // for `mod.X` standalone but not when this arm
@@ -115,16 +98,15 @@ pub(super) fn try_module_class_static(
                         // `NativeMethodCall` without recursing through
                         // lower_member. Without this, `crypto.subtle.encrypt(...)`
                         // built cleanly and silently returned undefined.
-                        if !is_sub_namespace
-                            && perry_api_manifest::module_has_any_entries(module_name)
-                            && perry_api_manifest::module_has_symbol(module_name, &class_name)
+                        if perry_api_manifest::module_has_any_entries(module_name)
+                            && perry_api_manifest::module_has_symbol(module_name, class_name)
                                 .is_none()
                         {
                             // #925: append a replacement hint if
                             // we have one for this exact shape.
                             let hint = super::super::unimpl_hints::module_member_hint(
                                 module_name,
-                                &class_name,
+                                class_name,
                             )
                             .map(|h| format!(" {h}"))
                             .unwrap_or_default();
@@ -160,74 +142,31 @@ pub(super) fn try_module_class_static(
                                 }
                             }
                         }
-                        if !is_sub_namespace {
-                            if let ast::MemberProp::Ident(method_ident) = &outer_member.prop {
-                                let method_name = method_ident.sym.to_string();
-                                // #4973: util.inherits-era subclassing —
-                                // `http.Server.call(this, handler)` inside a
-                                // function constructor. The generic
-                                // NativeMethodCall arm below loses `this`
-                                // (the dispatcher just constructs a server
-                                // from the args), so the instance never
-                                // becomes server-backed. Route to a dedicated
-                                // runtime extern that constructs the server
-                                // AND aliases `this` to the handle.
-                                let normalized =
-                                    module_name.strip_prefix("node:").unwrap_or(module_name);
-                                if matches!(normalized, "http" | "https")
-                                    && class_name == "Server"
-                                    && method_name == "call"
-                                    && !args.is_empty()
-                                {
-                                    let mut it = args.into_iter();
-                                    let this_arg = it.next().unwrap();
-                                    let mut rest: Vec<Expr> = it.collect();
-                                    rest.resize(2, Expr::Undefined);
-                                    let mut call_args = vec![this_arg];
-                                    call_args.extend(rest);
-                                    let extern_name = if normalized == "https" {
-                                        "js_https_server_construct_with_this"
-                                    } else {
-                                        "js_http_server_construct_with_this"
-                                    };
-                                    return Ok(Ok(Expr::Call {
-                                        callee: Box::new(Expr::ExternFuncRef {
-                                            name: extern_name.to_string(),
-                                            param_types: Vec::new(),
-                                            return_type: Type::Any,
-                                        }),
-                                        args: call_args,
-                                        type_args: Vec::new(),
-                                        byte_offset: 0,
-                                    }));
-                                }
-                                // #11268: `zlib.inflate.bind(zlib)`, `path.join.call(path, …)`,
-                                // `util.format.apply(null, […])` read an inherited
-                                // `Function.prototype` method off a module-export
-                                // function VALUE. They are not `inflate`-class
-                                // statics: the NativeMethodCall below has no table
-                                // entry for them, so it evaluated to `undefined`.
-                                // Fall through to the generic call path, which reads
-                                // `zlib.inflate` as a real function value and
-                                // dispatches `.bind/.call/.apply` on it. Genuine
-                                // native statics of those names
-                                // (`AsyncLocalStorage.bind`, `AsyncResource.bind`)
-                                // are registered in the manifest and keep routing here.
-                                if is_inherited_function_method_on_module_export(
-                                    module_name,
-                                    &class_name,
-                                    &method_name,
-                                ) {
-                                    return Ok(Err(args));
-                                }
-                                return Ok(Ok(Expr::NativeMethodCall {
-                                    module: module_name.to_string(),
-                                    class_name: Some(class_name),
-                                    object: None,
-                                    method: method_name,
-                                    args,
-                                }));
-                            }
+                        // Preserve genuine native fast paths, including module-wide
+                        // entries: codegen accepts class_filter: None for any class.
+                        // This keeps inherited events/cluster statics working.
+                        // Everything else falls through to the same property
+                        // read as ns.Class.method used as a value. lower_member
+                        // also retains the unimplemented-export gate.
+                        if !super::call_has_spread_arg(call)
+                            && perry_api_manifest::entries_for_module(module_name).any(|entry| {
+                                entry.name == method_name
+                                    && matches!(
+                                        entry.kind,
+                                        perry_api_manifest::ApiKind::Method {
+                                            has_receiver: false,
+                                            class_filter,
+                                        } if class_filter.is_none_or(|class| class == class_name)
+                                    )
+                            })
+                        {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: module_name.to_string(),
+                                class_name: Some(class_name.to_string()),
+                                object: None,
+                                method: method_name.to_string(),
+                                args,
+                            }));
                         }
                     }
                 }
@@ -237,9 +176,7 @@ pub(super) fn try_module_class_static(
 
     // process.stdin.setRawMode/.on and lifecycle methods, plus process.stdout.on — methods
     // we recognize on the stdin/stdout stream objects. (#347
-    // Phases 2 & 3.) Recognized BEFORE the generic
-    // module.Class.staticMethod() arm because process.std{in,out}
-    // are not classes. Falls through to the generic dispatch
+    // Phases 2 & 3.) These are stream values rather than class statics. Falls through to the generic dispatch
     // (which lowers it as a closure call on the stub object) for
     // any other method name — `process.stdout.write` keeps
     // working through that path.
@@ -351,27 +288,4 @@ pub(super) fn try_module_class_static(
     }
 
     Ok(Err(args))
-}
-
-/// True when `<module>.<export>.<method>(…)` is an inherited
-/// `Function.prototype.{bind,call,apply}` call on a module-export value rather
-/// than a native class static registered under that name (#11268).
-fn is_inherited_function_method_on_module_export(
-    module_name: &str,
-    export_name: &str,
-    method_name: &str,
-) -> bool {
-    if !matches!(method_name, "bind" | "call" | "apply") {
-        return false;
-    }
-    !perry_api_manifest::entries_for_module(module_name).any(|e| {
-        e.name == method_name
-            && matches!(
-                e.kind,
-                perry_api_manifest::ApiKind::Method {
-                    has_receiver: false,
-                    class_filter: Some(c),
-                } if c == export_name
-            )
-    })
 }
