@@ -145,8 +145,9 @@ fn an_array_buffer_and_data_view_keep_the_object_tag() {
     let ab = buffer(&[104, 105]) as usize;
     crate::buffer::mark_as_array_buffer(ab);
     assert_ne!(locale_string(boxed(ab)), "hi");
-    let dv = buffer(&[104, 105]) as usize;
-    crate::buffer::mark_as_data_view(dv);
+    let dv = (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[104, 105])
+        .to_bits()
+        & crate::value::POINTER_MASK) as usize;
     assert_ne!(locale_string(boxed(dv)), "hi");
 }
 

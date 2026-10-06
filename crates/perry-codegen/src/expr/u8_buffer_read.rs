@@ -32,6 +32,21 @@ pub(crate) fn u8_buffer_receiver_eligible(ctx: &FnCtx<'_>, object: &Expr) -> boo
     if ctx.receiver_descriptors.contains_buffer_view(id) {
         return false;
     }
+    if ctx
+        .receiver_descriptors
+        .byte_view_param(*id)
+        .is_some_and(|access| {
+            access.brands.iter().all(|brand| {
+                matches!(
+                    *brand,
+                    crate::runtime_abi::GC_TYPE_BUFFER
+                        | crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY
+                )
+            })
+        })
+    {
+        return true;
+    }
     let class = crate::type_analysis::receiver_class_name(ctx, object)
         .or_else(|| {
             if ctx.reassigned_locals.contains(id) {
@@ -157,7 +172,7 @@ fn lower_u8_buffer_checked_load(
         blk.cond_br(&in_bounds, &load_label, &oob_label);
     }
 
-    // ---- load: inline byte at `header + 8 + idx`, widened to f64 ----
+    // ---- load: resolved owner data plus index, widened to f64 ----
     ctx.current_block = load_idx;
     let (load_val, load_end) = {
         let blk = ctx.block();
@@ -222,14 +237,10 @@ fn lower_u8_buffer_checked_load(
 // #10515: the same admission cache, for the i32-ABI reads and for WRITES.
 //
 // The cache contract (`perry-runtime/src/buffer/header.rs`) is that an entry
-// names a live registered byte view — `Uint8Array` or `Buffer` — that OWNS its
-// bytes inline at `+8` (no foreign span, not a registered view). A write to
-// such a buffer is exactly `js_buffer_set`'s store: views over it resolve
-// their bytes through this backing rather than holding a copy (see
-// `buffer/view.rs`), so there is nothing to propagate. Every guard miss —
-// a foreign span, an out-of-range index, a non-pointer, an unadmitted buffer —
-// takes the runtime accessor. JS-value reads also try the cell-local view
-// pointer on an owning-cache miss; writes retain their runtime fallback.
+// admits a Buffer/Uint8Array owner or fixed view through its common header.
+// Views resolve the current owner state and byteOffset; no propagation or
+// address cache is needed. Unsupported owner states, property bags and
+// invalid receivers take the runtime accessor.
 // ---------------------------------------------------------------------------
 
 /// Pointer tag + full-address admission hit for `obj_box`. Returns
@@ -286,6 +297,7 @@ fn emit_u8_byte_ptr(ctx: &mut FnCtx<'_>, raw: &str, idx_i32: &str) -> String {
 /// `js_buffer_get`, which answer the `0` byte sentinel out of range).
 pub(crate) fn emit_u8_cached_get_i32(
     ctx: &mut FnCtx<'_>,
+    object: &Expr,
     obj_box: &str,
     idx_i32: &str,
     slow_fn: &str,
@@ -298,8 +310,17 @@ pub(crate) fn emit_u8_cached_get_i32(
     let load_label = ctx.block_label(load_idx);
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
-    let access = emit_u8_header_admission(ctx, obj_box, &slow_label);
-    let raw = &access.raw;
+    let raw = super::unbox_to_i64(ctx.block(), obj_box);
+    let access = super::byte_cell::resolve_read(
+        ctx,
+        object,
+        obj_box,
+        &[
+            crate::runtime_abi::GC_TYPE_BUFFER,
+            crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY,
+        ],
+        &slow_label,
+    );
     let hit = "true";
     ctx.block().cond_br(&hit, &chk_label, &slow_label);
 
@@ -322,8 +343,9 @@ pub(crate) fn emit_u8_cached_get_i32(
     let (slow_val, slow_end) = {
         let blk = ctx.block();
         let val = blk.call(I32, slow_fn, &[(I64, &raw), (I32, idx_i32)]);
-        let end = blk.label.clone();
-        blk.br(&merge_label);
+        super::byte_cell::refresh_hoisted_byte_accesses(ctx);
+        let end = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
         (val, end)
     };
 
@@ -488,6 +510,7 @@ pub(crate) fn emit_u8_cached_dyn_set(
 /// `slow_fn(handle, idx, value)` (`js_uint8array_set` / `js_buffer_set`).
 pub(crate) fn emit_u8_cached_set_i32(
     ctx: &mut FnCtx<'_>,
+    object: &Expr,
     obj_box: &str,
     idx_i32: &str,
     val_i32: &str,
@@ -501,8 +524,10 @@ pub(crate) fn emit_u8_cached_set_i32(
     let store_label = ctx.block_label(store_idx);
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
-    let access = super::byte_cell::resolve_write(
+    let raw = super::unbox_to_i64(ctx.block(), obj_box);
+    let access = super::byte_cell::resolve_indexed_write(
         ctx,
+        object,
         obj_box,
         &[
             crate::runtime_abi::GC_TYPE_BUFFER,
@@ -510,7 +535,6 @@ pub(crate) fn emit_u8_cached_set_i32(
         ],
         &slow_label,
     );
-    let raw = &access.raw;
     let hit = "true";
     ctx.block().cond_br(&hit, &chk_label, &slow_label);
 
@@ -531,7 +555,8 @@ pub(crate) fn emit_u8_cached_set_i32(
     {
         let blk = ctx.block();
         blk.call_void(slow_fn, &[(I64, &raw), (I32, idx_i32), (I32, val_i32)]);
-        blk.br(&merge_label);
+        super::byte_cell::refresh_hoisted_byte_accesses(ctx);
+        ctx.block().br(&merge_label);
     }
     ctx.current_block = merge_idx;
 }

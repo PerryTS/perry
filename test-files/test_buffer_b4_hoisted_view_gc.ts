@@ -25,3 +25,21 @@ function scanLocal(): number {
   return sum;
 }
 console.log(scanLocal());
+function scanBuffer(view: Buffer): number {
+  let sum = 0;
+  for (let i = 0; i < 16; i++) {
+    if ((i & 3) === 0) gc();
+    sum += view.readInt32BE(i * 4);
+  }
+  return sum;
+}
+function makeBufferView(): Buffer {
+  const owner = Buffer.alloc(80);
+  const view = owner.subarray(16);
+  for (let i = 0; i < 16; i++) view.writeInt32BE(i + 1, i * 4);
+  return view;
+}
+console.log(scanBuffer(makeBufferView()));
+const bagged = makeBufferView();
+(bagged as any).label = 'keeps owner';
+console.log(scanBuffer(bagged));

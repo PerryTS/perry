@@ -132,8 +132,9 @@ fn received_native_brands() {
         ) as i64),
         "Int16Array",
     );
-    let view = crate::buffer::buffer_alloc(1);
-    crate::buffer::mark_as_data_view(view as usize);
+    let view = (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 1])
+        .to_bits()
+        & crate::value::POINTER_MASK) as usize;
     add(crate::value::js_nanbox_pointer(view as i64), "DataView");
     let backing = crate::buffer::buffer_alloc(1);
     crate::buffer::mark_as_array_buffer(backing as usize);
@@ -386,8 +387,10 @@ fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) 
         }
         "Uint8Array" => crate::buffer::js_uint8array_alloc(1) as i64,
         "DataView" => {
-            let view = crate::buffer::buffer_alloc(1);
-            crate::buffer::mark_as_data_view(view as usize);
+            let view =
+                (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 1])
+                    .to_bits()
+                    & crate::value::POINTER_MASK) as usize;
             view as i64
         }
         "Buffer" => crate::buffer::buffer_alloc(1) as i64,

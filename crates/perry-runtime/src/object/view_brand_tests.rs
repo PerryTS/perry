@@ -114,8 +114,7 @@ fn registry_typed_array_keeps_its_kind() {
 
 #[test]
 fn data_view_is_a_view_but_not_a_typed_array_or_buffer() {
-    let value = boxed(buffer::buffer_alloc(4));
-    buffer::mark_as_data_view(crate::value::addr_class::object_ref_addr(value));
+    let value = crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 4]);
     assert_eq!(view_brand(value), Some(ViewBrand::DataView));
     assert_eq!(
         row(value),
@@ -178,7 +177,13 @@ fn uint8_view_shortcut_agrees_with_the_full_brand() {
         }),
     ];
     for (label, mark) in fixtures {
-        let addr = buffer::buffer_alloc(4) as usize;
+        let addr = if label == "DataView" {
+            (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 4])
+                .to_bits()
+                & crate::value::POINTER_MASK) as usize
+        } else {
+            buffer::buffer_alloc(4) as usize
+        };
         mark(addr);
         assert_eq!(
             buffer::is_uint8_view_buffer(addr),

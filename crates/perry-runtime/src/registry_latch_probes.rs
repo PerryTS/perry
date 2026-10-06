@@ -113,8 +113,9 @@ fn array_buffer_and_data_view_marks_are_found_after_the_idle_fast_path_ran() {
 
     let ab = crate::buffer::buffer_alloc(16) as usize;
     crate::buffer::mark_as_array_buffer(ab);
-    let dv = crate::buffer::buffer_alloc(16) as usize;
-    crate::buffer::mark_as_data_view(dv);
+    let dv = (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 16])
+        .to_bits()
+        & crate::value::POINTER_MASK) as usize;
 
     assert!(crate::buffer::is_array_buffer(ab));
     assert!(crate::buffer::is_any_array_buffer(ab));

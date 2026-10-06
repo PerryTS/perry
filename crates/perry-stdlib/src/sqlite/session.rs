@@ -10,9 +10,7 @@
 
 use super::*;
 use perry_runtime::buffer::bytes::{from_slice, Brand};
-use perry_runtime::buffer::{
-    is_any_array_buffer, is_data_view, is_registered_buffer, BufferHeader,
-};
+use perry_runtime::buffer::{is_any_array_buffer, is_data_view, is_registered_buffer};
 use perry_runtime::closure::{ClosureHeader, JsThis};
 use perry_runtime::gc::RuntimeHandleScope;
 use perry_runtime::native_class_ids::SQLITE_SESSION;
