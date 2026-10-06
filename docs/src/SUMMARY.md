@@ -158,6 +158,7 @@
 - [Node Compatibility Matrix](testing/node-compat-matrix.md)
 - [node:http2 Conformance Fixtures](testing/http2-conformance.md)
 - [CI Tiers (PR gate / sweep / full)](testing/ci-tiers.md)
+- [Perry CLI Performance Reports (tak)](testing/tak-performance.md)
 - [Claude Code Bundle Parity](testing/cc-parity.md)
 - [CI Gate Scheduling](testing/ci-gate-scheduling.md)
 - [Linux Incident Capture](testing/linux-incident-capture.md)
