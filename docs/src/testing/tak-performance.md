@@ -6,7 +6,10 @@ JSON parsing app-pattern kernel, and the compiler's `check` path on a second
 app-pattern kernel. The workloads are declared in [`tak.toml`](../../../tak.toml).
 They read only checked-in sources and do not access the network.
 
-The workflow runs on `ubuntu-latest` with Valgrind. It attaches the measurement
+The workflow runs on Ubuntu 24.04 with tak 0.0.14 and the pinned Valgrind
+package from `external-tools.json`. Cargo sources, Perry build outputs, and the
+pinned tak binary are cached in CI. The full measurement-series class, including
+these tool versions and the Rust toolchain, is recorded in `tak.toml`. It attaches the measurement
 summary to the Actions run and uploads JSON plus text output as an artifact. A
 separate trusted job publishes the exact-SHA measurement into Git notes under
 `refs/notes/tak`; the build and measurement job itself has no write permission.
@@ -22,7 +25,7 @@ reviewing a stable history on the same runner class. The class is pinned in
 To inspect the configured workloads locally, install tak and run:
 
 ```sh
-cargo install tak-cli --locked
+cargo install tak-cli@0.0.14 --locked
 tak run --dry-run
 ```
 
