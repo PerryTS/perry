@@ -1663,7 +1663,7 @@ jobs:
   # so one failed, timed-out, or cancelled shard blocks a release.
   # ---------------------------------------------------------------------------
   cargo-test-perry:
-    name: cargo-test-perry (${{ matrix.shard }}/${{ fromJSON(needs.plan.outputs.plan).cargo_test_perry.total }})
+    name: cargo-test-perry (shard ${{ matrix.shard }})
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.cargo_test_perry
     runs-on: ubuntu-latest
