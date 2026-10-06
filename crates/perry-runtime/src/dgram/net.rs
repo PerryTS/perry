@@ -183,19 +183,15 @@ fn message_bytes_inner(value: f64, allow_list: bool) -> Option<Vec<u8>> {
         return Some(text.into_bytes());
     }
     let raw = raw_ptr_from_value(value);
-    if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
-        let buf = raw as *const crate::buffer::BufferHeader;
-        unsafe {
-            let len = (*buf).length as usize;
-            let data = crate::buffer::buffer_data(raw as *const crate::buffer::BufferHeader);
-            return Some(std::slice::from_raw_parts(data, len).to_vec());
-        }
-    }
-    if raw >= 0x10000 && crate::typedarray::lookup_typed_array_kind(raw).is_some() {
-        return unsafe {
-            crate::typedarray::typed_array_bytes(raw as *const crate::typedarray::TypedArrayHeader)
+    if raw >= 0x10000
+        && (crate::buffer::is_registered_buffer(raw)
+            || crate::typedarray::lookup_typed_array_kind(raw).is_some())
+    {
+        return crate::buffer::bytes::no_gc(|scope| {
+            crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(raw as i64), scope)
+                .ok()
                 .map(<[u8]>::to_vec)
-        };
+        });
     }
     if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
         // Node accepts one top-level buffer list, but each list element must

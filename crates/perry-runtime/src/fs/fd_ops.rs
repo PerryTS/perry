@@ -267,34 +267,42 @@ pub(crate) fn read_sync_result(
     if buf.is_null() {
         return Ok(0.0);
     }
-    FD_REGISTRY.with(|r| {
-        let mut reg = r.borrow_mut();
-        let Some(file) = reg.get_mut(&fd) else {
-            return Ok(0.0);
-        };
-        let restore_pos = position.and_then(|_| file.stream_position().ok());
-        if let Some(pos) = position {
-            let _ = file.seek(SeekFrom::Start(pos));
-        }
-        unsafe {
-            let cap = (*buf).length as usize;
-            if offset >= cap {
+    crate::buffer::bytes::no_gc(|scope| {
+        FD_REGISTRY.with(|r| {
+            let mut reg = r.borrow_mut();
+            let Some(file) = reg.get_mut(&fd) else {
+                return Ok(0.0);
+            };
+            let restore_pos = position.and_then(|_| file.stream_position().ok());
+            if let Some(pos) = position {
+                let _ = file.seek(SeekFrom::Start(pos));
+            }
+            unsafe {
+                let Ok(bytes) = crate::buffer::bytes::bytes_mut(
+                    crate::value::js_nanbox_pointer(buf as i64),
+                    scope,
+                ) else {
+                    return Ok(0.0);
+                };
+                let cap = bytes.len();
+                if offset >= cap {
+                    if let Some(pos) = restore_pos {
+                        let _ = file.seek(SeekFrom::Start(pos));
+                    }
+                    return Ok(0.0);
+                }
+                let n = length.min(cap - offset);
+                let data = bytes.as_mut_ptr().add(offset);
+                let result = match file.read(std::slice::from_raw_parts_mut(data, n)) {
+                    Ok(read) => Ok(read as f64),
+                    Err(err) => Err(err),
+                };
                 if let Some(pos) = restore_pos {
                     let _ = file.seek(SeekFrom::Start(pos));
                 }
-                return Ok(0.0);
+                result
             }
-            let n = length.min(cap - offset);
-            let data = crate::buffer::buffer_data_mut(buf).add(offset);
-            let result = match file.read(std::slice::from_raw_parts_mut(data, n)) {
-                Ok(read) => Ok(read as f64),
-                Err(err) => Err(err),
-            };
-            if let Some(pos) = restore_pos {
-                let _ = file.seek(SeekFrom::Start(pos));
-            }
-            result
-        }
+        })
     })
 }
 
@@ -426,33 +434,40 @@ pub(crate) fn write_buffer_sync_result(
     if buf.is_null() {
         return Ok(0.0);
     }
-    FD_REGISTRY.with(|r| {
-        let mut reg = r.borrow_mut();
-        let Some(file) = reg.get_mut(&fd) else {
-            return Ok(0.0);
-        };
-        let restore_pos = position.and_then(|_| file.stream_position().ok());
-        if let Some(pos) = position {
-            let _ = file.seek(SeekFrom::Start(pos));
-        }
-        unsafe {
-            let cap = (*buf).length as usize;
-            if offset >= cap {
+    crate::buffer::bytes::no_gc(|scope| {
+        FD_REGISTRY.with(|r| {
+            let mut reg = r.borrow_mut();
+            let Some(file) = reg.get_mut(&fd) else {
+                return Ok(0.0);
+            };
+            let restore_pos = position.and_then(|_| file.stream_position().ok());
+            if let Some(pos) = position {
+                let _ = file.seek(SeekFrom::Start(pos));
+            }
+            unsafe {
+                let Ok(bytes) =
+                    crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(buf as i64), scope)
+                else {
+                    return Ok(0.0);
+                };
+                let cap = bytes.len();
+                if offset >= cap {
+                    if let Some(pos) = restore_pos {
+                        let _ = file.seek(SeekFrom::Start(pos));
+                    }
+                    return Ok(0.0);
+                }
+                let n = length.min(cap - offset);
+                let data = bytes.as_ptr().add(offset);
+                let result = file
+                    .write(std::slice::from_raw_parts(data, n))
+                    .map(|written| written as f64);
                 if let Some(pos) = restore_pos {
                     let _ = file.seek(SeekFrom::Start(pos));
                 }
-                return Ok(0.0);
+                result
             }
-            let n = length.min(cap - offset);
-            let data = crate::buffer::buffer_data(buf).add(offset);
-            let result = file
-                .write(std::slice::from_raw_parts(data, n))
-                .map(|written| written as f64);
-            if let Some(pos) = restore_pos {
-                let _ = file.seek(SeekFrom::Start(pos));
-            }
-            result
-        }
+        })
     })
 }
 
@@ -564,6 +579,8 @@ pub extern "C" fn js_fs_readv_sync(fd_value: f64, buffers_value: f64, position_v
     if buffers.is_null() {
         return 0.0;
     }
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let buffers = handles.root_raw_const_ptr(buffers);
     FD_REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         let Some(file) = reg.get_mut(&fd) else {
@@ -575,38 +592,47 @@ pub extern "C" fn js_fs_readv_sync(fd_value: f64, buffers_value: f64, position_v
         }
         let mut total = 0usize;
         unsafe {
-            let len = crate::array::js_array_length(buffers);
+            let len = crate::array::js_array_length(buffers.get_raw_const_ptr());
             for i in 0..len {
-                let value = crate::array::js_array_get_f64(buffers, i);
+                let value = crate::array::js_array_get_f64(buffers.get_raw_const_ptr(), i);
                 let buf = buffer_ptr_from_value(value);
                 if buf.is_null() {
                     continue;
                 }
-                let cap = (*buf).length as usize;
-                if cap == 0 {
-                    continue;
-                }
-                let data = crate::buffer::buffer_data_mut(buf);
-                // Node's readv fills each iovec completely (short read only
-                // at EOF). Use `read` in a loop so we don't return partially
-                // filled buffers when the kernel splits the read.
-                let mut filled = 0usize;
-                let mut eof = false;
-                while filled < cap {
-                    let slice = std::slice::from_raw_parts_mut(data.add(filled), cap - filled);
-                    match file.read(slice) {
-                        Ok(0) => {
-                            eof = true;
-                            break;
-                        }
-                        Ok(n) => filled += n,
-                        Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-                        Err(_) => {
-                            eof = true;
-                            break;
+                let (filled, eof) = crate::buffer::bytes::no_gc(|scope| {
+                    let Ok(bytes) = crate::buffer::bytes::bytes_mut(
+                        crate::value::js_nanbox_pointer(buf as i64),
+                        scope,
+                    ) else {
+                        return (0, false);
+                    };
+                    let cap = bytes.len();
+                    if cap == 0 {
+                        return (0, false);
+                    }
+                    let data = bytes.as_mut_ptr();
+                    // Node's readv fills each iovec completely (short read only
+                    // at EOF). Use `read` in a loop so we don't return partially
+                    // filled buffers when the kernel splits the read.
+                    let mut filled = 0usize;
+                    let mut eof = false;
+                    while filled < cap {
+                        let slice = std::slice::from_raw_parts_mut(data.add(filled), cap - filled);
+                        match file.read(slice) {
+                            Ok(0) => {
+                                eof = true;
+                                break;
+                            }
+                            Ok(n) => filled += n,
+                            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                            Err(_) => {
+                                eof = true;
+                                break;
+                            }
                         }
                     }
-                }
+                    (filled, eof)
+                });
                 total += filled;
                 if eof {
                     break;
@@ -649,6 +675,8 @@ pub(crate) fn writev_sync_inner(fd: i32, buffers_value: f64, position_value: f64
     if buffers.is_null() {
         return 0.0;
     }
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let buffers = handles.root_raw_const_ptr(buffers);
     FD_REGISTRY.with(|r| {
         let mut reg = r.borrow_mut();
         let Some(file) = reg.get_mut(&fd) else {
@@ -659,26 +687,24 @@ pub(crate) fn writev_sync_inner(fd: i32, buffers_value: f64, position_value: f64
             let _ = file.seek(SeekFrom::Start(pos));
         }
         let mut total = 0usize;
-        unsafe {
-            let len = crate::array::js_array_length(buffers);
-            for i in 0..len {
-                let value = crate::array::js_array_get_f64(buffers, i);
-                let buf = buffer_ptr_from_value(value);
-                if buf.is_null() {
-                    continue;
-                }
-                let cap = (*buf).length as usize;
-                if cap == 0 {
-                    continue;
-                }
-                let data = crate::buffer::buffer_data(buf);
-                // Node guarantees each iovec is fully written before the
-                // next; use `write_all` semantics to match.
-                let slice = std::slice::from_raw_parts(data, cap);
-                if file.write_all(slice).is_err() {
-                    break;
-                }
-                total += cap;
+        let len = crate::array::js_array_length(buffers.get_raw_const_ptr());
+        for i in 0..len {
+            let value = crate::array::js_array_get_f64(buffers.get_raw_const_ptr(), i);
+            let buf = buffer_ptr_from_value(value);
+            if buf.is_null() {
+                continue;
+            }
+            let result = crate::buffer::bytes::no_gc(|scope| {
+                let Ok(bytes) =
+                    crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(buf as i64), scope)
+                else {
+                    return Ok(0);
+                };
+                file.write_all(bytes).map(|()| bytes.len())
+            });
+            match result {
+                Ok(count) => total += count,
+                Err(_) => break,
             }
         }
         if let Some(pos) = restore_pos {

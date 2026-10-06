@@ -1,10 +1,7 @@
 use super::*;
 use crate::common::{get_handle, register_handle, Handle};
 use perry_runtime::{
-    buffer::{
-        buffer_alloc, buffer_data, buffer_data_mut, is_any_array_buffer, is_data_view,
-        is_registered_buffer, mark_as_uint8array, BufferHeader,
-    },
+    buffer::{is_any_array_buffer, is_data_view, is_registered_buffer, BufferHeader},
     closure::{js_closure_call1, ClosureHeader},
     js_array_alloc, js_array_push, js_object_alloc_with_shape, js_object_set_field,
     js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
@@ -244,19 +241,18 @@ pub unsafe extern "C" fn js_node_sqlite_statement_sync_expanded_sql(
 
 pub(crate) unsafe fn changeset_bytes_from_value(value: f64) -> Vec<u8> {
     let addr = raw_addr_from_value(value);
-    if addr != 0 {
-        if is_registered_buffer(addr) && !is_any_array_buffer(addr) && !is_data_view(addr) {
-            let buf = addr as *const BufferHeader;
-            let bytes = std::slice::from_raw_parts(buffer_data(buf), (*buf).length as usize);
-            return bytes.to_vec();
-        }
-        if perry_runtime::typedarray::lookup_typed_array_kind(addr)
-            == Some(perry_runtime::typedarray::KIND_UINT8)
-        {
-            let ptr = addr as *const perry_runtime::typedarray::TypedArrayHeader;
-            if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(ptr) {
-                return bytes.to_vec();
-            }
+    if addr != 0
+        && ((is_registered_buffer(addr) && !is_any_array_buffer(addr) && !is_data_view(addr))
+            || perry_runtime::typedarray::lookup_typed_array_kind(addr)
+                == Some(perry_runtime::typedarray::KIND_UINT8))
+    {
+        if let Some(bytes) = perry_runtime::buffer::bytes::no_gc(|scope| {
+            let value = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+            perry_runtime::buffer::bytes::bytes(value, scope)
+                .ok()
+                .map(<[u8]>::to_vec)
+        }) {
+            return bytes;
         }
     }
     throw_type("The \"changeset\" argument must be a Uint8Array.");
@@ -311,12 +307,20 @@ pub(crate) unsafe fn sqlite_session_blob(
     }
 
     let len = len.max(0) as usize;
-    let buffer = buffer_alloc(len as u32);
-    (*buffer).length = len as u32;
-    mark_as_uint8array(buffer as usize);
-    if len > 0 && !data.is_null() {
-        std::ptr::copy_nonoverlapping(data as *const u8, buffer_data_mut(buffer), len);
-    }
+    let input = if len > 0 && !data.is_null() {
+        std::slice::from_raw_parts(data as *const u8, len)
+    } else {
+        &[]
+    };
+    let buffer = JSValue::from_bits(
+        perry_runtime::buffer::bytes::from_slice(
+            perry_runtime::buffer::bytes::Brand::Uint8Array,
+            input,
+        )
+        .to_bits(),
+    )
+    .as_pointer::<perry_runtime::buffer::BufferHeader>()
+    .cast_mut();
     if !data.is_null() {
         ffi::sqlite3_free(data);
     }

@@ -16,38 +16,18 @@
 //! zeros), so the only observable effect is RSS dropping.
 
 use super::*;
-use crate::fast_hash::{new_ptr_hash_set, PtrHashSet};
-use std::cell::RefCell;
+// Per-buffer header bit; disjoint from byte pins and the storage-layout bits.
+pub(crate) const DETACHED: u16 = 1 << 14;
 
-crate::perry_thread_local! {
-    /// Buffers detached via `transfer`/`transferToFixedLength`/structuredClone
-    /// transfer. A detached buffer also has `length == capacity == 0`, but that
-    /// alone cannot be the probe: `new ArrayBuffer(0)` is empty yet NOT
-    /// detached.
-    static DETACHED_BUFFER_REGISTRY: RefCell<PtrHashSet<usize>> =
-        RefCell::new(new_ptr_hash_set());
-}
-
-/// Monotone "an ArrayBuffer has been detached in this process" latch — nothing
-/// detached ⟹ nothing to find. See `crate::registry_latch`.
-static EVER_DETACHED: crate::registry_latch::RegistryLatch =
-    crate::registry_latch::RegistryLatch::new();
-
-/// `ArrayBuffer.prototype.detached` — true after a successful transfer.
+/// Detached state is born and dies with the store owner, never its address.
 #[inline]
 pub fn is_detached_buffer(addr: usize) -> bool {
-    if EVER_DETACHED.is_idle() {
+    if !super::is_registered_buffer(addr) {
         return false;
     }
-    DETACHED_BUFFER_REGISTRY.with(|r| r.borrow().contains(&addr))
-}
-
-/// Drop the detached mark when the buffer dies — a recycled address would
-/// otherwise inherit detached-ness (the #6080 ABA class).
-pub(crate) fn remove_detached_entry_for_dead_buffer(addr: usize) {
-    DETACHED_BUFFER_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
+    unsafe {
+        (*crate::gc::header_from_trusted_user_ptr(addr as *const u8))._reserved & DETACHED != 0
+    }
 }
 
 /// DetachArrayBuffer(buffer): idempotent.
@@ -62,13 +42,18 @@ pub fn detach_array_buffer(addr: usize) {
         (*buf).length = 0;
         (*buf).capacity = 0;
     }
-    // Arm before the insert — see `crate::registry_latch`.
-    EVER_DETACHED.arm();
-    DETACHED_BUFFER_REGISTRY.with(|r| {
-        let mut r = r.borrow_mut();
-        r.insert(addr);
-        r.insert(backing);
-    });
+    #[cfg(test)]
+    let mark_detached = !super::bytes::b4_sabotage("detach_mark");
+    #[cfg(not(test))]
+    let mark_detached = true;
+    if mark_detached {
+        unsafe {
+            (*crate::gc::header_from_trusted_user_ptr(backing as *const u8).cast_mut())
+                ._reserved |= DETACHED;
+            (*crate::gc::header_from_trusted_user_ptr(addr as *const u8).cast_mut())._reserved |=
+                DETACHED;
+        }
+    }
     // Buffer-shaped views (`new Uint8Array(ab)`, DataView slices): zero their
     // own header lengths so `.length`/`.byteLength` report 0 and every indexed
     // access is out-of-bounds, matching Node's view-over-detached semantics.

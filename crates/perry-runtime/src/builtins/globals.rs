@@ -613,19 +613,11 @@ fn clone_buffer_header(addr: usize, detach_source: bool) -> f64 {
     // merely marking an inline buffer as a DataView would make the numeric
     // setter interpret its first bytes as that cache pointer.
     if crate::buffer::is_data_view(addr) {
-        let backing = crate::buffer::buffer_alloc(src_len);
-        unsafe {
-            (*backing).length = src_len;
-            if src_len > 0 {
-                std::ptr::copy_nonoverlapping(
-                    crate::buffer::buffer_data(src),
-                    crate::buffer::buffer_data_mut(backing),
-                    src_len as usize,
-                );
-            }
-        }
-        crate::buffer::mark_as_array_buffer(backing as usize);
-        let backing_value = crate::value::js_nanbox_pointer(backing as i64);
+        let backing_value = crate::buffer::bytes::copy_value(
+            crate::buffer::bytes::Brand::ArrayBuffer,
+            crate::value::js_nanbox_pointer(addr as i64),
+        )
+        .expect("live DataView bytes");
         let cloned = crate::buffer::js_data_view_new(backing_value, 0.0, src_len as f64);
         if detach_source {
             let cloned_addr = pointer_addr(cloned).unwrap_or(0);
@@ -634,17 +626,14 @@ fn clone_buffer_header(addr: usize, detach_source: bool) -> f64 {
         return cloned;
     }
 
-    let dst = crate::buffer::buffer_alloc(src_len);
-    unsafe {
-        (*dst).length = src_len;
-        if src_len > 0 {
-            std::ptr::copy_nonoverlapping(
-                crate::buffer::buffer_data(src),
-                crate::buffer::buffer_data_mut(dst),
-                src_len as usize,
-            );
-        }
-    }
+    let value = crate::buffer::bytes::copy_value(
+        crate::buffer::bytes::Brand::Buffer,
+        crate::value::js_nanbox_pointer(addr as i64),
+    )
+    .expect("live buffer bytes");
+    let dst = JSValue::from_bits(value.to_bits())
+        .as_pointer::<crate::buffer::BufferHeader>()
+        .cast_mut();
 
     let dst_addr = dst as usize;
     if crate::buffer::is_array_buffer(addr) {

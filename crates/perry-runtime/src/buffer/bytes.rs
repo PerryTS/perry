@@ -80,6 +80,11 @@ pub(crate) fn assert_allocation_allowed() {
     NO_GC_DEPTH.with(|n| assert_eq!(n.get(), 0, "allocation inside bytes::no_gc"));
 }
 
+#[cfg(test)]
+pub(crate) fn b4_sabotage(fault: &str) -> bool {
+    std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some(fault)
+}
+
 pub(crate) struct Span {
     pub ptr: *mut u8,
     pub len: usize,
@@ -94,7 +99,13 @@ pub(crate) fn span(value: f64, writable: bool) -> Result<Span, NotBytes> {
     let addr = value.as_pointer::<u8>() as usize;
     let (ptr, len, owner) = if super::is_registered_buffer(addr) {
         let owner = super::view::backing_of(addr);
-        if super::is_detached_buffer(owner) || super::view::is_out_of_bounds_view(addr) {
+        #[cfg(test)]
+        let skip_owner_check = b4_sabotage("owner_check");
+        #[cfg(not(test))]
+        let skip_owner_check = false;
+        if !skip_owner_check
+            && (super::is_detached_buffer(owner) || super::view::is_out_of_bounds_view(addr))
+        {
             return Err(NotBytes::Detached);
         }
         let b = addr as *const super::BufferHeader;
@@ -106,8 +117,13 @@ pub(crate) fn span(value: f64, writable: bool) -> Result<Span, NotBytes> {
     } else if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
         let ta = addr as *const crate::typedarray::TypedArrayHeader;
         let owner = if let Some(meta) = crate::typedarray_view::view_meta_of(addr) {
-            if super::is_detached_buffer(meta.backing)
-                || crate::typedarray_view::is_view_out_of_bounds(addr)
+            #[cfg(test)]
+            let skip_owner_check = b4_sabotage("owner_check");
+            #[cfg(not(test))]
+            let skip_owner_check = false;
+            if !skip_owner_check
+                && (super::is_detached_buffer(meta.backing)
+                    || crate::typedarray_view::is_view_out_of_bounds(addr))
             {
                 return Err(NotBytes::Detached);
             }
@@ -179,11 +195,12 @@ pub(crate) unsafe fn write_admitted_inline_byte(addr: usize, index: usize, byte:
     });
 }
 
-// Bits 9..14 are unused by current byte cells and NativeArena owners. Bit 15
+// Bits 9..13 hold up to 31 nested byte pins. Bit 14 is detached state for
+// byte-family cells (unused by NativeArena owners). Bit 15
 // preserves a pre-existing permanent GC pin. Nested byte pins share the owner;
 // no address registry or latch is introduced. Overflow is refused, never wraps.
 const PIN_ONE: u16 = 1 << 9;
-const PIN_MASK: u16 = 0x7e00;
+const PIN_MASK: u16 = 0x3e00;
 const WAS_PINNED: u16 = 0x8000;
 
 pub(crate) fn has_pins(owner: usize) -> bool {
@@ -381,4 +398,19 @@ pub fn from_slice(brand: Brand, input: &[u8]) -> f64 {
         std::ptr::copy_nonoverlapping(input.as_ptr(), super::buffer_data_mut(cell), input.len());
     });
     value
+}
+
+/// Copy a byte value into a new store. Root the input before allocating;
+/// resolve its span after allocation so no derived pointer crosses GC.
+pub fn copy_value(brand: Brand, input: f64) -> Result<f64, NotBytes> {
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let input = handles.root_nanbox_f64(input);
+    let len = no_gc(|scope| bytes(input.get_nanbox_f64(), scope).map(<[u8]>::len))?;
+    let (output, pin) = new_bytes(brand, len, Init::Uninit);
+    no_gc(|scope| {
+        let source = bytes(input.get_nanbox_f64(), scope)?;
+        unsafe { std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()) }
+            .copy_from_slice(source);
+        Ok(output)
+    })
 }

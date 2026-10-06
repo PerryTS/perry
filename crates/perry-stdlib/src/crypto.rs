@@ -32,3 +32,6 @@ pub use self::{
     certificate::*, cipher::*, ecdh::*, handles::*, hash::*, hash_chain::*, hash_handles::*,
     kdf::*, keys::*, prime::*, random::*, sign::*, x509::*,
 };
+
+#[cfg(test)]
+mod bytes_contract_tests;

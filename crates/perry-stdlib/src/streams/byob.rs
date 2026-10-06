@@ -102,6 +102,9 @@ struct ViewInfo {
     byte_len: usize,
     kind: u8,
     elem_size: usize,
+    // Queue processing can allocate a remainder and invoke stream callbacks.
+    // Keep the owner rooted and the address stable for the whole operation.
+    _pin: perry_runtime::buffer::bytes::Pinned,
 }
 
 unsafe fn view_info(view_bits: u64) -> Option<ViewInfo> {
@@ -109,31 +112,28 @@ unsafe fn view_info(view_bits: u64) -> Option<ViewInfo> {
     if addr < 0x1000 {
         return None;
     }
-    if let Some(kind) = perry_runtime::typedarray::lookup_typed_array_kind(addr) {
-        let ta = addr as *mut perry_runtime::typedarray::TypedArrayHeader;
-        let bytes = perry_runtime::typedarray::typed_array_bytes_mut(ta)?;
-        return Some(ViewInfo {
-            data: bytes.as_mut_ptr(),
-            byte_len: bytes.len(),
-            kind,
-            elem_size: perry_runtime::typedarray::elem_size_for_kind(kind).max(1),
-        });
-    }
-    if perry_runtime::buffer::is_registered_buffer(addr)
-        && !perry_runtime::buffer::is_any_array_buffer(addr)
-    {
-        // DataView and Uint8Array/Buffer registrations both carry their
-        // byte storage in a BufferHeader.
-        let buf = addr as *mut perry_runtime::buffer::BufferHeader;
-        let len = (*buf).length as usize;
-        return Some(ViewInfo {
-            data: perry_runtime::buffer::buffer_data_mut(buf),
-            byte_len: len,
-            kind: 0, // KIND_U8 — fulfilled values surface as Uint8Array
-            elem_size: 1,
-        });
-    }
-    None
+    let (kind, elem_size) =
+        if let Some(kind) = perry_runtime::typedarray::lookup_typed_array_kind(addr) {
+            (
+                kind,
+                perry_runtime::typedarray::elem_size_for_kind(kind).max(1),
+            )
+        } else if perry_runtime::buffer::is_registered_buffer(addr)
+            && !perry_runtime::buffer::is_any_array_buffer(addr)
+        {
+            (0, 1)
+        } else {
+            return None;
+        };
+    let value = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+    let pin = perry_runtime::buffer::bytes::pin(value).ok()?;
+    Some(ViewInfo {
+        data: pin.as_mut_ptr(),
+        byte_len: pin.len(),
+        kind,
+        elem_size,
+        _pin: pin,
+    })
 }
 
 /// `chunk.byteLength` for desiredSize accounting on byte streams; 1.0 for
@@ -166,10 +166,13 @@ unsafe fn alloc_view_of_kind(kind: u8, elem_size: usize, bytes: &[u8]) -> u64 {
     if ta.is_null() {
         return TAG_UNDEFINED;
     }
-    if let Some(dst) = perry_runtime::typedarray::typed_array_bytes_mut(ta) {
-        let n = dst.len().min(bytes.len());
-        dst[..n].copy_from_slice(&bytes[..n]);
-    }
+    perry_runtime::buffer::bytes::no_gc(|scope| {
+        let value = f64::from_bits(JSValue::pointer(ta.cast()).bits());
+        if let Ok(dst) = perry_runtime::buffer::bytes::bytes_mut(value, scope) {
+            let n = dst.len().min(bytes.len());
+            dst[..n].copy_from_slice(&bytes[..n]);
+        }
+    });
     JSValue::pointer(ta as *const u8).bits()
 }
 

@@ -1071,11 +1071,18 @@ fn write_u32(buffer: *mut crate::buffer::BufferHeader, offset: f64, value: u32) 
     if offset.checked_add(4).is_none_or(|end| end > len) {
         return false;
     }
-    unsafe {
-        let target = crate::buffer::buffer_data_mut(buffer).add(offset);
-        std::ptr::copy_nonoverlapping(value.to_le_bytes().as_ptr(), target, 4);
-    }
-    true
+    crate::buffer::bytes::no_gc(|scope| unsafe {
+        let Ok(data) =
+            crate::buffer::bytes::bytes_mut(crate::value::js_nanbox_pointer(buffer as i64), scope)
+        else {
+            return false;
+        };
+        let Some(target) = data.get_mut(offset..offset + 4) else {
+            return false;
+        };
+        target.copy_from_slice(&value.to_le_bytes());
+        true
+    })
 }
 
 fn write_u64(buffer: *mut crate::buffer::BufferHeader, offset: f64, value: u64) -> bool {
@@ -1086,11 +1093,18 @@ fn write_u64(buffer: *mut crate::buffer::BufferHeader, offset: f64, value: u64) 
     if offset.checked_add(8).is_none_or(|end| end > len) {
         return false;
     }
-    unsafe {
-        let target = crate::buffer::buffer_data_mut(buffer).add(offset);
-        std::ptr::copy_nonoverlapping(value.to_le_bytes().as_ptr(), target, 8);
-    }
-    true
+    crate::buffer::bytes::no_gc(|scope| unsafe {
+        let Ok(data) =
+            crate::buffer::bytes::bytes_mut(crate::value::js_nanbox_pointer(buffer as i64), scope)
+        else {
+            return false;
+        };
+        let Some(target) = data.get_mut(offset..offset + 8) else {
+            return false;
+        };
+        target.copy_from_slice(&value.to_le_bytes());
+        true
+    })
 }
 
 fn snapshot_values(import: f64, key: &[u8]) -> *mut crate::array::ArrayHeader {
@@ -1149,10 +1163,22 @@ fn snapshot_get(import: f64, key: &[u8], pointers: f64, strings: f64) -> f64 {
         if !write_u32(buffer, pointers as f64, strings as u32) {
             return 28.0;
         }
-        unsafe {
-            let target = crate::buffer::buffer_data_mut(buffer).add(strings);
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), target, bytes.len());
-            *target.add(bytes.len()) = 0;
+        let written = crate::buffer::bytes::no_gc(|scope| unsafe {
+            let Ok(data) = crate::buffer::bytes::bytes_mut(
+                crate::value::js_nanbox_pointer(buffer as i64),
+                scope,
+            ) else {
+                return false;
+            };
+            let Some(target) = data.get_mut(strings..strings + bytes.len() + 1) else {
+                return false;
+            };
+            target[..bytes.len()].copy_from_slice(&bytes);
+            target[bytes.len()] = 0;
+            true
+        });
+        if !written {
+            return 28.0;
         }
         pointers += 4;
         strings += bytes.len() + 1;
@@ -1279,11 +1305,23 @@ pub extern "C" fn js_wasi_import_stub(
                 let seed = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .map_or(1, |time| time.as_nanos() as u64);
-                unsafe {
-                    let target = crate::buffer::buffer_data_mut(buffer).add(offset);
-                    for index in 0..len {
-                        *target.add(index) = (seed >> ((index % 8) * 8)) as u8;
+                let written = crate::buffer::bytes::no_gc(|scope| unsafe {
+                    let Ok(data) = crate::buffer::bytes::bytes_mut(
+                        crate::value::js_nanbox_pointer(buffer as i64),
+                        scope,
+                    ) else {
+                        return false;
+                    };
+                    let Some(target) = data.get_mut(offset..offset + len) else {
+                        return false;
+                    };
+                    for (index, byte) in target.iter_mut().enumerate() {
+                        *byte = (seed >> ((index % 8) * 8)) as u8;
                     }
+                    true
+                });
+                if !written {
+                    return 28.0;
                 }
             }
             0.0

@@ -29,7 +29,7 @@ use crate::common::handle::Handle;
 use std::borrow::Cow;
 
 use perry_runtime::array::{js_array_alloc, js_array_length, js_array_push_f64};
-use perry_runtime::buffer::{buffer_alloc, buffer_data_mut, BufferHeader};
+use perry_runtime::buffer::BufferHeader;
 use perry_runtime::closure::{is_closure_ptr, js_closure_call1, ClosureHeader};
 use perry_runtime::{
     js_object_alloc_null_proto, js_object_get_field_by_name, js_object_get_own_field_or_undef,
@@ -199,15 +199,15 @@ pub unsafe extern "C" fn js_querystring_unescape(str_arg: f64) -> f64 {
 }
 
 unsafe fn buffer_from_bytes(bytes: &[u8]) -> *mut BufferHeader {
-    let buf = buffer_alloc(bytes.len() as u32);
-    if buf.is_null() {
-        return std::ptr::null_mut();
-    }
-    (*buf).length = bytes.len() as u32;
-    if !bytes.is_empty() {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_data_mut(buf), bytes.len());
-    }
-    buf
+    perry_runtime::JSValue::from_bits(
+        perry_runtime::buffer::bytes::from_slice(
+            perry_runtime::buffer::bytes::Brand::Buffer,
+            bytes,
+        )
+        .to_bits(),
+    )
+    .as_pointer::<perry_runtime::buffer::BufferHeader>()
+    .cast_mut()
 }
 
 /// `querystring.unescapeBuffer(str, decodeSpaces?)` -> Buffer.

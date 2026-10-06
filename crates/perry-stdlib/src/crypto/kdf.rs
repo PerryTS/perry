@@ -170,7 +170,7 @@ pub unsafe extern "C" fn js_crypto_hkdf_bytes_alg(
     let info = bytes_from_ptr(info_ptr);
     let len = keylen as usize;
     if len == 0 || len > 8160 {
-        return perry_runtime::buffer::buffer_alloc(0);
+        return alloc_buffer_from_slice(&[]);
     }
     let mut out = vec![0u8; len];
     let ok = match alg.as_str() {
@@ -193,7 +193,7 @@ pub unsafe extern "C" fn js_crypto_hkdf_bytes_alg(
     if ok {
         alloc_buffer_from_slice(&out)
     } else {
-        perry_runtime::buffer::buffer_alloc(0)
+        alloc_buffer_from_slice(&[])
     }
 }
 
@@ -314,8 +314,12 @@ unsafe fn argon2_value_bytes(bits: u64) -> Option<Vec<u8>> {
         return None;
     }
     if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
-        return perry_runtime::typedarray::typed_array_bytes(ta).map(|bytes| bytes.to_vec());
+        return perry_runtime::buffer::bytes::no_gc(|scope| {
+            let value = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+            perry_runtime::buffer::bytes::bytes(value, scope)
+                .ok()
+                .map(<[u8]>::to_vec)
+        });
     }
     if perry_runtime::buffer::is_registered_buffer(addr) {
         return Some(bytes_from_ptr(addr as i64));
@@ -495,19 +499,13 @@ unsafe fn validate_timing_safe_equal_buffer_source(value: f64, arg_name: &str) -
             bits as usize
         }
     };
-    if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
-        if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(
-            addr as *const perry_runtime::typedarray::TypedArrayHeader,
-        ) {
-            return bytes.to_vec();
-        }
-    }
-    if perry_runtime::buffer::is_registered_buffer(addr) {
-        let buf = addr as *const perry_runtime::buffer::BufferHeader;
-        let len = (*buf).length as usize;
-        let data =
-            perry_runtime::buffer::buffer_data(buf as *const perry_runtime::buffer::BufferHeader);
-        return std::slice::from_raw_parts(data, len).to_vec();
+    if let Some(bytes) = perry_runtime::buffer::bytes::no_gc(|scope| {
+        let value = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+        perry_runtime::buffer::bytes::bytes(value, scope)
+            .ok()
+            .map(<[u8]>::to_vec)
+    }) {
+        return bytes;
     }
     let message = format!(
         "The \"{}\" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.",

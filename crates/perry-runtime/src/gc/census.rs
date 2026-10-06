@@ -341,6 +341,26 @@ struct ClassAcc {
     unshaped: u64,
 }
 
+// Rust's array Default impl stops at 32 entries. Keep per-kind census counts
+// sized by the type inventory, including the persistent-symbol leaf kind.
+struct TypeCounts([Acc; GC_TYPE_MAX as usize + 1]);
+impl Default for TypeCounts {
+    fn default() -> Self {
+        Self(std::array::from_fn(|_| Acc::default()))
+    }
+}
+impl std::ops::Deref for TypeCounts {
+    type Target = [Acc; GC_TYPE_MAX as usize + 1];
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for TypeCounts {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 #[derive(Default)]
 struct Census {
     // per space: 0..5 arenas (walk order), 5 = malloc
@@ -350,9 +370,9 @@ struct Census {
     space_stub_live: [Acc; 6],
     space_stub_dead: [Acc; 6],
     space_late: [Acc; 6],
-    type_live: [Acc; GC_TYPE_MAX as usize + 1],
-    type_dead: [Acc; GC_TYPE_MAX as usize + 1],
-    type_late: [Acc; GC_TYPE_MAX as usize + 1],
+    type_live: TypeCounts,
+    type_dead: TypeCounts,
+    type_late: TypeCounts,
     /// Pass-1 reachable set (sorted header addresses); `None` = trust marks.
     pass1: Option<Vec<usize>>,
     size_hist: [Acc; 21],

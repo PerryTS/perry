@@ -844,13 +844,17 @@ fn wasm_memory_grow_on(this: f64, delta: f64) -> Result<u32, MemoryCtorError> {
         ));
     }
     if old_bytes > 0 {
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                crate::buffer::buffer_data_mut(buf),
-                crate::buffer::buffer_data_mut(new_buf),
-                old_bytes,
-            );
-        }
+        crate::buffer::bytes::no_gc(|scope| unsafe {
+            let source =
+                crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(buf as i64), scope)
+                    .expect("live wasm store");
+            let target = crate::buffer::bytes::bytes_mut(
+                crate::value::js_nanbox_pointer(new_buf as i64),
+                scope,
+            )
+            .expect("new wasm store");
+            target[..old_bytes].copy_from_slice(source);
+        });
     }
     js_object_set_field_by_name(
         this_obj,

@@ -100,13 +100,12 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
     // the side table and materialize a StringHeader in *their own* arena on
     // demand, so cross-thread reads are safe even when the originating
     // worker's arena was torn down.
-    let boxed = Box::new(SymbolHeader {
+    let sym_ptr = leak_symbol(SymbolHeader {
         magic: SYMBOL_MAGIC,
         registered: 1,
         description: std::ptr::null_mut(),
         id: next_id(),
     });
-    let sym_ptr = Box::into_raw(boxed);
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_constructed(
             crate::hot_diag::ReceiverReprFamily::SymbolGlobal,

@@ -896,19 +896,21 @@ pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
         );
     }
     if crate::buffer::is_registered_buffer(addr) {
-        let buf = addr as *const crate::buffer::BufferHeader;
-        unsafe {
-            let length = (*buf).length as i64;
-            let mut idx = index as i64;
-            if idx < 0 {
-                idx += length;
-            }
-            if idx < 0 || idx >= length {
+        return crate::buffer::bytes::no_gc(|scope| {
+            let Ok(data) =
+                crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(addr as i64), scope)
+            else {
                 return f64::from_bits(crate::value::TAG_UNDEFINED);
-            }
-            let data = crate::buffer::buffer_data(buf as *const crate::buffer::BufferHeader);
-            return *data.add(idx as usize) as f64;
-        }
+            };
+            let length = data.len() as i64;
+            let idx = if (index as i64) < 0 {
+                index as i64 + length
+            } else {
+                index as i64
+            };
+            data.get(idx as usize)
+                .map_or(f64::from_bits(crate::value::TAG_UNDEFINED), |n| *n as f64)
+        });
     }
     unsafe {
         let length = (*arr).length as i64;

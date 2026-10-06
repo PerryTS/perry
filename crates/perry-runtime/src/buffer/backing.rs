@@ -91,6 +91,12 @@ impl TransferredBacking {
             };
             Backing::copy(data, self.length)
         });
+        #[cfg(test)]
+        let backing = if super::bytes::b4_sabotage("transfer_copy") {
+            Backing::copy(backing.data(), self.length)
+        } else {
+            backing
+        };
         *self.backing.get_mut().unwrap() = Some(backing);
     }
 
@@ -145,12 +151,12 @@ mod tests {
         let _guard = setup();
         let before = count();
         let scope = RuntimeHandleScope::new();
-        let source = js_array_buffer_new(8 * 1024 * 1024);
+        let source = js_array_buffer_new(32 * 1024 * 1024);
         let source_root = scope.root_raw_mut_ptr(source);
         let original = buffer_data(source) as usize;
         unsafe {
             *(original as *mut u8) = 37;
-            *(original as *mut u8).add(8 * 1024 * 1024 - 1) = 91;
+            *(original as *mut u8).add(32 * 1024 * 1024 - 1) = 91;
             let message = serialize_message(
                 JSValue::pointer(source.cast()).bits(),
                 &[source as usize],
@@ -176,12 +182,19 @@ mod tests {
                     original,
                     "transfer must move the original allocation"
                 );
-                assert_eq!((*received).length, 8 * 1024 * 1024);
+                assert_eq!((*received).length, 32 * 1024 * 1024);
                 drop(message);
                 collect();
                 let received = (root.get_nanbox_u64() & POINTER_MASK) as *const BufferHeader;
                 assert_eq!(*buffer_data(received), 37);
-                assert_eq!(*buffer_data(received).add(8 * 1024 * 1024 - 1), 91);
+                crate::buffer::bytes::no_gc(|scope| {
+                    let data = crate::buffer::bytes::bytes(
+                        crate::value::js_nanbox_pointer(received as i64),
+                        scope,
+                    )
+                    .unwrap();
+                    assert_eq!(data.last(), Some(&91));
+                });
             })
             .join()
             .unwrap();

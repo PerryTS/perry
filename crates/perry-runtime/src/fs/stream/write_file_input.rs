@@ -68,21 +68,20 @@ fn write_file_chunk_bytes(value: f64, encoding_tag: i32) -> Result<Vec<u8>, f64>
     // payload or an allocator-owned raw word is an address here.
     let addr = crate::value::addr_class::object_ref_addr(value);
     if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let ta = addr as *const crate::typedarray::TypedArrayHeader;
-        if let Some(bytes) = unsafe { crate::typedarray::typed_array_bytes(ta) } {
-            return Ok(bytes.to_vec());
-        }
-        return Ok(Vec::new());
+        return Ok(crate::buffer::bytes::no_gc(|scope| {
+            crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(addr as i64), scope)
+                .map(<[u8]>::to_vec)
+                .unwrap_or_default()
+        }));
     }
     if crate::array::js_array_is_array(value).to_bits() == crate::value::TAG_TRUE {
         let buf = crate::buffer::js_buffer_from_value(value.to_bits() as i64, encoding_tag);
         if buf.is_null() {
             return Ok(Vec::new());
         }
-        return Ok(unsafe {
-            std::slice::from_raw_parts(crate::buffer::buffer_data(buf), (*buf).length as usize)
-                .to_vec()
-        });
+        return Ok(bytes_from_buffer_value(crate::value::js_nanbox_pointer(
+            buf as i64,
+        )));
     }
     Err(write_file_data_type_error(value))
 }

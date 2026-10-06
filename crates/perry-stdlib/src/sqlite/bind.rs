@@ -1,10 +1,7 @@
 use super::*;
 use crate::common::{get_handle, Handle};
 use perry_runtime::{
-    buffer::{
-        buffer_alloc, buffer_data, buffer_data_mut, is_any_array_buffer, is_data_view,
-        is_registered_buffer, mark_as_uint8array, BufferHeader,
-    },
+    buffer::{is_any_array_buffer, is_data_view, is_registered_buffer},
     closure::js_closure_call_array,
     js_array_alloc, js_array_get, js_array_length, js_array_push, js_get_string_pointer_unified,
     js_object_alloc_null_proto, js_object_get_field_by_name, js_object_set_field,
@@ -183,49 +180,23 @@ pub(crate) unsafe fn bind_node_sqlite_value(
         ffi::sqlite3_bind_double(raw_stmt, index, js.as_number())
     } else {
         let raw = raw_addr_from_value(value);
-        if perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some() {
-            let typed_array = raw as *const perry_runtime::typedarray::TypedArrayHeader;
-            let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(typed_array) else {
-                throw_type(&format!(
-                    "Provided value cannot be bound to SQLite parameter {}.",
-                    index
-                ));
-            };
-            let data_ptr = if bytes.is_empty() {
-                std::ptr::null()
-            } else {
-                bytes.as_ptr() as *const c_void
-            };
-            if bytes.is_empty() {
+        let status = perry_runtime::buffer::bytes::no_gc(|scope| {
+            let value = f64::from_bits(JSValue::pointer(raw as *const u8).bits());
+            let bytes = perry_runtime::buffer::bytes::bytes(value, scope).ok()?;
+            Some(if bytes.is_empty() {
                 ffi::sqlite3_bind_zeroblob(raw_stmt, index, 0)
             } else {
                 ffi::sqlite3_bind_blob(
                     raw_stmt,
                     index,
-                    data_ptr,
+                    bytes.as_ptr().cast(),
                     bytes.len() as c_int,
                     ffi::SQLITE_TRANSIENT(),
                 )
-            }
-        } else if raw != 0 && is_registered_buffer(raw) {
-            let buffer = raw as *const BufferHeader;
-            let len = (*buffer).length as usize;
-            let data_ptr = if len == 0 {
-                std::ptr::null()
-            } else {
-                buffer_data(buffer) as *const c_void
-            };
-            if len == 0 {
-                ffi::sqlite3_bind_zeroblob(raw_stmt, index, 0)
-            } else {
-                ffi::sqlite3_bind_blob(
-                    raw_stmt,
-                    index,
-                    data_ptr,
-                    len as c_int,
-                    ffi::SQLITE_TRANSIENT(),
-                )
-            }
+            })
+        });
+        if let Some(status) = status {
+            status
         } else {
             throw_type(&format!(
                 "Provided value cannot be bound to SQLite parameter {}.",
@@ -436,15 +407,19 @@ pub(crate) unsafe fn node_sqlite_column_value(
         }
         ffi::SQLITE_BLOB => {
             let len = ffi::sqlite3_column_bytes(raw_stmt, index) as usize;
-            let buf = buffer_alloc(len as u32);
-            (*buf).length = len as u32;
-            if len > 0 {
-                let ptr = ffi::sqlite3_column_blob(raw_stmt, index);
-                if !ptr.is_null() {
-                    std::ptr::copy_nonoverlapping(ptr as *const u8, buffer_data_mut(buf), len);
-                }
-            }
-            JSValue::object_ptr(buf as *mut u8)
+            let ptr = ffi::sqlite3_column_blob(raw_stmt, index);
+            let input = if len > 0 && !ptr.is_null() {
+                std::slice::from_raw_parts(ptr as *const u8, len)
+            } else {
+                &[]
+            };
+            JSValue::from_bits(
+                perry_runtime::buffer::bytes::from_slice(
+                    perry_runtime::buffer::bytes::Brand::Buffer,
+                    input,
+                )
+                .to_bits(),
+            )
         }
         _ => JSValue::null(),
     }
@@ -544,16 +519,19 @@ pub(crate) unsafe fn node_sqlite_value_arg(
         }
         ffi::SQLITE_BLOB => {
             let len = ffi::sqlite3_value_bytes(value) as usize;
-            let buf = buffer_alloc(len as u32);
-            (*buf).length = len as u32;
-            mark_as_uint8array(buf as usize);
-            if len > 0 {
-                let ptr = ffi::sqlite3_value_blob(value);
-                if !ptr.is_null() {
-                    std::ptr::copy_nonoverlapping(ptr as *const u8, buffer_data_mut(buf), len);
-                }
-            }
-            JSValue::object_ptr(buf as *mut u8)
+            let ptr = ffi::sqlite3_value_blob(value);
+            let input = if len > 0 && !ptr.is_null() {
+                std::slice::from_raw_parts(ptr as *const u8, len)
+            } else {
+                &[]
+            };
+            JSValue::from_bits(
+                perry_runtime::buffer::bytes::from_slice(
+                    perry_runtime::buffer::bytes::Brand::Uint8Array,
+                    input,
+                )
+                .to_bits(),
+            )
         }
         _ => JSValue::null(),
     }
@@ -582,22 +560,15 @@ pub(crate) unsafe fn node_sqlite_blob_like_bytes(value: f64) -> Option<Vec<u8>> 
     if raw < 0x1000 {
         return None;
     }
-    if perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some() {
-        let ta = raw as *const perry_runtime::typedarray::TypedArrayHeader;
-        if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(ta) {
-            return Some(bytes.to_vec());
-        }
+    if is_registered_buffer(raw) && is_any_array_buffer(raw) && !is_data_view(raw) {
+        return None;
     }
-    if is_registered_buffer(raw) {
-        if is_any_array_buffer(raw) && !is_data_view(raw) {
-            return None;
-        }
-        let buf = raw as *const BufferHeader;
-        let len = (*buf).length as usize;
-        let data = buffer_data(buf);
-        return Some(std::slice::from_raw_parts(data, len).to_vec());
-    }
-    None
+    perry_runtime::buffer::bytes::no_gc(|scope| {
+        let value = f64::from_bits(JSValue::pointer(raw as *const u8).bits());
+        perry_runtime::buffer::bytes::bytes(value, scope)
+            .ok()
+            .map(<[u8]>::to_vec)
+    })
 }
 
 pub(crate) unsafe fn sqlite_result_error(ctx: *mut ffi::sqlite3_context, message: &str) {

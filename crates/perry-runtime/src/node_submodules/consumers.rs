@@ -28,24 +28,16 @@ pub(crate) fn buffer_from_bytes(
     mark_array_buffer: bool,
     mark_uint8_array: bool,
 ) -> *mut crate::buffer::BufferHeader {
-    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
-    unsafe {
-        (*buf).length = bytes.len() as u32;
-        if !bytes.is_empty() {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                crate::buffer::buffer_data_mut(buf),
-                bytes.len(),
-            );
-        }
-    }
-    if mark_array_buffer {
-        crate::buffer::mark_as_array_buffer(buf as usize);
-    }
-    if mark_uint8_array {
-        crate::buffer::mark_as_uint8array(buf as usize);
-    }
-    buf
+    let brand = if mark_array_buffer {
+        crate::buffer::bytes::Brand::ArrayBuffer
+    } else if mark_uint8_array {
+        crate::buffer::bytes::Brand::Uint8Array
+    } else {
+        crate::buffer::bytes::Brand::Buffer
+    };
+    crate::value::JSValue::from_bits(crate::buffer::bytes::from_slice(brand, bytes).to_bits())
+        .as_pointer::<crate::buffer::BufferHeader>()
+        .cast_mut()
 }
 
 pub(crate) fn bytes_to_buffer_value(bytes: &[u8]) -> f64 {
@@ -276,12 +268,12 @@ fn append_buffer_value_bytes(raw: usize, out: &mut Vec<u8>) {
     if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
         return;
     }
-    unsafe {
-        let buf = raw as *const crate::buffer::BufferHeader;
-        let len = (*buf).length as usize;
-        let data = crate::buffer::buffer_data(buf);
-        out.extend_from_slice(std::slice::from_raw_parts(data, len));
-    }
+    crate::buffer::bytes::no_gc(|scope| {
+        let value = crate::value::js_nanbox_pointer(raw as i64);
+        if let Ok(bytes) = crate::buffer::bytes::bytes(value, scope) {
+            out.extend_from_slice(bytes);
+        }
+    });
 }
 
 fn append_number_chunk(value: f64, jsval: JSValue, out: &mut Vec<u8>) {

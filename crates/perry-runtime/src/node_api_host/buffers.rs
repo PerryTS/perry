@@ -80,12 +80,16 @@ unsafe fn initialize_buffer(
         Ok(length) => length,
         Err(status) => return status,
     };
-    let buffer = crate::buffer::buffer_alloc(length);
-    (*buffer).length = length;
+    let (value, pin) = crate::buffer::bytes::new_bytes(
+        crate::buffer::bytes::Brand::Buffer,
+        length as usize,
+        crate::buffer::bytes::Init::Uninit,
+    );
     if !data.is_null() {
-        *data = crate::buffer::buffer_data_mut(buffer).cast();
+        *data = pin.as_mut_ptr().cast();
     }
-    write_pointer_handle(env, buffer.cast(), result)
+    let buffer = JSValue::from_bits(value.to_bits()).as_pointer::<u8>();
+    write_pointer_handle(env, buffer.cast_mut().cast(), result)
 }
 
 #[no_mangle]
@@ -205,11 +209,16 @@ pub unsafe extern "C" fn napi_create_arraybuffer(
             )
         }
     };
-    let buffer = crate::buffer::js_array_buffer_new(byte_length);
+    let (value, pin) = crate::buffer::bytes::new_bytes(
+        crate::buffer::bytes::Brand::ArrayBuffer,
+        byte_length as usize,
+        crate::buffer::bytes::Init::Zero,
+    );
     if !data.is_null() {
-        *data = crate::buffer::buffer_data_mut(buffer).cast();
+        *data = pin.as_mut_ptr().cast();
     }
-    write_pointer_handle(env, buffer.cast(), result)
+    let buffer = JSValue::from_bits(value.to_bits()).as_pointer::<u8>();
+    write_pointer_handle(env, buffer, result)
 }
 
 #[no_mangle]

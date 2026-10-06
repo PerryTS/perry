@@ -71,21 +71,10 @@ pub(super) unsafe fn key_object_from(value: f64) -> f64 {
 /// thread's (thread-local) buffer registry has no entry for it. Requiring the
 /// registry hit turned such keys into a silent `invalid_key` throw.
 unsafe fn secret_key_object(addr: usize) -> f64 {
-    let src = addr as *const crate::buffer::BufferHeader;
-    let len = (*src).length as usize;
-    let out = crate::buffer::buffer_alloc(len as u32);
-    if out.is_null() {
-        conversion_failed("could not allocate the secret key buffer");
-    }
-    if len > 0 {
-        std::ptr::copy_nonoverlapping(
-            crate::buffer::buffer_data(src),
-            crate::buffer::buffer_data_mut(out),
-            len,
-        );
-    }
-    (*out).length = len as u32;
-    crate::buffer::mark_as_uint8array(out as usize);
+    let input = crate::value::js_nanbox_pointer(addr as i64);
+    let value = crate::buffer::bytes::copy_value(crate::buffer::bytes::Brand::Uint8Array, input)
+        .unwrap_or_else(|_| conversion_failed("could not read the secret key buffer"));
+    let out = JSValue::from_bits(value.to_bits()).as_pointer::<crate::buffer::BufferHeader>();
     crate::buffer::mark_as_secret_key(out as usize);
     f64::from_bits(JSValue::pointer(out as *const u8).bits())
 }

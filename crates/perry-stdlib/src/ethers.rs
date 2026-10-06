@@ -280,12 +280,10 @@ pub unsafe extern "C" fn js_keccak256_native(buf_ptr: i64) -> *mut StringHeader 
         return js_string_from_bytes(s.as_ptr(), s.len() as u32);
     }
 
-    let len = (*buf_ptr).length as usize;
-    let data =
-        perry_runtime::buffer::buffer_data(buf_ptr as *const perry_runtime::buffer::BufferHeader);
-    let bytes = std::slice::from_raw_parts(data, len);
-
-    let hash = keccak256(bytes);
+    let hash = perry_runtime::buffer::bytes::no_gc(|scope| {
+        let value = f64::from_bits(perry_runtime::JSValue::pointer(buf_ptr.cast()).bits());
+        keccak256(perry_runtime::buffer::bytes::bytes(value, scope).unwrap_or(&[]))
+    });
 
     // Format as "0x" + 64 hex chars
     let hex_chars = b"0123456789abcdef";
@@ -308,17 +306,10 @@ pub unsafe extern "C" fn js_keccak256_native_bytes(
 ) -> *mut perry_runtime::buffer::BufferHeader {
     let buf_ptr =
         (buf_ptr as u64 & 0x0000_FFFF_FFFF_FFFF) as *const perry_runtime::buffer::BufferHeader;
-    let (data, _len) = if buf_ptr.is_null() {
-        (&[] as &[u8], 0)
-    } else {
-        let len = (*buf_ptr).length as usize;
-        let data = perry_runtime::buffer::buffer_data(
-            buf_ptr as *const perry_runtime::buffer::BufferHeader,
-        );
-        (std::slice::from_raw_parts(data, len), len)
-    };
-
-    let hash = keccak256(data);
+    let hash = perry_runtime::buffer::bytes::no_gc(|scope| {
+        let value = f64::from_bits(perry_runtime::JSValue::pointer(buf_ptr.cast()).bits());
+        keccak256(perry_runtime::buffer::bytes::bytes(value, scope).unwrap_or(&[]))
+    });
 
     let result = perry_runtime::value::JSValue::from_bits(
         perry_runtime::buffer::bytes::from_slice(

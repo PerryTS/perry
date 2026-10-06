@@ -311,6 +311,12 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
         "capacity: u32 (bytes), as `GC_TYPE_BUFFER`",
         Rule3Word::BoundedBelowRange,
     ),
+    (
+        gc::GC_TYPE_SYMBOL,
+        "SymbolHeader (persistent)",
+        "registered: u32 — the Symbol.for flag is exactly 0 or 1",
+        Rule3Word::StructurallySmall,
+    ),
 ];
 
 /// Rule 3, checked where the word is written.

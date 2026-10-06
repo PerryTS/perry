@@ -27,7 +27,7 @@
 //! the next write. `hex` / `latin1` / `ascii` are stateless.
 
 use crate::common::handle::{get_handle_mut, with_handle};
-use perry_runtime::buffer::{buffer_data, is_registered_buffer, BufferHeader};
+
 use perry_runtime::string::js_string_from_wtf8_bytes;
 use perry_runtime::{js_get_string_pointer_unified, js_string_from_bytes, JSValue, StringHeader};
 
@@ -708,25 +708,16 @@ unsafe fn bytes_from_write_arg(value: f64) -> Vec<u8> {
     }
 
     let addr = raw_addr_from_value(value);
-    if addr >= 0x1000 {
-        if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
-            let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
-            if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(ta) {
-                return bytes.to_vec();
-            }
+    if addr >= 0x1000 && !perry_runtime::buffer::is_any_array_buffer(addr) {
+        if let Some(bytes) = perry_runtime::buffer::bytes::no_gc(|scope| {
+            let value = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+            perry_runtime::buffer::bytes::bytes(value, scope)
+                .ok()
+                .map(<[u8]>::to_vec)
+        }) {
+            return bytes;
         }
     }
-    if addr >= 0x1000
-        && is_registered_buffer(addr)
-        && (!perry_runtime::buffer::is_any_array_buffer(addr)
-            || perry_runtime::buffer::is_data_view(addr))
-    {
-        let buf = addr as *const BufferHeader;
-        let len = (*buf).length as usize;
-        let data = buffer_data(buf);
-        return std::slice::from_raw_parts(data, len).to_vec();
-    }
-
     throw_invalid_buf_arg(value)
 }
 
@@ -907,16 +898,10 @@ pub unsafe fn dispatch_string_decoder_property(handle: i64, property: &str) -> f
     match property {
         "lastNeed" => f64::from(h.utf8.last_need as i32),
         "lastTotal" => f64::from(h.utf8.last_total as i32),
-        "lastChar" => {
-            let buf = perry_runtime::buffer::buffer_alloc(4);
-            if buf.is_null() {
-                return f64::from_bits(JSValue::undefined().bits());
-            }
-            (*buf).length = 4;
-            let dst = perry_runtime::buffer::buffer_data_mut(buf);
-            std::ptr::copy_nonoverlapping(h.utf8.last_char.as_ptr(), dst, 4);
-            f64::from_bits(0x7FFD_0000_0000_0000u64 | ((buf as u64) & 0x0000_FFFF_FFFF_FFFF))
-        }
+        "lastChar" => perry_runtime::buffer::bytes::from_slice(
+            perry_runtime::buffer::bytes::Brand::Buffer,
+            &h.utf8.last_char,
+        ),
         "encoding" => {
             let s = canonical_encoding_name(h.mode);
             let sh = js_string_from_bytes(s.as_ptr(), s.len() as u32);

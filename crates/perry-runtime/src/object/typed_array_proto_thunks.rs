@@ -348,14 +348,17 @@ unsafe fn uint8_set(addr: usize, index: usize, value: u8) {
 }
 
 unsafe fn uint8_alloc_like(source_addr: usize, len: usize) -> *mut crate::buffer::BufferHeader {
-    let out = crate::buffer::buffer_alloc(len as u32);
-    if !out.is_null() {
-        (*out).length = len as u32;
-        if crate::buffer::is_uint8array_buffer(source_addr) {
-            crate::buffer::mark_as_uint8array(out as usize);
-        }
-    }
-    out
+    let brand = if crate::buffer::is_uint8array_buffer(source_addr) {
+        crate::buffer::bytes::Brand::Uint8Array
+    } else {
+        crate::buffer::bytes::Brand::Buffer
+    };
+    let (value, pin) =
+        crate::buffer::bytes::new_bytes(brand, len, crate::buffer::bytes::Init::Uninit);
+    drop(pin);
+    crate::value::JSValue::from_bits(value.to_bits())
+        .as_pointer::<crate::buffer::BufferHeader>()
+        .cast_mut()
 }
 
 unsafe fn uint8_copy_to_new(source_addr: usize) -> *mut crate::buffer::BufferHeader {
