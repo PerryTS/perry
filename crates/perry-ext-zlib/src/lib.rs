@@ -6,10 +6,8 @@
 //! aren't valid UTF-8, so the wrapper can't go through the standard
 //! `read_string` / `alloc_string` path.
 
-use flate2::read::{
-    DeflateDecoder, DeflateEncoder, GzEncoder, MultiGzDecoder, ZlibDecoder, ZlibEncoder,
-};
-use flate2::Compression;
+use flate2::read::{DeflateDecoder, DeflateEncoder, MultiGzDecoder, ZlibDecoder, ZlibEncoder};
+use flate2::{Compression, GzBuilder};
 use perry_ffi::{alloc_buffer, BufferHeader, ErrorKind};
 use std::io::{Error as IoError, ErrorKind as IoErrorKind, Read};
 
@@ -19,6 +17,19 @@ use std::io::{Error as IoError, ErrorKind as IoErrorKind, Read};
 mod stream;
 pub use stream::*;
 
+// Match zlib's platform byte rather than flate2's default "unknown" (255).
+// All gzip entry points use this header; mtime stays deterministic at zero.
+fn gzip_header() -> GzBuilder {
+    let os = if cfg!(target_os = "macos") {
+        19
+    } else if cfg!(target_os = "windows") {
+        10
+    } else {
+        3
+    };
+    GzBuilder::new().mtime(0).operating_system(os)
+}
+
 #[cfg(test)]
 fn gzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
     gzip_bytes_with(data, Compression::default())
@@ -27,7 +38,7 @@ fn gzip_bytes(data: &[u8]) -> std::io::Result<Vec<u8>> {
 // #2935: honor the `{ level }` option. `level` selects the zlib compression
 // level (0 = none .. 9 = best), which changes the compressed output size.
 fn gzip_bytes_with(data: &[u8], level: Compression) -> std::io::Result<Vec<u8>> {
-    let mut encoder = GzEncoder::new(data, level);
+    let mut encoder = gzip_header().read(data, level);
     let mut compressed = Vec::new();
     encoder.read_to_end(&mut compressed)?;
     Ok(compressed)
@@ -512,6 +523,24 @@ mod tests {
         assert!(compressed.len() < input.len());
         let decompressed = gunzip_bytes(&compressed).unwrap();
         assert_eq!(decompressed, input);
+    }
+
+    #[test]
+    fn gzip_matches_node_bytes() {
+        let input = b"hello hello hello hello hello world";
+        let mut expected = vec![
+            0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0xc8, 0xc0,
+            0x41, 0x96, 0xe7, 0x17, 0xe5, 0xa4, 0, 0, 0x92, 0x80, 5, 0x89, 0x23, 0, 0, 0,
+        ];
+        if cfg!(target_os = "macos") {
+            expected[9] = 19;
+        }
+        if cfg!(target_os = "windows") {
+            expected[9] = 10;
+        }
+        let compressed = gzip_bytes(input).unwrap();
+        assert_eq!(compressed, expected);
+        assert_eq!(gunzip_bytes(&compressed).unwrap(), input);
     }
 
     #[test]
