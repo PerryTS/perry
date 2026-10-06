@@ -149,6 +149,16 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         "EventEmitterAsyncResource" => 0xFFFF0077,
         "AsyncLocalStorage" => 0xFFFF0078,
         "AsyncResource" => 0xFFFF0079,
+        // G1 (STREAM-PAYLOAD-DESIGN): `class X extends Readable` must link
+        // `X.prototype` to node's `Readable.prototype`, which carries the
+        // stream methods; the instances own only their state. Keep in sync
+        // with the classic-stream ids of `lower_instanceof` above and
+        // `reserved_native_parent_prototype_bits` in perry-runtime.
+        "Readable" => 0xFFFF0071,
+        "Writable" => 0xFFFF0072,
+        "Duplex" => 0xFFFF0073,
+        "Transform" => 0xFFFF0074,
+        "PassThrough" => 0xFFFF0075,
         _ => return None,
     })
 }

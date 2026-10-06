@@ -1099,6 +1099,33 @@ pub(crate) fn install_readable_async_iterator_symbol(stream: f64) {
     );
 }
 
+/// G1: `Readable.prototype[Symbol.asyncIterator]`, one closure that reads its
+/// receiver from the call-site `this` (capture slot 0 holds `undefined`), so
+/// no classic stream instance carries its own copy.
+pub(crate) fn install_readable_async_iterator_symbol_on_prototype(proto: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(proto);
+    let async_iterator = crate::symbol::well_known_symbol("asyncIterator");
+    if async_iterator.is_null() {
+        return;
+    }
+    let closure = scope.root_raw_mut_ptr(js_closure_alloc(
+        crate::fn_info!(ns_async_iterator, 0; with_declared(0)),
+        1,
+    ));
+    closure.with_mut_ptr(|closure| {
+        js_closure_set_capture_ptr(closure, 0, crate::value::TAG_UNDEFINED as i64)
+    });
+    let symbol_value = box_pointer(async_iterator as *const u8);
+    closure.with_const_ptr(|closure| unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            proto.get_nanbox_f64(),
+            symbol_value,
+            box_pointer(closure),
+        );
+    });
+}
+
 /// #9400: make a readable that owns its own listener registry async-iterable —
 /// `process.stdin`. Like [`install_foreign_readable_async_iterator_symbol`] it
 /// starts the flow through the object's public `resume()`, and additionally

@@ -55,6 +55,11 @@ pub use async_runtime::{
 
 pub mod turnloop_net;
 
+/// Native-payload streams (#11919): a codec family whose objects are ordinary
+/// runtime Transforms/Writables, reached through the `StreamHooks` its payload
+/// cell's vtable names.
+pub mod native_stream;
+
 /// turnloop P10: run a job on the loop of the agent this thread acts for.
 ///
 /// What a binding uses INSTEAD of keeping an async runtime alive when it is a

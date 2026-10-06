@@ -94,11 +94,6 @@ pub(super) fn init_lifecycle_state(stream: f64, opts: f64) {
     set_visible_closed(stream, false);
 }
 
-pub(super) fn init_constructor(stream: f64, name: &str) {
-    let constructor = crate::object::bound_native_callable_export_value("stream", name);
-    set_hidden_value(stream, hidden_key(b"constructor"), constructor);
-}
-
 pub(super) fn set_visible_readable(stream: f64, readable: bool) {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_some() {
         let value = if readable { TAG_TRUE } else { TAG_FALSE };
@@ -302,7 +297,8 @@ pub(super) fn init_duplex_state(stream: f64, opts: f64) {
     } else {
         TAG_TRUE
     };
-    set_hidden_value(
+    // node's own enumerable `allowHalfOpen`.
+    set_visible_own_value(
         stream,
         hidden_key(b"allowHalfOpen"),
         f64::from_bits(allow_half_open),
@@ -335,8 +331,9 @@ mod pipeline;
 mod web_adapter;
 
 pub use builders::{
-    js_array_subclass_init, js_event_emitter_async_resource_subclass_init,
-    js_event_emitter_subclass_init, js_node_stream_duplex_new, js_node_stream_duplex_subclass_init,
+    init_transform_in_place, init_writable_payload_in_place, js_array_subclass_init,
+    js_event_emitter_async_resource_subclass_init, js_event_emitter_subclass_init,
+    js_node_stream_duplex_new, js_node_stream_duplex_subclass_init,
     js_node_stream_legacy_subclass_init, js_node_stream_passthrough_new,
     js_node_stream_passthrough_subclass_init, js_node_stream_readable_from,
     js_node_stream_readable_from_options, js_node_stream_readable_new,

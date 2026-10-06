@@ -28,7 +28,7 @@ pub(crate) static PAYLOAD_FINALIZED: std::sync::atomic::AtomicUsize =
 
 static MAIN_THREAD_ID: AtomicU64 = AtomicU64::new(0);
 
-type NativeHandleFinalizer = unsafe extern "C" fn(*mut c_void, *mut c_void);
+pub(crate) type NativeHandleFinalizer = unsafe extern "C" fn(*mut c_void, *mut c_void);
 
 /// GC payload for a Perry native handle.
 #[repr(C)]
@@ -309,11 +309,11 @@ unsafe fn finalize_once_with(handle: *mut NativeHandleHeader, account: bool) -> 
     if !sabotage {
         (*handle).finalized = 1;
     }
+    let drop_fn = cell_drop_fn(handle);
     let should_finalize = (*handle).ownership == OWNERSHIP_OWNED
         && !(*handle).resource_ptr.is_null()
-        && !(*handle).finalizer.is_null();
-    if should_finalize {
-        let finalizer: NativeHandleFinalizer = std::mem::transmute((*handle).finalizer);
+        && drop_fn.is_some();
+    if let (true, Some(finalizer)) = (should_finalize, drop_fn) {
         finalizer((*handle).resource_ptr, ptr::null_mut());
     }
     (*handle).finalized = 1;
@@ -326,11 +326,48 @@ unsafe fn finalize_once_with(handle: *mut NativeHandleHeader, account: bool) -> 
     should_finalize
 }
 
+/// The function that frees the cell's resource: the C finalizer of a plain
+/// handle, or the `drop` of a Rust payload's [`PayloadVTable`] (the cell's
+/// `finalizer` word names the family's static vtable when the
+/// [`VTABLE_WORD`](crate::native_payload::VTABLE_WORD) flag is set).
+///
+/// [`PayloadVTable`]: crate::native_payload::PayloadVTable
+#[inline]
+pub(crate) unsafe fn cell_drop_fn(
+    handle: *const NativeHandleHeader,
+) -> Option<NativeHandleFinalizer> {
+    let word = (*handle).finalizer;
+    if word.is_null() {
+        return None;
+    }
+    if (*handle).flags & crate::native_payload::VTABLE_WORD != 0 {
+        return Some((*(word as *const crate::native_payload::PayloadVTable)).drop);
+    }
+    Some(std::mem::transmute::<*mut c_void, NativeHandleFinalizer>(
+        word,
+    ))
+}
+
+/// The static vtable of a Rust-payload cell (`None` for a plain handle).
+#[inline]
+pub(crate) unsafe fn cell_vtable(
+    handle: *const NativeHandleHeader,
+) -> Option<&'static crate::native_payload::PayloadVTable> {
+    if (*handle).flags & crate::native_payload::VTABLE_WORD == 0 || (*handle).finalizer.is_null() {
+        return None;
+    }
+    Some(&*((*handle).finalizer as *const crate::native_payload::PayloadVTable))
+}
+
 /// Create an OWNED handle cell for a Rust payload (#11919 P0).
 ///
-/// `drop_thunk` is the monomorphized `Box<T>` drop for `resource_ptr`; it is
-/// the cell's finalizer, so it runs once per install: on release, at the sweep
-/// that finds the cell dead, or at thread teardown, whichever comes first.
+/// `vtable` is the payload type's static [`PayloadVTable`]: its `drop` frees
+/// `resource_ptr` once per install (on release, at the sweep that finds the
+/// cell dead, or at thread teardown, whichever comes first), and its `stream`
+/// hooks, when present, are how the runtime's stream machinery reaches the
+/// payload's codec. The cell's `finalizer` word names the vtable (no growth).
+///
+/// [`PayloadVTable`]: crate::native_payload::PayloadVTable
 /// The cell starts with no external bytes: the owner reports them with
 /// [`native_handle_set_external_bytes`] once the cell is reachable, because
 /// that report can start a collection. The cell is bound to the creating
@@ -338,24 +375,26 @@ unsafe fn finalize_once_with(handle: *mut NativeHandleHeader, account: bool) -> 
 pub(crate) unsafe fn native_handle_new_rust_payload(
     resource_ptr: *mut c_void,
     type_id: u64,
-    drop_thunk: NativeHandleFinalizer,
+    vtable: &'static crate::native_payload::PayloadVTable,
     debug_name: &str,
 ) -> *mut NativeHandleHeader {
     runtime_main_thread_id();
+    let word = vtable as *const crate::native_payload::PayloadVTable as *mut c_void;
     let value = native_handle_new(
         resource_ptr as i64,
         type_id as i64,
         OWNERSHIP_OWNED,
         0,
         THREAD_CREATOR as i32,
-        drop_thunk as *mut c_void,
+        word,
         debug_name.as_ptr(),
         debug_name.len() as i64,
     );
     let cell = crate::value::JSValue::from_bits(value.to_bits()).as_pointer::<NativeHandleHeader>()
         as *mut NativeHandleHeader;
-    // alloc_closed has no resource yet, but retains its eventual drop thunk.
-    (*cell).finalizer = drop_thunk as *mut c_void;
+    // alloc_closed has no resource yet, but retains its eventual vtable.
+    (*cell).finalizer = word;
+    (*cell).flags |= crate::native_payload::VTABLE_WORD;
     cell
 }
 
@@ -428,9 +467,10 @@ pub(crate) unsafe fn native_handle_release_rust_payload(handle: *mut NativeHandl
         return false;
     }
     (*handle).flags |= crate::native_payload::CLOSING;
-    if (*handle).ownership == OWNERSHIP_OWNED && !(*handle).finalizer.is_null() {
-        let finalizer: NativeHandleFinalizer = std::mem::transmute((*handle).finalizer);
-        finalizer((*handle).resource_ptr, ptr::null_mut());
+    if (*handle).ownership == OWNERSHIP_OWNED {
+        if let Some(finalizer) = cell_drop_fn(handle) {
+            finalizer((*handle).resource_ptr, ptr::null_mut());
+        }
     }
     (*handle).resource_ptr = ptr::null_mut();
     (*handle).ownership = OWNERSHIP_NULL;

@@ -51,6 +51,11 @@ fn queue_destroy_events(stream: f64, err: f64) {
     let closure = js_closure_alloc(crate::fn_info!(ns_destroy_error_microtask, 0), 2);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
     js_closure_set_capture_f64(closure, 1, err);
+    #[cfg(test)]
+    if super::native_hooks::stream_sabotage("close_sync") {
+        ns_destroy_error_microtask(closure, crate::closure::JsThis::from_f64(stream));
+        return;
+    }
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
@@ -72,6 +77,10 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
     }
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_TRUE));
     super::refresh_readable_aborted_flag(stream);
+    // A native-payload stream releases its codec now, before any event is
+    // queued: the native memory returns at once, not at the next sweep, and
+    // a still-queued step finds the stream destroyed (STREAM-PAYLOAD §2).
+    super::native_hooks::release_on_destroy(stream);
     if let Some(destroy) = get_hidden_value(stream, hidden_key(b"__perryStreamDestroy")) {
         if super::is_callable_value(destroy) {
             let cb = js_closure_alloc(

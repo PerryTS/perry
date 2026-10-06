@@ -138,8 +138,13 @@ pub(crate) fn displaced_native_base_method(this_value: f64, name: &str) -> Optio
 /// The user's own overrides on the class prototypes in between are skipped by
 /// that identity test, so `super.emit` can never re-enter the override.
 fn inherited_event_emitter_method(this_value: f64, name: &str) -> Option<f64> {
+    // G1: the stream prototypes carry the readable/writable bodies too, so a
+    // `super.push(...)` / `super.write(...)` from a stream subclass override
+    // finds its base the same way `super.emit(...)` does.
     let infos: Vec<StubFn> = super::emitter_methods()
         .iter()
+        .chain(super::readable_methods().iter())
+        .chain(super::writable_methods().iter())
         .filter(|(method, _)| *method == name)
         .map(|(_, info)| *info)
         .collect();
@@ -628,27 +633,6 @@ pub(crate) unsafe fn install_event_emitter_async_resource_instance_methods(
 #[inline]
 pub(super) fn box_pointer(ptr: *const u8) -> f64 {
     f64::from_bits(JSValue::pointer(ptr).bits())
-}
-
-pub(super) fn install_stream_async_dispose_symbol(stream: f64) {
-    let async_dispose = crate::symbol::well_known_symbol("asyncDispose");
-    if async_dispose.is_null() {
-        return;
-    }
-    let closure = js_closure_alloc(crate::fn_info!(ns_async_dispose, 0; with_declared(0)), 1);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
-    set_hidden_value(
-        stream,
-        hidden_key(b"__perry_async_dispose__"),
-        box_pointer(closure as *const u8),
-    );
-    unsafe {
-        crate::symbol::js_object_set_symbol_property(
-            stream,
-            box_pointer(async_dispose as *const u8),
-            box_pointer(closure as *const u8),
-        );
-    }
 }
 
 #[inline]
