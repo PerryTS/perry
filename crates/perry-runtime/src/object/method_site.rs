@@ -703,12 +703,12 @@ unsafe fn lookup_entry(
 #[inline(always)]
 unsafe fn bare_collection(bits: u64) -> bool {
     let addr = (bits & crate::value::POINTER_MASK) as usize;
-    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
-        || !crate::value::addr_class::is_above_handle_band(addr)
-    {
+    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
         return false;
     }
-    let header = &*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+        return false;
+    };
     if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         return false;
     }
@@ -795,12 +795,12 @@ unsafe fn memo_hit(slot: *mut MethodSiteSlot, bits: u64) -> Option<(u64, u64)> {
 #[inline]
 unsafe fn closure_of_body(value: u64, info: u64) -> bool {
     let h = (value & crate::value::POINTER_MASK) as usize;
-    if value & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
-        || !crate::value::addr_class::is_above_handle_band(h)
-    {
+    if value & !crate::value::POINTER_MASK != crate::value::POINTER_TAG {
         return false;
     }
-    let header = &*((h - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
+    let Some(header) = crate::value::addr_class::try_read_gc_header(h) else {
+        return false;
+    };
     header.obj_type == crate::gc::GC_TYPE_CLOSURE
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && (*(h as *const crate::closure::ClosureHeader)).info as u64 == info

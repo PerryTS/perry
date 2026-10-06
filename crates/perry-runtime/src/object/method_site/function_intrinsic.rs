@@ -174,19 +174,19 @@ unsafe fn entry_holds(e: &MethodEntry) -> bool {
         return false;
     }
     let method = (value & crate::value::POINTER_MASK) as usize;
-    crate::value::addr_class::is_above_handle_band(method)
-        && is_live_closure(method)
+    is_live_closure(method)
         && (*(method as *const crate::closure::ClosureHeader)).info as u64 == e.info
 }
 
-/// Is the heap cell at `addr` a closure that has not been forwarded? Its
-/// GcHeader type byte and flags, read in place (the emitted method site reads
-/// the same half-word to prove a slot value a closure).
+/// Is `addr` a heap closure that has not been forwarded? Its GcHeader type
+/// byte and flags, read in place (the emitted method site reads the same
+/// half-word to prove a slot value a closure).
 #[inline(always)]
 unsafe fn is_live_closure(addr: usize) -> bool {
-    let header = &*((addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
-    header.obj_type == crate::gc::GC_TYPE_CLOSURE
-        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+    crate::value::addr_class::try_read_gc_header(addr).is_some_and(|header| {
+        header.obj_type == crate::gc::GC_TYPE_CLOSURE
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+    })
 }
 
 /// Run the intrinsic an entry's `code` names on the function `recv`: what

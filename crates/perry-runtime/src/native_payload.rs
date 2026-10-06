@@ -1711,13 +1711,15 @@ pub unsafe fn link_ref(link: OwnerLink) {
         #[cfg(test)]
         if callback_sabotage("latch") {
             crate::gc::pin_object(
-                (((*cell).owner & crate::value::POINTER_MASK) as *mut u8)
-                    .sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader,
+                crate::gc::header_from_trusted_user_ptr(
+                    ((*cell).owner & crate::value::POINTER_MASK) as *const u8,
+                )
+                .cast_mut(),
             );
             return;
         }
         crate::gc::pin_object_non_young(
-            (cell as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
+            crate::gc::header_from_trusted_user_ptr(cell as *const u8).cast_mut(),
         );
     }
 }
@@ -1734,7 +1736,7 @@ pub unsafe fn link_unref(link: OwnerLink) {
     (*cell).refs -= 1;
     if (*cell).refs == 0 {
         crate::gc::unpin_object(
-            (cell as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader
+            crate::gc::header_from_trusted_user_ptr(cell as *const u8).cast_mut(),
         );
     }
 }
