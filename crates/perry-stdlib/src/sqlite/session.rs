@@ -209,7 +209,8 @@ pub(crate) unsafe fn changeset_bytes_from_value(value: f64) -> Vec<u8> {
                 == Some(perry_runtime::typedarray::KIND_UINT8)
         {
             let bytes = perry_runtime::buffer::bytes::no_gc(|scope| {
-                let value = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+                let value =
+                    f64::from_bits(perry_runtime::JSValue::pointer(addr as *const u8).bits());
                 perry_runtime::buffer::bytes::bytes(value, scope)
                     .ok()
                     .map(<[u8]>::to_vec)
