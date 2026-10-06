@@ -1632,7 +1632,7 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 ///
 /// Read this before spending a bit. It is the only place both namespaces are
 /// written down together, and the reason it exists is that they are not:
-/// `OBJ_FLAG_*` lives here, `GC_OBJ_TYPED_LAYOUT_INTACT` / `GC_LAYOUT_*` live
+/// `OBJ_FLAG_*` lives here, `GC_LAYOUT_*` live
 /// in `gc/layout.rs`, and a comment in this file used to claim bits 12..13
 /// were "the last free bits" while `gc/layout.rs` already owned 12, 13, 14
 /// and 15.
