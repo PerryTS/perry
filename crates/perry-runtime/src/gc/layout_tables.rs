@@ -1293,6 +1293,14 @@ pub(in crate::gc) unsafe fn layout_payload_slot_count(
                 (slot_index + 1).max(expected)
             }
         }
+        GC_TYPE_CLOSURE => {
+            // Captures have a fixed live range, unlike an array append. Use
+            // the tracer's range: a tiny closure cannot earn the native mask
+            // and young-log entry any more than a tiny array can. Its own
+            // property bag is a separate fixed edge, outside this range.
+            crate::closure::gc_capture_slot_range(user_ptr as *mut crate::closure::ClosureHeader)
+                .map_or(usize::MAX, |range| range.slot_count)
+        }
         GC_TYPE_OBJECT => {
             let size = (*header).size as usize;
             match size.checked_sub(GC_HEADER_SIZE) {

@@ -250,6 +250,35 @@ fn test_copying_minor_relocates_managed_closure_and_rewrites_capture() {
 }
 
 #[test]
+fn test_small_closure_scan_rewrites_capture_and_preserves_numbers() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let child = young_leaf();
+    let closure = crate::closure::js_closure_alloc(&TEST_CAPTURED_SINGLETON_INFO, 3);
+    crate::closure::js_closure_set_capture_f64(closure, 0, 10.0);
+    crate::closure::js_closure_set_capture_f64(closure, 1, f64::from_bits(ptr_bits(child)));
+    crate::closure::js_closure_set_capture_f64(closure, 2, 30.0);
+    assert_eq!(
+        test_layout_pointer_slot_count(closure as usize, 3),
+        None,
+        "a tiny capture range uses the existing tag scan, without a pointer mask"
+    );
+    js_shadow_slot_set(0, ptr_bits(closure as usize));
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    let slots = unsafe {
+        (after as *const u8).add(std::mem::size_of::<crate::closure::ClosureHeader>()) as *const u64
+    };
+    let moved_child = unsafe { *slots.add(1) & POINTER_MASK } as usize;
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert_ne!(after, closure as usize);
+    assert_ne!(moved_child, child);
+    assert!(crate::arena::pointer_in_nursery(moved_child));
+    assert_eq!(f64::from_bits(unsafe { *slots }), 10.0);
+    assert_eq!(f64::from_bits(unsafe { *slots.add(2) }), 30.0);
+}
+
+#[test]
 fn test_copying_minor_relocates_managed_map() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
