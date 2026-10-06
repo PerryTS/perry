@@ -5,7 +5,8 @@ process entry keeps startup and its event loop and calls that initializer.
 
 Register the already compiled program entry in the existing worker entry table
 and accept URL literals naming it. Include runtime and CommonJS namespace
-constructors in the per-thread module-state decision. This also supports `new Worker(__filename)`,
+constructors in the per-thread module-state decision and prepare a CommonJS
+entry record on each worker thread. This also supports `new Worker(__filename)`,
 `new Worker(fileURLToPath(import.meta.url))`, runtime filename dispatch,
 `workerData` and top-level await in a self-spawning worker.
 

@@ -81,6 +81,12 @@ pub(super) fn compile_module_init(
         {
             let blk = wrap_fn.block_mut(2).unwrap();
             blk.store(I8, "1", &format!("@{}", done_global));
+            // A CommonJS program entry claims this thread's main-module
+            // record in its wrapper preamble. Main publishes it before eager
+            // imports; a worker also needs it before evaluating dependencies.
+            if is_entry && crate::collectors::is_cjs_wrapped_module(hir) {
+                blk.call_void("js_bootstrap_cjs_main_module_placeholder", &[]);
+            }
             // Cyclic dependencies may call our hoisted functions before
             // our body. Prepare literal infrastructure without evaluating
             // declared classes or any user statement ahead of dependencies.
