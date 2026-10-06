@@ -52,7 +52,6 @@
 2 0 crates/perry-runtime/src/array/header.rs
 1 0 crates/perry-runtime/src/array/named_props.rs
 3 0 crates/perry-runtime/src/async_hooks.rs
-1 0 crates/perry-runtime/src/buffer/detach.rs
 6 0 crates/perry-runtime/src/buffer/header.rs
 2 0 crates/perry-runtime/src/buffer/view.rs
 1 0 crates/perry-runtime/src/builtins/console.rs
