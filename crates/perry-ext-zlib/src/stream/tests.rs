@@ -27,6 +27,18 @@ fn input(codec: Codec, bytes: &[u8]) -> Vec<u8> {
     run_codec(codec, bytes).unwrap()
 }
 #[test]
+fn gzip_stream_and_one_shot_emit_identical_node_bytes() {
+    let bytes = b"hello hello hello hello hello world";
+    let expected = crate::gzip_bytes(bytes).unwrap();
+    assert_eq!(run_codec(Codec::Gzip, bytes).unwrap(), expected);
+    let mut encoder = make_codec_state(Codec::Gzip).unwrap();
+    encoder.write_chunk(bytes).unwrap();
+    let compressed = encoder.finish().unwrap();
+    assert_eq!(compressed, expected);
+    assert_eq!(crate::gunzip_bytes(&compressed).unwrap(), bytes);
+}
+
+#[test]
 fn decoder_suspends_at_hwm_and_resumes_without_losing_bytes() {
     let expected = vec![65; 2_000_000];
     let compressed = input(Codec::Gzip, &expected);
