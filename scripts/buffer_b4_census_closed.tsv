@@ -71,3 +71,4 @@ perry-stdlib	perry-stdlib/src/crypto/kdf.rs:173	creation	buffer_alloc	prod	retur
 perry-stdlib	perry-stdlib/src/crypto/kdf.rs:196	creation	buffer_alloc	prod	perry_runtime::buffer::buffer_alloc(0)
 perry-updater	perry-updater/src/core.rs:435	creation	buffer_alloc	prod	let out = perry_runtime::buffer::buffer_alloc(32);
 perry-updater	perry-updater/src/core.rs:439	size-assumption	header length write	prod	(*out).length = 32;
+perry-stdlib	perry-stdlib/src/crypto/sign.rs:51	creation	buffer_alloc	prod	Err(_) => return perry_runtime::buffer::buffer_alloc(0),

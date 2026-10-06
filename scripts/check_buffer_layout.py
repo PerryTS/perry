@@ -21,6 +21,7 @@ PATTERNS = [
     re.compile(r'\b(?:buf(?:fer)?(?:_data|_ptr)?|ta|view|result)\s*(?:as\s+\*\s*(?:const|mut)\s+u8\s*)?\)?\s*\.add\(\s*(?:8|16)\s*\)'),
     re.compile(r'\(\*(?:buf(?:fer)?(?:_ptr)?|ta|view|result|backing)\)\.(?:length|capacity)\s*=(?!=)'),
     re.compile(r'(?<!fn )\b(?:buffer_data(?:_mut)?|typed_array_bytes(?:_mut)?|js_value_buffer_or_typedarray_data|js_native_buffer_data_ptr)\s*\('),
+    re.compile(r'\btypedarray::data_ptr(?:_mut)?\s*\('),
 ]
 # These are the layout/accessor implementations, rather than byte consumers.
 ACCESSORS = {
@@ -67,6 +68,7 @@ def self_test():
             'let ptr = crate::buffer::buffer_data(buffer);',
             'let data = typed_array_bytes(ta);',
             'let data = js_value_buffer_or_typedarray_data(value, &mut len);',
+            'let data = crate::typedarray::data_ptr_mut(ta);',
         ]] + [(emitted, code) for code in [
             'let data = blk.add(I64, &raw, "8");',
             'let data = blk.gep(I8, &header, &[(I32, "16")]);',

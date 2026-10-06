@@ -476,11 +476,12 @@ unsafe fn new_buffer(bytes: &[u8]) -> *mut crate::buffer::BufferHeader {
 unsafe fn owned_typed_array(kind: u8, length: u32, bytes: &[u8]) -> u64 {
     let ta = crate::typedarray::typed_array_alloc(kind, length);
     if !bytes.is_empty() {
-        ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            crate::typedarray::data_ptr_mut(ta),
-            bytes.len(),
-        );
+        crate::buffer::bytes::no_gc(|scope| {
+            let value = crate::value::js_nanbox_pointer(ta as i64);
+            let destination = crate::buffer::bytes::bytes_mut(value, scope)
+                .expect("fresh typed array must expose its bytes");
+            destination[..bytes.len()].copy_from_slice(bytes);
+        });
     }
     JSValue::pointer(ta as *const u8).bits()
 }
