@@ -36,7 +36,6 @@ pub(crate) fn note_full_weak_processing_work_unit() {
 }
 
 pub(crate) fn clear_weak_holders() {
-    super::index::clear_weak_collection_indexes();
     WEAK_HOLDERS.with(|holders| holders.borrow_mut().clear());
 }
 
@@ -65,14 +64,31 @@ pub(crate) fn weak_entry_visits() -> usize {
     WEAK_ENTRY_VISITS.with(std::cell::Cell::get)
 }
 
-pub(crate) fn cached_weak_collections() -> usize {
-    super::index::cached_collections()
-}
-
 pub(crate) fn weak_entry_extent(map: f64) -> u32 {
     unsafe {
         let map = super::js_nanbox_get_pointer(map) as *mut super::ObjectHeader;
-        super::js_array_length(super::entries_array(map))
+        let store = super::storage::owned_storage(map);
+        if store.is_null() {
+            0
+        } else {
+            (*store).len
+        }
+    }
+}
+
+pub(crate) fn reserve_weak_storage_for_tests(map: f64, capacity: u32) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let map = scope.root_nanbox_f64(map);
+    loop {
+        unsafe {
+            let owner =
+                super::js_nanbox_get_pointer(map.get_nanbox_f64()) as *mut super::ObjectHeader;
+            let table = super::storage::owned_storage(owner);
+            if !table.is_null() && (*table).capacity >= capacity {
+                break;
+            }
+            super::storage::grow(map);
+        }
     }
 }
 

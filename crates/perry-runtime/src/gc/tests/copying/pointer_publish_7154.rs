@@ -140,8 +140,7 @@ fn test_bound_this_capture_is_traced_after_method_bind_7154() {
 }
 
 /// `js_weakmap_set` overwriting an EXISTING key publishes the new value into
-/// field 1 (+40 from the user pointer — the offset #7154's diagnostic scan
-/// reports) of an already-reachable entry object.
+/// the value word of an entry in the map-owned storage cell.
 ///
 /// The interesting case is the OLD entry: once the entry has been promoted, an
 /// overwrite creates an old→young edge, and only the write barrier puts that
@@ -227,26 +226,18 @@ fn test_weakmap_overwrite_value_is_traced_7154() {
     }
 }
 
-/// Address of the entry object a WeakMap holds for `key`, found by walking the
-/// map's entries array the same way `js_weakmap_get` does.
+/// Address of the owned entry holding `key`; it has its storage cell's generation.
 fn weak_entry_addr_for(map: f64, key: f64) -> usize {
-    let map_ptr = (map.to_bits() & POINTER_MASK) as *mut crate::ObjectHeader;
-    // #7277: the calls below are safe fns; the wrapper was redundant.
-    let entries = crate::object::js_object_get_field(map_ptr, 0);
-    let entries_ptr = (entries.bits() & POINTER_MASK) as *mut crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(entries_ptr) as usize;
-    for i in 0..len {
-        let entry_val = crate::array::js_array_get(entries_ptr, i as u32);
-        let entry = (entry_val.bits() & POINTER_MASK) as *mut crate::ObjectHeader;
-        if entry.is_null() {
-            continue;
+    unsafe {
+        let owner = (map.to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
+        let table = crate::weakref::storage::owned_storage(owner);
+        if table.is_null() {
+            return 0;
         }
-        let stored_key = crate::object::js_object_get_field(entry, 0);
-        if stored_key.bits() == key.to_bits() {
-            return entry as usize;
-        }
+        (*table)
+            .find(key.to_bits())
+            .map_or(0, |(_, entry)| entry as usize)
     }
-    0
 }
 
 /// A freshly allocated closure's capture slots must read as a non-pointer

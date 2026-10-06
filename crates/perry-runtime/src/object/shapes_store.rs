@@ -124,8 +124,8 @@ pub(crate) struct ShapeRecord {
     /// Low 8 bits: the `RECORD_FLAG_*` set. Bits 8-10: the `ShapeObjectKind`
     /// discriminant (codes 0-6; the store facts F-A/F-B are kinds 5 and 6).
     /// Bits 11-14: the births a keyless birth shape served while tracking its
-    /// width (#10905). Bit 15: reserved (it held the answerable-by-position
-    /// bit, which is now [`Self::position_bound`]'s zero). Bits 16-23: the
+    /// width (#10905). Bit 15: derived WeakMap/WeakSet brand summary.
+    /// Bits 16-23: the
     /// attribute SUMMARY byte (`key_attrs::SUMMARY_*`), an identity fact.
     /// Bits 24-31: the inline width a keyless birth shape's descendants grow
     /// to (#10905). The two #10905 fields are learned facts of the record,
@@ -165,6 +165,7 @@ pub(crate) struct ShapeRecord {
     extras: u64,
 }
 
+const RECORD_WEAK_COLLECTION: u32 = 1 << 15;
 const RECORD_KIND_SHIFT: u32 = 8;
 const RECORD_KIND_MASK: u32 = 0b111 << RECORD_KIND_SHIFT;
 /// The largest `ShapeObjectKind::code()` (`NativeNamespace`, 7).
@@ -197,6 +198,7 @@ const _: () = {
         0xFF,
         RECORD_KIND_MASK,
         RECORD_BIRTHS_MASK,
+        RECORD_WEAK_COLLECTION,
         RECORD_SUMMARY_MASK,
         RECORD_WIDTH_MASK,
     ];
@@ -482,33 +484,6 @@ impl ShapeRecord {
     pub(super) fn with_rep(mut self, rep: u64) -> ShapeRecord {
         debug_assert!(crate::object::field_rep::is_valid(rep), "reserved rep lane");
         self.rep = rep;
-        self
-    }
-
-    /// Install a SPECIAL rep with its exact ConstFn body identities. A `11`
-    /// lane absent from `infos` is reserved for optional NoPointer. The old
-    /// `with_rep` keeps rejecting `11`, so no legacy mint silently omits the
-    /// identity fact. Called only after the interner misses.
-    #[inline(always)]
-    pub(super) fn with_special_facts(
-        mut self,
-        rep: u64,
-        infos: &[ConstFnSlotInfo],
-        brands: &[u64],
-    ) -> ShapeRecord {
-        assert_eq!(self.extras, 0, "special facts replace a fresh record only");
-        let mask = constfn_mask(infos).expect("invalid ConstFn slot list");
-        assert!(crate::object::field_rep::is_valid_with_special(rep, mask));
-        assert_eq!(mask & !crate::object::field_rep::special_lane_slots(rep), 0);
-        assert!(
-            brands_are_sorted(brands),
-            "a brand list is sorted and unique"
-        );
-        self.rep = rep;
-        self.special_constfn_mask = mask;
-        if !infos.is_empty() || !brands.is_empty() {
-            self.extras = new_extras(infos, brands);
-        }
         self
     }
 
@@ -1997,3 +1972,6 @@ impl IdList {
 #[cfg(test)]
 #[path = "shapes_store_tests.rs"]
 mod tests;
+
+#[path = "shapes_store_special.rs"]
+mod special;

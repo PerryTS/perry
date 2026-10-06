@@ -1222,6 +1222,7 @@ pub fn gc_init() {
     // keeps a dead holder alive. Copied-minor liveness/prune is driven by
     // `process_weak_targets_from_registry`; this covers full-cycle currency.
     reg_scanner!(crate::weakref::scan_weak_holders_roots_mut);
+    reg_scanner!(ephemeron::scan_ephemeron_seeds_roots_mut);
     // Issue #841: GC roots for the per-(submodule, export) function
     // singletons + per-submodule namespace stub objects allocated by
     // `node_submodules.rs`. Without this scanner the next GC cycle
@@ -1795,3 +1796,6 @@ pub(crate) use tests::support::{
 pub(crate) fn test_external_side_live_bytes() -> usize {
     policy::external_side_live_bytes()
 }
+
+mod ephemeron;
+pub(crate) use ephemeron::weak_collection_store_barrier;

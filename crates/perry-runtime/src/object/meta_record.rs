@@ -232,9 +232,9 @@ pub struct ObjectMeta {
     /// storage identity. It survives evacuation and never retains another
     /// object. Class objects cannot also be native decoders or Sets.
     ///
-    /// POD. Never a managed-heap edge — the GC trace arm visits this record's
-    /// child edges explicitly and this word is not one of them, exactly like
-    /// `array_tail_object_hot`.
+    /// Native payload families and WeakMap/WeakSet store their object-owned
+    /// GC cell here as a POINTER_TAG word. The GC descriptor traces and
+    /// rewrites that edge. Other families store untagged POD and no edge.
     ///
     /// LAST FIELD ON PURPOSE: this record carries `offset_of!` assertions for
     /// the words codegen and the spill lanes address by index, so a new field

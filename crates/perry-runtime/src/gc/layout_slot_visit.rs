@@ -513,8 +513,8 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             visit(fixed_slot(
                 &mut (*meta).private_evaluation_brand as *mut u64,
             ));
-            // #11919 P0: a native-payload object's `native_state` is its
-            // POINTER_TAG-boxed payload cell, reachable ONLY through this
+            // Native payload and weak-collection `native_state` is its
+            // POINTER_TAG-boxed owned cell, reachable ONLY through this
             // record, so it is a child edge exactly like `arguments`. Other
             // families pack POD into the same word (text bits, timer/tui ids,
             // a Set's malloc'd index, a class's private-storage serial) and
@@ -540,6 +540,17 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             crate::buffer::visit_ab_alias_slot(user_ptr as usize, |slot| {
                 visit(fixed_slot(slot));
             });
+        }
+        GcRewriteDescriptorKind::WeakStorage => {
+            let storage = user_ptr as *mut crate::weakref::storage::WeakStorage;
+            for i in 0..(*storage).len {
+                let entry = (*storage).entries().add(i as usize);
+                // Free-list words are scalars, never JS edges.
+                if (*entry).key != crate::value::TAG_UNDEFINED {
+                    visit(fixed_slot(&mut (*entry).key));
+                    visit(fixed_slot(&mut (*entry).value));
+                }
+            }
         }
         GcRewriteDescriptorKind::Box => visit(fixed_slot(user_ptr as *mut u64)),
         GcRewriteDescriptorKind::Scope => {

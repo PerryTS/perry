@@ -577,7 +577,6 @@ fn fan_out(
     // Weak collection indexes contain untraced owner/key addresses. Discard
     // them before a copied-minor flip or full/fallback sweep can reuse memory.
     // This is cache cleanup only: no heap walk and no weak-holder latch.
-    crate::weakref::clear_weak_collection_indexes();
     for entry in DEAD_KEY_PRUNES {
         let is_dead: &dyn Fn(usize) -> bool = match entry.owner {
             DeadKeyOwner::Any => is_dead_owner,

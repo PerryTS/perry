@@ -1236,6 +1236,7 @@ pub(super) fn take_mark_seeds() -> Vec<*mut GcHeader> {
 
 #[inline]
 pub(super) fn clear_mark_seeds() {
+    super::ephemeron::clear_seeds();
     // An unfinished budgeted cycle is owned by another TLS value. During
     // thread teardown its Drop may run after MARK_SEEDS has already been
     // destroyed; at that point there is no surviving mutator that could

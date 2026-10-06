@@ -264,6 +264,12 @@ impl ShapeDescriptor {
 pub(crate) struct ShapeRecordRef(std::ptr::NonNull<ShapeRecord>);
 
 impl ShapeRecordRef {
+    #[inline]
+    pub(crate) fn weak_collection_brand(self) -> Option<u32> {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).weak_collection_brand() }
+    }
+
     /// The authoritative layout kind, without lifting a descriptor copy.
     #[inline]
     pub(crate) fn object_kind(self) -> ShapeObjectKind {

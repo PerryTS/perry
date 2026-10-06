@@ -95,6 +95,11 @@ pub struct ProxyEntry {
     pub constructable: bool,
 }
 
+struct ProxyTraceMarks {
+    seen: Vec<bool>,
+    revision: usize,
+}
+
 thread_local! {
     /// id -> entry. Index 0 is reserved so we never return a null handle.
     static PROXIES: RefCell<Vec<Option<Box<ProxyEntry>>>> = RefCell::new(vec![None]);
@@ -112,7 +117,7 @@ thread_local! {
     static REFLECT_METADATA: RefCell<HashMap<MetadataKey, f64>> = RefCell::new(HashMap::new());
     /// Live proxy ids observed by the current full GC trace. `None` outside a
     /// full trace; minors continue to root every registry entry strongly.
-    static PROXY_FULL_TRACE_LIVE: RefCell<Option<Vec<bool>>> = const { RefCell::new(None) };
+    static PROXY_FULL_TRACE_LIVE: RefCell<Option<ProxyTraceMarks>> = const { RefCell::new(None) };
     /// Hot reject-path gate: collector funnels test this before decoding a
     /// proxy-band payload, so ordinary marking pays one TLS boolean branch.
     static PROXY_FULL_TRACE_ACTIVE: Cell<bool> = const { Cell::new(false) };
@@ -291,7 +296,10 @@ pub(crate) fn gc_begin_full_trace() {
     });
     PROXY_FULL_TRACE_LIVE.with(|live| {
         assert!(live.borrow().is_none(), "proxy full trace already active");
-        *live.borrow_mut() = Some(vec![false; len]);
+        *live.borrow_mut() = Some(ProxyTraceMarks {
+            seen: vec![false; len],
+            revision: 0,
+        });
     });
     PROXY_FULL_TRACE_ACTIVE.with(|active| active.set(has_live_entries));
 }
@@ -329,11 +337,14 @@ pub(crate) fn gc_observe_traced_value(bits: u64, valid_ptrs: &crate::gc::ValidPo
     let first_observation = PROXY_FULL_TRACE_LIVE.with(|live| {
         let mut live = live.borrow_mut();
         let live = live.as_mut().expect("proxy observation outside full trace");
-        if id as usize >= live.len() {
-            live.resize(id as usize + 1, false);
+        if id as usize >= live.seen.len() {
+            live.seen.resize(id as usize + 1, false);
         }
-        let first = !live[id as usize];
-        live[id as usize] = true;
+        let first = !live.seen[id as usize];
+        live.seen[id as usize] = true;
+        if first {
+            live.revision = live.revision.wrapping_add(1);
+        }
         first
     });
     if first_observation {
@@ -343,6 +354,35 @@ pub(crate) fn gc_observe_traced_value(bits: u64, valid_ptrs: &crate::gc::ValidPo
         }
     }
     true
+}
+
+/// Revision of the existing collector-owned mark vector. Ephemeron cursors
+/// restart if a late weak read observes a new proxy without adding heap work.
+pub(crate) fn gc_trace_mark_revision() -> usize {
+    PROXY_FULL_TRACE_LIVE.with(|live| live.borrow().as_ref().map_or(0, |live| live.revision))
+}
+
+/// Read the existing full-trace mark for a weak proxy key without observing
+/// it. Minor collections conservatively keep this external registry alive.
+pub(crate) fn gc_weak_key_is_live(bits: u64, minor: bool) -> bool {
+    let Some(id) = decode_proxy_id((bits & POINTER_MASK) as i64) else {
+        return false;
+    };
+    if minor {
+        return PROXIES.with(|proxies| {
+            proxies
+                .borrow()
+                .get(id as usize)
+                .is_some_and(Option::is_some)
+        });
+    }
+    PROXY_FULL_TRACE_LIVE.with(|live| {
+        live.borrow()
+            .as_ref()
+            .and_then(|marks| marks.seen.get(id as usize))
+            .copied()
+            .unwrap_or(false)
+    })
 }
 
 /// End a full proxy trace and tombstone every registry entry whose handle was
@@ -359,7 +399,7 @@ pub(crate) fn gc_finish_full_trace() -> usize {
         let mut proxies = proxies.borrow_mut();
         let mut reclaimed = 0usize;
         for (id, slot) in proxies.iter_mut().enumerate().skip(1) {
-            if slot.is_some() && !live.get(id).copied().unwrap_or(false) {
+            if slot.is_some() && !live.seen.get(id).copied().unwrap_or(false) {
                 slot.take();
                 reclaimed += 1;
             }

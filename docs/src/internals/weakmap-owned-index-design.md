@@ -1,10 +1,40 @@
 # WeakMap lookup and owned identity storage
 
-Status: design only, based on `4c2e7fa2b53e8721ec01aa0d1a7a0921148ca6b4`.
-No runtime or codegen change is proposed for landing in this commit. The
-WeakMap performance lane explicitly permits stopping with a design when the
-correct fix requires a substantial redesign. This is that fallback, not a
-successful performance gate.
+Status: owned-storage and conditional-ephemeron implementation is complete;
+performance acceptance is blocked by TypeScript cycles. See
+[implementation validation](weakmap-owned-index-validation.md) for the fresh
+qb6 program matrix, floors, GC counts, and THP-disabled check. Rebased onto
+`68e41faa0f9145d8b8ab67ecb0cf414eaf13420b`, including c85c2db93 (#12105).
+The coordinator authorized the redesign on 2026-10-06 and filed the
+conditional tracing defect as #12087.
+The original design and diagnostic baseline below were recorded against
+`4c2e7fa2b53e8721ec01aa0d1a7a0921148ca6b4`; they are historical evidence,
+not acceptance measurements for the implementation.
+
+## Implemented representation
+
+WeakMap and WeakSet constructors add their internal brand to the Shape's
+private brand facts. A spare Shape flag summarizes those facts without
+changing the Shape record or ordinary object header size. Transitions retain
+the brand. The object owns a tagged `GC_TYPE_WEAK_STORAGE` edge through
+`ObjectMeta.native_state`; empty maps allocate that metadata lazily.
+
+The storage cell holds key/value pairs, twice-capacity open-addressed bucket
+offsets, and a reverse bucket offset per entry. The reverse offsets make
+delete and budgeted weak clearing constant work after lookup. Empty entries
+reuse their value word as a scalar free-list offset. No owner-address index,
+last-key cache, or extra copies of key pointer bits survive outside the cell.
+Growth discards the lookup view, roots all call arguments, reloads after
+allocation, and publishes the replacement through the existing meta barrier.
+
+Collectors discover the cell through its owner edge. Conditional closure
+traces values only for independently live keys, including cross-map and Proxy
+chains. The copying collector repairs authoritative pairs and rebuilds
+buckets before returning to the mutator. Budgeted non-moving closure and
+clearing charge entries individually. Weak pair publication maintains old to
+young coverage without unconditionally shading copied keys or values.
+Mark verification checks enabled values; rewrite and coverage verification
+continue to inspect both words.
 
 ## Measured baseline and verification
 
@@ -296,8 +326,10 @@ optimization.
    TypeScript, qs parse/stringify, commander and fastify. Reuse the real-program
    harness, not a replacement workload with different semantics.
 
-Every program must satisfy the owner's fixed +0.5% ceiling independently
-for `instructions:u`, `cycles:u` and RSS. Task-clock is informational.
-Identical-binary floors describe uncertainty; they do not relax that ceiling.
-No performance improvement, passing A/B gate or Node-level WeakMap cost is
-claimed for this design-only commit.
+The owner-approved PERF_POLICY_2026-10-06.md replaces the old fixed
+percentage/byte gates. The 2026-10-07 coordinator requests five interleaved
+runs per label and ten for TypeScript, on qb6 measurement cores under the
+shared lock, with ASLR disabled. Real-program deltas beyond same-binary
+floors need named mechanisms; a larger real-program regression goes to the
+owner. The current validation records the unresolved TypeScript CPU issue.
+Historical design measurements above do not establish an implementation pass.

@@ -156,28 +156,13 @@ pub fn weak_wrapper_class_id(receiver: f64) -> Option<u32> {
             Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {}
             _ => return None,
         }
-        let cid = (*(addr as *const ObjectHeader)).class_id;
-        if matches!(
-            cid,
-            CLASS_ID_WEAKMAP | CLASS_ID_WEAKSET | CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_REGISTRY
-        ) {
+        let obj = addr as *const ObjectHeader;
+        let cid = (*obj).class_id;
+        if matches!(cid, CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_REGISTRY) {
             return Some(cid);
         }
-        // User subclasses keep their own class id but their registered parent
-        // chain terminates at the reserved WeakMap/WeakSet constructor ids.
-        const CLASS_ID_WEAKMAP_RESERVED: u32 = 0xFFFF_002C;
-        const CLASS_ID_WEAKSET_RESERVED: u32 = 0xFFFF_002D;
-        let mut current = cid;
-        for _ in 0..64 {
-            match crate::object::get_parent_class_id(current) {
-                Some(CLASS_ID_WEAKMAP_RESERVED) => return Some(CLASS_ID_WEAKMAP),
-                Some(CLASS_ID_WEAKSET_RESERVED) => return Some(CLASS_ID_WEAKSET),
-                Some(parent) => current = parent,
-                None => break,
-            }
-        }
+        crate::weakref::storage::collection_brand(obj)
     }
-    None
 }
 
 /// True when `receiver` is a genuine instance of the weak wrapper `class_id`.

@@ -165,13 +165,10 @@ fn test_copied_minor_handle_band_key_not_false_tombstoned() {
     );
 }
 
-/// (4) Latch clears: a transient WeakMap whose wrapper AND entries all die is
-/// pruned from the registry by a full collection, so
-/// `weak_target_holders_allocated()` (registry non-empty) returns to false —
-/// the transient-WeakMap copied-minor cost returns to zero (the old bool latch
-/// stayed set forever).
+/// A WeakMap's owned cell never enters the WeakRef/finalization registry,
+/// even while it is populated; discovering its ephemerons is collector work.
 #[test]
-fn test_weak_holder_latch_clears_after_transient_weakmap_dies() {
+fn test_weakmap_storage_never_enters_weak_holder_registry() {
     let _guard = GcTestIsolationGuard::new();
     assert!(
         !crate::weakref::weak_target_holders_allocated(),
@@ -190,8 +187,8 @@ fn test_weak_holder_latch_clears_after_transient_weakmap_dies() {
         );
     }
     assert!(
-        crate::weakref::weak_target_holders_allocated(),
-        "the WeakMap entry must register a holder"
+        !crate::weakref::weak_target_holders_allocated(),
+        "WeakMap storage must be owned by the object, not a holder registry"
     );
 
     // Full (non-moving) mark-sweep → dead holders pruned via
@@ -200,7 +197,7 @@ fn test_weak_holder_latch_clears_after_transient_weakmap_dies() {
 
     assert!(
         !crate::weakref::weak_target_holders_allocated(),
-        "a transient WeakMap that died must return the weak-processing latch to zero"
+        "reclaiming WeakMap storage must leave the unrelated holder registry empty"
     );
 }
 
@@ -357,13 +354,13 @@ fn prepare_moved_full_path_weak_holders() {
     let before_move = crate::weakref::test_support::weak_holder_addresses();
     assert_eq!(
         before_move.len(),
-        4,
-        "one holder of every kind is registered"
+        2,
+        "only WeakRef and FinalizationRegistry need the holder registry"
     );
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
     let after_move = crate::weakref::test_support::weak_holder_addresses();
-    assert_eq!(after_move.len(), 4);
+    assert_eq!(after_move.len(), 2);
     assert!(
         before_move.iter().all(|addr| !after_move.contains(addr)),
         "every registered holder must be rekeyed after evacuation"
@@ -380,7 +377,7 @@ fn prepare_moved_full_path_weak_holders() {
     crate::weakref::test_support::register_weak_holder_address(0x1234_5678);
     assert_eq!(
         crate::weakref::test_support::weak_holder_addresses().len(),
-        6
+        4
     );
 
     let aged_from = crate::arena::general_block_count();
@@ -411,7 +408,7 @@ fn assert_full_path_weak_results() {
     );
     assert_eq!(
         crate::weakref::test_support::weak_holder_addresses().len(),
-        4,
+        2,
         "the dead holder and stale address must be pruned; live holders remain"
     );
 }
