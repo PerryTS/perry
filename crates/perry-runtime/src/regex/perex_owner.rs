@@ -102,14 +102,8 @@ impl<'scope> GcProgram<'scope> {
         // leaves a valid GC leaf that can be reclaimed normally, without a
         // finalizer or a leaked external owner. No GC call occurs in this scope.
         unsafe {
-            // GC_STORE_AUDIT(POINTER_FREE): the program cell is a leaf of u32 words; its prefix is a count.
-            cell.write(ProgramCell {
-                word_count: words,
-                witness: None,
-                registers: None,
-            });
+            init_program_cell(cell, words);
             let output = cell.add(1).cast::<u32>();
-            output.write_bytes(0, words);
             let output = std::slice::from_raw_parts_mut(output, words);
             plan.emit(output).map_err(BuildError::Compile)?;
         }
@@ -210,6 +204,36 @@ impl<'scope> GcProgram<'scope> {
         Ok(Self {
             root: scope.root_raw_const_ptr(ptr),
         })
+    }
+}
+
+/// Clear a freshly allocated program cell's whole payload, then write its
+/// prefix: an empty count-sized cell whose words emission fills.
+///
+/// The arena hands out recycled bytes uncleared, and `witness: None` and
+/// `registers: None` store only their discriminants, so without the clear the
+/// unused option payloads (and the padding after an odd word count) keep the
+/// previous occupant's words. Nothing reads them, but the whole-heap from-space
+/// scan does, and on tsc they were stale nursery addresses it reported as
+/// offenders in every regex program cell (16 per run, deterministic). The
+/// clear also provides the zeroed words emission requires.
+///
+/// # Safety
+/// `cell` must be the payload of a live `GC_TYPE_REGEX_PROGRAM` allocation
+/// sized for `words` program words, not yet visible to anything else.
+unsafe fn init_program_cell(cell: *mut ProgramCell, words: usize) {
+    unsafe {
+        let header = cell
+            .cast::<u8>()
+            .sub(crate::gc::GC_HEADER_SIZE)
+            .cast::<crate::gc::GcHeader>();
+        let payload = (*header).size as usize - crate::gc::GC_HEADER_SIZE;
+        debug_assert!(payload >= std::mem::size_of::<ProgramCell>() + words * 4);
+        // GC_STORE_AUDIT(POINTER_FREE): the program cell is a leaf of u32 words; its prefix is a count.
+        cell.cast::<u8>().write_bytes(0, payload);
+        std::ptr::addr_of_mut!((*cell).word_count).write(words);
+        std::ptr::addr_of_mut!((*cell).witness).write(None);
+        std::ptr::addr_of_mut!((*cell).registers).write(None);
     }
 }
 
@@ -552,6 +576,54 @@ impl ImmutableSubject for HeapSubject<'_> {
                 };
                 Ok(f(Subject::Wtf8(bytes)))
             })
+        }
+    }
+}
+
+#[cfg(test)]
+mod program_cell_tests {
+    use super::*;
+
+    /// A program cell laid out over `fill`-filled memory, as the arena hands it
+    /// out, initialised for `words` words. Returns the payload bytes.
+    fn init_over(fill: u8, words: usize) -> Vec<u8> {
+        let payload = (std::mem::size_of::<ProgramCell>() + words * 4 + 7) & !7;
+        let total = crate::gc::GC_HEADER_SIZE + payload;
+        let mut backing = vec![u64::from_ne_bytes([fill; 8]); total / 8];
+        unsafe {
+            let header = backing.as_mut_ptr().cast::<crate::gc::GcHeader>();
+            (*header).obj_type = crate::gc::GC_TYPE_REGEX_PROGRAM;
+            (*header).size = total as u32;
+            let cell = backing
+                .as_mut_ptr()
+                .cast::<u8>()
+                .add(crate::gc::GC_HEADER_SIZE)
+                .cast::<ProgramCell>();
+            init_program_cell(cell, words);
+            std::slice::from_raw_parts(cell.cast::<u8>(), payload).to_vec()
+        }
+    }
+
+    /// The cell's bytes must not depend on what the memory held before: the
+    /// whole-heap from-space scan reads every payload word, and residue in the
+    /// unused `None` payloads read there as stale nursery references (tsc,
+    /// 2026-10-06). An odd word count also leaves tail padding to cover.
+    #[test]
+    fn program_cell_bytes_do_not_carry_the_previous_occupant() {
+        for words in [0usize, 1, 7, 64] {
+            let clean = init_over(0x00, words);
+            let dirty = init_over(0xA5, words);
+            assert_eq!(
+                clean, dirty,
+                "a program cell for {words} words kept bytes of the memory it was built in"
+            );
+            unsafe {
+                let cell = dirty.as_ptr().cast::<ProgramCell>();
+                assert_eq!(
+                    std::ptr::read_unaligned(std::ptr::addr_of!((*cell).word_count)),
+                    words
+                );
+            }
         }
     }
 }
