@@ -3,6 +3,33 @@
 use super::*;
 use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering::Relaxed};
 
+/// Copy one shared lane into private storage without boxing or converting it.
+/// Retain the existing unordered atomic access at exactly the element width.
+///
+/// # Safety
+/// Source and destination have `size` bytes and the corresponding alignment;
+/// destination is exclusively owned. Both spans stay live within `scope`.
+pub(crate) unsafe fn copy_lane(
+    source: *const u8,
+    dest: *mut u8,
+    size: usize,
+    _scope: &crate::buffer::bytes::NoGc<'_>,
+) {
+    match size {
+        1 => dest.write((&*source.cast::<AtomicU8>()).load(Relaxed)),
+        2 => dest
+            .cast::<u16>()
+            .write((&*source.cast::<AtomicU16>()).load(Relaxed)),
+        4 => dest
+            .cast::<u32>()
+            .write((&*source.cast::<AtomicU32>()).load(Relaxed)),
+        8 => dest
+            .cast::<u64>()
+            .write((&*source.cast::<AtomicU64>()).load(Relaxed)),
+        _ => unreachable!("typed element width"),
+    }
+}
+
 pub(super) unsafe fn load(base: *const u8, kind: u8) -> f64 {
     match kind {
         KIND_INT8 => (&*base.cast::<AtomicU8>()).load(Relaxed) as i8 as f64,

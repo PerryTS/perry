@@ -373,6 +373,104 @@ pub fn new_bytes(brand: Brand, len: usize, init: Init) -> (f64, Pinned) {
     (value, pin(value).expect("fresh bytes must be pinnable"))
 }
 
+/// Typed allocation through the same retained-byte capability. `length` is
+/// an element count; consumers access the result as bytes within `no_gc`.
+pub(crate) fn new_typed_bytes(kind: u8, length: u32) -> (f64, Pinned) {
+    let ptr = crate::typedarray::typed_array_alloc(kind, length);
+    let value = crate::value::js_nanbox_pointer(ptr as i64);
+    (
+        value,
+        pin(value).expect("fresh typed bytes must be pinnable"),
+    )
+}
+
+pub(crate) fn copy_typed_range(
+    input: f64,
+    start: usize,
+    length: usize,
+    reverse: bool,
+) -> Result<f64, NotBytes> {
+    copy_typed_range_inner(input, start, length, reverse, |_| {})
+}
+
+fn copy_typed_range_inner(
+    input: f64,
+    start: usize,
+    length: usize,
+    reverse: bool,
+    after_allocation: impl FnOnce(f64),
+) -> Result<f64, NotBytes> {
+    let handles = crate::gc::RuntimeHandleScope::new();
+    #[cfg(test)]
+    let root = (!b4_sabotage("typed_copy_root")).then(|| handles.root_nanbox_f64(input));
+    #[cfg(not(test))]
+    let root = Some(handles.root_nanbox_f64(input));
+    let current = || root.as_ref().map_or(input, |root| root.get_nanbox_f64());
+    let addr = JSValue::from_bits(current().to_bits());
+    if !addr.is_pointer() {
+        return Err(NotBytes::Foreign);
+    }
+    let kind = crate::typedarray::lookup_typed_array_kind(addr.as_pointer::<u8>() as usize)
+        .ok_or(NotBytes::Foreign)?;
+    let shared = crate::typedarray::typed_array_has_shared_backing(
+        addr.as_pointer::<crate::typedarray::TypedArrayHeader>(),
+    );
+    let size = crate::typedarray::elem_size_for_kind(kind);
+    let source_len = no_gc(|scope| bytes(current(), scope).map(|bytes| bytes.len() / size))?;
+    let start = start.min(source_len);
+    let length = length.min(source_len - start);
+    let (output, pin) = new_typed_bytes(kind, length as u32);
+    after_allocation(current());
+    no_gc(|scope| {
+        if shared {
+            let source = span(current(), false)?;
+            for i in 0..length {
+                let index = start + if reverse { length - 1 - i } else { i };
+                #[cfg(test)]
+                let index = if b4_sabotage("shared_lane_copy") {
+                    0
+                } else {
+                    index
+                };
+                unsafe {
+                    crate::typedarray::copy_shared_lane(
+                        source.ptr.add(index * size),
+                        pin.as_mut_ptr().add(i * size),
+                        size,
+                        scope,
+                    );
+                }
+            }
+            return Ok(output);
+        }
+        let source = bytes(current(), scope)?;
+        let source = &source[start * size..(start + length) * size];
+        let dest = unsafe { std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()) };
+        if reverse {
+            for (dest, source) in dest
+                .chunks_exact_mut(size)
+                .zip(source.chunks_exact(size).rev())
+            {
+                dest.copy_from_slice(source);
+            }
+        } else {
+            dest.copy_from_slice(source);
+        }
+        Ok(output)
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn copy_typed_range_with_collection(
+    input: f64,
+    start: usize,
+    length: usize,
+    reverse: bool,
+    collect: impl FnOnce(f64),
+) -> Result<f64, NotBytes> {
+    copy_typed_range_inner(input, start, length, reverse, collect)
+}
+
 pub fn from_slice(brand: Brand, input: &[u8]) -> f64 {
     let value = allocate(brand, input.len(), Init::Uninit);
     #[cfg(test)]
@@ -403,12 +501,26 @@ pub fn from_slice(brand: Brand, input: &[u8]) -> f64 {
 /// Copy a byte value into a new store. Root the input before allocating;
 /// resolve its span after allocation so no derived pointer crosses GC.
 pub fn copy_value(brand: Brand, input: f64) -> Result<f64, NotBytes> {
-    copy_value_inner(brand, input, |_| {})
+    copy_value_inner(brand, input, 0, usize::MAX, |_| {})
+}
+
+/// Copy a clamped byte range without retaining an interior pointer across
+/// destination allocation. The source and the destination remain retained
+/// until the callback-free copy has finished.
+pub(crate) fn copy_range(
+    brand: Brand,
+    input: f64,
+    start: usize,
+    length: usize,
+) -> Result<f64, NotBytes> {
+    copy_value_inner(brand, input, start, length, |_| {})
 }
 
 fn copy_value_inner(
     brand: Brand,
     input: f64,
+    start: usize,
+    length: usize,
     after_allocation: impl FnOnce(f64),
 ) -> Result<f64, NotBytes> {
     let handles = crate::gc::RuntimeHandleScope::new();
@@ -417,13 +529,15 @@ fn copy_value_inner(
     #[cfg(not(test))]
     let root = Some(handles.root_nanbox_f64(input));
     let current = || root.as_ref().map_or(input, |root| root.get_nanbox_f64());
-    let len = no_gc(|scope| bytes(current(), scope).map(<[u8]>::len))?;
+    let source_len = no_gc(|scope| bytes(current(), scope).map(<[u8]>::len))?;
+    let start = start.min(source_len);
+    let len = length.min(source_len - start);
     let (output, pin) = new_bytes(brand, len, Init::Uninit);
     after_allocation(current());
     no_gc(|scope| {
         let source = bytes(current(), scope)?;
         unsafe { std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()) }
-            .copy_from_slice(source);
+            .copy_from_slice(&source[start..start + len]);
         Ok(output)
     })
 }
@@ -434,5 +548,16 @@ pub(crate) fn copy_with_collection(
     input: f64,
     collect: impl FnOnce(f64),
 ) -> Result<f64, NotBytes> {
-    copy_value_inner(brand, input, collect)
+    copy_value_inner(brand, input, 0, usize::MAX, collect)
+}
+
+#[cfg(test)]
+pub(crate) fn copy_range_with_collection(
+    brand: Brand,
+    input: f64,
+    start: usize,
+    length: usize,
+    collect: impl FnOnce(f64),
+) -> Result<f64, NotBytes> {
+    copy_value_inner(brand, input, start, length, collect)
 }
