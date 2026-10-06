@@ -1,6 +1,5 @@
 {
   "crates/perry-codegen/src/codegen/function.rs|let data_ptr = blk.gep(I8, &handle_ptr, &[(I32, \"16\")]);": 1,
-  "crates/perry-codegen/src/codegen/function.rs|let data_ptr = blk.gep(I8, &handle_ptr, &[(I32, \"8\")]);": 1,
   "crates/perry-codegen/src/expr/array_literal.rs|let arr_header_addr = blk.gep(I8, &raw, &[(I64, \"8\")]);": 1,
   "crates/perry-codegen/src/expr/array_literal.rs|let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, \"8\")]);": 1,
   "crates/perry-codegen/src/expr/array_literal.rs|let size_field_ptr = blk.gep(I8, &state_ptr, &[(I64, \"16\")]);": 1,
