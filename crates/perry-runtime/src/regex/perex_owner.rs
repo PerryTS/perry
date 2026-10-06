@@ -237,6 +237,7 @@ unsafe fn init_program_cell(cell: *mut ProgramCell, words: usize) {
         // `None`. A typed `write(None)` would copy the whole temporary,
         // including its uninitialised payload, and an unoptimised build fills
         // that from the stack, putting residue back into the cell.
+        // GC_STORE_AUDIT(INIT): both writes fill pointer-free fields of the fresh, unpublished cell.
         if (*cell).witness.is_some() {
             std::ptr::addr_of_mut!((*cell).witness).write(None);
         }
