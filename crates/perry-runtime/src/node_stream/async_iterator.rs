@@ -488,6 +488,10 @@ extern "C" fn ns_readable_iter_on_close(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let iterator = scope.root_nanbox_f64(iterator_from_listener(closure));
+    if iterator_is_done(iterator.get_nanbox_f64()) {
+        iterator_remove_listeners(iterator.get_nanbox_f64());
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     if !iterator_is_done(iterator.get_nanbox_f64())
         && !iterator_stream_ended(iterator.get_nanbox_f64())
         && iterator_stored_error(iterator.get_nanbox_f64()).is_none()
@@ -855,8 +859,35 @@ extern "C" fn ns_readable_iterator_return(
         iterator.get_nanbox_f64(),
         hidden_key(READABLE_ITERATOR_ATTACHED_KEY),
     );
+    let aborting = !already_done
+        && attached
+        && iterator_destroys_on_return(iterator.get_nanbox_f64())
+        && stream.is_some_and(uses_async_generator_ordering);
     iterator_mark_done(iterator.get_nanbox_f64());
-    iterator_remove_listeners(iterator.get_nanbox_f64());
+    if aborting {
+        // Keep the existing error/close listeners until destroy completes.
+        // An iterator's own AbortError is handled during generator cleanup.
+        if let Some(stream) = get_hidden_value(
+            iterator.get_nanbox_f64(),
+            hidden_key(READABLE_ITERATOR_STREAM_KEY),
+        ) {
+            let stream = scope.root_nanbox_f64(stream);
+            remove_iterator_listener(
+                iterator.get_nanbox_f64(),
+                stream.get_nanbox_f64(),
+                b"data",
+                READABLE_ITERATOR_DATA_CB_KEY,
+            );
+            remove_iterator_listener(
+                iterator.get_nanbox_f64(),
+                stream.get_nanbox_f64(),
+                b"end",
+                READABLE_ITERATOR_END_CB_KEY,
+            );
+        }
+    } else {
+        iterator_remove_listeners(iterator.get_nanbox_f64());
+    }
     iterator_resolve_all_pending_done(iterator.get_nanbox_f64());
     if !already_done
         && (iterator_has_yielded(iterator.get_nanbox_f64()) || attached)

@@ -1231,6 +1231,7 @@ js_ext_net_socket_write3	f64	i64,f64,f64,f64
 js_ext_tls_connect	i64	f64,f64,f64,f64
 js_ext_ws_handle_property_dispatch	i32s	i64,ptr,usize,ptr
 js_ext_zlib_native_dispatch	f64	ptr,usize,ptr,usize
+js_ext_zlib_nm_install	void	
 js_fetch_get	ptr	ptr
 js_fetch_get_with_auth	ptr	ptr,ptr
 js_fetch_handle_kind	i8u	usize

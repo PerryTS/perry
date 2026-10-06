@@ -203,6 +203,10 @@ const ZSTD_DEFAULT_LEVEL: i32 = 3;
 
 unsafe extern "C" fn step(payload: *mut c_void, input: &ns::StepIn, output: &mut ns::StepOut) {
     (&mut *(payload as *mut driver::Payload)).step(input, output);
+    #[cfg(test)]
+    if output.status == ns::StepStatus::ERROR && sabotage("error_as_eof") {
+        output.status = ns::StepStatus::ENDED;
+    }
 }
 unsafe fn payload(owner: f64) -> Option<&'static mut driver::Payload> {
     np::get_attached(owner, &CODEC_VTABLE)
@@ -653,6 +657,10 @@ unsafe fn create_stream(
             "_writeState",
             f64::from_bits(JsValue::from_object_ptr(js_typed_array_new_empty(5, 2)).bits())
         );
+    }
+    #[cfg(test)]
+    if sabotage("own_codec_methods") {
+        np::own(owner.get(), "_transform", field(owner.get(), "_transform"));
     }
     owner.get()
 }
