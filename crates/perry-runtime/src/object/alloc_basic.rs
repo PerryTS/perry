@@ -72,6 +72,47 @@ pub(crate) fn object_alloc_plain(field_count: u32) -> *mut ObjectHeader {
     object_alloc_with_parent_impl::<true, false>(0, 0, field_count)
 }
 
+/// `Object.create`: publish only the final ordinary prototype shape. Only
+/// scalar shape/prototype identities cross the allocating call; the prototype
+/// is refreshed through its caller's handle afterwards.
+pub(crate) fn object_alloc_created(
+    proto: &crate::gc::RuntimeHandle<'_>,
+    proto_id: u64,
+    width: u32,
+) -> *mut ObjectHeader {
+    use crate::object::shapes;
+    let mut shape = shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), width);
+    let mut obj = object_alloc_unpublished(0, width);
+    unsafe {
+        shapes::store_kind::premark_plain_ordinary(obj);
+        // A full collection during allocation may retire an uncarried record.
+        // Remint those same birth facts, with the unpublished newborn rooted.
+        if !shapes::shape_is_keyless_birth_of(
+            shape,
+            proto_id,
+            width,
+            shapes::ShapeObjectKind::Ordinary,
+        ) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let owner = scope.root_raw_mut_ptr(obj);
+            (shape, obj) = owner.across_mut::<ObjectHeader, _>(|| {
+                shapes::created_birth_shape(proto_id, proto.get_nanbox_u64(), width)
+            });
+        }
+        if crate::arena::pointer_in_nursery(obj as usize) {
+            // GC_STORE_AUDIT(POINTER_FREE): the sole birth publication is a ShapeId.
+            (*obj).parent_class_id = shape;
+        } else {
+            shapes::stamp_object_shape_id_with_carrier_note(obj, shape);
+        }
+        // The prototype edge lives outside the heap. A black newborn must
+        // still shade it during an incremental mark, as the link funnel does.
+        crate::gc::runtime_shade_external_edge(proto.get_nanbox_u64());
+        shapes::store_kind::check_store_facts(obj);
+    }
+    obj
+}
+
 /// A null-parent object must publish that edge in its birth shape, before
 /// any reader can observe the object. Setting only a post-birth header bit
 /// leaves the descriptor claiming the default prototype.

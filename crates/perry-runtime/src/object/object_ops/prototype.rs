@@ -83,49 +83,25 @@ pub extern "C" fn js_object_create(proto_value: f64) -> f64 {
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto_value);
-    // #10905: the result is born on the keyless shape `(proto, [])`, and that
-    // BIRTH shape knows how wide its descendants grow (in-object slack
-    // tracking, `shapes::shapes_birth_width`), so the object is allocated
-    // that wide instead of at the two-slot floor its own keys would spill
-    // past. The shape names the prototype by its serial, which marking
-    // assigns; the link below marks it too, and a second mark is a no-op.
-    let birth_width = {
+    // Mark once, before allocation, and carry the stable scalar identity.
+    // Non-object prototype kinds (Proxy, array, function, typed array) have
+    // no serial and retain the existing unique-identity semantics.
+    let serial = {
         let value = crate::value::JSValue::from_bits(proto.get_nanbox_u64());
         if value.is_pointer() {
-            // SAFETY: a validated object pointer, rooted by `proto`; the mark
-            // roots its target across its own allocation.
             unsafe {
                 crate::object::proto_validity::mark_object_as_prototype(
                     value.as_pointer::<ObjectHeader>() as usize,
                 )
             }
-            .map_or(0, crate::object::shapes::keyless_birth_width)
         } else {
-            0
+            None
         }
     };
-    let born = crate::object::object_alloc_plain(birth_width);
-    // `OrdinaryObjectCreate(proto)`: the result is an ORDINARY object, and its
-    // [[Prototype]] becomes a fact of its shape in the link below (#11342).
-    // So it is born ordinary like every other ordinary birth site
-    // (`mark_object_plain_ordinary`): the store sites' receiver-kind test then
-    // admits it on its ShapeId alone, exactly as it admits a literal or a
-    // class instance. Unmarked, a class-less receiver fails that test on every
-    // store and takes the full `[[Set]]` walk (#11166 moved Object.create off
-    // its synthetic class id, which had been admitting it).
-    // Charter step 3: born marked (`object_alloc_plain`), before its stamp.
-    unsafe { crate::object::shapes::store_kind::check_store_facts(born) };
-    let obj = scope.root_raw_mut_ptr(born);
-    // The link is a self-rooting entry point: it roots the owner and the
-    // prototype before its meta-record allocation, so the handle is re-read
-    // afterwards for the post-collection address.
-    obj.with_mut_ptr::<ObjectHeader, _>(|owner| {
-        crate::object::prototype_chain::object_link_created_prototype(
-            owner as usize,
-            proto.get_nanbox_u64(),
-        )
-    });
-    obj.with_mut_ptr::<ObjectHeader, _>(|owner| crate::value::js_nanbox_pointer(owner as i64))
+    let birth_width = serial.map_or(0, crate::object::shapes::keyless_birth_width);
+    let proto_id = serial.unwrap_or_else(crate::object::shapes::fresh_unique_proto_id);
+    let born = crate::object::alloc_basic::object_alloc_created(&proto, proto_id, birth_width);
+    crate::value::js_nanbox_pointer(born as i64)
 }
 
 /// Object.getPrototypeOf(obj):

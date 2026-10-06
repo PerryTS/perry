@@ -1745,14 +1745,18 @@ pub extern "C" fn js_object_create_with_props(proto_value: f64, props_value: f64
         );
     }
 
-    let result = js_object_create(proto_value);
-
     // #2816: apply the descriptor bag, if one was supplied.
     let props_jv = crate::value::JSValue::from_bits(props_value.to_bits());
-    if !props_jv.is_undefined() {
-        return js_object_define_properties(result, props_value);
+    if props_jv.is_undefined() {
+        return js_object_create(proto_value);
     }
-    result
+    // The birth may move the bag as well as the prototype. The caller's root
+    // cannot refresh this copied argument; retain it here and reload it before
+    // the self-rooting DefineProperties entry point takes over.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let props = scope.root_nanbox_f64(props_value);
+    let result = js_object_create(proto_value);
+    js_object_define_properties(result, props.get_nanbox_f64())
 }
 
 #[cfg(feature = "keepalive-anchors")]

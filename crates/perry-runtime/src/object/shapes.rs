@@ -62,7 +62,7 @@ pub(crate) use shapes_prototype::{
 };
 #[path = "shapes_store_kind.rs"]
 pub(crate) mod store_kind;
-pub(crate) use shapes_birth_width::{keyless_birth_width, note_spill_width};
+pub(crate) use shapes_birth_width::{created_birth_shape, keyless_birth_width, note_spill_width};
 #[cfg(test)]
 pub(crate) use shapes_slot_list::shape_descriptor_keys_slot;
 pub(crate) use shapes_slot_list::shape_id_owns_keys_slot;
