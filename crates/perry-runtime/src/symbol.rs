@@ -155,15 +155,18 @@ struct PersistentSymbol {
 }
 
 fn leak_symbol(symbol: SymbolHeader) -> *mut SymbolHeader {
-    let cell = Box::new(PersistentSymbol {
+    let mut cell = Box::new(PersistentSymbol {
         header: crate::gc::GcHeader {
             obj_type: crate::gc::GC_TYPE_SYMBOL,
-            gc_flags: crate::gc::GC_FLAG_PINNED | crate::gc::GC_FLAG_TENURED,
+            gc_flags: crate::gc::GC_FLAG_TENURED,
             _reserved: 0,
             size: std::mem::size_of::<PersistentSymbol>() as u32,
         },
         symbol,
     });
+    // A Box allocation is outside the moving arena. Use the shared setter
+    // so pin custody remains explicit even for these immortal leaf cells.
+    unsafe { crate::gc::pin_object(std::ptr::addr_of_mut!(cell.header)) };
     #[cfg(test)]
     let cell = if crate::buffer::bytes::b4_sabotage("symbol_header") {
         let mut cell = cell;
