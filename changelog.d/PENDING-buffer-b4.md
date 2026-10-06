@@ -40,66 +40,72 @@ Raw-pointer consumers now use scoped byte slices, retained read leases or pins, 
 
 ## Tests and sabotages
 
-All results below are intermediate Linux checks, with at most eight Cargo jobs, CPUs 0–55 and single-threaded runtime tests. Final verification must be repeated on the rebased current-main head and coherent release archives.
+Production head 493a683ed7 is merged with origin/main 78e2ab97e7. Linux checks use CPUs 0–55, at most eight Cargo jobs and one runtime test thread. Full evidence is in scripts/fixtures/buffer_b4_final_tests.json. All 56 Cargo-reported test artifacts were compared; the latest codegen rerun supersedes the earlier compiler artifact.
 
-| Contract | Witness / sabotage | Intermediate result |
+| Suite | Main | Head | New failures |
+|---|---|---|---:|
+| Codegen units | 2,042 PASS, 1 ignored | 2,049 PASS, 1 ignored | 0 |
+| Codegen integrations | All 47 artifacts PASS | All 47 artifacts PASS | 0 |
+| Runtime units | 5,194 PASS, 2 FAIL, 4 ignored | 5,204 PASS, 1 FAIL, 4 ignored | 0 |
+| Stdlib units | 257 PASS, 2 FAIL | 257 PASS, same 2 FAIL | 0 |
+| FFI units | 75 PASS | 75 PASS | 0 |
+| Ext-zlib units | 17 PASS | 17 PASS | 0 |
+| Runtime Android/TLS integration | PASS | PASS | 0 |
+| AddressSanitizer byte/backing/header suites | — | 35 PASS | 0 |
+
+Both arms exclude two crashing runtime tests independently reproduced on pristine main: residual_prototype_relocation::test_residual_prototype_owners_of_every_movable_kind_survive_a_copying_minor (SIGSEGV), and node_stream::state_tests::stream_dynamic_instanceof_follows_node_stream_inheritance (class-id debug-assert abort). The remaining runtime failure is regex::perex_owner::program_cell_tests::program_cell_bytes_do_not_carry_the_previous_occupant, a padding comparison that fails on both arms. Main's z8 churn RSS check failed on that run and passes on the latest head run. Stdlib's thread-exit symbol/closure side-entry failures reproduce on main. These are zero-new-failure results, not a claim that every test passes.
+
+| Contract | Witness / sabotage | Result |
 |---|---|---|
-| Shared cell, header brands, stable named-property attachment | Common-cell and 31-pin witnesses; attach_moves_bytes | PASS / RED |
-| Pin overflow | Pin 32, hidden property, complete unpin; pin_overflow | PASS / RED |
-| Pool identity, alignment, threshold, rollover and GC root | Real pool owner; pool_identity, pool_root | PASS / both RED |
-| Retained source copies and exact typed lanes | Forced full GC and root marks; copy_root, copy_kind, typed_copy_root, shared_lane_copy | PASS / all RED |
-| Retained typed predicate receiver/callback/BigInt candidate | Collecting predicate; find_receiver_root | PASS / RED |
-| Owner resize/detach, traced view edge, transfer and u32 admission | Owner/view witnesses; owner_check, detach_mark, view_edge, transfer_copy, u32_admission | PASS / all RED |
-| Native view owner/offset and persistent symbol prefix | native_resolution, symbol_header | PASS / all RED |
-| B4 focused runtime suite | 11 tests; 18 sabotage invocations | PASS / all 18 RED |
-| Hoisted owner root | Statepoint-root IR invariant; hoist_owner | PASS / RED |
-| Stdlib / FFI / ext-zlib | Current-main merge | 257 PASS + 2 inherited FAIL / 75 PASS / 17 PASS |
-| Whole codegen unit suite | Development build, latest emitted ABI | 2045 PASS, 0 FAIL, 1 ignored |
-| Runtime suite | Current-main merge, two independently reproduced crashing main tests excluded | 5200 PASS, 2 FAIL, 4 ignored; both failures reproduce on current main (5194 PASS, the same 2 FAIL, 4 ignored) |
-| Source ratchet sabotage | Ten planted source couplings | PASS / all ten RED |
-| GC header constants / root-holder inventory | Executable gates | PASS at intermediate snapshot |
-| View owner live across forced collection in emitted loop | test_buffer_b4_hoisted_view_gc.ts | Uint32 parameter/local witness PASS: output 2080 twice, 32 collections including 16 full; Buffer parameter/subarray variants added |
-| Every pointer-tagged value has p-8 header, whole module | Existing native/proxy registry IDs remain pointer-tagged nonheap words | Not established; broader representation gap recorded below |
+| Shared cell, brands, named properties on 31-pin owner | attach_moves_bytes | PASS / RED |
+| Pin overflow through hidden shaped property | pin_overflow | PASS / RED |
+| Pinned inline detach defers page decommit through last unpin | inline_detach_decommit | PASS / RED |
+| Pool identity, alignment, threshold, rollover and traced owner | pool_identity, pool_root | PASS / both RED |
+| Retained source copies and exact typed lanes | copy_root, copy_kind, typed_copy_root, shared_lane_copy | PASS / all RED |
+| Collecting typed predicate keeps receiver, callback and BigInt candidate | find_receiver_root | PASS / RED |
+| Resize/detach, view edge, transfer and u32 admission | owner_check, detach_mark, view_edge, transfer_copy, u32_admission | PASS / all RED |
+| Native owner/offset and persistent symbol prefix | native_resolution, symbol_header | PASS / both RED |
+| B4 focused runtime suite | 12 tests; 19 planted sabotages | PASS / all 19 RED |
+| Existing B1 byte lifetime/borrow contracts | 8 tests; 8 planted sabotages | PASS / all 8 RED |
+| Header admission | All 256 type bytes; accept retired type | PASS / RED |
+| Ordinary and local hoisted owner roots | Independent IR live-root controls | PASS / RED |
+| Specialized typed callee retains its exact owner parameter | spec_owner, both lowerings | PASS / RED |
+| Source layout couplings | Ten planted couplings | PASS / all ten RED |
+| Compiler/runtime header constants | 25 restatements; one-bit move | PASS / RED |
+| Runtime root-holder inventory | Executable gate | PASS |
+| Forced full collection in hoisted typed/Buffer/subarray/bagged loop | test_buffer_b4_hoisted_view_gc.ts | Output equals Node; 24 full collections |
+| Streaming zlib callback detaches input owner | test_buffer_b4_zlib_detach.ts | Output equals Node; valid 1 MiB round trip, detached input length zero |
+| Whole-module pointer-tagged p-8 invariant | Native/proxy/fetch registry IDs remain nonheap pointer-tagged values | Not established |
 
-The residual-prototype relocation test SIGSEGV reproduces on pristine current origin/main in the separate main-target build. The duplicate-key JSON fixture omitted production's shape forwarding scanner after its isolation guard cleared the registry. Its stale family index was retired when the old keys address was recycled into bytes whose type became recognizable in the expanded type range. Registering the existing shape forwarding scanner restores the production root set and the fixture passes on the rebased head; no production shape machinery changed. Other failures from the earlier release run included stale common-kind/length expectations, a cross-thread SAB fixture retaining a dead agent wrapper, a thread-transfer diagnostic expectation, and a cwd-dependent URL fixture. These have source fixes or a corrected execution environment and need the fresh full rerun. No failure is waived as a passing result.
+ASan uses a separate target and the system allocator so native Backing frees are instrumented, preserving other default runtime features. Leak scanning is disabled for immortal allocations. Its 35 selected tests include the 19 B4, eight B1 and one header-admission sabotages; all turn red, with no ASan failure in the positive runs. The ASan target was cleaned after preserving results. The streaming-zlib Node witness uses one output window: a smaller multi-window version also errors in Node after input detachment and is not claimed as passing parity. Byte cells are born old and nonmoving; this does not test a future B6 young-byte allocation mode.
 
-The whole-module pointer-header requirement is stronger than the current NaN-box representation: value/addr_class explicitly reserves pointer-tagged bands for proxy and native-resource/fetch registry IDs with no addressable p-8 header. Persistent Box-leaked symbols now have a real leaf prefix, and every byte family uses the common GC allocation prefix, but those facts do not establish the whole-module invariant. No fabricated subset test is reported as proving it.
+The whole-module pointer-header requirement exceeds the current NaN-box representation: value/addr_class reserves pointer-tagged bands for proxy and native-resource/fetch registry IDs without addressable p-8 headers. Persistent Box-leaked symbols have real leaf prefixes and every byte family has the common GC prefix, but this does not establish the whole-module invariant. Converting those ID representations would require broader producer/consumer changes, including protected fetch code. No subset proof is substituted.
 
 ## Program and kernel acceptance
 
-| Required real programs | Output == Node | n=5 interleaved instructions:u, RSS, full collections |
+All ten required real programs pass against Node on current main, including buffer_heavy and worker_heavy: their old baseline exceptions have cleared and both are included in the final gate. Final head program compilation and the complete 186-case gap comparison are running. The final compiler already matches Node on all four kernels and hello; The first final n=5 interleaved kernel batch is complete and still fails the hard gate; subsequent compiler corrections are being tested.
+
+| Required programs | Final head output == Node | Instructions:u, RSS, full collections |
 |---|---|---|
-| tsc, Zod x5000, qs parse/stringify, commander, hello, fastify | Pending coherent release builds | Pending |
-| Effect | Policy driver copied; effect@4.0.0-beta.83 installed; Node passes | Pending |
-| buffer_heavy, worker_heavy | Current-main status pending; known #12091/#12092 baseline exceptions | Pending |
+| tsc, Zod x5000, qs parse/stringify, commander, fastify | Final compilation pending | Pending |
+| hello | PASS | Final measurement pending |
+| Effect, buffer_heavy, worker_heavy | Final compilation pending | Pending |
 
-| Hard-gate kernel | Output parity | Flat-or-better |
+| Hard-gate kernel | Final compiler output parity | Final flat-or-better gate |
 |---|---|---|
-| matmul | Pending | Pending |
-| prime_sieve | Pending | Pending |
-| bench_buffer_readwrite | Pending | Pending |
-| ECS u32 | Pending | Pending |
+| matmul | PASS | −0.000069%, PASS |
+| prime_sieve | PASS | +0.990336%, RED |
+| bench_buffer_readwrite | PASS | −0.001291%, PASS |
+| ECS u32 | PASS | +65.702271%, RED |
 
-The approved +8 B per small owner is implemented; its RSS effect has not yet been measured. Full runtime/stdlib/codegen/ffi/ext-zlib tests, the buffer|typed|dataview|arraybuffer|zlib|crypto|tls|net|http|fs gap comparison, full program measurements, typed-kernel hard gate, THP-off checks where indicated, and every material delta's mechanism remain required. There is no performance acceptance or landable-head claim in this milestone.
+An earlier diagnostic compiler measured prime_sieve +0.990946% and ECS +230.990027%, so that snapshot failed the hard gate. The ECS length adapter called a runtime helper on each sealed-view check, obstructing loop hoisting; it now reads the canonical independent length slot. Prime's emitted loop assembly is unchanged. The compile-time dense admission prefix did not remove its +0.99% regression; runtime-call profiling is queued and the earlier attribution to sparse metadata was not sufficient. ECS assembly shows repeated duplicate register moves from its owner-lifetime uses. Consolidating the same exact roots into one empty assembly use, marked as touching no memory, is being tested together with equivalent masked brand predicates. No cache, side table or latch is restored. This batch measured hello +310 instructions (+0.022378%); its explanation and the complete program gate remain pending.
 
-Milestone compile check: `cargo check -p perry-runtime -p perry-codegen -p perry-stdlib --tests` passes on the Linux host. The last obsolete test-only byte-cache declaration was then removed. No version fields changed.
+## Header-size RSS
 
-Follow-up lifetime audit: tracked locals now explicitly retain receiver and owner starts across safepoints, including paths where the boxed binding is otherwise consumed only through a hoisted data slot. Their independent IR sabotage is added. Empty reserved owners preserve the real pin address rather than a zero-length slice sentinel; the large shrink/regrow witness now passes. The canonical DataView byte-allocation brand creates an ArrayBuffer owner plus a 16-byte view. Four formerly incidentally covered scalar/native-tape inventory entries have researched non-GC-edge verdicts. The separate current-main coherent release build passes.
+The first THP-off retained-small-owner measurement has five interleaved trials, zero huge pages and one full collection in both nonzero arms. At 131,072 retained owners, RSS is 21,192 KiB main and 21,700 KiB head (+508 KiB); at 262,144, it is 30,920 and 32,452 KiB (+1,532 KiB). The difference increases by 1,024 KiB for 131,072 more owners: exactly 8.00 B per added owner, matching the approved header increase. Absolute totals contain a fixed offset of −516 KiB, including −132 KiB at empty startup; the remainder is still being investigated with separate census diagnostics. A repeat with the final compiler is queued. Diagnostic census allocations are excluded from accepted RSS/instruction trials.
 
-Census follow-up: the historical ledger has 310 creation rows reserved for B3 placement policy and 270 other rows: 21 unified emission, 122 scoped consumers, 61 canonical byte operations/fixtures, 29 canonical FFI copies, four already scoped protected zlib consumers, eight layout-authority rows, 13 current owner-extent/ABI assertions, five generic-array/arena false positives, one owned transcode copy, one leaf raw ABI export with no emitted callers, and five protected-owner debt rows. The current executable source ratchet covers 18 protected fetch/stream sites; it is not zero and none are hidden behind new exemptions.
+## Remaining acceptance work
 
-Follow-up compiler validation: the 2,045 unit tests pass with retained local owners, including immutable aliases and the existing last-use raw-call sabotage. Integration IR readers now recognize the canonical data resolver and keep their unrelated-pointer and unchecked-access controls. Test artifacts are held stable during full runtime runs; a replaced-executable run was stopped rather than counted. Main reproduces the stream class fixture's debug-assert abort at class id 0xc0000001.
+The final gap and real-program comparisons, final kernel hard gate, material delta explanations, pool-retention RSS and final header RSS attribution remain pending. Source debt is 18 protected fetch/stream sites, with no new exemptions; the requested zero-debt result is not reached. The global pointer-tagged-header invariant remains a broader representation gap. This milestone makes no landable-head or performance-acceptance claim.
 
-Final-verification progress: all current-main codegen integrations pass (including 47 buffer proof and 292 regression tests); both stdlib failures reproduce on main. Main and head runtime failures are the same z8 churn RSS threshold and perex program-cell padding comparison. Initial n=5 kernels: matmul −0.000035%, prime_sieve +0.990946%, bench_buffer_readwrite −0.001291%, ECS u32 +230.990027%; the hard gate is RED. The common-cell region length adapter introduced helper calls on sealed views and blocked loop hoisting; it now loads the canonical independent length slot for sealed views. The prime loop assembly is unchanged; sparse header admission adds metadata loads in runtime classification. A compile-time dense prefix derived from the existing descriptor authority is being verified. No cache or side table is restored. Initial hello is +296 instructions (+0.021367%); explanation and final measurement remain pending.
-
-Current-main real-program outputs pass for all required programs, including tsc, Effect, buffer_heavy and worker_heavy. Both heavy drivers are included in the final gate; their earlier baseline exceptions have cleared. Main tsc passes with eight unit jobs and a 45-minute compile limit. Head outputs have passed for tsc, Zod x5000, qs parse/stringify and commander; the final compiler must repeat these checks.
-
-Parameter/kernel milestone: declared Buffer parameters use the common-cell admission and exact receiver/owner roots instead of the legacy raw data-pointer preheader. Their numeric readers and integer element accesses consume the retained data/length slots, with normal dispatch on unsupported headers and named-method shadows. Writes also check the receiver's current frozen bit. The old bounded-parameter IR test incorrectly required the whole function to have no cold fallback; it now proves that both admitted read and store blocks contain no calls and that the common hoist supplies them. All 2,047 codegen unit tests and 47 Buffer-proof integrations pass, including the positive numeric-reader witness and its missing-owner-root sabotage. The forced-GC typed/Buffer/subarray/bagged-view driver passes with 48 collections, 24 full, on the preceding release compiler; it must repeat after the final compiler build.
-
-The first head gap run was discarded because rsync removed output directories under src while it ran, allowing empty comparisons. The driver now writes outside the synced source tree and requires the complete selected case count. A subsequent valid run was stopped explicitly by its own PID tree before the final parameter compiler update; neither partial run is counted as final evidence. Final gap comparison and the corrected kernel/RSS measurements remain pending.
-
-Owner-retention milestone: specialized typed-array callees bind their existing exact parameter root and retain it across collecting calls; the witness and independent `spec_owner` sabotage pass under both lowerings. The latest codegen suite is 2,049 PASS, zero FAIL, one ignored, with all 47 integration artifacts passing. The latest runtime run is 5,204 PASS, one inherited FAIL, four ignored, with two independently reproduced main crashes excluded. The remaining failure is the perex program-cell padding comparison; the z8 RSS check passes on this run. Stdlib has 257 PASS and the same two failures as main; FFI has 75 PASS and ext-zlib 17 PASS. This establishes zero new failures, rather than an all-tests-pass claim.
-
-The inline pinned-detach page witness and its forced-decommit sabotage pass. The focused B4 suite now has 12 tests and 19 RED sabotages. AddressSanitizer passes 35 selected byte/backing/header tests, including the 19 B4, eight B1 byte-lifetime and one header-admission sabotages. ASan uses the system allocator so native backing frees are visible; leak scanning is disabled for the runtime's immortal allocation scope. Its separate target was cleaned after saving results. The real streaming-zlib callback witness matches Node: detaching the owner during the output callback leaves the result valid and the input length zero.
-
-The THP-off retained-small-owner measurement has five interleaved trials, zero huge pages and one full collection in each nonzero arm. Increasing the retained count from 131,072 to 262,144 increases the head-minus-main RSS difference by exactly 1,024 KiB: 8.00 B per added owner. Absolute differences are +508 KiB and +1,532 KiB respectively; the fixed offset is still being investigated. This confirms the incremental approved header cost, but does not yet explain every absolute RSS term. Final kernel/program acceptance and the complete final gap comparison remain pending.
+Invalid earlier gap runs are excluded: one wrote inside the synced source tree and lost output files during rsync, and a subsequent valid partial run was stopped by its own PID tree before the final parameter update. Outputs now live outside src and the driver requires the complete selected case count. Artifact mutation and measurement are serialized with a lane-local lock as well as the shared host measurement lock. No version fields changed.
