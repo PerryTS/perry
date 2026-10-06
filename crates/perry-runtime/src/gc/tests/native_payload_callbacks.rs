@@ -695,8 +695,12 @@ fn native_call_reuses_catch_refreshes_roots_and_pops() {
             assert_eq!(crate::exception::current_try_depth(), depth + 1);
             // The second trampoline has argument-conversion roots absent from the
             // first. A throw must retain them instead of restoring the old depth.
+            // Two roots: the first callback's own capture (inside its pending-slot
+            // scope) sits one root above the guard, so one root here would
+            // coincide with it and hide a missing refresh.
             let extra = RuntimeHandleScope::new();
             let object = extra.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+            let _second = extra.root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
             let handles = crate::gc::runtime_handle_stack_savepoint();
             assert_eq!(
                 np::call_from_link(link, throws.get_nanbox_f64(), &[43.0]),
