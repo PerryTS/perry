@@ -223,6 +223,18 @@ def _rust_module_is_declared(tree: Tree, rel: str) -> bool:
                 if (Path(cand).parent / target).as_posix() == rel:
                     return True
         parent = parent.parent
+    # A sibling module can adopt the file as its own child with
+    # `#[path = "<file>.rs"] mod name;`. Outside an inline block, rustc resolves
+    # that path against the declaring file's directory, so any `.rs` beside the
+    # file may be the registration — e.g. `gc/tests/native_payload_callbacks.rs`
+    # registers `native_payload_lifecycle.rs` as its `lifecycle` submodule.
+    for sibling in tree.glob((path.parent / "*.rs").as_posix()):
+        if sibling == rel:
+            continue
+        text = tree.read(sibling)
+        for target in re.findall(r'#\[path\s*=\s*"([^"]+)"\]', text):
+            if (Path(sibling).parent / target).as_posix() == rel:
+                return True
     # A test suite root (`crates/<c>/tests/<suite>.rs`) can pull a file from
     # anywhere under `tests/` with `#[path = "…"] mod name;` — e.g.
     # `node_api_host_e2e.rs` registers `fixtures/node_api_host/computed_require.rs`.
@@ -648,6 +660,31 @@ def _self_test(root: Path) -> int:
             "the inline-`mod` false-positive guard's subject %s is gone; "
             "re-point it at another live one rather than dropping the case" % inline
         )
+
+    # 7b. A `#[path]` registration in a SIBLING file counts, and only when it
+    #     names this file: the shape of `gc/tests/native_payload_lifecycle.rs`,
+    #     which `native_payload_callbacks.rs` adopts as its `lifecycle` child.
+    sib_dir = "crates/perry-runtime/src/gc/tests"
+    child = sib_dir + "/selftest_planted_child.rs"
+    host = sib_dir + "/selftest_planted_host.rs"
+    adopted = Tree(
+        root,
+        added=[child, host],
+        overrides={host: '#[path = "selftest_planted_child.rs"]\nmod child;\n'},
+    )
+    check(
+        "a sibling's `#[path]` registration counts",
+        _rust_module_is_declared(adopted, child),
+    )
+    elsewhere = Tree(
+        root,
+        added=[child, host],
+        overrides={host: '#[path = "other.rs"]\nmod child;\n'},
+    )
+    check(
+        "a sibling's `#[path]` to another file does not count",
+        not _rust_module_is_declared(elsewhere, child),
+    )
 
     # 8. the path matcher does not let `*` cross a directory separator — the bug
     #    that would silently widen every mechanism's candidate set.
