@@ -32,7 +32,7 @@ pub(super) fn register_host_roots() {
     gc_register_mutable_root_scanner(crate::object::scan_exotic_expando_roots_mut);
     gc_register_mutable_root_scanner(crate::regex::scan_last_exec_groups_root_mut);
     gc_register_mutable_root_scanner(
-        crate::object::regex_proto_thunks::scan_canonical_test_site_roots_mut,
+        crate::object::method_site::read_holder::scan_read_holder_roots_mut,
     );
     gc_register_mutable_root_scanner(crate::object::scan_dispatch_binding_roots_mut);
     // PR #10564 review finding: the new_target savepoint in exception.rs is
@@ -422,4 +422,37 @@ fn perex_public_exec_captures_agree_across_inline_and_heap_slots_and_storage() {
             }
         }
     }
+}
+
+#[test]
+fn regexp_cold_birth_keeps_the_realm_intrinsic_after_global_replacement_and_move() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    register_host_roots();
+    let scope = RuntimeHandleScope::new();
+    let global = scope.root_nanbox_f64(crate::object::js_get_global_this());
+    let before =
+        crate::value::js_nanbox_get_pointer(crate::object::builtin_prototype_value("RegExp"))
+            as usize;
+    assert!(crate::arena::pointer_in_nursery(before));
+    let key = crate::string::intern_ascii_literal(b"RegExp");
+    crate::object::js_object_set_field_by_name(
+        crate::value::js_nanbox_get_pointer(global.get_nanbox_f64()) as *mut ObjectHeader,
+        key,
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    // No handle roots the intrinsic and no RegExp has yet carried its shape.
+    let cycles = copying_minor_cycles();
+    gc_collect_minor();
+    assert!(copying_minor_cycles() > cycles);
+    let receiver = regex(&scope, "a", "");
+    let after = crate::object::js_object_get_prototype_of(
+        receiver.with_const_ptr::<RegExpHeader, _>(|r| js_nanbox_pointer(r as i64)),
+    );
+    assert_ne!(crate::value::js_nanbox_get_pointer(after) as usize, before);
+    assert!(crate::value::JSValue::from_bits(after.to_bits()).is_pointer());
+    let input = text(&scope, b"a");
+    assert_eq!(test(&receiver, &input), 1);
 }

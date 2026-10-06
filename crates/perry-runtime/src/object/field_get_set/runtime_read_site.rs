@@ -124,6 +124,92 @@ impl RuntimeReadSite {
         (v.to_bits() != crate::value::TAG_HOLE).then_some(v)
     }
 
+    /// The native entry of a getter, after the ordinary accessor lane checks.
+    /// An inherited immutable pair owns the memo; own accessors are inspected
+    /// on every call because equal receiver shapes do not imply equal pairs.
+    #[inline]
+    #[cfg(any(test, feature = "regex-engine"))]
+    pub(crate) unsafe fn probe_getter_code(
+        &self,
+        obj: *const ObjectHeader,
+        key: crate::object::method_site::read_holder::probe::Key<'_>,
+    ) -> Option<usize> {
+        use crate::object::method_site::read_holder::probe::{self, Answer};
+        let cache = self.slot.load(Ordering::Relaxed);
+        if !cache.is_null() {
+            if let Some(code) = probe::probe_accessor_code(&*cache, obj) {
+                return Some(code);
+            }
+        }
+        match self.probe(obj, key)? {
+            Answer::Getter(bits) => Some(probe::getter_code(bits)),
+            Answer::Data(_) => None,
+        }
+    }
+
+    /// Inspect the already primed entry without resolving its key. Symbol
+    /// identities, like name atoms, are needed only when priming a miss.
+    /// # Safety
+    /// As Self::read_leaf.
+    #[inline]
+    #[cfg(any(test, feature = "regex-engine"))]
+    pub(crate) unsafe fn probe_leaf(
+        &self,
+        obj: *const ObjectHeader,
+    ) -> Option<crate::object::method_site::read_holder::probe::Answer> {
+        use crate::object::method_site::read_holder::{self, probe::Answer};
+        if let Some(value) = self.read_own_inline(obj) {
+            return Some(Answer::Data(value.to_bits()));
+        }
+        let cache = self.slot.load(Ordering::Relaxed);
+        if !cache.is_null() {
+            let stamp = crate::object::shapes::object_shape_stamp(obj);
+            let token = (u64::from(stamp) | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
+            if let Some(bits) = read_holder::entry_answer(&*cache, token) {
+                return Some(Answer::Data(bits));
+            }
+            if let Some(answer) = read_holder::probe::probe_accessor_entry(&*cache, obj) {
+                return Some(answer);
+            }
+        }
+        None
+    }
+
+    /// Inspect a data property or accessor without running user code.
+    /// Uses the emitted read's PIC and accessor lane validation.
+    #[cfg(any(test, feature = "regex-engine"))]
+    pub(crate) unsafe fn probe(
+        &self,
+        obj: *const ObjectHeader,
+        key: crate::object::method_site::read_holder::probe::Key<'_>,
+    ) -> Option<crate::object::method_site::read_holder::probe::Answer> {
+        use crate::object::method_site::read_holder::{
+            self,
+            probe::{Answer, Key},
+        };
+        if let Some(answer) = self.probe_leaf(obj) {
+            return Some(answer);
+        }
+        let answer = read_holder::probe::prime(obj, key, self.slot_ptr())?;
+        if matches!(answer, Answer::Data(_)) {
+            let keys = crate::object::object_keys(obj);
+            let index = match key {
+                Key::Name(name) => {
+                    crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name)
+                }
+                Key::Symbol(symbol) => crate::object::shaped_symbols::position(obj, symbol),
+            };
+            if let Some(index) = index {
+                self.prime_own_inline(
+                    crate::object::shapes::object_shape_stamp(obj),
+                    index,
+                    crate::object::object_live_slot_count(obj),
+                );
+            }
+        }
+        Some(answer)
+    }
+
     /// The collecting read: the slow entry an emitted site calls on a front
     /// miss, which also primes the words. It can run a getter, collect and
     /// throw. Returns the value and the receiver's address after the call.

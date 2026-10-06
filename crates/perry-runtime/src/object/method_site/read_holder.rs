@@ -70,6 +70,8 @@ use crate::object::{ObjectHeader, PicCache, PicCacheSlot};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod class_read;
+#[cfg(any(test, feature = "regex-engine"))]
+pub(crate) mod probe;
 
 /// The receiver's ShapeId as a PIC token (`ShapeId | PIC_ID_TOKEN_BIT`), or 0
 /// for an empty entry. A zeroed cache is therefore an empty one: no token is 0.
@@ -88,7 +90,9 @@ pub const HOLDER_SHAPE: usize = crate::codegen_abi::PIC_HOLDER_SHAPE_WORD;
 /// | [`HOLDER_MULTI_ABSENT`] | depth 1 for up to ten receiver shapes: absent ([`HOLDER_ABSENT_BIT`]) or the holder's slot word ([`multi_slot`]) |
 /// | negative | [`HOLDER_STUB`] set: depth 2..=4 and/or a deep absent entry |
 pub const HOLDER_KIND: usize = crate::codegen_abi::PIC_HOLDER_KIND_WORD;
-/// First of three intermediate hop addresses (depth 2..=4).
+/// First of three intermediate hop addresses (depth 2..=4). For accessors,
+/// the first word is the immutable pair root, the second its native getter
+/// code (a scalar used by non-observable probes), and the third is unused.
 pub const HOLDER_HOPS: usize = HOLDER_KIND + 1;
 /// Data/absence: first and second hop ShapeIds. Accessor: the code the hit
 /// calls for the getter the primed pair names, `double get(double this, i64
@@ -525,13 +529,12 @@ unsafe fn key_may_be_accessor(obj: *const ObjectHeader, name: &[u8]) -> bool {
 /// [`holder_name_admitted`] for an ordinary read site's receiver. The
 /// method-site name refusals cover `constructor` because a CLASS instance's
 /// `constructor` is synthesized from the class registry (`instance_constructor_value`)
-/// rather than read off its chain. A receiver whose shape links to the realm's
-/// `%Object.prototype%` has no class prototype to synthesize from: its
-/// `constructor` is the chain's data slot like any other key, and the prime
-/// still admits it only after the getter's answer agreed with the walk.
+/// rather than read off its chain. Default and ordinary serial links have
+/// no declared class prototype to synthesize from: their constructor is the
+/// chain's data slot like any other key.
 unsafe fn read_name_admitted(recv: *const ObjectHeader, name: &[u8]) -> bool {
     if name == b"constructor" {
-        return admitted_proto_id(recv) == Some(PROTO_ID_DEFAULT);
+        return admitted_proto_id(recv).is_some_and(|id| id < PROTO_ID_CLASS);
     }
     holder_name_admitted(name)
 }
@@ -891,12 +894,13 @@ pub(crate) unsafe fn try_cached_accessor(
 /// [`try_cached_accessor`] past its kind test. Out of line: every collecting
 /// read miss on an object asks the entry first, and a site without an
 /// accessor entry must pay only the inlined kind test.
-#[inline(never)]
-unsafe fn accessor_entry_hit(
-    recv: *const ObjectHeader,
-    c: &PicCache,
-) -> Option<crate::value::JSValue> {
+/// Validate the accessor lane without invoking its getter.
+#[inline]
+unsafe fn accessor_entry_pair(recv: *const ObjectHeader, c: &PicCache) -> Option<usize> {
     let kind = c[HOLDER_KIND] as u64;
+    if kind & HOLDER_ACCESSOR == 0 {
+        return None;
+    }
     if WORKER_AGENTS_EXIST.load(Ordering::SeqCst) != 0 {
         return None;
     }
@@ -914,6 +918,17 @@ unsafe fn accessor_entry_hit(
     {
         return None;
     }
+    Some(c[HOLDER_HOPS] as usize)
+}
+
+#[inline(never)]
+unsafe fn accessor_entry_hit(
+    recv: *const ObjectHeader,
+    c: &PicCache,
+) -> Option<crate::value::JSValue> {
+    let pair = accessor_entry_pair(recv, c)?;
+    let kind = c[HOLDER_KIND] as u64;
+    let lane = crate::value::POINTER_TAG | pair as u64;
     // A spill lane's entry keeps getter word 0 for the emitted arm; the pair
     // (immutable, and just compared) names its getter.
     let getter = if kind & HOLDER_ACCESSOR_DEEP != 0 || kind as u32 & HOLDER_SLOT_SPILL != 0 {
@@ -1529,6 +1544,16 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, acc
     for i in 0..HOLDER_MAX_DEPTH - 1 {
         c[HOLDER_HOPS + i] = w.hops[i].0 as i64;
     }
+    // Accessor pairs are immutable. The second hop word is unused by an
+    // accessor (deep hops have class_read storage), so retain its native
+    // getter code alongside the pair. Replacing the lane invalidates both.
+    #[cfg(any(test, feature = "regex-engine"))]
+    if accessor {
+        let pair = w.hops[0].0 as *const crate::array::ArrayHeader;
+        let words = crate::array::array_elements_ptr(pair);
+        c[HOLDER_HOPS + 1] =
+            probe::getter_code(*words.add(crate::object::accessor_pair::PAIR_GET)) as i64;
+    }
     c[HOLDER_HOP_SHAPES] = if accessor {
         // The emitted arm loads inline lanes only (see `HOLDER_HOP_SHAPES`).
         if w.slot.is_some_and(|s| s & HOLDER_SLOT_SPILL != 0) {
@@ -1586,7 +1611,14 @@ pub(crate) fn scan_read_holder_roots_mut(visitor: &mut crate::gc::RuntimeRootVis
                 }
             }
             if c[HOLDER_KIND] as u64 & HOLDER_MULTI_ABSENT == 0 {
-                for i in 0..HOLDER_MAX_DEPTH - 1 {
+                // Accessors retain only their pair here. The next word is
+                // native code, not a managed pointer; deep hops are separate.
+                let count = if c[HOLDER_KIND] as u64 & HOLDER_ACCESSOR != 0 {
+                    1
+                } else {
+                    HOLDER_MAX_DEPTH - 1
+                };
+                for i in 0..count {
                     visitor.visit_i64_slot(&mut c[HOLDER_HOPS + i]);
                 }
             }

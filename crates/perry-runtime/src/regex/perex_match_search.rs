@@ -35,7 +35,7 @@ pub(crate) fn flags(receiver: f64) -> Result<*mut StringHeader, EngineError> {
     // frame: ~70k instructions for a two-flag RegExp (#10518).
     let re = crate::value::js_nanbox_get_pointer(receiver) as *const super::RegExpHeader;
     if crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some()
-        && crate::object::regex_proto_thunks::regexp_view_flags_is_canonical(receiver)
+        && crate::object::regex_read_sites::flag_getters(receiver)
     {
         let text = unsafe { (*crate::regex::regexp_data_ptr(re)).flags_ptr } as *mut StringHeader;
         if !text.is_null() {
@@ -90,7 +90,7 @@ pub(super) fn match_flags(
 ) -> Result<(bool, bool), EngineError> {
     let value = receiver.get_nanbox_f64();
     if let Some(data) = crate::regex::regexp_data_of(value) {
-        if crate::object::regex_proto_thunks::regexp_view_flags_is_canonical(value) {
+        if crate::object::regex_read_sites::flags(value) {
             // The canonicality check neither collects nor calls user code.
             return Ok(unsafe { ((*data).global, (*data).unicode) });
         }
@@ -303,9 +303,9 @@ pub(crate) fn string(
         ));
     }
     if matches!(operation, Operation::Match)
-        && crate::object::regex_canonical::method(
+        && crate::object::regex_read_sites::method(
             pattern,
-            crate::object::regex_canonical::Method::Match,
+            crate::object::regex_read_sites::Method::Match,
         )
     {
         // `Get(pattern, @@match)` would reach the builtin without running

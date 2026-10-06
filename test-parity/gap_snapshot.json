@@ -136,13 +136,6 @@
       "category": "bug-open",
       "reason": "Root-caused 2026-08-16, no longer 'needs triage'. The test is written for SLOPPY mode (its own comments say \"writes must be dropped\" / \"silent no-op\") but runs as ESM, which is strict, so cases 3 and 4 throw instead. Node AND Perry both correctly throw; they differ only in the message. Node names the constructor -- \"of object '#<H>'\" -- while Perry hardcodes \"'#<Object>'\" at error.rs:1726, because js_throw_type_error_immutable_write takes (kind, key_ptr, key_len) and no receiver. normalize_failure_output keeps the full error line, so the messages diverge. Real Perry parity bug, not a snapshot artifact: 14 callers, all behind the throw_immutable_write wrapper, so a receiver-aware variant fixes it without a codegen ABI change."
     },
-    "test_gap_regexp_observe_known_wrong": {
-      "status": "parity_fail",
-      "issue": "11881",
-      "added": "2026-10-04",
-      "category": "bug-open",
-      "reason": "RegExp one-shape S2: flags_reads_getters still differs from Node because the builtin flags getter reads internal flags instead of observing overridden prototype flag getters; S3 fixes the remaining row. The five other S0 known-wrong rows moved to test_gap_regexp_observe_rows after matching Node."
-    },
     "test_gap_v8_2_3680plus": {
       "status": "parity_fail",
       "issue": "3680",

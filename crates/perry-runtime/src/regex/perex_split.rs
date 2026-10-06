@@ -95,9 +95,7 @@ fn forward_program<'s>(
     }
     let value = splitter.get_nanbox_f64();
     let re = crate::value::js_nanbox_get_pointer(value) as *const super::RegExpHeader;
-    if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some()
-        || !crate::object::regex_proto_thunks::regexp_view_uses_builtin(value)
-    {
+    if !crate::object::regex_read_sites::exec_is_builtin(value) {
         return None;
     }
     let splitter = scope.root_raw_const_ptr(re);
@@ -220,7 +218,7 @@ fn push_span(
 
 /// Split by an untouched RegExp without its protocol Gets (#10518).
 ///
-/// When `regex_canonical::split` holds, SpeciesConstructor reaches the
+/// When `regex_read_sites::split` holds, SpeciesConstructor reaches the
 /// intrinsic `RegExp` through builtin data and a builtin `@@species` accessor,
 /// `Get(rx, "flags")` reaches the builtin getter over builtin flag accessors,
 /// and constructing the splitter from them runs no code either. The splitter
@@ -238,7 +236,7 @@ fn canonical_split(
     limit_value: &RuntimeHandle<'_>,
 ) -> Result<Option<f64>, EngineError> {
     if !limit_is_plain(limit_value)
-        || !crate::object::regex_canonical::split(receiver.get_nanbox_f64())
+        || !crate::object::regex_read_sites::split(receiver.get_nanbox_f64())
     {
         return Ok(None);
     }
@@ -477,7 +475,10 @@ pub(crate) fn string(receiver: f64, separator: f64, limit_value: f64) -> Result<
     let limit_value = scope.root_nanbox_f64(limit_value);
     let mut budget = Budget::new(api::WORK);
     let memory = MemoryBudget::new(api::SCRATCH_BYTES);
-    if crate::object::regex_canonical::split(separator.get_nanbox_f64()) {
+    if crate::object::regex_read_sites::method(
+        separator.get_nanbox_f64(),
+        crate::object::regex_read_sites::Method::Split,
+    ) {
         // `Get(separator, @@split)` would reach the builtin without running
         // code (#10518). Call what it would have returned.
         return regexp(

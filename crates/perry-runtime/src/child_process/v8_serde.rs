@@ -520,7 +520,7 @@ impl Serializer {
         self.out.push(TAG_REGEXP);
         let source = crate::regex::js_regexp_get_source(re);
         self.write_string(crate::value::js_nanbox_string(source as i64));
-        let flags = crate::regex::js_regexp_get_flags(re);
+        let flags = crate::regex::original_flags(re);
         let flags = string_bytes(crate::value::js_nanbox_string(flags as i64));
         let mut bits = 0u64;
         for flag in flags {

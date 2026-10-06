@@ -30,7 +30,7 @@ pub(super) fn try_remove(
     };
     if !empty
         || !JSValue::from_bits(receiver.to_bits()).is_any_string()
-        || !crate::object::regex_canonical::replace(search)
+        || !crate::object::regex_read_sites::replace(search)
     {
         return Ok(None);
     }

@@ -32,6 +32,25 @@ pub(crate) const PROGRAM_BYTES: usize = 32 * 1024 * 1024;
 pub(crate) const QUANTUM: usize = 4096;
 pub(crate) const OUTPUT_BYTES: usize = crate::string::MAX_STRING_LENGTH * 3;
 
+// The allocation-point root witness arms pressure after the search's
+// mandatory capture poll. A native function pointer is not a managed edge.
+#[cfg(test)]
+thread_local! {
+    static BEFORE_RESULT_ALLOC: std::cell::Cell<Option<fn()>> = const { std::cell::Cell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn set_before_result_alloc(hook: Option<fn()>) -> Option<fn()> {
+    BEFORE_RESULT_ALLOC.with(|slot| slot.replace(hook))
+}
+
+#[cfg(test)]
+pub(super) fn before_result_alloc() {
+    if let Some(hook) = BEFORE_RESULT_ALLOC.with(|slot| slot.take()) {
+        hook();
+    }
+}
+
 /// Capture by reference when `f` can throw: its Rust frame can be abandoned by
 /// longjmp. Native ownership belongs in the caller, above this local trap.
 pub(crate) fn caught<T>(f: impl FnOnce() -> T) -> Result<T, EngineError> {
@@ -356,9 +375,7 @@ pub(crate) fn test_window(
             // Only an already-Number permits omitting that observable step.
             && crate::value::JSValue::from_bits(crate::regex::get_last_index(re).to_bits()).is_number()
     });
-    if !admitted
-        || !crate::object::regex_proto_thunks::regexp_view_uses_builtin(receiver.get_nanbox_f64())
-    {
+    if !admitted || !crate::object::regex_read_sites::test_exec(receiver.get_nanbox_f64()) {
         return Ok(None);
     }
     let mut budget = Budget::new(WORK);

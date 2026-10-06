@@ -1,7 +1,6 @@
 // RegExp spec-observability rows (REGEXP_ONE_SHAPE_DESIGN S0). Every row here
-// must match Node through the one-shape slices (S1-S6). S2 moves five formerly
-// wrong rows here. The remaining S3 flags-getter row lives in
-// test_gap_regexp_observe_known_wrong.ts.
+// must match Node through the one-shape slices (S1-S6). S3 also covers
+// the formerly wrong flags getter observation.
 //
 // Rows observe: a patched or own `test`/`exec`, an overridden flag getter, a
 // patched @@replace, subclassing, own/prototype property layout, `lastIndex`
@@ -18,6 +17,16 @@ function t(name: string, f: () => any): void {
 }
 const mk = (): any => /a/;
 
+// This must precede every literal birth; a warmed birth shape masks the bug.
+t("cold_intrinsic_after_global_reassignment", () => {
+  const saved: any = globalThis.RegExp;
+  const intrinsic: any = saved.prototype;
+  globalThis.RegExp = function Fake() {} as any;
+  try {
+    const r: any = /a/;
+    return [Object.getPrototypeOf(r) === intrinsic, r.test("a"), intrinsic.global, intrinsic.source, intrinsic.flags];
+  } finally { globalThis.RegExp = saved; }
+});
 t("cold_lastIndex_define", () => {
   let calls = 0;
   Object.defineProperty(Object.prototype, "lastIndex", { set() { calls++; }, configurable: true });
@@ -130,3 +139,6 @@ t("dictionary_exec_shadow", () => {
   r.exec = () => { calls++; return null; };
   return [first, r.test("a"), calls];
 });
+
+// S3: flags must read overridden boolean getters.
+t("flags_reads_getters", () => { const warm: any = /a/g; if (warm.flags !== "g") return "warmup failed"; const d = Object.getOwnPropertyDescriptor(RegExp.prototype, "global"); Object.defineProperty(RegExp.prototype, "global", { get() { return false; }, configurable: true }); try { return /a/g.flags; } finally { Object.defineProperty(RegExp.prototype, "global", d); } });

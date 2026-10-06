@@ -518,7 +518,7 @@ pub(crate) fn intrinsic_private_set(receiver: f64, name: &'static str, value: f6
 
 /// Install the private entry before the intrinsic publishes its receiver.
 /// A property with the qualified spelling is never a private field.
-#[cfg(all(test, feature = "regex-engine"))]
+#[cfg(feature = "regex-engine")]
 pub(crate) fn intrinsic_private_add(receiver: f64, name: &'static str, value: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_raw_mut_ptr(

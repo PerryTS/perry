@@ -18,6 +18,8 @@ mod flags;
 #[cfg(feature = "regex-engine")]
 mod instance;
 #[cfg(feature = "regex-engine")]
+pub(crate) use instance::intrinsic_prototype;
+#[cfg(feature = "regex-engine")]
 mod perex_split_compat;
 #[cfg(feature = "regex-engine")]
 pub use perex_split_compat::{js_string_split_n, js_string_split_regex, js_string_split_regex_n};
@@ -599,6 +601,18 @@ pub extern "C" fn js_regexp_empty_source() -> *mut StringHeader {
 /// Get regex.flags — returns the flags string
 #[no_mangle]
 pub extern "C" fn js_regexp_get_flags(re: *const RegExpHeader) -> *mut StringHeader {
+    #[cfg(feature = "regex-engine")]
+    {
+        return perex_api::finish(perex_match_search::flags(crate::value::js_nanbox_pointer(
+            re as i64,
+        )));
+    }
+    #[cfg(not(feature = "regex-engine"))]
+    original_flags(re)
+}
+
+/// Internal serialization reads OriginalFlags, not the observable flags getter.
+pub(crate) fn original_flags(re: *const RegExpHeader) -> *mut StringHeader {
     let Some(data) = crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(re as i64))
     else {
         return js_string_from_str("");

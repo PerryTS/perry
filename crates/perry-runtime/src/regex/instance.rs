@@ -6,19 +6,17 @@ use crate::value::js_nanbox_pointer;
 use std::cell::Cell;
 
 crate::perry_thread_local! {
+    static PROTOTYPE_READ: crate::object::IntrinsicPrivateReadSite =
+        const { crate::object::IntrinsicPrivateReadSite::new("[[RegExpPrototype]]") };
     static BIRTH_SHAPE: Cell<u32> = const { Cell::new(0) };
 }
 
 pub(super) fn new(scope: &RuntimeHandleScope, data: &RuntimeHandle<'_>) -> *mut RegExpHeader {
     let shape = BIRTH_SHAPE.with(Cell::get);
     let receiver = scope.root_raw_mut_ptr(crate::object::object_alloc_plain_born(2, shape));
-    let prototype = crate::object::regex_proto_thunks::recorded_regexp_prototype();
-    let cached = !prototype.is_null()
-        && receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
-            crate::object::shapes::object_shape_stamp(r) == shape
-        })
-        && crate::object::shapes::shape_prototype_word(shape)
-            == js_nanbox_pointer(prototype as i64).to_bits();
+    let cached = receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
+        crate::object::shapes::object_shape_stamp(r) == shape
+    });
     if !cached {
         prepare_shape(scope, &receiver);
     }
@@ -38,13 +36,9 @@ pub(super) fn new(scope: &RuntimeHandleScope, data: &RuntimeHandle<'_>) -> *mut 
 fn prepare_shape(scope: &RuntimeHandleScope, receiver: &RuntimeHandle<'_>) {
     use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};
     use crate::object::key_attrs::{attr_bits_to_entry, PRIVATE_FIELD_ENTRY};
-    let intrinsic = crate::object::regex_proto_thunks::recorded_regexp_prototype();
-    let prototype = scope.root_raw_mut_ptr(if intrinsic.is_null() {
-        crate::value::js_nanbox_get_pointer(crate::object::builtin_prototype_value("RegExp"))
-            as *mut RegExpHeader
-    } else {
-        intrinsic
-    });
+    let prototype = scope.root_raw_mut_ptr(
+        crate::value::js_nanbox_get_pointer(intrinsic_prototype()) as *mut RegExpHeader,
+    );
     let proto_id = prototype
         .with_mut_ptr::<RegExpHeader, _>(|p| unsafe {
             crate::object::proto_validity::mark_object_as_prototype(p as usize)
@@ -89,4 +83,13 @@ fn prepare_shape(scope: &RuntimeHandleScope, receiver: &RuntimeHandle<'_>) {
         super::MATCHER_READ.with(|site| site.prime_birth(shape, 0, 2));
         super::LAST_INDEX_READ.with(|site| site.prime_own_inline(shape, 1, 2));
     });
+}
+
+// Read the realm intrinsic through the same private slot machinery as matcher
+// data. Neither this site nor BIRTH_SHAPE retains a managed pointer.
+pub(crate) fn intrinsic_prototype() -> f64 {
+    let global = crate::object::js_get_global_this();
+    PROTOTYPE_READ
+        .with(|site| site.read(global))
+        .expect("realm has installed the RegExp intrinsic")
 }
