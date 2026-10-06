@@ -85,6 +85,15 @@ fn refresh_param(ctx: &mut FnCtx<'_>, access: &crate::collectors::ByteViewParamA
 }
 
 pub(crate) fn refresh_hoisted_byte_accesses(ctx: &mut FnCtx<'_>) {
+    for (receiver, owner) in ctx.receiver_descriptors.retained_byte_owners() {
+        for slot in [&receiver, &owner] {
+            let value = ctx.block().load(DOUBLE, slot);
+            let bits = ctx.block().bitcast_double_to_i64(&value);
+            ctx.block().emit_raw(format!(
+                "call void asm sideeffect \"\", \"r\"(i64 {bits}) \"gc-leaf-function\""
+            ));
+        }
+    }
     for access in ctx.receiver_descriptors.hoisted_byte_params() {
         keep_cached_owner_alive(ctx, &access);
         refresh_param(ctx, &access);
@@ -343,4 +352,145 @@ pub(crate) fn inline_owner_guard(ctx: &mut FnCtx<'_>, boxed: &str, brand: u8) ->
         .block()
         .phi(I1, &[("false", &before), (&guard, &inspect_l)]);
     (raw, guard)
+}
+
+/// A tracked local may be consumed solely through its interior data slot.
+/// Retain both exact object starts across every subsequent safepoint. Fresh
+/// constructor results have a direct owner link, before any bag attachment.
+pub(crate) fn retain_fresh_local_owner(ctx: &mut FnCtx<'_>, boxed: &str) {
+    let receiver_slot = ctx.func.alloca_entry(DOUBLE);
+    let owner_slot = ctx.func.alloca_entry(DOUBLE);
+    let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    for slot in [&receiver_slot, &owner_slot] {
+        ctx.func.entry_allocas_push_store(DOUBLE, &undef, slot);
+    }
+    super::scalar_slot_root::root_entry_alloca(ctx, &receiver_slot);
+    #[cfg(test)]
+    let omit_owner = std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("hoist_owner");
+    #[cfg(not(test))]
+    let omit_owner = false;
+    if !omit_owner {
+        super::scalar_slot_root::root_entry_alloca(ctx, &owner_slot);
+    }
+    ctx.block().emit_raw(format!(
+        "; bytes.local.roots receiver={} owner={}",
+        receiver_slot.trim_start_matches('%'),
+        owner_slot.trim_start_matches('%')
+    ));
+    ctx.block().store(DOUBLE, boxed, &receiver_slot);
+    let raw = super::unbox_to_i64(ctx.block(), boxed);
+    let h = header_word(ctx.block(), &raw);
+    let role = ctx
+        .block()
+        .and(I64, &h, &crate::runtime_abi::BYTES_TYPE_VIEW.to_string());
+    let is_view = ctx.block().icmp_ne(I64, &role, "0");
+    let view = ctx.new_block("bytes.local.owner.view");
+    let done = ctx.new_block("bytes.local.owner.done");
+    let view_l = ctx.block_label(view);
+    let done_l = ctx.block_label(done);
+    let owner_l = ctx.block().label.clone();
+    ctx.block().cond_br(&is_view, &view_l, &done_l);
+    ctx.current_block = view;
+    let link = ctx
+        .block()
+        .add(I64, &raw, &crate::runtime_abi::BYTES_LINK.to_string());
+    let link_ptr = ctx.block().inttoptr(I64, &link);
+    let owner = ctx.block().load(I64, &link_ptr);
+    let bits = ctx.block().or(I64, &owner, crate::nanbox::POINTER_TAG_I64);
+    let owner = ctx.block().bitcast_i64_to_double(&bits);
+    let view_end = ctx.block().label.clone();
+    ctx.block().br(&done_l);
+    ctx.current_block = done;
+    let owner = ctx
+        .block()
+        .phi(DOUBLE, &[(boxed, &owner_l), (&owner, &view_end)]);
+    ctx.block().store(DOUBLE, &owner, &owner_slot);
+    ctx.receiver_descriptors
+        .retain_byte_owner(receiver_slot, owner_slot);
+}
+
+#[cfg(test)]
+mod tests {
+    use perry_hir::{types::Type, Expr, Stmt};
+
+    #[test]
+    fn tracked_local_keeps_receiver_and_owner_roots_across_a_collecting_call() {
+        crate::temp_root_coverage::under_both_lowerings(|mode| {
+            for alias in [false, true] {
+                let ir = crate::temp_root_coverage::main_ir_for(
+                    "byte_local_owner",
+                    vec![
+                        Stmt::Let {
+                            id: 1,
+                            name: "bytes".into(),
+                            ty: Type::Named("Uint32Array".into()),
+                            mutable: false,
+                            init: Some(Expr::TypedArrayNew {
+                                kind: perry_hir::TYPED_ARRAY_KIND_UINT32,
+                                arg: Some(Box::new(Expr::Integer(64))),
+                            }),
+                        },
+                        Stmt::Let {
+                            id: 2,
+                            name: "alias".into(),
+                            ty: Type::Named("Uint32Array".into()),
+                            mutable: false,
+                            init: Some(Expr::LocalGet(1)),
+                        },
+                        Stmt::While {
+                            condition: Expr::Integer(1),
+                            body: vec![
+                                Stmt::Expr(Expr::Call {
+                                    callee: Box::new(Expr::GlobalGet(100)),
+                                    args: vec![],
+                                    type_args: vec![],
+                                    byte_offset: 0,
+                                }),
+                                Stmt::Expr(Expr::IndexGet {
+                                    object: Box::new(Expr::LocalGet(if alias { 2 } else { 1 })),
+                                    index: Box::new(Expr::Integer(0)),
+                                }),
+                            ],
+                        },
+                    ],
+                );
+                let marker = ir
+                    .lines()
+                    .find(|line| line.contains("; bytes.local.roots "))
+                    .expect("the tracked data slot must retain its exact owners");
+                let roots = crate::testing::root_slots::bound_slots(&ir);
+                for field in ["receiver=", "owner="] {
+                    let slot = marker
+                        .split(field)
+                        .nth(1)
+                        .unwrap()
+                        .split_whitespace()
+                        .next()
+                        .unwrap();
+                    let slot = format!("%{slot}");
+                    assert!(
+                        roots.contains_key(&slot)
+                            || ir.contains(&format!("{slot} = alloca ptr addrspace(1)")),
+                        "{mode}: {field}{slot} must be a statepoint root"
+                    );
+                }
+                assert!(
+                    ir.contains("asm sideeffect"),
+                    "the owner must remain live after the call"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn dropping_a_tracked_local_owner_root_turns_the_invariant_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "expr::byte_cell::tests::tracked_local_keeps_receiver_and_owner_roots_across_a_collecting_call", "--nocapture"])
+            .env("PERRY_B4_SABOTAGE", "hoist_owner").output().unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(
+            !child.status.success(),
+            "the planted missing owner root must be detected"
+        );
+    }
 }

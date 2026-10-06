@@ -350,6 +350,7 @@ pub(crate) struct ByteViewParamAccess {
 #[derive(Debug, Default)]
 pub(crate) struct ReceiverDescriptorTable {
     byte_view_params: std::collections::HashMap<u32, ByteViewParamAccess>,
+    retained_byte_owners: Vec<(String, String)>,
     entries: Vec<ActiveReceiverDescriptor>,
     /// 5L (step5 DESIGN §4.1): the scoped Number-local sets, innermost last.
     /// Each is the set a guarded clone proved for its own body: the locals
@@ -363,6 +364,18 @@ pub(crate) struct ReceiverDescriptorTable {
 }
 
 impl ReceiverDescriptorTable {
+    pub(crate) fn retain_byte_owner(&mut self, receiver: String, owner: String) {
+        self.retained_byte_owners.push((receiver, owner));
+    }
+
+    pub(crate) fn retained_byte_owners(&self) -> Vec<(String, String)> {
+        self.retained_byte_owners.clone()
+    }
+
+    pub(crate) fn has_hoisted_byte_owners(&self) -> bool {
+        !self.byte_view_params.is_empty() || !self.retained_byte_owners.is_empty()
+    }
+
     pub(crate) fn materialize_byte_view_param(
         &mut self,
         receiver: u32,
@@ -376,7 +389,12 @@ impl ReceiverDescriptorTable {
     }
 
     pub(crate) fn hoisted_byte_params(&self) -> Vec<ByteViewParamAccess> {
-        self.byte_view_params.values().cloned().collect()
+        let mut entries: Vec<_> = self.byte_view_params.iter().collect();
+        entries.sort_unstable_by_key(|(id, _)| **id);
+        entries
+            .into_iter()
+            .map(|(_, access)| access.clone())
+            .collect()
     }
 
     /// Whether an active scope has already materialised `receiver`.

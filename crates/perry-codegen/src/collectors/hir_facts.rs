@@ -155,6 +155,9 @@ pub(crate) struct BoundsFacts {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct AliasNoAliasFacts {
     pub known_noalias_buffer_locals: HashSet<u32>,
+    /// Fresh locals accessed through interior data pointers in this region.
+    /// Passing a boxed receiver to a call has its own, shorter root lifetime.
+    pub interior_byte_locals: HashSet<u32>,
     /// The `known_noalias_buffer_locals` whose every use is sealed: nothing
     /// can observe their `.buffer`, so nothing can rebind or detach them.
     pub sealed_buffer_locals: HashSet<u32>,
@@ -378,6 +381,10 @@ impl TypeFacts {
 
     pub(crate) fn known_noalias_buffer_locals(&self) -> &HashSet<u32> {
         &self.alias_noalias.known_noalias_buffer_locals
+    }
+
+    pub(crate) fn interior_byte_locals(&self) -> &HashSet<u32> {
+        &self.alias_noalias.interior_byte_locals
     }
 
     pub(crate) fn sealed_buffer_locals(&self) -> &HashSet<u32> {
@@ -821,6 +828,42 @@ pub(crate) fn collect_type_facts(
     let non_object_locals: HashSet<u32> = number_locals.union(&integer_locals).copied().collect();
     let known_noalias_buffer_locals =
         collect_known_noalias_buffer_locals(stmts, &non_object_locals);
+    let mut byte_aliases = Vec::new();
+    super::ptr_shape_elements::walk_stmts(stmts, &mut |stmt| {
+        if let Stmt::Let {
+            id,
+            init: Some(Expr::LocalGet(source)),
+            ..
+        } = stmt
+        {
+            byte_aliases.push((*id, *source));
+        }
+    });
+    let interior_byte_locals = known_noalias_buffer_locals
+        .iter()
+        .copied()
+        .filter(|id| {
+            let mut names = HashSet::from([*id]);
+            loop {
+                let before = names.len();
+                for &(alias, source) in &byte_aliases {
+                    if names.contains(&source) {
+                        names.insert(alias);
+                    }
+                }
+                if names.len() == before {
+                    break;
+                }
+            }
+            names.iter().any(|name| {
+                stmts.iter().any(|stmt| {
+                    perry_hir::walker::stmt_any_expr(stmt, &mut |expr| {
+                        directly_accesses_byte_local(expr, *name)
+                    })
+                })
+            })
+        })
+        .collect();
     // The owned bindings no use can hand to code that reads their `.buffer`
     // (`collectors/sealed_buffers.rs`). Only these keep their construction
     // facts: observing `.buffer` rebinds a typed array to an external
@@ -896,6 +939,7 @@ pub(crate) fn collect_type_facts(
         },
         alias_noalias: AliasNoAliasFacts {
             known_noalias_buffer_locals,
+            interior_byte_locals,
             sealed_buffer_locals,
             late_exposed_buffer_locals,
             numeric_key_locals,
@@ -1041,6 +1085,40 @@ pub(crate) fn collect_hir_facts(
         &HashSet::new(),
         &HashMap::new(),
     )
+}
+
+fn directly_accesses_byte_local(expr: &Expr, id: u32) -> bool {
+    if matches!(expr, Expr::Closure { .. }) {
+        return false;
+    }
+    let receiver = match expr {
+        Expr::IndexGet { object, .. }
+        | Expr::IndexSet { object, .. }
+        | Expr::IndexUpdate { object, .. } => Some(object.as_ref()),
+        Expr::Uint8ArrayGet { array, .. } | Expr::Uint8ArraySet { array, .. } => {
+            Some(array.as_ref())
+        }
+        Expr::BufferIndexGet { buffer, .. } | Expr::BufferIndexSet { buffer, .. } => {
+            Some(buffer.as_ref())
+        }
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object: Some(object),
+            ..
+        } if module == "buffer" && (method.starts_with("read") || method.starts_with("write")) => {
+            Some(object.as_ref())
+        }
+        _ => None,
+    };
+    if matches!(receiver, Some(Expr::LocalGet(receiver)) if *receiver == id) {
+        return true;
+    }
+    let mut found = false;
+    perry_hir::walker::walk_expr_children(expr, &mut |child| {
+        found |= directly_accesses_byte_local(child, id);
+    });
+    found
 }
 
 /// Immutable locals bound to a fresh, owned buffer or typed array.

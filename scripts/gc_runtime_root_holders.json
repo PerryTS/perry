@@ -2905,6 +2905,30 @@
       "name": "CALLS",
       "verdict": "not_a_gc_pointer",
       "why": "Test-only AtomicUsize invocation counter. Its only writes store zero or fetch_add(1); reads compare the numeric callback count. No address or tagged value is ever stored."
+    },
+    {
+      "file": "crates/perry-runtime/src/alloc_census.rs",
+      "name": "IN_SAMPLER",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean allocator-sampler reentrancy guard. It holds no pointer. Its former incidental scanner call-graph coverage disappeared when B4 removed byte side-table scanners."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/trace.rs",
+      "name": "BLOCK_PERSIST_FORCE_MARKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Numeric diagnostic count of block-persistence forced marks. It holds no pointer; B4 scanner deletions exposed incidental prior call-graph coverage."
+    },
+    {
+      "file": "crates/perry-runtime/src/json_tape_store.rs",
+      "name": "TAPE_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Shutdown inventory from a nonmoving old LazyArrayHeader address to a uniquely owned, immutable native TapeEntry allocation. TapeEntry is pointer-free offset/kind/link data; keys deliberately do not keep headers alive. LazyArrayTape finalization, materialization and thread teardown release the native allocation. No GC edge needs tracing; B4 scanner deletions exposed incidental prior call-graph coverage."
+    },
+    {
+      "file": "crates/perry-runtime/src/json_tape_store.rs",
+      "name": "TAPE_REGISTRY_NONEMPTY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean indicating whether a native JSON tape side allocation inventory has entries. It holds no heap pointer; B4 scanner deletions exposed incidental prior call-graph coverage."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

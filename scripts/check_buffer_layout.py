@@ -35,6 +35,10 @@ EMITTERS = {
     'u8_buffer_read.rs', 'arrays.rs', 'stable_packed_typed_array.rs',
 }
 EMITTED = re.compile(r'\b(?:add|gep)\([^\n]*"(?:8|16|10)"')
+# Rust strings in IR inspectors and hand-written IR fixtures are not runtime
+# calls. Preserve line positions; emitted offset checks still use the source.
+STRINGS = re.compile(r'//[^\n]*|/\*.*?\*/|\'(?:\\.|[^\'\\])\'|'
+                     r'r(?P<hashes>\#{0,255})".*?"(?P=hashes)|"(?:\\.|[^"\\])*"', re.S)
 
 def inventory(root=ROOT):
     out = collections.Counter()
@@ -42,12 +46,14 @@ def inventory(root=ROOT):
         relative = p.relative_to(root).as_posix()
         if relative.startswith('crates/perry-abi/') or '/buffer/store' in relative or relative in ACCESSORS:
             continue
-        for line in p.read_text().splitlines():
+        source = p.read_text()
+        code_lines = STRINGS.sub(lambda m: re.sub(r'[^\n]', ' ', m.group()), source).splitlines()
+        for line, code_line in zip(source.splitlines(), code_lines):
             code = line.strip()
             if code.startswith('//'):
                 continue
             emitted = '/perry-codegen/' in relative and p.name in EMITTERS and EMITTED.search(code)
-            if emitted or any(pattern.search(code) for pattern in PATTERNS):
+            if emitted or any(pattern.search(code_line) for pattern in PATTERNS):
                 out[relative + '|' + re.sub(r'\s+', ' ', code)] += 1
     return out
 
@@ -69,6 +75,7 @@ def self_test():
             'let data = typed_array_bytes(ta);',
             'let data = js_value_buffer_or_typedarray_data(value, &mut len);',
             'let data = crate::typedarray::data_ptr_mut(ta);',
+            'let quote = \'"\'; // an unmatched " in a comment\nlet data = buffer_data(buffer);',
         ]] + [(emitted, code) for code in [
             'let data = blk.add(I64, &raw, "8");',
             'let data = blk.gep(I8, &header, &[(I32, "16")]);',
@@ -83,7 +90,9 @@ def self_test():
             print(f'buffer-layout sabotage {index + 1}: RED')
             last = fixture
         last.unlink()
-        (crate / 'lib.rs').write_text('// buffer_data(buffer);\nlet n = array.length;\n')
+        (crate / 'lib.rs').write_text('// buffer_data(buffer);\nlet n = array.length;\n'
+                                    'let ir = "call ptr @js_native_buffer_data_ptr(double %v)";\n'
+                                    'let text = r#"buffer_data(buffer)"#;\n')
         assert not inventory(root), 'unrelated arrays and comments must stay outside the gate'
 
 def main():
