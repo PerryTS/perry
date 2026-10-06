@@ -110,21 +110,27 @@ fn large_concat_and_nested_views_preserve_one_visible_window() {
         let concat = handles.root_raw_mut_ptr(concat);
         let view = buffer::js_buffer_slice(concat.get_raw_mut_ptr(), 4, 5_400_000);
         let view = handles.root_raw_mut_ptr(view);
-        let nested = buffer::js_buffer_slice(view.get_raw_mut_ptr(), 4, 12);
+        let nested =
+            handles.root_raw_mut_ptr(buffer::js_buffer_slice(view.get_raw_mut_ptr(), 4, 12));
         assert_eq!(
             buffer::buffer_backing_array_buffer(
                 concat.get_raw_mut_ptr::<buffer::BufferHeader>() as usize
             ),
-            buffer::buffer_backing_array_buffer(nested as usize)
+            buffer::buffer_backing_array_buffer(
+                nested.get_raw_mut_ptr::<buffer::BufferHeader>() as usize
+            )
         );
+        let holder = crate::array::js_array_alloc(1);
+        crate::array::js_array_push_f64(
+            holder,
+            bits(nested.get_raw_mut_ptr::<buffer::BufferHeader>()),
+        );
+        js_shadow_slot_set(0, ptr_bits(holder as usize));
         (
-            nested,
+            nested.get_raw_mut_ptr::<buffer::BufferHeader>(),
             concat.get_raw_mut_ptr::<buffer::BufferHeader>() as usize,
         )
     };
-    let holder = crate::array::js_array_alloc(1);
-    crate::array::js_array_push_f64(holder, bits(nested));
-    js_shadow_slot_set(0, ptr_bits(holder as usize));
     let before = gc_total_collection_count();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
