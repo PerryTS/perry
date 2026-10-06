@@ -167,3 +167,112 @@ extern "C" fn next_rejected(
     }
     f64::from_bits(TAG_UNDEFINED)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    thread_local! {
+        static NEXTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    extern "C" fn next(_: *const ClosureHeader, _: crate::closure::JsThis) -> f64 {
+        let count = NEXTS.with(|n| {
+            let count = n.get();
+            n.set(count + 1);
+            count
+        });
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(buffer_value_from_bytes(&[count as u8; 1024]));
+        let result =
+            scope.root_nanbox_f64(box_pointer(crate::object::js_object_alloc(0, 2).cast()));
+        set_visible_own_value(
+            result.get_nanbox_f64(),
+            hidden_key(b"done"),
+            f64::from_bits(if count == 4 { TAG_TRUE } else { TAG_FALSE }),
+        );
+        set_visible_own_value(
+            result.get_nanbox_f64(),
+            hidden_key(b"value"),
+            value.get_nanbox_f64(),
+        );
+        result.get_nanbox_f64()
+    }
+    #[test]
+    fn synchronous_iterator_is_lazy_and_stops_at_readable_credit() {
+        NEXTS.with(|n| n.set(0));
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let source =
+            scope.root_nanbox_f64(box_pointer(crate::object::js_object_alloc(0, 1).cast()));
+        let next = js_closure_alloc(crate::fn_info!(next, 0), 0);
+        set_visible_own_value(
+            source.get_nanbox_f64(),
+            hidden_key(b"next"),
+            box_pointer(next.cast()),
+        );
+        let options =
+            scope.root_nanbox_f64(box_pointer(crate::object::js_object_alloc(0, 2).cast()));
+        set_visible_own_value(
+            options.get_nanbox_f64(),
+            hidden_key(b"objectMode"),
+            f64::from_bits(TAG_FALSE),
+        );
+        set_visible_own_value(
+            options.get_nanbox_f64(),
+            hidden_key(b"highWaterMark"),
+            1024.0,
+        );
+        let stream = scope.root_nanbox_f64(constructors::js_node_stream_readable_from_options(
+            source.get_nanbox_f64(),
+            options.get_nanbox_f64(),
+        ));
+        assert_eq!(
+            NEXTS.with(std::cell::Cell::get),
+            0,
+            "construction must not exhaust the source"
+        );
+        assert!(pull(stream.get_nanbox_f64()));
+        crate::promise::js_promise_run_microtasks();
+        for _ in 0..3 {
+            assert!(pull(stream.get_nanbox_f64()));
+        }
+        crate::promise::js_promise_run_microtasks();
+        assert_eq!(
+            NEXTS.with(std::cell::Cell::get),
+            1,
+            "a paused source stops at its HWM"
+        );
+        assert_eq!(
+            get_hidden_value(stream.get_nanbox_f64(), hidden_buffered_key()),
+            Some(1024.0)
+        );
+        crate::gc::js_gc_collect();
+        let chunk = scope.root_nanbox_f64(super::super::js_node_stream_method_read(
+            raw_ptr_from_value(stream.get_nanbox_f64()) as i64,
+            f64::from_bits(TAG_UNDEFINED),
+        ));
+        crate::buffer::bytes::no_gc(|no_gc| {
+            assert_eq!(
+                crate::buffer::bytes::bytes(chunk.get_nanbox_f64(), no_gc).unwrap(),
+                &[0; 1024]
+            )
+        });
+        assert!(pull(stream.get_nanbox_f64()));
+        crate::promise::js_promise_run_microtasks();
+        assert_eq!(NEXTS.with(std::cell::Cell::get), 2);
+        destroy_stream(stream.get_nanbox_f64(), f64::from_bits(TAG_UNDEFINED));
+        crate::promise::js_promise_run_microtasks();
+    }
+    #[test]
+    fn eager_iterator_sabotage_turns_credit_witness_red() {
+        let witness = "node_stream::readable_from_iterator::tests::synchronous_iterator_is_lazy_and_stops_at_readable_credit";
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", witness, "--nocapture", "--test-threads=1"])
+            .env("PERRY_TEST_STREAM_SABOTAGE", "eager_iterator_from")
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&result.stdout).contains("running 1 test"));
+        assert!(
+            !result.status.success(),
+            "eager iterator materialization must turn the credit witness red"
+        );
+    }
+}

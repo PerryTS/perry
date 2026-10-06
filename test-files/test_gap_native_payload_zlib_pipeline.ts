@@ -38,5 +38,6 @@ await new Promise<void>((resolve, reject) => {
   }
 });
 console.log(mode, received === size, checksum === expected, maximum <= 32768,
-  falseWrites, drains > 0 && Math.abs(falseWrites - drains) <= 1);
+  Math.abs(falseWrites - Math.ceil(size / 16384)) <= 1,
+  drains > 0 && Math.abs(falseWrites - drains) <= 1);
 if (process.argv[4] === 'counts') console.log('counts', falseWrites, drains);

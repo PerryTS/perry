@@ -1578,10 +1578,13 @@ fn normalized_readable_chunks(chunks: f64) -> NormalizedReadableInput {
 }
 
 pub(super) fn normalize_readable_from_input(iterable: f64) -> NormalizedReadableInput {
-    if let Some(chunks) = readable_hidden_chunks(iterable) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iterable = scope.root_nanbox_f64(iterable);
+    let value = || iterable.get_nanbox_f64();
+    if let Some(chunks) = readable_hidden_chunks(value()) {
         return normalized_readable_chunks(chunks);
     }
-    let raw = raw_ptr_from_value(iterable);
+    let raw = raw_ptr_from_value(value());
     if raw >= 0x10000
         && crate::buffer::is_registered_buffer(raw)
         && crate::buffer::is_uint8array_buffer(raw)
@@ -1602,39 +1605,53 @@ pub(super) fn normalize_readable_from_input(iterable: f64) -> NormalizedReadable
             return normalized_readable_chunks(box_pointer(chunks as *const u8));
         }
     }
-    if is_array_like_value(iterable) {
+    if is_array_like_value(value()) {
         // #11827: the stream shifts chunks off its queue as they are read;
         // Node only iterates the caller's array, so queue a copy of it.
         let copy =
             crate::array::js_array_slice(raw as *const crate::array::ArrayHeader, 0, i32::MAX);
         return normalized_readable_chunks(box_pointer(copy as *const u8));
     }
-    if is_single_chunk_value(iterable) {
+    if is_single_chunk_value(value()) {
         let arr = crate::array::js_array_alloc(1);
-        let arr = crate::array::js_array_push_f64(arr, iterable);
+        let arr = crate::array::js_array_push_f64(arr, value());
         return normalized_readable_chunks(box_pointer(arr as *const u8));
     }
-    if let Some(source_iterator) = crate::array::call_symbol_async_iterator(iterable) {
-        return NormalizedReadableInput {
-            chunks: box_pointer(crate::array::js_array_alloc(0) as *const u8),
-            source_iterator: Some(source_iterator),
-        };
+    if let Some(source_iterator) = crate::array::call_symbol_async_iterator(value()) {
+        return normalized_live_iterator(source_iterator);
     }
-    if let Some((chunks, source_iterator)) = flatten_async_iterable_with_source(iterable) {
-        return NormalizedReadableInput {
-            chunks: box_pointer(chunks as *const u8),
-            source_iterator,
-        };
+    #[cfg(test)]
+    if super::native_hooks::stream_sabotage("eager_iterator_from") {
+        if let Some((chunks, source_iterator)) = flatten_async_iterable_with_source(value()) {
+            return NormalizedReadableInput {
+                chunks: box_pointer(chunks.cast()),
+                source_iterator,
+            };
+        }
     }
-    if let Some((chunks, source_iterator)) = flatten_sync_iterable_value(iterable) {
-        return NormalizedReadableInput {
-            chunks: box_pointer(chunks as *const u8),
-            source_iterator,
-        };
+    // A Readable drives next() only as its readable credit permits. Draining
+    // generators into an array here bypasses backpressure and leaves their
+    // results in the eager iterator helper across moving collections.
+    if crate::array::has_iterator_next(value()) {
+        return normalized_live_iterator(value());
+    }
+    let source_iterator = scope.root_nanbox_f64(crate::symbol::js_get_iterator(value()));
+    if crate::array::has_iterator_next(source_iterator.get_nanbox_f64()) {
+        return normalized_live_iterator(source_iterator.get_nanbox_f64());
     }
 
     let arr = crate::array::js_array_alloc(1);
     normalized_readable_chunks(box_pointer(arr as *const u8))
+}
+
+fn normalized_live_iterator(source_iterator: f64) -> NormalizedReadableInput {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source_iterator = scope.root_nanbox_f64(source_iterator);
+    let chunks = box_pointer(crate::array::js_array_alloc(0) as *const u8);
+    NormalizedReadableInput {
+        chunks,
+        source_iterator: Some(source_iterator.get_nanbox_f64()),
+    }
 }
 
 pub(super) fn initialize_readable_from_buffered_length(readable: f64, chunks: f64) {
@@ -1651,34 +1668,6 @@ pub(super) fn initialize_readable_from_buffered_length(readable: f64, chunks: f6
     };
     set_hidden_value(readable, hidden_buffered_key(), length);
     set_hidden_value(readable, hidden_key(b"readableLength"), length);
-}
-
-fn flatten_sync_iterable_value(
-    value: f64,
-) -> Option<(*mut crate::array::ArrayHeader, Option<f64>)> {
-    if has_symbol_async_iterator(value) {
-        return None;
-    }
-    if crate::object::js_util_types_is_generator_object(value).to_bits() == TAG_TRUE {
-        return crate::array::sync_iterator_to_array_if_not_async(value)
-            .map(|chunks| (chunks, Some(value)));
-    }
-    let iter = crate::symbol::js_get_iterator(value);
-    if iter.to_bits() != value.to_bits() {
-        return crate::array::sync_iterator_to_array_if_not_async(iter)
-            .map(|chunks| (chunks, Some(iter)));
-    }
-    None
-}
-
-fn has_symbol_async_iterator(value: f64) -> bool {
-    let sym = crate::symbol::well_known_symbol("asyncIterator");
-    if sym.is_null() {
-        return false;
-    }
-    let sym_value = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
-    let method = unsafe { crate::symbol::js_object_get_symbol_property(value, sym_value) };
-    is_callable_value(method)
 }
 
 pub(super) fn readable_from_options(opts: f64) -> f64 {
