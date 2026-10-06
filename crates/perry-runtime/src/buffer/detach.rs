@@ -58,7 +58,13 @@ pub fn detach_array_buffer(addr: usize) {
     // External ArrayBuffers borrow addon-owned memory. Detaching severs the
     // JavaScript view but must never decommit pages which Perry did not
     // allocate; the registered finalizer still receives the original pointer.
-    if !super::is_foreign_backed_buffer(backing) && !super::bytes::has_pins(backing) {
+    #[cfg(test)]
+    let retain_pinned_inline = !super::bytes::b4_sabotage("inline_detach_decommit");
+    #[cfg(not(test))]
+    let retain_pinned_inline = true;
+    if !super::is_foreign_backed_buffer(backing)
+        && (!super::bytes::has_pins(backing) || !retain_pinned_inline)
+    {
         super::bytes::no_gc(|_| unsafe {
             decommit_payload_pages(super::store::owner_data(backing), capacity as usize);
         });

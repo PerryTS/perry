@@ -23,9 +23,8 @@ use perry_runtime::native_payload::{
     PayloadMiss, PayloadPrototype,
 };
 use perry_runtime::{
-    buffer::BufferHeader, js_array_alloc, js_array_get, js_array_length, js_array_push_f64,
-    js_nanbox_pointer, js_promise_rejected, js_promise_resolved, js_string_from_bytes, ArrayHeader,
-    JSValue, Promise,
+    js_array_alloc, js_array_get, js_array_length, js_array_push_f64, js_nanbox_pointer,
+    js_promise_rejected, js_promise_resolved, js_string_from_bytes, ArrayHeader, JSValue, Promise,
 };
 use rusqlite::ffi;
 use std::cell::Cell;
