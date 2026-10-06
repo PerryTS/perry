@@ -53,7 +53,7 @@ pub(crate) unsafe fn class_super_base(
             .as_pointer::<super::ObjectHeader>();
         let parent = super::class_registry::class_object_pinned_parent(obj);
         if !parent.is_some_and(super::is_class_object_value)
-            && !declared_chain_is_user_classes(parent_cid)
+            && !declared_chain_has_property_storage(parent_cid, is_static)
         {
             return None;
         }
@@ -88,8 +88,9 @@ pub(crate) unsafe fn class_super_base(
         super::class_registry::class_decl_prototype_value(parent_cid)
     };
     let base = base.get_nanbox_f64();
-    (base.to_bits() != declared.to_bits() || declared_chain_is_user_classes(parent_cid))
-        .then_some(base)
+    (base.to_bits() != declared.to_bits()
+        || declared_chain_has_property_storage(parent_cid, is_static))
+    .then_some(base)
 }
 
 /// Was the `[[Prototype]]` of a class constructor on the declared chain from
@@ -148,12 +149,14 @@ pub(crate) unsafe fn super_get_live_base(
     class_super_base(home_cid, parent_cid, owner, is_static)
 }
 
-/// Does the declared chain from `cid` consist of compiled user classes only,
-/// ending in a class that extends nothing? Then every member on it is a
-/// property of a prototype object (or class constructor) the runtime reads.
-pub(super) fn declared_chain_is_user_classes(cid: u32) -> bool {
+/// Does every member of the declared chain have ordinary property storage?
+/// User classes and materialized payload prototypes use the same lookup.
+fn declared_chain_has_property_storage(cid: u32, is_static: bool) -> bool {
     let mut cur = cid;
     for _ in 0..64 {
+        if !is_static && crate::native_payload::materialized_prototype(cur).is_some() {
+            return true;
+        }
         if cur == 0 || cur >= 0xFFFF_0000 || !super::is_class_id_registered(cur) {
             return false;
         }

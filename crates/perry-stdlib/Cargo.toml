@@ -119,15 +119,10 @@ bundled-net = []
 # promise bridge (turnloop P8 lane L).
 external-net-pump = ["async-bridge"]
 
-# Activated by `optimized_libs::build_optimized_libs` (#1843) when the
-# well-known flip routes `node:zlib` to perry-ext-zlib and strips
-# `compression`. Routes lost-static-type `gz.write()` / `.on()` /
-# `.pipe()` calls through `js_ext_zlib_dispatch_method`. It also registers
-# `js_ext_zlib_native_dispatch` for captured module exports such as
-# `util.promisify(zlib.gzip)`; pump and keepalive registration is owned by
-# perry-ext-zlib. perry-ext-zlib is synchronous (no tokio task), so this
-# needs only the promise bridge, not the tokio runtime (turnloop P8 lane L).
-external-zlib-pump = ["async-bridge"]
+# Optimized builds resolve module exports from the separately linked binding.
+# Stream methods and deferred codec jobs are owned by the runtime. The legacy
+# feature name remains compatible with the optimized feature selector.
+external-zlib-pump = []
 
 # Activated by `optimized_libs::build_optimized_libs` (v0.5.714) when
 # the well-known flip routes `node:http` / `node:https` / `node:http2`

@@ -280,6 +280,13 @@ fn slot_index_if_payload(class_id: u32) -> Option<usize> {
     (index < PROTOTYPE_SLOTS).then_some(index)
 }
 
+/// An existing family prototype, without creating a second prototype object.
+pub(crate) fn materialized_prototype(class_id: u32) -> Option<*mut ObjectHeader> {
+    let index = slot_index_if_payload(class_id)?;
+    let ptr = PAYLOAD_PROTOTYPES.with(|slots| slots[index].load(Ordering::Acquire));
+    (ptr != 0).then_some(ptr as *mut ObjectHeader)
+}
+
 /// GC roots for the payload prototypes. Called from
 /// `object::scan_object_cache_roots_mut`, beside the timer prototypes.
 pub(crate) fn scan_payload_prototype_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {

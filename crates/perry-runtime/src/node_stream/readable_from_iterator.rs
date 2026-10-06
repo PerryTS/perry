@@ -16,7 +16,12 @@ pub(super) fn pull(stream: f64) -> bool {
     if stream_hidden_ended(stream.get_nanbox_f64()) || stream_destroyed(stream.get_nanbox_f64()) {
         return false;
     }
-    if !readable_is_flowing(stream.get_nanbox_f64()) {
+    // A paused pipe still fills its readable buffer up to its HWM. This
+    // one-result lookahead discovers EOF before the destination's last write
+    // completes, so end() suppresses that write's otherwise redundant drain.
+    let buffered = get_hidden_value(stream.get_nanbox_f64(), hidden_buffered_key()).unwrap_or(0.0);
+    let hwm = get_hidden_value(stream.get_nanbox_f64(), hidden_hwm_key()).unwrap_or(1.0);
+    if !readable_is_flowing(stream.get_nanbox_f64()) && buffered >= hwm {
         return true;
     }
     if has_truthy_hidden(
@@ -136,7 +141,9 @@ extern "C" fn next_fulfilled(
             box_pointer(chunks.get_raw_const_ptr()),
         );
     }
-    if readable_is_flowing(stream.get_nanbox_f64()) {
+    if done && !readable_chunks_nonempty(stream.get_nanbox_f64()) {
+        schedule_readable_end(stream.get_nanbox_f64());
+    } else if readable_is_flowing(stream.get_nanbox_f64()) {
         schedule_readable_from_drain(stream.get_nanbox_f64());
     }
     f64::from_bits(TAG_UNDEFINED)

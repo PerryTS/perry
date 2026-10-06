@@ -1365,6 +1365,17 @@ fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
         CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE => ("events", "EventEmitterAsyncResource"),
         crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY => ("async_hooks", "AsyncLocalStorage"),
         crate::native_class_ids::ASYNC_RESOURCE_LEGACY => ("async_hooks", "AsyncResource"),
+        crate::native_class_ids::GZIP => ("zlib", "Gzip"),
+        crate::native_class_ids::GUNZIP => ("zlib", "Gunzip"),
+        crate::native_class_ids::DEFLATE => ("zlib", "Deflate"),
+        crate::native_class_ids::INFLATE => ("zlib", "Inflate"),
+        crate::native_class_ids::DEFLATE_RAW => ("zlib", "DeflateRaw"),
+        crate::native_class_ids::INFLATE_RAW => ("zlib", "InflateRaw"),
+        crate::native_class_ids::UNZIP => ("zlib", "Unzip"),
+        crate::native_class_ids::BROTLI_COMPRESS => ("zlib", "BrotliCompress"),
+        crate::native_class_ids::BROTLI_DECOMPRESS => ("zlib", "BrotliDecompress"),
+        crate::native_class_ids::ZSTD_COMPRESS => ("zlib", "ZstdCompress"),
+        crate::native_class_ids::ZSTD_DECOMPRESS => ("zlib", "ZstdDecompress"),
         _ => return None,
     };
     let func_value =

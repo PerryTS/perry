@@ -29,8 +29,7 @@ static ARM_FETCH: Hook<MethodArm> = Hook::empty();
 ///
 /// These methods either consume their arguments synchronously or only return
 /// the receiver, so borrowing the caller-provided slices for the duration of
-/// the call is sufficient. This mirrors the allocation-free external-zlib
-/// fast path above.
+/// the call is sufficient.
 #[cfg(feature = "external-http-client-pump")]
 unsafe fn try_dispatch_external_http_client(
     handle: i64,
@@ -835,6 +834,34 @@ unsafe fn arm_fetch(handle: i64, method_name: &str, args: &[f64]) -> Option<f64>
         }
     }
     None
+}
+
+// Per-feature slot fills, called from the owning feature's install
+// (`super::install_*`, reached from `feature_hooks`).
+#[cfg(feature = "bundled-streams")]
+pub(super) fn install_streams() {
+    ARM_STREAMS.set(arm_streams);
+}
+#[cfg(feature = "bundled-nodemailer")]
+pub(super) fn install_nodemailer() {
+    ARM_NODEMAILER.set(arm_nodemailer);
+}
+#[cfg(feature = "database-sqlite")]
+pub(super) fn install_sqlite() {
+    ARM_NODE_SQLITE.set(arm_node_sqlite);
+    ARM_SQLITE.set(arm_sqlite);
+}
+#[cfg(feature = "crypto")]
+pub(super) fn install_crypto() {
+    ARM_CRYPTO.set(arm_crypto);
+}
+#[cfg(all(
+    feature = "tls-runtime",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+pub(super) fn install_tls() {
+    ARM_TLS.set(arm_tls);
 }
 
 #[cfg(feature = "external-http-client-pump")]

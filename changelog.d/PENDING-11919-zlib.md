@@ -3,6 +3,8 @@
 - Use runtime Transform state for all eleven `node:zlib` constructors. Codec payloads use StreamHooks, deferred steps, bounded output and external byte accounting; destroy releases the codec immediately.
 - Queue one-shot callbacks as traced runtime closures and return plain values from synchronous codecs. Read and create bytes through the Buffer B1 API.
 - Implement lazy stream state initialization and shared payload allocation, attachment and prototype operations for binding crates.
+- Match Node's gzip bytes across multiple writes with the bundled zlib encoder and count its allocations through its allocator hooks. Preserve the platform gzip OS byte.
+- Route inherited codec methods through the ordinary prototype chain, honor subclass transforms and pipe write overrides, and complete deferred writable work before async iterator continuations.
 
 ### Removed
 

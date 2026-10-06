@@ -3,7 +3,7 @@
 use super::*;
 extern "C" {
     fn js_async_hooks_provider_init(name: *const u8, len: usize) -> u64;
-    fn js_async_hooks_provider_run_catching_deferred_destroy_on_error(
+    fn js_async_hooks_provider_run_catching_deferred_destroy(
         id: u64,
         turns: u32,
         callback: unsafe extern "C" fn(*mut c_void) -> f64,
@@ -46,6 +46,12 @@ pub(crate) unsafe fn queue_one_shot_callback(data: f64, options: f64, callback: 
     .into_iter()
     .enumerate()
     {
+        #[cfg(test)]
+        let value = if index == 2 && sabotage("raw_one_shot_callback") {
+            JsValue::from_bits(value.to_bits()).as_pointer::<RawClosureHeader>() as usize as f64
+        } else {
+            value
+        };
         perry_ffi::set_closure_capture_f64(
             JsValue::from_bits(job.get().to_bits()).as_pointer(),
             index as u32,
@@ -58,12 +64,19 @@ extern "C" fn job(c: *const RawClosureHeader, _: JsThis) -> f64 {
     let roots = TransientRootScope::enter();
     let data = roots.root_nanbox(unsafe { perry_ffi::closure_capture_f64(c, 0) });
     let options = roots.root_nanbox(unsafe { perry_ffi::closure_capture_f64(c, 1) });
-    let callback = roots.root_nanbox(unsafe { perry_ffi::closure_capture_f64(c, 2) });
+    let callback = unsafe { perry_ffi::closure_capture_f64(c, 2) };
+    #[cfg(test)]
+    let callback = if sabotage("raw_one_shot_callback") {
+        f64::from_bits(JsValue::from_object_ptr(callback as usize as *mut RawClosureHeader).bits())
+    } else {
+        callback
+    };
+    let callback = roots.root_nanbox(callback);
     let codec = unsafe { perry_ffi::closure_capture_f64(c, 3) } as u32;
     let id = unsafe { perry_ffi::closure_capture_f64(c, 4) } as u64;
     let mut call = (data, options, callback, codec);
     unsafe {
-        js_async_hooks_provider_run_catching_deferred_destroy_on_error(
+        js_async_hooks_provider_run_catching_deferred_destroy(
             id,
             4,
             run,

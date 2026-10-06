@@ -6,11 +6,87 @@ thread_local! {
     static OUTPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static RELEASE: RefCell<Option<(usize, usize)>> = const { RefCell::new(None) };
+    static BOMB: std::cell::Cell<(usize, bool, usize)> = const { std::cell::Cell::new((0, true, 0)) };
+    static BOMB_CRC: RefCell<flate2::Crc> = RefCell::new(flate2::Crc::new());
+    static ONE_SHOTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static ONE_SHOT_ERRORS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+}
+
+extern "C" fn one_shot(_: *const RawClosureHeader, _: JsThis, err: f64, output: f64) -> f64 {
+    let result = bytes::no_gc(|scope| {
+        bytes::borrow(JsValue::from_bits(output.to_bits()), scope).map(|v| v.to_vec())
+    });
+    let valid = err.to_bits() == JsValue::NULL.bits()
+        && result
+            .as_ref()
+            .is_some_and(|v| crate::gunzip_bytes(v).is_ok_and(|v| v == b"traced one-shot input"));
+    if !valid {
+        ONE_SHOT_ERRORS.with(|errors| {
+            if errors.borrow().len() < 10 {
+                errors.borrow_mut().push(format!(
+                    "err={:x} output={:x} bytes={:?}",
+                    err.to_bits(),
+                    output.to_bits(),
+                    result.as_ref().map(Vec::len)
+                ));
+            }
+        });
+    }
+    ONE_SHOTS.with(|n| n.set(n.get() + 1));
+    undefined()
+}
+
+#[test]
+fn ten_thousand_one_shots_keep_captures_through_a_collection_before_run() {
+    clear();
+    ONE_SHOTS.with(|n| n.set(0));
+    ONE_SHOT_ERRORS.with(|v| v.borrow_mut().clear());
+    for index in 0..10000 {
+        let roots = TransientRootScope::enter();
+        // Exercise both nursery and tracked-large closure storage. A large
+        // closure is swept by this full collection even when the current
+        // nursery block has not yet reached its copying threshold.
+        let captures = if index == 0 {
+            vec![undefined(); 2048]
+        } else {
+            Vec::new()
+        };
+        let callback = roots.root_nanbox(closure(
+            perry_ffi::js_function_info!(one_shot, 2),
+            &captures,
+        ));
+        let input = roots.root_nanbox(value_bytes(b"traced one-shot input"));
+        unsafe { queue_one_shot_callback(input.get(), undefined(), callback.get(), Codec::Gzip) };
+    }
+    assert_eq!(ONE_SHOTS.with(std::cell::Cell::get), 0);
+    eprintln!("10k: queued, collecting");
+    let mut before = 0;
+    perry_runtime::gc::js_gc_stats(&mut before, std::ptr::null_mut(), std::ptr::null_mut());
+    perry_runtime::gc::js_gc_collect();
+    let mut after = 0;
+    perry_runtime::gc::js_gc_stats(&mut after, std::ptr::null_mut(), std::ptr::null_mut());
+    assert!(after > before, "the forced collection actually ran");
+    // Reuse dead closure-sized storage before dispatch: a raw native
+    // callback address must not appear valid merely because reclaimed bytes
+    // have not yet been overwritten.
+    for _ in 0..20000 {
+        let _ = value_bytes(&[0; 64]);
+    }
+    eprintln!("10k: collected, pumping");
+    pump();
+    eprintln!("10k: pumped");
+    assert!(
+        ONE_SHOT_ERRORS.with(|v| v.borrow().is_empty()),
+        "{:?}",
+        ONE_SHOT_ERRORS.with(|v| v.borrow().clone())
+    );
+    assert_eq!(ONE_SHOTS.with(std::cell::Cell::get), 10000);
 }
 extern "C" {
     fn js_nm_install_zlib();
 }
 fn clear() {
+    perry_runtime::gc::gc_init();
     unsafe { js_nm_install_zlib() };
     OUTPUT.with(|v| v.borrow_mut().clear());
     EVENTS.with(|v| v.borrow_mut().clear());
@@ -60,7 +136,27 @@ extern "C" fn data(c: *const RawClosureHeader, _: JsThis, chunk: f64) -> f64 {
             .unwrap()
             .to_vec()
     });
-    OUTPUT.with(|v| v.borrow_mut().extend(bytes));
+    if action == 3.0 {
+        let (count, valid, peak) = BOMB.with(std::cell::Cell::get);
+        BOMB_CRC.with(|crc| crc.borrow_mut().update(&bytes));
+        let current = if count % (128 * 1024) < bytes.len() {
+            rss()
+        } else {
+            peak
+        };
+        BOMB.with(|stats| {
+            stats.set((
+                count + bytes.len(),
+                valid && bytes.iter().all(|b| *b == 65),
+                peak.max(current),
+            ))
+        });
+        if count == 0 {
+            unsafe { method(owner.get(), "pause", &[]) };
+        }
+    } else {
+        OUTPUT.with(|v| v.borrow_mut().extend(bytes));
+    }
     EVENTS.with(|v| v.borrow_mut().push("data".into()));
     if action == 1.0 {
         unsafe { method(owner.get(), "pause", &[]) };
@@ -181,20 +277,44 @@ fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
     clear();
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(options());
-    let input = vec![65; 16_000_000];
+    let input = vec![65; 100_000_000];
+    let mut expected = flate2::Crc::new();
+    expected.update(&input);
     let compressed = crate::gzip_bytes(&input).unwrap();
+    drop(input);
     let owner = roots.root_nanbox(factory("Gunzip", opts.get()));
-    listen(owner.get(), 1.0);
+    listen(owner.get(), 3.0);
     let chunk = roots.root_nanbox(value_bytes(&compressed));
+    BOMB_CRC.with(|crc| *crc.borrow_mut() = flate2::Crc::new());
+    let baseline = rss();
+    BOMB.with(|stats| stats.set((0, true, baseline)));
     unsafe { method(owner.get(), "end", &[chunk.get()]) };
     pump();
-    assert!(OUTPUT.with(|v| v.borrow().len()) <= 1024);
+    assert_eq!(BOMB.with(std::cell::Cell::get).0, 1024);
     assert!(field(owner.get(), "bytesWritten") < compressed.len() as f64);
     assert!(field(owner.get(), "readableLength") <= 3072.0);
     assert!(native_bytes(owner.get()) < 100000);
-    unsafe { method(owner.get(), "destroy", &[]) };
-    assert_eq!(native_bytes(owner.get()), 0);
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert_eq!(
+        BOMB.with(std::cell::Cell::get).0,
+        1024,
+        "paused for fifty milliseconds"
+    );
+    // Collect while the unread compressed tail lives only in the stream.
+    perry_runtime::gc::js_gc_collect();
+    unsafe { method(owner.get(), "resume", &[]) };
     pump();
+    let (count, valid, peak) = BOMB.with(std::cell::Cell::get);
+    assert_eq!(count, 100_000_000);
+    assert!(valid);
+    assert_eq!(BOMB_CRC.with(|crc| crc.borrow().sum()), expected.sum());
+    assert!(
+        peak.saturating_sub(baseline) < 32 << 20,
+        "bomb RSS delta: {}",
+        peak.saturating_sub(baseline)
+    );
+    assert_eq!(native_bytes(owner.get()), 0);
+    eprintln!("Z2 bytes={count} baseline_rss={baseline} peak_rss={peak}");
 }
 #[test]
 fn brotli_destroy_inside_data_releases_before_gc_and_closes_once_later() {
@@ -242,4 +362,163 @@ fn every_decoder_reports_corrupt_input_then_close() {
         );
         assert_eq!(native_bytes(owner.get()), 0);
     }
+}
+
+#[test]
+fn codec_sabotages_turn_their_runtime_witnesses_red() {
+    if std::env::var("PERRY_TEST_ZLIB_SABOTAGE").is_ok() {
+        return;
+    }
+    for (fault, witness) in [
+        (
+            "release_in_finalizer_only",
+            "fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss",
+        ),
+        (
+            "raw_one_shot_callback",
+            "ten_thousand_one_shots_keep_captures_through_a_collection_before_run",
+        ),
+        (
+            "unbounded_output",
+            "real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced",
+        ),
+        (
+            "release_in_finalizer_only",
+            "brotli_destroy_inside_data_releases_before_gc_and_closes_once_later",
+        ),
+        (
+            "keep_handle_field",
+            "eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion",
+        ),
+        (
+            "corrupt_output",
+            "eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion",
+        ),
+    ] {
+        let witness = format!("stream::runtime_tests::{witness}");
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                &witness,
+                "--nocapture",
+                "--include-ignored",
+                "--test-threads=1",
+            ])
+            .env("PERRY_TEST_ZLIB_SABOTAGE", fault)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&result.stdout).contains("running 1 test"),
+            "missing witness {witness}"
+        );
+        assert!(!result.status.success(), "{fault} must turn {witness} red");
+        eprintln!("zlib sabotage {fault}: RED");
+    }
+}
+
+fn rss() -> usize {
+    std::fs::read_to_string("/proc/self/statm")
+        .unwrap()
+        .split_whitespace()
+        .nth(1)
+        .unwrap()
+        .parse::<usize>()
+        .unwrap()
+        * 4096
+}
+#[test]
+#[ignore = "full Z8: 50,000 completions per codec plus 50,000 immediate destroys"]
+fn fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss() {
+    clear();
+    driver::PAYLOAD_COUNTS.with(|n| n.set((0, 0)));
+    let roots = TransientRootScope::enter();
+    let opts = roots.root_nanbox(options());
+    let input = vec![65; 1024];
+    let gzip = crate::gzip_bytes(&input).unwrap();
+    let deflate = crate::deflate_bytes(&input).unwrap();
+    let raw = crate::deflate_raw_bytes_with(&input, Compression::default()).unwrap();
+    let brotli = brotli_compress_bytes(&input);
+    let zstd = zstd::stream::encode_all(input.as_slice(), 3).unwrap();
+    let selected = std::env::var("PERRY_TEST_ZLIB_CHURN_CODEC").ok();
+    let mut samples = Vec::new();
+    for batch in 0..10 {
+        for (name, input) in [
+            ("Gzip", &input),
+            ("Gunzip", &gzip),
+            ("Deflate", &input),
+            ("Inflate", &deflate),
+            ("DeflateRaw", &input),
+            ("InflateRaw", &raw),
+            ("Unzip", &gzip),
+            ("BrotliCompress", &input),
+            ("BrotliDecompress", &brotli),
+            ("ZstdCompress", &input),
+            ("ZstdDecompress", &zstd),
+        ] {
+            if selected.as_ref().is_some_and(|filter| filter != name) {
+                continue;
+            }
+            let started = std::time::Instant::now();
+            for iteration in 0..5000 {
+                let scope = TransientRootScope::enter();
+                let owner = scope.root_nanbox(factory(name, opts.get()));
+                listen(owner.get(), 0.0);
+                let chunk = scope.root_nanbox(value_bytes(input));
+                unsafe {
+                    method(owner.get(), "end", &[chunk.get()]);
+                }
+                pump();
+                assert_eq!(native_bytes(owner.get()), 0, "completion released {name}");
+                assert!(!OUTPUT.with(|v| v.borrow().is_empty()),
+                    "consumed {name}, batch={batch} iteration={iteration} bytesWritten={} events={:?}",
+                    field(owner.get(), "bytesWritten"), EVENTS.with(|v| v.borrow().clone()));
+                OUTPUT.with(|v| v.borrow_mut().clear());
+                EVENTS.with(|v| v.borrow_mut().clear());
+            }
+            perry_runtime::gc::js_gc_collect();
+            eprintln!(
+                "Z8 codec={name} batch={batch} elapsed={:?}",
+                started.elapsed()
+            );
+        }
+        for _ in 0..if selected
+            .as_ref()
+            .is_none_or(|filter| filter == "Gzip" || filter == "destroy")
+        {
+            5000
+        } else {
+            0
+        } {
+            let scope = TransientRootScope::enter();
+            let owner = scope.root_nanbox(factory("Gzip", opts.get()));
+            unsafe {
+                method(owner.get(), "destroy", &[]);
+            }
+            assert_eq!(native_bytes(owner.get()), 0, "explicit destroy released");
+            pump();
+        }
+        perry_runtime::gc::js_gc_collect();
+        samples.push(rss());
+        let (created, dropped) = driver::PAYLOAD_COUNTS.with(std::cell::Cell::get);
+        assert_eq!(created, dropped, "all codec allocations released before GC");
+        eprintln!(
+            "Z8 batch={batch} created={created} dropped={dropped} rss={}",
+            samples[batch]
+        );
+    }
+    let warm = *samples[3..].iter().min().unwrap();
+    let peak = *samples[3..].iter().max().unwrap();
+    assert!(
+        peak - warm < 4 << 20,
+        "RSS plateau exceeded 4 MiB: {samples:?}"
+    );
+    let expected = match selected.as_deref() {
+        None => 600000,
+        Some("Gzip") => 100000,
+        _ => 50000,
+    };
+    assert_eq!(
+        driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
+        (expected, expected)
+    );
 }

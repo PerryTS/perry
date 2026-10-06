@@ -13,8 +13,9 @@ crate-type = ["staticlib", "rlib"]
 
 [dependencies]
 perry-ffi.workspace = true
-flate2 = "1"
-# Actual fixed-workspace sizes used by flate2's rust backend.
+flate2 = { version = "1", default-features = false, features = ["zlib"] }
+libz-sys = { version = "=1.1.22", default-features = false, features = ["static"] }
+# Actual fixed workspace of the bounded inflate engine.
 miniz_oxide = "=0.9.1"
 # zstd codecs: `zlib.zstdCompressSync` / `createZstdDecompress`. When `zlib`
 # routes here, perry-stdlib's `compression` module is compiled out — this

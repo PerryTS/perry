@@ -9,6 +9,7 @@ use std::ffi::c_void;
 use std::io::Read;
 const UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 extern "C" {
+    fn js_object_set_property_key(owner: f64, key: f64, value: f64) -> f64;
     fn js_zlib_stream_error(message: *const u8, len: usize, truncated: i32) -> f64;
     fn js_zlib_is_callback(value: f64) -> i32;
     fn js_zlib_stream_option(opts: f64, which: i32) -> usize;
@@ -23,6 +24,7 @@ extern "C" {
 mod allocation;
 mod driver;
 mod one_shot_callback;
+mod zlib_encoder;
 pub(crate) use one_shot_callback::queue_one_shot_callback;
 
 pub(crate) unsafe fn read_input_from_bits(bits: i64) -> Option<Vec<u8>> {
@@ -212,20 +214,46 @@ unsafe extern "C" fn progress(owner: f64) {
         np::own(owner, "bytesWritten", written as f64);
     }
 }
+unsafe fn error_field(owner: f64, key: &str, value: f64) {
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(owner);
+    let value = roots.root_nanbox(value);
+    let key = roots.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(alloc_string(key).as_raw()).bits(),
+    ));
+    js_object_set_property_key(owner.get(), key.get(), value.get());
+}
 unsafe extern "C" fn error(owner: f64, code: u32) -> f64 {
-    let message = payload(owner)
-        .and_then(|p| p.error_message())
-        .unwrap_or_else(|| "Decompression failed".into());
-    let err = js_zlib_stream_error(
+    let (message, name, errno) = payload(owner)
+        .map(|p| p.error_details(code))
+        .unwrap_or_else(|| ("Decompression failed".into(), "Z_DATA_ERROR".into(), -3));
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(owner);
+    let err = roots.root_nanbox(js_zlib_stream_error(
         message.as_ptr(),
         message.len(),
         if code == 5 { 1 } else { 0 },
-    );
-    np::own(err, "errno", -(code as f64));
-    err
+    ));
+    let name = roots.root_nanbox(f64::from_bits(
+        JsValue::from_string_ptr(alloc_string(&name).as_raw()).bits(),
+    ));
+    error_field(err.get(), "code", name.get());
+    error_field(err.get(), "errno", errno as f64);
+    // The native binding's onerror destroys the stream without calling the
+    // outstanding _transform continuation (Node 26.5.1's pending write).
+    method(owner.get(), "destroy", &[err.get()]);
+    err.get()
 }
 unsafe extern "C" fn release(owner: f64) {
+    #[cfg(test)]
+    if sabotage("release_in_finalizer_only") {
+        return;
+    }
     np::close_attached(owner, &CODEC_VTABLE);
+    #[cfg(test)]
+    if sabotage("keep_handle_field") {
+        return;
+    }
     np::own(owner, "_handle", f64::from_bits(JsValue::NULL.bits()));
 }
 static HOOKS: ns::StreamHooks = ns::StreamHooks {
@@ -679,7 +707,47 @@ extern "C" fn transform(
     f64::from_bits(UNDEFINED)
 }
 extern "C" fn final_flush(_: *const RawClosureHeader, this: JsThis, cb: f64) -> f64 {
-    ns::prototype_step(this.as_f64(), f64::from_bits(UNDEFINED), cb, true);
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(this.as_f64());
+    let cb = roots.root_nanbox(cb);
+    let empty = roots.root_nanbox(value_bytes(&[]));
+    let done = roots.root_nanbox(f64::from_bits(
+        JsValue::from_object_ptr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(final_write_done, 1),
+            2,
+        ))
+        .bits(),
+    ));
+    for (index, value) in [owner.get(), cb.get()].into_iter().enumerate() {
+        unsafe {
+            perry_ffi::set_closure_capture_f64(
+                JsValue::from_bits(done.get().to_bits()).as_pointer(),
+                index as u32,
+                value,
+            );
+        }
+    }
+    unsafe {
+        method(
+            owner.get(),
+            "_transform",
+            &[empty.get(), f64::from_bits(UNDEFINED), done.get()],
+        );
+    }
+    f64::from_bits(UNDEFINED)
+}
+extern "C" fn final_write_done(closure: *const RawClosureHeader, this: JsThis, err: f64) -> f64 {
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(unsafe { perry_ffi::closure_capture_f64(closure, 0) });
+    let cb = roots.root_nanbox(unsafe { perry_ffi::closure_capture_f64(closure, 1) });
+    let err = roots.root_nanbox(err);
+    if err.get().to_bits() != UNDEFINED && err.get().to_bits() != JsValue::NULL.bits() {
+        unsafe {
+            perry_ffi::call_value(cb.get(), this, &[err.get()]);
+        }
+    } else {
+        ns::prototype_step(owner.get(), f64::from_bits(UNDEFINED), cb.get(), true);
+    }
     f64::from_bits(UNDEFINED)
 }
 extern "C" fn final_callback(_: *const RawClosureHeader, this: JsThis, cb: f64) -> f64 {
@@ -738,7 +806,7 @@ extern "C" fn params_done(c: *const RawClosureHeader, _: JsThis) -> f64 {
     let cb = roots.root_nanbox(unsafe { perry_ffi::closure_capture_f64(c, 3) });
     let bytes = unsafe {
         payload(owner.get()).map(|p| {
-            p.params(Compression::new(level as u32));
+            p.params(Compression::new(level as u32), strategy as i32);
             p.external_bytes()
         })
     };
@@ -759,3 +827,8 @@ mod tests;
 
 #[cfg(test)]
 mod runtime_tests;
+
+#[cfg(test)]
+fn sabotage(name: &str) -> bool {
+    std::env::var("PERRY_TEST_ZLIB_SABOTAGE").is_ok_and(|fault| fault == name)
+}
