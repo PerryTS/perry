@@ -1045,23 +1045,6 @@ pub enum Expr {
     // URL operations
     FileURLToPath(Box<Expr>), // url.fileURLToPath(url) -> string
 
-    // RegExp operations
-    RegExpExec {
-        regex: Box<Expr>,
-        string: Box<Expr>,
-    },
-    RegExpSource(Box<Expr>),
-    RegExpFlags(Box<Expr>),
-    RegExpLastIndex(Box<Expr>),
-    RegExpSetLastIndex {
-        regex: Box<Expr>,
-        value: Box<Expr>,
-    },
-    RegExpReplaceFn {
-        string: Box<Expr>,
-        regex: Box<Expr>,
-        callback: Box<Expr>,
-    },
     RegExpExecIndex,
     RegExpExecGroups,
 
@@ -2381,11 +2364,6 @@ pub enum Expr {
         /// shortcut) while `new` keeps `js_regexp_construct` (always a fresh
         /// object). See #5586.
         is_call: bool,
-    },
-    /// regex.test(string) -> boolean
-    RegExpTest {
-        regex: Box<Expr>,
-        string: Box<Expr>,
     },
     /// string.match(regex) -> string[] | null
     StringMatch {

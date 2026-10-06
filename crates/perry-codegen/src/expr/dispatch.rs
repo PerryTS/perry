@@ -228,8 +228,6 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::PathWin32 { .. }
         | Expr::QueueMicrotask(..)
         | Expr::ProcessNextTick { .. }
-        | Expr::RegExpTest { .. }
-        | Expr::RegExpExec { .. }
         | Expr::GlobalGet(..)
         | Expr::PathDirname(..)
         | Expr::PathRelative(..)
@@ -380,8 +378,6 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
         | Expr::StringCodePointAt { .. }
-        | Expr::RegExpSource(..)
-        | Expr::RegExpFlags(..)
         | Expr::ProcessChdir(..)
         | Expr::ProcessExit(..)
         | Expr::ProcessAbort
@@ -420,7 +416,6 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::MathAtan(..)
         | Expr::MathAtan2(..)
         | Expr::StringFromCharCode(..)
-        | Expr::RegExpSetLastIndex { .. }
         | Expr::ProcessStdin
         | Expr::ProcessStdout
         | Expr::ProcessStderr
@@ -516,7 +511,6 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::DateSetTime { .. } => super::os_uri_dates::lower(ctx, expr),
         Expr::ArrayIsArray(..)
         | Expr::AggregateErrorNew { .. }
-        | Expr::RegExpLastIndex(..)
         | Expr::BufferConcat(..)
         | Expr::BufferConcatWithLength { .. }
         | Expr::BufferSlice { .. }

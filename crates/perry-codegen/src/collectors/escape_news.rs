@@ -643,10 +643,6 @@ fn collect_used_new_fields_in_expr(
             collect_used_new_fields_in_expr(replacer, non_escaping_news, used);
             collect_used_new_fields_in_expr(indent, non_escaping_news, used);
         }
-        Expr::RegExpTest { regex, string } | Expr::RegExpExec { regex, string } => {
-            collect_used_new_fields_in_expr(regex, non_escaping_news, used);
-            collect_used_new_fields_in_expr(string, non_escaping_news, used);
-        }
         Expr::In { property, object } => {
             collect_used_new_fields_in_expr(property, non_escaping_news, used);
             collect_used_new_fields_in_expr(object, non_escaping_news, used);

@@ -94,9 +94,6 @@ pub struct SegmentUseTally {
     pub char_code_at: u32,
     /// `O.length` — v2 (`_length`, §5).
     pub length: u32,
-    /// `RegExpTest { regex, string: LocalGet(O) }` — a *statically* proven
-    /// regex receiver. v2 (`_regexp_test`).
-    pub regexp_test_static: u32,
     /// `recv.test(O)` where `recv` is an arbitrary expression — cc's
     /// `g54.default().test(O)`. v2, and only behind the three-valued decline
     /// (§5): `is RegExp` at the call site does not rule out a patched
@@ -114,7 +111,6 @@ impl SegmentUseTally {
         self.code_point_at
             + self.char_code_at
             + self.length
-            + self.regexp_test_static
             + self.regexp_test_dynamic
             + self.materialise
     }
@@ -619,13 +615,6 @@ fn classify_segment_uses_in_expr(e: &Expr, seg: u32, t: &mut SegmentUseTally) {
                 return;
             }
         }
-        Expr::RegExpTest { regex, string } => {
-            if matches!(string.as_ref(), Expr::LocalGet(id) if *id == seg) {
-                t.regexp_test_static += 1;
-                classify_segment_uses_in_expr(regex, seg, t);
-                return;
-            }
-        }
         Expr::PropertyGet {
             object, property, ..
         } => {
@@ -863,7 +852,7 @@ impl SegViewDiag {
             eprintln!(
                 "[segview] {region} record={} (id={}) verdict={} open={} keys=[{}] \
                  iter_extra_uses={} O-uses: code_point_at={} char_code_at={} length={} \
-                 regexp_test_static={} regexp_test_dynamic={} materialise={}",
+                 regexp_test_dynamic={} materialise={}",
                 s.record_name,
                 s.record_id,
                 describe(&s.verdict),
@@ -873,7 +862,6 @@ impl SegViewDiag {
                 u.code_point_at,
                 u.char_code_at,
                 u.length,
-                u.regexp_test_static,
                 u.regexp_test_dynamic,
                 u.materialise,
             );
@@ -1120,9 +1108,8 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
             // v2 is attempted only when the classifier found NO use that needs
             // the substring. If even one does, materialising once (v1) is
             // strictly better than materialising once AND paying the guards.
-            let answerable = site.segment_uses.regexp_test_static
-                + site.segment_uses.regexp_test_dynamic
-                + site.segment_uses.code_point_at;
+            let answerable =
+                site.segment_uses.regexp_test_dynamic + site.segment_uses.code_point_at;
             let mut v2: Option<(V2Emission, Vec<Stmt>)> = None;
             if site.segment_uses.materialise == 0 && answerable > 0 {
                 // Rewrite a CLONE and keep it only if the emission matches the
@@ -1141,9 +1128,7 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
                     rewrite_uses_in_stmt(st, seg_id, cur, &mut probe_fresh, &mut emitted);
                 }
                 let agrees = emitted.code_point_at == site.segment_uses.code_point_at
-                    && emitted.regexp_test
-                        == site.segment_uses.regexp_test_static
-                            + site.segment_uses.regexp_test_dynamic;
+                    && emitted.regexp_test == site.segment_uses.regexp_test_dynamic;
                 if agrees {
                     *fresh = probe_fresh;
                     v2 = Some((emitted, trial));
@@ -1195,10 +1180,7 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
                             "[segview-lower] {} open=1 next=1 segment=1 code_point_at=0 \
                              regexp_test=0 declined=none (v1: classifier code_point_at={} \
                              regexp_test={} materialise={})",
-                            site.record_name,
-                            u.code_point_at,
-                            u.regexp_test_static + u.regexp_test_dynamic,
-                            u.materialise,
+                            site.record_name, u.code_point_at, u.regexp_test_dynamic, u.materialise,
                         );
                     }
                 }
@@ -1587,49 +1569,6 @@ fn rewrite_uses_in_expr(e: &mut Expr, seg: u32, cur: u32, fresh: &mut u32, out: 
                             )],
                             type_args: vec![],
                             byte_offset: 0,
-                        }),
-                        else_expr: Box::new(Expr::LocalGet(t_res)),
-                    },
-                ]);
-                replaced = Some(pick(cur, view_form, e_original.clone()));
-                out.regexp_test += 1;
-            }
-        }
-    }
-    // `Expr::RegExpTest { regex, string: O }` — the node perry folds a test to
-    // when the regex is statically known. The classifier counts it as
-    // `regexp_test_static`, so the rewriter has to answer it too, or the
-    // emission/classification agreement check refuses v2 and the site falls
-    // back to v1. That is exactly what happened on the first version of this
-    // pass: the check caught it, which is why it fell back instead of emitting
-    // a loop that read an unbound segment.
-    if replaced.is_none() {
-        if let Expr::RegExpTest { regex, string } = e {
-            if matches!(string.as_ref(), Expr::LocalGet(id) if *id == seg) {
-                let t_res = *fresh;
-                *fresh += 1;
-                out.decls
-                    .push(let_any(t_res, "__segview_test_res", Expr::Undefined));
-                // The regex here is an ordinary expression with no side effect
-                // worth hoisting (a literal or a binding), so unlike the
-                // generic `recv.test(O)` form it can be repeated in the
-                // decline arm.
-                let view_form = Expr::Sequence(vec![
-                    Expr::LocalSet(
-                        t_res,
-                        Box::new(extern_call(
-                            "js_segments_view_regexp_test",
-                            vec![Expr::LocalGet(cur), regex.as_ref().clone()],
-                        )),
-                    ),
-                    Expr::Conditional {
-                        condition: Box::new(is_undefined_cmp(t_res)),
-                        then_expr: Box::new(Expr::RegExpTest {
-                            regex: regex.clone(),
-                            string: Box::new(extern_call(
-                                "js_segments_view_segment",
-                                vec![Expr::LocalGet(cur)],
-                            )),
                         }),
                         else_expr: Box::new(Expr::LocalGet(t_res)),
                     },

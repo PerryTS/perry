@@ -533,8 +533,6 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::StringFromCharCodeSpread(_)
         | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
-        | Expr::RegExpSource(_)
-        | Expr::RegExpFlags(_)
         // process/os string accessors — lower to runtime calls that
         // return NaN-boxed strings in expr.rs. Refining the local type
         // to String lets `const v = process.version; v.startsWith('v')`

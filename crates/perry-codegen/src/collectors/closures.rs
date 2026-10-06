@@ -113,7 +113,6 @@ pub fn collect_closures_in_expr(
     //
     // This replaces a long ad-hoc match (with a `_ => {}` catch-all) that
     // historically dropped closures hidden inside variants like
-    // `Expr::RegExpReplaceFn { callback }`,
     // `Expr::NetCreateServer { connection_listener }`,
     // `Expr::ProxyNew { handler }` / `Expr::ProxyApply { args }`, the
     // Reflect.* family, and many others — producing

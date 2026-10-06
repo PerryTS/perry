@@ -166,16 +166,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             })
         }
 
-        // -------- RegExpLastIndex — regex.lastIndex getter --------
-        Expr::RegExpLastIndex(r) => lower_expr(
-            ctx,
-            &Expr::PropertyGet {
-                object: r.clone(),
-                property: "lastIndex".into(),
-                byte_offset: 0,
-            },
-        ),
-
         // -------- BufferConcat stub --------
         // -------- BufferConcat --------
         // `Buffer.concat([buf1, buf2, ...])`. Lower the array of buffer

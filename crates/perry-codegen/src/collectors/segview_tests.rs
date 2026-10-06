@@ -124,10 +124,7 @@ fn cc_body() -> Vec<Stmt> {
             ),
         ),
         Stmt::If {
-            condition: Expr::RegExpTest {
-                regex: Box::new(Expr::LocalGet(1)),
-                string: Box::new(Expr::LocalGet(SEG)),
-            },
+            condition: call(pget(Expr::LocalGet(1), "test"), vec![Expr::LocalGet(SEG)]),
             then_branch: vec![Stmt::Continue],
             else_branch: None,
         },
@@ -151,7 +148,7 @@ fn fires_on_the_cc_shape_and_names_the_two_view_entry_points() {
     assert_eq!(s.record_keys, vec!["segment".to_string()]);
     assert_eq!(s.segment_id, Some(SEG));
     assert_eq!(s.segment_uses.code_point_at, 1);
-    assert_eq!(s.segment_uses.regexp_test_static, 1);
+    assert_eq!(s.segment_uses.regexp_test_dynamic, 1);
     assert_eq!(
         s.segment_uses.materialise, 0,
         "every use of the segment string is view-answerable, so this site is v2-ready"
@@ -179,7 +176,7 @@ fn a_use_of_the_segment_string_is_a_materialisation_not_a_rejection() {
 }
 
 /// `recv.test(O)` with an opaque receiver — cc's `g54.default().test(O)` — is
-/// classified apart from the statically-proven `RegExpTest`, because the
+/// uses the ordinary call path, because the
 /// runtime declines it three-valued (§5 of the interface).
 #[test]
 fn an_opaque_test_receiver_is_counted_separately() {
@@ -433,12 +430,6 @@ fn v2_answers_every_use_from_the_view_and_materialises_nothing() {
         out.contains("js_segments_view_regexp_test"),
         "the regex test must be answered from the cursor"
     );
-    // NOT `__segview_test_recv` here: `cc_body()` uses `Expr::RegExpTest`, the
-    // folded node for a statically-known regex, which has no opaque receiver to
-    // hoist. The receiver-hoisting property belongs to the generic
-    // `recv.test(O)` form and is pinned by
-    // `v2_evaluates_an_opaque_test_receiver_exactly_once`. Asserting it here
-    // was asserting a property this body does not have.
     assert!(
         out.contains("__segview_test_res"),
         "the tri-state result must be held in a temporary so the decline arm \
