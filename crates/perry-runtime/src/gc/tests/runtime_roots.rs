@@ -19,6 +19,7 @@ mod json_record_output;
 mod json_shape_template;
 mod json_tape_owned;
 mod native_module_name;
+mod object_create_birth;
 mod old_defrag_contract;
 #[cfg(feature = "regex-engine")]
 mod perex_construction;

@@ -150,6 +150,27 @@ pub(crate) fn keyless_birth_width(proto_id: u64) -> u32 {
     }
 }
 
+/// Resolve an ordinary keyless birth on its final prototype, including the
+/// slack slots this birth was served. The identity word is an edge of its
+/// carriers, not a permanent root; the caller roots the prototype until the
+/// newborn carries this shape.
+pub(crate) fn created_birth_shape(proto_id: u64, proto_bits: u64, width: u32) -> u32 {
+    // An identity names one prototype for its lifetime. GC rewrites its word;
+    // another birth need not write it or append another young-log entry.
+    if super::shapes_prototype::identity_prototype_word(proto_id) != proto_bits {
+        super::shapes_prototype::write_identity_word(proto_id, proto_bits);
+    }
+    super::publish_shape_result(super::shape_descriptor_ensure_with_generation(
+        std::ptr::null(),
+        0,
+        width,
+        0,
+        ShapeObjectKind::Ordinary,
+        proto_id,
+        super::ReceiverFacts::NONE,
+    ))
+}
+
 /// A spill at `width` slots on `obj` teaches its keyless birth record, so a
 /// lineage whose shapes were all minted before the record existed (a prune
 /// in between) still learns from the objects that outgrow it.
