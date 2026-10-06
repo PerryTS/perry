@@ -51,7 +51,7 @@ extern "C" {
     fn longjmp(env: *mut i32, val: i32) -> !;
 }
 
-// Maximum nesting depth for try blocks. Per-depth state lives in fixed heap
+// Maximum nesting depth for try blocks. Jump buffers live in fixed heap
 // slabs per thread. They keep jump-buffer addresses stable and
 // avoid ld64's 64KB inline initialized-TLS limit on arm64_32. Raised from 128
 // (#5065): legal recursion through try/catch must reach 1024 open handlers.
@@ -82,7 +82,7 @@ struct ExceptionState {
     // adds 15 KiB of padding per thread in the default 64-bit configuration.
     jump_buffers: Box<[JmpBuf]>,
     handler_kinds: Box<[HandlerKind]>,
-    savepoints: Box<[std::mem::MaybeUninit<CatchSavepoint>]>,
+    savepoints: Vec<std::mem::MaybeUninit<CatchSavepoint>>,
     try_depth: usize,
     current_exception: f64,
     has_exception: bool,
@@ -97,10 +97,10 @@ impl ExceptionState {
             // Zeroed (#11507): 256 KiB that a slot's `setjmp` arms before use.
             jump_buffers: crate::zeroed_cache::new_zeroed_cache(MAX_TRY_DEPTH),
             handler_kinds: vec![HandlerKind::Setjmp; MAX_TRY_DEPTH].into_boxed_slice(),
-            // Each push writes a complete snapshot before incrementing try_depth.
-            // Inactive slots are never read or scanned. Avoid touching every
-            // page with the shadow-stack sentinel at thread initialization.
-            savepoints: Box::<[CatchSavepoint]>::new_uninit_slice(MAX_TRY_DEPTH),
+            // Snapshots have no escaping addresses. Allocate only the nesting
+            // depth reached by this thread; each push initializes its slot
+            // before publishing try_depth, which bounds the root scanner.
+            savepoints: Vec::new(),
             try_depth: 0,
             current_exception: 0.0,
             has_exception: false,
@@ -154,13 +154,18 @@ fn try_push_with_kind(kind: HandlerKind) -> *mut i32 {
         }
         let depth = (*s).try_depth;
         let savepoint = CatchSavepoint::capture();
-        // SAFETY: all three slabs are allocated with exactly MAX_TRY_DEPTH
-        // entries in `ExceptionState::new`, and `depth < MAX_TRY_DEPTH` was
-        // checked above; this path runs on every `try` entry.
+        // Native vector growth cannot trigger a JS GC. No snapshot address
+        // escapes, and the scanner visits only the published active prefix.
+        if depth == (*s).savepoints.len() {
+            (*s).savepoints.push(std::mem::MaybeUninit::new(savepoint));
+        } else {
+            (&mut (*s).savepoints)
+                .get_unchecked_mut(depth)
+                .write(savepoint);
+        }
+        // SAFETY: the fixed handler and jump-buffer slabs contain
+        // MAX_TRY_DEPTH entries, and depth was checked above.
         *(&mut (*s).handler_kinds).get_unchecked_mut(depth) = kind;
-        (&mut (*s).savepoints)
-            .get_unchecked_mut(depth)
-            .write(savepoint);
         (*s).try_depth = depth + 1;
         (&mut (*s).jump_buffers)
             .get_unchecked_mut(depth)
@@ -354,7 +359,7 @@ pub(crate) fn hand_to_worker_base(value: f64) {
             (*s).in_finally = false;
             (*s).try_depth = depth + 1;
             crate::async_context::unwind_context_guards(depth);
-            (*s).savepoints[depth].assume_init_read().restore();
+            (&(*s).savepoints)[depth].assume_init_read().restore();
             (*s).jump_buffers[depth].as_mut_ptr()
         });
         // See `js_throw`: force the non-unwinding POSIX-style longjmp.
@@ -450,7 +455,7 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         // registration generates capture and restore together, including the
         // feature-gated entries; the test replay uses this exact path too.
         // depth names a published handler, whose push initialized this slot.
-        (*s).savepoints[depth].assume_init_read().restore();
+        (&(*s).savepoints)[depth].assume_init_read().restore();
         // The savepoint restores above are transport-independent: the unwind
         // path skips Rust cleanups exactly like longjmp does (the runtime is
         // built panic=abort; see crate::eh), so restoring at throw time is
@@ -825,7 +830,7 @@ pub(crate) fn test_try_depth() -> usize {
 pub(crate) fn test_unwind_innermost_shadow_restore() {
     with_exception_state(|s| unsafe {
         assert!((*s).try_depth > 0, "no open try to unwind");
-        (*s).savepoints[(*s).try_depth - 1]
+        (&(*s).savepoints)[(*s).try_depth - 1]
             .assume_init_read()
             .restore();
     });
@@ -850,6 +855,52 @@ mod tests {
                     assert!(buf.data.iter().all(|&word| word == 0));
                 }
             });
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn growing_savepoints_preserve_jump_buffers_and_active_roots() {
+        std::thread::spawn(|| {
+            with_exception_state(|state| unsafe {
+                assert!((*state).savepoints.is_empty());
+            });
+            let previous = crate::object::js_new_target_get();
+            let mut buffers = Vec::new();
+            for depth in 0..MAX_TRY_DEPTH {
+                crate::object::js_new_target_set((depth + 1) as f64);
+                buffers.push(js_try_push());
+            }
+            with_exception_state(|state| unsafe {
+                assert_eq!((*state).jump_buffers[0].as_mut_ptr(), buffers[0]);
+            });
+            for expected_depth in [MAX_TRY_DEPTH, MAX_TRY_DEPTH / 2] {
+                while current_try_depth() > expected_depth {
+                    js_try_end();
+                }
+                let mut roots = Vec::new();
+                let mut mark = |value: f64| roots.push(value);
+                let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
+                scan_exception_roots_mut(&mut visitor);
+                assert_eq!(
+                    roots,
+                    (1..=expected_depth).map(|n| n as f64).collect::<Vec<_>>()
+                );
+            }
+            crate::object::js_new_target_set(-1.0);
+            let landed =
+                arm_trap_and_run(buffers[MAX_TRY_DEPTH / 2 - 1], || -> () { js_throw(99.0) });
+            assert!(landed.is_none());
+            assert_eq!(
+                crate::object::js_new_target_get(),
+                (MAX_TRY_DEPTH / 2) as f64
+            );
+            js_clear_exception();
+            while current_try_depth() > 0 {
+                js_try_end();
+            }
+            crate::object::js_new_target_set(previous);
         })
         .join()
         .unwrap();
