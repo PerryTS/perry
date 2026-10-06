@@ -21,7 +21,7 @@
 //! |                        | crypto, fastify, UI widgets, timers, …)                          |
 //! | `[0x40000, 0xE0000)`   | Web Fetch family (Request/Response/Headers/Blob), perry-stdlib   |
 //! |                        | `fetch/mod.rs` `FETCH_HANDLE_ID_{START,END}` (#3973/#3974/#4004) |
-//! | `[0xE0000, 0xF0000)`   | zlib streams, perry-stdlib `zlib.rs` (#1843)                     |
+//! | `[0xE0000, 0xF0000)`   | unallocated (former zlib ids, now ordinary payload objects)     |
 //! | `[0xF0000, 0x100000)`  | revocable Proxy ids, perry-runtime `proxy.rs` `PROXY_TAG_BASE`   |
 //! |                        | (#2846 crash cluster)                                            |
 //! | `>= 0x100000`          | plausible heap addresses (see [`is_valid_obj_ptr`] for the       |
@@ -34,7 +34,7 @@
 //! The `0x100000` ceiling was established by #1843 (zlib handle deref'd as
 //! heap object), #4004 (fetch handles moved to 0x40000), and #4800
 //! (`is_builtin_iterator_class_id` used an 0x1008 floor and deref'd a Headers
-//! handle on every hono response). All four sub-bands must stay below
+//! handle on every hono response). All allocated sub-bands must stay below
 //! [`HANDLE_BAND_MAX`]; perry-stdlib re-exports these constants and its unit
 //! tests assert the containment.
 

@@ -9,7 +9,8 @@ for (const [encode, decode] of [['gzip', 'gunzip'], ['deflate', 'inflate'],
     (error: any, value: Buffer) => error ? reject(error) : resolve(value)));
   const asyncDecoded = await new Promise<Buffer>((resolve, reject) => (z as any)[decode](asyncEncoded,
     (error: any, value: Buffer) => error ? reject(error) : resolve(value)));
-  console.log(encode, decoded.equals(input), asyncDecoded.equals(input), encoded.equals(asyncEncoded));
+  console.log(encode, decoded.equals(input), asyncDecoded.equals(input), encoded.equals(asyncEncoded),
+    z.crc32(encoded), z.crc32(asyncEncoded));
 }
 console.log('unzip', z.unzipSync(z.gzipSync(input)).equals(input));
 await new Promise<void>((resolve, reject) => z.unzip(z.deflateSync(input), (error, value) => {

@@ -203,6 +203,34 @@ fn listen(owner: f64, action: f64) {
 fn factory(name: &str, opts: f64) -> f64 {
     unsafe { crate::js_ext_zlib_native_dispatch(name.as_ptr(), name.len(), &opts, 1) }
 }
+#[test]
+fn constructor_fields_survive_collection_before_the_last_write_state() {
+    if std::env::var("PERRY_TEST_ZLIB_CONSTRUCTOR_GC").is_err() {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "stream::runtime_tests::constructor_fields_survive_collection_before_the_last_write_state", "--nocapture"])
+            .env("PERRY_TEST_ZLIB_CONSTRUCTOR_GC", "1")
+            .output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+    clear();
+    let roots = TransientRootScope::enter();
+    let opts = roots.root_nanbox(options());
+    for index in 0..1000 {
+        let scope = TransientRootScope::enter();
+        let owner = scope.root_nanbox(factory("ZstdDecompress", opts.get()));
+        assert_eq!(field(owner.get(), "bytesWritten"), 0.0, "iteration {index}");
+        assert!(native_bytes(owner.get()) > 0);
+        unsafe { method(owner.get(), "destroy", &[]) };
+        pump();
+        assert_eq!(native_bytes(owner.get()), 0);
+    }
+}
 fn options() -> f64 {
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
@@ -462,7 +490,17 @@ fn fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss() {
             for iteration in 0..5000 {
                 let scope = TransientRootScope::enter();
                 let owner = scope.root_nanbox(factory(name, opts.get()));
+                assert_eq!(
+                    field(owner.get(), "bytesWritten"),
+                    0.0,
+                    "constructor fields {name}, batch={batch} iteration={iteration}"
+                );
                 listen(owner.get(), 0.0);
+                assert_eq!(
+                    field(owner.get(), "bytesWritten"),
+                    0.0,
+                    "listener installation fields {name}, batch={batch} iteration={iteration}"
+                );
                 let chunk = scope.root_nanbox(value_bytes(input));
                 unsafe {
                     method(owner.get(), "end", &[chunk.get()]);

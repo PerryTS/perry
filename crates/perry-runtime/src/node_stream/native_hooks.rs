@@ -560,7 +560,6 @@ fn readable_full(stream: f64) -> bool {
 /// the rooted chunk before every step, because a collection run by listeners
 /// may move the chunk.
 
-
 /// The one step loop for every hooked stream (see the module docs).
 pub(crate) fn run_native_steps(stream: f64) {
     let Some(hooks) = hooks_of(stream) else {
@@ -662,12 +661,9 @@ pub(crate) fn run_native_steps(stream: f64) {
             step_scope.root_nanbox_f64(buffer_value_from_bytes(bytes))
         });
         // SAFETY: the cell is alive (its owner is rooted above).
-        unsafe {
-            crate::native_handle::native_handle_set_external_bytes(
-                cell.get_raw_mut_ptr(),
-                out.external_bytes,
-            )
-        };
+        cell.with_mut_ptr(|cell| unsafe {
+            crate::native_handle::native_handle_set_external_bytes(cell, out.external_bytes)
+        });
         if let Some(after_step) = hooks.after_step {
             unsafe { after_step(st()) };
             if stream_destroyed(st()) {

@@ -477,7 +477,7 @@ mod specialized_string_tests {
         unsafe {
             use crate::value::addr_class::{
                 COMMON_HANDLE_BAND_END, FETCH_HANDLE_BAND_END, FETCH_HANDLE_BAND_START,
-                HANDLE_BAND_MAX, PROXY_ID_BAND_START, ZLIB_HANDLE_BAND_END, ZLIB_HANDLE_BAND_START,
+                HANDLE_BAND_MAX, PROXY_ID_BAND_START,
             };
 
             // None of these registry handles may reach a string-header read.
@@ -489,8 +489,8 @@ mod specialized_string_tests {
                 COMMON_HANDLE_BAND_END - 1,
                 FETCH_HANDLE_BAND_START,
                 FETCH_HANDLE_BAND_END - 1,
-                ZLIB_HANDLE_BAND_START,
-                ZLIB_HANDLE_BAND_END - 1,
+                FETCH_HANDLE_BAND_END,
+                PROXY_ID_BAND_START - 1,
                 PROXY_ID_BAND_START,
                 HANDLE_BAND_MAX - 1,
             ] {

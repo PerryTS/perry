@@ -268,6 +268,12 @@ mod zlib_payloads {
                 undef(),
                 undef(),
             );
+            // A JS probe in the same immediate queue observes an erroneous
+            // teardown drain even when the finalized codec's step is inert.
+            perry_runtime::timer::js_set_immediate_callback(perry_runtime::js_nanbox_get_pointer(
+                callback.get_nanbox_f64(),
+            ));
+            assert_eq!(perry_runtime::timer::js_immediate_has_pending(), 1);
             // Wrap only the native destructor after queuing. The real codec
             // is freed by its original vtable; no GC address leaves the worker.
             let obj = perry_runtime::JSValue::from_bits(owner.get_nanbox_u64())
@@ -287,6 +293,14 @@ mod zlib_payloads {
                 .cast_mut()
                 .cast();
             assert_eq!(count.load(Ordering::SeqCst), 0);
+            if std::env::var("PERRY_TEST_ZLIB_TEARDOWN_SABOTAGE").as_deref()
+                == Ok("drain_after_finalize")
+            {
+                perry_runtime::native_handle::js_native_handle_dispose(f64::from_bits(
+                    perry_runtime::JSValue::pointer(cell.cast()).bits(),
+                ));
+                perry_runtime::timer::js_event_loop_check_phase();
+            }
             if retire {
                 perry_runtime::agent::retire_agent(agent);
             }
@@ -300,7 +314,7 @@ mod zlib_payloads {
         );
         // The main agent remains usable after the worker's heap retires.
         perry_runtime::gc::gc_init();
-        assert!(!perry_runtime::buffer::js_buffer_alloc(16).is_null());
+        assert!(!perry_runtime::buffer::js_buffer_alloc(16, 0).is_null());
         dropped
     }
     #[test]
@@ -310,5 +324,23 @@ mod zlib_payloads {
     #[test]
     fn retired_worker_heap_releases_a_real_codec_with_a_step_queued() {
         assert_eq!(queued_codec(true).load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn draining_after_codec_finalize_turns_worker_witness_red() {
+        let witness = "runtime_thread_exit_tests::streams_tests::zlib_payloads::retired_worker_heap_releases_a_real_codec_with_a_step_queued";
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", witness, "--nocapture"])
+            .env("PERRY_TEST_ZLIB_TEARDOWN_SABOTAGE", "drain_after_finalize")
+            .output()
+            .unwrap();
+        let log = format!(
+            "{}{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        assert!(
+            !child.status.success() && log.contains("worker teardown never invokes JS"),
+            "{log}"
+        );
     }
 }

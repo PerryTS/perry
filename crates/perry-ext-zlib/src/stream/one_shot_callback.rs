@@ -1,6 +1,7 @@
 //! One-shot work is an immediate-queue closure. Input, options and callback
 //! remain traced captures through queue lifetime and moving collections.
 use super::*;
+use std::io::Write;
 extern "C" {
     fn js_async_hooks_provider_init(name: *const u8, len: usize) -> u64;
     fn js_async_hooks_provider_run_catching_deferred_destroy(
@@ -108,7 +109,13 @@ unsafe extern "C" fn run(context: *mut c_void) -> f64 {
         6 => crate::unzip_bytes(&data),
         7 => Ok(brotli_compress_bytes(&data)),
         8 => brotli_decompress_bytes(&data),
-        9 => zstd::stream::encode_all(data.as_slice(), ZSTD_DEFAULT_LEVEL),
+        9 => (|| {
+            // Node's callback helper uses the streaming encoder: its frame
+            // omits the pledged content size present in zstdCompressSync.
+            let mut encoder = zstd::stream::write::Encoder::new(Vec::new(), ZSTD_DEFAULT_LEVEL)?;
+            encoder.write_all(&data)?;
+            encoder.finish()
+        })(),
         10 => zstd::stream::decode_all(data.as_slice()),
         _ => unreachable!("private one-shot codec capture"),
     };
