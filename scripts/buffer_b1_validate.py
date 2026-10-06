@@ -23,6 +23,7 @@ PROGRAMS = {
     'commander': ('commander/parse_argv.ts', ['5000', '200'], True),
     'hello': ('hello.ts', [], False),
     'fastify': ('fastify/inject.ts', ['500', '30'], True),
+    'effect': ('effect/main.ts', [], False),
     'buffer_heavy': ('buffer_heavy.ts', [], False),
     'worker_heavy': ('worker_heavy.ts', [], False),
 }
@@ -46,13 +47,16 @@ def environment(root, arm):
 
 def run(cmd, cwd, env, prefix, timeout=1800):
     prefix.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, timeout=timeout)
-    Path(str(prefix)+'.out').write_bytes(result.stdout)
-    Path(str(prefix)+'.err').write_bytes(result.stderr)
-    return result
+    stdout_path, stderr_path = Path(str(prefix)+'.out'), Path(str(prefix)+'.err')
+    with stdout_path.open('wb') as stdout, stderr_path.open('wb') as stderr:
+        result = subprocess.run(cmd, cwd=cwd, env=env, stdout=stdout, stderr=stderr, timeout=timeout)
+    return subprocess.CompletedProcess(cmd, result.returncode, stdout_path.read_bytes(), stderr_path.read_bytes())
 
 def normalize_kernel(data):
     return re.sub(rb'(?m)^(matrix_multiply|matmul|prime_sieve|buffer_readwrite):\d+', rb'\1:<time>', data)
+
+def normalize_effect(data):
+    return re.sub(rb'(construct2000|decode20000)=\d+ms', rb'\1=<time>ms', data)
 
 def compile_arm(root, arm, names):
     source, target, env = environment(root, arm)
@@ -72,7 +76,7 @@ def compile_arm(root, arm, names):
             continue
         node = run([*NODE, relative, *args], cwd, env, out/f'{name}.node')
         perry = run([str(out/name), *args], cwd, env, out/f'{name}.perry')
-        norm = normalize_kernel if name in KERNELS else lambda b: b
+        norm = normalize_kernel if name in KERNELS else normalize_effect if name == 'effect' else lambda b: b
         matches = node.returncode == 0 and perry.returncode == 0 and norm(node.stdout) == norm(perry.stdout)
         status[name] = {'node': node.returncode, 'perry': perry.returncode, 'output_equal': matches}
         print(f'{arm}/{name}: {status[name]}', flush=True)
@@ -83,7 +87,8 @@ def compile_arm(root, arm, names):
 
 def full_collections(root, arm, name, cmd, cwd, env, trial):
     diag = dict(env, PERRY_GC_DIAG='1')
-    prefix = root/'measure/trials'/f'{name}.{trial}.{arm}.gc'
+    trials_dir = 'trials-thp-off' if env.get('MIMALLOC_ALLOW_THP') == '0' else 'trials'
+    prefix = root/'measure'/trials_dir/f'{name}.{trial}.{arm}.gc'
     huge = []
     stop = threading.Event()
     proc = subprocess.Popen(cmd, cwd=cwd, env=diag, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -117,6 +122,7 @@ def full_collections(root, arm, name, cmd, cwd, env, trial):
     return {'fulls': fulls, 'anon_huge_kb': max(huge) if huge else None}
 
 def measure(root, names, thp_off):
+    trials_dir = 'trials-thp-off' if thp_off else 'trials'
     status = {a: json.loads((root/'measure'/a/'status.json').read_text()) for a in ['main', 'head']}
     records = {}
     for name in names:
@@ -132,7 +138,7 @@ def measure(root, names, thp_off):
                 _, _, env = environment(root, arm)
                 if thp_off: env['MIMALLOC_ALLOW_THP'] = '0'
                 cmd = [str(root/'measure'/arm/name), *args]
-                prefix = root/'measure/trials'/f'{name}.{trial}.{arm}'
+                prefix = root/'measure'/trials_dir/f'{name}.{trial}.{arm}'
                 prefix.parent.mkdir(parents=True, exist_ok=True)
                 counter, rss = Path(str(prefix)+'.stat'), Path(str(prefix)+'.rss')
                 result = run(['perf', 'stat', '-x', ';', '-e', 'instructions:u,cycles:u', '-o', str(counter),
@@ -149,7 +155,7 @@ def measure(root, names, thp_off):
                 print(f'{name}/{trial}/{arm}: {stats}', flush=True)
                 if arm == 'main':
                     # Identical binary control, interleaved with each A/B pair.
-                    prefix = root/'measure/trials'/f'{name}.{trial}.noise'
+                    prefix = root/'measure'/trials_dir/f'{name}.{trial}.noise'
                     noise_counter = Path(str(prefix)+'.stat')
                     control = run(['perf', 'stat', '-x', ';', '-e', 'instructions:u', '-o', str(noise_counter), '/usr/bin/time', '-f', '%M', '-o', str(Path(str(prefix)+'.rss')), *cmd],
                                   cwd, env, prefix)
