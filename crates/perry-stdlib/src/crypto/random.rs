@@ -54,18 +54,17 @@ pub extern "C" fn js_crypto_random_bytes_buffer(
     size: f64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
     let size = validate_random_bytes_size(size);
-    if size == 0 {
-        return perry_runtime::buffer::buffer_alloc(0);
-    }
-
-    let buf = perry_runtime::buffer::buffer_alloc(size as u32);
+    let (value, pin) = perry_runtime::buffer::bytes::new_bytes(
+        perry_runtime::buffer::bytes::Brand::Buffer,
+        size,
+        perry_runtime::buffer::bytes::Init::Uninit,
+    );
     unsafe {
-        (*buf).length = size as u32;
-        let data = perry_runtime::buffer::buffer_data_mut(buf);
-        let bytes = std::slice::from_raw_parts_mut(data, size);
-        rand::rng().fill_bytes(bytes);
+        rand::rng().fill_bytes(std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()));
     }
-    buf
+    JSValue::from_bits(value.to_bits())
+        .as_pointer::<perry_runtime::buffer::BufferHeader>()
+        .cast_mut()
 }
 
 /// `crypto.randomBytes(size, callback)` — callback form.
@@ -584,47 +583,46 @@ pub extern "C" fn js_crypto_random_fill_sync(
     offset_bits: f64,
     size_bits: f64,
 ) -> f64 {
-    unsafe {
-        let raw = raw_addr_from_value(buf_bits);
-        // TypedArrayHeader path (Uint8Array, Uint32Array, Float32Array, …).
-        if perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some() {
-            let ta = raw as *mut perry_runtime::typedarray::TypedArrayHeader;
-            if let Some(data) = perry_runtime::typedarray::typed_array_bytes_mut(ta) {
-                let elem_size = (*ta).elem_size as usize;
-                let len = if elem_size == 0 {
-                    0
-                } else {
-                    data.len() / elem_size
-                };
-                let (start_elem, count_elem) =
-                    validate_random_fill_range(len, offset_bits, size_bits);
-                let start = start_elem.saturating_mul(elem_size);
-                let end = start
-                    .saturating_add(count_elem.saturating_mul(elem_size))
-                    .min(data.len());
-                if end > start {
-                    rand::rng().fill_bytes(&mut data[start..end]);
-                }
-                return buf_bits;
-            }
-            throw_invalid_random_fill_buffer(buf_bits);
+    let raw = raw_addr_from_value(buf_bits);
+    let elem_size = if let Some(kind) = perry_runtime::typedarray::lookup_typed_array_kind(raw) {
+        perry_runtime::typedarray::elem_size_for_kind(kind).max(1)
+    } else if perry_runtime::buffer::is_registered_buffer(raw) {
+        1
+    } else {
+        throw_invalid_random_fill_buffer(buf_bits);
+    };
+    let value = f64::from_bits(JSValue::pointer(raw as *const u8).bits());
+    let byte_len = perry_runtime::buffer::bytes::no_gc(|scope| {
+        perry_runtime::buffer::bytes::bytes(value, scope).map(<[u8]>::len)
+    })
+    .unwrap_or_else(|_| throw_invalid_random_fill_buffer(buf_bits));
+    let (start_elem, count_elem) =
+        validate_random_fill_range(byte_len / elem_size, offset_bits, size_bits);
+    let start = start_elem.saturating_mul(elem_size);
+    let count = count_elem
+        .saturating_mul(elem_size)
+        .min(byte_len.saturating_sub(start));
+    #[cfg(test)]
+    let start = if b2c_sabotage("random_fill_range") {
+        0
+    } else {
+        start
+    };
+    // RNG work neither allocates in the JS heap nor calls JS. A scoped borrow
+    // also supports foreign stores without requiring a retain protocol.
+    perry_runtime::buffer::bytes::no_gc(|scope| unsafe {
+        let data = perry_runtime::buffer::bytes::bytes_mut(value, scope)?;
+        rand::rng().fill_bytes(&mut data[start..start + count]);
+        #[cfg(test)]
+        if b2c_sabotage("random_fill_range") && count > 0 {
+            // Make the wrong-window witness deterministic rather than depend
+            // on the RNG changing the sentinel byte by chance.
+            data[start] = 0xff;
         }
-        // BufferHeader / Uint8Array path.
-        if perry_runtime::buffer::is_registered_buffer(raw) {
-            let buf = raw as *mut perry_runtime::buffer::BufferHeader;
-            let total = (*buf).length as usize;
-            let (start, count) = validate_random_fill_range(total, offset_bits, size_bits);
-            if count > 0 {
-                let data = perry_runtime::buffer::buffer_data_mut(buf);
-                let slice = std::slice::from_raw_parts_mut(data.add(start), count);
-                rand::rng().fill_bytes(slice);
-            }
-            // Hand back the same NaN-boxed value the caller passed.
-            return buf_bits;
-        }
-    }
-
-    throw_invalid_random_fill_buffer(buf_bits);
+        Ok::<_, perry_runtime::buffer::bytes::NotBytes>(())
+    })
+    .unwrap_or_else(|_| throw_invalid_random_fill_buffer(buf_bits));
+    buf_bits
 }
 
 fn raw_addr_from_value(value: f64) -> usize {

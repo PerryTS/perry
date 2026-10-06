@@ -145,6 +145,43 @@ pub struct SymbolHeader {
     pub id: u64,
 }
 
+/// Box-leaked symbols obey the same p-8 header contract as GC cells. The
+/// prefix is not registered with the collector: identity and lifetime remain
+/// process-wide, and the payload contains no GC pointers.
+#[repr(C)]
+struct PersistentSymbol {
+    header: crate::gc::GcHeader,
+    symbol: SymbolHeader,
+}
+
+fn leak_symbol(symbol: SymbolHeader) -> *mut SymbolHeader {
+    let mut cell = Box::new(PersistentSymbol {
+        header: crate::gc::GcHeader {
+            obj_type: crate::gc::GC_TYPE_SYMBOL,
+            gc_flags: crate::gc::GC_FLAG_TENURED,
+            _reserved: 0,
+            size: std::mem::size_of::<PersistentSymbol>() as u32,
+        },
+        symbol,
+    });
+    // A Box allocation is outside the moving arena. Use the shared setter
+    // so pin custody remains explicit even for these immortal leaf cells.
+    unsafe { crate::gc::pin_object(std::ptr::addr_of_mut!(cell.header)) };
+    #[cfg(test)]
+    let cell = if crate::buffer::bytes::b4_sabotage("symbol_header") {
+        let mut cell = cell;
+        cell.header.obj_type = crate::gc::GC_TYPE_STRING;
+        cell
+    } else {
+        cell
+    };
+    let raw = Box::into_raw(cell);
+    unsafe { std::ptr::addr_of_mut!((*raw).symbol) }
+}
+
+const _: () = assert!(std::mem::offset_of!(PersistentSymbol, symbol) == crate::gc::GC_HEADER_SIZE);
+const _: () = assert!(std::mem::offset_of!(SymbolHeader, registered) == 4);
+
 // Global registry for Symbol.for(key) — maps key → symbol pointer (as usize).
 // The symbol pointers stored here are leaked (never freed) so that
 // `Symbol.for("x") === Symbol.for("x")` always returns the same pointer.
@@ -374,13 +411,12 @@ fn well_known_symbol_slow(short_name: &str) -> *mut SymbolHeader {
     // can't store a real StringHeader pointer here because this allocation may
     // be made on a worker thread whose arena will later be torn down, while
     // the SymbolHeader itself is Box-leaked and outlives that arena.
-    let boxed = Box::new(SymbolHeader {
+    let sym_ptr = leak_symbol(SymbolHeader {
         magic: SYMBOL_MAGIC,
         registered: 0,
         description: std::ptr::null_mut(),
         id: next_id(),
     });
-    let sym_ptr = Box::into_raw(boxed);
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_constructed(
             crate::hot_diag::ReceiverReprFamily::SymbolGlobal,
@@ -452,28 +488,10 @@ static SYMBOL_EVER_REGISTERED: crate::registry_latch::RegistryLatch =
 /// classifier that has already ruled a symbol out some other way must still ask
 /// the authoritative [`is_registered_symbol`].
 ///
-/// #7850. `gc_pointer_and_type_from_value` — on the path of every dynamic method
-/// call — cannot use `GcHeader.obj_type` to rule a symbol out, because three of
-/// the five registration sites (`well_known_symbol`,
-/// `intl_legacy_constructed_symbol`, `js_symbol_for`) are `Box::into_raw`:
-/// process-lifetime allocations with **no `GcHeader` at all**, so `ptr - 8` is
-/// foreign allocator bytes that can coincidentally equal any `obj_type`. Trusting
-/// the header for those is a silent wrong answer.
-///
-/// What every symbol DOES have, whatever its storage, is `SYMBOL_MAGIC` in its
-/// own first four bytes — `alloc_symbol` and all three `Box` sites set it, and
-/// the field is at offset 0 precisely so cheap discrimination is possible. So
-/// one 4-byte load of the object the caller is already about to inspect answers
-/// "definitely not a symbol" for everything else.
-///
-/// The direction of the guarantee is what makes it safe to use as a screen:
-/// **`false` is exact** — no symbol reads `false` — while `true` is merely
-/// "ask the registry". A non-symbol whose first word happens to equal
-/// `SYMBOL_MAGIC` (a `StringHeader` would need `utf16_len == 0x5359_4D42`, i.e.
-/// a 2.8 GB string; an `ObjectHeader`'s first word is `class_id`, and ids are
-/// handed out from 1 — #8113 deleted the `object_type` tag that used to sit
-/// there, which does not change this argument) simply pays the old probe and
-/// gets the old, correct answer.
+/// All persistent symbols now carry a GC_TYPE_SYMBOL prefix; fresh symbols
+/// retain their existing GC_TYPE_STRING leaf layout. The magic screen stays
+/// valid for both kinds until the codegen header migration in B4c.
+/// `false` is exact, while `true` still asks the symbol registry.
 ///
 /// # Safety
 /// `ptr` must be readable for 4 bytes. Every caller is one that already
@@ -698,13 +716,13 @@ pub fn intl_legacy_constructed_symbol() -> f64 {
     // realm-global. Description text lives in REGISTERED_SYMBOL_DESCRIPTIONS
     // (readers materialize a fresh StringHeader on demand), matching the
     // well-known-symbol contract.
-    let boxed = Box::new(SymbolHeader {
+    let sym_ptr = leak_symbol(SymbolHeader {
         magic: SYMBOL_MAGIC,
         registered: 0,
         description: std::ptr::null_mut(),
         id: next_id(),
     });
-    let sym_ptr = Box::into_raw(boxed) as usize;
+    let sym_ptr = sym_ptr as usize;
     if crate::hot_diag::receiver_repr_on() {
         crate::hot_diag::receiver_repr_note_constructed(
             crate::hot_diag::ReceiverReprFamily::SymbolGlobal,

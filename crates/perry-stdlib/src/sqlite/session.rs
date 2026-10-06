@@ -11,7 +11,7 @@
 use super::*;
 use perry_runtime::buffer::bytes::{from_slice, Brand};
 use perry_runtime::buffer::{
-    buffer_data, is_any_array_buffer, is_data_view, is_registered_buffer, BufferHeader,
+    is_any_array_buffer, is_data_view, is_registered_buffer, BufferHeader,
 };
 use perry_runtime::closure::{ClosureHeader, JsThis};
 use perry_runtime::gc::RuntimeHandleScope;
@@ -204,17 +204,18 @@ fn install_session_prototype(proto: &mut PayloadPrototype) {
 pub(crate) unsafe fn changeset_bytes_from_value(value: f64) -> Vec<u8> {
     let addr = raw_addr_from_value(value);
     if addr != 0 {
-        if is_registered_buffer(addr) && !is_any_array_buffer(addr) && !is_data_view(addr) {
-            let buf = addr as *const BufferHeader;
-            let bytes = std::slice::from_raw_parts(buffer_data(buf), (*buf).length as usize);
-            return bytes.to_vec();
-        }
-        if perry_runtime::typedarray::lookup_typed_array_kind(addr)
-            == Some(perry_runtime::typedarray::KIND_UINT8)
+        if (is_registered_buffer(addr) && !is_any_array_buffer(addr) && !is_data_view(addr))
+            || perry_runtime::typedarray::lookup_typed_array_kind(addr)
+                == Some(perry_runtime::typedarray::KIND_UINT8)
         {
-            let ptr = addr as *const perry_runtime::typedarray::TypedArrayHeader;
-            if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(ptr) {
-                return bytes.to_vec();
+            let bytes = perry_runtime::buffer::bytes::no_gc(|scope| {
+                let value = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+                perry_runtime::buffer::bytes::bytes(value, scope)
+                    .ok()
+                    .map(<[u8]>::to_vec)
+            });
+            if let Some(bytes) = bytes {
+                return bytes;
             }
         }
     }

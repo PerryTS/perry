@@ -36,40 +36,18 @@ use crate::value::JSValue;
 /// The pointer borrows the live allocation: it is valid until the next
 /// collection. The callers below neither allocate on the JS heap nor reach a
 /// safepoint between taking it and finishing the write.
-fn binary_chunk_span(chunk: f64) -> Option<(*const u8, usize)> {
+fn binary_chunk_span<'s>(
+    chunk: f64,
+    scope: &'s crate::buffer::bytes::NoGc<'s>,
+) -> Option<&'s [u8]> {
     if !JSValue::from_bits(chunk.to_bits()).is_pointer() {
         return None;
     }
-    // Everything below keys registries by address; nothing dereferences
-    // `addr` unless a registry has vouched for it.
     let addr = (chunk.to_bits() & crate::value::POINTER_MASK) as usize;
     if crate::buffer::is_any_array_buffer(addr) {
         return None;
     }
-    let mut len = 0_u32;
-    // SAFETY: `len` is a valid out-pointer. This is the shared native-span
-    // accessor: it resolves a registered view (subarray / `new T(ab, off, n)` /
-    // DataView) to its backing window rather than to the view header.
-    let data = unsafe { crate::buffer::js_value_buffer_or_typedarray_data(chunk, &mut len) };
-    if !data.is_null() && len != 0 {
-        return Some((data, len as usize));
-    }
-    // `(null, 0)` is both "not a binary chunk" and "an empty one" (a
-    // zero-length or detached view). Only the second is a chunk.
-    let is_view = crate::buffer::is_registered_buffer(addr)
-        || crate::typedarray::lookup_typed_array_kind(addr).is_some();
-    if !is_view {
-        return None;
-    }
-    // Node re-wraps every view that is not already a `Buffer`
-    // (`new FastBuffer(chunk.buffer, chunk.byteOffset, chunk.byteLength)`),
-    // and that construction throws once the ArrayBuffer has been transferred
-    // away. A detached `Buffer` is written as it is: empty. Only reachable
-    // for an empty view, so a live chunk never pays for the lookup.
-    if !crate::buffer::is_node_buffer(addr) && view_backing_is_detached(addr) {
-        crate::typedarray::throw_type_error(b"Cannot perform Construct on a detached ArrayBuffer");
-    }
-    Some((std::ptr::NonNull::<u8>::dangling().as_ptr() as *const u8, 0))
+    crate::buffer::bytes::bytes(chunk, scope).ok()
 }
 
 /// Whether the `ArrayBuffer` a view aliases has been detached (`transfer()`).
@@ -119,10 +97,21 @@ pub(super) fn with_write_bytes<R>(chunk: f64, encoding: f64, f: impl FnOnce(&[u8
                 tag => f(&crate::buffer::buffer_string_bytes_for_encoding(text, tag)),
             };
         }
-    } else if let Some((data, len)) = binary_chunk_span(chunk) {
-        // SAFETY: see `binary_chunk_span` — `len` readable bytes, stable for
-        // the duration of `f`, which does not touch the JS heap.
-        return f(unsafe { std::slice::from_raw_parts(data, len) });
+    } else if value.is_pointer() {
+        let addr = value.as_pointer::<u8>() as usize;
+        let is_view = !crate::buffer::is_any_array_buffer(addr)
+            && (crate::buffer::is_registered_buffer(addr)
+                || crate::typedarray::lookup_typed_array_kind(addr).is_some());
+        if is_view {
+            if !crate::buffer::is_node_buffer(addr) && view_backing_is_detached(addr) {
+                crate::typedarray::throw_type_error(
+                    b"Cannot perform Construct on a detached ArrayBuffer",
+                );
+            }
+            return crate::buffer::bytes::no_gc(|scope| {
+                f(binary_chunk_span(chunk, scope).unwrap_or(&[]))
+            });
+        }
     }
     let s_ptr = crate::value::js_jsvalue_to_string(chunk);
     if s_ptr.is_null() {

@@ -303,16 +303,11 @@ unsafe fn pem_bytes(value: JsValue) -> Option<Vec<u8>> {
     if let Some(text) = jsvalue_to_owned_string(f64::from_bits(value.bits())) {
         return Some(text.into_bytes());
     }
-    extern "C" {
-        fn js_value_buffer_or_typedarray_data(value: f64, out_len: *mut u32) -> *const u8;
-    }
-    let mut len = 0u32;
-    let data = js_value_buffer_or_typedarray_data(f64::from_bits(value.bits()), &mut len);
-    if data.is_null() || len == 0 {
-        None
-    } else {
-        Some(std::slice::from_raw_parts(data, len as usize).to_vec())
-    }
+    perry_ffi::bytes::no_gc(|scope| {
+        perry_ffi::bytes::borrow(value, scope)
+            .filter(|bytes| !bytes.is_empty())
+            .map(<[u8]>::to_vec)
+    })
 }
 
 /// `(host, port, host:port)` for an `http2.connect` authority.

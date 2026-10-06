@@ -1237,11 +1237,12 @@ pub(crate) unsafe fn decode_path_value_named(path_value: f64, arg_name: &str) ->
         if buf.is_null() {
             return None;
         }
-        let bytes =
-            std::slice::from_raw_parts(crate::buffer::buffer_data(buf), (*buf).length as usize);
-        return std::str::from_utf8(bytes)
-            .ok()
-            .map(|s| reject_null_bytes(s.to_string(), arg_name));
+        let path = crate::buffer::bytes::no_gc(|scope| {
+            crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(buf as i64), scope)
+                .ok()
+                .and_then(|bytes| std::str::from_utf8(bytes).ok().map(str::to_owned))
+        });
+        return path.map(|s| reject_null_bytes(s, arg_name));
     }
     if jsval.is_pointer() {
         let obj = jsval.as_pointer::<crate::object::ObjectHeader>();

@@ -114,31 +114,11 @@ unsafe fn build_object(pairs: &[(&str, f64)]) -> f64 {
 /// `Uint8Array` / other TypedArrays, and `ArrayBuffer`. Returns `None` for
 /// anything else (caller throws `ERR_INVALID_ARG_TYPE` like Node).
 unsafe fn input_bytes(value: f64) -> Option<Vec<u8>> {
-    let jsv = JSValue::from_bits(value.to_bits());
-    if !jsv.is_pointer() {
-        return None;
-    }
-    let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
-    if addr < 0x10000 {
-        return None;
-    }
-    if crate::buffer::is_registered_buffer(addr) {
-        let data = crate::buffer::js_native_buffer_data_ptr(value);
-        let len = crate::buffer::js_native_buffer_byte_len(value);
-        if data.is_null() || len == 0 {
-            return Some(Vec::new());
-        }
-        return Some(std::slice::from_raw_parts(data, len).to_vec());
-    }
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let ta = addr as *const crate::typedarray::TypedArrayHeader;
-        return Some(
-            crate::typedarray::typed_array_bytes(ta)
-                .map(|b| b.to_vec())
-                .unwrap_or_default(),
-        );
-    }
-    None
+    crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(value, scope)
+            .ok()
+            .map(<[u8]>::to_vec)
+    })
 }
 
 fn is_valid_heap_snapshot_options(value: f64) -> bool {

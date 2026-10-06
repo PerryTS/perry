@@ -172,12 +172,7 @@ pub(super) unsafe fn js_webcrypto_key_object_to_crypto_key(
 /// metadata resolves through the process-global registry still has readable
 /// bytes at `addr`.
 unsafe fn crypto_key_bytes(addr: usize) -> Vec<u8> {
-    let buf = addr as *const BufferHeader;
-    let len = (*buf).length as usize;
-    if len == 0 {
-        return Vec::new();
-    }
-    std::slice::from_raw_parts(buffer_payload(buf), len).to_vec()
+    buffer_payload_copy(addr)
 }
 
 /// Re-encode an asymmetric CryptoKey's WebCrypto key material (SPKI/PKCS#8 DER

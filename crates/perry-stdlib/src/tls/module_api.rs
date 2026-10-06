@@ -239,18 +239,17 @@ pub unsafe extern "C" fn js_tls_convert_alpn_protocols(protocols: f64, out: f64)
         if perry_runtime::buffer::is_registered_buffer(addr)
             && !perry_runtime::buffer::is_any_array_buffer(addr)
         {
-            let data = perry_runtime::buffer::js_native_buffer_data_ptr(protocols);
-            let length = perry_runtime::buffer::js_native_buffer_byte_len(protocols);
-            if !data.is_null() && length != 0 {
-                encoded.extend_from_slice(std::slice::from_raw_parts(data, length));
-            }
+            perry_runtime::buffer::bytes::no_gc(|scope| {
+                if let Ok(bytes) = perry_runtime::buffer::bytes::bytes(protocols, scope) {
+                    encoded.extend_from_slice(bytes);
+                }
+            });
         } else if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
-            let mut length = 0u32;
-            let data =
-                perry_runtime::buffer::js_value_buffer_or_typedarray_data(protocols, &mut length);
-            if !data.is_null() && length != 0 {
-                encoded.extend_from_slice(std::slice::from_raw_parts(data, length as usize));
-            }
+            perry_runtime::buffer::bytes::no_gc(|scope| {
+                if let Ok(bytes) = perry_runtime::buffer::bytes::bytes(protocols, scope) {
+                    encoded.extend_from_slice(bytes);
+                }
+            });
         } else {
             return undefined();
         }
@@ -266,14 +265,15 @@ pub unsafe extern "C" fn js_tls_convert_alpn_protocols(protocols: f64, out: f64)
             "ERR_INVALID_ARG_TYPE",
         );
     };
-    let buffer = perry_runtime::buffer::js_buffer_alloc(encoded.len() as i32, 0);
-    if !encoded.is_empty() {
-        std::ptr::copy_nonoverlapping(
-            encoded.as_ptr(),
-            perry_runtime::buffer::buffer_data_mut(buffer),
-            encoded.len(),
-        );
-    }
+    let buffer = JSValue::from_bits(
+        perry_runtime::buffer::bytes::from_slice(
+            perry_runtime::buffer::bytes::Brand::Buffer,
+            &encoded,
+        )
+        .to_bits(),
+    )
+    .as_pointer::<perry_runtime::buffer::BufferHeader>()
+    .cast_mut();
     set_field(
         out_addr as *mut ObjectHeader,
         "ALPNProtocols",

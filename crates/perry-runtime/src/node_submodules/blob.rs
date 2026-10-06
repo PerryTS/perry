@@ -330,12 +330,12 @@ fn captured_blob_bytes(closure: *const ClosureHeader) -> Vec<u8> {
     if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
         return Vec::new();
     }
-    unsafe {
-        let buf = raw as *const crate::buffer::BufferHeader;
-        let len = (*buf).length as usize;
-        let data = crate::buffer::buffer_data(buf);
-        std::slice::from_raw_parts(data, len).to_vec()
-    }
+    crate::buffer::bytes::no_gc(|scope| {
+        let value = crate::value::js_nanbox_pointer(raw as i64);
+        crate::buffer::bytes::bytes(value, scope)
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default()
+    })
 }
 
 fn set_named_value(obj: *mut ObjectHeader, name: &[u8], value: f64) {

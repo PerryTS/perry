@@ -412,9 +412,11 @@ impl Serializer {
         let mut le: Vec<u8> = if be_buf.is_null() {
             Vec::new()
         } else {
-            let data = crate::buffer::buffer_data(be_buf);
-            let len = unsafe { (*be_buf).length } as usize;
-            let mut v = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
+            let mut v = crate::buffer::bytes::no_gc(|scope| {
+                crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(be_buf as i64), scope)
+                    .map(<[u8]>::to_vec)
+                    .unwrap_or_default()
+            });
             v.reverse();
             v
         };
@@ -444,32 +446,28 @@ impl Serializer {
     }
 
     fn write_host_buffer(&mut self, value: f64) {
-        let data = crate::buffer::js_native_buffer_data_ptr(value);
-        let len = crate::buffer::js_native_buffer_byte_len(value);
-        let bytes: &[u8] = if data.is_null() || len == 0 {
-            &[]
-        } else {
-            unsafe { std::slice::from_raw_parts(data, len) }
-        };
-        self.write_host_view(NODE_BUFFER_VIEW_INDEX, bytes);
+        crate::buffer::bytes::no_gc(|scope| {
+            let bytes = crate::buffer::bytes::bytes(value, scope).unwrap_or(&[]);
+            self.write_host_view(NODE_BUFFER_VIEW_INDEX, bytes);
+        });
     }
 
     fn write_array_buffer(&mut self, buffer: *const crate::buffer::BufferHeader) {
-        let len = unsafe { (*buffer).length as usize };
-        let data = crate::buffer::buffer_data(buffer);
-        self.out.push(TAG_ARRAY_BUFFER);
-        self.write_varint(len as u64);
-        if !data.is_null() && len != 0 {
-            self.out
-                .extend_from_slice(unsafe { std::slice::from_raw_parts(data, len) });
-        }
+        crate::buffer::bytes::no_gc(|scope| {
+            let bytes =
+                crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(buffer as i64), scope)
+                    .unwrap_or(&[]);
+            self.out.push(TAG_ARRAY_BUFFER);
+            self.write_varint(bytes.len() as u64);
+            self.out.extend_from_slice(bytes);
+        });
     }
 
     fn write_host_typed_array(&mut self, value: f64, kind: u8) {
-        let raw = (value.to_bits() & crate::value::POINTER_MASK) as usize;
-        let ta = raw as *const crate::typedarray::TypedArrayHeader;
-        let bytes = unsafe { crate::typedarray::typed_array_bytes(ta) }.unwrap_or(&[]);
-        self.write_host_view(v8_index_for_kind(kind), bytes);
+        crate::buffer::bytes::no_gc(|scope| {
+            let bytes = crate::buffer::bytes::bytes(value, scope).unwrap_or(&[]);
+            self.write_host_view(v8_index_for_kind(kind), bytes);
+        });
     }
 
     fn write_dense_array(&mut self, arr: *mut crate::array::ArrayHeader) {
@@ -999,15 +997,7 @@ impl<'a> Deserializer<'a> {
     fn read_array_buffer(&mut self) -> Option<f64> {
         let len = self.read_varint()? as usize;
         let bytes = self.read_raw(len)?;
-        let buffer = crate::buffer::js_array_buffer_new(len as i32);
-        if buffer.is_null() {
-            return Some(cp_undefined());
-        }
-        let data = crate::buffer::buffer_data_mut(buffer);
-        if !data.is_null() && len != 0 {
-            unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, len) };
-        }
-        let v = cp_box_ptr(buffer as *const u8);
+        let v = crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::ArrayBuffer, bytes);
         self.id_table.push(v);
         Some(v)
     }
@@ -1268,9 +1258,13 @@ fn make_typed_array(kind: u8, bytes: &[u8]) -> f64 {
     if ta.is_null() {
         return cp_undefined();
     }
-    if let Some(dst) = unsafe { crate::typedarray::typed_array_bytes_mut(ta) } {
-        let n = dst.len().min(bytes.len());
-        dst[..n].copy_from_slice(&bytes[..n]);
-    }
+    crate::buffer::bytes::no_gc(|scope| unsafe {
+        if let Ok(dst) =
+            crate::buffer::bytes::bytes_mut(crate::value::js_nanbox_pointer(ta as i64), scope)
+        {
+            let n = dst.len().min(bytes.len());
+            dst[..n].copy_from_slice(&bytes[..n]);
+        }
+    });
     cp_box_ptr(ta as *const u8)
 }

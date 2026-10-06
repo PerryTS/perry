@@ -699,15 +699,12 @@ pub(crate) fn buffer_receiver_as_uint8_typed_array(
     // Copy the bytes out BEFORE allocating: `typed_array_alloc` can collect,
     // and a raw payload pointer read across it is exactly the borrowed-heap-
     // slice shape rooting cannot fix.
-    let buf = addr as *const crate::buffer::BufferHeader;
-    let bytes: Vec<u8> = unsafe {
-        let len = (*buf).length as usize;
-        if len == 0 {
-            Vec::new()
-        } else {
-            std::slice::from_raw_parts(crate::buffer::buffer_data(buf), len).to_vec()
-        }
-    };
+    let bytes = crate::buffer::bytes::no_gc(|scope| {
+        let value = crate::value::js_nanbox_pointer(addr as i64);
+        crate::buffer::bytes::bytes(value, scope)
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default()
+    });
     let ta =
         crate::typedarray::typed_array_alloc(crate::typedarray::KIND_UINT8, bytes.len() as u32);
     for (i, byte) in bytes.iter().enumerate() {

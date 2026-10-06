@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::array::ArrayHeader;
-use crate::buffer::BufferHeader;
 use crate::closure::ClosureHeader;
 use crate::object::{ObjectHeader, PropertyAttrs};
 use crate::string::StringHeader;
@@ -319,10 +318,6 @@ fn array_value(arr: *mut ArrayHeader) -> f64 {
     crate::value::js_nanbox_pointer(arr as i64)
 }
 
-fn buffer_value(buf: *mut BufferHeader) -> f64 {
-    crate::value::js_nanbox_pointer(buf as i64)
-}
-
 fn raw_addr_from_value(value: f64) -> usize {
     let bits = value.to_bits();
     let jv = JSValue::from_bits(bits);
@@ -523,16 +518,11 @@ fn validate_produce_cached_data(options: f64) -> bool {
 }
 
 fn typed_array_or_buffer_bytes(value: f64) -> Option<Vec<u8>> {
-    let mut len = 0_u32;
-    let ptr = unsafe { crate::buffer::js_value_buffer_or_typedarray_data(value, &mut len) };
-    if !ptr.is_null() {
-        return Some(unsafe { std::slice::from_raw_parts(ptr, len as usize).to_vec() });
-    }
-    let addr = raw_addr_from_value(value);
-    if addr != 0 && crate::buffer::is_data_view(addr) {
-        return Some(Vec::new());
-    }
-    None
+    crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(value, scope)
+            .ok()
+            .map(<[u8]>::to_vec)
+    })
 }
 
 fn validate_cached_data_option(options: f64) -> Option<Vec<u8>> {
@@ -580,16 +570,7 @@ fn validate_one_of_string(
 
 fn cached_data_buffer(kind: u8, hash: u64) -> f64 {
     let bytes = cached_data_bytes(kind, hash);
-    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
-    unsafe {
-        (*buf).length = bytes.len() as u32;
-        std::ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            crate::buffer::buffer_data_mut(buf),
-            bytes.len(),
-        );
-    }
-    buffer_value(buf)
+    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, &bytes)
 }
 
 fn validate_module_source(source: &str) {

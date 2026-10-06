@@ -136,20 +136,7 @@ unsafe fn value_bytes(value: f64) -> Option<Vec<u8>> {
     if js.is_any_string() {
         return crate::jsvalue_to_socket_bytes(value);
     }
-    // Read through the canonical runtime registry.  `perry-ext-net` is a
-    // separately linked archive, so perry-ffi's local Buffer registry cannot
-    // see Buffers allocated by the program runtime (notably `ca`, `cert`, and
-    // `key` values returned by fs.readFileSync).
-    extern "C" {
-        fn js_value_buffer_or_typedarray_data(value: f64, out_len: *mut u32) -> *const u8;
-    }
-    let mut len = 0u32;
-    let data = js_value_buffer_or_typedarray_data(value, &mut len);
-    if data.is_null() {
-        None
-    } else {
-        Some(std::slice::from_raw_parts(data, len as usize).to_vec())
-    }
+    perry_ffi::bytes::no_gc(|scope| perry_ffi::bytes::borrow(js, scope).map(<[u8]>::to_vec))
 }
 
 unsafe fn material_list(value: f64) -> Option<Vec<Vec<u8>>> {

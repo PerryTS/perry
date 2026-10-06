@@ -387,19 +387,7 @@ fn webstream_auto_close(closure: *const ClosureHeader) -> bool {
 }
 
 fn allocate_uint8array_chunk(bytes: &[u8]) -> f64 {
-    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
-    crate::buffer::mark_as_uint8array(buf as usize);
-    unsafe {
-        (*buf).length = bytes.len() as u32;
-        if !bytes.is_empty() {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                crate::buffer::buffer_data_mut(buf),
-                bytes.len(),
-            );
-        }
-    }
-    f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
+    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Uint8Array, bytes)
 }
 
 fn read_filehandle_webstream_chunk(fd: i32) -> Option<Vec<u8>> {
@@ -1274,19 +1262,9 @@ pub(crate) extern "C" fn filehandle_read_file_impl(
             return promise_rejected_fs(unsafe { build_fs_error_value_no_path(&err, "read") });
         }
         if read_file_encoding(encoding).is_none() {
-            let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
-            if !buf.is_null() {
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        bytes.as_ptr(),
-                        crate::buffer::buffer_data_mut(buf),
-                        bytes.len(),
-                    );
-                    (*buf).length = bytes.len() as u32;
-                }
-            }
-            promise_value_fs(f64::from_bits(
-                crate::value::JSValue::pointer(buf as *const u8).bits(),
+            promise_value_fs(crate::buffer::bytes::from_slice(
+                crate::buffer::bytes::Brand::Buffer,
+                &bytes,
             ))
         } else {
             let s = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
@@ -1353,8 +1331,12 @@ pub(crate) extern "C" fn filehandle_read_impl(
                 let actual_buffer = options_field_value(buffer, b"buffer")
                     .map(|v| f64::from_bits(v.bits()))
                     .unwrap_or_else(|| {
-                        let buf = crate::buffer::js_buffer_alloc(16 * 1024, 0);
-                        f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
+                        crate::buffer::bytes::new_bytes(
+                            crate::buffer::bytes::Brand::Buffer,
+                            16 * 1024,
+                            crate::buffer::bytes::Init::Zero,
+                        )
+                        .0
                     });
                 let buffer_len = buffer_len_from_value(actual_buffer) as f64;
                 let actual_offset = options_number_field(buffer, b"offset").unwrap_or(0.0);

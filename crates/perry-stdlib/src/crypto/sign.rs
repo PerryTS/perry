@@ -48,7 +48,7 @@ pub unsafe extern "C" fn js_crypto_hmac_sha256_bytes(
     let data = bytes_from_ptr(data_ptr);
     let mut mac = match HmacSha256::new_from_slice(&key) {
         Ok(m) => m,
-        Err(_) => return perry_runtime::buffer::buffer_alloc(0),
+        Err(_) => return alloc_buffer_from_slice(&[]),
     };
     mac.update(&data);
     let digest = mac.finalize().into_bytes();

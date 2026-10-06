@@ -309,6 +309,10 @@ fn register(view_ptr: usize, backing_ptr: usize, offset: u32) {
 /// Backings are old/non-moving; exposing a stable slot also makes the edge
 /// visible to the collector's rewrite and verification walks.
 pub(crate) fn visit_backing_slot(addr: usize, mut visit: impl FnMut(*mut u64)) {
+    #[cfg(test)]
+    if super::bytes::b4_sabotage("view_edge") {
+        return;
+    }
     let updated = VIEW_REGISTRY.with(|r| {
         r.borrow_mut().get_mut(&addr).and_then(|rec| {
             let previous = rec.info.backing;

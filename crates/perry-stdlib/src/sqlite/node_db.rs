@@ -6,10 +6,7 @@
 use super::*;
 use crate::common::{get_handle, register_handle, Handle};
 use perry_runtime::{
-    buffer::{
-        buffer_alloc, buffer_data, buffer_data_mut, is_any_array_buffer, is_data_view,
-        is_registered_buffer, mark_as_uint8array, BufferHeader,
-    },
+    buffer::{is_any_array_buffer, is_data_view, is_registered_buffer, BufferHeader},
     js_array_alloc, js_array_push, js_get_string_pointer_unified, js_nanbox_pointer,
     js_object_alloc_with_shape, js_object_set_field, js_string_from_bytes, ArrayHeader, JSValue,
     ObjectHeader, StringHeader,
@@ -210,12 +207,15 @@ pub(crate) unsafe fn sqlite_serialize_to_buffer(
         throw_sqlite_error_from_db(db);
     }
     let len = size as usize;
-    let buffer = buffer_alloc(len as u32);
-    (*buffer).length = len as u32;
-    mark_as_uint8array(buffer as usize);
-    if len > 0 {
-        std::ptr::copy_nonoverlapping(image, buffer_data_mut(buffer), len);
-    }
+    let buffer = JSValue::from_bits(
+        perry_runtime::buffer::bytes::from_slice(
+            perry_runtime::buffer::bytes::Brand::Uint8Array,
+            std::slice::from_raw_parts(image, len),
+        )
+        .to_bits(),
+    )
+    .as_pointer::<perry_runtime::buffer::BufferHeader>()
+    .cast_mut();
     ffi::sqlite3_free(image.cast());
     buffer
 }
@@ -225,18 +225,17 @@ pub(crate) unsafe fn sqlite_image_bytes(image_value: f64) -> Vec<u8> {
     let raw = raw_addr_from_value(image_value);
     let bytes = if perry_runtime::typedarray::lookup_typed_array_kind(raw)
         == Some(perry_runtime::typedarray::KIND_UINT8)
+        || (raw >= 0x1000
+            && is_registered_buffer(raw)
+            && !is_any_array_buffer(raw)
+            && !is_data_view(raw))
     {
-        perry_runtime::typedarray::typed_array_bytes(
-            raw as *const perry_runtime::typedarray::TypedArrayHeader,
-        )
-        .map(ToOwned::to_owned)
-    } else if raw >= 0x1000
-        && is_registered_buffer(raw)
-        && !is_any_array_buffer(raw)
-        && !is_data_view(raw)
-    {
-        let buffer = raw as *const BufferHeader;
-        Some(std::slice::from_raw_parts(buffer_data(buffer), (*buffer).length as usize).to_vec())
+        perry_runtime::buffer::bytes::no_gc(|scope| {
+            let value = f64::from_bits(JSValue::pointer(raw as *const u8).bits());
+            perry_runtime::buffer::bytes::bytes(value, scope)
+                .ok()
+                .map(<[u8]>::to_vec)
+        })
     } else {
         None
     }

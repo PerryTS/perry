@@ -421,26 +421,21 @@ pub extern "C" fn perry_updater_sha256_buffer(buf_ptr: i64) -> *mut BufferHeader
     if buf_ptr == 0 {
         return std::ptr::null_mut();
     }
-    unsafe {
-        let buf = buf_ptr as *const BufferHeader;
-        let len = (*buf).length as usize;
-        let data =
-            perry_runtime::buffer::buffer_data(buf as *const perry_runtime::buffer::BufferHeader);
-        let bytes = std::slice::from_raw_parts(data, len);
-
-        let mut hasher = Sha256::new();
-        hasher.update(bytes);
-        let digest = hasher.finalize();
-
-        let out = perry_runtime::buffer::buffer_alloc(32);
-        if out.is_null() {
-            return out;
-        }
-        (*out).length = 32;
-        let dst = perry_runtime::buffer::buffer_data_mut(out);
-        std::ptr::copy_nonoverlapping(digest.as_ptr(), dst, 32);
-        out
-    }
+    let value = perry_runtime::value::js_nanbox_pointer(buf_ptr);
+    let digest = perry_runtime::buffer::bytes::no_gc(|scope| {
+        let bytes = perry_runtime::buffer::bytes::bytes(value, scope).ok()?;
+        Some(Sha256::digest(bytes))
+    });
+    let Some(digest) = digest else {
+        return std::ptr::null_mut();
+    };
+    let output = perry_runtime::buffer::bytes::from_slice(
+        perry_runtime::buffer::bytes::Brand::Buffer,
+        &digest,
+    );
+    perry_runtime::value::JSValue::from_bits(output.to_bits())
+        .as_pointer::<BufferHeader>()
+        .cast_mut()
 }
 
 #[cfg(test)]

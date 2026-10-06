@@ -644,35 +644,7 @@ pub fn stdin_chunk_jsvalue(chunk: &[u8]) -> f64 {
         let decoded = stdin_decode_encoded(chunk).unwrap_or_default();
         return string_jsvalue(&decoded);
     }
-    let buf = crate::buffer::buffer_alloc(chunk.len() as u32);
-    unsafe {
-        // #9399: `buffer_alloc` only reserves CAPACITY — it leaves `length` at
-        // 0, and every other caller sets the length itself after filling the
-        // payload. This one never did, so a `data` chunk delivered as a Buffer
-        // (Node's default, i.e. whenever `setEncoding` has NOT been called)
-        // arrived with `.length === 0`: the bytes were copied into the payload
-        // but no consumer could see them. `chunk.toString()` was `""`,
-        // `Buffer.concat([acc, chunk])` appended nothing, and
-        // `JSON.stringify(chunk)` reported `{"type":"Buffer","data":[]}`.
-        //
-        // That is why claude-code's MCP stdio server answered nothing: its
-        // transport does `readBuffer.append(chunk)` on raw (unencoded) chunks,
-        // so the newline-delimited JSON-RPC framer never saw a single byte and
-        // `readMessage()` returned null forever. The `setEncoding("utf8")`
-        // branch above was unaffected, which is why the string path looked fine.
-        (*buf).length = chunk.len() as u32;
-        let dst = crate::buffer::buffer_data_mut(buf);
-        if !dst.is_null() && !chunk.is_empty() {
-            // GC_STORE_AUDIT(POINTER_FREE): raw stdin bytes into a freshly
-            // allocated Buffer's data area. The payload is bytes, never
-            // JSValues, so the destination slots hold no GC references and no
-            // write barrier is required. `buffer_alloc` returns before any
-            // safepoint, so `dst` cannot have been moved between the
-            // allocation and this copy.
-            std::ptr::copy_nonoverlapping(chunk.as_ptr(), dst, chunk.len());
-        }
-    }
-    f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
+    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, chunk)
 }
 
 /// `process.stdin.setEncoding(enc)`. Was a no-op stub, which forced every `data`

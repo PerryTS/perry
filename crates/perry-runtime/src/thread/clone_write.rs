@@ -569,12 +569,13 @@ impl Writer<'_> {
                 if let Err(seen) = self.begin(Some(addr)) {
                     return seen;
                 }
-                return SerializedValue::Uint8Array(view_bytes(
-                    crate::buffer::buffer_data(header),
-                    length as usize,
-                ));
+                return SerializedValue::Uint8Array(crate::buffer::bytes::no_gc(|scope| {
+                    crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(addr as i64), scope)
+                        .map(<[u8]>::to_vec)
+                        .unwrap_or_default()
+                }));
             }
-            return self.visible_bytes_view(addr, kind, crate::buffer::buffer_data(header), length);
+            return self.visible_bytes_view(addr, kind, length);
         }
         if let Err(seen) = self.begin(Some(addr)) {
             return seen;
@@ -600,7 +601,7 @@ impl Writer<'_> {
         }
         if self.mode == CloneMode::Thread {
             let bytes = length * crate::typedarray::elem_size_for_kind(kind) as u32;
-            return self.visible_bytes_view(addr, kind, crate::typedarray::data_ptr(ta), bytes);
+            return self.visible_bytes_view(addr, kind, bytes);
         }
         if let Err(seen) = self.begin(Some(addr)) {
             return seen;
@@ -624,7 +625,6 @@ impl Writer<'_> {
         &mut self,
         addr: usize,
         kind: u8,
-        data: *const u8,
         byte_len: u32,
     ) -> SerializedValue {
         if let Err(seen) = self.begin(Some(addr)) {
@@ -638,9 +638,12 @@ impl Writer<'_> {
         };
         SerializedValue::View {
             kind,
-            buffer: Box::new(SerializedValue::ArrayBuffer(view_bytes(
-                data,
-                byte_len as usize,
+            buffer: Box::new(SerializedValue::ArrayBuffer(crate::buffer::bytes::no_gc(
+                |scope| {
+                    crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(addr as i64), scope)
+                        .map(<[u8]>::to_vec)
+                        .unwrap_or_default()
+                },
             ))),
             byte_offset: 0,
             length: byte_len / elem,
@@ -665,17 +668,11 @@ impl Writer<'_> {
                 crate::buffer::TransferredBacking::pending(backing, length),
             );
         }
-        let bytes = if let Some(kind) = crate::typedarray::lookup_typed_array_kind(backing) {
-            let ta = backing as *const crate::typedarray::TypedArrayHeader;
-            let len = (*ta).length as usize * crate::typedarray::elem_size_for_kind(kind);
-            view_bytes(crate::typedarray::data_ptr(ta), len)
-        } else {
-            let header = backing as *const crate::buffer::BufferHeader;
-            view_bytes(
-                crate::buffer::buffer_data(header),
-                (*header).length as usize,
-            )
-        };
+        let bytes = crate::buffer::bytes::no_gc(|scope| {
+            crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(backing as i64), scope)
+                .map(<[u8]>::to_vec)
+                .unwrap_or_default()
+        });
         SerializedValue::ArrayBuffer(bytes)
     }
 
@@ -767,12 +764,5 @@ impl Writer<'_> {
 unsafe fn string_bytes(ptr: *const crate::string::StringHeader) -> Vec<u8> {
     let len = (*ptr).byte_len as usize;
     let data = (ptr as *const u8).add(std::mem::size_of::<crate::string::StringHeader>());
-    std::slice::from_raw_parts(data, len).to_vec()
-}
-
-unsafe fn view_bytes(data: *const u8, len: usize) -> Vec<u8> {
-    if len == 0 || data.is_null() {
-        return Vec::new();
-    }
     std::slice::from_raw_parts(data, len).to_vec()
 }

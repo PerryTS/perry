@@ -60,14 +60,12 @@ pub(super) use ml_kem::pkcs8::{
 };
 
 pub(super) use perry_runtime::{
-    buffer::{buffer_data_mut, is_registered_buffer, BufferHeader},
+    buffer::{is_registered_buffer, BufferHeader},
     js_object_alloc, js_object_set_field_by_name, js_promise_resolved, JSValue, Promise,
     StringHeader,
 };
 
 extern "C" {
-    fn js_buffer_alloc_unsafe(size: i32) -> *mut BufferHeader;
-    fn js_buffer_mark_as_uint8array_external(addr: usize);
     fn js_buffer_mark_as_crypto_key_external(
         addr: usize,
         algo: u8,
@@ -81,8 +79,13 @@ extern "C" {
 
 /// Resolve inline, shared-view, and foreign-backed buffer storage.
 #[inline]
-pub(super) unsafe fn buffer_payload(buf: *const BufferHeader) -> *const u8 {
-    perry_runtime::buffer::buffer_data(buf as *const perry_runtime::buffer::BufferHeader)
+pub(super) unsafe fn buffer_payload_copy(addr: usize) -> Vec<u8> {
+    perry_runtime::buffer::bytes::no_gc(|scope| {
+        let value = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+        perry_runtime::buffer::bytes::bytes(value, scope)
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default()
+    })
 }
 
 // #854: NaN-boxing tag contract — see CLAUDE.md. `POINTER_TAG`,
@@ -515,18 +518,10 @@ pub(super) unsafe fn bytes_from_jsvalue(bits: u64) -> Vec<u8> {
     if raw < 0x1000 {
         return Vec::new();
     }
-    if is_registered_buffer(raw) {
-        let buf = raw as *const BufferHeader;
-        let len = (*buf).length as usize;
-        return std::slice::from_raw_parts(buffer_payload(buf), len).to_vec();
-    }
-    if let Some(_kind) = perry_runtime::typedarray::lookup_typed_array_kind(raw) {
-        // BufferSource can be any TypedArray. Native arena views keep their
-        // bytes out-of-line, so route through the typed-array byte helper.
-        let ta = raw as *const perry_runtime::typedarray::TypedArrayHeader;
-        if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(ta) {
-            return bytes.to_vec();
-        }
+    if is_registered_buffer(raw)
+        || perry_runtime::typedarray::lookup_typed_array_kind(raw).is_some()
+    {
+        return buffer_payload_copy(raw);
     }
     if top16 == 0x7FFF {
         let hdr = raw as *const StringHeader;
@@ -944,20 +939,15 @@ pub(super) fn require_usage(
 /// Allocate a fresh Buffer marked as Uint8Array (so `instanceof Uint8Array`
 /// is true and `new Uint8Array(buf)` memcpy's correctly), copy `bytes` in.
 pub(super) unsafe fn alloc_uint8array_from_slice(bytes: &[u8]) -> *mut BufferHeader {
-    // Allocate through the runtime provider's C ABI. A separately packaged
-    // stdlib must not depend on registering a Rust-allocated cell afterwards.
-    // A negative size makes the runtime raise its ordinary allocation error.
-    let buf = js_buffer_alloc_unsafe(i32::try_from(bytes.len()).unwrap_or(-1));
-    if buf.is_null() {
-        return buf;
-    }
-    (*buf).length = bytes.len() as u32;
-    if !bytes.is_empty() {
-        let dst = buffer_data_mut(buf);
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len());
-    }
-    js_buffer_mark_as_uint8array_external(buf as usize);
-    buf
+    JSValue::from_bits(
+        perry_runtime::buffer::bytes::from_slice(
+            perry_runtime::buffer::bytes::Brand::Uint8Array,
+            bytes,
+        )
+        .to_bits(),
+    )
+    .as_pointer::<perry_runtime::buffer::BufferHeader>()
+    .cast_mut()
 }
 
 /// Wrap a heap value (NaN-boxed bits) in an already-resolved Promise.

@@ -84,7 +84,9 @@ fn a_wider_typed_array_is_written_as_its_raw_element_bytes() {
 fn an_empty_view_is_an_empty_chunk_and_an_arraybuffer_is_not_a_chunk() {
     let empty = js_uint8array_alloc(0);
     assert_eq!(
-        binary_chunk_span(pointer_value(empty)).map(|s| s.1),
+        crate::buffer::bytes::no_gc(
+            |scope| binary_chunk_span(pointer_value(empty), scope).map(<[u8]>::len)
+        ),
         Some(0)
     );
     assert!(written(pointer_value(empty), UNDEFINED).is_empty());
@@ -92,9 +94,19 @@ fn an_empty_view_is_an_empty_chunk_and_an_arraybuffer_is_not_a_chunk() {
     // Node rejects an ArrayBuffer chunk; perry keeps writing its display text
     // rather than its bytes, so it must not be classified as binary.
     let array_buffer = js_array_buffer_new(4);
-    assert!(binary_chunk_span(pointer_value(array_buffer)).is_none());
-    assert!(binary_chunk_span(UNDEFINED).is_none());
-    assert!(binary_chunk_span(42.0).is_none());
+    assert!(crate::buffer::bytes::no_gc(|scope| binary_chunk_span(
+        pointer_value(array_buffer),
+        scope
+    )
+    .is_none()));
+    assert!(crate::buffer::bytes::no_gc(|scope| binary_chunk_span(
+        UNDEFINED, scope
+    )
+    .is_none()));
+    assert!(crate::buffer::bytes::no_gc(|scope| binary_chunk_span(
+        42.0, scope
+    )
+    .is_none()));
 }
 
 #[test]

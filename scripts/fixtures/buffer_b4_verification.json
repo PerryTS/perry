@@ -1,0 +1,1546 @@
+{
+  "main_sha": "81e65f33ebdc72d75431b03427dcbfb2f153d7b1",
+  "b1_sha": "f3e59107868b737b3b5646a7d0b19dc4f9193f8f",
+  "production_head_sha": "48205175a7163f0a2f5b129e5ef37b9c4e8a5960",
+  "crate_tests": {
+    "main": {
+      "perry_codegen-c94dd17e69627274": {
+        "label": "unittests src/lib.rs",
+        "status": 0,
+        "summary": "test result: ok. 2048 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 11.89s"
+      },
+      "app_window_config_options-05f98175cfec6237": {
+        "label": "tests/app_window_config_options.rs",
+        "status": 0,
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      },
+      "argless_builtin_extra_args-d7669281c451d754": {
+        "label": "tests/argless_builtin_extra_args.rs",
+        "status": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "class_field_store_pointer_test-edcc861a03aa88ec": {
+        "label": "tests/class_field_store_pointer_test.rs",
+        "status": 0,
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      },
+      "class_keys_gc_root-118736334d3153dc": {
+        "label": "tests/class_keys_gc_root.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "concat_site_agent_ownership-4ac2dff02eb8d850": {
+        "label": "tests/concat_site_agent_ownership.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "constructor_recursion-cbc0663bfc4a100f": {
+        "label": "tests/constructor_recursion.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "crypto_hash_chain_lowering-8bb5a16803c13a3a": {
+        "label": "tests/crypto_hash_chain_lowering.rs",
+        "status": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "destructure_call_location-64fc499bbc987cf2": {
+        "label": "tests/destructure_call_location.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "error_subclass_field_init-9f619e0025d96637": {
+        "label": "tests/error_subclass_field_init.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "export_function_alias_identity-cf12142d96150090": {
+        "label": "tests/export_function_alias_identity.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "generated_inline_budget-631613267b78bf0e": {
+        "label": "tests/generated_inline_budget.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "i64_spec_ternary_recursion-5b5c298dc0f99f7e": {
+        "label": "tests/i64_spec_ternary_recursion.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "ios_platform_api_lowering-9ea86199fbccadc0": {
+        "label": "tests/ios_platform_api_lowering.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "large_object_barriers-210694df18f719e4": {
+        "label": "tests/large_object_barriers.rs",
+        "status": 0,
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s"
+      },
+      "loop_safepoint_purity-0f4e87372d35090e": {
+        "label": "tests/loop_safepoint_purity.rs",
+        "status": 0,
+        "summary": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      },
+      "macos_bundle_chdir_gate-19b20a4da1db9053": {
+        "label": "tests/macos_bundle_chdir_gate.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      },
+      "manifest_consistency-89591c572a3a8998": {
+        "label": "tests/manifest_consistency.rs",
+        "status": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "namespace_getter_binding_identity-d7d38eb4d8d25a11": {
+        "label": "tests/namespace_getter_binding_identity.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "native_proof_buffer_views-bd88acc5aaef6e6f": {
+        "label": "tests/native_proof_buffer_views.rs",
+        "status": 0,
+        "summary": "test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s"
+      },
+      "native_proof_regressions-b686140e8146b3d4": {
+        "label": "tests/native_proof_regressions.rs",
+        "status": 0,
+        "summary": "test result: ok. 292 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s"
+      },
+      "node_test_mock_property_presence-67d83caaef19300c": {
+        "label": "tests/node_test_mock_property_presence.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "padding_single_evaluation-cf8a276a20c82897": {
+        "label": "tests/padding_single_evaluation.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "perry_builtin_name_collision-8e678e9363c1e7cf": {
+        "label": "tests/perry_builtin_name_collision.rs",
+        "status": 0,
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "private_guard_declaring_class-c5ff65e19ecfc60d": {
+        "label": "tests/private_guard_declaring_class.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "release_boxes_lowering-fe5576a73ed2fa0d": {
+        "label": "tests/release_boxes_lowering.rs",
+        "status": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "scalar_replaced_slot_roots-e1862c2fe8147f6c": {
+        "label": "tests/scalar_replaced_slot_roots.rs",
+        "status": 0,
+        "summary": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      },
+      "shadow_slot_hygiene-08af2754685742df": {
+        "label": "tests/shadow_slot_hygiene.rs",
+        "status": 0,
+        "summary": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      },
+      "size_function_attributes-d108c413c7250ca7": {
+        "label": "tests/size_function_attributes.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "spec_abi_typed_array_local_length-4c2655249ce3132d": {
+        "label": "tests/spec_abi_typed_array_local_length.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "static_symbol_hygiene-51b4ed38f3de09fb": {
+        "label": "tests/static_symbol_hygiene.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "string_array_length_9160-0be40372b3449c34": {
+        "label": "tests/string_array_length_9160.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "system_boolean_result-ba22785dca8188a6": {
+        "label": "tests/system_boolean_result.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "temp_root_operand_temporaries-3f3f906266bc47ef": {
+        "label": "tests/temp_root_operand_temporaries.rs",
+        "status": 0,
+        "summary": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s"
+      },
+      "thread_agent_strings-cac345d201c61e82": {
+        "label": "tests/thread_agent_strings.rs",
+        "status": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      },
+      "thread_immutable_globals-bdae12f87c9ae42e": {
+        "label": "tests/thread_immutable_globals.rs",
+        "status": 0,
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "typed_array_rmw_8692-7ca06bdc5e8ef133": {
+        "label": "tests/typed_array_rmw_8692.rs",
+        "status": 0,
+        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      },
+      "typed_array_update_lowering-45f429de5471d19a": {
+        "label": "tests/typed_array_update_lowering.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s"
+      },
+      "typed_collection_receiver_guard-d57e8f92a1afd991": {
+        "label": "tests/typed_collection_receiver_guard.rs",
+        "status": 0,
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "typed_feedback-a8afaec949e4585d": {
+        "label": "tests/typed_feedback.rs",
+        "status": 0,
+        "summary": "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s"
+      },
+      "typed_shape_descriptor-b6cf15815b5d4d0f": {
+        "label": "tests/typed_shape_descriptor.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "typed_shape_descriptors-f42849a5e7644c57": {
+        "label": "tests/typed_shape_descriptors.rs",
+        "status": 0,
+        "summary": "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      },
+      "ui_i64_boolean_args-60b7463d692b0387": {
+        "label": "tests/ui_i64_boolean_args.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "widget_max_width-71f05c0ad58cf73b": {
+        "label": "tests/widget_max_width.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "perry_runtime-cf583210c4de02a0": {
+        "label": "unittests src/lib.rs",
+        "status": 0,
+        "summary": "test result: ok. 5155 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 17.06s"
+      },
+      "android_tls_pool-b7ff72bbb0b43602": {
+        "label": "tests/android_tls_pool.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "perry_stdlib-e923086162fefa1c": {
+        "label": "unittests src/lib.rs",
+        "status": 101,
+        "summary": "test result: FAILED. 251 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.11s"
+      },
+      "container_backend_selection-c379875825346956": {
+        "label": "tests/container_backend_selection.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "container_capability_tests-973c7c5ce6beff91": {
+        "label": "tests/container_capability_tests.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "container_extra_tests-48991cd24959dbf9": {
+        "label": "tests/container_extra_tests.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "container_ffi_tests-aaa51817b427053e": {
+        "label": "tests/container_ffi_tests.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "container_props-4cca50136e1af9ee": {
+        "label": "tests/container_props.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "container_verification_tests-c7fd3f7f300b28fc": {
+        "label": "tests/container_verification_tests.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "container_workspace_invariants-5395daf84df5c0c7": {
+        "label": "tests/container_workspace_invariants.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      }
+    },
+    "head": {
+      "perry_codegen-c94dd17e69627274": {
+        "label": "unittests src/lib.rs",
+        "status": 0,
+        "summary": "test result: ok. 2048 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 12.50s"
+      },
+      "app_window_config_options-05f98175cfec6237": {
+        "label": "tests/app_window_config_options.rs",
+        "status": 0,
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      },
+      "argless_builtin_extra_args-d7669281c451d754": {
+        "label": "tests/argless_builtin_extra_args.rs",
+        "status": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "class_field_store_pointer_test-edcc861a03aa88ec": {
+        "label": "tests/class_field_store_pointer_test.rs",
+        "status": 0,
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      },
+      "class_keys_gc_root-118736334d3153dc": {
+        "label": "tests/class_keys_gc_root.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "concat_site_agent_ownership-4ac2dff02eb8d850": {
+        "label": "tests/concat_site_agent_ownership.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "constructor_recursion-cbc0663bfc4a100f": {
+        "label": "tests/constructor_recursion.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "crypto_hash_chain_lowering-8bb5a16803c13a3a": {
+        "label": "tests/crypto_hash_chain_lowering.rs",
+        "status": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "destructure_call_location-64fc499bbc987cf2": {
+        "label": "tests/destructure_call_location.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "error_subclass_field_init-9f619e0025d96637": {
+        "label": "tests/error_subclass_field_init.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "export_function_alias_identity-cf12142d96150090": {
+        "label": "tests/export_function_alias_identity.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "generated_inline_budget-631613267b78bf0e": {
+        "label": "tests/generated_inline_budget.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "i64_spec_ternary_recursion-5b5c298dc0f99f7e": {
+        "label": "tests/i64_spec_ternary_recursion.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "ios_platform_api_lowering-9ea86199fbccadc0": {
+        "label": "tests/ios_platform_api_lowering.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "large_object_barriers-210694df18f719e4": {
+        "label": "tests/large_object_barriers.rs",
+        "status": 0,
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s"
+      },
+      "loop_safepoint_purity-0f4e87372d35090e": {
+        "label": "tests/loop_safepoint_purity.rs",
+        "status": 0,
+        "summary": "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      },
+      "macos_bundle_chdir_gate-19b20a4da1db9053": {
+        "label": "tests/macos_bundle_chdir_gate.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      },
+      "manifest_consistency-89591c572a3a8998": {
+        "label": "tests/manifest_consistency.rs",
+        "status": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "namespace_getter_binding_identity-d7d38eb4d8d25a11": {
+        "label": "tests/namespace_getter_binding_identity.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "native_proof_buffer_views-bd88acc5aaef6e6f": {
+        "label": "tests/native_proof_buffer_views.rs",
+        "status": 0,
+        "summary": "test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s"
+      },
+      "native_proof_regressions-b686140e8146b3d4": {
+        "label": "tests/native_proof_regressions.rs",
+        "status": 0,
+        "summary": "test result: ok. 292 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.19s"
+      },
+      "node_test_mock_property_presence-67d83caaef19300c": {
+        "label": "tests/node_test_mock_property_presence.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "padding_single_evaluation-cf8a276a20c82897": {
+        "label": "tests/padding_single_evaluation.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "perry_builtin_name_collision-8e678e9363c1e7cf": {
+        "label": "tests/perry_builtin_name_collision.rs",
+        "status": 0,
+        "summary": "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "private_guard_declaring_class-c5ff65e19ecfc60d": {
+        "label": "tests/private_guard_declaring_class.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "release_boxes_lowering-fe5576a73ed2fa0d": {
+        "label": "tests/release_boxes_lowering.rs",
+        "status": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "scalar_replaced_slot_roots-e1862c2fe8147f6c": {
+        "label": "tests/scalar_replaced_slot_roots.rs",
+        "status": 0,
+        "summary": "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      },
+      "shadow_slot_hygiene-08af2754685742df": {
+        "label": "tests/shadow_slot_hygiene.rs",
+        "status": 0,
+        "summary": "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      },
+      "size_function_attributes-d108c413c7250ca7": {
+        "label": "tests/size_function_attributes.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "spec_abi_typed_array_local_length-4c2655249ce3132d": {
+        "label": "tests/spec_abi_typed_array_local_length.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "static_symbol_hygiene-51b4ed38f3de09fb": {
+        "label": "tests/static_symbol_hygiene.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "string_array_length_9160-0be40372b3449c34": {
+        "label": "tests/string_array_length_9160.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "system_boolean_result-ba22785dca8188a6": {
+        "label": "tests/system_boolean_result.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "temp_root_operand_temporaries-3f3f906266bc47ef": {
+        "label": "tests/temp_root_operand_temporaries.rs",
+        "status": 0,
+        "summary": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s"
+      },
+      "thread_agent_strings-cac345d201c61e82": {
+        "label": "tests/thread_agent_strings.rs",
+        "status": 0,
+        "summary": "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      },
+      "thread_immutable_globals-bdae12f87c9ae42e": {
+        "label": "tests/thread_immutable_globals.rs",
+        "status": 0,
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "typed_array_rmw_8692-7ca06bdc5e8ef133": {
+        "label": "tests/typed_array_rmw_8692.rs",
+        "status": 0,
+        "summary": "test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      },
+      "typed_array_update_lowering-45f429de5471d19a": {
+        "label": "tests/typed_array_update_lowering.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s"
+      },
+      "typed_collection_receiver_guard-d57e8f92a1afd991": {
+        "label": "tests/typed_collection_receiver_guard.rs",
+        "status": 0,
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "typed_feedback-a8afaec949e4585d": {
+        "label": "tests/typed_feedback.rs",
+        "status": 0,
+        "summary": "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s"
+      },
+      "typed_shape_descriptor-b6cf15815b5d4d0f": {
+        "label": "tests/typed_shape_descriptor.rs",
+        "status": 0,
+        "summary": "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "typed_shape_descriptors-f42849a5e7644c57": {
+        "label": "tests/typed_shape_descriptors.rs",
+        "status": 0,
+        "summary": "test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+      },
+      "ui_i64_boolean_args-60b7463d692b0387": {
+        "label": "tests/ui_i64_boolean_args.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "widget_max_width-71f05c0ad58cf73b": {
+        "label": "tests/widget_max_width.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      },
+      "perry_runtime-cf583210c4de02a0": {
+        "label": "unittests src/lib.rs",
+        "status": 0,
+        "summary": "test result: ok. 5168 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 17.19s"
+      },
+      "android_tls_pool-b7ff72bbb0b43602": {
+        "label": "tests/android_tls_pool.rs",
+        "status": 0,
+        "summary": "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "perry_stdlib-e923086162fefa1c": {
+        "label": "unittests src/lib.rs",
+        "status": 101,
+        "summary": "test result: FAILED. 258 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.20s"
+      },
+      "container_backend_selection-c379875825346956": {
+        "label": "tests/container_backend_selection.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "container_capability_tests-973c7c5ce6beff91": {
+        "label": "tests/container_capability_tests.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "container_extra_tests-48991cd24959dbf9": {
+        "label": "tests/container_extra_tests.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "container_ffi_tests-aaa51817b427053e": {
+        "label": "tests/container_ffi_tests.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "container_props-4cca50136e1af9ee": {
+        "label": "tests/container_props.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "container_verification_tests-c7fd3f7f300b28fc": {
+        "label": "tests/container_verification_tests.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      },
+      "container_workspace_invariants-5395daf84df5c0c7": {
+        "label": "tests/container_workspace_invariants.rs",
+        "status": 0,
+        "summary": "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s"
+      }
+    }
+  },
+  "crate_totals": {
+    "main": {
+      "runtime": {
+        "passed": 5156,
+        "failed": 0,
+        "ignored": 5,
+        "binaries": 2
+      },
+      "stdlib": {
+        "passed": 251,
+        "failed": 2,
+        "ignored": 0,
+        "binaries": 8
+      },
+      "codegen": {
+        "passed": 2564,
+        "failed": 0,
+        "ignored": 1,
+        "binaries": 44
+      }
+    },
+    "head": {
+      "runtime": {
+        "passed": 5169,
+        "failed": 0,
+        "ignored": 5,
+        "binaries": 2
+      },
+      "stdlib": {
+        "passed": 258,
+        "failed": 2,
+        "ignored": 0,
+        "binaries": 8
+      },
+      "codegen": {
+        "passed": 2564,
+        "failed": 0,
+        "ignored": 1,
+        "binaries": 44
+      }
+    }
+  },
+  "gap": {
+    "main": {
+      "test_gap_10089_dataview_setter_fast_path": "pass",
+      "test_gap_10309_zlib_async_options": "pass",
+      "test_gap_10426_buffer_prototype_shape": "pass",
+      "test_gap_10427_webcrypto_method_identity": "pass",
+      "test_gap_10446_typed_collection_receiver": "pass",
+      "test_gap_10472_crypto_sign_verify_encoding": "pass",
+      "test_gap_10473_crypto_digest_latin1": "pass",
+      "test_gap_10513_untyped_array_element_access": "pass",
+      "test_gap_10515_u8_untyped_store": "pass",
+      "test_gap_10516_typed_view_storage": "pass",
+      "test_gap_10524_untyped_array_destructuring": "pass",
+      "test_gap_10810_zlib_default_compression": "pass",
+      "test_gap_10873_resizable_arraybuffer": "pass",
+      "test_gap_10894_typed_array_generic_annotation": "pass",
+      "test_gap_10927_arraybuffer_string": "pass",
+      "test_gap_11046_crypto_inventory_dynamic_receiver": "pass",
+      "test_gap_11174_http_runtime_defaults": "pass",
+      "test_gap_11193_buffer_species_fastbuffer": "pass",
+      "test_gap_11239_buffer_view_predicates": "pass",
+      "test_gap_11291_buffer_write_args": "pass",
+      "test_gap_11300_typed_emitter_param_dispatch": "pass",
+      "test_gap_11340_worker_net_events": "pass",
+      "test_gap_11430_buffer_write_short_string": "pass",
+      "test_gap_11430_crypto_short_string_args": "pass",
+      "test_gap_11447_crypto_sign_dispatch": "pass",
+      "test_gap_11447_crypto_sign_followups": "pass",
+      "test_gap_11519_buffer_options_short_strings": "pass",
+      "test_gap_11519_date_typedarray_short_strings": "pass",
+      "test_gap_11519_http_short_strings": "pass",
+      "test_gap_11519_net_url_short_strings": "pass",
+      "test_gap_11620_zlib_stream_for_await": "pass",
+      "test_gap_11810_typed_array_alias_view": "pass",
+      "test_gap_11837_export_alias_shadows_local_function": "pass",
+      "test_gap_11875_proxy_array_typed_param": "pass",
+      "test_gap_11891_proxy_array_typed_write": "pass",
+      "test_gap_11973_stale_array_length_typed_copy": "pass",
+      "test_gap_12094_buffer_param_views": "pass",
+      "test_gap_3146_spec_throws": "pass",
+      "test_gap_3527_http_ctor_prototype": "pass",
+      "test_gap_3657_dataview_ctor_validation": "pass",
+      "test_gap_3662_typedarray_length": "pass",
+      "test_gap_4103_typedarray_view_validation": "pass",
+      "test_gap_5437_class_ref_shadows_captured_local": "pass",
+      "test_gap_6386_dataview_concat_regex_fastpaths": "pass",
+      "test_gap_6486_typedarray_from_grown_array": "pass",
+      "test_gap_6924_extends_buffer_statics": "pass",
+      "test_gap_7153_class_typed_nullish_field_read": "pass",
+      "test_gap_7220_typed_array_named_getter_pointer": "pass",
+      "test_gap_7640_computed_key_windows": "pass",
+      "test_gap_9408_multiline_anchors_lineterminators": "pass",
+      "test_gap_9421_write_file_sync_throws": "pass",
+      "test_gap_9782_specialized_typedarray_last_use": "pass",
+      "test_gap_arraybuffer_transfer": "pass",
+      "test_gap_autoopt_zlib_properties": "pass",
+      "test_gap_buffer_b4_detach_during_zlib": "pass",
+      "test_gap_buffer_dyn_key_own_prop_6412": "pass",
+      "test_gap_buffer_ops": "pass",
+      "test_gap_buffer_own_prop_shadow_intrinsic_6405": "pass",
+      "test_gap_buffer_own_props": "pass",
+      "test_gap_buffer_pool_identity": "pass",
+      "test_gap_buffer_proto_index": "pass",
+      "test_gap_buffer_subarray_native_consumers": "pass",
+      "test_gap_buffer_subarray_shared_storage": "pass",
+      "test_gap_buffer_unknown_method_throws": "pass",
+      "test_gap_buffer_view_predicate_matrix": "pass",
+      "test_gap_buffer_views_escaped_call": "pass",
+      "test_gap_crypto_cipher_3382_3381_2954": "pass",
+      "test_gap_crypto_hash_chain_11516": "pass",
+      "test_gap_crypto_scrypt_options": "pass",
+      "test_gap_crypto_state_2944_2945_2962": "pass",
+      "test_gap_dataview_2878_2877_2879": "pass",
+      "test_gap_dataview_buffer_aliasing_7219": "pass",
+      "test_gap_fetch_streaming_tls": "pass",
+      "test_gap_for_of_untyped_map_set": "pass",
+      "test_gap_gc_http2_pending_event_callback_rooting": "pass",
+      "test_gap_gc_net_once_flags_rekey": "pass",
+      "test_gap_gc_uint8_buffer_callback_rooting": "pass",
+      "test_gap_http2_alpn_secure": "parity_fail",
+      "test_gap_http2_e2e_streams": "parity_fail",
+      "test_gap_http2_packed_nonfinite": "pass",
+      "test_gap_http2_response_drain": "pass",
+      "test_gap_http2_session_isolation": "parity_fail",
+      "test_gap_http2_settings": "pass",
+      "test_gap_http2_wire_client_ping": "parity_fail",
+      "test_gap_http2_wire_flow_control": "parity_fail",
+      "test_gap_http2_wire_frame_errors": "parity_fail",
+      "test_gap_http2_wire_goaway_recv": "parity_fail",
+      "test_gap_http2_wire_goaway_send": "parity_fail",
+      "test_gap_http2_wire_goaway_server": "parity_fail",
+      "test_gap_http2_wire_refused_stream": "parity_fail",
+      "test_gap_http2_wire_server_ping": "parity_fail",
+      "test_gap_http2_wire_server_settings": "parity_fail",
+      "test_gap_http2_wire_session_lifecycle": "parity_fail",
+      "test_gap_http2_wire_settings_ack": "parity_fail",
+      "test_gap_http_client_no_redirect_follow": "pass",
+      "test_gap_http_connection_socket_destroy": "pass",
+      "test_gap_http_overloads_3226plus": "pass",
+      "test_gap_http_req_async_iterator": "pass",
+      "test_gap_http_res_socket_writable_onfinished": "pass",
+      "test_gap_http_sequential_get_no_fd_leak": "pass",
+      "test_gap_http_server_closes_after_client_fin": "pass",
+      "test_gap_https_server_closes_after_client_fin": "pass",
+      "test_gap_native_payload_crypto_11919": "pass",
+      "test_gap_net_accepted_endpoints": "pass",
+      "test_gap_net_connect_bound_value": "pass",
+      "test_gap_net_crypto_2549_2963": "pass",
+      "test_gap_net_destroy_close_before_exit": "pass",
+      "test_gap_net_listener_this_binding": "pass",
+      "test_gap_net_socket_end_twice_callbacks": "pass",
+      "test_gap_net_socket_get_prototype_of": "pass",
+      "test_gap_net_socket_surface_cluster": "pass",
+      "test_gap_net_socket_write_return_drain": "pass",
+      "test_gap_net_unconnected_write_callbacks": "pass",
+      "test_gap_net_write_before_connect_called": "pass",
+      "test_gap_net_write_before_connect_hostname": "pass",
+      "test_gap_net_write_burst_then_end": "pass",
+      "test_gap_new_local_shadows_class": "pass",
+      "test_gap_node_crypto_buffer": "pass",
+      "test_gap_proto_write_local_shadows_class": "pass",
+      "test_gap_readable_stream_pull_throws": "pass",
+      "test_gap_regex_replace_dyn_regex_with_http": "pass",
+      "test_gap_regexp_observe_rows": "pass",
+      "test_gap_region_typed_array_copy_loops": "pass",
+      "test_gap_tls_write_backpressure_handshake": "pass",
+      "test_gap_try_entry_shadow_hot_tls": "pass",
+      "test_gap_turnloop_http2_control": "pass",
+      "test_gap_turnloop_http2_server": "pass",
+      "test_gap_turnloop_http_lifecycle": "pass",
+      "test_gap_turnloop_http_server": "pass",
+      "test_gap_turnloop_https_server": "pass",
+      "test_gap_turnloop_net_sockets": "pass",
+      "test_gap_turnloop_p9_worker_agent_net": "pass",
+      "test_gap_turnloop_ws_attached": "pass",
+      "test_gap_turnloop_ws_client": "pass",
+      "test_gap_turnloop_ws_echo_roundtrip": "pass",
+      "test_gap_turnloop_ws_frames": "pass",
+      "test_gap_turnloop_ws_server": "pass",
+      "test_gap_typed_array_compound_update": "pass",
+      "test_gap_typed_array_detach_loop": "pass",
+      "test_gap_typed_array_detach_spec_param": "pass",
+      "test_gap_typed_array_detach_u8_buffer": "pass",
+      "test_gap_typed_array_dynamic_index_access": "pass",
+      "test_gap_typed_array_guarded_view_keys": "pass",
+      "test_gap_typed_array_length_bound_region": "pass",
+      "test_gap_typed_array_length_inline": "pass",
+      "test_gap_typed_array_length_ownership": "pass",
+      "test_gap_typed_array_numeric_length": "pass",
+      "test_gap_typed_array_proto_methods": "pass",
+      "test_gap_typed_array_symbol_key": "pass",
+      "test_gap_typed_array_view_region": "pass",
+      "test_gap_typed_arrays": "pass",
+      "test_gap_typed_recv_clone_alias": "pass",
+      "test_gap_typed_view_index_reads": "pass",
+      "test_gap_typedarray_buffer_aliasing_7219": "pass",
+      "test_gap_typedarray_param_read": "pass",
+      "test_gap_typedarray_tostringtag": "pass",
+      "test_gap_untyped_param_masked_window": "pass",
+      "test_gap_untyped_string_accumulator": "pass",
+      "test_gap_webcrypto_async_threadpool": "pass",
+      "test_gap_windows_child_argv0": "pass",
+      "test_gap_windows_executable_lookup": "pass",
+      "test_gap_windows_named_pipe_backlog": "pass",
+      "test_gap_windows_named_pipe_duplex_end": "pass",
+      "test_gap_windows_named_pipe_end": "pass",
+      "test_gap_windows_paths": "pass",
+      "test_gap_windows_platform_surface": "pass",
+      "test_gap_windows_shell_quotes": "pass",
+      "test_gap_worker_zlib_stream": "parity_fail",
+      "test_gap_ws_attached_server_socket_closes": "pass",
+      "test_gap_zlib_3285_params": "pass",
+      "test_gap_zlib_4917_level": "pass",
+      "test_gap_zlib_chunk_backpressure": "pass",
+      "test_gap_zlib_fs_assert_2935_2752_2971": "pass"
+    },
+    "head": {
+      "test_gap_10089_dataview_setter_fast_path": "pass",
+      "test_gap_10309_zlib_async_options": "pass",
+      "test_gap_10426_buffer_prototype_shape": "pass",
+      "test_gap_10427_webcrypto_method_identity": "pass",
+      "test_gap_10446_typed_collection_receiver": "pass",
+      "test_gap_10472_crypto_sign_verify_encoding": "pass",
+      "test_gap_10473_crypto_digest_latin1": "pass",
+      "test_gap_10513_untyped_array_element_access": "pass",
+      "test_gap_10515_u8_untyped_store": "pass",
+      "test_gap_10516_typed_view_storage": "pass",
+      "test_gap_10524_untyped_array_destructuring": "pass",
+      "test_gap_10810_zlib_default_compression": "pass",
+      "test_gap_10873_resizable_arraybuffer": "pass",
+      "test_gap_10894_typed_array_generic_annotation": "pass",
+      "test_gap_10927_arraybuffer_string": "pass",
+      "test_gap_11046_crypto_inventory_dynamic_receiver": "pass",
+      "test_gap_11174_http_runtime_defaults": "pass",
+      "test_gap_11193_buffer_species_fastbuffer": "pass",
+      "test_gap_11239_buffer_view_predicates": "pass",
+      "test_gap_11291_buffer_write_args": "pass",
+      "test_gap_11300_typed_emitter_param_dispatch": "pass",
+      "test_gap_11340_worker_net_events": "pass",
+      "test_gap_11430_buffer_write_short_string": "pass",
+      "test_gap_11430_crypto_short_string_args": "pass",
+      "test_gap_11447_crypto_sign_dispatch": "pass",
+      "test_gap_11447_crypto_sign_followups": "pass",
+      "test_gap_11519_buffer_options_short_strings": "pass",
+      "test_gap_11519_date_typedarray_short_strings": "pass",
+      "test_gap_11519_http_short_strings": "pass",
+      "test_gap_11519_net_url_short_strings": "pass",
+      "test_gap_11620_zlib_stream_for_await": "pass",
+      "test_gap_11810_typed_array_alias_view": "pass",
+      "test_gap_11837_export_alias_shadows_local_function": "pass",
+      "test_gap_11875_proxy_array_typed_param": "pass",
+      "test_gap_11891_proxy_array_typed_write": "pass",
+      "test_gap_11973_stale_array_length_typed_copy": "pass",
+      "test_gap_12094_buffer_param_views": "pass",
+      "test_gap_3146_spec_throws": "pass",
+      "test_gap_3527_http_ctor_prototype": "pass",
+      "test_gap_3657_dataview_ctor_validation": "pass",
+      "test_gap_3662_typedarray_length": "pass",
+      "test_gap_4103_typedarray_view_validation": "pass",
+      "test_gap_5437_class_ref_shadows_captured_local": "pass",
+      "test_gap_6386_dataview_concat_regex_fastpaths": "pass",
+      "test_gap_6486_typedarray_from_grown_array": "pass",
+      "test_gap_6924_extends_buffer_statics": "pass",
+      "test_gap_7153_class_typed_nullish_field_read": "pass",
+      "test_gap_7220_typed_array_named_getter_pointer": "pass",
+      "test_gap_7640_computed_key_windows": "pass",
+      "test_gap_9408_multiline_anchors_lineterminators": "pass",
+      "test_gap_9421_write_file_sync_throws": "pass",
+      "test_gap_9782_specialized_typedarray_last_use": "pass",
+      "test_gap_arraybuffer_transfer": "pass",
+      "test_gap_autoopt_zlib_properties": "pass",
+      "test_gap_buffer_b4_detach_during_zlib": "pass",
+      "test_gap_buffer_dyn_key_own_prop_6412": "pass",
+      "test_gap_buffer_ops": "pass",
+      "test_gap_buffer_own_prop_shadow_intrinsic_6405": "pass",
+      "test_gap_buffer_own_props": "pass",
+      "test_gap_buffer_pool_identity": "pass",
+      "test_gap_buffer_proto_index": "pass",
+      "test_gap_buffer_subarray_native_consumers": "pass",
+      "test_gap_buffer_subarray_shared_storage": "pass",
+      "test_gap_buffer_unknown_method_throws": "pass",
+      "test_gap_buffer_view_predicate_matrix": "pass",
+      "test_gap_buffer_views_escaped_call": "pass",
+      "test_gap_crypto_cipher_3382_3381_2954": "pass",
+      "test_gap_crypto_hash_chain_11516": "pass",
+      "test_gap_crypto_scrypt_options": "pass",
+      "test_gap_crypto_state_2944_2945_2962": "pass",
+      "test_gap_dataview_2878_2877_2879": "pass",
+      "test_gap_dataview_buffer_aliasing_7219": "pass",
+      "test_gap_fetch_streaming_tls": "pass",
+      "test_gap_for_of_untyped_map_set": "pass",
+      "test_gap_gc_http2_pending_event_callback_rooting": "pass",
+      "test_gap_gc_net_once_flags_rekey": "pass",
+      "test_gap_gc_uint8_buffer_callback_rooting": "pass",
+      "test_gap_http2_alpn_secure": "parity_fail",
+      "test_gap_http2_e2e_streams": "parity_fail",
+      "test_gap_http2_packed_nonfinite": "pass",
+      "test_gap_http2_response_drain": "pass",
+      "test_gap_http2_session_isolation": "parity_fail",
+      "test_gap_http2_settings": "pass",
+      "test_gap_http2_wire_client_ping": "parity_fail",
+      "test_gap_http2_wire_flow_control": "parity_fail",
+      "test_gap_http2_wire_frame_errors": "parity_fail",
+      "test_gap_http2_wire_goaway_recv": "parity_fail",
+      "test_gap_http2_wire_goaway_send": "parity_fail",
+      "test_gap_http2_wire_goaway_server": "parity_fail",
+      "test_gap_http2_wire_refused_stream": "parity_fail",
+      "test_gap_http2_wire_server_ping": "parity_fail",
+      "test_gap_http2_wire_server_settings": "parity_fail",
+      "test_gap_http2_wire_session_lifecycle": "parity_fail",
+      "test_gap_http2_wire_settings_ack": "parity_fail",
+      "test_gap_http_client_no_redirect_follow": "pass",
+      "test_gap_http_connection_socket_destroy": "pass",
+      "test_gap_http_overloads_3226plus": "pass",
+      "test_gap_http_req_async_iterator": "pass",
+      "test_gap_http_res_socket_writable_onfinished": "pass",
+      "test_gap_http_sequential_get_no_fd_leak": "pass",
+      "test_gap_http_server_closes_after_client_fin": "pass",
+      "test_gap_https_server_closes_after_client_fin": "pass",
+      "test_gap_native_payload_crypto_11919": "pass",
+      "test_gap_net_accepted_endpoints": "pass",
+      "test_gap_net_connect_bound_value": "pass",
+      "test_gap_net_crypto_2549_2963": "pass",
+      "test_gap_net_destroy_close_before_exit": "pass",
+      "test_gap_net_listener_this_binding": "pass",
+      "test_gap_net_socket_end_twice_callbacks": "pass",
+      "test_gap_net_socket_get_prototype_of": "pass",
+      "test_gap_net_socket_surface_cluster": "pass",
+      "test_gap_net_socket_write_return_drain": "pass",
+      "test_gap_net_unconnected_write_callbacks": "pass",
+      "test_gap_net_write_before_connect_called": "pass",
+      "test_gap_net_write_before_connect_hostname": "pass",
+      "test_gap_net_write_burst_then_end": "pass",
+      "test_gap_new_local_shadows_class": "pass",
+      "test_gap_node_crypto_buffer": "pass",
+      "test_gap_proto_write_local_shadows_class": "pass",
+      "test_gap_readable_stream_pull_throws": "pass",
+      "test_gap_regex_replace_dyn_regex_with_http": "pass",
+      "test_gap_regexp_observe_rows": "pass",
+      "test_gap_region_typed_array_copy_loops": "pass",
+      "test_gap_tls_write_backpressure_handshake": "pass",
+      "test_gap_try_entry_shadow_hot_tls": "pass",
+      "test_gap_turnloop_http2_control": "pass",
+      "test_gap_turnloop_http2_server": "pass",
+      "test_gap_turnloop_http_lifecycle": "pass",
+      "test_gap_turnloop_http_server": "pass",
+      "test_gap_turnloop_https_server": "pass",
+      "test_gap_turnloop_net_sockets": "pass",
+      "test_gap_turnloop_p9_worker_agent_net": "pass",
+      "test_gap_turnloop_ws_attached": "pass",
+      "test_gap_turnloop_ws_client": "pass",
+      "test_gap_turnloop_ws_echo_roundtrip": "pass",
+      "test_gap_turnloop_ws_frames": "pass",
+      "test_gap_turnloop_ws_server": "pass",
+      "test_gap_typed_array_compound_update": "pass",
+      "test_gap_typed_array_detach_loop": "pass",
+      "test_gap_typed_array_detach_spec_param": "pass",
+      "test_gap_typed_array_detach_u8_buffer": "pass",
+      "test_gap_typed_array_dynamic_index_access": "pass",
+      "test_gap_typed_array_guarded_view_keys": "pass",
+      "test_gap_typed_array_length_bound_region": "pass",
+      "test_gap_typed_array_length_inline": "pass",
+      "test_gap_typed_array_length_ownership": "pass",
+      "test_gap_typed_array_numeric_length": "pass",
+      "test_gap_typed_array_proto_methods": "pass",
+      "test_gap_typed_array_symbol_key": "pass",
+      "test_gap_typed_array_view_region": "pass",
+      "test_gap_typed_arrays": "pass",
+      "test_gap_typed_recv_clone_alias": "pass",
+      "test_gap_typed_view_index_reads": "pass",
+      "test_gap_typedarray_buffer_aliasing_7219": "pass",
+      "test_gap_typedarray_param_read": "pass",
+      "test_gap_typedarray_tostringtag": "pass",
+      "test_gap_untyped_param_masked_window": "pass",
+      "test_gap_untyped_string_accumulator": "pass",
+      "test_gap_webcrypto_async_threadpool": "parity_fail",
+      "test_gap_windows_child_argv0": "pass",
+      "test_gap_windows_executable_lookup": "pass",
+      "test_gap_windows_named_pipe_backlog": "pass",
+      "test_gap_windows_named_pipe_duplex_end": "pass",
+      "test_gap_windows_named_pipe_end": "pass",
+      "test_gap_windows_paths": "pass",
+      "test_gap_windows_platform_surface": "pass",
+      "test_gap_windows_shell_quotes": "pass",
+      "test_gap_worker_zlib_stream": "parity_fail",
+      "test_gap_ws_attached_server_socket_closes": "pass",
+      "test_gap_zlib_3285_params": "pass",
+      "test_gap_zlib_4917_level": "pass",
+      "test_gap_zlib_chunk_backpressure": "pass",
+      "test_gap_zlib_fs_assert_2935_2752_2971": "pass"
+    }
+  },
+  "focused": {
+    "b4": 0,
+    "bytes": 0,
+    "transfer": 0,
+    "crypto": 0
+  },
+  "output": {
+    "main": {
+      "tsc": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "zod5k": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "qsparse": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "qsstr": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "commander": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "hello": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "fastify": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "effect": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "buffer_heavy": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "worker_heavy": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "matmul": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "prime_sieve": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "bench_buffer_readwrite": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "ecs_u32": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      }
+    },
+    "head": {
+      "tsc": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "zod5k": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "qsparse": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "qsstr": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "commander": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "hello": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "fastify": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "effect": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "buffer_heavy": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "worker_heavy": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "matmul": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "prime_sieve": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "bench_buffer_readwrite": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      },
+      "ecs_u32": {
+        "node": 0,
+        "perry": 0,
+        "output_equal": true
+      }
+    }
+  },
+  "known_stdlib_failures": [
+    "runtime_thread_exit_tests::symbols_tests::thread_exit_releases_the_threads_symbol_side_table_entries",
+    "runtime_thread_exit_tests::thread_exit_releases_the_threads_closure_side_table_entries"
+  ],
+  "gap_raw_differences": {
+    "test_gap_webcrypto_async_threadpool": [
+      "pass",
+      "parity_fail"
+    ]
+  },
+  "gap_isolated_recheck": [
+    {
+      "trial": 0,
+      "arm": "main",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 0,
+      "arm": "head",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 1,
+      "arm": "head",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 1,
+      "arm": "main",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 2,
+      "arm": "main",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 2,
+      "arm": "head",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 3,
+      "arm": "head",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 3,
+      "arm": "main",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 4,
+      "arm": "main",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 4,
+      "arm": "head",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    }
+  ],
+  "gap_variation": "Original head Node oracle printed subtle.digest crosses macrotask: false; Perry printed true. All ten isolated interleaved Node comparisons passed, five per arm.",
+  "asan": {
+    "witnesses": {
+      "gc::tests::buffer_bytes": "0",
+      "gc::tests::buffer_b4": "0",
+      "buffer::backing::tests::transfer_receiver_uses_original_pointer_after_sender_gc": "0"
+    },
+    "summaries": [
+      "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 5164 filtered out; finished in 0.20s",
+      "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 5167 filtered out; finished in 0.18s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5171 filtered out; finished in 0.01s"
+    ],
+    "scope": "Instrumented runtime, system allocator, forced GC; native pin/detach, view and transfer tests. TS zlib stream not executed under ASan."
+  },
+  "hello_profile_changes": [
+    {
+      "function": "???:0x000000000564e5f0 [???]",
+      "main": 542,
+      "head": 0,
+      "delta": -542
+    },
+    {
+      "function": "???:0x00000000056505f0 [???]",
+      "main": 0,
+      "head": 542,
+      "delta": 542
+    },
+    {
+      "function": "<perry_runtime::arena::block::Arena as core::ops::drop::Drop>::drop",
+      "main": 1031,
+      "head": 611,
+      "delta": -420
+    },
+    {
+      "function": "PROGRAM TOTALS",
+      "main": 1470003,
+      "head": 1469784,
+      "delta": -219
+    },
+    {
+      "function": "???:0x000000000564e4f0 [???]",
+      "main": 142,
+      "head": 0,
+      "delta": -142
+    },
+    {
+      "function": "???:0x00000000056504f0 [???]",
+      "main": 0,
+      "head": 142,
+      "delta": 142
+    },
+    {
+      "function": "???:0x000000000564e6a0 [???]",
+      "main": 120,
+      "head": 0,
+      "delta": -120
+    },
+    {
+      "function": "???:0x00000000056506a0 [???]",
+      "main": 0,
+      "head": 120,
+      "delta": 120
+    },
+    {
+      "function": "???:0x000000000564e470 [???]",
+      "main": 114,
+      "head": 0,
+      "delta": -114
+    },
+    {
+      "function": "???:0x0000000005650470 [???]",
+      "main": 0,
+      "head": 114,
+      "delta": 114
+    },
+    {
+      "function": "./elf/./elf/dl-reloc.c:_dl_relocate_object_no_relro [/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2]",
+      "main": 528938,
+      "head": 529043,
+      "delta": 105
+    },
+    {
+      "function": "./stdlib/../stdlib/strtol_l.c:____strtoul_l_internal [/usr/lib/x86_64-linux-gnu/libc.so.6]",
+      "main": 26902,
+      "head": 26998,
+      "delta": 96
+    },
+    {
+      "function": "???:0x000000000564e3d0 [???]",
+      "main": 62,
+      "head": 0,
+      "delta": -62
+    },
+    {
+      "function": "???:0x00000000056503d0 [???]",
+      "main": 0,
+      "head": 62,
+      "delta": 62
+    },
+    {
+      "function": "???:0x000000000564e440 [???]",
+      "main": 54,
+      "head": 0,
+      "delta": -54
+    },
+    {
+      "function": "???:0x0000000005650440 [???]",
+      "main": 0,
+      "head": 54,
+      "delta": 54
+    },
+    {
+      "function": "???:0x000000000564e4d0 [???]",
+      "main": 52,
+      "head": 0,
+      "delta": -52
+    },
+    {
+      "function": "???:0x00000000056504d0 [???]",
+      "main": 0,
+      "head": 52,
+      "delta": 52
+    },
+    {
+      "function": "???:0x000000000564e710 [???]",
+      "main": 28,
+      "head": 0,
+      "delta": -28
+    },
+    {
+      "function": "???:0x0000000005650710 [???]",
+      "main": 0,
+      "head": 28,
+      "delta": 28
+    },
+    {
+      "function": "???:0x000000000564e3e0 [???]",
+      "main": 12,
+      "head": 0,
+      "delta": -12
+    },
+    {
+      "function": "???:0x00000000056503e0 [???]",
+      "main": 0,
+      "head": 12,
+      "delta": 12
+    },
+    {
+      "function": "???:0x000000000561a000 [???]",
+      "main": 7,
+      "head": 0,
+      "delta": -7
+    },
+    {
+      "function": "???:0x0000000005859000 [???]",
+      "main": 7,
+      "head": 0,
+      "delta": -7
+    },
+    {
+      "function": "???:0x0000000005971000 [???]",
+      "main": 7,
+      "head": 0,
+      "delta": -7
+    },
+    {
+      "function": "???:0x000000000561c000 [???]",
+      "main": 0,
+      "head": 7,
+      "delta": 7
+    },
+    {
+      "function": "???:0x000000000585b000 [???]",
+      "main": 0,
+      "head": 7,
+      "delta": 7
+    },
+    {
+      "function": "???:0x0000000005973000 [???]",
+      "main": 0,
+      "head": 7,
+      "delta": 7
+    },
+    {
+      "function": "???:0x000000000564e400 [???]",
+      "main": 6,
+      "head": 0,
+      "delta": -6
+    },
+    {
+      "function": "???:0x000000000564e730 [???]",
+      "main": 6,
+      "head": 0,
+      "delta": -6
+    },
+    {
+      "function": "???:0x0000000005650400 [???]",
+      "main": 0,
+      "head": 6,
+      "delta": 6
+    },
+    {
+      "function": "???:0x0000000005650730 [???]",
+      "main": 0,
+      "head": 6,
+      "delta": 6
+    },
+    {
+      "function": "???:0x00000000049f4494 [???]",
+      "main": 4,
+      "head": 0,
+      "delta": -4
+    },
+    {
+      "function": "???:0x000000000561a294 [???]",
+      "main": 4,
+      "head": 0,
+      "delta": -4
+    },
+    {
+      "function": "???:0x000000000564e670 [???]",
+      "main": 4,
+      "head": 0,
+      "delta": -4
+    },
+    {
+      "function": "???:0x00000000058f8384 [???]",
+      "main": 4,
+      "head": 0,
+      "delta": -4
+    },
+    {
+      "function": "???:0x0000000005994438 [???]",
+      "main": 4,
+      "head": 0,
+      "delta": -4
+    },
+    {
+      "function": "???:0x00000000049f6ad4 [???]",
+      "main": 0,
+      "head": 4,
+      "delta": 4
+    },
+    {
+      "function": "???:0x000000000561c294 [???]",
+      "main": 0,
+      "head": 4,
+      "delta": 4
+    },
+    {
+      "function": "???:0x0000000005650670 [???]",
+      "main": 0,
+      "head": 4,
+      "delta": 4
+    },
+    {
+      "function": "???:0x00000000058fa384 [???]",
+      "main": 0,
+      "head": 4,
+      "delta": 4
+    },
+    {
+      "function": "???:0x0000000005996438 [???]",
+      "main": 0,
+      "head": 4,
+      "delta": 4
+    },
+    {
+      "function": "???:0x000000000561a030 [???]",
+      "main": 2,
+      "head": 0,
+      "delta": -2
+    },
+    {
+      "function": "???:0x000000000564e420 [???]",
+      "main": 2,
+      "head": 0,
+      "delta": -2
+    },
+    {
+      "function": "???:0x000000000564e650 [???]",
+      "main": 2,
+      "head": 0,
+      "delta": -2
+    },
+    {
+      "function": "???:0x000000000564e790 [???]",
+      "main": 2,
+      "head": 0,
+      "delta": -2
+    },
+    {
+      "function": "???:0x0000000005859310 [???]",
+      "main": 2,
+      "head": 0,
+      "delta": -2
+    },
+    {
+      "function": "???:0x00000000059713c0 [???]",
+      "main": 2,
+      "head": 0,
+      "delta": -2
+    },
+    {
+      "function": "???:0x000000000561c030 [???]",
+      "main": 0,
+      "head": 2,
+      "delta": 2
+    },
+    {
+      "function": "???:0x0000000005650420 [???]",
+      "main": 0,
+      "head": 2,
+      "delta": 2
+    },
+    {
+      "function": "???:0x0000000005650650 [???]",
+      "main": 0,
+      "head": 2,
+      "delta": 2
+    },
+    {
+      "function": "???:0x0000000005650790 [???]",
+      "main": 0,
+      "head": 2,
+      "delta": 2
+    },
+    {
+      "function": "???:0x000000000585b310 [???]",
+      "main": 0,
+      "head": 2,
+      "delta": 2
+    },
+    {
+      "function": "???:0x00000000059733c0 [???]",
+      "main": 0,
+      "head": 2,
+      "delta": 2
+    }
+  ],
+  "final_b1_base": "16b16c96f3cb1f4f81a4bee62dc78c94be59cf83",
+  "final_rebase_note": "B1 additions since f3e5910 are documentation and cfg(test) only; the added FFI witness uses the public scoped byte API. Production measurement sources remain unchanged.",
+  "ffi_buffer_tests": {
+    "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s",
+    "native_input_sabotage": "RED",
+    "features": "runtime-link"
+  }
+}

@@ -362,30 +362,11 @@ pub(crate) unsafe fn value_to_f64_num(v: f64) -> f64 {
 /// always targets the ultimate backing bytes (#6515) — see the module doc
 /// for the resulting read-back caveat on views.
 pub(crate) unsafe fn value_buffer_span(v: f64) -> Option<(*mut u8, usize)> {
-    let jv = JSValue::from_bits(v.to_bits());
-    if !jv.is_pointer() {
-        return None;
-    }
-    let addr = crate::value::js_nanbox_get_pointer(f64::from_bits(jv.bits())) as usize;
-    if addr == 0 {
-        return None;
-    }
-    if crate::buffer::is_registered_buffer(addr)
-        || crate::buffer::is_any_array_buffer(addr)
-        || crate::buffer::is_data_view(addr)
-        || crate::buffer::is_uint8array_buffer(addr)
-    {
-        let buf = addr as *const crate::buffer::BufferHeader;
-        let data = crate::buffer::view::resolve_data_ptr(buf);
-        return Some((data as *mut u8, (*buf).length as usize));
-    }
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let ta =
-            crate::typedarray::clean_ta_ptr(addr as *const crate::typedarray::TypedArrayHeader);
-        let bytes = crate::typedarray::typed_array_bytes(ta)?;
-        return Some((bytes.as_ptr() as *mut u8, bytes.len()));
-    }
-    None
+    crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(v, scope)
+            .ok()
+            .map(|bytes| (bytes.as_ptr() as *mut u8, bytes.len()))
+    })
 }
 
 fn describe_value_for_error(jv: JSValue) -> &'static str {

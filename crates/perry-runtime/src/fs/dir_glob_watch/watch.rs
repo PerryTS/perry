@@ -382,17 +382,7 @@ fn with_watcher_uncaught_trap<F: FnOnce()>(f: F) {
 fn filename_arg_value(filename: &str, encoding: &str) -> f64 {
     let bytes = filename.as_bytes();
     if encoding == "buffer" {
-        let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
-        if !buf.is_null() && !bytes.is_empty() {
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    bytes.as_ptr(),
-                    crate::buffer::buffer_data_mut(buf),
-                    bytes.len(),
-                );
-            }
-        }
-        boxed_ptr(buf as *const u8)
+        crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes)
     } else {
         let ptr = encoded_string_ptr(bytes, encoding);
         f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())

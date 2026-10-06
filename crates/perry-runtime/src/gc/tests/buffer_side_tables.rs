@@ -268,7 +268,7 @@ fn test_buffer_own_props_table_drains_after_owners_die() {
 /// pointer-lifetime contract hands `ptr(view)` to native code and documents
 /// the address as stable for the lifetime of the JS object
 /// (`bun_ffi/mod.rs`); `VIEW_REGISTRY`,
-/// `BACKING_TO_VIEWS`, `DETACHED_BUFFER_REGISTRY` and the identity registries
+/// `BACKING_TO_VIEWS` and the remaining identity registries
 /// above are all keyed by that address; and #9611 publishes
 /// `WebAssembly.Memory.prototype.buffer` as a foreign-backed wrapper whose
 /// address the wasm binding table keys. Flipping either type to `movable`

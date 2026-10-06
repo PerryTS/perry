@@ -1,7 +1,6 @@
-struct TypedArrayView {
+struct TypedArrayView<'s> {
     kind: u8,
-    data: *const u8,
-    byte_len: usize,
+    data: &'s [u8],
 }
 
 fn value_pointer_addr(value: f64) -> Option<usize> {
@@ -18,47 +17,33 @@ fn value_pointer_addr(value: f64) -> Option<usize> {
     None
 }
 
-fn typed_array_view(value: f64) -> Option<TypedArrayView> {
+fn typed_array_view<'s>(
+    value: f64,
+    scope: &'s crate::buffer::bytes::NoGc<'s>,
+) -> Option<TypedArrayView<'s>> {
     let addr = value_pointer_addr(value)?;
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-        let ta = addr as *const crate::typedarray::TypedArrayHeader;
-        let bytes = unsafe { crate::typedarray::typed_array_bytes(ta)? };
-        return Some(TypedArrayView {
-            kind,
-            data: bytes.as_ptr(),
-            byte_len: bytes.len(),
-        });
-    }
-    if crate::buffer::is_registered_buffer(addr) && crate::buffer::is_uint8array_buffer(addr) {
-        let buf = addr as *const crate::buffer::BufferHeader;
-        let byte_len = unsafe { (*buf).length as usize };
-        return Some(TypedArrayView {
-            kind: crate::typedarray::KIND_UINT8,
-            data: crate::buffer::buffer_data(buf),
-            byte_len,
-        });
-    }
-    None
+    let kind = if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+        kind
+    } else if crate::buffer::is_registered_buffer(addr) && crate::buffer::is_uint8array_buffer(addr)
+    {
+        crate::typedarray::KIND_UINT8
+    } else {
+        return None;
+    };
+    let data =
+        crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(addr as i64), scope).ok()?;
+    Some(TypedArrayView { kind, data })
 }
 
 pub(super) fn deep_strict_typed_array_equal(left: f64, right: f64) -> Option<bool> {
-    let left_view = typed_array_view(left);
-    let right_view = typed_array_view(right);
-    match (left_view, right_view) {
-        (Some(left_view), Some(right_view)) => {
-            if left_view.kind != right_view.kind || left_view.byte_len != right_view.byte_len {
-                return Some(false);
-            }
-            if left_view.byte_len == 0 {
-                return Some(true);
-            }
-            unsafe {
-                let left_bytes = std::slice::from_raw_parts(left_view.data, left_view.byte_len);
-                let right_bytes = std::slice::from_raw_parts(right_view.data, right_view.byte_len);
-                Some(left_bytes == right_bytes)
-            }
+    crate::buffer::bytes::no_gc(|scope| {
+        match (
+            typed_array_view(left, scope),
+            typed_array_view(right, scope),
+        ) {
+            (Some(left), Some(right)) => Some(left.kind == right.kind && left.data == right.data),
+            (Some(_), None) | (None, Some(_)) => Some(false),
+            (None, None) => None,
         }
-        (Some(_), None) | (None, Some(_)) => Some(false),
-        (None, None) => None,
-    }
+    })
 }

@@ -860,17 +860,8 @@ unsafe fn build_iter_result(value_bits: u64, done: bool) -> u64 {
 }
 
 pub(crate) unsafe fn alloc_uint8array_from_bytes(bytes: &[u8]) -> u64 {
-    let buf = perry_runtime::buffer::buffer_alloc(bytes.len() as u32);
-    perry_runtime::buffer::mark_as_uint8array(buf as usize);
-    (*buf).length = bytes.len() as u32;
-    if !bytes.is_empty() {
-        std::ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            perry_runtime::buffer::buffer_data_mut(buf),
-            bytes.len(),
-        );
-    }
-    JSValue::object_ptr(buf as *mut u8).bits()
+    perry_runtime::buffer::bytes::from_slice(perry_runtime::buffer::bytes::Brand::Uint8Array, bytes)
+        .to_bits()
 }
 
 unsafe fn read_bytes_from_chunk(chunk_bits: u64) -> Option<Vec<u8>> {
@@ -885,17 +876,12 @@ unsafe fn read_bytes_from_chunk(chunk_bits: u64) -> Option<Vec<u8>> {
     if addr < 0x1000 {
         return None;
     }
-    if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
-        return perry_runtime::typedarray::typed_array_bytes(ta).map(|bytes| bytes.to_vec());
-    }
-    if !perry_runtime::buffer::is_registered_buffer(addr) {
-        return None;
-    }
-    let ptr = addr as *const perry_runtime::buffer::BufferHeader;
-    let len = (*ptr).length as usize;
-    let data = perry_runtime::buffer::buffer_data(ptr);
-    Some(std::slice::from_raw_parts(data, len).to_vec())
+    perry_runtime::buffer::bytes::no_gc(|scope| {
+        let value = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
+        perry_runtime::buffer::bytes::bytes(value, scope)
+            .ok()
+            .map(<[u8]>::to_vec)
+    })
 }
 
 unsafe fn raw_pointer_addr(bits: u64) -> Option<usize> {
@@ -1959,10 +1945,13 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
             && !perry_runtime::buffer::is_any_array_buffer(addr)
             && !perry_runtime::buffer::is_data_view(addr)
         {
-            let buf = addr as *const perry_runtime::buffer::BufferHeader;
-            let len = (*buf).length as usize;
-            let data = perry_runtime::buffer::buffer_data(buf);
-            let chunks = (0..len).map(|i| (*data.add(i) as f64).to_bits()).collect();
+            let chunks = perry_runtime::buffer::bytes::no_gc(|scope| {
+                perry_runtime::buffer::bytes::bytes(value, scope)
+                    .unwrap_or(&[])
+                    .iter()
+                    .map(|&byte| (byte as f64).to_bits())
+                    .collect()
+            });
             ReadableFromSource::closed(chunks)
         } else if let Some(chunks) = chunks_from_sync_iterable(value) {
             ReadableFromSource::closed(chunks)

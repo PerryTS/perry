@@ -5,21 +5,23 @@ pub(super) unsafe fn format_array_buffer_value(
     if buf_ptr.is_null() {
         return format!("{label} {{ [Uint8Contents]: <>, [byteLength]: 0 }}");
     }
-    let len = (*buf_ptr).length as usize;
-    let data = crate::buffer::buffer_data(buf_ptr as *const crate::buffer::BufferHeader);
-    let bytes = std::slice::from_raw_parts(data, len);
-    let display_len = len.min(50);
-    let mut contents = String::new();
-    for (i, b) in bytes[..display_len].iter().enumerate() {
-        if i > 0 {
-            contents.push(' ');
+    crate::buffer::bytes::no_gc(|scope| {
+        let value = crate::value::js_nanbox_pointer(buf_ptr as i64);
+        let bytes = crate::buffer::bytes::bytes(value, scope).unwrap_or(&[]);
+        let len = bytes.len();
+        let display_len = len.min(50);
+        let mut contents = String::new();
+        for (i, b) in bytes[..display_len].iter().enumerate() {
+            if i > 0 {
+                contents.push(' ');
+            }
+            contents.push_str(&format!("{:02x}", b));
         }
-        contents.push_str(&format!("{:02x}", b));
-    }
-    if len > display_len {
-        contents.push_str(&format!(" ... {} more bytes", len - display_len));
-    }
-    format!("{label} {{ [Uint8Contents]: <{contents}>, [byteLength]: {len} }}")
+        if len > display_len {
+            contents.push_str(&format!(" ... {} more bytes", len - display_len));
+        }
+        format!("{label} {{ [Uint8Contents]: <{contents}>, [byteLength]: {len} }}")
+    })
 }
 
 pub(super) unsafe fn format_data_view_value(buf_ptr: *const crate::buffer::BufferHeader) -> String {

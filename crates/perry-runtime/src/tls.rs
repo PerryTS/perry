@@ -298,12 +298,11 @@ fn value_to_bytes(value: f64) -> Option<Vec<u8>> {
     if js.is_pointer() && crate::buffer::is_any_array_buffer(js.as_pointer::<u8>() as usize) {
         return None;
     }
-    let mut len = 0u32;
-    let data = unsafe { crate::buffer::js_value_buffer_or_typedarray_data(value, &mut len) };
-    if data.is_null() {
-        return None;
-    }
-    Some(unsafe { std::slice::from_raw_parts(data, len as usize) }.to_vec())
+    crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(value, scope)
+            .ok()
+            .map(<[u8]>::to_vec)
+    })
 }
 
 fn value_to_utf8(value: f64) -> Option<String> {

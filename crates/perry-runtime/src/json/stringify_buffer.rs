@@ -18,57 +18,59 @@ use super::*;
 /// dispatch to the wrong arm (or panic when `is_object_pointer` deref's a
 /// bogus `keys_array` pointer).
 pub(crate) unsafe fn stringify_buffer(ptr: *const u8, buf: &mut String) {
-    let buf_ptr = ptr as *const crate::buffer::BufferHeader;
-    if buf_ptr.is_null() {
-        buf.push_str("null");
-        return;
-    }
-    // #8149: an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` is a
-    // registered buffer, but it is NOT a `Buffer` and NOT a `Uint8Array`.
-    // Neither `Buffer.prototype.toJSON` nor the integer-indexed own-property
-    // shape applies: node serializes both as `{}` because they have no own
-    // enumerable properties at all. Perry answered
-    // `{"type":"Buffer","data":[…]}` — a shape node never produces for these,
-    // and one that leaks the backing bytes. Asked ABOVE the
-    // Buffer/`Uint8Array` split, which claims every registered buffer.
-    //
-    // Own expandos (`dv.foo = 1`, which node WOULD serialize) are not emitted:
-    // that needs the generic object serializer, and this arm exists to stop the
-    // byte leak. `{}` is node's answer for every `DataView`/`ArrayBuffer` that
-    // carries none, which is all of them in practice.
-    if crate::buffer::is_non_indexed_buffer_view(ptr as usize) {
-        buf.push_str("{}");
-        return;
-    }
-    let len = (*buf_ptr).length as usize;
-    let data = crate::buffer::buffer_data(buf_ptr as *const crate::buffer::BufferHeader);
-    let bytes = std::slice::from_raw_parts(data, len);
+    crate::buffer::bytes::no_gc(|scope| {
+        let buf_ptr = ptr as *const crate::buffer::BufferHeader;
+        if buf_ptr.is_null() {
+            buf.push_str("null");
+            return;
+        }
+        // #8149: an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` is a
+        // registered buffer, but it is NOT a `Buffer` and NOT a `Uint8Array`.
+        // Neither `Buffer.prototype.toJSON` nor the integer-indexed own-property
+        // shape applies: node serializes both as `{}` because they have no own
+        // enumerable properties at all. Perry answered
+        // `{"type":"Buffer","data":[…]}` — a shape node never produces for these,
+        // and one that leaks the backing bytes. Asked ABOVE the
+        // Buffer/`Uint8Array` split, which claims every registered buffer.
+        //
+        // Own expandos (`dv.foo = 1`, which node WOULD serialize) are not emitted:
+        // that needs the generic object serializer, and this arm exists to stop the
+        // byte leak. `{}` is node's answer for every `DataView`/`ArrayBuffer` that
+        // carries none, which is all of them in practice.
+        if crate::buffer::is_non_indexed_buffer_view(ptr as usize) {
+            buf.push_str("{}");
+            return;
+        }
+        let bytes =
+            crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(buf_ptr as i64), scope)
+                .unwrap_or(&[]);
 
-    if crate::buffer::is_uint8array_buffer(ptr as usize) {
-        buf.push('{');
-        for (i, b) in bytes.iter().enumerate() {
-            if i > 0 {
-                buf.push(',');
+        if crate::buffer::is_uint8array_buffer(ptr as usize) {
+            buf.push('{');
+            for (i, b) in bytes.iter().enumerate() {
+                if i > 0 {
+                    buf.push(',');
+                }
+                buf.push('"');
+                let mut idx_buf = itoa::Buffer::new();
+                buf.push_str(idx_buf.format(i));
+                buf.push_str("\":");
+                let mut byte_buf = itoa::Buffer::new();
+                buf.push_str(byte_buf.format(*b));
             }
-            buf.push('"');
-            let mut idx_buf = itoa::Buffer::new();
-            buf.push_str(idx_buf.format(i));
-            buf.push_str("\":");
-            let mut byte_buf = itoa::Buffer::new();
-            buf.push_str(byte_buf.format(*b));
-        }
-        buf.push('}');
-    } else {
-        buf.push_str(r#"{"type":"Buffer","data":["#);
-        for (i, b) in bytes.iter().enumerate() {
-            if i > 0 {
-                buf.push(',');
+            buf.push('}');
+        } else {
+            buf.push_str(r#"{"type":"Buffer","data":["#);
+            for (i, b) in bytes.iter().enumerate() {
+                if i > 0 {
+                    buf.push(',');
+                }
+                let mut byte_buf = itoa::Buffer::new();
+                buf.push_str(byte_buf.format(*b));
             }
-            let mut byte_buf = itoa::Buffer::new();
-            buf.push_str(byte_buf.format(*b));
+            buf.push_str("]}");
         }
-        buf.push_str("]}");
-    }
+    });
 }
 
 /// Issue #5111: serialize a `TypedArrayHeader`-backed typed array (`Int8Array`
@@ -147,81 +149,84 @@ pub(crate) unsafe fn stringify_buffer_pretty(
     indent: &str,
     depth: usize,
 ) {
-    let buf_ptr = ptr as *const crate::buffer::BufferHeader;
-    if buf_ptr.is_null() {
-        buf.push_str("null");
-        return;
-    }
-    // #8149: see `stringify_buffer` — an `ArrayBuffer` / `SharedArrayBuffer` /
-    // `DataView` is neither a `Buffer` nor a `Uint8Array`, and node serializes
-    // all three as `{}`.
-    if crate::buffer::is_non_indexed_buffer_view(ptr as usize) {
-        buf.push_str("{}");
-        return;
-    }
-    let len = (*buf_ptr).length as usize;
-    let data = crate::buffer::buffer_data(buf_ptr as *const crate::buffer::BufferHeader);
-    let bytes = std::slice::from_raw_parts(data, len);
-
-    let push_indent = |buf: &mut String, levels: usize| {
-        for _ in 0..levels {
-            buf.push_str(indent);
+    crate::buffer::bytes::no_gc(|scope| {
+        let buf_ptr = ptr as *const crate::buffer::BufferHeader;
+        if buf_ptr.is_null() {
+            buf.push_str("null");
+            return;
         }
-    };
-
-    if len == 0 {
-        // Empty Uint8Array -> "{}"; empty Buffer -> {"type":"Buffer","data":[]}.
-        if crate::buffer::is_uint8array_buffer(ptr as usize) {
+        // #8149: see `stringify_buffer` — an `ArrayBuffer` / `SharedArrayBuffer` /
+        // `DataView` is neither a `Buffer` nor a `Uint8Array`, and node serializes
+        // all three as `{}`.
+        if crate::buffer::is_non_indexed_buffer_view(ptr as usize) {
             buf.push_str("{}");
+            return;
+        }
+        let bytes =
+            crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(buf_ptr as i64), scope)
+                .unwrap_or(&[]);
+        let len = bytes.len();
+
+        let push_indent = |buf: &mut String, levels: usize| {
+            for _ in 0..levels {
+                buf.push_str(indent);
+            }
+        };
+
+        if len == 0 {
+            // Empty Uint8Array -> "{}"; empty Buffer -> {"type":"Buffer","data":[]}.
+            if crate::buffer::is_uint8array_buffer(ptr as usize) {
+                buf.push_str("{}");
+            } else {
+                buf.push_str("{\n");
+                push_indent(buf, depth + 1);
+                buf.push_str("\"type\": \"Buffer\",\n");
+                push_indent(buf, depth + 1);
+                buf.push_str("\"data\": []\n");
+                push_indent(buf, depth);
+                buf.push('}');
+            }
+            return;
+        }
+
+        if crate::buffer::is_uint8array_buffer(ptr as usize) {
+            // Plain Uint8Array: { "0": b0, "1": b1, ... }
+            buf.push_str("{\n");
+            for (i, b) in bytes.iter().enumerate() {
+                push_indent(buf, depth + 1);
+                let mut idx_buf = itoa::Buffer::new();
+                buf.push('"');
+                buf.push_str(idx_buf.format(i));
+                buf.push_str("\": ");
+                let mut byte_buf = itoa::Buffer::new();
+                buf.push_str(byte_buf.format(*b));
+                if i + 1 < len {
+                    buf.push(',');
+                }
+                buf.push('\n');
+            }
+            push_indent(buf, depth);
+            buf.push('}');
         } else {
+            // Buffer: { "type": "Buffer", "data": [ b0, b1, ... ] }
             buf.push_str("{\n");
             push_indent(buf, depth + 1);
             buf.push_str("\"type\": \"Buffer\",\n");
             push_indent(buf, depth + 1);
-            buf.push_str("\"data\": []\n");
+            buf.push_str("\"data\": [\n");
+            for (i, b) in bytes.iter().enumerate() {
+                push_indent(buf, depth + 2);
+                let mut byte_buf = itoa::Buffer::new();
+                buf.push_str(byte_buf.format(*b));
+                if i + 1 < len {
+                    buf.push(',');
+                }
+                buf.push('\n');
+            }
+            push_indent(buf, depth + 1);
+            buf.push_str("]\n");
             push_indent(buf, depth);
             buf.push('}');
         }
-        return;
-    }
-
-    if crate::buffer::is_uint8array_buffer(ptr as usize) {
-        // Plain Uint8Array: { "0": b0, "1": b1, ... }
-        buf.push_str("{\n");
-        for (i, b) in bytes.iter().enumerate() {
-            push_indent(buf, depth + 1);
-            let mut idx_buf = itoa::Buffer::new();
-            buf.push('"');
-            buf.push_str(idx_buf.format(i));
-            buf.push_str("\": ");
-            let mut byte_buf = itoa::Buffer::new();
-            buf.push_str(byte_buf.format(*b));
-            if i + 1 < len {
-                buf.push(',');
-            }
-            buf.push('\n');
-        }
-        push_indent(buf, depth);
-        buf.push('}');
-    } else {
-        // Buffer: { "type": "Buffer", "data": [ b0, b1, ... ] }
-        buf.push_str("{\n");
-        push_indent(buf, depth + 1);
-        buf.push_str("\"type\": \"Buffer\",\n");
-        push_indent(buf, depth + 1);
-        buf.push_str("\"data\": [\n");
-        for (i, b) in bytes.iter().enumerate() {
-            push_indent(buf, depth + 2);
-            let mut byte_buf = itoa::Buffer::new();
-            buf.push_str(byte_buf.format(*b));
-            if i + 1 < len {
-                buf.push(',');
-            }
-            buf.push('\n');
-        }
-        push_indent(buf, depth + 1);
-        buf.push_str("]\n");
-        push_indent(buf, depth);
-        buf.push('}');
-    }
+    });
 }

@@ -633,24 +633,21 @@ pub(crate) unsafe fn node_sqlite_database_path(value: f64) -> String {
 }
 
 unsafe fn node_sqlite_path_bytes(value: f64) -> Option<Vec<u8>> {
-    use perry_runtime::buffer::{buffer_data, is_registered_buffer, is_uint8array_buffer};
+    use perry_runtime::buffer::{is_registered_buffer, is_uint8array_buffer};
     let raw = raw_addr_from_value(value);
     if raw < 0x1000 {
         return None;
     }
-    if is_registered_buffer(raw) && is_uint8array_buffer(raw) {
-        let buffer = raw as *const BufferHeader;
-        return Some(
-            std::slice::from_raw_parts(buffer_data(buffer), (*buffer).length as usize).to_vec(),
-        );
-    }
-    if perry_runtime::typedarray::lookup_typed_array_kind(raw)
-        == Some(perry_runtime::typedarray::KIND_UINT8)
+    if (is_registered_buffer(raw) && is_uint8array_buffer(raw))
+        || perry_runtime::typedarray::lookup_typed_array_kind(raw)
+            == Some(perry_runtime::typedarray::KIND_UINT8)
     {
-        return perry_runtime::typedarray::typed_array_bytes(
-            raw as *const perry_runtime::typedarray::TypedArrayHeader,
-        )
-        .map(ToOwned::to_owned);
+        return perry_runtime::buffer::bytes::no_gc(|scope| {
+            let value = f64::from_bits(JSValue::pointer(raw as *const u8).bits());
+            perry_runtime::buffer::bytes::bytes(value, scope)
+                .ok()
+                .map(<[u8]>::to_vec)
+        });
     }
     None
 }
