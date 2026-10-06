@@ -1,0 +1,1 @@
+Treat retired receiver ShapeIds as expired class read-cache facts. Reuse expired ways before evicting live entries, preserve live-shape churn history, and reclaim retired receiver ids before refusing a full shared absent set. The hit path is unchanged.
