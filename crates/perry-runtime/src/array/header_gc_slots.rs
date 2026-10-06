@@ -25,13 +25,11 @@ pub(crate) fn test_dense_move_layout_classified_slots() -> usize {
 /// NON-pointer store into a plain, forwarding-resolved array. With all of them
 /// clear except `GC_LAYOUT_POINTER_FREE`, the note provably returns without a
 /// state change: the element-shape hook is gated on `GC_ARRAY_ELEMENT_SHAPE`,
-/// the typed-descriptor probe on `GC_OBJ_TYPED_LAYOUT_INTACT`, the
-/// all-pointers append proof on `GC_LAYOUT_ALL_POINTERS`, and a non-pointer
+/// the all-pointers append proof on `GC_LAYOUT_ALL_POINTERS`, and a non-pointer
 /// value in the `POINTER_FREE` state is its early return. Anything else (a
-/// side mask to clear, `UNKNOWN`, a descriptor to consult) keeps the note.
+/// pointer declaration to weaken, `UNKNOWN`, an element-shape proof) keeps the note.
 const SCALAR_NOTE_ELIDABLE_MASK: u16 = crate::gc::GC_LAYOUT_STATE_MASK
     | crate::gc::GC_LAYOUT_ALL_POINTERS
-    | crate::gc::GC_OBJ_TYPED_LAYOUT_INTACT
     | crate::gc::GC_ARRAY_ELEMENT_SHAPE;
 
 /// Whether the layout note for storing `value_bits` into `arr` can be skipped.

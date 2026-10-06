@@ -21,3 +21,49 @@ fn layout_birth_rebuild_and_store_never_mint_masks() {
     }
     assert_eq!(crate::gc::per_object_layout_table_sizes(), 0);
 }
+
+#[test]
+fn holey_numeric_array_keeps_holes_fact_across_layout_operations() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let arr = crate::array::js_array_alloc_with_length(8);
+    crate::array::js_array_set_f64(arr, 2, 42.5);
+    unsafe {
+        assert!(crate::array::rebuild_array_numeric_raw_f64_allow_holes(arr));
+        let header = header_from_user_ptr(arr.cast());
+        let slots = crate::array::array_elements_ptr(arr);
+        assert_ne!(
+            (*header)._reserved & GC_ARRAY_RAW_F64_HOLES,
+            0,
+            "fixture must be holey numeric"
+        );
+        layout_init_pointer_free(arr.cast());
+        assert_ne!(
+            (*header)._reserved & GC_ARRAY_RAW_F64_HOLES,
+            0,
+            "birth layout must preserve the holes proof"
+        );
+        layout_rebuild_from_slots(arr.cast(), slots, 8);
+        assert_ne!(
+            (*header)._reserved & GC_ARRAY_RAW_F64_HOLES,
+            0,
+            "rebuild must preserve the holes proof"
+        );
+        assert_eq!(*slots, crate::value::TAG_HOLE);
+        assert_eq!(*slots.add(2), 42.5f64.to_bits());
+    }
+    js_shadow_slot_set(0, ptr_bits(arr as usize));
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert!(trace.copying_nursery.copied_objects > 0);
+    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::array::ArrayHeader;
+    assert_ne!(moved, arr);
+    unsafe {
+        assert_ne!(
+            (*header_from_user_ptr(moved.cast()))._reserved & GC_ARRAY_RAW_F64_HOLES,
+            0
+        );
+        assert_eq!(
+            *crate::array::array_elements_ptr(moved),
+            crate::value::TAG_HOLE
+        );
+    }
+}

@@ -13,8 +13,7 @@
 //!
 //! So every layout fact the header carries has already arrived at the
 //! destination by construction: the layout state, `GC_LAYOUT_ALL_POINTERS`,
-//! the raw-f64 / holes flags, `GC_ARRAY_ELEMENT_SHAPE` and
-//! `GC_OBJ_TYPED_LAYOUT_INTACT`. What cannot ride a header is a record keyed
+//! the raw-f64 / holes flags, `GC_ARRAY_ELEMENT_SHAPE`. What cannot ride a header is a record keyed
 //! by the object's ADDRESS, and that is all this funnel moves:
 //!
 //! * the residual static-prototype owner registry (#9304), gated by its
@@ -105,13 +104,6 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     let element_shape = is_array && reserved & GC_ARRAY_ELEMENT_SHAPE != 0;
     if per_object || element_shape {
         transfer_address_keyed_records(old_user as usize, new_user as usize, is_array);
-    }
-
-    // The source is a dead evacuation original or a growth forwarding stub the
-    // moment we return. Drop its claim to a descriptor rather than leave the
-    // bit readable at an address whose records now belong to the destination.
-    if mask_owner {
-        header_clear_typed_layout_intact(old_header);
     }
 }
 

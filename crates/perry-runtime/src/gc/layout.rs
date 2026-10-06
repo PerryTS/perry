@@ -51,30 +51,6 @@ pub(crate) const GC_LAYOUT_SIDE_MASK: u16 = 0x8000;
 // copying GC moves the object, avoiding a per-array side-table entry.
 pub(crate) const GC_LAYOUT_ALL_POINTERS: u16 = 0x2000;
 
-// #5093: bit 12 of `GcHeader._reserved`. For an ARRAY it is the typed-literal
-// layout claim (`array::header_gc_slots`). Objects never set this bit; their
-// ShapeId rep is authoritative.
-pub const GC_OBJ_TYPED_LAYOUT_INTACT: u16 = 0x1000;
-
-#[inline]
-pub(super) unsafe fn header_clear_typed_layout_intact(header: *mut GcHeader) {
-    (*header)._reserved &= !GC_OBJ_TYPED_LAYOUT_INTACT;
-}
-
-// Clear the intact bit given only a user pointer (looks the header up). Used by
-// the one remove path (`layout_clear_for_ptr`) that doesn't already hold a
-// header. No-op for addresses too low to carry a Gc header.
-#[inline]
-pub(super) fn clear_typed_layout_intact_for_user(user_ptr: usize) {
-    if user_ptr < GC_HEADER_SIZE + 0x1000 {
-        return;
-    }
-    unsafe {
-        let header = header_from_user_ptr(user_ptr as *const u8);
-        (*header)._reserved &= !GC_OBJ_TYPED_LAYOUT_INTACT;
-    }
-}
-
 mod by_shape;
 mod child_slots;
 mod slot_mask;
@@ -274,7 +250,6 @@ pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
     }
     set_layout_state(header, GC_LAYOUT_POINTER_FREE);
     layout_forget_object(user_ptr as usize);
-    header_clear_typed_layout_intact(header);
 }
 
 /// Declare that every currently-live slot of a fresh array-like payload holds
@@ -286,7 +261,6 @@ pub(crate) unsafe fn layout_init_all_pointer_slots(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
-    header_clear_typed_layout_intact(header);
     layout_forget_object(user_ptr as usize);
     set_layout_state(header, GC_LAYOUT_SIDE_MASK);
     (*header)._reserved |= GC_LAYOUT_ALL_POINTERS;
@@ -340,7 +314,6 @@ pub(crate) unsafe fn layout_init_unknown_fresh(user_ptr: *mut u8) {
         GC_LAYOUT_POINTER_FREE,
         "layout_init_unknown_fresh is for a fresh pointer-free birth only"
     );
-    header_clear_typed_layout_intact(header);
     set_layout_state(header, GC_LAYOUT_UNKNOWN);
 }
 
@@ -363,7 +336,6 @@ pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
     if (*header).obj_type == GC_TYPE_OBJECT {
         return;
     }
-    header_clear_typed_layout_intact(header);
     let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
     if state == GC_LAYOUT_UNKNOWN {
         layout_forget_object(user_ptr as usize);
@@ -387,7 +359,6 @@ pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
     // outright rather than only clearing the bit.
     crate::array::forget_element_shape(user_ptr);
     layout_forget_object(user_ptr);
-    clear_typed_layout_intact_for_user(user_ptr);
     if user_ptr >= GC_HEADER_SIZE + 0x1000 {
         unsafe {
             (*header_from_user_ptr(user_ptr as *const u8))._reserved &= !GC_LAYOUT_ALL_POINTERS;
@@ -466,12 +437,6 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         }
         if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_UNKNOWN {
             return;
-        }
-        // An array typed-literal claim is retired before generic mask updates.
-        // Object layout is handled above by ShapeId and never reaches here.
-        let claimed_intact = (*header)._reserved & GC_OBJ_TYPED_LAYOUT_INTACT != 0;
-        if claimed_intact {
-            header_clear_typed_layout_intact(header);
         }
         let pointer = layout_pointer_bearing_bits(value_bits);
         // A result array built by a runtime helper can declare that its live
@@ -629,7 +594,6 @@ pub(crate) unsafe fn layout_rebuild_from_slots(
     }
     // The rebuild reconstructs only the pointer mask (no raw-f64 layout), so the
     // object no longer has a canonical typed descriptor: drop the intact bit.
-    header_clear_typed_layout_intact(header);
     if slots.is_null() || slot_count == 0 {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
         slot_masks_remove(user_ptr as usize);
@@ -673,7 +637,6 @@ pub(crate) unsafe fn layout_init_from_slots(
     if super::layout_tables::per_object_layouts_maybe_nonempty() {
         layout_forget_object(user_ptr as usize);
     }
-    header_clear_typed_layout_intact(header);
     if slots.is_null() || slot_count == 0 {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
         return false;
