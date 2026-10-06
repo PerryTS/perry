@@ -610,7 +610,19 @@ pub(crate) fn run_native_steps(stream: f64) {
             let (base, total) = (bytes.as_ptr(), bytes.len());
             #[cfg(test)]
             let (base, total) = if stream_sabotage("hold_slice_across_push") && op == REC_WRITE {
-                *held_input.get_or_insert((base, total))
+                // Deliberately violate the borrow boundary. Heap strings move,
+                // unlike the owned UTF-8 scratch above: keeping their interior
+                // address makes this fault deterministic after a listener GC.
+                *held_input.get_or_insert_with(|| {
+                    if JSValue::from_bits(chunk.to_bits()).is_string() {
+                        crate::string::with_string_value_bytes(chunk, |bytes| {
+                            (bytes.as_ptr(), bytes.len())
+                        })
+                        .unwrap()
+                    } else {
+                        (base, total)
+                    }
+                })
             } else {
                 (base, total)
             };
