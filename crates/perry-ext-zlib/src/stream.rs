@@ -143,7 +143,11 @@ pub(crate) unsafe fn read_input_bytes(ptr: *const StringHeader) -> Option<Vec<u8
     }
     if js_buffer_is_buffer(ptr as i64) != 0 {
         let buf = ptr as *const BufferHeader;
-        return Some(perry_ffi::read_buffer_bytes(buf).unwrap_or(&[]).to_vec());
+        return Some(perry_ffi::bytes::no_gc(|scope| {
+            perry_ffi::read_buffer_bytes(buf, scope)
+                .unwrap_or(&[])
+                .to_vec()
+        }));
     }
     let len = (*ptr).byte_len as usize;
     let data = (ptr as *const u8).add(std::mem::size_of::<StringHeader>());
@@ -701,7 +705,11 @@ unsafe fn chunk_to_bytes(value: f64) -> Option<Vec<u8>> {
         if js_buffer_is_buffer(raw) != 0 {
             let buf = raw as *const BufferHeader;
             if !buf.is_null() {
-                return Some(perry_ffi::read_buffer_bytes(buf).unwrap_or(&[]).to_vec());
+                return Some(perry_ffi::bytes::no_gc(|scope| {
+                    perry_ffi::read_buffer_bytes(buf, scope)
+                        .unwrap_or(&[])
+                        .to_vec()
+                }));
             }
         }
     }

@@ -1592,6 +1592,10 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 /// | 13 | available | `GC_LAYOUT_ALL_POINTERS` | closure/array layout only |
 /// | 14..15 | available | `GC_LAYOUT_STATE_MASK` | closure/array layout only |
 ///
+/// Byte families, TypedArray and NativeArena owner only: B1 uses 9..14 for
+/// the active byte-pin count, 15 to preserve a pre-existing permanent pin.
+/// These types have no dynamic layout-slot state; no header or cell grows.
+///
 /// Object layout is a ShapeId fact. Bits 7 and 12..15 have no object
 /// layout meaning; array and closure layout metadata still uses its listed
 /// bits. Any new header use must be checked against every GC kind.

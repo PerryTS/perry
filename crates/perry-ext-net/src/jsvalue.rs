@@ -123,7 +123,11 @@ pub(crate) unsafe fn jsvalue_to_socket_bytes(value: f64) -> Option<Vec<u8>> {
         if js_buffer_is_buffer(raw) != 0 {
             let buf = raw as *const BufferHeader;
             if !buf.is_null() {
-                return Some(perry_ffi::read_buffer_bytes(buf).unwrap_or(&[]).to_vec());
+                return Some(perry_ffi::bytes::no_gc(|scope| {
+                    perry_ffi::read_buffer_bytes(buf, scope)
+                        .unwrap_or(&[])
+                        .to_vec()
+                }));
             }
         }
         // Non-buffer pointer: do NOT reinterpret it as a `StringHeader`. A real

@@ -699,7 +699,10 @@ unsafe fn live_pfx_entries(options: f64) -> Option<Vec<(Vec<u8>, String)>> {
         if is_buffer(raw) == 0 {
             return None;
         }
-        perry_ffi::read_buffer_bytes(raw as *const perry_ffi::BufferHeader).map(<[u8]>::to_vec)
+        perry_ffi::bytes::no_gc(|scope| {
+            perry_ffi::read_buffer_bytes(raw as *const perry_ffi::BufferHeader, scope)
+                .map(<[u8]>::to_vec)
+        })
     }
 
     unsafe fn entry(

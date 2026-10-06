@@ -372,12 +372,7 @@ fn json_parse_promise(bytes: &[u8]) -> f64 {
 }
 
 fn array_buffer_from_bytes(bytes: &[u8]) -> f64 {
-    let buf = crate::buffer::js_array_buffer_new(bytes.len() as i32);
-    unsafe {
-        let data = (buf as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
-    }
-    f64::from_bits(JSValue::pointer(buf as *const u8).bits())
+    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::ArrayBuffer, bytes)
 }
 
 fn uint8_array_from_bytes(bytes: &[u8]) -> f64 {

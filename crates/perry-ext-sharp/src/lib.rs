@@ -97,8 +97,10 @@ unsafe fn decode_image_from_value(input_bits: i64) -> Option<DynamicImage> {
         return None;
     }
     if js_buffer_is_buffer(ptr) != 0 {
-        let bytes = read_buffer_bytes(ptr as *const BufferHeader)?;
-        image::load_from_memory(bytes).ok()
+        perry_ffi::bytes::no_gc(|scope| {
+            let bytes = read_buffer_bytes(ptr as *const BufferHeader, scope)?;
+            image::load_from_memory(bytes).ok()
+        })
     } else if JsValue::from_bits(input_bits as u64).is_pointer() {
         None // object/array — not a valid input
     } else {
@@ -311,10 +313,12 @@ pub unsafe extern "C" fn js_sharp_from_input(input_bits: i64) -> Handle {
         return -1;
     }
     if js_buffer_is_buffer(ptr) != 0 {
-        return match read_buffer_bytes(ptr as *const BufferHeader) {
-            Some(bytes) => decode_image_bytes(bytes),
-            None => -1,
-        };
+        return perry_ffi::bytes::no_gc(|scope| {
+            match read_buffer_bytes(ptr as *const BufferHeader, scope) {
+                Some(bytes) => decode_image_bytes(bytes),
+                None => -1,
+            }
+        });
     }
     let input = JsValue::from_bits(input_bits as u64);
     if input.is_pointer() {

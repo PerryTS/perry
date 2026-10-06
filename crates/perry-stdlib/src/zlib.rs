@@ -9,8 +9,8 @@ use flate2::read::{
 use flate2::Compression;
 use perry_runtime::{
     buffer::{
-        buffer_alloc, buffer_data, buffer_data_mut, is_registered_buffer, js_buffer_alloc,
-        js_buffer_is_buffer, mark_as_uint8array, BufferHeader,
+        buffer_alloc, buffer_data, buffer_data_mut, is_registered_buffer, js_buffer_is_buffer,
+        mark_as_uint8array, BufferHeader,
     },
     closure::is_closure_ptr,
     js_closure_call0, js_closure_call1, js_closure_call2, js_get_string_pointer_unified,
@@ -1407,14 +1407,10 @@ fn pipes_for(id: i64) -> Vec<u64> {
 }
 
 unsafe fn make_buffer(bytes: &[u8]) -> Option<f64> {
-    let buf = js_buffer_alloc(bytes.len() as i32, 0);
-    if buf.is_null() {
-        return None;
-    }
-    let data = (buf as *mut u8).add(std::mem::size_of::<BufferHeader>());
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
-    (*buf).length = bytes.len() as u32;
-    Some(f64::from_bits(JSValue::pointer(buf as *const u8).bits()))
+    Some(perry_runtime::buffer::bytes::from_slice(
+        perry_runtime::buffer::bytes::Brand::Buffer,
+        bytes,
+    ))
 }
 
 /// Forward a `.pipe(dest)` chunk: `dest.write(Buffer.from(bytes))`. Builds the

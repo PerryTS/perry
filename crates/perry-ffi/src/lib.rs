@@ -117,6 +117,8 @@ mod bigint;
 pub use bigint::{alloc_bigint_from_str, read_bigint_limbs};
 
 mod buffer;
+pub mod bytes;
+pub mod native_payload;
 pub use buffer::{alloc_buffer, read_buffer_bytes};
 
 mod json;

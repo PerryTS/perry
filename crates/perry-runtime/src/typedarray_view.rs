@@ -301,7 +301,7 @@ pub(crate) fn is_view_length_tracking(ta: usize) -> bool {
 
 /// True when `ta` is a view its resizable ArrayBuffer has shrunk past.
 #[inline]
-fn is_view_out_of_bounds(ta: usize) -> bool {
+pub(crate) fn is_view_out_of_bounds(ta: usize) -> bool {
     crate::buffer::any_resizable_buffer()
         && TYPED_ARRAY_VIEW_META.with(|r| r.borrow().get(&ta).is_some_and(|rec| rec.out_of_bounds))
 }

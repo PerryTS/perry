@@ -148,6 +148,7 @@ pub mod native_abi;
 pub mod native_arena;
 pub mod native_handle;
 pub mod native_payload;
+pub mod native_payload_abi;
 #[cfg(target_os = "linux")]
 mod native_stack;
 pub mod native_value_profile;

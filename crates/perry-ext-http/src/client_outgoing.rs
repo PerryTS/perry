@@ -55,8 +55,10 @@ pub(crate) unsafe fn chunk_to_bytes(value: f64) -> Option<Vec<u8>> {
     if bits >> 48 == 0x7FFD {
         let raw = (bits & PTR_MASK) as i64;
         if js_buffer_is_buffer(raw) != 0 {
-            return perry_ffi::read_buffer_bytes(raw as *const perry_ffi::BufferHeader)
-                .map(|b| b.to_vec());
+            return perry_ffi::bytes::no_gc(|scope| {
+                perry_ffi::read_buffer_bytes(raw as *const perry_ffi::BufferHeader, scope)
+                    .map(|b| b.to_vec())
+            });
         }
     }
     extract_string_value(value).map(String::into_bytes)

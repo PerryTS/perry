@@ -150,16 +150,7 @@ pub(crate) fn cp_value_to_bytes(value: f64) -> Vec<u8> {
 
 /// NaN-boxed `Buffer` value holding `bytes`.
 pub(crate) fn cp_make_buffer(bytes: &[u8]) -> f64 {
-    let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
-    if buf.is_null() {
-        return cp_undefined();
-    }
-    unsafe {
-        let data = (buf as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
-        (*buf).length = bytes.len() as u32;
-    }
-    cp_box_ptr(buf as *const u8)
+    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes)
 }
 
 pub(crate) unsafe fn cp_read_string_header(ptr: i64) -> String {

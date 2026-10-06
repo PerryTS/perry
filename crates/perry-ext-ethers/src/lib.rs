@@ -146,8 +146,9 @@ pub unsafe extern "C" fn js_keccak256_native(buf_ptr: i64) -> *mut StringHeader 
         let s = "0x0000000000000000000000000000000000000000000000000000000000000000";
         return alloc_string(s).as_raw();
     }
-    let bytes = perry_ffi::read_buffer_bytes(buf).unwrap_or(&[]);
-    let hash = keccak256(bytes);
+    let hash = perry_ffi::bytes::no_gc(|scope| {
+        keccak256(perry_ffi::read_buffer_bytes(buf, scope).unwrap_or(&[]))
+    });
 
     let hex_chars = b"0123456789abcdef";
     let mut out = Vec::with_capacity(66);
@@ -174,12 +175,9 @@ pub unsafe extern "C" fn js_keccak256_native(buf_ptr: i64) -> *mut StringHeader 
 #[no_mangle]
 pub unsafe extern "C" fn js_keccak256_native_bytes(buf_ptr: i64) -> *mut BufferHeader {
     let buf = (buf_ptr as u64 & 0x0000_FFFF_FFFF_FFFF) as *const BufferHeader;
-    let bytes: &[u8] = if buf.is_null() {
-        &[]
-    } else {
-        perry_ffi::read_buffer_bytes(buf).unwrap_or(&[])
-    };
-    let hash = keccak256(bytes);
+    let hash = perry_ffi::bytes::no_gc(|scope| {
+        keccak256(perry_ffi::read_buffer_bytes(buf, scope).unwrap_or(&[]))
+    });
     alloc_buffer(&hash)
 }
 

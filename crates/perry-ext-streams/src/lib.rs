@@ -327,7 +327,7 @@ unsafe fn read_bytes_from_chunk(chunk_bits: u64) -> Option<Vec<u8>> {
         return None;
     }
     let ptr = (chunk_bits & POINTER_MASK) as *const BufferHeader;
-    perry_ffi::read_buffer_bytes(ptr).map(|s| s.to_vec())
+    perry_ffi::bytes::no_gc(|scope| perry_ffi::read_buffer_bytes(ptr, scope).map(|s| s.to_vec()))
 }
 
 /// Allocate a node-shaped `Error` and throw it via the runtime's

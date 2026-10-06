@@ -91,11 +91,15 @@ fn _force_link() -> u64 {
 mod tests {
     use super::{upgrade_head_arg, POINTER_TAG, PTR_MASK};
 
-    fn head_bytes(data: &[u8]) -> &'static [u8] {
+    fn head_bytes(data: &[u8]) -> Vec<u8> {
         let arg = upgrade_head_arg(data);
         assert_eq!(arg.to_bits() & !PTR_MASK, POINTER_TAG);
         let ptr = (arg.to_bits() & PTR_MASK) as *const perry_ffi::BufferHeader;
-        perry_ffi::read_buffer_bytes(ptr).expect("upgrade head buffer")
+        perry_ffi::bytes::no_gc(|scope| {
+            perry_ffi::read_buffer_bytes(ptr, scope)
+                .expect("upgrade head buffer")
+                .to_vec()
+        })
     }
 
     #[test]

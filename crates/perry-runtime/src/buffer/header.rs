@@ -804,6 +804,7 @@ pub fn buffer_byte_offset(buf: usize) -> u32 {
 /// post-trace registry pruning below. Their bytes now also count toward
 /// `arena_total_bytes`, so allocation pressure finally triggers collections.
 pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
+    super::bytes::assert_allocation_allowed();
     // RULE 3 (`object/shape_rule3.rs`): `capacity` occupies payload `+4`, the
     // word the emitted property-read path compares against a cached ShapeId,
     // and a 2 GiB buffer would write `0x8000_0000` there — shape #1. Every
@@ -839,6 +840,7 @@ pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
 /// Fresh allocations start with no foreign-data bit, so recycled addresses
 /// cannot inherit a previous owner's native pointer.
 pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHeader {
+    super::bytes::assert_allocation_allowed();
     // RULE 3: this wrapper is reached from `extern "C"` Node-API entry points
     // where a JS throw has nowhere to land, so the over-range span is clamped
     // rather than refused — the policy `instance_memory_span` already applies
@@ -906,8 +908,17 @@ pub(crate) fn buffer_adopt_backing(
     root.get_raw_mut_ptr()
 }
 
+/// Whether this foreign-shaped cell owns bytes whose release Perry controls.
+pub(crate) fn has_owned_backing(addr: usize) -> bool {
+    is_foreign_backed_buffer(addr) && unsafe { (*(addr as *const ForeignBuffer)).owned.is_some() }
+}
+
 pub(crate) fn take_owned_backing(addr: usize) -> Option<super::backing::Backing> {
-    if !is_foreign_backed_buffer(addr) {
+    #[cfg(test)]
+    let defer = !super::bytes::sabotage("detach_free");
+    #[cfg(not(test))]
+    let defer = true;
+    if !is_foreign_backed_buffer(addr) || (defer && super::bytes::has_pins(addr)) {
         return None;
     }
     let backing = unsafe { (*(addr as *mut ForeignBuffer)).owned.take() };

@@ -710,14 +710,7 @@ unsafe fn json_value_from_str(json: &str) -> f64 {
 }
 
 unsafe fn buffer_from_bytes(bytes: &[u8]) -> f64 {
-    let buf = perry_runtime::buffer::js_buffer_alloc(bytes.len() as i32, 0);
-    if buf.is_null() {
-        return undefined();
-    }
-    let data = (buf as *mut u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
-    (*buf).length = bytes.len() as u32;
-    js_nanbox_pointer(buf as i64)
+    perry_runtime::buffer::bytes::from_slice(perry_runtime::buffer::bytes::Brand::Buffer, bytes)
 }
 
 fn certificate_attr_value(atv: &x509_cert::attr::AttributeTypeAndValue) -> String {

@@ -320,12 +320,14 @@ pub unsafe extern "C" fn js_keccak256_native_bytes(
 
     let hash = keccak256(data);
 
-    // Allocate a buffer and copy hash bytes
-    let result = perry_runtime::buffer::buffer_alloc(32);
-    (*result).length = 32;
-    let dst = (result as *mut u8).add(std::mem::size_of::<perry_runtime::buffer::BufferHeader>());
-    std::ptr::copy_nonoverlapping(hash.as_ptr(), dst, 32);
-    result
+    perry_runtime::value::JSValue::from_bits(
+        perry_runtime::buffer::bytes::from_slice(
+            perry_runtime::buffer::bytes::Brand::Buffer,
+            &hash,
+        )
+        .to_bits(),
+    )
+    .as_pointer()
 }
 
 /// formatUnits(value: bigint, decimals: number) -> string

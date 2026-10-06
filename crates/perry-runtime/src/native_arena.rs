@@ -244,13 +244,27 @@ unsafe fn dispose_owner(owner: *mut NativeArenaOwnerHeader) {
     if owner.is_null() || (*owner).disposed != 0 {
         return;
     }
+    if !crate::buffer::bytes::has_pins(owner as usize) {
+        release_owner_bytes(owner);
+    }
+    (*owner).disposed = 1;
+    (*owner).generation = (*owner).generation.wrapping_add(1);
+}
+
+/// Release an explicitly disposed owner's allocation when native pins finish.
+/// # Safety
+/// owner is a live NativeArena owner on this thread.
+pub(crate) unsafe fn release_disposed_bytes(owner: *mut NativeArenaOwnerHeader) {
+    if (*owner).disposed != 0 && !crate::buffer::bytes::has_pins(owner as usize) {
+        release_owner_bytes(owner);
+    }
+}
+unsafe fn release_owner_bytes(owner: *mut NativeArenaOwnerHeader) {
     let data = (*owner).data;
     if !data.is_null() {
         dealloc(data, byte_layout((*owner).byte_length));
         (*owner).data = ptr::null_mut();
     }
-    (*owner).disposed = 1;
-    (*owner).generation = (*owner).generation.wrapping_add(1);
 }
 
 #[no_mangle]
