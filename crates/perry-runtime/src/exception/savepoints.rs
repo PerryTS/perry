@@ -250,7 +250,8 @@ catch_savepoints! {
 /// that scanner. A moving minor that runs while a `try` is open — before any
 /// throw crosses it — must rewrite this copy too, or a later throw restores a
 /// from-space address. Bounded by `try_depth <= MAX_TRY_DEPTH`, same as every
-/// other read of this slab.
+/// other read of this growing storage. No pointer into the vector is cached:
+/// the caller obtains the current slice through `ExceptionState` for each scan.
 pub(super) fn scan_pending_trap_roots_mut(
     savepoints: &mut [std::mem::MaybeUninit<CatchSavepoint>],
     try_depth: usize,
