@@ -47,7 +47,8 @@ def environment(root, arm):
     env = dict(os.environ, CARGO_TARGET_DIR=str(target), PERRY_RUNTIME_DIR=str(target/'release'),
                PERRY_WORKSPACE_ROOT=str(source), RUST_TEST_THREADS='1', CARGO_BUILD_JOBS='8',
                PERRY_NO_AUTO_OPTIMIZE='1', PERRY_NO_CACHE='1', PERRY_SKIP_BUILD='1',
-               PERRY_ALLOW_PERRY_FEATURES='1', TMPDIR=str(root/'tmp'), RAYON_NUM_THREADS='8',
+               PERRY_ALLOW_PERRY_FEATURES='1', PERRY_KEEP_SYMBOLS='1',
+               TMPDIR=str(root/'tmp'), RAYON_NUM_THREADS='8',
                PERRY_FORCE_WELL_KNOWN='http,net,ws,zlib',
                PERF_BUILDID_DIR=str(root/'perf-buildid'), XDG_CACHE_HOME=str(root/'cache'))
     env.pop('PERRY_GC_DIAG', None)
@@ -106,7 +107,7 @@ def full_collections(root, arm, name, cmd, cwd, env, trial):
     diag = dict(env, PERRY_GC_DIAG='1')
     trials_dir = 'trials-thp-off' if env.get('MIMALLOC_ALLOW_THP') == '0' else 'trials'
     prefix = root/'measure'/trials_dir/f'{name}.{trial}.{arm}.gc'
-    huge = []
+    samples = []
     stop = threading.Event()
     proc = subprocess.Popen(cmd, cwd=cwd, env=diag, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             preexec_fn=disable_thp if env.get('MIMALLOC_ALLOW_THP') == '0' else None)
@@ -114,8 +115,8 @@ def full_collections(root, arm, name, cmd, cwd, env, trial):
         while not stop.is_set():
             try:
                 data = Path(f'/proc/{proc.pid}/smaps_rollup').read_text()
-                match = re.search(r'(?m)^AnonHugePages:\s+(\d+)', data)
-                if match: huge.append(int(match[1]))
+                fields = {k: int(v) for k, v in re.findall(r'(?m)^(Rss|Anonymous|AnonHugePages):\s+(\d+)', data)}
+                if len(fields) == 3: samples.append(fields)
             except (OSError, ProcessLookupError): pass
             stop.wait(0.02)
     sampler = threading.Thread(target=sample); sampler.start()
@@ -137,7 +138,10 @@ def full_collections(root, arm, name, cmd, cwd, env, trial):
                 if obj.get('event') == 'gc_cycle': events.append(obj)
             except ValueError: pass
     fulls = None if not events and b'diagnostics feature disabled' in stderr else sum(e['collection_kind'] == 'full' for e in events)
-    return {'fulls': fulls, 'anon_huge_kb': max(huge) if huge else None}
+    return {'fulls': fulls,
+            'anon_huge_kb': max(s['AnonHugePages'] for s in samples) if samples else None,
+            'diag_anon_kb': max(s['Anonymous'] for s in samples) if samples else None,
+            'diag_file_rss_kb': max(s['Rss']-s['Anonymous'] for s in samples) if samples else None}
 
 def measure(root, names, thp_off):
     trials_dir = 'trials-thp-off' if thp_off else 'trials'
