@@ -48,7 +48,7 @@ def environment(root, arm):
     env = dict(os.environ, CARGO_TARGET_DIR=str(target), PERRY_RUNTIME_DIR=str(target/'release'),
                PERRY_WORKSPACE_ROOT=str(prebuilt), RUST_TEST_THREADS='1', CARGO_BUILD_JOBS='8',
                PERRY_NO_AUTO_OPTIMIZE='1', PERRY_NO_CACHE='1', PERRY_SKIP_BUILD='1',
-               PERRY_ALLOW_PERRY_FEATURES='1', TMPDIR=str(root/'tmp'), RAYON_NUM_THREADS='8',
+               PERRY_ALLOW_PERRY_FEATURES='1', TMPDIR=str(root/'tmp'), RAYON_NUM_THREADS=os.environ.get('PERRY_VERIFY_RAYON_THREADS', '8'),
                PERRY_FORCE_WELL_KNOWN='http,net,ws,zlib')
     env.pop('PERRY_GC_DIAG', None)
     return source, target, env
