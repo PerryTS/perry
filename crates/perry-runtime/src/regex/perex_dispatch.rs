@@ -361,8 +361,16 @@ pub(crate) fn test_value(
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let argument = scope.root_nanbox_f64(argument);
-    let input =
-        api::caught(|| crate::value::js_jsvalue_to_string_coerce(argument.get_nanbox_f64()))?;
+    let input = api::caught(|| {
+        let value = argument.get_nanbox_f64();
+        if crate::value::JSValue::from_bits(value.to_bits()).is_short_string() {
+            // Inline strings have no StringHeader. Materialization may
+            // collect, so it stays inside the caught, rooted window.
+            crate::string::js_string_materialize_to_heap(value)
+        } else {
+            crate::value::js_jsvalue_to_string_coerce(value)
+        }
+    })?;
     let input = scope.root_string_ptr(input);
     test_rooted(&receiver, &input)
 }
