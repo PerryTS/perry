@@ -156,6 +156,23 @@ pub unsafe fn bytes_mut<'s>(value: f64, _: &'s NoGc<'s>) -> Result<&'s mut [u8],
     Ok(std::slice::from_raw_parts_mut(span.ptr, span.len))
 }
 
+/// Preserve the existing inline-cache admission proof on the element hot path.
+/// This moves its current-layout address calculation into the access API; it
+/// adds no probe, cache, or alternative admission rule.
+///
+/// # Safety
+/// The existing u8 inline cache admitted this live owning cell, and index is
+/// in bounds. The caller holds exclusive byte access until this store ends.
+#[inline(always)]
+pub(crate) unsafe fn write_admitted_inline_byte(addr: usize, index: usize, byte: u8) {
+    no_gc(|_| {
+        *((addr as *mut super::BufferHeader)
+            .add(1)
+            .cast::<u8>()
+            .add(index)) = byte;
+    });
+}
+
 // Bits 9..14 are unused by current byte cells and NativeArena owners. Bit 15
 // preserves a pre-existing permanent GC pin. Nested byte pins share the owner;
 // no address registry or latch is introduced. Overflow is refused, never wraps.
@@ -313,7 +330,9 @@ pub fn from_slice(brand: Brand, input: &[u8]) -> f64 {
     let value = allocate(brand, input.len(), Init::Uninit);
     #[cfg(test)]
     if sabotage("inline_copy") {
-        let cell = JSValue::from_bits(value.to_bits()).as_pointer::<u8>();
+        let cell = JSValue::from_bits(value.to_bits())
+            .as_pointer::<u8>()
+            .cast_mut();
         // Poison the pointer word, then let the witness inspect it BEFORE
         // dereferencing it. This reproduces ump's corruption without a UAF.
         unsafe {

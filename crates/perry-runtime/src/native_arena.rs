@@ -175,13 +175,6 @@ pub(crate) unsafe fn native_view_from_typed_array(
     ta as *const NativeTypedViewHeader
 }
 
-#[inline]
-pub(crate) unsafe fn native_view_from_typed_array_mut(
-    ta: *mut TypedArrayHeader,
-) -> *mut NativeTypedViewHeader {
-    ta as *mut NativeTypedViewHeader
-}
-
 unsafe fn clean_owner_ptr(raw: u64) -> *mut NativeArenaOwnerHeader {
     let addr = strip_nanbox(raw);
     if addr < 0x1000 {
@@ -231,13 +224,6 @@ pub(crate) unsafe fn native_view_data_ptr(ta: *const TypedArrayHeader) -> *const
     let view = native_view_from_typed_array(ta);
     validate_view_alive(view);
     (*view).data as *const u8
-}
-
-#[inline]
-pub(crate) unsafe fn native_view_data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
-    let view = native_view_from_typed_array_mut(ta);
-    validate_view_alive(view);
-    (*view).data
 }
 
 unsafe fn dispose_owner(owner: *mut NativeArenaOwnerHeader) {

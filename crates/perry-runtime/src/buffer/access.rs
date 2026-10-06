@@ -291,7 +291,7 @@ pub(crate) fn cached_u8_write(addr: usize, index: i32, byte: u8) -> bool {
         if index < 0 || index as u32 >= len {
             return false;
         }
-        *super::buffer_data_mut(addr as *mut BufferHeader).add(index as usize) = byte;
+        super::bytes::write_admitted_inline_byte(addr, index as usize, byte);
     }
     true
 }
