@@ -38,32 +38,34 @@ The identical stdlib failures are `runtime_thread_exit_tests::symbols_tests::thr
 
 All 14 program/kernel output checks pass against Node. Forced-GC focused tests pass: five B4, eight B1 byte-access, one transfer and three crypto tests, with six B4, seven B1 and three crypto child sabotages red. ASan's instrumented runtime with the system allocator passes 14 native tests (eight byte-access, five B4, one transfer), including the runtime child sabotages; leak detection is disabled for intentional process-lifetime objects. The TS zlib stream's output is checked against Node; that stream executable is not run under ASan.
 
-Final source-layout, header-constant, root-holder and pin-custody checks pass, as do their applicable self-tests and the lint-runner inventory self-test. The full lint tier is not claimed: the file-size gate has three unchanged main violations (`dynamic_dispatch.rs`, `delete_rest.rs`, `method_site.rs`). Exact crate summaries, raw gap outcomes, rechecks, ASan summaries and output statuses are recorded in `scripts/fixtures/buffer_b4_verification.json`; interleaved trials and medians are in `scripts/fixtures/buffer_b4_measurements.json`. The performance tables below still show the completed 2fb54a cohort until the current locked batch finishes.
+Final source-layout, header-constant, root-holder and pin-custody checks pass, as do their applicable self-tests and the lint-runner inventory self-test. The full lint tier is not claimed: the file-size gate has three unchanged main violations (`dynamic_dispatch.rs`, `delete_rest.rs`, `method_site.rs`). Exact crate summaries, raw gap outcomes, rechecks, ASan summaries and output statuses are recorded in `scripts/fixtures/buffer_b4_verification.json`; interleaved trials and medians are in `scripts/fixtures/buffer_b4_measurements.json`.
 
 Measurements use qb6 CPUs 56–63 under the shared lock, ASLR disabled, separate targets, Node 26.5.1 output checks and n=5 interleaved trials with identical-main-binary controls. Both arms use the same full prebuilt archives and forced http/net/ws/zlib wrappers. GC counts come from separate `PERRY_GC_TRACE=1` runs; instruction/RSS runs have tracing disabled. Kernel elapsed-time fields and Effect's two elapsed-time fields are normalized; semantic output matches exactly.
 
 | Program | Instructions main → head | Delta / instruction noise (%) | RSS KiB main → head | Fulls main → head | Minors main → head |
 |---|---|---|---|---|---|
-| tsc | 9,998,327,170 → 9,998,701,924 | +0.00375 / 0.04378 | 215,092 → 214,776 | 0 → 0 | 3 → 3 |
-| zod5k | 14,721,232,761 → 14,721,014,043 | -0.00149 / 0.02512 | 52,936 → 52,876 | 0 → 0 | 97 → 97 |
-| qsparse | 23,495,379,760 → 23,494,973,812 | -0.00173 / 0.00516 | 57,688 → 57,644 | 0 → 0 | 131 → 131 |
-| qsstr | 60,426,561,459 → 60,421,714,294 | -0.00802 / 0.04890 | 57,592 → 57,596 | 0 → 0 | 439 → 439 |
-| commander | 7,559,526,605 → 7,558,358,126 | -0.01546 / 0.03845 | 53,036 → 52,912 | 0 → 0 | 32 → 32 |
-| hello | 1,381,233 → 1,381,007 | -0.01636 / 0.00217 | 16,104 → 16,116 | 0 → 0 | 0 → 0 |
-| fastify | 6,635,416,740 → 6,642,640,383 | +0.10886 / 0.35682 | 133,408 → 133,296 | 0 → 0 | 2 → 2 |
-| effect | 26,133,495,624 → 26,133,378,778 | -0.00045 / 0.25415 | 194,420 → 194,952 | 2 → 2 | 16 → 16 |
-| buffer_heavy | 10,672,691,729 → 10,669,855,641 | -0.02657 / 0.00765 | 94,080 → 94,528 | 36 → 36 | 0 → 0 |
-| worker_heavy | 2,126,362,711 → 2,133,180,238 | +0.32062 / 1.44819 | 232,204 → 221,548 | 42 → 41 | 0 → 0 |
-| matmul | 1,735,700,878 → 1,735,699,437 | -0.00008 / 0.00002 | 20,756 → 20,696 | 0 → 0 | 0 → 0 |
-| prime_sieve | 25,192,350 → 25,191,608 | -0.00295 / 0.00018 | 18,172 → 18,176 | 0 → 0 | 0 → 0 |
-| bench_buffer_readwrite | 101,594,585 → 101,593,966 | -0.00061 / 0.00111 | 18,168 → 18,176 | 0 → 0 | 0 → 0 |
-| ecs_u32 | 681,969,502 → 681,968,930 | -0.00008 / 0.00006 | 18,144 → 17,700 | 0 → 0 | 0 → 0 |
+| tsc | 9,971,062,650 → 9,971,526,952 | +0.00466 / 0.02131 | 218,628 → 217,104 | 0 → 0 | 3 → 3 |
+| zod5k | 14,680,305,791 → 14,689,230,535 | +0.06079 / 0.06157 | 52,428 → 52,812 | 0 → 0 | 97 → 97 |
+| qsparse | 23,501,408,052 → 23,499,678,046 | -0.00736 / 0.03111 | 57,688 → 57,644 | 0 → 0 | 131 → 131 |
+| qsstr | 60,415,603,345 → 60,418,221,141 | +0.00433 / 0.04021 | 57,532 → 57,532 | 0 → 0 | 439 → 439 |
+| commander | 7,562,974,564 → 7,562,572,144 | -0.00532 / 0.02436 | 53,032 → 52,908 | 0 → 0 | 32 → 32 |
+| hello | 1,390,682 → 1,390,347 | -0.02409 / 0.03012 | 16,104 → 16,112 | 0 → 0 | 0 → 0 |
+| fastify | 6,628,074,014 → 6,630,180,962 | +0.03179 / 0.25620 | 133,384 → 133,152 | 0 → 0 | 2 → 2 |
+| effect | 24,903,168,156 → 24,909,199,781 | +0.02422 / 0.10273 | 191,596 → 190,816 | 2 → 2 | 17 → 17 |
+| buffer_heavy | 10,673,094,122 → 10,670,258,459 | -0.02657 / 0.00600 | 94,016 → 94,012 | 36 → 36 | 0 → 0 |
+| worker_heavy | 2,127,316,944 → 2,113,661,119 | -0.64193 / 1.30558 | 227,908 → 226,132 | 42 → 42 | 0 → 0 |
+| matmul | 1,735,709,990 → 1,735,708,592 | -0.00008 / 0.00000 | 20,300 → 20,696 | 0 → 0 | 0 → 0 |
+| prime_sieve | 25,201,751 → 25,201,070 | -0.00270 / 0.00031 | 18,164 → 18,176 | 0 → 0 | 0 → 0 |
+| bench_buffer_readwrite | 101,604,457 → 101,603,876 | -0.00057 / 0.00002 | 18,164 → 18,172 | 0 → 0 | 0 → 0 |
+| ecs_u32 | 681,978,773 → 681,978,340 | -0.00006 / 0.00000 | 18,140 → 17,692 | 0 → 0 | 0 → 0 |
 
-All real-program instruction changes are within their control noise floor except hello and buffer-heavy, which improve. Buffer-heavy uses uninitialized factories before copying native output, removing redundant zero writes; an AVX2 explanatory profile (Valgrind cannot decode the normal driver's AVX512 masked instruction) confirms fewer memset and finalizer instructions. The removed detached table no longer incurs a removal probe per finalized byte cell. Hello's final-binary profile confirms 420 fewer dynamic instructions in arena teardown after deleting the 64-entry admission-cache scan; all other Perry function counts are unchanged. The smaller measured total reduction includes ELF/libc startup-layout effects. The kernel changes are tiny; no kernel loop code is changed by this lane.
+All real-program instruction changes are within their current control noise floor except buffer-heavy, which improves. Buffer-heavy uses uninitialized factories before copying native output, removing redundant zero writes; an AVX2 explanatory profile (Valgrind cannot decode the normal driver's AVX512 masked instruction) confirms fewer memset and finalizer instructions. The removed detached table no longer incurs a removal probe per finalized byte cell. Hello's refreshed final-binary profile confirms 420 fewer dynamic instructions in arena teardown after deleting the 64-entry admission-cache scan; all other Perry function counts are unchanged. The smaller total reduction includes ELF/libc startup-layout effects. The kernel instruction decreases are at most 0.00270%, consistent with the same startup/teardown removal; no kernel loop code is changed by this lane.
 
-Worker full counts vary across runs: main 41–42, head 40–43; every event is `old_gen_bytes`. Concurrent transfer scheduling changes simultaneously live stores and pressure-triggered collection timing. Its RSS delta is inside the 15,540 KiB same-binary control variation, and its instruction delta is inside 1.44819% noise. Buffer-heavy retains exactly 36 full collections per arm. Small RSS changes come from the linked code/data working set and allocator page granularity. The sampled file-resident deltas are -448 KiB on tsc, -128 KiB on commander and ECS, -52 KiB on fastify, +192 KiB on buffer-heavy, +72 KiB on matmul and +8 KiB on prime_sieve. Anonymous working sets are nearly unchanged in those companion samples. Zod and buffer-readwrite have smaller primary RSS movements than their diagnostic working-set shifts; these are inferred layout/page effects, not a change in Buffer placement or full-GC regime. Full collection counts are unchanged except the overlapping worker ranges described above. The qs-stringify 2 MiB steps disappear with THP disabled; Effect’s THP-off RSS delta is within its 668 KiB control noise.
+Worker full-count trials are main [42, 42, 41, 42, 42], head [42, 41, 43, 40, 42]; both medians are 42. Concurrent transfer scheduling changes simultaneously live stores and pressure-triggered collection timing. Its RSS delta is inside the 12,856 KiB same-binary control variation, and its instruction delta is inside 1.30558% noise. Buffer-heavy retains exactly 36 full collections per arm. All full/minor medians match across the two arms.
 
-THP-off companion results (`PR_SET_THP_DISABLE`, verified AnonHugePages=0):
+Small RSS movements are bounded changes in linked code/data residency and allocator page granularity, inferred from the companion mapping samples and unchanged collection regime. Zod's +384 KiB, commander’s -124 KiB, hello’s +8 KiB, fastify’s -232 KiB and the kernels’ +396/+12/+8/-448 KiB accompany only small anonymous working-set changes (0–16 KiB in those samples). File-resident shifts are +180/+4/+160/+76 KiB for Zod/commander/hello/fastify, and +72/+8/+8/-128 KiB for matmul/prime_sieve/buffer-readwrite/ECS. These companion snapshots are not taken at the primary run’s exact RSS peak, so they establish the page/layout mechanism without accounting for every primary KiB. No Buffer placement rule or pacing rule changed. tsc’s -1,524 KiB is within its 2,048 KiB RSS control variation and has a 2,036 KiB anonymous companion step; a fresh THP-off check is pending, together with qs-stringify and Effect.
+
+Previous 2fb54a-cohort THP-off companion results (`PR_SET_THP_DISABLE`, verified AnonHugePages=0); the fresh 81e65f3 batch is queued:
 
 | Program | RSS KiB main → head | RSS control noise KiB | Instruction delta / noise (%) | Fulls / minors main → head |
 |---|---|---|---|---|
