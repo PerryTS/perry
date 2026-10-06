@@ -189,7 +189,7 @@ jobs:
   # installed, while retaining separate logs and exit status.
   config-scans:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - name: Checkout repository (inline git)
         shell: bash
