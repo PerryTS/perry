@@ -231,13 +231,21 @@ fn iterator_dequeue(iterator: f64) -> Option<f64> {
 
 /// Append a pending pull to the back of the FIFO queue.
 fn iterator_push_pending(iterator: f64, promise: *mut crate::promise::Promise) {
-    let existing = get_hidden_value(iterator, hidden_key(READABLE_ITERATOR_PENDING_KEY))
-        .filter(|v| is_array_like_value(*v))
-        .unwrap_or_else(|| box_pointer(crate::array::js_array_alloc(0) as *const u8));
+    // Allocating the first queue and growing it can both collect, so the
+    // iterator and the promise are re-read from roots after each.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iterator = scope.root_nanbox_f64(iterator);
+    let promise = scope.root_nanbox_f64(box_pointer(promise as *const u8));
+    let existing = get_hidden_value(
+        iterator.get_nanbox_f64(),
+        hidden_key(READABLE_ITERATOR_PENDING_KEY),
+    )
+    .filter(|v| is_array_like_value(*v))
+    .unwrap_or_else(|| box_pointer(crate::array::js_array_alloc(0) as *const u8));
     let arr = raw_ptr_from_value(existing) as *mut crate::array::ArrayHeader;
-    let arr = crate::array::js_array_push_f64(arr, box_pointer(promise as *const u8));
+    let arr = crate::array::js_array_push_f64(arr, promise.get_nanbox_f64());
     set_hidden_value(
-        iterator,
+        iterator.get_nanbox_f64(),
         hidden_key(READABLE_ITERATOR_PENDING_KEY),
         box_pointer(arr as *const u8),
     );
@@ -766,13 +774,20 @@ extern "C" fn ns_readable_iterator_next(
                 1,
             );
             let rejected = scope.root_raw_mut_ptr(rejected);
-            js_closure_set_capture_f64(fulfilled.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
-            js_closure_set_capture_f64(rejected.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
-            return box_pointer(crate::promise::js_promise_then(
-                promise.get_raw_mut_ptr(),
-                fulfilled.get_raw_mut_ptr(),
-                rejected.get_raw_mut_ptr(),
-            ) as *const u8);
+            for callback in [&fulfilled, &rejected] {
+                callback.with_mut_ptr(|callback| {
+                    js_closure_set_capture_f64(callback, 0, iterator.get_nanbox_f64())
+                });
+            }
+            // js_promise_then roots all three arguments before it allocates.
+            let then = promise.with_mut_ptr(|promise| {
+                fulfilled.with_const_ptr(|fulfilled| {
+                    rejected.with_const_ptr(|rejected| {
+                        crate::promise::js_promise_then(promise, fulfilled, rejected)
+                    })
+                })
+            });
+            return box_pointer(then as *const u8);
         }
     }
 
@@ -814,9 +829,11 @@ extern "C" fn ns_readable_iterator_next(
     // their own promise (FIFO) — none is overwritten or dropped.
     let promise = crate::promise::js_promise_new();
     let promise = scope.root_raw_mut_ptr(promise);
-    iterator_push_pending(iterator.get_nanbox_f64(), promise.get_raw_mut_ptr());
-    resume_iterator_source(stream.get_nanbox_f64());
-    box_pointer(promise.get_raw_const_ptr())
+    promise.with_mut_ptr(|promise| iterator_push_pending(iterator.get_nanbox_f64(), promise));
+    let ((), promise) = promise.across_const::<crate::promise::Promise, _>(|| {
+        resume_iterator_source(stream.get_nanbox_f64())
+    });
+    box_pointer(promise as *const u8)
 }
 
 extern "C" fn ns_readable_iterator_return(
@@ -844,13 +861,17 @@ extern "C" fn ns_readable_iterator_return(
             crate::fn_info!(ns_readable_iterator_return_after_pull, 1; with_declared(1)),
             1,
         ));
-        js_closure_set_capture_f64(continuation.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
-        return box_pointer(crate::promise::js_promise_then(
-            crate::value::js_nanbox_get_pointer(last.get_nanbox_f64())
-                as *mut crate::promise::Promise,
-            continuation.get_raw_mut_ptr(),
-            continuation.get_raw_mut_ptr(),
-        ) as *const u8);
+        let then = continuation.with_mut_ptr(|continuation| {
+            js_closure_set_capture_f64(continuation, 0, iterator.get_nanbox_f64());
+            // js_promise_then roots all three arguments before it allocates.
+            crate::promise::js_promise_then(
+                crate::value::js_nanbox_get_pointer(last.get_nanbox_f64())
+                    as *mut crate::promise::Promise,
+                continuation,
+                continuation,
+            )
+        });
+        return box_pointer(then as *const u8);
     }
     let already_done = iterator_is_done(iterator.get_nanbox_f64());
     let attached = has_truthy_hidden(

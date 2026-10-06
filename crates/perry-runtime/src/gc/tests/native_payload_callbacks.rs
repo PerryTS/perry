@@ -9,7 +9,7 @@ use crate::value::TAG_UNDEFINED;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 static DROPS: AtomicUsize = AtomicUsize::new(0);
-static CALLS: AtomicUsize = AtomicUsize::new(0);
+per_test_global!(static CALLS: AtomicUsize = AtomicUsize::new(0));
 static FINAL_JS: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Default)]

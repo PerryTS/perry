@@ -327,6 +327,8 @@ pub(crate) fn visit_backing_slot(addr: usize, mut visit: impl FnMut(*mut u64)) {
         unsafe {
             let data =
                 buffer_data(info.backing as *const BufferHeader).wrapping_add(info.offset as usize);
+            // GC_STORE_AUDIT(POINTER_FREE): a derived byte address, not a traced
+            // edge; it is re-derived from the backing the collector just visited.
             data_view_cache_slot(addr as *mut BufferHeader).write(data as usize);
         }
     }
