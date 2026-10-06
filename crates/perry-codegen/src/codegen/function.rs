@@ -1501,7 +1501,9 @@ pub(super) fn compile_function(
         let arg_val = blk.load(DOUBLE, &param_slot);
         let handle = crate::expr::unbox_to_i64(blk, &arg_val);
         let handle_ptr = blk.inttoptr(I64, &handle);
-        let data_ptr = blk.gep(I8, &handle_ptr, &[(I32, "8")]);
+        // Use the same backing resolution as Uint8Array views: a
+        // Buffer argument may own inline bytes or carry a view/native span.
+        let data_ptr = blk.call(PTR, "js_native_buffer_data_ptr", &[(DOUBLE, &arg_val)]);
         let buf_slot = ctx.func.alloca_entry(PTR);
         ctx.block().store(PTR, &data_ptr, &buf_slot);
         let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
@@ -1511,12 +1513,14 @@ pub(super) fn compile_function(
             p.id,
             BufferViewSlot {
                 data_slot: buf_slot,
-                length_slot: None,
+                // Length belongs to the receiver header, not data_ptr - 8.
+                // Keep it live so detach/resize still invalidate bounds.
+                length_slot: Some(handle_ptr),
                 scope_idx: Some(scope_idx),
                 elem: BufferElem::U8,
                 element_width_bytes: 1,
                 index_unit: BufferIndexUnit::Byte,
-                view_byte_offset: Some(0),
+                view_byte_offset: None,
                 length_offset_from_data: -8,
                 alias: AliasState::Unknown,
                 length_source: Some(LengthSource::Unknown),
