@@ -1059,7 +1059,9 @@ pub(crate) fn gc_type_is_known(obj_type: u8) -> bool {
 #[inline]
 pub(crate) fn gc_type_info(obj_type: u8) -> Option<&'static GcTypeInfo> {
     #[cfg(test)]
-    if obj_type == GC_TYPE_ARRAY && crate::buffer::bytes::b4_sabotage("dense_core_descriptor") {
+    if obj_type == GC_TYPE_ARRAY
+        && header_admission_tests::DENSE_DESCRIPTOR_FAULT.with(std::cell::Cell::get)
+    {
         return GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize].as_ref();
     }
     if obj_type.wrapping_sub(1) < FIRST_CORE_TYPE_GAP - 1 {
@@ -1723,8 +1725,17 @@ mod buffer_family_type_tests {
 
 #[cfg(test)]
 mod header_admission_tests {
+    // Only the independent descriptor witness selects this test fault. Do
+    // not query the environment in each runtime lookup during GC sweeping.
+    std::thread_local! {
+        pub(super) static DENSE_DESCRIPTOR_FAULT: std::cell::Cell<bool> = const {
+            std::cell::Cell::new(false)
+        };
+    }
+
     #[test]
     fn sparse_header_admission_agrees_with_all_type_descriptors() {
+        DENSE_DESCRIPTOR_FAULT.set(crate::buffer::bytes::b4_sabotage("dense_core_descriptor"));
         for kind in 0..=u8::MAX {
             assert_eq!(
                 super::gc_type_info(kind),
