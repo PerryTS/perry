@@ -268,6 +268,57 @@ fn constructor_fields_survive_collection_before_the_last_write_state() {
         assert_eq!(native_bytes(owner.get()), 0);
     }
 }
+// Node 26.5.1's own-key order, independently captured by the eleven-
+// constructor oracle. Inherited methods never become instance properties.
+fn own_names(owner: f64) -> Vec<String> {
+    let roots = TransientRootScope::enter();
+    let names = roots.root_nanbox(perry_runtime::object::js_object_get_own_property_names(
+        owner,
+    ));
+    let ptr = || {
+        JsValue::from_bits(names.get().to_bits()).as_pointer::<perry_runtime::array::ArrayHeader>()
+    };
+    let count = perry_runtime::array::js_array_length(ptr());
+    (0..count)
+        .map(|i| {
+            let name = perry_runtime::array::js_array_get_f64(ptr(), i);
+            String::from_utf8(unsafe { read_input_from_bits(name.to_bits() as i64) }.unwrap())
+                .unwrap()
+        })
+        .collect()
+}
+fn assert_node_own_names(owner: f64, codec: Codec) {
+    let zstd = matches!(codec, Codec::ZstdCompress | Codec::ZstdDecompress);
+    let mut expected = vec![
+        "_events",
+        "_readableState",
+        "_writableState",
+        "allowHalfOpen",
+        "_maxListeners",
+        "_eventsCount",
+        "bytesWritten",
+        "_handle",
+        "_outBuffer",
+        "_outOffset",
+        "_chunkSize",
+        "_defaultFlushFlag",
+        "_finishFlushFlag",
+        "_defaultFullFlushFlag",
+        "_flushBoundIdx",
+        "_info",
+        "_maxOutputLength",
+        "_rejectGarbageAfterEnd",
+    ];
+    if zstd {
+        expected.push("_writeState");
+    } else {
+        expected.insert(0, "_writeState");
+        if !matches!(codec, Codec::BrotliCompress | Codec::BrotliDecompress) {
+            expected.extend(["_level", "_strategy", "_mode"]);
+        }
+    }
+    assert_eq!(own_names(owner), expected, "Node constructor field order");
+}
 fn options() -> f64 {
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
@@ -305,6 +356,7 @@ fn eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion() {
             _ => input.clone(),
         };
         let owner = roots.root_nanbox(factory(name, opts.get()));
+        assert_node_own_names(owner.get(), codec);
         listen(owner.get(), 0.0);
         let chunk = roots.root_nanbox(value_bytes(&data));
         unsafe { method(owner.get(), "end", &[chunk.get()]) };
@@ -340,6 +392,8 @@ fn eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion() {
 #[test]
 fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
     clear();
+    let _barriers = CompiledBarriers::new();
+    let copies_before = perry_runtime::gc::copying_minor_cycles();
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(options());
     // Generated in a separate Node process. A 100 MB producer allocation
@@ -348,7 +402,7 @@ fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
     let expected = 2229916188;
     let owner = roots.root_nanbox(factory("Gunzip", opts.get()));
     listen(owner.get(), 3.0);
-    let chunk = roots.root_nanbox(value_bytes(&compressed));
+    let chunk = roots.root_nanbox(value_bytes(compressed));
     BOMB_CRC.with(|crc| *crc.borrow_mut() = flate2::Crc::new());
     let baseline = rss();
     BOMB.with(|stats| stats.set((0, true, baseline)));
@@ -378,6 +432,10 @@ fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
         peak.saturating_sub(baseline)
     );
     assert_eq!(native_bytes(owner.get()), 0);
+    assert!(
+        perry_runtime::gc::copying_minor_cycles() > copies_before,
+        "copying minors actually ran"
+    );
     eprintln!("Z2 bytes={count} baseline_rss={baseline} peak_rss={peak}");
 }
 #[test]
@@ -435,6 +493,14 @@ fn codec_sabotages_turn_their_runtime_witnesses_red() {
     }
     for (fault, witness) in [
         (
+            "error_as_eof",
+            "every_decoder_reports_corrupt_input_then_close",
+        ),
+        (
+            "own_codec_methods",
+            "eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion",
+        ),
+        (
             "skip_registry_bootstrap",
             "a_fresh_factory_installs_its_inherited_methods_without_a_stream_import",
         ),
@@ -484,6 +550,22 @@ fn codec_sabotages_turn_their_runtime_witnesses_red() {
     }
 }
 
+// The fixture's JS executes entirely in runtime helpers, whose stores emit
+// barriers. Announce the same contract as a generated program so the witness
+// exercises copying minors rather than the nonmoving no-codegen fallback.
+struct CompiledBarriers;
+impl CompiledBarriers {
+    fn new() -> Self {
+        perry_runtime::gc::js_gc_write_barriers_emitted(1);
+        Self
+    }
+}
+impl Drop for CompiledBarriers {
+    fn drop(&mut self) {
+        perry_runtime::gc::js_gc_write_barriers_emitted(0);
+    }
+}
+
 fn rss() -> usize {
     std::fs::read_to_string("/proc/self/statm")
         .unwrap()
@@ -498,6 +580,8 @@ fn rss() -> usize {
 #[ignore = "full Z8: 50,000 completions per codec plus 50,000 immediate destroys"]
 fn fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss() {
     clear();
+    let _barriers = CompiledBarriers::new();
+    let copies_before = perry_runtime::gc::copying_minor_cycles();
     driver::PAYLOAD_COUNTS.with(|n| n.set((0, 0)));
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(options());
@@ -589,6 +673,10 @@ fn fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss() {
     assert!(
         peak - warm < 4 << 20,
         "RSS plateau exceeded 4 MiB: {samples:?}"
+    );
+    assert!(
+        perry_runtime::gc::copying_minor_cycles() > copies_before,
+        "copying minors actually ran"
     );
     let expected = match selected.as_deref() {
         None => 600000,
