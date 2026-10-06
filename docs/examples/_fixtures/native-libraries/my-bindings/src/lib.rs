@@ -18,8 +18,9 @@ use perry_ffi::{alloc_string, read_buffer_bytes, BufferHeader, StringHeader};
 #[no_mangle]
 pub unsafe extern "C" fn js_pdf_parse(buf_ptr: i64) -> *mut StringHeader {
     let buf_ptr = (buf_ptr as u64 & 0x0000_FFFF_FFFF_FFFF) as *const BufferHeader;
-    let bytes = read_buffer_bytes(buf_ptr).unwrap_or(&[]);
-    let summary = format!("stub: {} bytes", bytes.len());
+    let len =
+        perry_ffi::bytes::no_gc(|scope| read_buffer_bytes(buf_ptr, scope).map_or(0, <[u8]>::len));
+    let summary = format!("stub: {len} bytes");
     alloc_string(&summary).as_raw()
 }
 

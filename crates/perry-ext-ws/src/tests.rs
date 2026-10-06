@@ -5,7 +5,6 @@ use std::sync::{Mutex, MutexGuard};
 static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 struct GcTestGuard {
-    frame: u64,
     previous_force_evacuation: i32,
     _lock: MutexGuard<'static, ()>,
 }
@@ -17,9 +16,7 @@ impl GcTestGuard {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         let previous_force_evacuation = perry_runtime::gc::js_gc_force_evacuation_test_override(1);
         perry_runtime::gc::js_gc_write_barriers_emitted(1);
-        let frame = perry_runtime::gc::js_shadow_frame_push(0);
         Self {
-            frame,
             previous_force_evacuation,
             _lock: lock,
         }
@@ -28,7 +25,6 @@ impl GcTestGuard {
 
 impl Drop for GcTestGuard {
     fn drop(&mut self) {
-        perry_runtime::gc::js_shadow_frame_pop(self.frame);
         perry_runtime::gc::js_gc_write_barriers_emitted(0);
         perry_runtime::gc::js_gc_force_evacuation_test_override(self.previous_force_evacuation);
     }

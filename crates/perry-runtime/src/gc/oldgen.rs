@@ -666,7 +666,7 @@ impl MallocSweepCycleState {
             gc_type_finalize_unmarked_payload(obj_type, user_ptr);
             if crate::arena::old_sweep_quarantine_enabled() {
                 crate::arena::retire_swept_object(
-                    header as usize,
+                    header,
                     total_size,
                     crate::arena::RetiredKind::Malloc,
                 );
