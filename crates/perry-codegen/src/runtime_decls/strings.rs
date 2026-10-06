@@ -213,6 +213,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     //     lower_call.rs matches.
     module.declare_function("js_closure_alloc", I64, &[PTR, I32]);
     module.declare_function("js_closure_alloc_init", I64, &[PTR, I32, PTR]);
+    module.declare_function("js_closure_alloc_init_boxed", I64, &[PTR, I32, PTR]);
     // Singleton-cached variant for non-capturing closures and FuncRef
     // wrappers — the same body info returns the same cached ClosureHeader,
     // skipping per-evaluation closure allocation on the hot loop. See

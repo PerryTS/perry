@@ -465,9 +465,8 @@ fn closure_alloc_storage_no_collect(actual_count: usize) -> Option<*mut u8> {
 /// pointer-free sentinel fill `js_closure_alloc` performs is unnecessary:
 /// every slot is written before the object is reachable from anywhere.
 ///
-/// `captures_ptr` slots are plain capture bits; box-cell captures (which need
-/// `set_closure_box_capture` bookkeeping) keep the per-slot setter path in
-/// codegen and never reach this entry.
+/// `captures_ptr` slots are plain capture bits. Boxed births use the sibling
+/// entry below to avoid per-address capture masks.
 #[no_mangle]
 pub extern "C" fn js_closure_alloc_init(
     info: *const crate::closure::JsFunctionInfo,
@@ -479,22 +478,14 @@ pub extern "C" fn js_closure_alloc_init(
     if actual_count == 0 || captures_ptr.is_null() {
         return js_closure_alloc(info, capture_count);
     }
-    // The no-collect arm keeps `captures_ptr`'s VALUES valid raw: nothing on
-    // the heap moved. The collecting fallback may have moved what those bits
-    // point at, so it re-reads them through roots — exactly the original
-    // per-setter path's contract, kept by taking that path.
+    // Raw input words are valid only on the no-collect arm. The fallback
+    // owns mutable roots before allocating and never reads the input again.
     // Resolved BEFORE the storage exists: minting a base shape touches only
     // the shape table, never the GC heap.
     let shape_id = super::shape::birth_shape_for_body(info);
     let raw = match closure_alloc_storage_no_collect(actual_count) {
         Some(raw) => raw,
-        None => {
-            let closure = js_closure_alloc(info, capture_count);
-            for i in 0..actual_count {
-                js_closure_set_capture_bits(closure, i as u32, unsafe { *captures_ptr.add(i) });
-            }
-            return closure;
-        }
+        None => return closure_alloc_init_collecting(info, capture_count, captures_ptr, false),
     };
     let ptr = raw as *mut ClosureHeader;
     unsafe {
@@ -537,6 +528,62 @@ pub extern "C" fn js_closure_alloc_init(
     ptr
 }
 
+/// Fresh closure birth with raw box pointers, possibly mixed with ordinary
+/// captures. Identity, body Shape and capture flags are identical to
+/// `js_closure_alloc`; boxes themselves are shared, never copied. UNKNOWN
+/// capture layout keeps tag-checked tracing in the header without an address
+/// mask. The slow arm roots both tagged values and raw box pointers before
+/// any allocation and installs their current addresses afterwards.
+#[no_mangle]
+pub extern "C" fn js_closure_alloc_init_boxed(
+    info: *const crate::closure::JsFunctionInfo,
+    capture_count: u32,
+    captures_ptr: *const u64,
+) -> *mut ClosureHeader {
+    let actual_count = real_capture_count(capture_count) as usize;
+    if actual_count == 0 || captures_ptr.is_null() {
+        return js_closure_alloc(info, capture_count);
+    }
+    let shape_id = super::shape::birth_shape_for_body(info);
+    let values = unsafe { std::slice::from_raw_parts(captures_ptr, actual_count) };
+    match closure_alloc_storage_no_collect(actual_count) {
+        Some(raw) => {
+            crate::promise::bump(&CLOSURE_ALLOC_COUNT);
+            let closure = raw as *mut ClosureHeader;
+            unsafe {
+                (*closure).capture_count = capture_count;
+                (*closure).shape_id = shape_id;
+                (*closure).info = info;
+                // GC_STORE_AUDIT(INIT): fresh closure, null props edge.
+                (*closure).props = std::ptr::null_mut();
+                crate::gc::layout_init_pointer_free(closure as *mut u8);
+                closure_install_boxed_captures(closure, values);
+            }
+            closure
+        }
+        None => closure_alloc_init_collecting(info, capture_count, captures_ptr, true),
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn closure_alloc_init_collecting(
+    info: *const crate::closure::JsFunctionInfo,
+    capture_count: u32,
+    captures_ptr: *const u64,
+    boxed: bool,
+) -> *mut ClosureHeader {
+    let count = real_capture_count(capture_count) as usize;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let values = unsafe { std::slice::from_raw_parts(captures_ptr, count) };
+    let rooted = scope.root_heap_word_u64_slice_iter(values);
+    let closure = js_closure_alloc(info, capture_count);
+    // Read through the roots only after the allocation; consume them while
+    // installing slots, without any intervening collecting operation.
+    unsafe { closure_install_fresh_capture_words(closure, rooted, boxed) };
+    closure
+}
+
 /// Write `values` into the capture slots of `closure`, a closure fresh from
 /// `js_closure_alloc` (pointer-free birth state, no allocation since), in ONE
 /// step: raw stores, one layout decision (`GC_LAYOUT_UNKNOWN` when any word
@@ -548,22 +595,43 @@ pub extern "C" fn js_closure_alloc_init(
 /// `closure` is fresh and holds at least `values.len()` capture slots; the
 /// values are current (read through roots AFTER the allocation).
 pub(crate) unsafe fn closure_install_boxed_captures(closure: *mut ClosureHeader, values: &[u64]) {
-    debug_assert!(real_capture_count((*closure).capture_count) as usize >= values.len());
+    closure_install_fresh_capture_words(closure, values.iter().copied(), true);
+}
+
+/// The parent has its pointer-free birth layout, and no operation in this
+/// installer can collect. A rooted iterator may therefore refresh each word
+/// directly into its final slot before one layout decision and barrier.
+unsafe fn closure_install_fresh_capture_words(
+    closure: *mut ClosureHeader,
+    values: impl ExactSizeIterator<Item = u64>,
+    boxed: bool,
+) {
+    let count = values.len();
+    debug_assert!(real_capture_count((*closure).capture_count) as usize >= count);
     let slots = closure_capture_slots_mut(closure);
     let mut any_pointer = false;
-    for (i, &bits) in values.iter().enumerate() {
+    for (i, bits) in values.enumerate() {
         // GC_STORE_AUDIT(BARRIERED): fresh closure captures, followed by the
         // one layout decision and newborn barrier below.
         std::ptr::write(slots.add(i), bits);
-        any_pointer |= crate::gc::layout_pointer_bearing_bits(bits);
+        if boxed {
+            any_pointer |= crate::gc::layout_pointer_bearing_bits(bits);
+        }
     }
-    if any_pointer {
-        crate::gc::layout_init_unknown_fresh(closure as *mut u8);
+    let pointer_layout = if boxed {
+        if any_pointer {
+            crate::gc::layout_init_unknown_fresh(closure as *mut u8);
+        }
+        any_pointer
+    } else {
+        crate::gc::layout_init_from_slots(closure as *mut u8, slots, count)
+    };
+    if pointer_layout {
         if crate::gc::newborn_parent_needs_barrier(closure as usize) {
             crate::gc::runtime_write_barrier_newborn_slots(
                 closure as usize,
                 slots as *const u64,
-                values.len(),
+                count,
             );
         }
     }

@@ -617,6 +617,7 @@ js_clear_interval_value	Reenters
 js_clear_timeout_value	Reenters
 js_closure_alloc	AllocOnly
 js_closure_alloc_init	AllocOnly
+js_closure_alloc_init_boxed	Reenters
 js_closure_alloc_singleton	AllocOnly
 js_closure_alloc_with_captures_singleton	AllocOnly
 js_closure_call0	Reenters

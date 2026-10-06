@@ -14,6 +14,7 @@ mod boxes;
 mod budgeted_step_api;
 mod buffer_bound_method_name;
 mod buffer_side_tables;
+mod bulk_closure_captures;
 mod canonical_keys_holders;
 mod census;
 mod census_block_windows;
