@@ -76,7 +76,7 @@ pub use header::{
 };
 pub(crate) use header::{
     buffer_alloc_foreign, drop_owned_backing_at_thread_exit, finalize_collected_dead_buffer,
-    is_foreign_backed_buffer,
+    has_owned_backing, is_foreign_backed_buffer,
 };
 pub(crate) use header::{buffer_family_type_owned, header_is_owned};
 // Only the wasm host re-points a foreign wrapper (#9611); see the fn's docs.

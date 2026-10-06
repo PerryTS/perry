@@ -14,6 +14,54 @@ fn fault(name: &str) -> bool {
     std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some(name)
 }
 
+fn collect_between_allocation_and_copy(source: f64) {
+    // Inspect liveness before sweeping so the planted missing root fails
+    // deterministically without dereferencing reclaimed memory.
+    clear_marks();
+    clear_mark_seeds();
+    let valid = build_valid_pointer_set();
+    mark_mutable_registered_roots(&valid);
+    let owner = JSValue::from_bits(source.to_bits()).as_pointer::<u8>() as usize;
+    assert_marked_user_ptr(owner, "copy source before destination collection");
+    clear_marks();
+    clear_mark_seeds();
+    let before = gc_total_collection_count();
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    assert!(gc_total_collection_count() > before);
+}
+
+#[test]
+fn typed_array_copy_roots_source_across_destination_collection() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _force = ForcedEvacuationTestGuard::on();
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_named_mutable_root_scanner("pinned", crate::gc::pin::scan_pinned_object_roots_mut);
+    let buffer = buffer::buffer_alloc(8);
+    assert!(crate::typedarray::typed_array_to_array_buffer(buffer.cast()).is_null());
+    let ta = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_INT32, 4);
+    for (index, value) in [37.0, 91.0, -1.0, 1024.0].into_iter().enumerate() {
+        crate::typedarray::js_typed_array_set(ta, index as i32, value);
+    }
+    let copied = bytes::copy_with_collection(
+        Brand::ArrayBuffer,
+        bits(ta),
+        collect_between_allocation_and_copy,
+    )
+    .unwrap();
+    let copied = JSValue::from_bits(copied.to_bits()).as_pointer::<buffer::BufferHeader>();
+    assert!(!copied.is_null());
+    assert!(buffer::is_array_buffer(copied as usize));
+    bytes::no_gc(|scope| {
+        let bytes = bytes::bytes(bits(copied), scope).unwrap();
+        let expected: Vec<u8> = [37_i32, 91, -1, 1024]
+            .into_iter()
+            .flat_map(i32::to_ne_bytes)
+            .collect();
+        assert_eq!(bytes, expected);
+    });
+}
+
 #[test]
 fn views_observe_owner_resize_and_detach_after_a_live_collection() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -169,6 +217,9 @@ fn persistent_symbols_have_a_leaf_header_at_p_minus_eight() {
         );
         assert_ne!(h.gc_flags & GC_FLAG_PINNED, 0);
         assert_eq!(unsafe { crate::symbol::js_is_symbol(value) }, 1);
+        assert!(!buffer::is_registered_buffer(p as usize));
+        assert!(crate::typedarray::lookup_typed_array_kind(p as usize).is_none());
+        assert!(!crate::typedarray::is_offheap_sidetable_alloc(p as usize));
     }
 }
 
@@ -177,8 +228,24 @@ fn each_compatible_b4_sabotage_turns_its_witness_red() {
     assert!(!fault("unused"));
     for (fault, witness) in [
         (
+            "copy_root",
+            "gc::tests::buffer_b4::typed_array_copy_roots_source_across_destination_collection",
+        ),
+        (
+            "copy_kind",
+            "gc::tests::buffer_b4::typed_array_copy_roots_source_across_destination_collection",
+        ),
+        (
+            "native_resolution",
+            "typedarray::resolved_read_tests::typed_array_reads_use_resolved_slot_for_every_numeric_kind",
+        ),
+        (
             "symbol_header",
             "gc::tests::buffer_b4::persistent_symbols_have_a_leaf_header_at_p_minus_eight",
+        ),
+        (
+            "symbol_header",
+            "buffer::header_brand_tests::a_persistent_symbol_is_rejected_by_its_header_brand",
         ),
         (
             "detach_mark",

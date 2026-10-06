@@ -408,13 +408,6 @@ pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
     {
         return None;
     }
-    // A `Box`-leaked symbol has no `GcHeader`; see the twin screen in
-    // `buffer::header::buffer_family_type`.
-    if unsafe { crate::symbol::may_be_symbol_header(addr as *const u8) }
-        && !crate::buffer::header_is_owned(addr)
-    {
-        return None;
-    }
     let ta = addr as *const TypedArrayHeader;
     // SAFETY: the header says this is a typed-array cell, whose payload starts
     // with a `TypedArrayHeader` (a native view's prefix matches it exactly).
@@ -448,13 +441,9 @@ pub fn is_offheap_sidetable_alloc(addr: usize) -> bool {
         return false;
     };
     let obj_type = header.obj_type;
-    let candidate = crate::gc::is_buffer_family_type(obj_type)
+    crate::gc::is_buffer_family_type(obj_type)
         || obj_type == crate::gc::GC_TYPE_TYPED_ARRAY
-        || obj_type == crate::gc::GC_TYPE_NATIVE_TYPED_VIEW;
-    // The headerless-symbol screen of `buffer::header::buffer_family_type`.
-    candidate
-        && (!unsafe { crate::symbol::may_be_symbol_header(addr as *const u8) }
-            || crate::buffer::header_is_owned(addr))
+        || obj_type == crate::gc::GC_TYPE_NATIVE_TYPED_VIEW
 }
 
 pub(crate) fn mark_typed_array_shared_backing(ptr: *const TypedArrayHeader) {
@@ -699,25 +688,25 @@ pub unsafe fn typed_array_bytes_mut<'a>(ta: *mut TypedArrayHeader) -> Option<&'a
 pub fn typed_array_to_array_buffer(
     ta: *const TypedArrayHeader,
 ) -> *mut crate::buffer::BufferHeader {
-    let Some(bytes) = (unsafe { typed_array_bytes(ta) }) else {
+    let admitted = unsafe { typed_array_for_byte_helper(ta) };
+    #[cfg(test)]
+    let admitted = if crate::buffer::bytes::b4_sabotage("copy_kind") {
+        Some(clean_ta_ptr(ta).cast_mut())
+    } else {
+        admitted
+    };
+    let Some(ta) = admitted else {
         return std::ptr::null_mut();
     };
-    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
-    if buf.is_null() {
-        return std::ptr::null_mut();
+    // Destination allocation can collect. Keep the source value rooted and
+    // resolve its bytes afterward, rather than retaining an unscoped slice.
+    let input = crate::value::js_nanbox_pointer(ta as i64);
+    match crate::buffer::bytes::copy_value(crate::buffer::bytes::Brand::ArrayBuffer, input) {
+        Ok(value) => crate::value::JSValue::from_bits(value.to_bits())
+            .as_pointer::<crate::buffer::BufferHeader>()
+            .cast_mut(),
+        Err(_) => std::ptr::null_mut(),
     }
-    unsafe {
-        (*buf).length = bytes.len() as u32;
-        if !bytes.is_empty() {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                crate::buffer::buffer_data_mut(buf),
-                bytes.len(),
-            );
-        }
-    }
-    crate::buffer::mark_as_array_buffer(buf as usize);
-    buf
 }
 
 unsafe fn typed_array_for_byte_helper(
