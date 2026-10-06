@@ -184,6 +184,41 @@ fn no_gc_byte_allocation_is_rejected() {
 }
 
 #[test]
+fn process_shared_pins_leave_the_global_header_read_only() {
+    let _guard = guard(0);
+    let shared = crate::shared_sab::alloc_shared_sab(32);
+    let value = bits(shared);
+    let header = unsafe { crate::gc::header_from_trusted_user_ptr(shared.cast()) };
+    let before = unsafe { ((*header).gc_flags, (*header)._reserved) };
+    let pin = bytes::pin(value).unwrap();
+    assert_eq!(
+        unsafe { ((*header).gc_flags, (*header)._reserved) },
+        before,
+        "a process-global SAB header must not carry mutable byte-pin state"
+    );
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..128 {
+                    let pin = bytes::pin(value).unwrap();
+                    assert_eq!(pin.len(), 32);
+                    unsafe { assert_eq!(*pin.as_ptr(), 0) };
+                }
+            })
+        })
+        .collect();
+    barrier.wait();
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    drop(pin);
+    assert_eq!(unsafe { ((*header).gc_flags, (*header)._reserved) }, before);
+}
+
+#[test]
 fn each_b1_sabotage_turns_its_live_witness_red() {
     for (fault, witness) in [
         (
@@ -200,6 +235,10 @@ fn each_b1_sabotage_turns_its_live_witness_red() {
         ),
         ("no_gc_assert", "no_gc_byte_allocation_is_rejected"),
         ("arena_free", "native_arena_dispose_defers_free_until_unpin"),
+        (
+            "shared_pin_write",
+            "process_shared_pins_leave_the_global_header_read_only",
+        ),
         (
             "view_window",
             "every_current_byte_placement_and_view_resolves_the_canonical_window",

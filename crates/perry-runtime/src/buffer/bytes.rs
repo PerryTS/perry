@@ -220,6 +220,27 @@ impl Pinned {
 
 pub fn pin(value: f64) -> Result<Pinned, NotBytes> {
     let span = span(value, true)?;
+    // Process-global SAB blocks are permanently rooted and never freed. Their
+    // headers are shared between agents and must remain read-only. Recording
+    // per-thread pin counts there would introduce a cross-thread data race.
+    let owner_header =
+        unsafe { crate::gc::header_from_trusted_user_ptr(span.owner as *const u8).cast_mut() };
+    let process_shared =
+        unsafe { (*owner_header).obj_type == crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER }
+            && crate::shared_sab::is_shared_sab(span.owner);
+    #[cfg(test)]
+    let process_shared = process_shared && !sabotage("shared_pin_write");
+    if process_shared {
+        return Ok(Pinned {
+            ptr: span.ptr,
+            len: span.len,
+            // Zero denotes the existing immortal process owner; no mutable
+            // GC custody or detach deferral is needed for this placement.
+            owner: 0,
+            thread: std::thread::current().id(),
+            _not_send: PhantomData,
+        });
+    }
     // Rooting a wrapper cannot retain memory that an external engine can
     // reallocate. Refuse that guarantee until its owner has a retain protocol.
     if super::is_foreign_backed_buffer(span.owner) && !super::header::has_owned_backing(span.owner)
@@ -228,7 +249,7 @@ pub fn pin(value: f64) -> Result<Pinned, NotBytes> {
     }
 
     unsafe {
-        let h = crate::gc::header_from_trusted_user_ptr(span.owner as *const u8).cast_mut();
+        let h = owner_header;
         if (*h)._reserved & PIN_MASK == PIN_MASK {
             return Err(NotBytes::PinLimit);
         }
@@ -262,6 +283,9 @@ impl Drop for Pinned {
             std::thread::current().id(),
             "byte pin released on another thread"
         );
+        if self.owner == 0 {
+            return;
+        }
         unsafe {
             let h = crate::gc::header_from_trusted_user_ptr(self.owner as *const u8).cast_mut();
             assert!(has_pins(self.owner));
