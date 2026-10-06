@@ -3,11 +3,9 @@ use crate::common::feature_hooks::{HandleArm, Hook, PropertySetArm};
 
 // Slots for the optional-feature arms of the three hubs in this file; see
 // `method_dispatch.rs` for the scheme.
-static SET_SQLITE: Hook<PropertySetArm> = Hook::empty();
 static SET_HTTP_SERVER_STATUS: Hook<PropertySetArm> = Hook::empty();
 static SET_HTTP_AGENT: Hook<PropertySetArm> = Hook::empty();
 static SET_HTTP_SERVER_SOCKET: Hook<PropertySetArm> = Hook::empty();
-static OWN_NAMES_SQLITE: Hook<HandleArm> = Hook::empty();
 static PROTOTYPE_CRYPTO: Hook<HandleArm> = Hook::empty();
 
 /// `try_arm!` for the property-set hub, whose arms answer "claimed".
@@ -43,8 +41,6 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
     let _ = handle;
     let _ = value;
 
-    try_set_arm!(SET_SQLITE, handle, property_name, value);
-
     if crate::common::net_method_values::dispatch_property_set(handle, property_name, value) {
         return;
     }
@@ -70,7 +66,6 @@ pub unsafe extern "C" fn js_handle_property_set_dispatch(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_handle_own_property_names_dispatch(handle: i64) -> f64 {
-    try_arm!(OWN_NAMES_SQLITE, handle);
     if crate::string_decoder::is_string_decoder_handle(handle) {
         return crate::string_decoder::string_decoder_own_property_names(handle);
     }
@@ -394,8 +389,6 @@ pub(super) unsafe fn install_external_zlib_registrations() {
 #[cfg(feature = "database-sqlite")]
 pub(super) unsafe fn install_sqlite_registrations() {
     perry_runtime::js_set_native_sqlite_dispatch(crate::sqlite::js_node_sqlite_native_dispatch);
-    SET_SQLITE.set(set_sqlite);
-    OWN_NAMES_SQLITE.set(own_names_sqlite);
 }
 
 #[cfg(feature = "external-http-server-pump")]
@@ -465,14 +458,6 @@ pub(super) unsafe fn install_streams_registrations() {
             crate::streams::js_writer_abort,
         );
     }
-}
-
-#[cfg(feature = "database-sqlite")]
-unsafe fn set_sqlite(handle: i64, property_name: &str, value: f64) -> bool {
-    if crate::sqlite::dispatch_node_sqlite_limits_set(handle, property_name, value) {
-        return true;
-    }
-    false
 }
 
 #[cfg(feature = "external-http-server-pump")]
@@ -574,14 +559,6 @@ unsafe fn set_http_server_socket(handle: i64, property_name: &str, value: f64) -
         }
     }
     false
-}
-
-#[cfg(feature = "database-sqlite")]
-unsafe fn own_names_sqlite(handle: i64) -> Option<f64> {
-    if let Some(names) = crate::sqlite::dispatch_node_sqlite_own_property_names(handle) {
-        return Some(names);
-    }
-    None
 }
 
 #[cfg(feature = "crypto")]

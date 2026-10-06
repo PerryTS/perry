@@ -43,11 +43,6 @@ const ITER_RESULT_CACHE_FIELD: u32 = 5;
 const KIND_VALUES: i32 = 0;
 const KIND_KEYS: i32 = 1;
 const KIND_ENTRIES: i32 = 2;
-/// Values iterator with Node's `node:sqlite` result protocol (#6561):
-/// exhaustion and `return()` yield `{ done: true, value: null }` (the
-/// array iterator yields `value: undefined`), and `return()` terminates
-/// the iterator. Produced only by `StatementSync.prototype.iterate()`.
-const KIND_VALUES_NULL_DONE: i32 = 3;
 /// Values iterator over a live Arguments exotic object. Unlike an Array
 /// iterator this reads `length` and each indexed property from the Arguments
 /// object on every step, so mutations made before exhaustion are observable.
@@ -119,37 +114,6 @@ pub fn array_values_iter(arr_f64: f64) -> f64 {
         return f64::from_bits(TAG_UNDEFINED);
     }
     unsafe { alloc_iterator(arr_ptr, KIND_VALUES) }
-}
-
-/// Values iterator whose done-result carries `value: null` and whose
-/// `return()` terminates it — the `node:sqlite` `iterate()` protocol
-/// (#6561). See [`KIND_VALUES_NULL_DONE`].
-pub fn array_values_iter_null_done(
-    arr_f64: f64,
-    iteration_epoch: &std::sync::atomic::AtomicU64,
-    epoch: u64,
-) -> f64 {
-    let arr_ptr = unbox_array_ptr(arr_f64);
-    if arr_ptr.is_null() {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    let obj = js_object_alloc(ARRAY_ITERATOR_CLASS_ID, 6);
-    js_object_set_field(
-        obj,
-        0,
-        JSValue::from_bits(js_nanbox_pointer(arr_ptr as i64).to_bits()),
-    );
-    js_object_set_field(obj, 1, JSValue::number(0.0));
-    js_object_set_field(obj, 2, JSValue::number(KIND_VALUES_NULL_DONE as f64));
-    js_object_set_field(
-        obj,
-        3,
-        JSValue::pointer(iteration_epoch as *const _ as *const u8),
-    );
-    js_object_set_field(obj, 4, JSValue::number(epoch as f64));
-    js_object_set_field(obj, ITER_RESULT_CACHE_FIELD, JSValue::undefined());
-    crate::object::attach_iterator_prototype(obj, ARRAY_ITERATOR_CLASS_ID);
-    js_nanbox_pointer(obj as i64)
 }
 
 /// `arr.keys()` iterator — yields each index `0..length`.
@@ -623,7 +587,7 @@ pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
 // the keys array's address. Both constructors now come from the single
 // `crate::iter_result` implementation, which shares one keys array (and so one
 // shape) per key order per thread and allocates only the result object.
-use crate::iter_result::{make_iter_result, make_sqlite_iter_result};
+use crate::iter_result::make_iter_result;
 
 unsafe fn make_pair_array(idx: u32, value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -690,26 +654,10 @@ unsafe fn dispatch_array_iterator_method_inner(
     let iter_h = scope.root_nanbox_f64(js_nanbox_pointer(iter_obj as i64));
     let iter_obj = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
 
-    // Field 2: iterator kind — read up front so the exhausted paths can pick
-    // the kind's done-value (`null` for KIND_VALUES_NULL_DONE, `undefined`
-    // otherwise).
+    // Field 2: iterator kind.
     let kind = f64::from_bits(js_object_get_field(iter_obj(), 2).bits()) as i32;
-    let done_value = || {
-        if kind == KIND_VALUES_NULL_DONE {
-            JSValue::null()
-        } else {
-            JSValue::undefined()
-        }
-    };
-    // `node:sqlite`'s iterator yields `{ done, value }`; every other kind
-    // yields `{ value, done }`. The key order is observable through
-    // `Object.keys`/`JSON.stringify`, so it picks the shared keys array (and
-    // therefore the shape) the result is built with.
-    let result_order = if kind == KIND_VALUES_NULL_DONE {
-        crate::iter_result::IterResultOrder::DoneValue
-    } else {
-        crate::iter_result::IterResultOrder::ValueDone
-    };
+    let done_value = JSValue::undefined;
+    let result_order = crate::iter_result::IterResultOrder::ValueDone;
     match method_name {
         "next" => {
             if honor_override {
@@ -720,26 +668,10 @@ unsafe fn dispatch_array_iterator_method_inner(
                     return result;
                 }
             }
-            if kind == KIND_VALUES_NULL_DONE {
-                let epoch_ptr = js_nanbox_get_pointer(f64::from_bits(
-                    js_object_get_field(iter_obj(), 3).bits(),
-                )) as *const std::sync::atomic::AtomicU64;
-                let expected = f64::from_bits(js_object_get_field(iter_obj(), 4).bits()) as u64;
-                if epoch_ptr.is_null()
-                    || (*epoch_ptr).load(std::sync::atomic::Ordering::Relaxed) != expected
-                {
-                    crate::fs::validate::throw_error_with_code(
-                        "Statement iterator has been invalidated",
-                        "ERR_INVALID_STATE",
-                    );
-                }
-            }
             // Field 0: backing array pointer (NaN-boxed).
             let backing_field = js_object_get_field(iter_obj(), 0);
             let backing_f64 = f64::from_bits(backing_field.bits());
-            // Iterators clear their backing array at exhaustion. A completed
-            // SQLite statement iterator is also permanently closed; calling
-            // `StatementSync::iterate()` again creates a separate iterator.
+            // Iterators clear their backing array at exhaustion.
             if JSValue::from_bits(backing_f64.to_bits()).is_undefined() {
                 return crate::iter_result::emit_iter_result_cached(
                     &scope,
@@ -806,7 +738,7 @@ unsafe fn dispatch_array_iterator_method_inner(
             let elem_h = scope.root_nanbox_f64(elem);
 
             let value = match kind {
-                KIND_VALUES | KIND_VALUES_NULL_DONE | KIND_ARGUMENTS_VALUES | KIND_PROXY_VALUES => {
+                KIND_VALUES | KIND_ARGUMENTS_VALUES | KIND_PROXY_VALUES => {
                     JSValue::from_bits(elem_h.get_nanbox_u64())
                 }
                 KIND_KEYS => JSValue::number(idx as f64),
@@ -834,71 +766,7 @@ unsafe fn dispatch_array_iterator_method_inner(
         // `return`/`throw` are part of the iterator spec; Node's array
         // iterator inherits them from %IteratorPrototype%. Return a
         // `{ value: undefined, done: true }` shape for early-exit code.
-        // KIND_VALUES_NULL_DONE (`node:sqlite` iterate()) additionally
-        // TERMINATES the iterator on `return()` — a later `.next()` stays
-        // `{ done: true, value: null }` — matching Node's sqlite iterator.
-        "return" | "throw" => {
-            if kind == KIND_VALUES_NULL_DONE {
-                js_object_set_field(iter_obj(), 0, JSValue::undefined());
-            }
-            if kind == KIND_VALUES_NULL_DONE {
-                make_sqlite_iter_result(done_value(), true)
-            } else {
-                make_iter_result(done_value(), true)
-            }
-        }
+        "return" | "throw" => make_iter_result(done_value(), true),
         _ => f64::from_bits(TAG_UNDEFINED),
-    }
-}
-
-#[cfg(test)]
-mod sqlite_iterator_tests {
-    use super::*;
-    use std::sync::atomic::AtomicU64;
-
-    unsafe fn result_fields(result: f64) -> (u64, u64) {
-        let result = js_nanbox_get_pointer(result) as *mut ObjectHeader;
-        (
-            js_object_get_field(result, 0).bits(),
-            js_object_get_field(result, 1).bits(),
-        )
-    }
-
-    #[test]
-    fn sqlite_iterator_stays_exhausted_after_fused_for_of_drain() {
-        let _serialized = crate::array::test_serialize();
-        let epoch = AtomicU64::new(0);
-        let rows = crate::array::js_array_push_f64(crate::array::js_array_alloc(1), 7.0);
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let iter_h = scope.root_nanbox_f64(array_values_iter_null_done(
-            js_nanbox_pointer(rows as i64),
-            &epoch,
-            0,
-        ));
-        let iter = || js_nanbox_get_pointer(iter_h.get_nanbox_f64()) as *mut ObjectHeader;
-
-        unsafe {
-            // Model the optimized `for...of` driver: one yielded row followed
-            // by its terminal advance.
-            let first = dispatch_array_iterator_method_emit(iter(), "next", true, true);
-            assert_eq!(
-                result_fields(first),
-                (crate::value::TAG_FALSE, 7.0f64.to_bits())
-            );
-            let done = dispatch_array_iterator_method_emit(iter(), "next", true, true);
-            assert_eq!(
-                result_fields(done),
-                (crate::value::TAG_TRUE, crate::value::TAG_NULL)
-            );
-
-            // The same iterator must remain closed when user code calls
-            // `.next()` after the loop. Resetting its cursor used to return
-            // the first row again here.
-            let after = dispatch_array_iterator_method(iter(), "next");
-            assert_eq!(
-                result_fields(after),
-                (crate::value::TAG_TRUE, crate::value::TAG_NULL)
-            );
-        }
     }
 }

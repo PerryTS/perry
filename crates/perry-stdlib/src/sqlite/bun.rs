@@ -57,7 +57,7 @@ pub unsafe extern "C" fn js_bun_sqlite_database_new(path_value: f64, options_val
     options.enable_foreign_keys = false;
     options.allow_extension = true;
     options.defensive = false;
-    register_node_sqlite_database(path, options, "bun:sqlite")
+    register_bun_sqlite_database(path, options, "bun:sqlite")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -127,12 +127,12 @@ pub(crate) unsafe fn open_bun_sqlite_database(
     options.enable_foreign_keys = false;
     options.allow_extension = true;
     options.defensive = false;
-    register_node_sqlite_database(path, options, "bun")
+    register_bun_sqlite_database(path, options, "bun")
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_bun_sqlite_database_query(db_handle: Handle, sql_value: f64) -> Handle {
-    js_node_sqlite_database_sync_prepare(db_handle, sql_value, undefined_f64())
+    bun_sqlite_database_prepare(db_handle, sql_value)
 }
 
 #[no_mangle]
@@ -142,14 +142,14 @@ pub unsafe extern "C" fn js_bun_sqlite_database_run(
     params: *const ArrayHeader,
 ) -> *mut ObjectHeader {
     let statement = js_bun_sqlite_database_query(db_handle, sql_value);
-    let result = js_node_sqlite_statement_sync_run(statement, params);
-    finalize_node_sqlite_statement_handle(statement);
+    let result = js_bun_sqlite_statement_run(statement, params);
+    finalize_bun_sqlite_statement_handle(statement);
     result
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn js_bun_sqlite_database_filename(db_handle: Handle) -> *mut StringHeader {
-    let db = get_handle::<NodeSqliteDbHandle>(db_handle)
+    let db = get_handle::<BunSqliteDbHandle>(db_handle)
         .unwrap_or_else(|| throw_invalid_state("database is not open"));
     js_string_from_bytes(db.path.as_ptr(), db.path.len() as u32)
 }
@@ -159,7 +159,7 @@ pub unsafe extern "C" fn js_bun_sqlite_statement_values(
     stmt_handle: Handle,
     params: *const ArrayHeader,
 ) -> *mut ArrayHeader {
-    with_node_sqlite_statement(stmt_handle, params, |conn, stmt, raw_stmt| {
+    with_bun_sqlite_statement(stmt_handle, params, |conn, flags, raw_stmt| {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let rows = js_array_alloc(0);
         let rows_handle = scope.root_raw_mut_ptr(rows);
@@ -167,7 +167,7 @@ pub unsafe extern "C" fn js_bun_sqlite_statement_values(
         loop {
             match ffi::sqlite3_step(raw_stmt) {
                 ffi::SQLITE_ROW => {
-                    let row = node_sqlite_row_value_with_mode(stmt, raw_stmt, true);
+                    let row = node_sqlite_row_value_with_mode(flags, raw_stmt, true);
                     row_handle.set_nanbox_u64(row.bits());
                     let rows = js_array_push(
                         rows_handle.get_raw_mut_ptr(),
@@ -188,7 +188,7 @@ pub unsafe extern "C" fn js_bun_sqlite_statement_safe_integers(
     stmt_handle: Handle,
     enabled_value: f64,
 ) -> f64 {
-    let stmt = get_handle::<NodeSqliteStmtHandle>(stmt_handle)
+    let stmt = get_handle::<BunSqliteStmtHandle>(stmt_handle)
         .unwrap_or_else(|| throw_invalid_state("statement has been finalized"));
     if stmt.finalized.load(Ordering::Relaxed) {
         throw_invalid_state("statement has been finalized");
@@ -204,7 +204,7 @@ pub unsafe extern "C" fn js_bun_sqlite_statement_safe_integers(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_bun_sqlite_statement_finalize(stmt_handle: Handle) {
-    finalize_node_sqlite_statement_handle(stmt_handle);
+    finalize_bun_sqlite_statement_handle(stmt_handle);
 }
 
 unsafe extern "C" fn bun_sqlite_transaction_wrapper(
@@ -219,13 +219,13 @@ unsafe extern "C" fn bun_sqlite_transaction_wrapper(
     let args: Vec<f64> = (0..arg_count)
         .map(|index| f64_from_jsvalue(js_array_get(rest, index)))
         .collect();
-    let nested = with_open_node_connection(db_handle, |conn| !conn.is_autocommit());
+    let nested = with_open_bun_connection(db_handle, |conn| !conn.is_autocommit());
     let begin = if nested {
         "SAVEPOINT `bun:sqlite transaction`"
     } else {
         "BEGIN"
     };
-    with_open_node_connection(db_handle, |conn| {
+    with_open_bun_connection(db_handle, |conn| {
         if let Err((message, code)) = node_sqlite_exec_batch(conn, begin) {
             throw_sqlite_error_ext(&message, code);
         }
@@ -249,7 +249,7 @@ unsafe extern "C" fn bun_sqlite_transaction_wrapper(
             } else {
                 "COMMIT"
             };
-            with_open_node_connection(db_handle, |conn| {
+            with_open_bun_connection(db_handle, |conn| {
                 if let Err((message, code)) = node_sqlite_exec_batch(conn, finish) {
                     throw_sqlite_error_ext(&message, code);
                 }
@@ -262,7 +262,7 @@ unsafe extern "C" fn bun_sqlite_transaction_wrapper(
             } else {
                 "ROLLBACK"
             };
-            with_open_node_connection(db_handle, |conn| {
+            with_open_bun_connection(db_handle, |conn| {
                 let _ = node_sqlite_exec_batch(conn, rollback);
             });
             perry_runtime::exception::js_throw(error)

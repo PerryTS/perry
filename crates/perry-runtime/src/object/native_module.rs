@@ -54,8 +54,7 @@ pub(crate) use callable_exports::{
     prune_dead_builtin_closure_metadata_owners_young, scan_builtin_closure_metadata_roots_mut,
     scan_tls_derived_prototype_roots_mut, set_bound_native_closure_metadata,
     set_bound_native_closure_name, set_builtin_closure_length,
-    set_builtin_closure_non_constructable, sqlite_session_constructor_value,
-    sqlite_statement_sync_constructor_value, timers_promises_parent_namespace,
+    set_builtin_closure_non_constructable, timers_promises_parent_namespace,
     tls_constructor_prototype_is_instance_of, util_inspect_default_options_value,
     zlib_codes_object,
 };
@@ -98,8 +97,6 @@ crate::perry_thread_local! {
     /// process-global atomic, which kept an object/string written by an
     /// exited thread as a dangling, unrooted address.
     static BUFFER_POOL_SIZE_BITS: Cell<u64> = const { Cell::new(65536f64.to_bits()) };
-    pub(crate) static SQLITE_STATEMENT_SYNC_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
-    pub(crate) static SQLITE_SESSION_CONSTRUCTOR_VALUE: Cell<u64> = const { Cell::new(0) };
     pub(crate) static UTIL_INSPECT_DEFAULT_OPTIONS: Cell<u64> = const { Cell::new(0) };
     pub(crate) static UTIL_INSPECT_STYLES: Cell<u64> = const { Cell::new(0) };
     pub(crate) static UTIL_INSPECT_COLORS: Cell<u64> = const { Cell::new(0) };
@@ -283,20 +280,6 @@ pub fn scan_native_callable_export_roots_mut(visitor: &mut crate::gc::RuntimeRoo
         let mut value_bits = slot.get();
         visitor.visit_nanbox_u64_slot(&mut value_bits);
         slot.set(value_bits);
-    });
-    SQLITE_STATEMENT_SYNC_CONSTRUCTOR_VALUE.with(|slot| {
-        let mut value_bits = slot.get();
-        if value_bits != 0 {
-            visitor.visit_nanbox_u64_slot(&mut value_bits);
-            slot.set(value_bits);
-        }
-    });
-    SQLITE_SESSION_CONSTRUCTOR_VALUE.with(|slot| {
-        let mut value_bits = slot.get();
-        if value_bits != 0 {
-            visitor.visit_nanbox_u64_slot(&mut value_bits);
-            slot.set(value_bits);
-        }
     });
     UTIL_INSPECT_DEFAULT_OPTIONS.with(|slot| {
         let mut value_bits = slot.get();

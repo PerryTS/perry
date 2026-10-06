@@ -3543,6 +3543,10 @@
       "name": "CLASSIFIER_VERIFY_SUPPRESSED"
     },
     {
+      "file": "crates/perry-runtime/src/gc/trace.rs",
+      "name": "BLOCK_PERSIST_FORCE_MARKS"
+    },
+    {
       "file": "crates/perry-runtime/src/intl/number_format.rs",
       "name": "ROUND_CTX"
     },
@@ -4270,10 +4274,6 @@
       "name": "READLINE_GC_REGISTERED"
     },
     {
-      "file": "crates/perry-stdlib/src/sqlite.rs",
-      "name": "NODE_SQLITE_GC_SCANNER"
-    },
-    {
       "file": "crates/perry-stdlib/src/streams/gc.rs",
       "name": "GC_REGISTERED"
     },
@@ -4340,6 +4340,22 @@
     {
       "file": "crates/perry-runtime/src/box/activation.rs",
       "name": "NEXT_ASYNC_BOX_ACTIVATION_ID"
+    },
+    {
+      "file": "crates/perry-runtime/src/alloc_census.rs",
+      "name": "IN_SAMPLER"
+    },
+    {
+      "file": "crates/perry-runtime/src/json_tape_store.rs",
+      "name": "TAPE_REGISTRY"
+    },
+    {
+      "file": "crates/perry-runtime/src/json_tape_store.rs",
+      "name": "TAPE_REGISTRY_NONEMPTY"
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/site_test.rs",
+      "name": "TEST_DECLINED_NON_LITERAL"
     }
   ]
 }

@@ -355,6 +355,10 @@ fn build_iterator_prototypes() {
         return;
     }
     install_symbol_iterator(shared);
+    // `Iterator.prototype[Symbol.toStringTag]` is "Iterator": an iterator
+    // whose own prototype carries no tag (node:sqlite's
+    // StatementSyncIterator) prints as `[object Iterator]`.
+    set_to_string_tag(shared, "Iterator");
 
     let array_proto = build_family_proto(
         crate::fn_info!(array_iterator_next_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),

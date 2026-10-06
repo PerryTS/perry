@@ -35,12 +35,6 @@ pub(crate) fn throw_plain_type(message: &str) -> ! {
     perry_runtime::exception::js_throw(js_nanbox_pointer(err as i64))
 }
 
-pub(crate) fn throw_plain_range(message: &str) -> ! {
-    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = perry_runtime::error::js_rangeerror_new(msg);
-    perry_runtime::exception::js_throw(js_nanbox_pointer(err as i64))
-}
-
 pub(crate) fn throw_construct_required() -> ! {
     perry_runtime::fs::validate::throw_type_error_with_code(
         "Class constructor DatabaseSync cannot be invoked without 'new'",

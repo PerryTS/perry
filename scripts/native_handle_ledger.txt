@@ -125,11 +125,8 @@
 1 0 crates/perry-stdlib/src/nodemailer/turnloop_bridge.rs
 1 0 crates/perry-stdlib/src/readline/mod.rs
 0 13 crates/perry-stdlib/src/sharp.rs
-3 0 crates/perry-stdlib/src/sqlite.rs
 0 2 crates/perry-stdlib/src/sqlite/better.rs
 0 2 crates/perry-stdlib/src/sqlite/node_db.rs
-0 2 crates/perry-stdlib/src/sqlite/node_stmt_session.rs
-0 1 crates/perry-stdlib/src/sqlite/node_tag_store.rs
 5 3 crates/perry-stdlib/src/streams.rs
 1 1 crates/perry-stdlib/src/streams/byob.rs
 1 0 crates/perry-stdlib/src/streams/expando.rs

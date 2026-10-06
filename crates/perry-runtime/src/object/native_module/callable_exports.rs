@@ -345,60 +345,6 @@ pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
     )
 }
 
-extern "C" fn sqlite_statement_sync_constructor_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    crate::fs::validate::throw_error_with_code("Illegal constructor", "ERR_ILLEGAL_CONSTRUCTOR")
-}
-
-extern "C" fn sqlite_session_constructor_thunk(
-    _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    crate::fs::validate::throw_error_with_code("Illegal constructor", "ERR_ILLEGAL_CONSTRUCTOR")
-}
-
-pub(crate) fn sqlite_statement_sync_constructor_value() -> f64 {
-    SQLITE_STATEMENT_SYNC_CONSTRUCTOR_VALUE.with(|slot| {
-        let cached = slot.get();
-        if cached != 0 {
-            return f64::from_bits(cached);
-        }
-
-        let func_ptr =
-            crate::fn_info!(sqlite_statement_sync_constructor_thunk, 0; with_declared(0));
-        let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
-        if closure.is_null() {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
-        set_bound_native_closure_name(closure, "StatementSync");
-        let value = crate::value::js_nanbox_pointer(closure as i64);
-        slot.set(value.to_bits());
-        value
-    })
-}
-
-pub(crate) fn sqlite_session_constructor_value() -> f64 {
-    SQLITE_SESSION_CONSTRUCTOR_VALUE.with(|slot| {
-        let cached = slot.get();
-        if cached != 0 {
-            return f64::from_bits(cached);
-        }
-
-        let func_ptr = crate::fn_info!(sqlite_session_constructor_thunk, 0; with_declared(0));
-        let closure = crate::closure::js_closure_alloc_singleton(func_ptr);
-        if closure.is_null() {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
-        set_bound_native_closure_name(closure, "Session");
-        let value = crate::value::js_nanbox_pointer(closure as i64);
-        attach_sqlite_session_prototype(value);
-        slot.set(value.to_bits());
-        value
-    })
-}
-
 fn native_callable_export_display_name<'a>(module: &str, prop: &'a str) -> &'a str {
     if module == "fs" {
         match prop {
@@ -687,25 +633,6 @@ const BUFFER_PROTOTYPE_METHODS: &[&str] = &[
     "utf8Write",
 ];
 
-const SQLITE_DATABASE_SYNC_PROTOTYPE_METHODS: &[&str] = &[
-    "open",
-    "close",
-    "exec",
-    "prepare",
-    "function",
-    "aggregate",
-    "enableDefensive",
-    "setAuthorizer",
-    "createTagStore",
-    "createSession",
-    "applyChangeset",
-    "enableLoadExtension",
-    "loadExtension",
-    "location",
-];
-
-const SQLITE_SESSION_PROTOTYPE_METHODS: &[&str] = &["changeset", "patchset", "close"];
-
 const ASSERT_PROTOTYPE_METHODS: &[&str] = &[
     "fail",
     "ok",
@@ -796,170 +723,6 @@ fn attach_assert_prototype(constructor_value: f64) {
             super::PropertyAttrs::new(true, false, true),
         );
     }
-
-    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
-    crate::closure::closure_set_dynamic_prop(closure, "prototype", proto_value);
-    super::set_builtin_property_attrs(
-        closure,
-        "prototype".to_string(),
-        super::PropertyAttrs::new(true, false, false),
-    );
-}
-
-extern "C" fn sqlite_database_sync_prototype_method_thunk(
-    closure: *const crate::closure::ClosureHeader,
-    this: crate::closure::JsThis,
-    arg0: f64,
-    arg1: f64,
-    arg2: f64,
-) -> f64 {
-    unsafe {
-        let method_name_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const i8;
-        let method_name_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-        let receiver = this.as_f64();
-        let args = [arg0, arg1, arg2];
-        crate::object::js_native_call_method(
-            receiver,
-            method_name_ptr,
-            method_name_len,
-            args.as_ptr(),
-            args.len(),
-        )
-    }
-}
-
-fn attach_sqlite_database_sync_prototype(constructor_value: f64) {
-    let constructor_js = JSValue::from_bits(constructor_value.to_bits());
-    if !constructor_js.is_pointer() {
-        return;
-    }
-    let closure = constructor_js.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    if closure == 0 {
-        return;
-    }
-
-    let proto = js_object_alloc(0, 0);
-    if proto.is_null() {
-        return;
-    }
-
-    let constructor = "constructor";
-    let constructor_key =
-        crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
-    super::define_builtin_data_property(
-        proto,
-        constructor_key,
-        constructor_value,
-        constructor.to_string(),
-        super::PropertyAttrs::new(true, false, true),
-    );
-
-    let func_ptr =
-        crate::fn_info!(sqlite_database_sync_prototype_method_thunk, 3; with_declared(3));
-    for method in SQLITE_DATABASE_SYNC_PROTOTYPE_METHODS {
-        let leaked: &'static [u8] = method.as_bytes().to_vec().leak();
-        let method_closure = crate::closure::js_closure_alloc(func_ptr, 2);
-        if method_closure.is_null() {
-            continue;
-        }
-        crate::closure::js_closure_set_capture_ptr(method_closure, 0, leaked.as_ptr() as i64);
-        crate::closure::js_closure_set_capture_ptr(method_closure, 1, leaked.len() as i64);
-        set_bound_native_closure_name(method_closure, method);
-        set_builtin_closure_length(method_closure as usize, 0);
-        let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
-        let method_value = crate::value::js_nanbox_pointer(method_closure as i64);
-        super::define_builtin_data_property(
-            proto,
-            key,
-            method_value,
-            (*method).to_string(),
-            super::PropertyAttrs::new(true, false, true),
-        );
-    }
-
-    let proto_value = crate::value::js_nanbox_pointer(proto as i64);
-    crate::closure::closure_set_dynamic_prop(closure, "prototype", proto_value);
-    super::set_builtin_property_attrs(
-        closure,
-        "prototype".to_string(),
-        super::PropertyAttrs::new(true, false, false),
-    );
-}
-
-fn attach_sqlite_session_prototype(constructor_value: f64) {
-    let constructor_js = JSValue::from_bits(constructor_value.to_bits());
-    if !constructor_js.is_pointer() {
-        return;
-    }
-    let closure = constructor_js.as_pointer::<crate::closure::ClosureHeader>() as usize;
-    if closure == 0 {
-        return;
-    }
-
-    let proto = js_object_alloc(0, 0);
-    if proto.is_null() {
-        return;
-    }
-
-    let func_ptr =
-        crate::fn_info!(sqlite_database_sync_prototype_method_thunk, 3; with_declared(3));
-    for method in SQLITE_SESSION_PROTOTYPE_METHODS {
-        let leaked: &'static [u8] = method.as_bytes().to_vec().leak();
-        let method_closure = crate::closure::js_closure_alloc(func_ptr, 2);
-        if method_closure.is_null() {
-            continue;
-        }
-        crate::closure::js_closure_set_capture_ptr(method_closure, 0, leaked.as_ptr() as i64);
-        crate::closure::js_closure_set_capture_ptr(method_closure, 1, leaked.len() as i64);
-        set_bound_native_closure_name(method_closure, method);
-        set_builtin_closure_length(method_closure as usize, 0);
-        let key = crate::string::js_string_from_bytes(method.as_ptr(), method.len() as u32);
-        let method_value = crate::value::js_nanbox_pointer(method_closure as i64);
-        super::define_builtin_data_property(
-            proto,
-            key,
-            method_value,
-            (*method).to_string(),
-            super::PropertyAttrs::new(true, true, true),
-        );
-    }
-
-    let dispose_method = "@@__perry_wk_dispose";
-    let dispose_leaked: &'static [u8] = dispose_method.as_bytes().to_vec().leak();
-    let dispose_closure = crate::closure::js_closure_alloc(func_ptr, 2);
-    if !dispose_closure.is_null() {
-        crate::closure::js_closure_set_capture_ptr(
-            dispose_closure,
-            0,
-            dispose_leaked.as_ptr() as i64,
-        );
-        crate::closure::js_closure_set_capture_ptr(dispose_closure, 1, dispose_leaked.len() as i64);
-        set_bound_native_closure_name(dispose_closure, "[Symbol.dispose]");
-        set_builtin_closure_length(dispose_closure as usize, 0);
-        let dispose_value = crate::value::js_nanbox_pointer(dispose_closure as i64);
-        let dispose_sym = crate::symbol::well_known_symbol("dispose");
-        if !dispose_sym.is_null() {
-            let dispose_sym_value = crate::value::js_nanbox_pointer(dispose_sym as i64);
-            unsafe {
-                crate::symbol::js_object_set_symbol_property(
-                    crate::value::js_nanbox_pointer(proto as i64),
-                    dispose_sym_value,
-                    dispose_value,
-                );
-            }
-        }
-    }
-
-    let constructor = "constructor";
-    let constructor_key =
-        crate::string::js_string_from_bytes(constructor.as_ptr(), constructor.len() as u32);
-    super::define_builtin_data_property(
-        proto,
-        constructor_key,
-        constructor_value,
-        constructor.to_string(),
-        super::PropertyAttrs::new(true, false, true),
-    );
 
     let proto_value = crate::value::js_nanbox_pointer(proto as i64);
     crate::closure::closure_set_dynamic_prop(closure, "prototype", proto_value);
@@ -1626,11 +1389,22 @@ pub(crate) unsafe fn nm_attach_sqlite(
     mut value: f64,
     _closure_addr: usize,
 ) -> f64 {
-    if property_name == "DatabaseSync" {
-        attach_sqlite_database_sync_prototype(value);
-    }
-    if property_name == "Session" {
-        attach_sqlite_session_prototype(value);
+    // `DatabaseSync` / `StatementSync` / `Session` are native-payload
+    // families (#11919): materialize the family prototype now, so the export
+    // carries its `prototype` (with the methods) before any instance exists.
+    // The family installs it on this very export value.
+    if matches!(property_name, "DatabaseSync" | "StatementSync" | "Session") {
+        let ptr = crate::value::JS_NATIVE_SQLITE_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+        if !ptr.is_null() {
+            let dispatch: crate::value::JsNativeSqliteDispatchFn = std::mem::transmute(ptr);
+            dispatch(
+                property_name.as_ptr(),
+                property_name.len(),
+                std::ptr::null(),
+                0,
+                crate::value::NATIVE_SQLITE_DISPATCH_PROTOTYPE,
+            );
+        }
     }
     value
 }

@@ -360,103 +360,17 @@ unsafe fn arm_nodemailer(handle: i64, method_name: &str, args: &[f64]) -> Option
 
 #[cfg(feature = "database-sqlite")]
 unsafe fn arm_node_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
-    // node:sqlite DatabaseSync handle. Keep this before the better-sqlite3
-    // SQLite fallbacks because method names like prepare/exec/close overlap
-    // but the lifecycle/error semantics are intentionally different.
-    if matches!(
-        method_name,
-        "open"
-            | "close"
-            | "exec"
-            | "prepare"
-            | "serialize"
-            | "deserialize"
-            // `function`/`aggregate`/`enableDefensive`/`setAuthorizer` were
-            // missing from this gate (#6561): an any-typed
-            // `db.function(...)` / `db.aggregate(...)` fell through the
-            // tower and silently no-op'd, so the SQL function was never
-            // registered and the next query failed with
-            // "no such function: <name>".
-            | "function"
-            | "aggregate"
-            | "enableDefensive"
-            | "setAuthorizer"
-            | "createTagStore"
-            | "createSession"
-            | "applyChangeset"
-            | "enableLoadExtension"
-            | "loadExtension"
-            | "location"
-            // #10290: `query`/`run`/`transaction` are the bun:sqlite `Database`
-            // surface. `dispatch_node_sqlite_database_method` has always
-            // implemented all three (the same registry backs both bindings),
-            // but they were missing from THIS gate, so they never reached it.
-            // Codegen's static NATIVE_MODULE_TABLE entry covers `db.query(...)`
-            // only while the receiver's class is provable; the moment the
-            // database reaches a call site through any indirection — a field,
-            // an interface-typed parameter, a generator return, Drizzle's
-            // driver object — the call falls to this dynamic tower and
-            // silently returned `undefined`. `db.query(sql)` answering
-            // `undefined` is how `opencode models` dies.
-            | "query"
-            | "run"
-            | "transaction"
-            | "__perry_dispose__"
-            | "@@__perry_wk_dispose"
-    ) {
-        if let Some(result) =
-            crate::sqlite::dispatch_node_sqlite_database_method(handle, method_name, &args)
-        {
-            return Some(result);
-        }
+    // bun:sqlite `Database` / `Statement` registry handles (also Bun.SQL's
+    // SQLite adapter). Keep these before the better-sqlite3 fallbacks:
+    // prepare/exec/close/run/get/all overlap with different semantics.
+    // node:sqlite objects never reach this tower: they are ordinary objects
+    // whose methods resolve from their prototypes.
+    if let Some(result) =
+        crate::sqlite::dispatch_bun_sqlite_database_method(handle, method_name, args)
+    {
+        return Some(result);
     }
-
-    // node:sqlite SQLTagStore handle. Keep this before StatementSync because
-    // the query execution method names overlap but tag stores consume tagged
-    // template arguments and bind them positionally.
-    if matches!(method_name, "run" | "get" | "all" | "iterate" | "clear") {
-        if let Some(result) =
-            crate::sqlite::dispatch_node_sqlite_tag_store_method(handle, method_name, &args)
-        {
-            return Some(result);
-        }
-    }
-
-    // node:sqlite StatementSync handle. Keep this before the better-sqlite3
-    // statement fallback because run/get/all overlap but Node's parameter and
-    // result semantics are different.
-    if matches!(
-        method_name,
-        "run"
-            | "get"
-            | "all"
-            | "iterate"
-            | "columns"
-            | "setReadBigInts"
-            | "setReturnArrays"
-            | "setAllowBareNamedParameters"
-            | "setAllowUnknownNamedParameters"
-    ) {
-        if let Some(result) =
-            crate::sqlite::dispatch_node_sqlite_statement_method(handle, method_name, &args)
-        {
-            return Some(result);
-        }
-    }
-
-    // node:sqlite Session handle. This follows DatabaseSync dispatch because
-    // `close` overlaps and the database lifecycle rules should win for DBs.
-    if matches!(
-        method_name,
-        "changeset" | "patchset" | "close" | "__perry_dispose__" | "@@__perry_wk_dispose"
-    ) {
-        if let Some(result) =
-            crate::sqlite::dispatch_node_sqlite_session_method(handle, method_name, &args)
-        {
-            return Some(result);
-        }
-    }
-    None
+    crate::sqlite::dispatch_bun_sqlite_statement_method(handle, method_name, args)
 }
 
 #[cfg(feature = "crypto")]

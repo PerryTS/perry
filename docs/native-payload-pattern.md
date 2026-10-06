@@ -209,6 +209,30 @@ N checklist:
 2. Use the ordinary payload conversion checklist. Add no callback sites,
    keep-alive pins or pending-exception machinery.
 
+The first S family is node:sqlite (`perry-stdlib/src/sqlite/database_sync.rs`,
+`statement_sync.rs`, `sqlite_callbacks.rs`, `tag_store.rs`, `session.rs`):
+
+* `DatabaseSync` owns the `sqlite3*`; its payload exists only while open.
+  Everything `open()` needs to reopen (path, flags, limits) is plain data
+  kept in the JS state, so `close()` / `open()` keep the same object.
+* A statement owns no C resource: it keeps its SQL and options and compiles
+  them on its database per run, entering through the database. Children
+  carry the database's `OpenSerial`.
+* Each `sqlite3_step` is one guard; rows are converted after `finish`
+  with non-throwing converters, and an error finalizes the statement before
+  the throw. Resets that can run `xFinal` stay inside the guard, so a
+  pending exception keeps them out of JS.
+* The payload's `Drop` deletes sessions, finalizes any statement still on
+  the connection (the outer call of a deferred close), then
+  `sqlite3_close_v2`; the outer frame sees the database closed and forgets
+  its statement. A C child that must die before the connection (a
+  `sqlite3_session`) is shared through one `Rc` cell by the database
+  payload and the child payload: whichever goes first deletes it.
+* node's own accessors (`db.isOpen`, `stmt.sourceSQL`, `db.limits.*`) are
+  installed per instance with `native_payload::define_own_accessor`; a
+  constructor export materializes its prototype when the export is created
+  (`native_payload::prototype`).
+
 In each family conversion PR, delete its callback id registries and scanners,
 `js_write_barrier_root_nanbox` callback "rooting", and listener/pipe tables
 keyed by id. For sqlite this includes NODE_SQLITE_CUSTOM_FUNCTIONS,

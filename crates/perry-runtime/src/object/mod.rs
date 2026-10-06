@@ -227,7 +227,9 @@ pub(crate) mod own_override;
 mod own_override_builtin_install_tests;
 #[cfg(test)]
 mod own_override_push_tests;
-pub(crate) use object_ops::{ensure_key_in_keys_array, install_builtin_getter};
+pub(crate) use object_ops::{
+    ensure_key_in_keys_array, install_builtin_getter, install_own_builtin_accessor,
+};
 mod object_ops_frozen;
 mod polymorphic_index;
 #[cfg(test)]

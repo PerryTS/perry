@@ -720,6 +720,38 @@ pub(crate) unsafe fn install_builtin_getter(proto: *mut ObjectHeader, key: &str,
     );
 }
 
+/// Install a built-in accessor as an OWN property of a freshly allocated
+/// ordinary object (node's per-instance getters such as `db.isOpen`): the key
+/// is claimed with the accessor's attributes and the pair lives in the key's
+/// slot, exactly as [`install_builtin_getter`] does for a prototype. The
+/// caller keeps the heap still (`GcSuppressScope`) and roots the object.
+pub(crate) unsafe fn install_own_builtin_accessor(
+    obj: *mut ObjectHeader,
+    key_str: *const crate::StringHeader,
+    key: &str,
+    getter_bits: u64,
+    setter_bits: u64,
+    attrs: PropertyAttrs,
+) {
+    if obj.is_null() || (obj as usize) < 0x10000 || key_str.is_null() {
+        return;
+    }
+    let entry = crate::object::key_attrs::AttrsEdit::Data(&[], attrs.bits).apply(
+        crate::object::key_attrs::AttrsEdit::Accessor(&[], getter_bits != 0, setter_bits != 0)
+            .apply(0),
+    );
+    ensure_key_in_keys_array_with_entry(obj, key_str, entry);
+    set_builtin_accessor_descriptor(
+        obj as usize,
+        key.to_string(),
+        AccessorDescriptor {
+            get: getter_bits,
+            set: setter_bits,
+        },
+        attrs,
+    );
+}
+
 /// A builtin getter's attributes: writable is N/A for an accessor;
 /// enumerable=false, configurable=true.
 const BUILTIN_GETTER_ATTRS: PropertyAttrs = PropertyAttrs::new(true, false, true);
