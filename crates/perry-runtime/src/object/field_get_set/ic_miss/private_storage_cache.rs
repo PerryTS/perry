@@ -436,6 +436,17 @@ impl IntrinsicPrivateReadSite {
         crate::string::intern_ascii_literal(private_storage_spelling(0, 0, self.name).as_bytes())
     }
 
+    /// Publish the same own-inline read word from a namespace-aware birth.
+    ///
+    /// # Safety
+    /// The caller has established that this shape owns this site's qualified
+    /// private key at `slot`, flagged PRIVATE_FIELD_ENTRY, with `live` inline
+    /// slots. No object or key address is retained by the site.
+    #[cfg(feature = "regex-engine")]
+    pub(crate) unsafe fn prime_birth(&self, shape: u32, slot: u32, live: u32) {
+        self.site.prime_own_inline(shape, slot, live);
+    }
+
     #[inline]
     pub(crate) fn read(&self, receiver: f64) -> Option<f64> {
         let bits = receiver.to_bits();

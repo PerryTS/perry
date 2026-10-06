@@ -315,6 +315,10 @@ pub(crate) use has_property::{
 };
 pub use has_property::{js_in_operator, js_object_has_property};
 pub use has_property_ic::js_in_operator_presence_ic;
+#[cfg(all(test, feature = "regex-engine"))]
+pub(crate) use ic_miss::intrinsic_private_add;
+#[cfg(feature = "regex-engine")]
+pub(crate) use ic_miss::intrinsic_private_set;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, cannot_be_private_member_name, class_evaluation_of,
     current_private_lexical_brand_value, is_array_method_value_name,
@@ -326,10 +330,6 @@ pub(crate) use ic_miss::{
     stamp_private_evaluation_brand, take_private_method_call_hint, take_private_method_owner_hint,
     IntrinsicPrivateReadSite, PrivateHintBrandScope,
 };
-#[cfg(feature = "regex-engine")]
-pub(crate) use ic_miss::intrinsic_private_set;
-#[cfg(all(test, feature = "regex-engine"))]
-pub(crate) use ic_miss::intrinsic_private_add;
 pub use ic_miss::{
     js_class_field_add, js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
     js_object_get_field_ic, js_object_get_field_ic_miss, js_object_get_field_ic_miss_packed,
