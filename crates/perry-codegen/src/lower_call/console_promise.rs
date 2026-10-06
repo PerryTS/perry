@@ -1258,7 +1258,14 @@ pub fn try_lower_native_method_str_dispatch(
             // `const buf = Buffer.alloc(N)` local. Returns Ok(Some(reg)) on
             // success; falls through to the runtime dispatch for all other
             // Buffer methods or untracked receivers.
-            if is_buffer_class {
+            // A parameter declaration is only a hint. Its common-cell
+            // preheader performs the actual brand/owner admission; it may
+            // therefore use the guarded reader even without a stable type
+            // proof in this dispatch tower.
+            let guarded_buffer_param = matches!(object.as_ref(), Expr::LocalGet(id)
+                if ctx.receiver_descriptors.byte_view_param(*id).is_some_and(|access|
+                    access.brands == [crate::runtime_abi::GC_TYPE_BUFFER]));
+            if is_buffer_class || guarded_buffer_param {
                 if let Some(lowered) = try_emit_buffer_read_intrinsic(ctx, object, property, args)?
                 {
                     let materialized = crate::expr::materialize_js_value(

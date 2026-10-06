@@ -35,13 +35,14 @@ fn live_buffer_type(addr: usize) -> Option<u8> {
 fn test_dead_data_view_and_sab_brands_die_with_their_cells() {
     let _guard = GcTestIsolationGuard::new();
 
-    let view = crate::buffer::buffer_alloc(32) as usize;
-    crate::buffer::mark_as_data_view(view);
+    let view = (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 32])
+        .to_bits()
+        & crate::value::POINTER_MASK) as usize;
     let sab = crate::buffer::buffer_alloc(32) as usize;
     crate::buffer::mark_as_shared_array_buffer(sab);
     assert_eq!(
         live_buffer_type(view),
-        Some(crate::gc::GC_TYPE_BUFFER_DATA_VIEW)
+        Some(crate::gc::GC_TYPE_BUFFER_DATA_VIEW | crate::codegen_abi::BYTES_TYPE_VIEW)
     );
     assert_eq!(
         live_buffer_type(sab),
@@ -67,8 +68,9 @@ fn test_dead_data_view_and_sab_brands_die_with_their_cells() {
 fn test_live_data_view_and_shared_array_buffer_flags_survive_full_gc() {
     let _guard = CopyingNurseryTestGuard::new(2);
 
-    let view = crate::buffer::buffer_alloc(32) as usize;
-    crate::buffer::mark_as_data_view(view);
+    let view = (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 32])
+        .to_bits()
+        & crate::value::POINTER_MASK) as usize;
     let sab = crate::buffer::buffer_alloc(32) as usize;
     crate::buffer::mark_as_shared_array_buffer(sab);
 

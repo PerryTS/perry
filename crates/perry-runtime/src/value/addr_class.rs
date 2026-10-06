@@ -406,7 +406,7 @@ pub(crate) unsafe fn try_read_tracked_gc_header(
     }
     let header = std::ptr::NonNull::new(header_addr as *mut GcHeader)?;
     let header_ptr = header.as_ptr();
-    if crate::gc::gc_type_info((*header_ptr).obj_type).is_none() {
+    if !crate::gc::gc_type_is_known((*header_ptr).obj_type) {
         return None;
     }
     if ((*header_ptr).size as usize) < GC_HEADER_SIZE {

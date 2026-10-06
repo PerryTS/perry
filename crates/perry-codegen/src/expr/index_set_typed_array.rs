@@ -78,10 +78,17 @@ pub(super) fn lower_inline_dyn_typed_array_set(
     let done_label = ctx.block_label(done_idx);
     // One header admission decides whether to attempt the typed-array tier.
     let brands: Vec<u8> = (0..8).map(super::byte_cell::brand_for_kind).collect();
-    let _access = super::byte_cell::resolve_write(ctx, obj_box, &brands, &array_label);
+    let access = super::byte_cell::resolve_write(ctx, obj_box, &brands, &array_label);
     ctx.block().br(&ta_label);
     ctx.current_block = ta_idx;
-    emit_inline_ta_set(ctx, obj_box, idx_d, val_double, Some(&slow_label));
+    emit_inline_ta_set(
+        ctx,
+        obj_box,
+        idx_d,
+        val_double,
+        Some(&slow_label),
+        Some(access),
+    );
     ctx.block().br(&done_label);
 
     ctx.current_block = array_idx;
@@ -163,7 +170,7 @@ fn emit_inline_ta_set_then_runtime(
     val_double: &str,
     strict: bool,
 ) -> String {
-    emit_inline_ta_set(ctx, obj_box, idx_d, val_double, None)
+    emit_inline_ta_set(ctx, obj_box, idx_d, val_double, None, None)
         .expect("a typed-array store without a shared decline emits its own")
         .emit(ctx, obj_box, idx_d, val_double, strict);
     val_double.to_string()
@@ -198,6 +205,7 @@ fn emit_inline_ta_set(
     idx_d: &str,
     val_double: &str,
     decline: Option<&str>,
+    admitted: Option<super::byte_cell::Access>,
 ) -> Option<OwnDecline> {
     let fast_idx = ctx.new_block("tav.set.fast");
     let store_idx = ctx.new_block("tav.set.store");
@@ -213,7 +221,8 @@ fn emit_inline_ta_set(
     let merge_label = ctx.block_label(merge_idx);
 
     let brands: Vec<u8> = (0..8).map(super::byte_cell::brand_for_kind).collect();
-    let access = super::byte_cell::resolve_write(ctx, obj_box, &brands, &slow_label);
+    let access = admitted
+        .unwrap_or_else(|| super::byte_cell::resolve_write(ctx, obj_box, &brands, &slow_label));
     let h = access.word.clone();
     let (kind, _) = super::byte_cell::kind_and_width(ctx.block(), &h);
     let entry_guard = {

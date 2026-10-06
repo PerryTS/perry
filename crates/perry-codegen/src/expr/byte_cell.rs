@@ -280,6 +280,24 @@ pub(crate) fn resolve(ctx: &mut FnCtx<'_>, boxed: &str, brands: &[u8], miss: &st
 /// Stores additionally reject a frozen receiver before deriving a writable access.
 pub(crate) fn resolve_write(ctx: &mut FnCtx<'_>, boxed: &str, brands: &[u8], miss: &str) -> Access {
     let access = resolve(ctx, boxed, brands, miss);
+    admit_write(ctx, access, miss)
+}
+
+pub(crate) fn resolve_indexed_write(
+    ctx: &mut FnCtx<'_>,
+    object: &perry_hir::Expr,
+    boxed: &str,
+    brands: &[u8],
+    miss: &str,
+) -> Access {
+    let mut access = resolve_read(ctx, object, boxed, brands, miss);
+    if access.word.is_empty() {
+        access.word = header_word(ctx.block(), &access.raw);
+    }
+    admit_write(ctx, access, miss)
+}
+
+fn admit_write(ctx: &mut FnCtx<'_>, access: Access, miss: &str) -> Access {
     let flags = ctx
         .block()
         .and(I64, &access.word, &(1u64 << 16).to_string());
@@ -480,6 +498,112 @@ mod tests {
                 );
             }
         });
+    }
+
+    #[test]
+    fn buffer_parameter_numeric_read_retains_owner_and_uses_common_header() {
+        use perry_hir::{Function, Module, Param};
+        crate::temp_root_coverage::under_both_lowerings(|mode| {
+            let mut module = Module::new("buffer_param_owner.ts");
+            module.functions.push(Function {
+                id: 10,
+                name: "read".into(),
+                type_params: vec![],
+                params: vec![Param {
+                    id: 1,
+                    name: "view".into(),
+                    ty: Type::Named("Buffer".into()),
+                    default: None,
+                    decorators: vec![],
+                    is_rest: false,
+                    arguments_object: None,
+                }],
+                return_type: Type::Number,
+                body: vec![
+                    Stmt::Expr(Expr::Call {
+                        callee: Box::new(Expr::GlobalGet(100)),
+                        args: vec![],
+                        type_args: vec![],
+                        byte_offset: 0,
+                    }),
+                    Stmt::Return(Some(Expr::Call {
+                        callee: Box::new(Expr::PropertyGet {
+                            object: Box::new(Expr::LocalGet(1)),
+                            property: "readInt32BE".into(),
+                            byte_offset: 0,
+                        }),
+                        args: vec![Expr::Integer(0)],
+                        type_args: vec![],
+                        byte_offset: 0,
+                    })),
+                ],
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+                is_exported: false,
+                captures: vec![],
+                decorators: vec![],
+                was_plain_async: false,
+                was_unrolled: false,
+            });
+            let ir = String::from_utf8(
+                crate::compile_module(
+                    &module,
+                    crate::CompileOptions {
+                        emit_ir_only: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            assert!(
+                ir.contains("bytes.numeric.load"),
+                "{mode}: numeric load missing:\n{ir}"
+            );
+            assert!(
+                !ir.contains("call ptr @js_native_buffer_data_ptr"),
+                "{mode}: legacy preheader"
+            );
+            let marker = ir
+                .lines()
+                .find(|line| line.contains("; bytes.hoist.roots "))
+                .unwrap();
+            let roots = crate::testing::root_slots::bound_slots(&ir);
+            for field in ["receiver=", "owner="] {
+                let slot = format!(
+                    "%{}",
+                    marker
+                        .split(field)
+                        .nth(1)
+                        .unwrap()
+                        .split_whitespace()
+                        .next()
+                        .unwrap()
+                );
+                assert!(
+                    roots.contains_key(&slot)
+                        || ir.contains(&format!("{slot} = alloca ptr addrspace(1)")),
+                    "{mode}: {field}{slot} must be a statepoint root"
+                );
+            }
+            assert!(
+                ir.contains("asm sideeffect"),
+                "{mode}: keep owner live after collection"
+            );
+        });
+    }
+
+    #[test]
+    fn dropping_buffer_parameter_owner_root_turns_the_invariant_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "expr::byte_cell::tests::buffer_parameter_numeric_read_retains_owner_and_uses_common_header", "--nocapture"])
+            .env("PERRY_B4_SABOTAGE", "hoist_owner").output().unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(
+            !child.status.success(),
+            "missing Buffer owner root must be detected"
+        );
     }
 
     #[test]

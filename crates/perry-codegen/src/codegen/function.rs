@@ -10,7 +10,7 @@ use perry_hir::Function;
 use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::native_value::{
-    AliasState, BufferElem, BufferIndexUnit, BufferViewPointerState, BufferViewSlot, LengthSource,
+    AliasState, BufferIndexUnit, BufferViewPointerState, BufferViewSlot, LengthSource,
 };
 use crate::stmt;
 use crate::strings::StringPool;
@@ -1454,73 +1454,25 @@ pub(super) fn compile_function(
         crate::expr::body_call::emit_sloppy_receiver_coercion(&mut ctx, &slot);
     }
 
-    // Issue #92 follow-up: pre-register `buffer_data_slots` entries for
-    // `Buffer`-typed function parameters so that the readInt32BE/etc.
-    // intrinsic fast path in `lower_call.rs` fires on
-    // `function decode(row: Buffer) { row.readInt32BE(off) }` — the real
-    // Postgres-driver hot-path shape, not just the `const buf = Buffer.alloc(N)`
-    // micro-benchmark. Skipped when the param is reassigned (has_any_mutation
-    // covers LocalSet/Update/ARRAY_MUTATORS — `buf = ...`, `buf.fill(...)` etc.)
-    // because a cached data_ptr would go stale, and skipped for boxed params
-    // (same reason via cross-closure mutation). Uint8Array-typed params are
-    // deliberately excluded: a pre-existing crash surfaces when the same
-    // program defines both a Buffer-param and a Uint8Array-param function and
-    // then invokes them in sequence (reproducible on main without any of
-    // this extension's changes). Tracked separately; Buffer coverage alone
-    // hits the Postgres decode path which is the target workload here.
+    // Buffer parameters retain exact receiver/owner starts and resolve the
+    // same common-cell preheader as typed parameters. Numeric reads recheck
+    // bounds and named-property authority before their single element load.
     for p in &f.params {
-        let is_buffer_typed = matches!(
-            &p.ty,
-            perry_hir::types::Type::Named(n) if n == "Buffer"
-        );
-        if !is_buffer_typed {
+        if !matches!(&p.ty, perry_hir::types::Type::Named(n) if n == "Buffer")
+            || ctx.boxed_vars.contains(&p.id)
+            || crate::collectors::has_any_mutation(&f.body, p.id)
+        {
             continue;
         }
-        if ctx.boxed_vars.contains(&p.id) {
-            continue;
+        if let Some(slot) = ctx.locals.get(&p.id).cloned() {
+            let value = ctx.block().load(DOUBLE, &slot);
+            crate::expr::byte_cell::materialize_param(
+                &mut ctx,
+                p.id,
+                &value,
+                &[crate::runtime_abi::GC_TYPE_BUFFER],
+            );
         }
-        if crate::collectors::has_any_mutation(&f.body, p.id) {
-            continue;
-        }
-        let Some(param_slot) = ctx.locals.get(&p.id).cloned() else {
-            continue;
-        };
-        let blk = ctx.block();
-        let arg_val = blk.load(DOUBLE, &param_slot);
-        let handle = crate::expr::unbox_to_i64(blk, &arg_val);
-        let handle_ptr = blk.inttoptr(I64, &handle);
-        // Use the same backing resolution as Uint8Array views: a
-        // Buffer argument may own inline bytes or carry a view/native span.
-        let data_ptr = blk.call(PTR, "js_native_buffer_data_ptr", &[(DOUBLE, &arg_val)]);
-        let buf_slot = ctx.func.alloca_entry(PTR);
-        ctx.block().store(PTR, &data_ptr, &buf_slot);
-        let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
-        ctx.buffer_data_slots
-            .insert(p.id, (buf_slot.clone(), scope_idx));
-        ctx.receiver_descriptors.materialize_buffer_view(
-            p.id,
-            BufferViewSlot {
-                data_slot: buf_slot,
-                // Length belongs to the receiver header, not data_ptr - 8.
-                // Keep it live so detach/resize still invalidate bounds.
-                length_slot: Some(handle_ptr),
-                scope_idx: Some(scope_idx),
-                elem: BufferElem::U8,
-                element_width_bytes: 1,
-                index_unit: BufferIndexUnit::Byte,
-                view_byte_offset: None,
-                length_offset_from_data: 0,
-                alias: AliasState::Unknown,
-                length_source: Some(LengthSource::Unknown),
-                native_owned: None,
-                pointer_state: BufferViewPointerState::Stable,
-                // Declared-type hoist only — the construction form is unknown,
-                // so no inline-storage proof.
-                storage_inline_proven: false,
-                // Any caller's Buffer, which JS may detach between reads.
-                length_fixed: false,
-            },
-        );
     }
 
     // Representation-selection Phase 2: bind each `TaPtr` param as a PROVEN

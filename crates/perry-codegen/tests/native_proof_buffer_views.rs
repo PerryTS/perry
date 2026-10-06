@@ -1869,8 +1869,25 @@ fn bounded_buffer_read_modify_write_keeps_inline_byte_store() {
         ir.contains("load i8") && ir.contains("store i8"),
         "bounded read/modify/write should stay on native byte access:\n{ir}"
     );
-    assert!(
-        !ir.contains("call void @js_uint8array_set"),
-        "proven call-free RHS must not force the byte store to its runtime helper:\n{ir}"
-    );
+    // A declared Buffer parameter can be a bagged/detached view at runtime.
+    // Its common-header admission needs a cold fallback, while the admitted
+    // RHS and store remain native. Do not revive the unchecked old preheader
+    // just to eliminate that necessary fallback from the whole function.
+    assert!(ir.contains("bytes.hoist.roots"), "{ir}");
+    assert!(!ir.contains("call ptr @js_native_buffer_data_ptr"), "{ir}");
+    assert!(ir.contains("bytes.hoisted.read"), "{ir}");
+    for label in ["u8c.get.load.", "u8c.set.store."] {
+        let line = ir
+            .lines()
+            .find(|line| line.starts_with(label) && line.ends_with(':'))
+            .unwrap_or_else(|| panic!("missing admitted {label}:\n{ir}"));
+        let block = ir[ir.find(line).unwrap() + line.len()..]
+            .split("\n\n")
+            .next()
+            .unwrap();
+        assert!(
+            !block.contains("call "),
+            "admitted byte access calls a helper: {block}"
+        );
+    }
 }

@@ -1286,6 +1286,14 @@ pub(crate) fn note_view_access(ctx: &mut FnCtx<'_>) {
 /// Region admission consumes the current cell length. The data address never
 /// serves as a header address, including for a view over another owner's store.
 fn live_byte_length(ctx: &mut FnCtx<'_>, id: u32) -> Result<String> {
+    // Sealed view proofs already carry the canonical length slot. Read that
+    // word independently of data; a helper call would prevent LLVM from
+    // hoisting the unchanged bounds through the inner loop.
+    if let Some(view) = view_of(ctx, id).filter(|view| view.length_fixed) {
+        if let Some(slot) = view.length_slot {
+            return Ok(ctx.block().load(I32, &slot));
+        }
+    }
     let value = lower_expr(ctx, &Expr::LocalGet(id))?;
     let raw = crate::expr::unbox_to_i64(ctx.block(), &value);
     let receiver = ctx.block().inttoptr(I64, &raw);

@@ -43,9 +43,8 @@ fn buffer_with(bytes: &[u8]) -> *mut crate::buffer::BufferHeader {
 }
 
 fn data_view(bytes: &[u8]) -> usize {
-    let buf = buffer_with(bytes) as usize;
-    crate::buffer::mark_as_data_view(buf);
-    buf
+    (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, bytes).to_bits()
+        & crate::value::POINTER_MASK) as usize
 }
 
 fn array_buffer(bytes: &[u8]) -> usize {

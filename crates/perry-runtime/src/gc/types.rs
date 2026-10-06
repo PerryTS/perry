@@ -1032,6 +1032,29 @@ const fn buffer_family_type_info(type_id: u8, name: &'static str) -> GcTypeInfo 
     )
 }
 
+/// Header admission uses the same metadata as tracing. The dense initial
+/// range is derived at compile time so ordinary arrays/objects do not pay a
+/// sparse-table load after the byte brands move to the type-byte block.
+#[inline(always)]
+pub(crate) fn gc_type_is_known(obj_type: u8) -> bool {
+    #[cfg(test)]
+    if obj_type == 10 && crate::buffer::bytes::b4_sabotage("retired_type_admission") {
+        return true;
+    }
+    const FIRST_GAP: u8 = {
+        let infos = byte_type_infos();
+        let mut kind = 1usize;
+        while kind < infos.len() && infos[kind].is_some() {
+            kind += 1;
+        }
+        kind as u8
+    };
+    if obj_type.wrapping_sub(1) < FIRST_GAP - 1 {
+        return true;
+    }
+    gc_type_info(obj_type).is_some()
+}
+
 #[inline]
 pub(crate) fn gc_type_info(obj_type: u8) -> Option<&'static GcTypeInfo> {
     GC_TYPE_INFO_BY_ID
@@ -1679,5 +1702,27 @@ mod buffer_family_type_tests {
         }
         assert!(!is_uint8array_buffer_type(GC_TYPE_BUFFER));
         assert!(!is_uint8array_buffer_type(GC_TYPE_BUFFER_ARRAY_BUFFER));
+    }
+}
+
+#[cfg(test)]
+mod header_admission_tests {
+    #[test]
+    fn sparse_header_admission_agrees_with_all_type_descriptors() {
+        for kind in 0..=u8::MAX {
+            assert_eq!(
+                super::gc_type_is_known(kind),
+                super::gc_type_info(kind).is_some(),
+                "header kind {kind:#x}"
+            );
+        }
+    }
+    #[test]
+    fn admitting_a_retired_kind_turns_header_admission_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "gc::types::header_admission_tests::sparse_header_admission_agrees_with_all_type_descriptors", "--nocapture"])
+            .env("PERRY_B4_SABOTAGE", "retired_type_admission").output().unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(!child.status.success(), "retired kind must be rejected");
     }
 }

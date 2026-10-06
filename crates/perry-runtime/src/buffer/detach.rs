@@ -1,13 +1,13 @@
 //! ArrayBuffer detach state and `ArrayBuffer.prototype.transfer` /
 //! `transferToFixedLength` / `detached` (ES2024).
 //!
-//! Owned native bytes are freed (or taken by the transfer message). Legacy
-//! buffer bytes live INLINE after the `BufferHeader` in a GC old-arena
+//! Owned native bytes are freed (or taken by the transfer message). Inline
+//! bytes live after the common 16-byte cell in a GC old-arena
 //! allocation, so a detached buffer's storage cannot be individually freed
 //! while the JS object is alive. Detach therefore (1) zeroes the header —
-//! the pre-existing structuredClone-transfer convention, which makes
-//! `byteLength` read 0 — (2) zeroes every registered view's length so views
-//! over the detached buffer report length 0 like Node, and (3) hands the
+//! the structuredClone-transfer convention, which makes `byteLength` read 0 —
+//! (2) marks the owner detached, which its views check on access, and
+//! (3) hands the
 //! page-aligned interior of the payload back to the OS with `madvise`, so a
 //! large detached buffer stops costing RSS immediately even while the
 //! ArrayBuffer object itself is still reachable. The GcHeader `size` field
