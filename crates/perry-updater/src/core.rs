@@ -429,11 +429,13 @@ pub extern "C" fn perry_updater_sha256_buffer(buf_ptr: i64) -> *mut BufferHeader
     let Some(digest) = digest else {
         return std::ptr::null_mut();
     };
-    perry_runtime::buffer::bytes::from_slice(
+    let output = perry_runtime::buffer::bytes::from_slice(
         perry_runtime::buffer::bytes::Brand::Buffer,
         &digest,
-    )
-    .as_pointer::<BufferHeader>()
+    );
+    perry_runtime::value::JSValue::from_bits(output.to_bits())
+        .as_pointer::<BufferHeader>()
+        .cast_mut()
 }
 
 #[cfg(test)]

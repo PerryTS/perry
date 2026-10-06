@@ -96,20 +96,32 @@ fn detached_bit_and_nested_pin_count_do_not_overlap() {
 fn large_concat_and_nested_views_preserve_one_visible_window() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _force = ForcedEvacuationTestGuard::on();
-    let handles = RuntimeHandleScope::new();
-    let array = handles.root_raw_mut_ptr(crate::array::js_array_alloc(300));
-    let (part, pin) = bytes::new_bytes(Brand::Buffer, 18_000, Init::Uninit);
-    unsafe {
-        std::ptr::write_bytes(pin.as_mut_ptr(), 0x25, pin.len());
-    }
-    for _ in 0..300 {
-        crate::array::js_array_push_f64(array.get_raw_mut_ptr(), part);
-    }
-    let concat = buffer::js_buffer_concat(array.get_raw_mut_ptr());
-    let concat = handles.root_raw_mut_ptr(concat);
-    let view = buffer::js_buffer_slice(concat.get_raw_mut_ptr(), 4, 5_400_000);
-    let view = handles.root_raw_mut_ptr(view);
-    let nested = buffer::js_buffer_slice(view.get_raw_mut_ptr(), 4, 12);
+    let (nested, owner) = {
+        let handles = RuntimeHandleScope::new();
+        let array = handles.root_raw_mut_ptr(crate::array::js_array_alloc(300));
+        let (part, pin) = bytes::new_bytes(Brand::Buffer, 18_000, Init::Uninit);
+        unsafe {
+            std::ptr::write_bytes(pin.as_mut_ptr(), 0x25, pin.len());
+        }
+        for _ in 0..300 {
+            crate::array::js_array_push_f64(array.get_raw_mut_ptr(), part);
+        }
+        let concat = buffer::js_buffer_concat(array.get_raw_mut_ptr());
+        let concat = handles.root_raw_mut_ptr(concat);
+        let view = buffer::js_buffer_slice(concat.get_raw_mut_ptr(), 4, 5_400_000);
+        let view = handles.root_raw_mut_ptr(view);
+        let nested = buffer::js_buffer_slice(view.get_raw_mut_ptr(), 4, 12);
+        assert_eq!(
+            buffer::buffer_backing_array_buffer(
+                concat.get_raw_mut_ptr::<buffer::BufferHeader>() as usize
+            ),
+            buffer::buffer_backing_array_buffer(nested as usize)
+        );
+        (
+            nested,
+            concat.get_raw_mut_ptr::<buffer::BufferHeader>() as usize,
+        )
+    };
     let holder = crate::array::js_array_alloc(1);
     crate::array::js_array_push_f64(holder, bits(nested));
     js_shadow_slot_set(0, ptr_bits(holder as usize));
@@ -117,11 +129,15 @@ fn large_concat_and_nested_views_preserve_one_visible_window() {
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
     assert!(gc_total_collection_count() > before);
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    assert!(
+        unsafe { crate::value::addr_class::try_read_tracked_gc_header(owner) }.is_some(),
+        "the nested view must retain its concat owner without a separate owner root"
+    );
     assert_eq!(
-        buffer::buffer_backing_array_buffer(
-            concat.get_raw_mut_ptr::<buffer::BufferHeader>() as usize
-        ),
-        buffer::buffer_backing_array_buffer(nested as usize)
+        buffer::js_buffer_read_uint32_be(bits(nested), 0),
+        0x25252525_u32 as f64
     );
     bytes::no_gc(|scope| assert_eq!(bytes::bytes(bits(nested), scope).unwrap(), &[0x25; 8]));
 }
@@ -154,18 +170,44 @@ fn persistent_symbols_have_a_leaf_header_at_p_minus_eight() {
 fn each_compatible_b4_sabotage_turns_its_witness_red() {
     assert!(!fault("unused"));
     for (fault, witness) in [
-        ("symbol_header", "gc::tests::buffer_b4::persistent_symbols_have_a_leaf_header_at_p_minus_eight"),
-        ("detach_mark", "gc::tests::buffer_bytes::detach_defers_native_free_until_the_last_pin"),
-        ("owner_check", "gc::tests::buffer_b4::views_observe_owner_resize_and_detach_after_a_live_collection"),
-        ("transfer_copy", "buffer::backing::tests::transfer_receiver_uses_original_pointer_after_sender_gc"),
-        ("view_edge", "gc::tests::buffer_side_tables::test_buffer_subarray_owner_edges_survive_moving_gc_and_die_together"),
-        ("u32_admission", "typedarray::tests::owning_u32_admission_reads_current_header"),
+        (
+            "symbol_header",
+            "gc::tests::buffer_b4::persistent_symbols_have_a_leaf_header_at_p_minus_eight",
+        ),
+        (
+            "detach_mark",
+            "gc::tests::buffer_bytes::detach_defers_native_free_until_the_last_pin",
+        ),
+        (
+            "owner_check",
+            "gc::tests::buffer_b4::views_observe_owner_resize_and_detach_after_a_live_collection",
+        ),
+        (
+            "transfer_copy",
+            "buffer::backing::tests::transfer_receiver_uses_original_pointer_after_sender_gc",
+        ),
+        (
+            "view_edge",
+            "gc::tests::buffer_b4::large_concat_and_nested_views_preserve_one_visible_window",
+        ),
+        (
+            "u32_admission",
+            "typedarray::tests::owning_u32_admission_reads_current_header",
+        ),
     ] {
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", witness, "--nocapture"])
-            .env("PERRY_B4_SABOTAGE", fault).output().unwrap();
-        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"), "witness must actually run: {witness}");
-        assert!(!child.status.success(), "sabotage {fault} left {witness} green");
+            .env("PERRY_B4_SABOTAGE", fault)
+            .output()
+            .unwrap();
+        assert!(
+            String::from_utf8_lossy(&child.stdout).contains("running 1 test"),
+            "witness must actually run: {witness}"
+        );
+        assert!(
+            !child.status.success(),
+            "sabotage {fault} left {witness} green"
+        );
         eprintln!("B4 sabotage {fault}: RED");
     }
 }
