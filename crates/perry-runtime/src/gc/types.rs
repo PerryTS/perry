@@ -1032,6 +1032,15 @@ const fn buffer_family_type_info(type_id: u8, name: &'static str) -> GcTypeInfo 
     )
 }
 
+const FIRST_CORE_TYPE_GAP: u8 = {
+    let infos = byte_type_infos();
+    let mut kind = 1usize;
+    while kind < infos.len() && infos[kind].is_some() {
+        kind += 1;
+    }
+    kind as u8
+};
+
 /// Header admission uses the same metadata as tracing. The dense initial
 /// range is derived at compile time so ordinary arrays/objects do not pay a
 /// sparse-table load after the byte brands move to the type-byte block.
@@ -1041,15 +1050,7 @@ pub(crate) fn gc_type_is_known(obj_type: u8) -> bool {
     if obj_type == 10 && crate::buffer::bytes::b4_sabotage("retired_type_admission") {
         return true;
     }
-    const FIRST_GAP: u8 = {
-        let infos = byte_type_infos();
-        let mut kind = 1usize;
-        while kind < infos.len() && infos[kind].is_some() {
-            kind += 1;
-        }
-        kind as u8
-    };
-    if obj_type.wrapping_sub(1) < FIRST_GAP - 1 {
+    if obj_type.wrapping_sub(1) < FIRST_CORE_TYPE_GAP - 1 {
         return true;
     }
     gc_type_info(obj_type).is_some()
@@ -1057,6 +1058,21 @@ pub(crate) fn gc_type_is_known(obj_type: u8) -> bool {
 
 #[inline]
 pub(crate) fn gc_type_info(obj_type: u8) -> Option<&'static GcTypeInfo> {
+    #[cfg(test)]
+    if obj_type == GC_TYPE_ARRAY && crate::buffer::bytes::b4_sabotage("dense_core_descriptor") {
+        return GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize].as_ref();
+    }
+    if obj_type.wrapping_sub(1) < FIRST_CORE_TYPE_GAP - 1 {
+        // FIRST_CORE_TYPE_GAP is computed from this exact immutable metadata.
+        // The range guard proves both indexing and Some, so common array,
+        // object and closure layout notes need no sparse presence load.
+        return Some(unsafe {
+            GC_TYPE_INFO_BY_ID
+                .get_unchecked(obj_type as usize)
+                .as_ref()
+                .unwrap_unchecked()
+        });
+    }
     GC_TYPE_INFO_BY_ID
         .get(obj_type as usize)
         .and_then(Option::as_ref)
@@ -1711,6 +1727,13 @@ mod header_admission_tests {
     fn sparse_header_admission_agrees_with_all_type_descriptors() {
         for kind in 0..=u8::MAX {
             assert_eq!(
+                super::gc_type_info(kind),
+                super::GC_TYPE_INFO_BY_ID
+                    .get(kind as usize)
+                    .and_then(Option::as_ref),
+                "descriptor lookup must preserve the authoritative metadata for {kind:#x}"
+            );
+            assert_eq!(
                 super::gc_type_is_known(kind),
                 super::gc_type_info(kind).is_some(),
                 "header kind {kind:#x}"
@@ -1731,6 +1754,17 @@ mod header_admission_tests {
                 bytes && matches!(brand, 0 | 16 | 17)
             );
         }
+    }
+    #[test]
+    fn changing_dense_core_descriptor_turns_metadata_agreement_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "gc::types::header_admission_tests::sparse_header_admission_agrees_with_all_type_descriptors", "--nocapture"])
+            .env("PERRY_B4_SABOTAGE", "dense_core_descriptor").output().unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(
+            !child.status.success(),
+            "metadata substitution must be detected"
+        );
     }
     #[test]
     fn admitting_a_retired_kind_turns_header_admission_red() {

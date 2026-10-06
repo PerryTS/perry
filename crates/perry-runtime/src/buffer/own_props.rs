@@ -130,14 +130,42 @@ pub fn buffer_delete_own_prop(addr: usize, prop: &str) -> bool {
     unsafe {
         let bag = store::bag(addr);
         let key = crate::string::js_string_from_bytes(prop.as_ptr(), prop.len() as u32);
-        crate::object::js_object_delete_field(bag, key);
+        return crate::object::js_object_delete_field(bag, key) != 0;
     }
-    true
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shaped_engine_keys_keep_owner_edges_immutable_to_public_writes() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _suppress = crate::gc::GcSuppressScope::new();
+        let owner = super::super::buffer_alloc(16) as usize;
+        let view =
+            store::new_view(crate::gc::GC_TYPE_BUFFER_UINT8ARRAY, owner, 0, 16, false) as usize;
+        buffer_set_own_prop(view, "tag", 1.0);
+        let attrs = crate::object::get_property_attrs(view, store::VIEW_OWNER_KEY).unwrap();
+        assert!(!attrs.writable() && !attrs.enumerable() && !attrs.configurable());
+        buffer_set_own_prop(view, store::VIEW_OWNER_KEY, 0.0);
+        assert!(!buffer_delete_own_prop(view, store::VIEW_OWNER_KEY));
+        assert_eq!(unsafe { store::owner(view) }, owner);
+        unsafe {
+            store::bag_set(owner, store::PIN_OVERFLOW_KEY, 1.0, true);
+            store::bag_set(owner, store::PIN_OVERFLOW_KEY, 2.0, true);
+            assert_eq!(store::bag_get(owner, store::PIN_OVERFLOW_KEY), Some(2.0));
+        }
+    }
+
+    #[test]
+    fn making_engine_keys_publicly_mutable_turns_the_invariant_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "buffer::own_props::tests::shaped_engine_keys_keep_owner_edges_immutable_to_public_writes", "--nocapture"])
+            .env("PERRY_B4_SABOTAGE", "private_key_descriptor").output().unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(!child.status.success());
+    }
 
     #[test]
     fn own_property_names_preserve_creation_order() {

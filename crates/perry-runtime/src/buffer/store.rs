@@ -86,11 +86,19 @@ pub(crate) unsafe fn object_define(obj: *mut ObjectHeader, key: &str, value: f64
     let name = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
     crate::object::object_ops::define_property_force_store_value(obj, name, value);
     if hidden {
+        #[cfg(test)]
+        let writable = super::bytes::b4_sabotage("private_key_descriptor");
+        #[cfg(not(test))]
+        let writable = false;
         crate::object::descriptor_state::note_descriptor_target_edits(
             obj as usize,
             &[crate::object::key_attrs::AttrsEdit::Data(
                 key.as_bytes(),
-                crate::object::PropertyAttrs::new(true, false, true).bits,
+                // Engine-owned keys remain ordinary shaped properties, but
+                // public assignment/redefinition cannot replace an owner
+                // edge or pin count. Trusted updates use the force-store
+                // funnel above, including after freeze/preventExtensions.
+                crate::object::PropertyAttrs::new(writable, false, writable).bits,
             )],
         );
     }

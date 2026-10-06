@@ -949,6 +949,32 @@ impl<'ctx, 'm> FnReader<'ctx, 'm> {
             site.set_call_convention(LLVM_CC_PRESERVE_NONE);
         }
 
+        let trailing_attr = if let Some(rest) = trailing_attr.strip_prefix("readnone") {
+            if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+                bail!("malformed inline-asm memory attribute `{trailing_attr}`");
+            }
+            // LLVM's text reader translates legacy readnone to memory(none).
+            // The native path must preserve the same effect: MemoryEffects
+            // encodes NoModRef for every location as zero.
+            let kind = inkwell::attributes::Attribute::get_named_enum_kind_id("memory");
+            if kind == 0 {
+                bail!("LLVM has no memory-effect callsite attribute");
+            }
+            #[cfg(test)]
+            let omit =
+                std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("asm_memory_effect");
+            #[cfg(not(test))]
+            let omit = false;
+            if !omit {
+                site.add_attribute(
+                    inkwell::attributes::AttributeLoc::Function,
+                    self.ctx.create_enum_attribute(kind, 0),
+                );
+            }
+            rest.trim_start()
+        } else {
+            trailing_attr
+        };
         let mut has_gc_leaf = false;
         match trailing_attr {
             "" => {}

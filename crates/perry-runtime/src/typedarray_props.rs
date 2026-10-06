@@ -321,6 +321,7 @@ pub(crate) unsafe fn typed_array_define_own_property(
     key: *const crate::string::StringHeader,
     key_name: &str,
     descriptor_value: f64,
+    desc_view: Option<&crate::object::object_ops::DescView<'_>>,
 ) -> f64 {
     if ta.is_null() {
         return obj_value;
@@ -372,6 +373,26 @@ pub(crate) unsafe fn typed_array_define_own_property(
                 .unwrap_or(crate::object::PropertyAttrs::new(
                     existing, existing, existing,
                 ));
+            let current_accessor = crate::object::get_accessor_descriptor(owner, key_name);
+            if existing
+                && !current_attrs.configurable()
+                && !current_attrs.writable()
+                && current_accessor.is_none()
+            {
+                // Engine keys use the same immutable data descriptors as any
+                // other shaped property. A permitted redefinition is a no-op;
+                // never let it replace the view's traced owner or pin count.
+                crate::object::object_ops::validate_nonconfigurable_redefine(
+                    key_name,
+                    current_attrs,
+                    None,
+                    crate::buffer::buffer_get_own_prop(owner, key_name)
+                        .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED)),
+                    descriptor_value,
+                    desc_view,
+                );
+                return obj_value;
+            }
             let has_get = descriptor_has(desc_ptr, b"get");
             let has_set = descriptor_has(desc_ptr, b"set");
             let has_accessor = has_get || has_set;

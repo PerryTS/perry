@@ -804,3 +804,44 @@ fn wide_bigint_literal_words_survive_native_construction() {
         );
     }
 }
+
+#[test]
+fn byte_owner_asm_preserves_no_memory_effects_on_the_native_path() {
+    let ir = r#"
+define void @owner_use(i64 %owner) {
+entry:
+  call void asm sideeffect "", "r"(i64 %owner) readnone "gc-leaf-function"
+  ret void
+}
+"#;
+    let (skeleton, functions) = split_corpus(ir);
+    let context = Context::create();
+    let text = crate::inprocess::parse_ir_text(&context, ir, "owner_text").unwrap();
+    let native = crate::inprocess::parse_ir_text(&context, &skeleton, "owner_native").unwrap();
+    for function in &functions {
+        predeclare_function_from_text(&context, &native, function).unwrap();
+        add_function_from_text(&context, &native, function).unwrap();
+    }
+    native.verify().unwrap();
+    for module in [&text, &native] {
+        let printed = module.print_to_string().to_string();
+        assert!(printed.contains("asm sideeffect"), "{printed}");
+        assert!(printed.contains("memory(none)"), "{printed}");
+        assert!(printed.contains("gc-leaf-function"), "{printed}");
+    }
+}
+
+#[test]
+fn dropping_native_asm_memory_effect_turns_roundtrip_red() {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "dialect::tests::byte_owner_asm_preserves_no_memory_effects_on_the_native_path",
+            "--nocapture",
+        ])
+        .env("PERRY_B4_SABOTAGE", "asm_memory_effect")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+    assert!(!child.status.success());
+}

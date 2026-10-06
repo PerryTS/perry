@@ -1152,6 +1152,7 @@ pub extern "C" fn js_object_define_property(
                     key_str,
                     key_name,
                     descriptor_value,
+                    desc_view.as_ref(),
                 );
             }
             return obj_value;
@@ -1342,6 +1343,7 @@ pub extern "C" fn js_object_define_property(
                     key_str,
                     key_name,
                     descriptor_value,
+                    desc_view.as_ref(),
                 );
             }
             return obj_value;

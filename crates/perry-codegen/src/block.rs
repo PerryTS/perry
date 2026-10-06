@@ -308,6 +308,8 @@ impl LlBlock {
             name.starts_with("llvm.")
                 || name.starts_with("js_shadow_")
                 || name.starts_with("js_write_barrier")
+                || crate::gc_call_effects::classify_direct_callee(name)
+                    == crate::gc_call_effects::GcCallEffect::CannotCollect
         }) {
             return;
         }
@@ -1769,6 +1771,7 @@ mod tests {
         block.retain_byte_owner_root_slot("%owner");
         block.add(I32, "1", "2");
         block.call_void("js_shadow_slot_set", &[]);
+        block.call(PTR, "js_native_buffer_data_ptr", &[]);
         assert!(!block
             .insts()
             .iter()
