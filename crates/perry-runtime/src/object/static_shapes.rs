@@ -341,8 +341,23 @@ pub(crate) fn finalize_constfn_static(
 ) -> u64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let root = scope.root_raw_mut_ptr(object as usize as *mut super::ObjectHeader);
-    let Some(infos) = parse_constfn_static_entries(entries, entry_count) else {
-        return object;
+    let requested = Some(requested).filter(|&id| id != 0);
+    let existing = requested.and_then(|id| shapes::shape_descriptor_by_id(id).map(|d| (id, d)));
+    // A seeded ShapeId already owns the complete body list and key prefix.
+    // Packed names and ABI entries bootstrap an unseeded reconstruction;
+    // reparsing them on every factory invocation duplicates shape authority.
+    let parsed_infos;
+    let infos = if let Some((_, record)) = &existing {
+        if record.constfn_infos().is_empty() {
+            return object;
+        }
+        record.constfn_infos()
+    } else {
+        let Some(parsed) = parse_constfn_static_entries(entries, entry_count) else {
+            return object;
+        };
+        parsed_infos = parsed;
+        &parsed_infos
     };
     if packed.is_null() || packed_len == 0 || count == 0 || live < count {
         return object;
@@ -350,12 +365,21 @@ pub(crate) fn finalize_constfn_static(
     // SAFETY: compiler-owned bytes for this call, containing exact key names.
     let packed = unsafe { std::slice::from_raw_parts(packed, packed_len as usize) };
     let Some(current) = root.with_mut_ptr::<super::ObjectHeader, _>(|obj| unsafe {
-        finalized_constfn_facts(obj, packed, count, live, class_id, rep, &infos, rebuilt)
+        finalized_constfn_facts(
+            obj,
+            packed,
+            count,
+            live,
+            class_id,
+            rep,
+            infos,
+            rebuilt,
+            existing.as_ref().map(|(_, record)| record),
+        )
     }) else {
         // Validation only reads inline data and Rust-owned metadata; it cannot collect.
         return object;
     };
-    let requested = Some(requested).filter(|&id| id != 0);
     // A record already under the requested id (the seed's, or a worker's
     // installed seed) is the only shape this receiver may take under that
     // id. The mint would either hit it by facts or abort on the miss, and a
@@ -363,11 +387,9 @@ pub(crate) fn finalize_constfn_static(
     // different keys array. Compare the complete record here instead; a match
     // is stamped without minting, anything else is a refusal that leaves the
     // receiver untouched.
-    if let Some((id, existing)) =
-        requested.and_then(|id| shapes::shape_descriptor_by_id(id).map(|d| (id, d)))
-    {
+    if let Some((id, existing)) = existing {
         return root.with_mut_ptr::<super::ObjectHeader, _>(|obj| {
-            if final_record_names_receiver(&existing, &current, count, live, rep, &infos) {
+            if final_record_names_receiver(&existing, &current, count, live, rep, infos) {
                 // SAFETY: `obj` is the rooted receiver validated above;
                 // nothing between that validation and here can collect.
                 unsafe { shapes::stamp_object_shape_id_with_carrier_note(obj, id) };
@@ -391,20 +413,22 @@ pub(crate) fn finalize_constfn_static(
             live,
             class_id,
             rep,
-            &infos,
+            infos,
             requested,
         )
     });
     // Reload and revalidate after the mint; no closure address spans it.
-    if let Some(current) =
-        unsafe { finalized_constfn_facts(obj, packed, count, live, class_id, rep, &infos, rebuilt) }
-    {
+    if let Some(current) = unsafe {
+        finalized_constfn_facts(
+            obj, packed, count, live, class_id, rep, infos, rebuilt, None,
+        )
+    } {
         if let Ok(id) = minted {
             // Still check the complete record here, including learned
             // deprecation, before publication.
-            if shapes::shape_descriptor_by_id(id).is_some_and(|d| {
-                final_record_names_receiver(&d, &current, count, live, rep, &infos)
-            }) {
+            if shapes::shape_descriptor_by_id(id)
+                .is_some_and(|d| final_record_names_receiver(&d, &current, count, live, rep, infos))
+            {
                 unsafe { shapes::stamp_object_shape_id_with_carrier_note(obj, id) };
                 note_static_request("finalized-constfn", requested.unwrap_or(0), id);
             }
@@ -450,6 +474,7 @@ unsafe fn finalized_constfn_facts(
     rep: u64,
     infos: &[shapes::ConstFnSlotInfo],
     rebuilt: bool,
+    expected: Option<&shapes::ShapeDescriptor>,
 ) -> Option<shapes::ShapeDescriptor> {
     if obj.is_null()
         || !shapes::shape_word_is_writable(obj)
@@ -477,22 +502,33 @@ unsafe fn finalized_constfn_facts(
     {
         return None;
     }
-    let names: Vec<&[u8]> = packed.strip_suffix(&[0])?.split(|&b| b == 0).collect();
-    if names.len() != count as usize || names.iter().any(|n| n.is_empty()) {
-        return None;
-    }
-    let (keys, len) = super::keys_array_dense_slots(current.keys as usize as *const ArrayHeader);
-    if keys.is_null() || len < count as usize {
-        return None;
-    }
-    for (slot, name) in names.iter().enumerate() {
-        let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
-        if crate::string::js_string_key_bytes(
-            crate::JSValue::from_bits((*keys.add(slot)).to_bits()),
-            &mut short,
-        )? != *name
-        {
+    if let Some(expected) = expected {
+        // Identity proves every name and its position, including the logical
+        // prefix of a shared backing. Equal text in another list is no proof.
+        if current.keys != expected.keys {
             return None;
+        }
+    } else {
+        #[cfg(test)]
+        CONSTFN_BOOTSTRAP_NAME_SCANS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let names: Vec<&[u8]> = packed.strip_suffix(&[0])?.split(|&b| b == 0).collect();
+        if names.len() != count as usize || names.iter().any(|n| n.is_empty()) {
+            return None;
+        }
+        let (keys, len) =
+            super::keys_array_dense_slots(current.keys as usize as *const ArrayHeader);
+        if keys.is_null() || len < count as usize {
+            return None;
+        }
+        for (slot, name) in names.iter().enumerate() {
+            let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
+            if crate::string::js_string_key_bytes(
+                crate::JSValue::from_bits((*keys.add(slot)).to_bits()),
+                &mut short,
+            )? != *name
+            {
+                return None;
+            }
         }
     }
     let fields = (obj as *const u8).add(std::mem::size_of::<super::ObjectHeader>()) as *const u64;
@@ -529,17 +565,37 @@ unsafe fn finalized_constfn_facts(
                 crate::closure::resolve_strategy(info).kind(),
                 crate::closure::DispatchKind::Arity(_)
             )
-            || super::class_registry::is_class_object_value(f64::from_bits(bits))
-            || super::global_this::is_function_prototype_object_value(f64::from_bits(bits))
-            || super::native_module::bound_native_callable_module_and_method(f64::from_bits(bits))
-                .is_some()
-            || info.code == super::global_this::global_this_builtin_noop_thunk as *const u8
-            || info.code == super::global_this::global_this_array_thunk as *const u8
         {
             return None;
         }
+        // FN_COMPILED_BODY is an immutable ABI fact: a compiler body is
+        // never a native, bound or class constructor. Native permanent-image
+        // fixtures keep the general admission check.
+        if info.flags & crate::codegen_abi::FN_COMPILED_BODY == 0 {
+            #[cfg(test)]
+            CONSTFN_NATIVE_ADMISSION_PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if super::class_registry::is_class_object_value(f64::from_bits(bits))
+                || super::global_this::is_function_prototype_object_value(f64::from_bits(bits))
+                || super::native_module::bound_native_callable_module_and_method(f64::from_bits(
+                    bits,
+                ))
+                .is_some()
+                || info.code == super::global_this::global_this_builtin_noop_thunk as *const u8
+                || info.code == super::global_this::global_this_array_thunk as *const u8
+            {
+                return None;
+            }
+        }
     }
     Some(current)
+}
+
+#[cfg(test)]
+per_test_global! {
+    static CONSTFN_BOOTSTRAP_NAME_SCANS: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+    static CONSTFN_NATIVE_ADMISSION_PROBES: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
 }
 
 fn checked_constfn_static_entries(

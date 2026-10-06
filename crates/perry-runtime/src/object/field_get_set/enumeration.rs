@@ -1517,12 +1517,13 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         // the wrong slot's value. The slow path below already builds a
         // fresh array; the fast path now mirrors it, just without the
         // per-key descriptor check.
-        // #6759 Phase C2: the owner's meta summary answers "no descriptor
-        // entries at all" in two loads (still the first check, inside
-        // `owner_has_property_descriptors`); what used to follow it was an
-        // O(table-size) owner scan for every owner that *might* hold entries,
-        // now an O(1) owner-index lookup.
-        let has_descriptors = super::super::owner_has_property_descriptors(obj as usize);
+        // Exotic receivers were handled above. Every ordinary receiver's
+        // key attributes belong to its shape; only non-enumerability matters
+        // to this operation. Read the summary rather than reclassifying the
+        // owner and consulting descriptor machinery.
+        let has_descriptors = super::super::key_attrs::object_summary(obj)
+            & super::super::key_attrs::SUMMARY_NON_ENUMERABLE
+            != 0;
         let len = keys_view.count() as usize;
         // #2438: enumerate in ECMA-262 OrdinaryOwnPropertyKeys order —
         // array-index keys first (ascending numeric), then string keys in
@@ -1549,7 +1550,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         if !has_descriptors && !hide_private && !hide_wasi_state {
             let out = crate::array::js_array_alloc(len as u32);
             for j in 0..len {
-                let key_val = crate::array::js_array_get(keys, pos(j));
+                let key_val = keys_view.get(pos(j));
                 // Tombstoned slot from an O(1) delete: not a key. The slow
                 // path below skips holes for free (`js_string_key_bytes`
                 // rejects them); this raw-push path must skip explicitly or
@@ -1573,7 +1574,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
         let filtered = crate::array::js_array_alloc(len as u32);
         let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
         for j in 0..len {
-            let key_val = crate::array::js_array_get(keys, pos(j));
+            let key_val = keys_view.get(pos(j));
             // #1781: accept inline SSO short keys (≤5 bytes) — the
             // pre-fix `is_string()` skipped them and Object.keys silently
             // dropped them from the result.
@@ -1592,10 +1593,19 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
             }
             // If a descriptor explicitly marks this key non-enumerable, skip it.
             if has_descriptors {
-                if let Some(attrs) = get_property_attrs(obj as usize, key_str) {
-                    if !attrs.enumerable() {
-                        continue;
-                    }
+                // Class storage can contain several declarations of one
+                // public name. Its effective own descriptor is the last
+                // declaration's, so retain the by-name resolution there.
+                let non_enumerable = if hide_private {
+                    get_property_attrs(obj as usize, key_str)
+                        .is_some_and(|attrs| !attrs.enumerable())
+                } else {
+                    super::super::key_attrs::keys_entry(keys, pos(j))
+                        & super::super::key_attrs::ENTRY_NON_ENUMERABLE
+                        != 0
+                };
+                if non_enumerable {
+                    continue;
                 }
             }
             crate::array::js_array_push_f64(filtered, f64::from_bits(key_val.bits()));
@@ -1894,7 +1904,7 @@ fn js_object_values_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
             if keys.is_null() || i >= keys_view.count() {
                 continue;
             }
-            let key_val = crate::array::js_array_get(keys, i);
+            let key_val = keys_view.get(i);
             if hide_private && instance_private_key_hidden(obj, key_val) {
                 continue;
             }

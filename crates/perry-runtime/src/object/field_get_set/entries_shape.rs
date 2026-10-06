@@ -178,7 +178,7 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
             if keys.is_null() || i >= keys_view.count() {
                 continue;
             }
-            let key_val = crate::array::js_array_get(keys, i);
+            let key_val = keys_view.get(i);
             if hide_private && instance_private_key_hidden(obj, key_val) {
                 continue;
             }

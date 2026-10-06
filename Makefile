@@ -46,3 +46,10 @@ build-fast: build-dev
 
 build-prod:
 	PATH="$(CARGO_BIN):$$PATH" LLVM_SYS_221_PREFIX="$(LLVM_SYS_221_PREFIX)" mbx build --profile prod -p perry
+
+# Dedicated Linux agent hosts must provision compressed, quota-bounded ZFS
+# before building. Both paths are explicit to avoid using the root filesystem.
+.PHONY: build-agent
+build-agent:
+	python3 scripts/check_zfs_build_storage.py
+	$(MAKE) build-dev

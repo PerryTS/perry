@@ -220,6 +220,9 @@ jobs:
           python3 scripts/check_mbx_policy.py --self-test
           python3 scripts/check_mbx_policy.py
 
+      - name: Agent build storage policy tests
+        run: python3 -m unittest discover -s tests -p test_zfs_build_storage.py -v
+
       - name: Changeset gate self-test
         if: ${{ !cancelled() }}
         run: ./scripts/check_changeset_fragment.sh --self-test

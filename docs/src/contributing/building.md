@@ -215,3 +215,6 @@ checkout paths. Keep package and feature sets consistent across comparisons.
 
 See [MBX managed linkers](https://mr-boxington.jdx.dev/linkers) and
 [mold](https://github.com/rui314/mold).
+
+For dedicated Linux agent hosts, use [compressed ZFS build storage](build-storage.md)
+and `make build-agent` to check storage before building.
