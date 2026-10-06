@@ -252,3 +252,170 @@ fn bounded_long_lived_root_sets_use_ordinary_ssa_statepoints() {
     module.verify().unwrap();
     assert!(module.print_to_string().to_string().contains("volatile"));
 }
+
+#[test]
+fn acyclic_single_block_homes_release_their_last_value() {
+    let context = Context::create();
+    let module = parse_ir_text(
+        &context,
+        &fixture(native_homes::SMALL_HOME_SET + 1, 200),
+        "last_home_access",
+    )
+    .unwrap();
+    retain(&module);
+    module.verify().unwrap();
+    let text = module.print_to_string().to_string();
+    assert_eq!(
+        text.matches("store volatile ptr addrspace(1) null").count(),
+        native_homes::SMALL_HOME_SET + 1
+    );
+}
+
+#[test]
+fn cyclic_homes_do_not_clear_a_value_needed_on_the_backedge() {
+    let context = Context::create();
+    let mut ir = fixture(native_homes::SMALL_HOME_SET + 1, 200);
+    ir = ir.replace("entry:\n", "entry:\n  %again = icmp ne i64 %arg, 0\n");
+    ir = ir.replacen(
+        "  call void @collect()\n",
+        "  br label %loop\nloop:\n  call void @collect()\n",
+        1,
+    );
+    ir = ir.replace(
+        "  ret i64 %sum8",
+        "  br i1 %again, label %loop, label %exit\nexit:\n  ret i64 %sum8",
+    );
+    let module = parse_ir_text(&context, &ir, "cyclic_home_access").unwrap();
+    retain(&module);
+    module.verify().unwrap();
+    assert!(!module
+        .print_to_string()
+        .to_string()
+        .contains("store volatile ptr addrspace(1) null"));
+}
+
+#[test]
+fn forward_multi_block_homes_release_after_their_last_component() {
+    let context = Context::create();
+    let ir = fixture(native_homes::SMALL_HOME_SET + 1, 200).replacen(
+        "  call void @collect()\n",
+        "  br label %body\nbody:\n  call void @collect()\n",
+        1,
+    );
+    let module = parse_ir_text(&context, &ir, "split_home_access").unwrap();
+    retain(&module);
+    module.verify().unwrap();
+    assert_eq!(
+        module
+            .print_to_string()
+            .to_string()
+            .matches("store volatile ptr addrspace(1) null")
+            .count(),
+        native_homes::SMALL_HOME_SET + 1
+    );
+}
+
+#[test]
+fn releasing_a_home_keeps_the_loaded_ssa_value_rooted() {
+    let context = Context::create();
+    let ir = fixture(native_homes::SMALL_HOME_SET + 1, 200).replace(
+        "  ret i64 %sum8",
+        "  call void @collect()\n  %final = ptrtoint ptr addrspace(1) %v8 to i64\n  ret i64 %final",
+    );
+    let module = parse_ir_text(&context, &ir, "loaded_root_after_release").unwrap();
+    retain(&module);
+    global_init(&[]);
+    let triple = TargetTriple::create("x86_64-unknown-linux-gnu");
+    let tm = Target::from_triple(&triple)
+        .unwrap()
+        .create_target_machine(
+            &triple,
+            "",
+            "",
+            OptimizationLevel::Default,
+            RelocMode::PIC,
+            CodeModel::Default,
+        )
+        .unwrap();
+    module
+        .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
+        .unwrap();
+    module.verify().unwrap();
+    let text = module.print_to_string().to_string();
+    assert!(text.contains("store volatile ptr addrspace(1) null"));
+    assert!(
+        text.contains(
+            "%v8.relocated = call coldcc ptr addrspace(1) @llvm.experimental.gc.relocate"
+        ),
+        "loaded value must remain rooted after its memory home is cleared:\n{text}"
+    );
+}
+
+#[test]
+fn escaped_home_addresses_are_not_released() {
+    let context = Context::create();
+    let ir = fixture(native_homes::SMALL_HOME_SET + 1, 200).replacen(
+        "  call void @collect()",
+        "  %sink = alloca ptr\n  store ptr %slot8, ptr %sink\n  call void @collect()",
+        1,
+    );
+    let module = parse_ir_text(&context, &ir, "escaped_home").unwrap();
+    retain(&module);
+    module.verify().unwrap();
+    assert_eq!(
+        module
+            .print_to_string()
+            .to_string()
+            .matches("store volatile ptr addrspace(1) null")
+            .count(),
+        native_homes::SMALL_HOME_SET
+    );
+}
+
+#[test]
+fn component_rank_overrides_basic_block_source_order() {
+    let context = Context::create();
+    let mut ir = fixture(native_homes::SMALL_HOME_SET + 1, 200);
+    ir = ir.replacen("  call void @collect()", "  br label %early\nlate:\n  %latevalue = load ptr addrspace(1), ptr %slot8\n  %latebits = ptrtoint ptr addrspace(1) %latevalue to i64\n  ret i64 %latebits\nearly:\n  call void @collect()", 1);
+    ir = ir.replace("  ret i64 %sum8", "  br label %late");
+    let module = parse_ir_text(&context, &ir, "block_order").unwrap();
+    retain(&module);
+    module.verify().unwrap();
+    let text = module.print_to_string().to_string();
+    let late = text
+        .split("late:")
+        .nth(1)
+        .unwrap()
+        .split("early:")
+        .next()
+        .unwrap();
+    assert!(late.contains("store volatile ptr addrspace(1) null"));
+    let early = text.split("early:").nth(1).unwrap();
+    assert_eq!(
+        early
+            .matches("store volatile ptr addrspace(1) null")
+            .count(),
+        native_homes::SMALL_HOME_SET
+    );
+}
+
+#[test]
+fn explicit_release_does_not_gain_a_duplicate_volatile_store() {
+    let context = Context::create();
+    let clears = (0..native_homes::SMALL_HOME_SET + 1)
+        .map(|i| format!("  store ptr addrspace(1) null, ptr %slot{i}\n"))
+        .collect::<String>();
+    let ir = fixture(native_homes::SMALL_HOME_SET + 1, 200)
+        .replace("  ret i64 %sum8", &(clears + "  ret i64 %sum8"));
+    let module = parse_ir_text(&context, &ir, "explicit_release").unwrap();
+    retain(&module);
+    module.verify().unwrap();
+    assert_eq!(
+        module
+            .print_to_string()
+            .to_string()
+            .matches("store volatile ptr addrspace(1) null")
+            .count(),
+        native_homes::SMALL_HOME_SET + 1
+    );
+}
