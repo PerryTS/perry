@@ -1663,7 +1663,7 @@ jobs:
   # so one failed, timed-out, or cancelled shard blocks a release.
   # ---------------------------------------------------------------------------
   cargo-test-perry:
-    name: cargo-test-perry (shard ${{ matrix.shard }})
+    name: cargo-test-perry
     needs: plan
     if: fromJSON(needs.plan.outputs.plan).jobs.cargo_test_perry
     runs-on: ubuntu-latest
@@ -3636,9 +3636,6 @@ jobs:
         env:
           GC_EFFECTS_SKIP_BUILD: "1"
           GC_EFFECTS_FRESH_OUT: gc-effects/linux-x86_64.tsv
-          # PRs are tested merged with a main that may have added runtime
-          # symbols since the PR last regenerated; those only read as Unknown
-          # (safe). UNSAFE drift always fails. Main-line tiers are strict.
           GC_EFFECTS_ALLOW_SAFE_DRIFT: ${{ github.event_name == 'pull_request' && '1' || '' }}
         run: |
           mkdir -p gc-effects
