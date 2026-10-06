@@ -215,6 +215,11 @@ jobs:
           if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
             git config http.https://github.com/.extraheader "$auth_header"
           fi
+      - name: MBX and Linux linker policy
+        run: |
+          python3 scripts/check_mbx_policy.py --self-test
+          python3 scripts/check_mbx_policy.py
+
       - name: Agent build storage policy tests
         run: python3 -m unittest discover -s tests -p test_zfs_build_storage.py -v
 

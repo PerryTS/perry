@@ -198,5 +198,23 @@ perry/
 - [Architecture](architecture.md) — Crate map and pipeline overview
 - See `CLAUDE.md` for detailed implementation notes and pitfalls
 
+## Cached Linux linking
+
+Use `make mbx-deps` and the cached Make targets for local builds. Linux GNU
+x86_64 and AArch64 targets use mold 2.42.0 via `.mbx.toml`; install `clang`
+on the build host. MBX downloads the pinned mold release and verifies its
+GitHub SHA-256 digest. macOS, Windows, Android and custom musl linker paths
+keep the system linker. The core-runtime and Linux release scripts require
+MBX instead of silently bypassing the cache when it is missing.
+
+Use `MBX_LINKER=system` explicitly for linker bisection. Do not replace
+`RUSTFLAGS`: Perry requires the unwind-table and x86_64 frame-pointer flags
+in `.cargo/config.toml`. `share_workspace_root` stays false so panic locations
+and debug paths remain real paths; shared outputs may retain their source
+checkout paths. Keep package and feature sets consistent across comparisons.
+
+See [MBX managed linkers](https://mr-boxington.jdx.dev/linkers) and
+[mold](https://github.com/rui314/mold).
+
 For dedicated Linux agent hosts, use [compressed ZFS build storage](build-storage.md)
 and `make build-agent` to check storage before building.

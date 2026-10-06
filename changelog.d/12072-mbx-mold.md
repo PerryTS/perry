@@ -1,0 +1,1 @@
+Pin mold 2.42.0 for Linux GNU builds through MBX workspace policy, preserving Perry unwind and frame-pointer flags. Core-runtime and Linux release scripts now require MBX instead of silently falling back to uncached Cargo. Other target linkers are unchanged.
