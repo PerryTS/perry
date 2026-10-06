@@ -555,6 +555,13 @@ fn callback_cell_slot_moves_grows_replaces_and_clears() {
 fn callback_cell_slot_marks_its_array_without_another_edge() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _reset = Reset::new();
+    // The guard isolates scanner registration, but realm towers from earlier
+    // libtest cases still live on this thread. Preserve their production
+    // roots during this full collection; none points at this callbacks array.
+    gc_register_named_mutable_root_scanner(
+        "object_cache",
+        crate::object::scan_object_cache_roots_mut,
+    );
     let _no_stack = ConservativeScanDisabledGuard::new();
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let scope = RuntimeHandleScope::new();
