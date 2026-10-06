@@ -15,7 +15,7 @@ use super::*;
 use perry_runtime::gc::{RuntimeHandle, RuntimeHandleScope};
 use perry_runtime::native_payload::{self, CallbackSite, OwnerLink};
 use perry_runtime::{
-    buffer::{buffer_alloc, buffer_data_mut, mark_as_uint8array},
+    buffer::bytes::{from_slice, Brand},
     js_array_get, js_array_length, js_string_from_bytes, ArrayHeader, JSValue,
 };
 use rusqlite::ffi;
@@ -188,16 +188,15 @@ unsafe fn value_arg_checked(
         }
         ffi::SQLITE_BLOB => {
             let len = ffi::sqlite3_value_bytes(value) as usize;
-            let buf = buffer_alloc(len as u32);
-            (*buf).length = len as u32;
-            mark_as_uint8array(buf as usize);
-            if len > 0 {
-                let ptr = ffi::sqlite3_value_blob(value);
-                if !ptr.is_null() {
-                    std::ptr::copy_nonoverlapping(ptr as *const u8, buffer_data_mut(buf), len);
-                }
-            }
-            Ok(JSValue::object_ptr(buf as *mut u8))
+            let ptr = ffi::sqlite3_value_blob(value) as *const u8;
+            let bytes: &[u8] = if len > 0 && !ptr.is_null() {
+                std::slice::from_raw_parts(ptr, len)
+            } else {
+                &[]
+            };
+            Ok(JSValue::from_bits(
+                from_slice(Brand::Uint8Array, bytes).to_bits(),
+            ))
         }
         _ => Ok(JSValue::null()),
     }

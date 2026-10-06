@@ -9,13 +9,12 @@
 //! userdata of runtime handles.
 
 use super::*;
+use perry_runtime::buffer::bytes::{from_slice, Brand};
 use perry_runtime::buffer::{
-    buffer_alloc, buffer_data, buffer_data_mut, is_any_array_buffer, is_data_view,
-    is_registered_buffer, mark_as_uint8array, BufferHeader,
+    buffer_data, is_any_array_buffer, is_data_view, is_registered_buffer, BufferHeader,
 };
 use perry_runtime::closure::{ClosureHeader, JsThis};
 use perry_runtime::gc::RuntimeHandleScope;
-use perry_runtime::js_nanbox_pointer;
 use perry_runtime::native_class_ids::SQLITE_SESSION;
 use perry_runtime::native_payload::{
     self, NativePayloadFamily, OpenSerial, PayloadMiss, PayloadPrototype,
@@ -155,16 +154,16 @@ unsafe fn session_blob(
         throw_captured(error);
     }
     let len = len.max(0) as usize;
-    let buffer = buffer_alloc(len as u32);
-    (*buffer).length = len as u32;
-    mark_as_uint8array(buffer as usize);
-    if len > 0 && !data.is_null() {
-        std::ptr::copy_nonoverlapping(data as *const u8, buffer_data_mut(buffer), len);
-    }
+    let bytes: &[u8] = if len > 0 && !data.is_null() {
+        std::slice::from_raw_parts(data as *const u8, len)
+    } else {
+        &[]
+    };
+    let buffer = from_slice(Brand::Uint8Array, bytes);
     if !data.is_null() {
         ffi::sqlite3_free(data);
     }
-    js_nanbox_pointer(buffer as i64)
+    buffer
 }
 
 extern "C" fn session_changeset_thunk(_c: *const ClosureHeader, this: JsThis) -> f64 {

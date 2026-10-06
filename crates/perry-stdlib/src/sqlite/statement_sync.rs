@@ -20,7 +20,7 @@ use perry_runtime::native_payload::{
     self, NativePayloadFamily, OpenSerial, PayloadMiss, PayloadPrototype,
 };
 use perry_runtime::{
-    buffer::{buffer_alloc, buffer_data_mut, mark_as_uint8array},
+    buffer::bytes::{from_slice, Brand},
     js_array_alloc, js_array_get, js_array_length, js_array_push, js_nanbox_pointer,
     js_object_alloc_null_proto, js_object_set_field, js_string_from_bytes, ArrayHeader, JSValue,
     ObjectHeader,
@@ -464,16 +464,13 @@ unsafe fn column_value_checked(
         }
         ffi::SQLITE_BLOB => {
             let len = ffi::sqlite3_column_bytes(raw_stmt, index) as usize;
-            let buf = buffer_alloc(len as u32);
-            (*buf).length = len as u32;
-            mark_as_uint8array(buf as usize);
-            if len > 0 {
-                let ptr = ffi::sqlite3_column_blob(raw_stmt, index);
-                if !ptr.is_null() {
-                    std::ptr::copy_nonoverlapping(ptr as *const u8, buffer_data_mut(buf), len);
-                }
-            }
-            JSValue::object_ptr(buf as *mut u8)
+            let ptr = ffi::sqlite3_column_blob(raw_stmt, index) as *const u8;
+            let bytes: &[u8] = if len > 0 && !ptr.is_null() {
+                std::slice::from_raw_parts(ptr, len)
+            } else {
+                &[]
+            };
+            JSValue::from_bits(from_slice(Brand::Uint8Array, bytes).to_bits())
         }
         _ => JSValue::null(),
     })
