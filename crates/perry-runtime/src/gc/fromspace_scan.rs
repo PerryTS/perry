@@ -95,6 +95,12 @@ pub(crate) struct FromSpaceScanReport {
     /// false MISSING-REWRITEs (see the bound in `scan_object`). Counted so
     /// the exclusion is visible in the report, not a silent shrink.
     pub(crate) array_slack_words_skipped: usize,
+    /// Words past a string's `byte_len` or past a buffer's `capacity`,
+    /// excluded for the same reason as array slack: the object's own length
+    /// field says they are not part of its value, nothing reads them before
+    /// writing them, and they hold the previous occupant's bytes. Counted so
+    /// the exclusion is visible in the report.
+    pub(crate) leaf_slack_words_skipped: usize,
     /// Owners skipped because they are themselves FORWARDED (dead relocation
     /// stubs). Reported so the filter can never be mistaken for a fix.
     pub(crate) forwarded_owners_skipped: usize,
@@ -243,6 +249,35 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
             + (*arr).length as usize;
         if live_words < payload_words {
             report.array_slack_words_skipped += payload_words - live_words;
+            payload_words = live_words;
+        }
+    }
+    // The same bound for the two byte-carrying leaves, from their own length
+    // fields. A string's bytes past `byte_len` are the in-place append's room
+    // (`js_string_append` allocates twice the length) and a buffer's bytes
+    // past `capacity` are allocation padding. Both are written before they
+    // are ever read, so until then they hold whatever the previous occupant
+    // of the memory left there. Measured on main: tsc's 107 KB `src +=`
+    // string carried 628 such words past `byte_len` (decoded as 489 dangling
+    // and 139 missing rewrites), and fastify's 123-byte response buffers
+    // carried one word straddling their last 3 bytes and 5 padding bytes.
+    // Only whole words inside the declared bytes are scanned; a word that
+    // runs past them cannot be a stored reference.
+    let declared_bytes = match (*header).obj_type {
+        crate::gc::GC_TYPE_STRING => Some(
+            std::mem::size_of::<crate::string::StringHeader>()
+                + (*(user as *const crate::string::StringHeader)).byte_len as usize,
+        ),
+        t if crate::gc::is_buffer_family_type(t) => Some(
+            std::mem::size_of::<crate::buffer::BufferHeader>()
+                + (*(user as *const crate::buffer::BufferHeader)).capacity as usize,
+        ),
+        _ => None,
+    };
+    if let Some(bytes) = declared_bytes {
+        let live_words = bytes / 8;
+        if live_words < payload_words {
+            report.leaf_slack_words_skipped += payload_words - live_words;
             payload_words = live_words;
         }
     }
@@ -512,11 +547,12 @@ fn report_and_abort(report: &FromSpaceScanReport) -> ! {
 
 pub(super) fn emit_report(report: &FromSpaceScanReport, phase: &str) {
     eprintln!(
-        "[gc-fromspace-scan {}] objects={} words={} array_slack_skipped={} fwd_owners_skipped={} missing_rewrites={} dangling={} owners={} | never_dirty={} lost_dirty={} dirty_but_missed={}",
+        "[gc-fromspace-scan {}] objects={} words={} array_slack_skipped={} leaf_slack_skipped={} fwd_owners_skipped={} missing_rewrites={} dangling={} owners={} | never_dirty={} lost_dirty={} dirty_but_missed={}",
         phase,
         report.objects_scanned,
         report.words_scanned,
         report.array_slack_words_skipped,
+        report.leaf_slack_words_skipped,
         report.forwarded_owners_skipped,
         report.missing_rewrites,
         report.dangling,
