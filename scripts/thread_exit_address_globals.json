@@ -960,33 +960,6 @@
    "why": "OnceLock<Option<StaticSymbolIndex>> of relocated text-symbol start addresses and demangled String names loaded from the executable image (error_stack_frames.rs:429-438); code addresses. | (second declaration) OnceLock<Mutex<Option<CodeSymbolIndex>>> of (generated function start address, Arc<[u8]> display name) snapshotted from the codegen function registry (error_stack_frames.rs:581-592); code addresses."
   },
   {
-   "file": "crates/perry-stdlib/src/sqlite.rs",
-   "names": [
-    "NODE_SQLITE_CUSTOM_FUNCTIONS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Addresses of SQLite-owned boxes whose callback is a closure from the thread that called db.function(); a freed callback is set to undefined and the box unregistered at thread exit (xDestroy still frees it).",
-   "hook": "release_node_sqlite_callbacks_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-stdlib/src/sqlite.rs",
-   "names": [
-    "NODE_SQLITE_CUSTOM_AGGREGATES"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Boxes holding db.aggregate() start/step/result/inverse closures; freed slots become undefined and the box is unregistered at thread exit.",
-   "hook": "release_node_sqlite_callbacks_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-stdlib/src/sqlite.rs",
-   "names": [
-    "NODE_SQLITE_ACTIVE_AGGREGATES"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Running-aggregate state boxes; a freed state becomes undefined and the box is unregistered at thread exit, xFinal frees it as before.",
-   "hook": "release_node_sqlite_callbacks_in_freed_ranges"
-  },
-  {
    "file": "crates/perry-runtime/src/object/nm_namespace_hooks.rs",
    "names": [
     "NM_NAMESPACE_OPS"

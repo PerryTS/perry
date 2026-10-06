@@ -4712,6 +4712,36 @@ pub(crate) fn shape_is_filled_birth(
     count: u32,
     kind: ShapeObjectKind,
 ) -> bool {
+    filled_birth(id, proto_id, count, kind, false)
+}
+
+/// [`shape_is_filled_birth`] for a construction whose recorded keys may
+/// carry attributes: own accessors (or other non-default attributes) born
+/// with the object, as a native payload instance's own getters are. The
+/// keys' entries are those the construction's first run installed, since a
+/// ShapeId never comes to name other keys. Installing an accessor's
+/// functions mints a semantic generation (`transition_object_shape_accessor_replaced`),
+/// so the recorded shape may carry one: it retires caches trained on OTHER
+/// ids, and every object born on this id holds the same accessor functions
+/// (the construction's realm singletons) as the object that minted it.
+#[inline]
+pub(crate) fn shape_is_attributed_filled_birth(
+    id: u32,
+    proto_id: u64,
+    count: u32,
+    kind: ShapeObjectKind,
+) -> bool {
+    filled_birth(id, proto_id, count, kind, true)
+}
+
+#[inline]
+fn filled_birth(
+    id: u32,
+    proto_id: u64,
+    count: u32,
+    kind: ShapeObjectKind,
+    attributed: bool,
+) -> bool {
     let Some(record) = ShapeSlab::agent_record_present(id) else {
         return false;
     };
@@ -4723,9 +4753,9 @@ pub(crate) fn shape_is_filled_birth(
             && kind.is_ordinary_layout()
             && r.logical_key_count == count
             && r.live_inline_slot_count == count
-            && r.semantic_generation == 0
+            && (attributed || r.semantic_generation == 0)
             && r.hole_count == 0
-            && r.summary() == 0
+            && (attributed || r.summary() == 0)
             && r.special_constfn_mask() == 0
             && r.keys != 0
     }

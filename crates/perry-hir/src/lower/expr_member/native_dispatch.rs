@@ -143,8 +143,8 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
         // the dispatching fallback. They have no observed user-own-property
         // surface, so preserve that: dispatch any member not handled by the
         // PropertyGet arms above.
-        "dns" | "dns/promises" | "dgram" | "inspector" | "inspector/promises" | "sqlite"
-        | "url" | "worker_threads" | "util" | "sys" | "console" | "Headers" => true,
+        "dns" | "dns/promises" | "dgram" | "inspector" | "inspector/promises" | "url"
+        | "worker_threads" | "util" | "sys" | "console" | "Headers" => true,
         // Any other module (e.g. a mis-tagged `debug` createDebug value): a bare
         // member read is an own-property GET, never an invoking dispatch.
         _ => false,

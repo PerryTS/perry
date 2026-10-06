@@ -60,6 +60,14 @@ pub const CRYPTO_HMAC: u32 = 0xFFFF_2413;
 pub const CRYPTO_CIPHERIV: u32 = 0xFFFF_2414;
 pub const CRYPTO_DECIPHERIV: u32 = 0xFFFF_2415;
 pub const DOMAIN: u32 = 0xFFFF_2416;
+// node:sqlite (#11919): DatabaseSync, StatementSync, StatementSyncIterator,
+// SQLTagStore, Session and the `db.limits` object.
+pub const SQLITE_DATABASE_SYNC: u32 = 0xFFFF_2417;
+pub const SQLITE_STATEMENT_SYNC: u32 = 0xFFFF_2418;
+pub const SQLITE_STATEMENT_ITERATOR: u32 = 0xFFFF_2419;
+pub const SQLITE_TAG_STORE: u32 = 0xFFFF_241A;
+pub const SQLITE_SESSION: u32 = 0xFFFF_241B;
+pub const SQLITE_LIMITS: u32 = 0xFFFF_241C;
 
 /// #10926: `AsyncResource` is native-backed too, but keeps its LEGACY
 /// `0xFFFF_0079`, which `instanceof` and `class_registry::parent_static`
@@ -73,7 +81,7 @@ pub const ASYNC_LOCAL_STORAGE_LEGACY: u32 = 0xFFFF_0078;
 /// family between them carries a `native_state` word the far side of a
 /// `postMessage` could not reconstruct.
 const NATIVE_BACKED_FIRST: u32 = ABORT_CONTROLLER;
-const NATIVE_BACKED_LAST: u32 = DOMAIN;
+const NATIVE_BACKED_LAST: u32 = SQLITE_LIMITS;
 
 /// Class ids whose instances are ordinary objects carrying native state that
 /// cannot cross a thread boundary (#340/#341).
@@ -128,6 +136,12 @@ const ALL: &[u32] = &[
     CRYPTO_CIPHERIV,
     CRYPTO_DECIPHERIV,
     DOMAIN,
+    SQLITE_DATABASE_SYNC,
+    SQLITE_STATEMENT_SYNC,
+    SQLITE_STATEMENT_ITERATOR,
+    SQLITE_TAG_STORE,
+    SQLITE_SESSION,
+    SQLITE_LIMITS,
 ];
 
 /// Strictly ascending ⟹ no two families share an id, and the block stays
@@ -189,6 +203,12 @@ mod tests {
             CRYPTO_CIPHERIV,
             CRYPTO_DECIPHERIV,
             DOMAIN,
+            SQLITE_DATABASE_SYNC,
+            SQLITE_STATEMENT_SYNC,
+            SQLITE_STATEMENT_ITERATOR,
+            SQLITE_TAG_STORE,
+            SQLITE_SESSION,
+            SQLITE_LIMITS,
             ASYNC_LOCAL_STORAGE_LEGACY,
             ASYNC_RESOURCE_LEGACY,
         ] {

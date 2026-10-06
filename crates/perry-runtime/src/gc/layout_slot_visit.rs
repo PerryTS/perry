@@ -552,8 +552,17 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             let cell = user_ptr as *mut crate::native_handle::NativeHandleHeader;
             // One enumerator serves mark, relocation and dirty-slot rescan.
             // Released cells keep tracing their owner; only finalized cells stop.
-            if (*cell).finalized == 0 && (*cell).owner != 0 {
-                visit(fixed_slot(&mut (*cell).owner as *mut u64));
+            if (*cell).finalized == 0 {
+                if (*cell).owner != 0 {
+                    visit(fixed_slot(&mut (*cell).owner as *mut u64));
+                }
+                #[cfg(test)]
+                if crate::native_payload::callback_sabotage("callback_trace") {
+                    return;
+                }
+                if let Some(slot) = crate::native_payload::callback_slot_address(cell) {
+                    visit(fixed_slot(slot));
+                }
             }
         }
         GcRewriteDescriptorKind::Leaf => {}

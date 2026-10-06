@@ -143,8 +143,13 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # raw Box representation. Removing the now-unused receiver rows also removes
 # the classified AsyncResource.bind pointer result. 264 -> 252 rows,
 # 237 -> 228 providers.
-EXPECTED_ROWS = 252
-EXPECTED_PROVIDERS = 228
+# -16 rows / -13 providers (#11919 node:sqlite): DatabaseSync, StatementSync,
+# SQLTagStore and Session are ordinary objects; their receiver rows are
+# deleted and the three call-form rows return NR_F64. The bun:sqlite rows that
+# reused node providers now name their own bun providers. 252 -> 236 rows,
+# 228 -> 215 providers, as the script reports on the resolved tree.
+EXPECTED_ROWS = 236
+EXPECTED_PROVIDERS = 215
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

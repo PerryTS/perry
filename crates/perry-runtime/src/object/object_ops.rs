@@ -53,8 +53,9 @@ pub(crate) use prototype::get_prototype_of_resolved;
 // `instanceof.rs` definition (preserves the pre-split resolution).
 pub(crate) use keys_array::{
     ensure_key_in_keys_array, ensure_key_in_keys_array_for_value,
-    ensure_key_in_keys_array_with_entry, install_builtin_getter, own_key_present,
-    own_key_present_via_index, own_property_present, own_property_present_via_index,
+    ensure_key_in_keys_array_with_entry, install_builtin_getter, install_own_builtin_accessor,
+    own_key_present, own_key_present_via_index, own_property_present,
+    own_property_present_via_index,
 };
 
 /// Helper: extract object pointer from NaN-boxed f64. Returns null on failure.

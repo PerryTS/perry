@@ -42,6 +42,8 @@ unsafe impl crate::zeroed_cache::ZeroEmpty for JmpBuf {}
 
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) use savepoints::catch_subsystem_used;
+mod native_call;
+pub(crate) use native_call::{catch_native_callback, NativeCatch};
 mod savepoints;
 use savepoints::CatchSavepoint;
 pub(crate) use savepoints::{catch_subsystem, note_catch_subsystem_used, CatchStack};
@@ -70,10 +72,11 @@ const MAX_TRY_DEPTH: usize = 1024;
 /// innermost `try`-containing generated frame, which is exactly this entry
 /// (handler-stack order mirrors stack order, and an entry above it would
 /// have been popped or would itself be the throw target).
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum HandlerKind {
     Setjmp,
     Unwind,
+    NativeInactive,
 }
 
 struct ExceptionState {
@@ -470,6 +473,12 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         crate::closure::reset_throw_not_callable_counter();
 
         let depth = (*s).try_depth - 1;
+        if (*s).handler_kinds[depth] == HandlerKind::NativeInactive {
+            // A callback arms its own trampoline. Outside it, jumping to a
+            // previous trampoline would cross native frames into dead storage.
+            eprintln!("perry: JavaScript throw outside native callback trap");
+            std::process::abort();
+        }
         // Apply the deferred context restores of async-context scopes
         // (`AsyncLocalStorage#run`/`#exit`, `runInAsyncScope`) whose normal
         // restore code this longjmp skips (#788). Pure thread-local state
@@ -487,6 +496,7 @@ pub extern "C-unwind" fn js_throw(value: f64) -> ! {
         match (*s).handler_kinds[depth] {
             HandlerKind::Setjmp => (*s).jump_buffers[depth].as_mut_ptr(),
             HandlerKind::Unwind => std::ptr::null_mut(),
+            HandlerKind::NativeInactive => unreachable!(),
         }
     });
     // WASI (#11378): there is no exception transport yet — setjmp/longjmp

@@ -102,10 +102,10 @@ unsafe fn execute_sqlite_query(db_handle: Handle, strings_value: f64, params_val
         let params_ptr = template_array(params.get_nanbox_f64())
             .expect("the rooted tagged-template parameter array remains an array");
         let rows = js_call_catching(|| {
-            let rows = js_node_sqlite_statement_sync_all(statement, params_ptr);
+            let rows = js_bun_sqlite_statement_all(statement, params_ptr);
             f64::from_bits(JSValue::array_ptr(rows).bits())
         });
-        finalize_node_sqlite_statement_handle(statement);
+        finalize_bun_sqlite_statement_handle(statement);
         match rows {
             Ok(rows) => rows,
             Err(error) => js_throw(error),
@@ -138,7 +138,7 @@ fn transaction_sql(nested: bool, success: bool) -> &'static str {
 
 unsafe fn finish_transaction(db_handle: Handle, nested: bool, success: bool) {
     let sql = transaction_sql(nested, success);
-    with_open_node_connection(db_handle, |conn| {
+    with_open_bun_connection(db_handle, |conn| {
         if let Err((message, code)) = node_sqlite_exec_batch(conn, sql) {
             throw_sqlite_error_ext(&message, code);
         }
@@ -193,14 +193,14 @@ extern "C" fn bun_sql_begin(
         let callback = scope.root_nanbox_f64(callback_value);
         let client = scope.root_nanbox_f64(captured_client(closure));
         let db_handle = captured_handle(closure);
-        let nested = with_open_node_connection(db_handle, |conn| !conn.is_autocommit());
+        let nested = with_open_bun_connection(db_handle, |conn| !conn.is_autocommit());
         let begin = if nested {
             "SAVEPOINT perry_bun_sql"
         } else {
             "BEGIN"
         };
         let started = js_call_catching(|| {
-            with_open_node_connection(db_handle, |conn| {
+            with_open_bun_connection(db_handle, |conn| {
                 if let Err((message, code)) = node_sqlite_exec_batch(conn, begin) {
                     throw_sqlite_error_ext(&message, code);
                 }
@@ -321,7 +321,7 @@ extern "C" fn bun_sql_close(
         let onclose =
             scope.root_nanbox_f64(js_closure_get_capture_f64(closure, METHOD_ONCLOSE_CAPTURE));
         match js_call_catching(|| {
-            js_node_sqlite_database_sync_close(db_handle);
+            js_bun_sqlite_database_close(db_handle);
             undefined_f64()
         }) {
             Ok(_) => match call_onclose(

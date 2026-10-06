@@ -104,7 +104,7 @@ pub use handle::{
     js_set_native_http_dispatch, js_set_native_module_js_loader, js_set_native_net_dispatch,
     js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch, js_set_native_tls_dispatch,
     js_set_native_webcrypto_dispatch, js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
-    native_module_try_js_property,
+    native_module_try_js_property, NATIVE_SQLITE_DISPATCH_PROTOTYPE,
 };
 
 // ----- Basic NaN-box pack / unpack FFI -----

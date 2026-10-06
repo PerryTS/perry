@@ -56,50 +56,6 @@ fn thread_exit_releases_the_threads_tls_server_listener_and_once_entries() {
     );
 }
 
-#[cfg(feature = "database-sqlite")]
-#[test]
-fn thread_exit_releases_the_threads_node_sqlite_callbacks_and_authorizer() {
-    use crate::sqlite::thread_exit_probe as sq;
-    let (function, aggregate, state, db, present) = std::thread::spawn(|| {
-        let callbacks: Vec<f64> = (0..4)
-            .map(|_| perry_runtime::value::js_nanbox_pointer(closure_here()))
-            .collect();
-        let function = sq::register_function_for_test(callbacks[0]);
-        let aggregate = sq::register_aggregate_for_test(callbacks[1]);
-        let state = sq::register_aggregate_state_for_test(callbacks[2]);
-        let db = sq::register_db_with_authorizer_for_test(callbacks[3]);
-        let present = sq::function_registered(function)
-            && sq::aggregate_registered(aggregate)
-            && sq::aggregate_state_registered(state)
-            && sq::authorizer(db).is_some();
-        (function, aggregate, state, db, present)
-    })
-    .join()
-    .unwrap();
-    assert!(
-        present,
-        "the node:sqlite entries must exist while their thread lives"
-    );
-    assert!(
-        !sq::function_registered(function),
-        "a dead thread's db.function() callback is still scanned"
-    );
-    assert!(
-        !sq::aggregate_registered(aggregate),
-        "a dead thread's db.aggregate() callbacks are still scanned"
-    );
-    assert!(
-        !sq::aggregate_state_registered(state),
-        "a dead thread's running aggregate state is still scanned"
-    );
-    assert!(
-        sq::authorizer(db).is_none(),
-        "a dead thread's authorizer closure outlived its heap in HANDLES"
-    );
-    sq::free_boxes_for_test(function, aggregate, state);
-    crate::common::drop_handle(db);
-}
-
 #[cfg(feature = "crypto")]
 #[test]
 fn thread_exit_releases_the_threads_crypto_key_entries() {
