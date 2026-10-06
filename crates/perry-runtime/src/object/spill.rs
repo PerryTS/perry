@@ -201,6 +201,13 @@ pub(crate) fn spill_reserve_claimed(obj_ptr: usize, field_index: usize) {
 }
 
 pub(crate) fn spill_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
+    spill_get_inline(obj_ptr, field_index)
+}
+
+// Let a validated holder read preserve its existing inline spill path
+// without changing inlining policy for other spill consumers.
+#[inline(always)]
+pub(crate) fn spill_get_inline(obj_ptr: usize, field_index: usize) -> Option<u64> {
     unsafe {
         let obj = obj_ptr as *mut ObjectHeader;
         if (*obj).meta.is_null() {

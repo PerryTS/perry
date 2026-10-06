@@ -129,11 +129,9 @@ fn accessor_site_refills_after_weak_receiver_shape_retirement() {
             "the departed receiver's shape is a weak memo, not a root"
         );
     }
-    // Interleave live competition with expiry on fresh sites. Four live
-    // replacements must still latch even though retired predecessors refill.
-    // Keep each competitor alive while publishing its successor, then retire
-    // the successor before the next round. Resetting the budget on retirement
-    // would let all rounds pass and this control would fail.
+    // Interleave live competition with expiry on fresh sites. The bounded
+    // memo replaces permanent latching: both live competitors must hit, and
+    // retirement must let subsequent generations refill without latching.
     let controls = [
         RuntimeReadSite::new(),
         RuntimeReadSite::new(),
@@ -172,11 +170,7 @@ fn accessor_site_refills_after_weak_receiver_shape_retirement() {
                         } else {
                             read.read_slow(r as *mut ObjectHeader, key);
                         }
-                        if round == 3 && turn == 1 {
-                            assert!(read.probe_leaf(r).is_none());
-                        } else {
-                            assert!(read.probe_leaf(r).is_some());
-                        }
+                        assert!(read.probe_leaf(r).is_some());
                     }
                     last_shape = crate::object::shapes::object_shape_stamp(r);
                 });

@@ -26,8 +26,9 @@
 //!   whose first call reads one environment variable into Rust-heap memory,
 //!   which cannot arm a Perry trigger), the handle-band compare,
 //!   `pic_slot_peek` (one acquire load, never `pic_slot_resolve`, which is the
-//!   allocating variant), `object_shape_stamp` (one header load), two cache
-//!   word compares and one slot load;
+//!   allocating variant), `object_shape_stamp` (one header load), MRU and armed-way
+//!   token compares and slot loads, or the existing holder/class-entry shape
+//!   and lookup-generation validation (all noncollecting);
 //! * `typed_feedback_active` (one static read).
 //!
 //! It makes NO typed-feedback call. With feedback on, the ladder's observe and
@@ -40,8 +41,7 @@
 //! No Perry allocation, no `GcRootRegistryGuard`, no throw, no call into
 //! generated code, no poll. Everything it cannot serve — a non-POINTER
 //! receiver (SSO, class ref, nullish, primitive, heap string), an unprimed or
-//! mismatched MRU word, an overflow slot, the Array-subclass word, a
-//! polymorphic way — answers `TAG_HOLE`.
+//! mismatched cache entry, an overflow slot, or an accessor — answers `TAG_HOLE`.
 //!
 //! # Why the pair is behaviourally identical to the one call
 //!
@@ -56,7 +56,7 @@ use super::ic_miss::{get_field_ic_dispatch, pic_outlined_mru_hit};
 use crate::object::{ObjectHeader, PicCacheSlot};
 
 /// The GC-leaf hit of the full-outline generic read. Answers the slot value on
-/// an MRU hit and `TAG_HOLE` for everything else; the caller then calls
+/// a validated own or holder hit and `TAG_HOLE` for everything else; the caller then calls
 /// [`js_object_get_field_ic_fast_miss`] with the same operands.
 ///
 /// Same operands as [`super::js_object_get_field_ic`], so the emitted miss

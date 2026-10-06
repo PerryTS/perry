@@ -143,7 +143,7 @@ pub unsafe extern "C" fn js_object_get_field_ic_front(
     // and the holder's. Asked last, so an own-key read pays nothing for it.
     // A GC leaf like everything above: it reads site words and object words.
     if !cache.is_null() {
-        if let Some(bits) = crate::object::method_site::read_holder::entry_answer(
+        if let Some(bits) = crate::object::method_site::read_holder::primary_entry_answer(
             &*cache,
             (shape_id as u64 | PIC_ID_TOKEN_BIT) as i64,
         ) {
@@ -152,13 +152,11 @@ pub unsafe extern "C" fn js_object_get_field_ic_front(
         // 5. A declared-class instance's entry (`read_holder::class_read`):
         // the same facts with the class's direct link proved by the class
         // lookup-surface generation.
-        if let Some(bits) = crate::object::method_site::read_holder::class_entry_answer(
+        return f64::from_bits(crate::object::method_site::read_holder::class_entry_answer(
             &*cache,
             obj,
             (shape_id as u64 | PIC_ID_TOKEN_BIT) as i64,
-        ) {
-            return f64::from_bits(bits);
-        }
+        ));
     }
     hole()
 }

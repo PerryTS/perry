@@ -6,6 +6,8 @@
 //! compile until the number is right — so emitted code can never disagree
 //! with the struct it indexes. No dependencies.
 
+pub mod accessor_guards;
+
 /// `object::shapes::SHAPE_ID_BASE`: the first ShapeId.
 pub const SHAPE_ID_BASE: u32 = 0x8000_0000;
 /// The compiler-assigned ("static") ShapeId band is
