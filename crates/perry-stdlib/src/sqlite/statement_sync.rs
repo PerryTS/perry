@@ -1,12 +1,16 @@
 //! `node:sqlite` `StatementSync` and `StatementSyncIterator`: ordinary
 //! objects that own a native payload (#11919).
 //!
-//! A statement owns no C resource: it keeps its SQL and options and compiles
-//! them on its database for every run, so closing the database never leaves a
-//! statement holding a dead `sqlite3_stmt`. It enters C through its
-//! database's owner (held in its JS state) and carries the database's
-//! `OpenSerial`, so a statement of an earlier open reports "statement has been
-//! finalized" after `close()` / `open()`.
+//! A statement owns the `sqlite3_stmt` its `prepare()` compiled, as node's
+//! does: every run resets and rebinds it, so the authorizer runs once per
+//! `prepare()` and `expandedSQL` reads the last bindings. The connection
+//! finalizes it on close (its `live` token then reads false and the
+//! statement's drop leaves it alone); otherwise the statement's drop
+//! finalizes it. A run that re-enters a statement already stepping (a
+//! callback calling the same statement) compiles its own copy for that run.
+//! It enters C through its database's owner (held in its JS state) and
+//! carries the database's `OpenSerial`, so a statement of an earlier open
+//! reports "statement has been finalized" after `close()` / `open()`.
 
 use super::*;
 use perry_runtime::closure::{ClosureHeader, JsThis};
@@ -22,12 +26,30 @@ use perry_runtime::{
     ObjectHeader,
 };
 use rusqlite::ffi;
+use std::cell::Cell;
 use std::ffi::{CStr, CString};
 use std::os::raw::c_int;
+use std::rc::Rc;
 
 perry_runtime::state_key_memo!(static MEMO_DB);
 perry_runtime::state_key_memo!(static MEMO_STMT);
 perry_runtime::state_key_memo!(static MEMO_ROWS);
+perry_runtime::birth_memo!(static STMT_BIRTH);
+perry_runtime::birth_memo!(static ITER_BIRTH);
+
+/// node's own enumerable, non-configurable getter `name` (no setter).
+pub(crate) fn own_getter(
+    name: &'static str,
+    get: *const perry_runtime::closure::JsFunctionInfo,
+) -> native_payload::OwnAccessor {
+    native_payload::OwnAccessor {
+        name,
+        get,
+        set: None,
+        enumerable: true,
+        configurable: false,
+    }
+}
 
 macro_rules! builtin {
     ($body:path, $n:tt) => {
@@ -67,10 +89,25 @@ pub(crate) static ITER_FAMILY: NativePayloadFamily = NativePayloadFamily {
 pub(crate) struct NodeStmt {
     serial: OpenSerial,
     sql: CString,
-    expanded_sql: String,
+    /// The compiled statement (null for SQL with no statement). Reset
+    /// whenever no run is stepping it, so finalizing it calls nothing back.
+    raw: *mut ffi::sqlite3_stmt,
+    /// The open's liveness token (see `NodeDb::live`).
+    conn: Rc<Cell<bool>>,
+    /// A run is using `raw`.
+    running: bool,
     flags: StmtFlags,
     /// Bumped by every run; an iterator is valid while it matches.
     epoch: u64,
+}
+
+impl Drop for NodeStmt {
+    fn drop(&mut self) {
+        // Always reset here (see `raw`): no callback can run.
+        if self.conn.get() && !self.raw.is_null() {
+            unsafe { ffi::sqlite3_finalize(self.raw) };
+        }
+    }
 }
 
 pub(crate) struct NodeStmtIter {
@@ -89,47 +126,43 @@ pub unsafe extern "C" fn js_node_sqlite_statement_sync_new(_arg0: f64, _arg1: f6
     throw_illegal_constructor()
 }
 
-/// A `StatementSync` of the database `db` (open #`serial`).
+/// A `StatementSync` of the database `db` (open #`serial`) owning the
+/// compiled `raw`.
 pub(crate) unsafe fn new_statement(
     db: &RuntimeHandle<'_>,
     serial: OpenSerial,
+    conn: Rc<Cell<bool>>,
     sql: CString,
-    expanded_sql: String,
+    raw: *mut ffi::sqlite3_stmt,
     flags: StmtFlags,
 ) -> f64 {
-    let bytes = std::mem::size_of::<NodeStmt>() + sql.as_bytes().len() + expanded_sql.len();
+    let compiled = if raw.is_null() {
+        0
+    } else {
+        ffi::sqlite3_stmt_status(raw, ffi::SQLITE_STMTSTATUS_MEMUSED, 0).max(0) as usize
+    };
+    let bytes = std::mem::size_of::<NodeStmt>() + sql.as_bytes().len() + compiled;
     let payload = NodeStmt {
         serial,
         sql,
-        expanded_sql,
+        raw,
+        conn,
+        running: false,
         flags,
         epoch: 0,
     };
-    let scope = RuntimeHandleScope::new();
-    let stmt = scope.root_nanbox_f64(native_payload::alloc_with_state(
+    native_payload::alloc_with_state(
         &STMT_FAMILY,
         payload,
         bytes,
         &[],
         &[(b"db", db.get_nanbox_f64())],
-    ));
-    native_payload::define_own_accessor(
-        stmt.get_nanbox_f64(),
-        "sourceSQL",
-        builtin!(stmt_source_sql_getter, 0),
-        None,
-        true,
-        false,
-    );
-    native_payload::define_own_accessor(
-        stmt.get_nanbox_f64(),
-        "expandedSQL",
-        builtin!(stmt_expanded_sql_getter, 0),
-        None,
-        true,
-        false,
-    );
-    stmt.get_nanbox_f64()
+        &[
+            own_getter("sourceSQL", builtin!(stmt_source_sql_getter, 0)),
+            own_getter("expandedSQL", builtin!(stmt_expanded_sql_getter, 0)),
+        ],
+        &STMT_BIRTH,
+    )
 }
 
 /// `this`'s payload, or node's "finalized" error when its database is
@@ -157,6 +190,10 @@ pub(crate) struct Stepper<'a, 's> {
     raw_db: *mut ffi::sqlite3,
     link: perry_runtime::native_payload::OwnerLink,
     stmt: *mut ffi::sqlite3_stmt,
+    /// The statement whose compiled `stmt` this run uses: the run resets it
+    /// where a compiled-for-this-run statement is finalized. Null for the
+    /// latter. Stable: the caller roots the statement for the whole run.
+    owned: *mut NodeStmt,
     pub(crate) flags: StmtFlags,
 }
 
@@ -199,12 +236,54 @@ impl<'a, 's> Stepper<'a, 's> {
             raw_db,
             link,
             stmt,
+            owned: std::ptr::null_mut(),
             flags,
         }
     }
 
-    pub(crate) fn raw_stmt(&self) -> *mut ffi::sqlite3_stmt {
-        self.stmt
+    /// Run `owner`'s compiled statement: clear and bind it (as
+    /// [`Stepper::start`] binds). It is reset, never finalized, when the
+    /// run ends.
+    unsafe fn start_owned(
+        db: &'a RuntimeHandle<'s>,
+        owner: *mut NodeStmt,
+        flags: StmtFlags,
+        bind_runs_js: bool,
+        bind: impl FnOnce(*mut ffi::sqlite3, *mut ffi::sqlite3_stmt) -> Result<(), BindError>,
+    ) -> Self {
+        let raw_db = db_payload(db.get_nanbox_f64()).raw;
+        let link = match native_payload::owner_link(db.get_nanbox_f64(), &DB_FAMILY) {
+            Ok(link) => link,
+            Err(PayloadMiss::Closed) => throw_invalid_state("database is not open"),
+            Err(PayloadMiss::Foreign) => throw_illegal_invocation(),
+        };
+        let stmt = (*owner).raw;
+        (*owner).running = true;
+        // Every run binds from scratch. Clearing calls nothing back.
+        ffi::sqlite3_clear_bindings(stmt);
+        let bound = if bind_runs_js {
+            match perry_runtime::exception::catch_js_throw(|| bind(raw_db, stmt)) {
+                Ok(bound) => bound,
+                Err(error) => {
+                    (*owner).running = false;
+                    perry_runtime::exception::js_throw(error);
+                }
+            }
+        } else {
+            bind(raw_db, stmt)
+        };
+        if let Err(error) = bound {
+            (*owner).running = false;
+            error.throw();
+        }
+        Stepper {
+            db,
+            raw_db,
+            link,
+            stmt,
+            owned: owner,
+            flags,
+        }
     }
 
     pub(crate) fn raw_db(&self) -> *mut ffi::sqlite3 {
@@ -268,11 +347,29 @@ impl<'a, 's> Stepper<'a, 's> {
 
     unsafe fn finalize_guarded(&mut self) -> Result<(), perry_runtime::native_payload::CallEnd> {
         let stmt = std::mem::replace(&mut self.stmt, std::ptr::null_mut());
+        let owned = self.release_owned();
         if stmt.is_null() || !db_is_open(self.db.get_nanbox_f64()) {
             return Ok(());
         }
-        let (_, end) = guarded(self.db.get_nanbox_f64(), || ffi::sqlite3_finalize(stmt));
+        // Aggregates still open run their `result` callbacks either way.
+        let (_, end) = guarded(self.db.get_nanbox_f64(), || {
+            if owned {
+                ffi::sqlite3_reset(stmt)
+            } else {
+                ffi::sqlite3_finalize(stmt)
+            }
+        });
         end
+    }
+
+    /// End the use of an owned statement; true when this run had one.
+    unsafe fn release_owned(&mut self) -> bool {
+        let owned = std::mem::replace(&mut self.owned, std::ptr::null_mut());
+        if owned.is_null() {
+            return false;
+        }
+        (*owned).running = false;
+        true
     }
 
     /// Finalize, dropping whatever the callbacks threw (an earlier error
@@ -285,8 +382,16 @@ impl<'a, 's> Stepper<'a, 's> {
     /// every statement of the connection, this one included.
     unsafe fn forget_or_finalize(&mut self) {
         let stmt = std::mem::replace(&mut self.stmt, std::ptr::null_mut());
-        if !stmt.is_null() && db_is_open(self.db.get_nanbox_f64()) {
+        let owned = self.release_owned();
+        if stmt.is_null() || !db_is_open(self.db.get_nanbox_f64()) {
+            return;
+        }
+        if !owned {
             ffi::sqlite3_finalize(stmt);
+        } else if ffi::sqlite3_stmt_busy(stmt) != 0 {
+            // Stopped on a row: reset it (open aggregates finish) under a
+            // guard; what they throw loses to the error already leaving.
+            let _ = guarded(self.db.get_nanbox_f64(), || ffi::sqlite3_reset(stmt));
         }
     }
 }
@@ -421,23 +526,18 @@ unsafe fn start_statement<'a, 's>(
     let flags = stmt.flags;
     // The payload is stable and only dropped once `this` is unreachable;
     // `this` is rooted for the whole call.
+    let owner: *mut NodeStmt = stmt;
     let sql: *const CStr = stmt.sql.as_c_str();
     let params_arr = raw_addr_from_value(params) as *const ArrayHeader;
     let named = !params_arr.is_null()
         && js_array_length(params_arr) > 0
         && is_named_parameter_object(f64_from_jsvalue(js_array_get(params_arr, 0)));
-    let stepper = Stepper::start(db, &*sql, flags, named, |raw_db, raw_stmt| {
-        bind_node_sqlite_params(flags, raw_db, raw_stmt, params_arr)
-    });
-    if !stepper.raw_stmt().is_null() {
-        let expanded = expanded_sql_of(stepper.raw_stmt());
-        if let Ok(stmt) =
-            native_payload::payload_mut::<NodeStmt>(this.get_nanbox_f64(), &STMT_FAMILY)
-        {
-            stmt.expanded_sql = expanded;
-        }
+    let bind = |raw_db, raw_stmt| bind_node_sqlite_params(flags, raw_db, raw_stmt, params_arr);
+    if (*owner).raw.is_null() || (*owner).running {
+        Stepper::start(db, &*sql, flags, named, bind)
+    } else {
+        Stepper::start_owned(db, owner, flags, named, bind)
     }
-    stepper
 }
 
 macro_rules! with_statement {
@@ -488,6 +588,8 @@ extern "C" fn stmt_iterate_thunk(_c: *const ClosureHeader, this: JsThis, params:
                 (b"stmt", this_root.get_nanbox_f64()),
                 (b"rows", rows.get_nanbox_f64()),
             ],
+            &[],
+            &ITER_BIRTH,
         )
     }
 }
@@ -496,19 +598,14 @@ extern "C" fn stmt_columns_thunk(_c: *const ClosureHeader, this: JsThis) -> f64 
     unsafe {
         let scope = RuntimeHandleScope::new();
         let this = scope.root_nanbox_f64(this.as_f64());
-        let (stmt, db) = live_stmt(this.get_nanbox_f64());
-        let flags = stmt.flags;
-        let sql: *const CStr = stmt.sql.as_c_str();
-        let db = scope.root_nanbox_f64(db);
-        let stepper = Stepper::start(&db, &*sql, flags, false, |_, _| Ok(()));
-        let columns = if stepper.raw_stmt().is_null() {
+        let (stmt, _) = live_stmt(this.get_nanbox_f64());
+        // Column metadata of the compiled statement: nothing runs or calls back.
+        let columns = if stmt.raw.is_null() {
             js_array_alloc(0)
         } else {
-            sqlite_columns_array(stepper.raw_stmt())
+            sqlite_columns_array(stmt.raw)
         };
-        let columns = scope.root_raw_mut_ptr(columns);
-        stepper.finish();
-        js_nanbox_pointer(columns.get_raw_mut_ptr::<ArrayHeader>() as i64)
+        js_nanbox_pointer(columns as i64)
     }
 }
 
@@ -556,7 +653,8 @@ extern "C" fn stmt_source_sql_getter(_c: *const ClosureHeader, this: JsThis) -> 
 extern "C" fn stmt_expanded_sql_getter(_c: *const ClosureHeader, this: JsThis) -> f64 {
     unsafe {
         let (stmt, _) = live_stmt(this.as_f64());
-        f64_from_jsvalue(string_value(&stmt.expanded_sql))
+        // The compiled statement keeps the last run's bindings.
+        f64_from_jsvalue(string_value(&expanded_sql_of(stmt.raw)))
     }
 }
 

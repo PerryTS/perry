@@ -28,6 +28,7 @@ use perry_runtime::{
     JSValue, Promise,
 };
 use rusqlite::ffi;
+use std::cell::Cell;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
 use std::rc::Rc;
@@ -162,6 +163,10 @@ pub(crate) struct NodeDb {
     pub(crate) agg_len: u32,
     pub(crate) serial: OpenSerial,
     pub(crate) cfg: DbConfig,
+    /// Shared with this open's statements: true until the connection
+    /// closes. A statement's compiled `sqlite3_stmt` is finalized by its own
+    /// drop while this holds, and by the connection's close otherwise.
+    pub(crate) live: Rc<Cell<bool>>,
 }
 
 extern "C" {
@@ -171,6 +176,9 @@ extern "C" {
 
 impl Drop for NodeDb {
     fn drop(&mut self) {
+        // From here the connection finalizes every statement; a statement
+        // dropped later must not touch its (finalized) `sqlite3_stmt`.
+        self.live.set(false);
         unsafe {
             for session in self.sessions.drain(..) {
                 session.delete();
@@ -492,6 +500,7 @@ unsafe fn open_db(this: f64, cfg: DbConfig) {
         agg_len: 0,
         serial: native_payload::next_open_serial(),
         cfg,
+        live: Rc::new(Cell::new(true)),
     };
     match native_payload::attach(
         this.get_nanbox_f64(),
@@ -825,11 +834,11 @@ extern "C" fn db_prepare_thunk(
             throw_sqlite_error("SQL string must not contain null bytes");
         };
         let raw = db_payload(this.get_nanbox_f64()).raw;
+        // Compiled once, as node does: the statement owns it from here.
         let stmt = prepare_guarded(&this, raw, &c_sql);
-        let expanded = expanded_sql_of(stmt);
-        ffi::sqlite3_finalize(stmt);
-        let serial = db_payload(this.get_nanbox_f64()).serial;
-        new_statement(&this, serial, c_sql, expanded, flags)
+        let open = db_payload(this.get_nanbox_f64());
+        let (serial, live) = (open.serial, open.live.clone());
+        new_statement(&this, serial, live, c_sql, stmt, flags)
     }
 }
 

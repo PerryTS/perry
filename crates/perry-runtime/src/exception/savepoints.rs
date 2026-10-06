@@ -129,20 +129,20 @@ macro_rules! catch_savepoints {
                 }
             }
 
-            /// Root scopes may differ in each trampoline's argument conversion.
-            /// Other managed stacks stay at the native-call baseline.
+            /// A native call's handler is captured at its first callback and
+            /// reused by the rest. Only runtime handle scopes differ between
+            /// its callbacks (each trampoline roots its own converted
+            /// arguments); every other managed stack is back at the
+            /// native-call baseline whenever a callback starts.
             #[inline]
             pub(super) fn refresh_native_roots(&mut self) {
                 #[cfg(test)]
                 if crate::native_payload::callback_sabotage("catch_refresh") {
                     return;
                 }
-                self.shadow = crate::gc::frame_root_savepoint();
                 self.runtime_handles = crate::gc::runtime_handle_stack_savepoint();
                 #[cfg(test)]
-                if !crate::native_payload::callback_sabotage("catch_refresh") {
-                    assert_eq!(*self, Self::capture(), "native helper changed managed catch state");
-                }
+                assert_eq!(*self, Self::capture(), "native helper changed managed catch state");
             }
 
             pub(super) fn restore(self) {

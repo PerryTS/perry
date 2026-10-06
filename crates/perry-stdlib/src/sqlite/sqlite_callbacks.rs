@@ -45,6 +45,16 @@ struct Target {
 }
 
 impl Target {
+    /// The site's link and decoded index, unchecked.
+    #[inline]
+    fn of(site: &CallbackSite) -> Self {
+        Target {
+            link: site.link,
+            index: site.index & !SITE_BIGINT_ARGS,
+            use_bigints: site.index & SITE_BIGINT_ARGS != 0,
+        }
+    }
+
     /// The owner now (the GC may have moved it since the last look);
     /// `None` once a callback closed the database.
     unsafe fn owner(self) -> Option<f64> {
@@ -52,6 +62,7 @@ impl Target {
     }
 
     /// The callback at `index + offset`, read now.
+    #[inline]
     unsafe fn callback(self, offset: u32) -> f64 {
         native_payload::callback_from_link(self.link, self.index + offset)
     }
@@ -72,11 +83,7 @@ unsafe fn site_target(user_data: *mut c_void) -> Option<Target> {
     }
     let site = &*(user_data as *const CallbackSite);
     native_payload::link_owner(site.link)?;
-    Some(Target {
-        link: site.link,
-        index: site.index & !SITE_BIGINT_ARGS,
-        use_bigints: site.index & SITE_BIGINT_ARGS != 0,
-    })
+    Some(Target::of(site))
 }
 
 unsafe fn array_element(array: f64, index: u32) -> f64 {
@@ -139,19 +146,24 @@ unsafe fn arg_at(argv: *mut *mut ffi::sqlite3_value, index: usize) -> *mut ffi::
     }
 }
 
-/// Does converting this argument allocate (or fail)?
-unsafe fn arg_is_heap(value: *mut ffi::sqlite3_value, use_bigints: bool) -> bool {
+/// An argument whose conversion allocates nothing and cannot fail (null, a
+/// float, a safe integer read as a number), or `None`.
+unsafe fn immediate_arg(value: *mut ffi::sqlite3_value, use_bigints: bool) -> Option<f64> {
     if value.is_null() {
-        return false;
+        return Some(f64_from_jsvalue(JSValue::null()));
     }
     match ffi::sqlite3_value_type(value) {
-        ffi::SQLITE_INTEGER => {
-            use_bigints
-                || !(JS_SAFE_INTEGER_MIN..=JS_SAFE_INTEGER_MAX)
-                    .contains(&ffi::sqlite3_value_int64(value))
+        ffi::SQLITE_NULL => Some(f64_from_jsvalue(JSValue::null())),
+        ffi::SQLITE_FLOAT => Some(f64_from_jsvalue(JSValue::number(
+            ffi::sqlite3_value_double(value),
+        ))),
+        ffi::SQLITE_INTEGER if !use_bigints => {
+            let v = ffi::sqlite3_value_int64(value);
+            (JS_SAFE_INTEGER_MIN..=JS_SAFE_INTEGER_MAX)
+                .contains(&v)
+                .then(|| f64_from_jsvalue(JSValue::number(v as f64)))
         }
-        ffi::SQLITE_TEXT | ffi::SQLITE_BLOB => true,
-        _ => false,
+        _ => None,
     }
 }
 
@@ -196,6 +208,31 @@ unsafe fn value_arg_checked(
 /// from the stack with no handle scope; otherwise each is rooted as it is
 /// built, and `call` runs after the last allocation (so it must read the
 /// callee itself). `Err` carries a conversion error to park.
+/// The arguments (after `first`) when none of them allocates: up to eight,
+/// from the stack, with no handle scope.
+#[inline]
+unsafe fn immediate_args(
+    first: Option<f64>,
+    argc: c_int,
+    argv: *mut *mut ffi::sqlite3_value,
+    use_bigints: bool,
+) -> Option<([f64; 8], usize)> {
+    let argc = argc.max(0) as usize;
+    let count = argc + usize::from(first.is_some());
+    if count > 8 {
+        return None;
+    }
+    let mut buf = [0f64; 8];
+    let k = usize::from(first.is_some());
+    if let Some(first) = first {
+        buf[0] = first;
+    }
+    for i in 0..argc {
+        buf[k + i] = immediate_arg(arg_at(argv, i), use_bigints)?;
+    }
+    Some((buf, count))
+}
+
 unsafe fn with_callback_args<R>(
     first: Option<f64>,
     argc: c_int,
@@ -203,20 +240,11 @@ unsafe fn with_callback_args<R>(
     use_bigints: bool,
     call: impl FnOnce(&[f64]) -> R,
 ) -> Result<R, f64> {
-    let argc = argc.max(0) as usize;
-    let count = argc + usize::from(first.is_some());
-    if count <= 8 && !(0..argc).any(|i| arg_is_heap(arg_at(argv, i), use_bigints)) {
-        let mut buf = [0f64; 8];
-        let mut k = 0;
-        if let Some(first) = first {
-            buf[0] = first;
-            k = 1;
-        }
-        for i in 0..argc {
-            buf[k + i] = f64_from_jsvalue(value_arg_checked(arg_at(argv, i), false)?);
-        }
+    if let Some((buf, count)) = immediate_args(first, argc, argv, use_bigints) {
         return Ok(call(&buf[..count]));
     }
+    let argc = argc.max(0) as usize;
+    let count = argc + usize::from(first.is_some());
     let scope = RuntimeHandleScope::new();
     let mut roots: Vec<RuntimeHandle<'_>> = Vec::with_capacity(count);
     if let Some(first) = first {
@@ -235,13 +263,30 @@ pub(crate) unsafe extern "C" fn node_sqlite_scalar_trampoline(
     argc: c_int,
     argv: *mut *mut ffi::sqlite3_value,
 ) {
-    let Some(target) = site_target(ffi::sqlite3_user_data(ctx)) else {
+    let user_data = ffi::sqlite3_user_data(ctx);
+    if user_data.is_null() {
         ffi::sqlite3_result_error(ctx, c"database is not open".as_ptr(), -1);
         return;
+    }
+    let target = Target::of(&*(user_data as *const CallbackSite));
+    // Arguments that allocate nothing go straight to the call, which checks
+    // the owner. Any other conversion waits for an owner that may run JS.
+    let result = match immediate_args(None, argc, argv, target.use_bigints) {
+        Some((args, count)) => Ok(native_payload::call_callback(
+            target.link,
+            target.index,
+            &args[..count],
+        )),
+        None => {
+            if target.owner().is_none() {
+                ffi::sqlite3_result_error(ctx, c"database is not open".as_ptr(), -1);
+                return;
+            }
+            with_callback_args(None, argc, argv, target.use_bigints, |args| {
+                native_payload::call_from_link(target.link, target.callback(0), args)
+            })
+        }
     };
-    let result = with_callback_args(None, argc, argv, target.use_bigints, |args| {
-        native_payload::call_from_link(target.link, target.callback(0), args)
-    });
     match result {
         Ok(Ok(value)) => node_sqlite_result_value(ctx, value),
         Ok(Err(())) => result_error_pending(ctx),

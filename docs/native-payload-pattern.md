@@ -151,9 +151,16 @@ S checklist:
    without JS. Root the owner immediately, and read it only through that
    handle after allocation or JS. `callback_from_link` reads the traced
    callbacks slot after the last argument allocation, without owner-key
-   lookup. Use `set_callback`, `state_set`, or `state_set_memo` to replace or
+   lookup. A trampoline whose only JS is one registered callback with
+   arguments that allocate nothing calls `call_callback(link, index, args)`:
+   one owner check (open, this thread, nothing pending), the slot read and
+   the call. Use `set_callback`, `state_set`, or `state_set_memo` to replace or
    clear the callbacks array; these keep the state field and cell slot in sync.
-3. Call JS only through `call_from_native`. It catches a throw, parks the
+3. Call JS only through `call_from_native` / `call_from_link` /
+   `call_callback`. A native call (`NativeCallGuard::call`) captures one
+   handler at its first callback and reuses it for the rest; between
+   callbacks only runtime handle scopes may differ (a trampoline's argument
+   roots), never shadow frames or other managed stacks. It catches a throw, parks the
    exact value in `pendingException`, sets PENDING and returns `Err(())`.
    Further callbacks return the error without running JS: the first throw
    wins. Never throw through C or use throwing thread-validation helpers.
@@ -248,10 +255,19 @@ The first S family is node:sqlite (`perry-stdlib/src/sqlite/database_sync.rs`,
   its statement. A C child that must die before the connection (a
   `sqlite3_session`) is shared through one `Rc` cell by the database
   payload and the child payload: whichever goes first deletes it.
-* node's own accessors (`db.isOpen`, `stmt.sourceSQL`, `db.limits.*`) are
-  installed per instance with `native_payload::define_own_accessor`; a
-  constructor export materializes its prototype when the export is created
-  (`native_payload::prototype`).
+* A statement owns the `sqlite3_stmt` its `prepare()` compiled, as node's
+  does (the authorizer runs once per `prepare()`; `expandedSQL` reads the
+  last bindings). Every run clears and rebinds it and leaves it reset, so
+  finalizing it never calls back. The connection's close finalizes it; the
+  open's `live` token (an `Rc<Cell<bool>>` shared with the database
+  payload) tells the statement's drop whether it still must.
+* node's own accessors (`stmt.sourceSQL`, `SQLTagStore#size`) are born with
+  the instance: `alloc_with_state(.., accessors, &BIRTH_MEMO)` installs them
+  at the site's first birth and records the final shapes; later births are
+  allocated in them, holding the family's shared accessor pairs. One-off
+  objects (`db.isOpen`, `db.limits.*`) still use
+  `native_payload::define_own_accessor`; a constructor export materializes
+  its prototype when the export is created (`native_payload::prototype`).
 
 In each family conversion PR, delete its callback id registries and scanners,
 `js_write_barrier_root_nanbox` callback "rooting", and listener/pipe tables

@@ -51,9 +51,12 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use crate::native_handle::NativeHandleHeader;
 use crate::object::ObjectHeader;
 
+#[path = "native_payload_birth.rs"]
+mod birth;
+pub use birth::{BirthMemo, OwnAccessor};
 #[path = "native_payload_slots.rs"]
 mod callback_slots;
-pub use callback_slots::{callback_at, callback_from_link};
+pub use callback_slots::{call_callback, callback_at, callback_from_link};
 pub(crate) use callback_slots::{callback_slot_address, NativeCallbackCell};
 use callback_slots::{store_callbacks, sync_callbacks};
 
@@ -457,6 +460,7 @@ pub fn alloc<T: 'static>(
         plain_vtable::<T>(),
         external_bytes,
         own,
+        own.len(),
         proto,
     )
 }
@@ -478,6 +482,7 @@ pub fn alloc_stream<T: StreamPayload>(
         hooked_vtable::<T>(),
         external_bytes,
         own,
+        own.len(),
         proto,
     )
 }
@@ -492,57 +497,30 @@ pub fn prototype_value(family: &'static NativePayloadFamily) -> f64 {
 }
 
 /// [`alloc`] with the instance's JS state built at birth: `state` lists its
-/// fields in order. The state object has a null prototype, so storing its
-/// fields can run no inherited setter; it is attached like an own property,
-/// which costs a cached shape transition instead of a define.
+/// fields in order, and `accessors` the own accessors the instance is born
+/// with (after its own data keys). The state object has a null prototype, so
+/// storing its fields can run no inherited setter. Every birth at one call
+/// site has the same keys, so the site's `memo` records the final shapes its
+/// first birth reached and later births are allocated directly in them
+/// (`native_payload_birth.rs`). Declare one memo per call site with
+/// [`birth_memo!`](crate::birth_memo).
 pub fn alloc_with_state<T: 'static>(
     family: &'static NativePayloadFamily,
     payload: T,
     external_bytes: usize,
     own: &[(&[u8], f64)],
     state: &[(&[u8], f64)],
+    accessors: &[OwnAccessor],
+    memo: &'static BirthMemo,
 ) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let own_roots: Vec<_> = own
-        .iter()
-        .map(|&(key, value)| (key, scope.root_nanbox_f64(value)))
-        .collect();
-    let state_roots: Vec<_> = state
-        .iter()
-        .map(|&(key, value)| (key, scope.root_nanbox_f64(value)))
-        .collect();
-    let state_obj = crate::object::js_object_alloc_null_proto(0, state.len().max(4) as u32);
-    if state_obj.is_null() {
-        return undefined();
-    }
-    let state_obj = scope.root_raw_mut_ptr(state_obj);
-    for (key, value) in &state_roots {
-        set_own(&scope, &state_obj, key, value.get_nanbox_f64());
-    }
-    let state_value = scope.root_nanbox_f64(
-        state_obj.with_mut_ptr::<ObjectHeader, _>(|o| crate::value::js_nanbox_pointer(o as i64)),
-    );
-    let proto = family_prototype(family);
-    let mut all: Vec<(&[u8], f64)> = own_roots
-        .iter()
-        .map(|(key, value)| (*key, value.get_nanbox_f64()))
-        .collect();
-    all.push((JS_STATE_KEY, state_value.get_nanbox_f64()));
-    alloc_cell(
-        family,
-        Some(payload),
-        plain_vtable::<T>(),
-        external_bytes,
-        &all,
-        proto,
-    )
+    birth::alloc_born(family, payload, external_bytes, own, state, accessors, memo)
 }
 
 /// Allocate an ordinary instance with its permanent cell but no resource.
 /// The first attach establishes the family's payload layout and drop thunk.
 pub fn alloc_closed(family: &'static NativePayloadFamily, own: &[(&[u8], f64)]) -> f64 {
     let proto = family_prototype(family);
-    alloc_cell::<()>(family, None, plain_vtable::<()>(), 0, own, proto)
+    alloc_cell::<()>(family, None, plain_vtable::<()>(), 0, own, own.len(), proto)
 }
 
 /// Allocate a payload-family instance linked to an already-materialized
@@ -560,16 +538,20 @@ pub fn alloc_with_prototype<T: 'static>(
         plain_vtable::<T>(),
         external_bytes,
         own,
+        own.len(),
         proto,
     )
 }
 
+/// `slots`: the instance's live inline slots, at least `own.len()` (a birth
+/// that adds keys after `own` sizes for them, so none spills).
 fn alloc_cell<T: 'static>(
     family: &'static NativePayloadFamily,
     payload: Option<T>,
     vtable: &'static PayloadVTable,
     external_bytes: usize,
     own: &[(&[u8], f64)],
+    slots: usize,
     proto: *mut ObjectHeader,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -580,7 +562,7 @@ fn alloc_cell<T: 'static>(
     if proto.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let obj = unsafe { born_instance(family.class_id, proto, own.len() as u32) };
+    let obj = unsafe { born_instance(family.class_id, proto, slots as u32) };
     if obj.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -1090,6 +1072,7 @@ pub fn owner_link(value: f64, family: &NativePayloadFamily) -> Result<OwnerLink,
 ///
 /// # Safety
 /// `link` must name a live cell, owned by its C resource or kept alive by link_ref.
+#[inline]
 pub unsafe fn link_owner(link: OwnerLink) -> Option<f64> {
     let cell = link.0 as *mut NativeHandleHeader;
     #[cfg(test)]
@@ -1593,28 +1576,49 @@ unsafe fn ensure_pending_slot(cell: *mut NativeHandleHeader, owner: f64, class_i
 }
 
 /// [`call_from_native`] for an S trampoline that holds the userdata's link
-/// and just read its owner with [`link_owner`]. The owner is re-checked
-/// (a callback may have closed it) and re-read from the cell (the GC rewrites
-/// the slot). The caller keeps `callee` and every pointer in `args` rooted,
-/// or reads them after its last allocation.
+/// and proved it with [`link_owner`] on entry. The cell's state is
+/// re-checked on every call (an earlier callback may have closed the owner
+/// or parked an exception); its thread cannot change, so the trampoline's
+/// proof stands. The owner is re-read from the cell (the GC rewrites the
+/// slot). The caller keeps `callee` and every pointer in `args` rooted, or
+/// reads them after its last allocation.
 ///
 /// # Safety
-/// As [`call_from_native`]; `link` names a live cell of this thread.
+/// As [`call_from_native`]; `link` passed [`link_owner`] on this thread in
+/// the calling trampoline.
+#[inline]
 pub unsafe fn call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Result<f64, ()> {
     let cell = link.0 as *mut NativeHandleHeader;
-    if crate::native_handle::rust_payload_ptr_on_owner_thread(cell).is_null()
-        || ((*cell).flags & PENDING != 0 && !pending_sabotage())
-    {
+    if !cell_open(cell) || ((*cell).flags & PENDING != 0 && !pending_sabotage()) {
         return Err(());
     }
     if (*cell).flags & PENDING_SLOT == 0 {
-        let scope = crate::gc::RuntimeHandleScope::new();
-        let callee_root = scope.root_nanbox_f64(callee);
-        let roots: Vec<_> = args.iter().map(|v| scope.root_nanbox_f64(*v)).collect();
-        ensure_pending_slot(cell, f64::from_bits((*cell).owner), (*cell).type_id as u32);
-        let args: Vec<f64> = roots.iter().map(|v| v.get_nanbox_f64()).collect();
-        return call_from_link(link, callee_root.get_nanbox_f64(), &args);
+        return first_call_from_link(link, callee, args);
     }
+    call_open_link(cell, callee, args)
+}
+
+/// The owner's first callback: create its pending slot (see
+/// [`ensure_pending_slot`]), then call.
+#[cold]
+#[inline(never)]
+unsafe fn first_call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Result<f64, ()> {
+    let cell = link.0 as *mut NativeHandleHeader;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let callee_root = scope.root_nanbox_f64(callee);
+    let roots: Vec<_> = args.iter().map(|v| scope.root_nanbox_f64(*v)).collect();
+    ensure_pending_slot(cell, f64::from_bits((*cell).owner), (*cell).type_id as u32);
+    let args: Vec<f64> = roots.iter().map(|v| v.get_nanbox_f64()).collect();
+    call_from_link(link, callee_root.get_nanbox_f64(), &args)
+}
+
+/// [`call_from_link`] once the cell is open, nothing is pending and the
+/// pending slot exists.
+unsafe fn call_open_link(
+    cell: *mut NativeHandleHeader,
+    callee: f64,
+    args: &[f64],
+) -> Result<f64, ()> {
     let this = undefined();
     #[cfg(test)]
     if callback_sabotage("catch") {
@@ -1637,6 +1641,13 @@ pub unsafe fn call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Resu
             Err(())
         }
     }
+}
+
+/// The open-cell half of [`link_owner`] (payload installed, neither closing
+/// nor finalized), for a cell whose thread is already proven.
+#[inline]
+unsafe fn cell_open(cell: *mut NativeHandleHeader) -> bool {
+    (*cell).finalized == 0 && (*cell).flags & CLOSING == 0 && !(*cell).resource_ptr.is_null()
 }
 
 /// Park a trampoline validation failure without throwing through C. Returns
@@ -1821,16 +1832,14 @@ pub(crate) unsafe fn try_payload_method_fast_dispatch(
     {
         return None;
     }
-    let name_str = std::str::from_utf8(name).ok()?;
+    // Both are ordinary objects, whose keys carry every key's attributes
+    // (charter step 3): the instance owning no key of this name has no own
+    // descriptor for it, and the prototype's key entry says whether it is an
+    // accessor.
     if crate::object::dictionary::is_dictionary(obj)
-        || crate::object::descriptor_state::may_have_descriptor_entry(obj as usize, name_str, true)
         || shape_key_index(obj, name).is_some()
         || crate::object::dictionary::is_dictionary(proto)
-        || crate::object::descriptor_state::may_have_descriptor_entry(
-            proto as usize,
-            name_str,
-            true,
-        )
+        || crate::object::key_attrs::object_key_is_accessor(proto, name)
     {
         return None;
     }

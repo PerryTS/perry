@@ -23,6 +23,8 @@ use perry_runtime::native_payload::{
 use rusqlite::ffi;
 use std::ffi::CString;
 use std::os::raw::{c_int, c_void};
+
+perry_runtime::birth_memo!(static SESSION_BIRTH);
 use std::rc::Rc;
 
 perry_runtime::state_key_memo!(static MEMO_DB);
@@ -106,6 +108,8 @@ pub(crate) unsafe fn new_session(db: f64, options_value: f64) -> f64 {
         std::mem::size_of::<NodeSession>(),
         &[],
         &[(b"db", db.get_nanbox_f64())],
+        &[],
+        &SESSION_BIRTH,
     )
 }
 

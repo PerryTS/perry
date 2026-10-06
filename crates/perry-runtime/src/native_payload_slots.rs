@@ -40,19 +40,41 @@ pub fn callback_at(owner: f64, family: &NativePayloadFamily, index: u32) -> f64 
 }
 
 /// Read a callback through stable userdata, after its last allocating conversion.
-/// Never allocates; the slot is rewritten by moving GC.
+/// Never allocates; the slot is rewritten by moving GC. Whether the owner
+/// may still be called is [`call_from_link`]'s check, made at the call.
 ///
 /// # Safety
-/// As [`link_owner`]. The caller roots pointer arguments until the JS call.
+/// `link` passed [`link_owner`] on this thread in the calling trampoline.
+/// The caller roots pointer arguments until the JS call.
 #[inline]
 pub unsafe fn callback_from_link(link: OwnerLink, index: u32) -> f64 {
-    if link_owner(link).is_none() {
-        return undefined();
-    }
     callback_slot(link.0 as *mut NativeHandleHeader, index)
 }
 
+/// Call the callback at `index` of the owner `link` names: the whole JS side
+/// of an S trampoline that needs nothing else from the owner. One check that
+/// the owner may run JS (open, on this thread, nothing pending) answers
+/// `Err` with no JS otherwise; then the slot is read and called under the
+/// native call's catch, as [`call_from_link`] calls. The caller keeps every
+/// pointer in `args` rooted, or converted them after its last allocation.
+///
+/// # Safety
+/// `link` names a live cell, owned by its C resource.
 #[inline]
+pub unsafe fn call_callback(link: OwnerLink, index: u32, args: &[f64]) -> Result<f64, ()> {
+    link_owner(link).ok_or(())?;
+    let cell = link.0 as *mut NativeHandleHeader;
+    if (*cell).flags & PENDING != 0 && !pending_sabotage() {
+        return Err(());
+    }
+    let callee = callback_slot(cell, index);
+    if (*cell).flags & PENDING_SLOT == 0 {
+        return first_call_from_link(link, callee, args);
+    }
+    call_open_link(cell, callee, args)
+}
+
+#[inline(always)]
 unsafe fn callback_slot(cell: *mut NativeHandleHeader, index: u32) -> f64 {
     let Some(slot) = callback_slot_address(cell) else {
         return undefined();
@@ -60,15 +82,47 @@ unsafe fn callback_slot(cell: *mut NativeHandleHeader, index: u32) -> f64 {
     callback_array_slot(*slot, index)
 }
 
-#[inline]
+#[inline(always)]
 unsafe fn callback_array_slot(bits: u64, index: u32) -> f64 {
     let array = crate::JSValue::from_bits(bits);
     if !array.is_pointer() {
         return undefined();
     }
-    let mut arr = array.as_pointer::<crate::array::ArrayHeader>();
-    // Growth may leave a forwarding stub before the next GC rewrite. The
-    // traced slot proves a real array, so ordinary reads need one header bit.
+    let arr = array.as_pointer::<crate::array::ArrayHeader>();
+    // The traced slot proves a real array, so ordinary reads need one
+    // header bit; growth may leave a forwarding stub before the next GC
+    // rewrite, and an index past the dense storage is a sparse own key.
+    let header = crate::gc::header_from_trusted_user_ptr(arr.cast());
+    #[cfg(test)]
+    let test_path =
+        callback_sabotage("callback_forwarding") || callback_sabotage("callback_data_read");
+    #[cfg(not(test))]
+    let test_path = false;
+    if test_path
+        || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || index >= (*arr).capacity
+    {
+        return callback_array_slot_slow(arr, index);
+    }
+    dense_callback(arr, index)
+}
+
+#[inline(always)]
+unsafe fn dense_callback(arr: *const crate::array::ArrayHeader, index: u32) -> f64 {
+    if index >= (*arr).length {
+        return undefined();
+    }
+    let bits = *crate::array::array_elements_ptr(arr).add(index as usize);
+    if bits == crate::value::TAG_HOLE {
+        undefined()
+    } else {
+        f64::from_bits(bits)
+    }
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn callback_array_slot_slow(mut arr: *const crate::array::ArrayHeader, index: u32) -> f64 {
     let header = crate::gc::header_from_trusted_user_ptr(arr.cast());
     let forwarded = (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0;
     #[cfg(test)]
@@ -87,15 +141,9 @@ unsafe fn callback_array_slot(bits: u64, index: u32) -> f64 {
         return undefined();
     }
     if index >= (*arr).capacity {
-        return crate::array::array_named_property_get_by_name(arr, &index.to_string())
-            .unwrap_or_else(undefined);
+        return sparse_callback_slot(arr, index);
     }
-    let bits = *crate::array::array_elements_ptr(arr).add(index as usize);
-    if bits == crate::value::TAG_HOLE {
-        undefined()
-    } else {
-        f64::from_bits(bits)
-    }
+    dense_callback(arr, index)
 }
 
 pub(super) unsafe fn store_callbacks(cell: *mut NativeHandleHeader, value: f64) {
@@ -143,4 +191,25 @@ pub(super) unsafe fn catch_from_cell(
         return std::ptr::null_mut();
     }
     (*(cell as *mut NativeCallbackCell)).catch
+}
+
+#[cold]
+unsafe fn sparse_callback_slot(arr: *const crate::array::ArrayHeader, mut index: u32) -> f64 {
+    let mut digits = [0u8; 10];
+    let mut start = digits.len();
+    loop {
+        start -= 1;
+        digits[start] = b'0' + (index % 10) as u8;
+        index /= 10;
+        if index == 0 {
+            break;
+        }
+    }
+    #[cfg(test)]
+    if callback_sabotage("callback_sparse_key") {
+        digits[start] = b'x';
+    }
+    // Every byte above is ASCII. No heap or GC allocation.
+    let key = std::str::from_utf8_unchecked(&digits[start..]);
+    crate::array::array_named_property_get_by_name(arr, key).unwrap_or_else(undefined)
 }

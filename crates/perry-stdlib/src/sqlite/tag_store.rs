@@ -16,6 +16,7 @@ use std::collections::VecDeque;
 use std::ffi::CString;
 
 perry_runtime::state_key_memo!(static MEMO_DB);
+perry_runtime::birth_memo!(static TAG_STORE_BIRTH);
 
 macro_rules! builtin {
     ($body:path, $n:tt) => {
@@ -103,21 +104,13 @@ pub(crate) unsafe fn new_tag_store(db: f64, capacity: usize) -> f64 {
         std::mem::size_of::<NodeTagStore>(),
         &[],
         &[(b"db", db.get_nanbox_f64())],
+        &[
+            super::statement_sync::own_getter("capacity", builtin!(tag_store_capacity_getter, 0)),
+            super::statement_sync::own_getter("db", builtin!(tag_store_db_getter, 0)),
+            super::statement_sync::own_getter("size", builtin!(tag_store_size_getter, 0)),
+        ],
+        &TAG_STORE_BIRTH,
     ));
-    for (name, getter) in [
-        ("capacity", builtin!(tag_store_capacity_getter, 0)),
-        ("db", builtin!(tag_store_db_getter, 0)),
-        ("size", builtin!(tag_store_size_getter, 0)),
-    ] {
-        native_payload::define_own_accessor(
-            store.get_nanbox_f64(),
-            name,
-            getter,
-            None,
-            true,
-            false,
-        );
-    }
     store.get_nanbox_f64()
 }
 

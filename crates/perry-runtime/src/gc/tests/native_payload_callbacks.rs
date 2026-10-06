@@ -557,7 +557,7 @@ fn callback_cell_slot_marks_its_array_without_another_edge() {
     let _reset = Reset::new();
     // The guard isolates scanner registration, but realm towers from earlier
     // libtest cases still live on this thread. Preserve their production
-    // roots during this full collection; none points at this callbacks array.
+    // roots during this mark walk; none points at this callbacks array.
     gc_register_named_mutable_root_scanner(
         "object_cache",
         crate::object::scan_object_cache_roots_mut,
@@ -870,9 +870,40 @@ fn callback_cell_slot_resolves_array_growth_before_gc_rewrite() {
 }
 
 #[test]
+fn callback_cell_slot_reads_sparse_own_data() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _reset = Reset::new();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(owner());
+    let cb = scope.root_nanbox_f64(closure(crate::fn_info!(returns, 0)));
+    let index = 1_048_576;
+    np::set_callback(value.get_nanbox_f64(), &FAMILY, index, cb.get_nanbox_f64());
+    let link = np::owner_link(value.get_nanbox_f64(), &FAMILY).unwrap();
+    let array = np::callbacks(value.get_nanbox_f64(), &FAMILY);
+    let arr = crate::JSValue::from_bits(array.to_bits()).as_pointer::<crate::array::ArrayHeader>();
+    assert!(
+        unsafe { (*arr).capacity } <= index,
+        "fixture must take the sparse path"
+    );
+    assert_eq!(
+        unsafe { np::callback_from_link(link, index) }.to_bits(),
+        cb.get_nanbox_f64().to_bits()
+    );
+    assert_eq!(
+        unsafe { np::callback_from_link(link, index - 1) }.to_bits(),
+        TAG_UNDEFINED
+    );
+}
+
+#[test]
 fn every_sabotage_makes_its_runtime_witness_red() {
     let exe = std::env::current_exe().unwrap();
     for (fault, witness) in [
+        (
+            "callback_sparse_key",
+            "callback_cell_slot_reads_sparse_own_data",
+        ),
         (
             "callback_forwarding",
             "callback_cell_slot_resolves_array_growth_before_gc_rewrite",
