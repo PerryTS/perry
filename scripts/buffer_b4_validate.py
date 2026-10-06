@@ -7,6 +7,7 @@ Every artifact is under --hostdir. GC diagnostics run separately so their JSON
 formatting is not included in program instruction counts.
 """
 import argparse
+import ctypes
 import json
 import os
 from pathlib import Path
@@ -35,6 +36,10 @@ KERNELS = {
 }
 NODE = ['node', '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON', '--experimental-strip-types']
 
+def disable_thp():
+    if ctypes.CDLL(None, use_errno=True).prctl(41, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), 'PR_SET_THP_DISABLE failed')
+
 def environment(root, arm):
     source = root / ('main-src' if arm == 'main' else 'src')
     target = root / ('main-target' if arm == 'main' else 'target')
@@ -49,14 +54,16 @@ def environment(root, arm):
                PERRY_WORKSPACE_ROOT=str(prebuilt), RUST_TEST_THREADS='1', CARGO_BUILD_JOBS='8',
                PERRY_NO_AUTO_OPTIMIZE='1', PERRY_NO_CACHE='1', PERRY_SKIP_BUILD='1',
                PERRY_ALLOW_PERRY_FEATURES='1', TMPDIR=str(root/'tmp'), RAYON_NUM_THREADS=os.environ.get('PERRY_VERIFY_RAYON_THREADS', '8'),
-               PERRY_FORCE_WELL_KNOWN='http,net,ws,zlib')
+               PERRY_FORCE_WELL_KNOWN='http,net,ws,zlib',
+               PERF_BUILDID_DIR=str(root/'perf-buildid'), XDG_CACHE_HOME=str(root/'cache'))
     env.pop('PERRY_GC_DIAG', None)
     return source, target, env
 
 def run(cmd, cwd, env, prefix, timeout=1800):
     prefix.parent.mkdir(parents=True, exist_ok=True)
     try:
-        result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, timeout=timeout)
+        result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, timeout=timeout,
+                                preexec_fn=disable_thp if env.get('MIMALLOC_ALLOW_THP') == '0' else None)
     except subprocess.TimeoutExpired as error:
         result = subprocess.CompletedProcess(cmd, 124, error.stdout or b'', error.stderr or b'')
     Path(str(prefix)+'.out').write_bytes(result.stdout)
@@ -101,10 +108,12 @@ def compile_arm(root, arm, names):
 
 def full_collections(root, arm, name, cmd, cwd, env, trial):
     diag = dict(env, PERRY_GC_DIAG='1')
-    prefix = root/'measure/trials'/f'{name}.{trial}.{arm}.gc'
+    trials_dir = 'trials-thp-off' if env.get('MIMALLOC_ALLOW_THP') == '0' else 'trials'
+    prefix = root/'measure'/trials_dir/f'{name}.{trial}.{arm}.gc'
     huge = []
     stop = threading.Event()
-    proc = subprocess.Popen(cmd, cwd=cwd, env=diag, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(cmd, cwd=cwd, env=diag, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            preexec_fn=disable_thp if env.get('MIMALLOC_ALLOW_THP') == '0' else None)
     def sample():
         while not stop.is_set():
             try:
@@ -135,6 +144,7 @@ def full_collections(root, arm, name, cmd, cwd, env, trial):
     return {'fulls': fulls, 'anon_huge_kb': max(huge) if huge else None}
 
 def measure(root, names, thp_off):
+    trials_dir = 'trials-thp-off' if thp_off else 'trials'
     status = {a: json.loads((root/'measure'/a/'status.json').read_text()) for a in ['main', 'head']}
     records = {}
     for name in names:
@@ -150,7 +160,7 @@ def measure(root, names, thp_off):
                 _, _, env = environment(root, arm)
                 if thp_off: env['MIMALLOC_ALLOW_THP'] = '0'
                 cmd = [str(root/'measure'/arm/name), *args]
-                prefix = root/'measure/trials'/f'{name}.{trial}.{arm}'
+                prefix = root/'measure'/trials_dir/f'{name}.{trial}.{arm}'
                 prefix.parent.mkdir(parents=True, exist_ok=True)
                 counter, rss = Path(str(prefix)+'.stat'), Path(str(prefix)+'.rss')
                 result = run(['perf', 'stat', '-x', ';', '-e', 'instructions:u,cycles:u', '-o', str(counter),
@@ -167,7 +177,7 @@ def measure(root, names, thp_off):
                 print(f'{name}/{trial}/{arm}: {stats}', flush=True)
                 if arm == 'main':
                     # Identical binary control, interleaved with each A/B pair.
-                    prefix = root/'measure/trials'/f'{name}.{trial}.noise'
+                    prefix = root/'measure'/trials_dir/f'{name}.{trial}.noise'
                     noise_counter = Path(str(prefix)+'.stat')
                     control = run(['perf', 'stat', '-x', ';', '-e', 'instructions:u', '-o', str(noise_counter), '/usr/bin/time', '-f', '%M', '-o', str(Path(str(prefix)+'.rss')), *cmd],
                                   cwd, env, prefix)
