@@ -1,0 +1,1 @@
+Add recurring Perry CLI performance measurements with pinned tak and Valgrind versions, caching CI dependencies and storing reports against their exact commits to identify instruction-count change points in workflow history.

@@ -206,3 +206,6 @@ Variable inspection in a debugger requires an explicit local override, such as
 `CARGO_PROFILE_DEV_DEBUG=2 make build-dev`. Production stripping is unchanged.
 
 The policy is checked by `python3 scripts/check_dev_debug.py` in PR lint.
+
+For dedicated Linux agent hosts, use [compressed ZFS build storage](build-storage.md)
+and `make build-agent` to check storage before building.

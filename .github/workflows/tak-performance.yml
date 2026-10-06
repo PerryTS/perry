@@ -1,0 +1,175 @@
+name: tak Performance Report
+
+# Report-only adoption of tak's CLI measurements. Wall time is never a CI gate;
+# Linux/Valgrind instruction counts may be considered for a ratchet after a
+# stable history exists. This is separate from benchmark.yml's public
+# Node/Bun artifact and its macOS release regression gate.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+  schedule:
+    - cron: '30 4 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tak-performance-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+
+      - uses: ./.github/actions/setup-llvm22
+
+      - name: Cache cargo and Perry build
+        uses: ./.github/actions/perry/actions/cache # v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-tak-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+
+      - name: Cache pinned tak binary
+        id: tak-cache
+        uses: ./.github/actions/perry/actions/cache # v6
+        with:
+          path: ~/.cargo/bin/tak
+          key: tak-ubuntu-24.04-x64-cli-0.0.14
+
+      - name: Install Valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y 'valgrind=1:3.22.0-0ubuntu3'
+          valgrind --version | grep -F 'valgrind-3.22.0'
+
+      - name: Install tak
+        if: steps.tak-cache.outputs.cache-hit != 'true'
+        run: cargo install tak-cli@0.0.14 --locked
+
+      - name: Build Perry
+        run: |
+          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          test -s target/release/perry
+          test -s target/release/libperry_runtime.a
+          test -s target/release/libperry_stdlib.a
+
+      - name: Record tak CLI report
+        run: |
+          mkdir -p .tak-results
+          set +e
+          tak run --no-progress --record --export-json .tak-results/tak-cli.json \
+            > .tak-results/summary.txt 2>&1
+          status=$?
+          set -e
+          {
+            echo '## Perry CLI performance (tak)'
+            echo
+            echo 'Report-only: wall-clock samples are informational. Instruction counts are retained for review; no regression threshold is applied yet.'
+            echo
+            echo '```text'
+            cat .tak-results/summary.txt
+            echo '```'
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          tak artifact export --output .tak-results/tak-measurement.json
+          exit "$status"
+
+      - name: Include tak binary for history publisher
+        if: always() && hashFiles('.tak-results/tak-measurement.json') != ''
+        run: cp "$(command -v tak)" .tak-results/tak
+
+      - name: Upload tak report
+        if: always() && hashFiles('.tak-results/tak-measurement.json') != ''
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
+        with:
+          name: tak-performance-${{ github.sha }}
+          path: .tak-results/
+          if-no-files-found: warn
+          retention-days: 90
+
+  publish:
+    needs: report
+    if: always() && needs.report.result == 'success' && (github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/v'))
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+
+      - name: Download measurement artifact
+        uses: ./.github/actions/perry/actions/download-artifact # v8
+        with:
+          name: tak-performance-${{ github.sha }}
+          path: .tak-results
+
+      - name: Restore tak binary
+        run: |
+          install -m 0755 .tak-results/tak "$RUNNER_TEMP/tak"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Publish measurements and identify regression commits
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tak artifact publish .tak-results/tak-measurement.json --expect "$GITHUB_SHA"
+          tak log --limit 10 > .tak-results/history.txt 2>&1
+          tak detect --no-gate --allow-empty > .tak-results/detect.txt 2>&1
+          {
+            echo '## Perry performance history by commit (tak)'
+            echo
+            cat .tak-results/history.txt
+            echo
+            echo '## Instruction-count steps and introducing commits'
+            echo
+            cat .tak-results/detect.txt
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload commit history and detected steps
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact # v7
+        with:
+          name: tak-performance-history-${{ github.sha }}
+          path: |
+            .tak-results/history.txt
+            .tak-results/detect.txt
+          if-no-files-found: warn
+          retention-days: 90

@@ -1,0 +1,26 @@
+# Perry CLI startup and representative offline commands. These are report-only
+# until Linux instruction-count history has been collected and reviewed.
+# Commands run against the repository checkout with no network access.
+
+[runner]
+class = "gha-ubuntu-24.04-x64-rust-nightly-2026-10-04-tak-0.0.14-valgrind-3.22.0-0ubuntu3"
+
+[bench.version]
+cmd = ["./target/release/perry", "--version"]
+runs = 10
+warmup = 2
+
+[bench.help]
+cmd = ["./target/release/perry", "--help"]
+runs = 10
+warmup = 2
+
+[bench.compile]
+cmd = ["./target/release/perry", "benchmarks/app-patterns/kernels/json_parse_1mb.ts", "-o", "/tmp/perry-tak-json-parse"]
+runs = 5
+warmup = 1
+
+[bench.compile-hir]
+cmd = ["./target/release/perry", "check", "benchmarks/app-patterns/kernels/object_deep_clone.ts"]
+runs = 5
+warmup = 1

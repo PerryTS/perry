@@ -92,6 +92,22 @@ impl ObjectKeys {
     #[inline]
     pub(crate) unsafe fn get(self, index: u32) -> JSValue {
         debug_assert!(index < self.count, "key {index} of {}", self.count);
-        crate::array::js_array_get(self.arr, index)
+        // This list is shape storage, never a JS-facing array. Resolve the
+        // backing/front once; no element getter, exotic probe or descriptor
+        // lookup can affect an internal dense key slot.
+        let (slots, len) = self.dense_slots();
+        if index as usize >= len {
+            return JSValue::undefined();
+        }
+        let bits = (*slots.add(index as usize)).to_bits();
+        if bits == crate::value::TAG_HOLE {
+            JSValue::undefined()
+        } else {
+            JSValue::from_bits(bits)
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "metadata_12015_tests.rs"]
+mod metadata_12015_tests;
