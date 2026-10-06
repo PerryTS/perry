@@ -873,6 +873,9 @@ mod tests {
         }
         let record = (cache[SITE_WORD] as u64 & crate::value::POINTER_MASK) as usize as *mut Site;
         let data = Walk { slot: Some(0), ..w };
+        // Point the cursor at the shared way: reclaimed empties must take
+        // priority, even when ordinary rotation would evict the proof.
+        unsafe { (*record).next &= !CURSOR_MASK };
         let mut fillers = Vec::new();
         for i in 1..WAYS {
             let cid = CID + i as u32;
