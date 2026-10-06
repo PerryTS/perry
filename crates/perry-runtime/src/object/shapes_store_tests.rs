@@ -764,3 +764,35 @@ fn a_dictionary_band_id_does_not_grow_the_ordinary_directory() {
     assert_eq!(slab.ids(), vec![ordinary, dict]);
     assert!(slab.remove(dict).is_some() && slab.record_ptr(dict).is_none());
 }
+
+#[test]
+fn weak_collection_summary_agrees_with_shape_brands() {
+    for brand in [
+        17,
+        crate::weakref::CLASS_ID_WEAKMAP as u64,
+        crate::weakref::CLASS_ID_WEAKSET as u64,
+    ] {
+        for kind in [
+            ShapeObjectKind::Ordinary,
+            ShapeObjectKind::Dictionary,
+            ShapeObjectKind::Class,
+        ] {
+            let mut record =
+                ShapeRecord::new(0, 0, 0, 0, kind, 0).with_special_facts(0, &[], &[brand]);
+            let expected = if brand == 17 {
+                None
+            } else {
+                Some(brand as u32)
+            };
+            assert_eq!(record.weak_collection_brand(), expected);
+            record.note_rollback_parent(SHAPE_ID_BASE);
+            record.set_tracked_births(1);
+            record = record.with_summary(0xFF);
+            assert_eq!(record.weak_collection_brand(), expected);
+            unsafe {
+                record.release_extras();
+            }
+        }
+    }
+    assert_eq!(ShapeRecord::EMPTY.weak_collection_brand(), None);
+}

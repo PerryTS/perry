@@ -49,6 +49,10 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool>(
     // the trace skips (its class cannot change while it is traced). Range
     // descriptors are walked here directly rather than through a per-slot
     // dynamic callback.
+    if (*header).obj_type == GC_TYPE_WEAK_STORAGE {
+        crate::gc::ephemeron::discover(header);
+        return; // Neither word is an unconditional strong edge.
+    }
     let proxy_trace_active = super::full_trace::handle_trace_active();
     #[cfg(not(test))]
     let weak_holder = crate::weakref::is_weak_holder_header(header);

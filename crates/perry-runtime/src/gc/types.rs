@@ -138,7 +138,9 @@ pub const GC_TYPE_BUFFER_CRYPTO_KEY: u8 = 31;
 /// Process-lifetime symbols carry a readable leaf header even though their
 /// allocation is deliberately outside the collecting heap.
 pub const GC_TYPE_SYMBOL: u8 = 32;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_SYMBOL;
+/// Object-owned weak identity table; key/value pairs are conditional edges.
+pub const GC_TYPE_WEAK_STORAGE: u8 = 33;
+pub const GC_TYPE_MAX: u8 = GC_TYPE_WEAK_STORAGE;
 
 /// Is `obj_type` a `BufferHeader` cell of any flavor (Buffer, Uint8Array,
 /// ArrayBuffer, SharedArrayBuffer, DataView, KeyObject, CryptoKey)?
@@ -361,6 +363,7 @@ pub(crate) enum GcAllocationPolicy {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GcRewriteDescriptorKind {
+    WeakStorage,
     Box,
     Scope,
     Leaf,
@@ -454,6 +457,7 @@ pub(crate) enum GcRewriteHookKind {
     /// indexed by their pointer bits (identity) or pointee content (bigints),
     /// both of which go stale when the referenced allocation is evacuated.
     MapIndex,
+    WeakStorageIndex,
 }
 
 #[allow(dead_code)]
@@ -1016,6 +1020,21 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_WEAK_STORAGE,
+        "weak_storage",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::WeakStorage,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::WeakStorageIndex,
+        GcFinalizeHookKind::None,
+    )),
 ];
 
 /// One `GcTypeInfo` for every buffer-family flavor: the flavors differ only in
@@ -1106,6 +1125,9 @@ pub(crate) fn gc_type_rewrite_hook_kind(obj_type: u8) -> GcRewriteHookKind {
 pub(crate) fn run_gc_rewrite_hook(obj_type: u8, user_ptr: usize) {
     match gc_type_rewrite_hook_kind(obj_type) {
         GcRewriteHookKind::None => {}
+        GcRewriteHookKind::WeakStorageIndex => unsafe {
+            (*(user_ptr as *mut crate::weakref::storage::WeakStorage)).rebuild();
+        },
         GcRewriteHookKind::MapIndex => {
             crate::map::rebuild_map_ptr_index_for_gc(user_ptr as *mut crate::map::MapHeader);
         }
@@ -1279,7 +1301,8 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
                 return Err("closure rewrite descriptor must expose closure capture slots");
             }
         }
-        GcRewriteDescriptorKind::Box
+        GcRewriteDescriptorKind::WeakStorage
+        | GcRewriteDescriptorKind::Box
         | GcRewriteDescriptorKind::Scope
         | GcRewriteDescriptorKind::Buffer
         | GcRewriteDescriptorKind::MetaOnly

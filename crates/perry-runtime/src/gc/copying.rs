@@ -18,6 +18,7 @@ pub(super) struct CopyingNurseryPreflight {
     pub(super) pinned_reason: CopiedMinorFallbackReason,
     pub(super) worklist: Vec<*mut GcHeader>,
     pub(super) seen: crate::fast_hash::PtrHashSet<usize>,
+    pub(super) ephemerons: super::ephemeron::Ephemerons,
 }
 
 impl CopyingNurseryPreflight {
@@ -28,6 +29,7 @@ impl CopyingNurseryPreflight {
             pinned_reason,
             worklist: Vec::new(),
             seen: crate::fast_hash::new_ptr_hash_set(),
+            ephemerons: super::ephemeron::Ephemerons::default(),
         }
     }
 
@@ -106,17 +108,28 @@ impl CopyingNurseryPreflight {
 
     pub(super) unsafe fn drain(&mut self) {
         let mut i = 0usize;
-        while i < self.worklist.len() && self.fallback_reason.is_none() {
-            let header = self.worklist[i];
-            i += 1;
-            if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
-                continue;
+        loop {
+            while i < self.worklist.len() && self.fallback_reason.is_none() {
+                let header = self.worklist[i];
+                i += 1;
+                if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+                    continue;
+                }
+                self.scan_object_fields(header);
             }
-            self.scan_object_fields(header);
+            self.check_ephemerons();
+            if i == self.worklist.len() || self.fallback_reason.is_some() {
+                break;
+            }
         }
     }
 
     pub(super) unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
+        if (*header).obj_type == GC_TYPE_WEAK_STORAGE {
+            self.ephemerons
+                .add((header as *mut u8).add(GC_HEADER_SIZE).cast());
+            return;
+        }
         let mut weak_holder: Option<bool> = None;
         visit_gc_rewrite_slots(header, |slot| unsafe {
             // Weak-only reachability imposes no copy constraint: the
@@ -189,6 +202,7 @@ pub(super) struct CopyingNurseryCollector {
     /// to-space copies or non-moving objects, which don't move again within
     /// the cycle.
     pub(super) weak_slots: Vec<*mut u64>,
+    pub(super) ephemerons: super::ephemeron::Ephemerons,
     /// One-entry memo for [`CopyingNurseryCollector::mark_addr`]: the last
     /// address it classified successfully, and the address it returned.
     ///
@@ -286,6 +300,7 @@ impl CopyingNurseryCollector {
             survival: crate::gc::gc_diag_enabled()
                 .then(|| Box::new(super::survival_diag::SurvivalDiag::new())),
             weak_slots: Vec::new(),
+            ephemerons: super::ephemeron::Ephemerons::default(),
             memo_addr: 0,
             memo_result: 0,
         }
@@ -676,24 +691,28 @@ impl CopyingNurseryCollector {
 
     pub(super) unsafe fn drain(&mut self) {
         let mut i = 0usize;
-        while i < self.worklist.len() {
-            // The worklist is a list of COLD headers: on a promotion-heavy
-            // cycle the marking pass that filled it has since walked tens of
-            // MB, so every `(*header).gc_flags` read below is a DRAM round
-            // trip. The addresses are known `PREFETCH_DISTANCE` iterations
-            // ahead, so overlap the round trips instead of serialising them.
-            if let Some(&ahead) = self.worklist.get(i + super::prefetch::PREFETCH_DISTANCE) {
-                super::prefetch::prefetch_read(ahead as usize);
+        loop {
+            while i < self.worklist.len() {
+                if let Some(&ahead) = self.worklist.get(i + super::prefetch::PREFETCH_DISTANCE) {
+                    super::prefetch::prefetch_read(ahead as usize);
+                }
+                let header = self.worklist[i];
+                i += 1;
+                if let Some(d) = self.survival.as_mut() {
+                    d.begin_drain_entry(i - 1);
+                }
+                if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
+                    continue;
+                }
+                self.scan_object_fields(header);
             }
-            let header = self.worklist[i];
-            i += 1;
-            if let Some(d) = self.survival.as_mut() {
-                d.begin_drain_entry(i - 1);
+            let before = self.moved_headers.len() + self.marked_headers.len();
+            self.shade_ephemerons();
+            if i == self.worklist.len()
+                && before == self.moved_headers.len() + self.marked_headers.len()
+            {
+                break;
             }
-            if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
-                continue;
-            }
-            self.scan_object_fields(header);
         }
         if let Some(d) = self.survival.as_mut() {
             d.end_drain();
@@ -717,6 +736,10 @@ impl CopyingNurseryCollector {
     }
 
     pub(super) unsafe fn scan_object_fields(&mut self, header: *mut GcHeader) {
+        if (*header).obj_type == GC_TYPE_WEAK_STORAGE {
+            super::ephemeron::discover(header);
+            return; // Conditional tracing/repair is performed by the fixed point.
+        }
         // The common case, written out (#11549): see `gc/copying_object_scan.rs`.
         if self.scan_plain_object(header) {
             return;
@@ -1027,6 +1050,7 @@ impl CopiedMinorEligibility {
             }
             visit_ffi_mutable_registered_roots(&mut visitor);
         }
+        checker.check_dirty_roots();
         unsafe {
             checker.drain();
         }
@@ -1543,6 +1567,7 @@ pub(super) fn run_copied_minor_attempt(
     // same registry, with its existing valid-pointer set for liveness.
     unsafe {
         collector.repair_weak_slots();
+        collector.finish_ephemerons();
     }
     if crate::weakref::weak_target_holders_allocated() {
         let phase_start = trace_phase_start(trace);

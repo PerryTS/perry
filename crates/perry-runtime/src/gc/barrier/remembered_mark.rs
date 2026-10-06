@@ -51,6 +51,16 @@ impl DirtyHeaderSlotScan {
         stats.valid_roots += 1;
         stats.dirty_objects_scanned += 1;
 
+        if (*header).obj_type == GC_TYPE_WEAK_STORAGE {
+            crate::gc::ephemeron::discover(header);
+            return Some(Self {
+                header,
+                user_ptr,
+                work: Vec::new(),
+                cursor: 0,
+                changed: false,
+            });
+        }
         let mut work = Vec::new();
         visit_gc_rewrite_slot_descriptors(header, |descriptor| match descriptor {
             GcMutableSlotDescriptor::Slot(slot) => {

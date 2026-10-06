@@ -195,6 +195,7 @@ pub(super) unsafe fn scan_dirty_object_slots(
         let addr = slot as usize;
         addr >= body_start && addr < body_end
     };
+    super::ephemeron::discover(header);
     let mut complete = true;
     visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
         match descriptor {

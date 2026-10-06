@@ -132,7 +132,9 @@ fn park_inside_weak_processing(
     run_cycle_until_phase(state, GcCyclePhase::AtomicFinalize);
     js_shadow_slot_set(witness_slot, ptr_bits(witness));
     let mut steps = 0usize;
-    while state.atomic_finalize_subphase_for_tests() != Some("weak_processing") {
+    while state.atomic_finalize_subphase_for_tests() != Some("weak_processing")
+        || crate::weakref::test_support::full_weak_processing_work_units() < 1
+    {
         state.step(GcWorkBudget::bounded(1));
         steps += 1;
         assert!(steps < 200_000, "weak processing was never reached");
@@ -275,12 +277,21 @@ fn weak_read_after_final_remark_survives_budgeted_minor_cycle() {
 /// reads its entry. Both reads must shade, or the pending weak slice tombstones
 /// the entry and the sweep takes the key the mutator is holding.
 ///
-/// 8 entries + 8 key WeakRefs = 16 holders and a budget of 1, so at most one
+/// Eight key WeakRefs and a budget of 1, so at most one
 /// holder is decided when the window opens and at least seven key/entry pairs
 /// are intact. The test scans for one rather than assuming a registry iteration
 /// order, so it can never silently skip itself.
 #[test]
 fn weak_map_read_after_final_remark_survives_budgeted_cycle() {
+    weak_map_read_after_remark(false);
+}
+
+#[test]
+fn weak_map_has_after_final_remark_enables_conditional_value() {
+    weak_map_read_after_remark(true);
+}
+
+fn weak_map_read_after_remark(key_only: bool) {
     const ENTRIES: u32 = 8;
     const MAP_SLOT: u32 = ENTRIES;
     const WITNESS_SLOT: u32 = ENTRIES + 1;
@@ -322,15 +333,31 @@ fn weak_map_read_after_final_remark_survives_budgeted_cycle() {
         if key_bits == crate::value::TAG_UNDEFINED {
             continue;
         }
-        let value_bits =
-            crate::weakref::js_weakmap_get(map_value, f64::from_bits(key_bits)).to_bits();
+        let value_bits = if key_only {
+            assert_eq!(
+                crate::weakref::js_weakmap_has(map_value, f64::from_bits(key_bits)).to_bits(),
+                crate::value::TAG_TRUE
+            );
+            // Inspect without a read barrier: only the key was recovered.
+            let pairs = crate::weakref::weak_collection_entries(
+                (map_value.to_bits() & POINTER_MASK) as *const crate::ObjectHeader,
+            );
+            pairs
+                .into_iter()
+                .find(|(k, _)| k.to_bits() == key_bits)
+                .unwrap()
+                .1
+                .to_bits()
+        } else {
+            crate::weakref::js_weakmap_get(map_value, f64::from_bits(key_bits)).to_bits()
+        };
         if value_bits != crate::value::TAG_UNDEFINED {
             acquired = Some((key_bits, value_bits));
             break;
         }
     }
     let (key_bits, value_bits) = acquired.expect(
-        "with 16 holders and a one-unit budget at least seven key/entry pairs \
+        "with eight key holders and a one-unit budget at least seven key/entry pairs \
          must still be pending — the race was not set up",
     );
     let key_addr = (key_bits & POINTER_MASK) as usize;
@@ -339,6 +366,16 @@ fn weak_map_read_after_final_remark_survives_budgeted_cycle() {
         crate::weakref::test_support::weak_read_barrier_shades() >= 1,
         "SUBJECT-LIVE CHECK: the weak reads must have shaded at least one white value"
     );
+
+    if key_only {
+        let value_header =
+            unsafe { header_from_user_ptr((value_bits & POINTER_MASK) as usize as *const u8) };
+        assert_eq!(
+            unsafe { (*value_header).gc_flags } & GC_FLAG_MARKED,
+            0,
+            "the value must still be white: no value read barrier enabled it"
+        );
+    }
 
     run_cycle_in_single_unit_steps(&mut state);
     let _ = state.take_outcome().expect("cycle should complete");
@@ -358,6 +395,65 @@ fn weak_map_read_after_final_remark_survives_budgeted_cycle() {
         "#7900: a WeakMap entry the mutator read in the window was tombstoned"
     );
     crate::object::test_clear_overflow_fields_root();
+}
+
+#[test]
+fn weak_map_growth_after_remark_does_not_shade_copied_weak_keys() {
+    const ENTRIES: u32 = 8;
+    let _guard = CopyingNurseryTestGuard::new(ENTRIES + 3);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::weakref::test_support::clear_weak_holders();
+    let map = crate::weakref::js_weakmap_new();
+    js_shadow_slot_set(ENTRIES, ptr_bits(map as usize));
+    for slot in 0..ENTRIES {
+        let key = crate::object::js_object_alloc(0, 0);
+        let key_bits = ptr_bits(key as usize);
+        crate::weakref::js_weakmap_set(
+            f64::from_bits(js_shadow_slot_get(ENTRIES)),
+            f64::from_bits(key_bits),
+            f64::from_bits(key_bits),
+        );
+        let reference = crate::weakref::js_weakref_new(f64::from_bits(key_bits));
+        js_shadow_slot_set(slot, ptr_bits(reference as usize));
+    }
+    let witness = alloc_remark_witness();
+    age_out_of_block_persist_window();
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::ArenaBytes));
+    state.set_progress_kind(GcProgressKind::NormalIncremental);
+    park_inside_weak_processing(&mut state, ENTRIES, witness, ENTRIES + 1);
+    let map = f64::from_bits(js_shadow_slot_get(ENTRIES));
+    let object = (map.to_bits() & POINTER_MASK) as *const crate::ObjectHeader;
+    let before = unsafe { crate::weakref::storage::owned_storage(object) };
+    let white = crate::weakref::weak_collection_entries(object)
+        .into_iter()
+        .map(|(key, _)| (key.to_bits() & POINTER_MASK) as usize)
+        .find(|&key| unsafe {
+            (*header_from_user_ptr(key as *const u8)).gc_flags & GC_FLAG_MARKED == 0
+        })
+        .expect("a copied weak-only key must actually be white");
+    let key = crate::object::js_object_alloc(0, 0);
+    js_shadow_slot_set(ENTRIES + 2, ptr_bits(key as usize));
+    crate::weakref::js_weakmap_set(map, f64::from_bits(js_shadow_slot_get(ENTRIES + 2)), 17.0);
+    assert_ne!(
+        unsafe { crate::weakref::storage::owned_storage(object) },
+        before
+    );
+    assert_eq!(
+        unsafe { (*header_from_user_ptr(white as *const u8)).gc_flags } & GC_FLAG_MARKED,
+        0,
+        "internal growth must not turn a conditional backedge into a strong store"
+    );
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("cycle should complete");
+    assert_eq!(
+        crate::weakref::weak_collection_entries(object).len(),
+        1,
+        "the newly published black table must participate in weak clearing"
+    );
+    assert_eq!(
+        crate::weakref::js_weakmap_get(map, f64::from_bits(js_shadow_slot_get(ENTRIES + 2))),
+        17.0
+    );
 }
 
 /// Contract test for the acceptance criterion "no mutator window exists after
@@ -393,4 +489,95 @@ fn weak_read_barrier_is_inert_outside_a_cycle() {
         0,
         "weak read outside a cycle must leave the target unmarked"
     );
+}
+
+#[test]
+fn late_weakmap_key_read_revives_a_previously_skipped_weakref_holder() {
+    let _guard = CopyingNurseryTestGuard::new(4);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::weakref::test_support::clear_weak_holders();
+    let map = crate::weakref::js_weakmap_new();
+    js_shadow_slot_set(0, ptr_bits(map as usize));
+    let key = crate::object::js_object_alloc(0, 0);
+    let target = crate::object::js_object_alloc(0, 0);
+    let value = crate::weakref::js_weakref_new(f64::from_bits(ptr_bits(target as usize)));
+    let value_addr = value as usize;
+    crate::weakref::js_weakmap_set(
+        f64::from_bits(js_shadow_slot_get(0)),
+        f64::from_bits(ptr_bits(key as usize)),
+        f64::from_bits(ptr_bits(value_addr)),
+    );
+    let key_ref = crate::weakref::js_weakref_new(f64::from_bits(ptr_bits(key as usize)));
+    js_shadow_slot_set(1, ptr_bits(key_ref as usize));
+    let witness = alloc_remark_witness();
+    age_out_of_block_persist_window();
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::ArenaBytes));
+    state.set_progress_kind(GcProgressKind::NormalIncremental);
+    run_cycle_until_phase(&mut state, GcCyclePhase::AtomicFinalize);
+    state.set_weak_holder_order_for_tests(vec![value_addr, key_ref as usize]);
+    park_inside_weak_processing(&mut state, 2, witness, 2);
+    assert_eq!(
+        unsafe { (*header_from_user_ptr(value.cast())).gc_flags } & GC_FLAG_MARKED,
+        0,
+        "the conditional WeakRef holder must be white when first considered"
+    );
+    let key = crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(1)));
+    assert_ne!(key.to_bits(), crate::value::TAG_UNDEFINED);
+    let recovered = crate::weakref::js_weakmap_get(f64::from_bits(js_shadow_slot_get(0)), key);
+    assert_eq!(recovered.to_bits(), ptr_bits(value_addr));
+    assert_ne!(
+        unsafe { (*header_from_user_ptr(value.cast())).gc_flags } & GC_FLAG_MARKED,
+        0,
+        "the late read must revive the previously white holder"
+    );
+    js_shadow_slot_set(3, recovered.to_bits());
+    run_cycle_in_single_unit_steps(&mut state);
+    let _ = state.take_outcome().expect("completed collection");
+    assert_eq!(
+        crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(3))).to_bits(),
+        crate::value::TAG_UNDEFINED,
+        "a revived WeakRef holder must clear its dead target before sweep"
+    );
+}
+
+#[test]
+fn weakmap_conditional_entry_work_stays_bounded_at_one_unit() {
+    const KEYS: u32 = 128;
+    let _guard = CopyingNurseryTestGuard::new(KEYS + 1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    crate::weakref::test_support::clear_weak_holders();
+    let map = crate::weakref::js_weakmap_new();
+    js_shadow_slot_set(0, ptr_bits(map as usize));
+    for slot in 1..=KEYS {
+        let key = crate::object::js_object_alloc(0, 0);
+        js_shadow_slot_set(slot, ptr_bits(key as usize));
+        let value = crate::object::js_object_alloc(0, 0);
+        crate::weakref::js_weakmap_set(
+            f64::from_bits(js_shadow_slot_get(0)),
+            f64::from_bits(js_shadow_slot_get(slot)),
+            f64::from_bits(ptr_bits(value as usize)),
+        );
+    }
+    let mut state = GcCycleState::new_full(trace_snapshot(GcTriggerKind::ArenaBytes));
+    state.set_progress_kind(GcProgressKind::NormalIncremental);
+    let mut steps = 0;
+    while state.phase() != GcCyclePhase::Complete {
+        state.step(GcWorkBudget::bounded(1));
+        steps += 1;
+        assert!(
+            steps < 10_000,
+            "one-unit ephemeron rounds must make linear progress"
+        );
+    }
+    let _ = state.take_outcome().expect("completed collection");
+    for slot in 1..=KEYS {
+        assert_ne!(
+            crate::weakref::js_weakmap_get(
+                f64::from_bits(js_shadow_slot_get(0)),
+                f64::from_bits(js_shadow_slot_get(slot))
+            )
+            .to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+    }
 }
