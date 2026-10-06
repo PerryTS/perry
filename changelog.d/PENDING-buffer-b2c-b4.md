@@ -15,7 +15,7 @@ The exact closed census rows are in `scripts/buffer_b4_census_closed.tsv`: 73 ro
 | Contract | Witness and sabotage | Result |
 |---|---|---|
 | T1/T2: moving collection; borrow allocation forbidden | B1 byte tests; seven forced-GC byte tests | PASS; B1 child witnesses abort on violation |
-| T3: detach during operation | Deflate data listener transfers the input owner; native last-pin lifetime witness with `detach_mark` sabotage | Node parity PASS on main; final head/ASan pending |
+| T3: detach during operation | Deflate data listener transfers the input owner; native last-pin lifetime witness with B1 `detach_free` and B4 `detach_mark` sabotages | Node parity PASS on main; final head/ASan pending |
 | T4: worker transfer | 32 MiB transfer preserves backing pointer, sender length zero, receiver contents and backing count; `transfer_copy` | PASS / RED |
 | T5: large concat and nested views | 300 × 18,000 bytes; only the nested view roots its owner across minor and full GC; `view_edge` | PASS / RED; placement counter belongs to B3 |
 | T6: owner access checks | u8, i32 and DataView share writes; shrink/OOB/grow/detach; `owner_check` | PASS / RED |
@@ -24,6 +24,6 @@ The exact closed census rows are in `scripts/buffer_b4_census_closed.tsv`: 73 ro
 | T9: whole-module invariant | Source gate; owner-edge witness; header and root-holder gates | Ratchet PASS, nine source sabotages RED; address-table-free invariant pending B4c |
 | Symbol header and u32 admission | Three persistent-symbol factories; current-header u32 admission; `symbol_header`, `u32_admission` | PASS / RED |
 
-Verification baseline: origin/main `ba3d8c0b80df9805bdc0cf7c47d9f3887b9c0a8c`; refreshed/rebased B1 `631976d1784f96c9b7897fe1bc6e591fc03856e2`. Production sources were unchanged by that B1 refresh. Final verification after routing symbol pins through the shared setter is pending. The two stdlib thread-exit failures reproduce on both arms; no new failures were observed in the earlier complete 54-binary comparison. The full lint tier is not claimed: the file-size gate has three unchanged main violations (`dynamic_dispatch.rs`, `delete_rest.rs`, `method_site.rs`).
+Verification baseline: origin/main `2fb54a09942bf26766095995f8a5dc74d10b18f6`; refreshed/rebased B1 `43cb95a83bec59c463461ff0d6d1ffca407c888a`. Production sources were unchanged by that B1 refresh. The newer main changes RegExp, exception snapshots and getter memos, so the final build/test/output/performance comparison is being rerun against that exact snapshot. Final verification after routing symbol pins through the shared setter is pending. The two stdlib thread-exit failures reproduce on both arms; no new failures were observed in the earlier complete 54-binary comparison. The full lint tier is not claimed: the file-size gate has three unchanged main violations (`dynamic_dispatch.rs`, `delete_rest.rs`, `method_site.rs`).
 
 Final program/kernel measurements: pending. The additional eight bytes per small Buffer have not been introduced by this compatible subset; their RSS effect is unmeasured and belongs to the unified-layout change. Persistent symbols gained eight bytes each.
