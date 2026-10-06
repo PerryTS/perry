@@ -9,7 +9,7 @@ use crate::types::{DOUBLE, I32, I8, PTR};
 
 /// Return the HIR enum variant name for an expression. Uses Debug
 /// formatting and extracts the leading identifier so we get the actual
-/// variant name (e.g. `"ArrayMap"`, `"BufferAlloc"`, `"RegExpExec"`)
+/// variant name (e.g. `"ArrayMap"`, `"BufferAlloc"`, `"StringMatch"`)
 /// without having to maintain an exhaustive match against ~200 HIR
 /// variants. The result is used in "X not yet supported" error messages
 /// to tell the user exactly which HIR variant the LLVM backend is

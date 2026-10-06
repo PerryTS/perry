@@ -1,18 +1,4 @@
-//! Batch-3 functional-correctness fix (semver / minimatch source-compile):
-//! `receiver.test(arg)` on an `Any`/`Unknown`/untyped local must NOT be
-//! lowered to the RegExp `Expr::RegExpTest` codegen fast path. `.test()` is
-//! also a common INSTANCE method name (semver's `Comparator.test` /
-//! `Range.test`), and an imported class instance is typed `Any` at the call
-//! site. The old heuristic (`Type::Any | Type::Unknown | unwrap_or(true)`)
-//! mis-lowered `comparator.test(v)` to `js_regexp_test(comparator-as-string)`,
-//! silently returning a bogus boolean and never running the real method body —
-//! so `semver.satisfies(...)` always returned `false`.
-//!
-//! The runtime already routes a genuine RegExp receiver's `.test()`/`.exec()`
-//! through dynamic method dispatch (`dispatch_regex_receiver_method`, #1731),
-//! so falling through to a normal method call is correct for BOTH a regex
-//! value and a class instance. A regex *literal* receiver still takes the fast
-//! path.
+//! RegExp and user instances share ordinary method calls.
 
 use perry_diagnostics::SourceCache;
 use perry_hir::{lower_module, Module};
@@ -25,56 +11,43 @@ fn lower(src: &str) -> Module {
     lower_module(&parsed.module, "test", "/tmp/instance_test_method.ts").expect("lower failed")
 }
 
-/// True if any function/init body in the module debug-prints a `RegExpTest`
-/// node. Using the Debug rendering keeps the test independent of the internal
-/// walker API surface.
-fn module_has_regexp_test(module: &Module) -> bool {
-    format!("{:#?}", module).contains("RegExpTest")
-}
-
-#[test]
-fn untyped_receiver_test_call_is_not_regexp_test() {
-    // `c` is an untyped local (the `as any` mirror of an imported class
-    // instance). `c.test(10)` must lower to a normal method call, not a
-    // RegExpTest fast path.
-    let src = r#"
-        const c: any = makeComparator();
-        const r = c.test(10);
-    "#;
-    let module = lower(src);
-    assert!(
-        !module_has_regexp_test(&module),
-        "`c.test(10)` on an untyped local must NOT lower to RegExpTest"
-    );
-}
-
-#[test]
-fn member_receiver_test_call_is_not_regexp_test() {
-    // A member-access receiver (`this.set[i].test(f)` shape) must also fall
-    // through to dynamic dispatch.
-    let src = r#"
-        function f(obj: any, file: any) {
-            return obj.matcher.test(file);
+fn module_has_method_call(module: &Module, name: &str) -> bool {
+    fn has(expr: &perry_hir::Expr, name: &str) -> bool {
+        if let perry_hir::Expr::Call { callee, .. } = expr {
+            if matches!(callee.as_ref(), perry_hir::Expr::PropertyGet { property, .. } if property == name)
+            {
+                return true;
+            }
         }
-    "#;
-    let module = lower(src);
-    assert!(
-        !module_has_regexp_test(&module),
-        "`obj.matcher.test(file)` must NOT lower to RegExpTest"
-    );
+        let mut found = false;
+        perry_hir::walker::walk_expr_children(expr, &mut |child| found |= has(child, name));
+        found
+    }
+    let mut found = false;
+    for stmt in &module.init {
+        found |= perry_hir::walker::stmt_any_expr(stmt, &mut |expr| has(expr, name));
+    }
+    found
 }
 
 #[test]
-fn regex_literal_receiver_test_call_still_uses_fast_path() {
-    // A regex *literal* receiver has positive evidence and keeps the fast path.
-    let src = r#"
-        const hit = /foo/.test("foobar");
-    "#;
-    let module = lower(src);
-    assert!(
-        module_has_regexp_test(&module),
-        "`/foo/.test(...)` (regex literal) should still lower to RegExpTest"
-    );
+fn every_test_receiver_uses_an_ordinary_method_call() {
+    for source in [
+        "const c: any = makeComparator(); const hit = c.test(10);",
+        "const obj: any = getObject(); const hit = obj.matcher.test('file');",
+        "const hit = /foo/.test('foobar');",
+        "const r: RegExp = /foo/; const hit = r.test('foobar');",
+    ] {
+        assert!(module_has_method_call(&lower(source), "test"), "{source}");
+    }
+}
+
+#[test]
+fn typed_exec_uses_an_ordinary_method_call() {
+    assert!(module_has_method_call(
+        &lower("const r: RegExp = /foo/; const match = r.exec('foo');"),
+        "exec"
+    ));
 }
 
 /// True if any body debug-prints a `StringMatch`/`StringMatchAll` node.

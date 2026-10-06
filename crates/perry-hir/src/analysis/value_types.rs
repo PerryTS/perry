@@ -1032,8 +1032,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         | Expr::BufferWrite { .. }
         | Expr::BufferIndexGet { .. }
         | Expr::Uint8ArrayLength(_)
-        | Expr::Uint8ArrayGet { .. }
-        | Expr::RegExpLastIndex(_) => Type::Number,
+        | Expr::Uint8ArrayGet { .. } => Type::Number,
 
         Expr::ProcessStdinIsTTY
         | Expr::ProcessStdoutIsTTY
@@ -1059,7 +1058,6 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         | Expr::BufferEquals { .. }
         | Expr::FinalizationRegistryUnregister { .. }
         | Expr::IterResultGetDone
-        | Expr::RegExpTest { .. }
         | Expr::Delete(_)
         | Expr::ProxyHas { .. }
         | Expr::ProxyDelete { .. }
@@ -1131,10 +1129,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         | Expr::CryptoSha256(_)
         | Expr::CryptoMd5(_)
         | Expr::RegExpEscape(_)
-        | Expr::RegExpSource(_)
-        | Expr::RegExpFlags(_)
         | Expr::RegExpExecIndex
-        | Expr::RegExpReplaceFn { .. }
         | Expr::StringReplace { .. }
         | Expr::ErrorMessage(_)
         | Expr::JsonStringify(_)
@@ -1321,7 +1316,6 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         | Expr::FsMkdirSync(_)
         | Expr::FsUnlinkSync(_)
         | Expr::FsAppendFileSync(_, _)
-        | Expr::RegExpSetLastIndex { .. }
         | Expr::FinalizationRegistryRegister { .. }
         | Expr::UrlSearchParamsSet { .. }
         | Expr::UrlSearchParamsAppend { .. }

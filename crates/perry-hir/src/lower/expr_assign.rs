@@ -1136,31 +1136,6 @@ fn lower_assignment_target(
                 }
             }
 
-            // regex.lastIndex = N → RegExpSetLastIndex
-            if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-                if prop_ident.sym.as_ref() == "lastIndex" {
-                    let is_regex_obj = match member.obj.as_ref() {
-                        ast::Expr::Lit(ast::Lit::Regex(_)) => true,
-                        ast::Expr::Ident(ident) => ctx
-                            .lookup_local_type(ident.sym.as_ref())
-                            .map(|ty| matches!(ty, Type::Named(n) if n == "RegExp"))
-                            .unwrap_or(false),
-                        _ => false,
-                    };
-                    if is_regex_obj {
-                        let regex_expr = lower_expr(ctx, &member.obj)?;
-                        if matches!(&regex_expr, Expr::RegExp { .. })
-                            || matches!(&regex_expr, Expr::LocalGet(_))
-                        {
-                            return Ok(Expr::RegExpSetLastIndex {
-                                regex: Box::new(regex_expr),
-                                value,
-                            });
-                        }
-                    }
-                }
-            }
-
             let object_expr = lower_expr(ctx, &member.obj)?;
             // #5437: `PutValueSet` / `PropertySet` carry the object expression
             // in BOTH `target` and `receiver`, and codegen evaluates both. When

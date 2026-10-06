@@ -216,12 +216,6 @@ impl SH for Expr {
             Expr::SymbolDescription(e) => { tag(h, 123); e.as_ref().hash(h); }
             Expr::SymbolToString(e) => { tag(h, 124); e.as_ref().hash(h); }
             Expr::FileURLToPath(e) => { tag(h, 125); e.as_ref().hash(h); }
-            Expr::RegExpExec { regex, string } => { tag(h, 126); regex.as_ref().hash(h); string.as_ref().hash(h); }
-            Expr::RegExpSource(e) => { tag(h, 127); e.as_ref().hash(h); }
-            Expr::RegExpFlags(e) => { tag(h, 128); e.as_ref().hash(h); }
-            Expr::RegExpLastIndex(e) => { tag(h, 129); e.as_ref().hash(h); }
-            Expr::RegExpSetLastIndex { regex, value } => { tag(h, 130); regex.as_ref().hash(h); value.as_ref().hash(h); }
-            Expr::RegExpReplaceFn { string, regex, callback, } => { tag(h, 131); string.as_ref().hash(h); regex.as_ref().hash(h); callback.as_ref().hash(h); }
             Expr::RegExpExecIndex => tag(h, 132),
             Expr::RegExpExecGroups => tag(h, 133),
             Expr::JsonParse(e) => { tag(h, 134); e.as_ref().hash(h); }
@@ -557,7 +551,6 @@ impl SH for Expr {
             Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, captures_new_target, enclosing_class, is_arrow, is_async, is_generator, is_strict, } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); captures_new_target.hash(h); enclosing_class.hash(h); is_arrow.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
             Expr::RegExp { pattern, flags } => { tag(h, 383); pattern.hash(h); flags.hash(h); }
             Expr::RegExpDynamic { pattern, flags, is_call } => { tag(h, 475); pattern.as_ref().hash(h); if let Some(f_box) = flags { tag(h, 476); f_box.as_ref().hash(h); } else { tag(h, 477); } tag(h, if *is_call { 478 } else { 479 }); }
-            Expr::RegExpTest { regex, string } => { tag(h, 384); regex.as_ref().hash(h); string.as_ref().hash(h); }
             Expr::StringMatch { string, regex } => { tag(h, 385); string.as_ref().hash(h); regex.as_ref().hash(h); }
             Expr::StringMatchAll { string, regex } => { tag(h, 386); string.as_ref().hash(h); regex.as_ref().hash(h); }
             Expr::StringReplace { string, pattern, replacement, } => { tag(h, 387); string.as_ref().hash(h); pattern.as_ref().hash(h); replacement.as_ref().hash(h); }

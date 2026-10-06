@@ -947,12 +947,6 @@ impl JsEmitter {
             Expr::RegExp { pattern, flags } => {
                 let _ = write!(self.output, "/{}/{}", pattern, flags);
             }
-            Expr::RegExpTest { regex, string } => {
-                self.emit_expr(regex);
-                self.output.push_str(".test(");
-                self.emit_expr(string);
-                self.output.push(')');
-            }
             Expr::StringMatch { string, regex } => {
                 self.emit_expr(string);
                 self.output.push_str(".match(");
@@ -1504,41 +1498,6 @@ impl JsEmitter {
                 self.output.push_str(".toString()");
             }
             // RegExp stubs
-            Expr::RegExpExec { regex, string } => {
-                self.emit_expr(regex);
-                self.output.push_str(".exec(");
-                self.emit_expr(string);
-                self.output.push(')');
-            }
-            Expr::RegExpSource(re) => {
-                self.emit_expr(re);
-                self.output.push_str(".source");
-            }
-            Expr::RegExpFlags(re) => {
-                self.emit_expr(re);
-                self.output.push_str(".flags");
-            }
-            Expr::RegExpLastIndex(re) => {
-                self.emit_expr(re);
-                self.output.push_str(".lastIndex");
-            }
-            Expr::RegExpSetLastIndex { regex, value } => {
-                self.emit_expr(regex);
-                self.output.push_str(".lastIndex = ");
-                self.emit_expr(value);
-            }
-            Expr::RegExpReplaceFn {
-                string,
-                regex,
-                callback,
-            } => {
-                self.emit_expr(string);
-                self.output.push_str(".replace(");
-                self.emit_expr(regex);
-                self.output.push_str(", ");
-                self.emit_expr(callback);
-                self.output.push(')');
-            }
             Expr::RegExpExecIndex => {
                 self.output.push_str("__perry_exec_index");
             }

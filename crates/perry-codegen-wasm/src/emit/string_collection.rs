@@ -638,10 +638,6 @@ impl WasmModuleEmitter {
                 self.intern_string(pattern);
                 self.intern_string(flags);
             }
-            Expr::RegExpTest { regex, string } => {
-                self.collect_strings_in_expr(regex);
-                self.collect_strings_in_expr(string);
-            }
             Expr::StringMatch { string, regex } => {
                 self.collect_strings_in_expr(string);
                 self.collect_strings_in_expr(regex);

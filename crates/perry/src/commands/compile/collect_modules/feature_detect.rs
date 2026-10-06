@@ -11,7 +11,7 @@ use super::crypto_ns::module_uses_global_crypto_namespace;
 use crate::commands::compile::CompilationContext;
 
 fn debug_hir_uses_regex(hir_debug: &str) -> bool {
-    hir_debug.contains("RegExp") // RegExp / RegExpDynamic / RegExpTest / RegExpExec / RegExpEscape / RegExpReplaceFn / RegExpExec{Index,Groups}
+    hir_debug.contains("RegExp") // RegExp / RegExpDynamic / RegExpEscape / RegExpExec{Index,Groups}
         || hir_debug.contains("StringMatch") // dedicated .match / .matchAll variants
         // Covers both `PathMatchesGlob` and
         // `PathWin32 { method: MatchesGlob, ... }`.

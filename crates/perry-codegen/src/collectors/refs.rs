@@ -732,10 +732,6 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(t, out);
             }
         }
-        Expr::RegExpTest { regex, string } | Expr::RegExpExec { regex, string } => {
-            walk(regex, out);
-            walk(string, out);
-        }
         Expr::StringMatch { string, regex } => {
             walk(string, out);
             walk(regex, out);
