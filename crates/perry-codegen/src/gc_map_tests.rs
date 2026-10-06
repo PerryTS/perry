@@ -84,7 +84,7 @@ fn every_target_emits_the_same_blob_with_a_relative_function_field() {
             out.contains(&format!("\t.byte\t{GC_MAP_VERSION}\n")),
             "the emitted blob must declare the version the runtime expects:\n{out}"
         );
-        assert_eq!(GC_MAP_VERSION, 6);
+        assert_eq!(GC_MAP_VERSION, 7);
         // 16-byte header + one 12-byte function entry + one 4-byte v5 stream
         // offset + one 4-byte instruction offset + a 3-byte root stream, on
         // ILP32 and LP64 alike.
@@ -157,7 +157,7 @@ fn compact_and_assemble_refusal(target: &str) -> String {
     // fails if that guard is removed rather than if a string changes.
     if matches!(format_for(target), ObjectFormat::Coff) && !target.starts_with("x86_64") {
         return format!(
-            "perry: native GC roots (PERRY_RS4GC) are not enabled for target \
+            "perry: statepoint GC roots are not enabled for target \
                  `{target}` yet — the runtime's Windows stack walker is x86-64 only"
         );
     }
@@ -587,16 +587,19 @@ fn repeated_live_sets_cost_one_byte() {
         stack_size: 64,
         records: vec![
             Record {
+                native_range: None,
                 instruction_offset: "0".to_string(),
                 roots: shared.clone(),
                 derived: Vec::new(),
             },
             Record {
+                native_range: None,
                 instruction_offset: "8".to_string(),
                 roots: shared.clone(),
                 derived: Vec::new(),
             },
             Record {
+                native_range: None,
                 instruction_offset: "16".to_string(),
                 roots: shared,
                 derived: Vec::new(),
@@ -640,6 +643,7 @@ fn encodes_a_foreign_register_base() {
 #[test]
 fn derived_slots_roundtrip_and_share_the_repeat_flag() {
     let record = |off: &str, derived: Vec<(u32, u16, i32)>| Record {
+        native_range: None,
         instruction_offset: off.to_string(),
         roots: vec![(29, -16), (29, -8)],
         derived,
@@ -695,11 +699,13 @@ fn roundtrip_check_catches_a_corrupted_stream() {
         // x86-64 shape: RSP (DWARF 7) base, ascending frame offsets.
         records: vec![
             Record {
+                native_range: None,
                 instruction_offset: "0".to_string(),
                 roots: vec![(7, 8), (7, 24), (7, 40)],
                 derived: Vec::new(),
             },
             Record {
+                native_range: None,
                 instruction_offset: "16".to_string(),
                 roots: vec![(7, 8), (7, 24), (7, 40)],
                 derived: Vec::new(),
@@ -759,6 +765,7 @@ fn roundtrip_check_catches_a_wrong_per_function_stream_offset() {
         records: offsets
             .iter()
             .map(|off| Record {
+                native_range: None,
                 instruction_offset: (*off).to_string(),
                 roots: vec![(7, 8), (7, 24)],
                 derived: Vec::new(),

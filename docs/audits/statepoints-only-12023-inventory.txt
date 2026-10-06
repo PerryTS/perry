@@ -1,0 +1,1390 @@
+crates/perry/tests/issue_5731_embedded_assets.rs:81:        compile_command.env("PERRY_RS4GC", "0");
+crates/perry-stdlib/src/fetch/lifecycle.rs:557:        let frame = perry_runtime::gc::js_shadow_frame_push(0);
+crates/perry-stdlib/src/fetch/lifecycle.rs:561:                perry_runtime::gc::js_shadow_frame_pop(self.0);
+crates/perry/tests/issue_8138_typed_array_method_availability.rs:56:        .env("PERRY_RS4GC", "0")
+crates/perry/tests/issue_5234_wasm_esm_import.rs:437:        .env("PERRY_RS4GC", "0")
+crates/perry-runtime/src/regex/perex_replace_storage.rs:133:            crate::gc::js_shadow_frame_pop(self.0);
+crates/perry-runtime/src/regex/perex_replace_storage.rs:136:    let frame = Frame(crate::gc::js_shadow_frame_push(args.len() as u32));
+crates/perry-runtime/src/regex/perex_replace_storage.rs:138:        crate::gc::js_shadow_slot_bind(i as u32, value.get().cast());
+crates/perry-runtime/src/regex/perex_replace_storage.rs:206:            crate::gc::js_shadow_frame_pop(self.0);
+crates/perry-runtime/src/regex/perex_replace_storage.rs:215:    let frame = Frame(crate::gc::js_shadow_frame_push(slots.len() as u32));
+crates/perry-runtime/src/regex/perex_replace_storage.rs:217:        crate::gc::js_shadow_slot_bind(i as u32, slot.get().cast());
+crates/perry-ext-ws/src/tests.rs:20:        let frame = perry_runtime::gc::js_shadow_frame_push(0);
+crates/perry-ext-ws/src/tests.rs:31:        perry_runtime::gc::js_shadow_frame_pop(self.frame);
+crates/perry-codegen/tests/native_proof_support/mod.rs:40://! the suite under `PERRY_RS4GC=0`. See [`native_buffer_element_geps`].
+crates/perry-codegen/tests/native_proof_support/mod.rs:512:  %r4 = call ptr @js_shadow_frame_enter(i32 1)
+crates/perry-codegen/tests/native_proof_support/mod.rs:530:         — this is the exact text that turned sixteen `PERRY_RS4GC=0` tests \
+crates/perry-codegen/tests/scalar_replaced_slot_roots.rs:22://! LOWERING (#7493): every test here measures `js_shadow_slot_bind` /
+crates/perry-codegen/tests/scalar_replaced_slot_roots.rs:23://! `js_shadow_frame_enter` call sites, which only the SHADOW-STACK lowering
+crates/perry-codegen/tests/scalar_replaced_slot_roots.rs:36://! @js_shadow_slot_bind(").count()` — and since #7487 a pooled temp root emits
+crates/perry-codegen/tests/scalar_replaced_slot_roots.rs:218:/// entry-block alloca with no `js_shadow_slot_bind` anywhere in the function:
+crates/perry-codegen/tests/scalar_replaced_slot_roots.rs:479:// #7007 emitted `js_shadow_slot_bind` at every store into a scalar-replacement
+crates/perry-codegen/tests/scalar_replaced_slot_roots.rs:540:/// `js_shadow_slot_bind`), so the old compiler produces 0 and fails.
+crates/perry-codegen/tests/scalar_replaced_slot_roots.rs:588:/// the slot — and after `js_shadow_frame_enter`.
+crates/perry-codegen/tests/scalar_replaced_slot_roots.rs:638:    // @js_shadow_slot_bind(")` would in general land on one of them. Name the
+crates/perry-codegen/tests/scalar_replaced_slot_roots.rs:645:    // #7088: the push is `js_shadow_frame_enter` (returns the state pointer).
+crates/perry-codegen/tests/scalar_replaced_slot_roots.rs:647:        .find("call ptr @js_shadow_frame_enter(")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:2://! the `ShadowStackState` pointer `js_shadow_frame_enter` returns, not as
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:3://! `js_shadow_slot_bind` / `js_shadow_slot_set` calls. Each inline site still
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:688:        ir.contains("call ptr @js_shadow_frame_enter(i32 2)"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:693:        .find("call void @js_shadow_slot_bind(i32 0, ptr %")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:696:        .find("call void @js_shadow_slot_set(i32 0, i64 0)")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:707:        !ir.contains("call void @js_shadow_slot_set(i32 2"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:719:/// The inline #7088 store keeps a `js_shadow_slot_bind` call on its
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:732:        .split("call ptr @js_shadow_frame_enter(i32 ")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:742:    for chunk in fn_ir.split("@js_shadow_slot_bind(i32 ").skip(1) {
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:756:        fn_ir.contains("@js_shadow_slot_bind(i32 1, ptr %"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:777:        .find("call ptr @js_shadow_frame_enter(i32 2)")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:787:        main_ir.contains("call void @js_shadow_frame_pop"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:806:        main_ir.contains("call ptr @js_shadow_frame_enter(i32 2)"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:811:        .find("call void @js_shadow_slot_bind(i32 0, ptr %")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:814:        .find("call void @js_shadow_slot_set(i32 0, i64 0)")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:825:        !main_ir.contains("call void @js_shadow_slot_set(i32 2"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:848:        .find("call ptr @js_shadow_frame_enter(i32 2)")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:857:        init_ir.contains("call void @js_shadow_slot_bind(i32 0, ptr %"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:861:        init_ir.contains("call void @js_shadow_frame_pop"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:875:        .find("call void @js_shadow_slot_bind(i32 0, ptr %")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:878:        .find("call void @js_shadow_slot_set(i32 0, i64 0)")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:889:        !main_ir[body_write..body_clear].contains("call void @js_shadow_slot_set(i32 0, i64 %"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:905:            .matches("call void @js_shadow_slot_bind(i32 1, ptr %")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:911:        !main_ir.contains("call void @js_shadow_slot_set(i32 1, i64 0)"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:934:/// `js_shadow_frame_enter(i32 1)` — "only the flat-const table root should
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:954:/// `js_shadow_slot_set(i32 1`, while #7013 moved the per-slot traffic to
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:955:/// `js_shadow_slot_bind`. The row aliases were touching slot 1 the whole time,
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:988:            main_ir.contains(&format!("call void @js_shadow_slot_bind(i32 {idx}, ptr %"))
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:989:                || main_ir.contains(&format!("call void @js_shadow_slot_set(i32 {idx}"))
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:1019:        fn_ir.contains("call ptr @js_shadow_frame_enter(i32 1)"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:1026:        .find("call void @js_shadow_slot_bind(i32 0, ptr %")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:1044:        fn_ir.contains("call ptr @js_shadow_frame_enter(i32 3)"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:1050:                "call void @js_shadow_slot_bind(i32 {slot_idx}, ptr %"
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:1051:            )) || fn_ir.contains(&format!("call void @js_shadow_slot_set(i32 {slot_idx}")),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:1070:        fn_ir.contains("call ptr @js_shadow_frame_enter(i32 2)"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:1091:        .find("call void @js_shadow_slot_bind(i32 0, ptr %")
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:1111:        fn_ir.contains("call void @js_shadow_slot_bind(i32 1, ptr %"),
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:1237:/// double slot, same `js_shadow_slot_bind` — while the string ops tag-
+crates/perry-codegen/tests/shadow_slot_hygiene.rs:1252:        fn_ir.contains("call void @js_shadow_slot_bind"),
+crates/perry-stdlib/src/readline/mod_tests.rs:20:        let frame = perry_runtime::gc::js_shadow_frame_push(0);
+crates/perry-stdlib/src/readline/mod_tests.rs:30:        perry_runtime::gc::js_shadow_frame_pop(self.frame);
+crates/perry/tests/issue_8694_stable_for_in.rs:159:        .env("PERRY_RS4GC", "0")
+crates/perry-codegen/tests/native_proof_buffer_views.rs:11:// under `PERRY_RS4GC=0` it reports a proof leak that is not there. Same shape,
+crates/perry-codegen/tests/native_proof_buffer_views.rs:674:/// unrelated to any buffer — so under `PERRY_RS4GC=0` it reported a proof leak
+crates/perry-codegen/tests/native_proof_regressions.rs:2545:        probe[..collection].contains("call void @js_shadow_slot_bind"),
+crates/perry-codegen/tests/native_proof_regressions.rs:2549:        probe.matches("call void @js_shadow_slot_bind").count(),
+crates/perry-codegen/tests/native_proof_regressions.rs:13250:    // failures `PERRY_RS4GC=0` heals; run alone it fails under BOTH lowerings,
+crates/perry/src/shadow_layout_contract.rs:5://! `ShadowEntry` from the `ShadowStackState` pointer `js_shadow_frame_enter`
+crates/perry/src/shadow_layout_contract.rs:82:    /// store touching the same memory as `js_shadow_slot_set`.
+crates/perry/src/shadow_layout_contract.rs:84:    /// Sabotage check: have `js_shadow_frame_enter` return anything other than
+crates/perry/src/shadow_layout_contract.rs:88:        let state = rt::js_shadow_frame_enter(1);
+crates/perry/src/shadow_layout_contract.rs:104:        rt::js_shadow_frame_pop((frame_top - rt::SHADOW_STACK_HEADER_SLOTS) as u64);
+crates/perry/tests/issue_5898_array_remaining.rs:208:        .env("PERRY_RS4GC", "0")
+crates/perry-codegen/tests/native_proof_regressions/invalidation.rs:9://! reasons that have nothing to do with a buffer store. Under `PERRY_RS4GC=0`
+crates/perry-codegen/tests/temp_root_operand_temporaries.rs:23://! `this`-slot root (`js_shadow_slot_bind`) and pin `NativeRootsPin::shadow()`;
+crates/perry-codegen/tests/temp_root_operand_temporaries.rs:26://! its `!contains("@js_shadow_slot_bind")` is true of every program (hazard 4:
+crates/perry-codegen/tests/temp_root_operand_temporaries.rs:1252:/// `js_shadow_slot_bind` records `slot_ptrs[idx] = alloca`, so evacuation
+crates/perry-codegen/tests/temp_root_operand_temporaries.rs:1271:    // from by taking the alloca that a `js_shadow_slot_bind` names AND that is
+crates/perry-codegen/tests/temp_root_operand_temporaries.rs:1277:        .filter_map(|l| l.split_once("js_shadow_slot_bind(i32 "))
+crates/perry-codegen/tests/temp_root_operand_temporaries.rs:1283:        "expected at least one js_shadow_slot_bind in:\n{f}"
+crates/perry-codegen/tests/temp_root_operand_temporaries.rs:1550:        f.matches("@js_shadow_slot_bind").count(),
+crates/perry-runtime/src/object/field_get_set/get_field_by_name_probe_tests.rs:52:        Self(crate::gc::js_shadow_frame_push(slot_count))
+crates/perry-runtime/src/object/field_get_set/get_field_by_name_probe_tests.rs:58:        crate::gc::js_shadow_frame_pop(self.0);
+crates/perry-runtime/src/object/field_get_set/get_field_by_name_probe_tests.rs:63:    crate::value::js_nanbox_get_pointer(f64::from_bits(crate::gc::js_shadow_slot_get(slot)))
+crates/perry-runtime/src/object/field_get_set/get_field_by_name_probe_tests.rs:68:    crate::gc::js_shadow_slot_set(slot, crate::value::js_nanbox_pointer(addr as i64).to_bits());
+crates/perry-runtime/src/object/field_get_set/get_field_by_name_probe_tests.rs:72:    crate::gc::js_shadow_slot_set(
+crates/perry-runtime/src/object/field_get_set/get_field_by_name_probe_tests.rs:237:    crate::gc::js_shadow_slot_set(1, set_proto.to_bits());
+crates/perry/tests/issue_10151_large_json_define.rs:41:        command.env("PERRY_RS4GC", "0");
+crates/perry/tests/issue_9611_llhttp_differential.rs:132:        .env("PERRY_RS4GC", "0")
+crates/perry/tests/issue_10104_runtime_data_imports.rs:19:        compiler.env("PERRY_RS4GC", "0");
+crates/perry-codegen/src/native_root_coverage/harness_self_tests.rs:167:/// silently-bounds-checked `js_shadow_slot_bind`, and just as invisible: the
+crates/perry-codegen/src/native_root_coverage/mod.rs:18://! `js_shadow_slot_bind` was absent, which under the native default is true of
+crates/perry-codegen/src/native_root_coverage/mod.rs:340:/// The pin is not redundant with the default: it also overrides `PERRY_RS4GC`
+crates/perry-codegen/src/native_root_coverage/mod.rs:342:/// `PERRY_RS4GC=0` bisection as they do in CI.
+crates/perry-codegen/src/native_root_coverage/mechanics.rs:128://    (shadow counterpart: the `js_shadow_slot_set(i32 0, i64 0)` clear in
+crates/perry-codegen/src/native_root_coverage/mechanics.rs:213://    (shadow counterpart: `js_shadow_frame_enter(i32 2)` for three locals)
+crates/perry-codegen/src/native_root_coverage/mechanics.rs:666:/// shadow-pinned original counted `js_shadow_slot_bind` calls, of which the
+crates/perry-codegen/src/statepoint_report.rs:178:            "No native-stack lowering records were emitted. Set PERRY_RS4GC=1 and\n\
+crates/perry-codegen/src/statepoint_report.rs:206:             noticed). Compile with PERRY_RS4GC=1 on a target whose map is\n\
+crates/perry-codegen/src/testing/root_slots.rs:5://! `js_shadow_slot_bind` and `js_write_barrier_root_nanbox` used to have
+crates/perry-codegen/src/testing/root_slots.rs:9://! @js_shadow_slot_bind(").count()` and the same for the barrier.
+crates/perry-codegen/src/testing/root_slots.rs:69:/// The `ptr` operand of a `js_shadow_slot_bind` call line, if this is one.
+crates/perry-codegen/src/testing/root_slots.rs:73:        .strip_prefix("call void @js_shadow_slot_bind(i32 ")?;
+crates/perry-codegen/src/testing/root_slots.rs:119:/// Every emitted `js_shadow_slot_bind`, keyed by the alloca it names.
+crates/perry-codegen/src/testing/root_slots.rs:206:/// The slot count baked into this function's `js_shadow_frame_enter`.
+crates/perry-codegen/src/testing/root_slots.rs:208:    let needle = "call ptr @js_shadow_frame_enter(i32 ";
+crates/perry-codegen/src/testing/root_slots.rs:275:  %r3 = call ptr @js_shadow_frame_enter(i32 2)
+crates/perry-codegen/src/testing/root_slots.rs:276:  call void @js_shadow_slot_bind(i32 1, ptr %v)
+crates/perry-codegen/src/testing/root_slots.rs:279:  call void @js_shadow_slot_bind(i32 2, ptr %t)
+crates/perry-codegen/src/testing/root_slots.rs:282:  call void @js_shadow_slot_bind(i32 2, ptr %t)
+crates/perry-codegen/src/testing/root_slots.rs:294:        assert_eq!(MIXED.matches("call void @js_shadow_slot_bind(").count(), 3);
+crates/perry-codegen/src/testing/root_slots.rs:319:  call void @js_shadow_slot_bind(i32 0, ptr %x)
+crates/perry-codegen/src/testing/root_slots.rs:355:  call void @js_shadow_slot_bind(i32 0, ptr %b)
+crates/perry-codegen/src/linker.rs:489:/// `PERRY_RS4GC=1`. mem2reg promotes the retyped `ptr addrspace(1)` root
+crates/perry-codegen/src/linker.rs:518:        "PERRY_RS4GC: this module contains a `try`/`catch` that lowered to \
+crates/perry-codegen/src/linker.rs:523:             Compile without PERRY_RS4GC, or keep `try` out of RS4GC-compiled \
+crates/perry-codegen/src/linker.rs:559:            "PERRY_RS4GC=1 requires an LLVM `opt` binary: set PERRY_LLVM_OPT, \
+crates/perry-codegen/src/linker.rs:591:            "PERRY_RS4GC: opt pipeline failed ({}).\n{}\n\
+crates/perry-codegen/src/rooting/temp_root.rs:134:    // rewrites the emitted `js_shadow_frame_enter` slot count in place, so the
+crates/perry-codegen/src/inprocess/optimize_emit.rs:88:        let preflight_cap = crate::codegen::helpers::root_spill_relocation_threshold();
+crates/perry-codegen/src/testing.rs:61://!     // … assertions about js_shadow_frame_enter / slot binds …
+crates/perry-codegen/src/block.rs:79:    /// with `js_shadow_slot_bind(idx, ptr)`.
+crates/perry-codegen/src/block.rs:226:        if callee != "js_shadow_slot_bind" {
+crates/perry-codegen/src/block.rs:229:        // `js_shadow_slot_bind(i32 idx, ptr %slot)`: the slot is argument two.
+crates/perry-codegen/src/block.rs:1842:        b.call_void("js_shadow_slot_bind", &[(I64, "0"), (PTR, "%root")]);
+crates/perry-codegen/src/block.rs:1862:            ir.find("@js_shadow_slot_bind").unwrap() < first_dirty
+crates/perry/tests/issue_5898_array_shift_exotic.rs:88:        .env("PERRY_RS4GC", "0")
+crates/perry/tests/issue_10105_native_runtime_plugins.rs:91:        compile.env("PERRY_RS4GC", "0");
+crates/perry-codegen/src/collectors/ptr_shape.rs:122://! as a rewritable root via `js_shadow_slot_bind` (the GC marks and rewrites
+crates/perry/tests/issue_10100_bun_plugin.rs:15:        compiler.env("PERRY_RS4GC", "0");
+crates/perry-codegen/src/collectors/ptr_shape_elements.rs:127://! / `js_shadow_slot_bind` like any other object local, and every access
+crates/perry-codegen/src/codegen/testing_feature_gate_tests.rs:262:    // `PERRY_RS4GC` is an explicit, process-global override cached in a
+crates/perry-codegen/src/codegen/testing_feature_gate_tests.rs:264:    if std::env::var("PERRY_RS4GC").is_ok() {
+crates/perry-codegen/src/codegen/testing_feature_gate_tests.rs:320:    // native-roots IR while a `PERRY_RS4GC=0` sweep is in progress.
+crates/perry-codegen/src/collectors/pointer_locals.rs:1001:    /// length failed `js_shadow_slot_bind` / the #7088 inline store's bounds
+crates/perry/tests/issue_5898_array_slice_invalid_length.rs:97:        .env("PERRY_RS4GC", "0")
+crates/perry/tests/issue_8774_argument_shape_clones.rs:118:        .env("PERRY_RS4GC", "0");
+crates/perry-codegen/src/codegen/closure_capture_cells.rs:60:                "js_shadow_slot_bind",
+crates/perry-ext-http/src/tests.rs:24:        let frame = perry_runtime::gc::js_shadow_frame_push(0);
+crates/perry-ext-http/src/tests.rs:35:        perry_runtime::gc::js_shadow_frame_pop(self.frame);
+crates/perry-ext-net/src/tests.rs:25:        let frame = perry_runtime::gc::js_shadow_frame_push(1);
+crates/perry-ext-net/src/tests.rs:36:        perry_runtime::gc::js_shadow_frame_pop(self.frame);
+crates/perry-ext-net/src/tests.rs:88:    perry_runtime::gc::js_shadow_slot_set(0, control as u64);
+crates/perry-ext-net/src/tests.rs:115:    assert_rewritten(control, perry_runtime::gc::js_shadow_slot_get(0) as i64);
+crates/perry-ext-net/src/tests.rs:416:            perry_runtime::gc::js_shadow_slot_set(0, expected.to_bits());
+crates/perry-ext-net/src/tests.rs:430:            let expected = f64::from_bits(perry_runtime::gc::js_shadow_slot_get(0));
+crates/perry-codegen/src/codegen/ordinary_param_guard_tests.rs:31:    ir.matches("alloca ptr addrspace(1)").count() + ir.matches("@js_shadow_slot_bind(").count()
+crates/perry-runtime/src/exception.rs:838:        js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_set, shadow_stack_depth,
+crates/perry-runtime/src/exception.rs:869:        let run_frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/exception.rs:870:        js_shadow_slot_set(0, 0x7FFD_0000_0000_0001);
+crates/perry-runtime/src/exception.rs:878:        let _f1 = js_shadow_frame_push(1);
+crates/perry-runtime/src/exception.rs:879:        js_shadow_slot_set(0, 0x7FFD_0000_0000_00A1);
+crates/perry-runtime/src/exception.rs:880:        let _f2 = js_shadow_frame_push(2);
+crates/perry-runtime/src/exception.rs:881:        js_shadow_slot_set(0, 0x7FFD_0000_0000_00B1);
+crates/perry-runtime/src/exception.rs:896:        js_shadow_frame_pop(run_frame);
+crates/perry/tests/issue_10101_defines_resolve.rs:8:        command.env("PERRY_RS4GC", "0");
+crates/perry-codegen/src/gc_call_effects.rs:488:        "js_shadow_frame_enter",
+crates/perry-codegen/src/gc_call_effects.rs:489:        "js_shadow_frame_push",
+crates/perry-codegen/src/gc_call_effects.rs:490:        "js_shadow_frame_pop",
+crates/perry-codegen/src/gc_call_effects.rs:492:        "js_shadow_slot_bind",
+crates/perry-codegen/src/gc_call_effects.rs:493:        "js_shadow_slot_set",
+crates/perry-codegen/src/gc_call_effects.rs:972:            "js_shadow_slot_bind",
+crates/perry-codegen/src/gc_call_effects.rs:995:            "js_shadow_slot_bind",
+crates/perry-codegen/src/codegen/method_static.rs:123:                "js_shadow_slot_bind",
+crates/perry-codegen/src/codegen/method_static.rs:134:                    "js_shadow_slot_bind",
+crates/perry-codegen/src/native_emit.rs:987:        module.declare_function_with_ret_attrs("js_shadow_frame_enter", PTR, &[I32], "nonnull");
+crates/perry-codegen/src/native_emit.rs:988:        module.declare_function("js_shadow_frame_pop", VOID, &[I64]);
+crates/perry-codegen/src/native_emit.rs:989:        module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
+crates/perry-codegen/src/native_emit.rs:1005:                    "js_shadow_slot_bind",
+crates/perry-codegen/src/native_emit.rs:1203:        module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
+crates/perry-codegen/src/native_emit.rs:1215:            "js_shadow_slot_bind",
+crates/perry-codegen/src/native_emit.rs:1328:            !text_ir.contains("call void @js_shadow_slot_bind"),
+crates/perry-codegen/src/native_emit.rs:1361:        assert!(!before.contains("@js_shadow_frame_enter"), "{before}");
+crates/perry-codegen/src/native_emit.rs:1377:        assert!(after.contains("@js_shadow_frame_enter"), "{after}");
+crates/perry-codegen/src/native_emit.rs:1378:        assert!(after.contains("@js_shadow_slot_bind"), "{after}");
+crates/perry-codegen/src/native_emit.rs:1379:        assert!(after.contains("@js_shadow_frame_pop"), "{after}");
+crates/perry-codegen/src/native_emit.rs:1478:            text_ir.contains("call void @js_shadow_slot_bind"),
+crates/perry-codegen/src/codegen/method.rs:407:                "js_shadow_slot_bind",
+crates/perry-codegen/src/codegen/method.rs:417:                    "js_shadow_slot_bind",
+crates/perry-codegen/src/gc_map.rs:1372:            "perry: native GC roots (PERRY_RS4GC) are not supported for target \
+crates/perry-codegen/src/gc_map.rs:1391:            "perry: native GC roots (PERRY_RS4GC) are not enabled for target \
+crates/perry-codegen/src/codegen/entry/tests.rs:620:        !closure.contains("call ptr @js_shadow_frame_enter(i32 "),
+crates/perry-codegen/src/codegen/argument_shape_clone_tests.rs:198:        clone.contains("@js_shadow_slot_bind(")
+crates/perry-codegen/src/codegen/argument_shape_clone_tests.rs:199:            && clone.find("@js_shadow_slot_bind(")
+crates/perry-codegen/src/scope_env/tests.rs:275:        + fn_ir.matches("@js_shadow_slot_bind(").count()
+crates/perry/src/commands/compile/build_cache.rs:45:    "PERRY_SHADOW_STACK",
+crates/perry/src/commands/compile/build_cache.rs:46:    "PERRY_RS4GC",
+crates/perry/src/commands/compile/build_cache.rs:150:    "PERRY_INLINE_SHADOW_SLOT",
+crates/perry-codegen/src/module.rs:266:    /// Used for `js_shadow_frame_enter`, whose `nonnull` return is what lets
+crates/perry-codegen/src/collectors/ptr_shape_returns.rs:89://! `collect_pointer_typed_locals` / `js_shadow_slot_bind` like any other
+crates/perry-codegen/src/root_reload.rs:21://!   call void @js_shadow_slot_bind(i32 0, ptr %r7)   ; %r7 IS a root
+crates/perry-codegen/src/root_reload.rs:178:    "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload.rs:179:    "js_shadow_slot_set",
+crates/perry-codegen/src/root_reload.rs:180:    "js_shadow_frame_enter",
+crates/perry-codegen/src/root_reload.rs:181:    "js_shadow_frame_push",
+crates/perry-codegen/src/root_reload.rs:182:    "js_shadow_frame_pop",
+crates/perry-codegen/src/root_reload.rs:806:    // for a post-init-frame function contains `js_shadow_frame_enter` itself —
+crates/perry-codegen/src/root_reload.rs:807:    // lands after every `js_shadow_slot_bind` in the body. See
+crates/perry-codegen/src/function.rs:127:    /// function body to call `js_shadow_frame_pop` first, reading
+crates/perry-codegen/src/function.rs:154:    /// Where the emitted `js_shadow_frame_push` line lives, so its slot count
+crates/perry-codegen/src/function.rs:167:    /// `js_shadow_slot_bind` calls, removes the calls, and emits stack maps.
+crates/perry-codegen/src/function.rs:199:/// `js_shadow_frame_enter` is `js_shadow_frame_push` returning the address of
+crates/perry-codegen/src/function.rs:207:        "  {} = call ptr @js_shadow_frame_enter(i32 {})",
+crates/perry-codegen/src/function.rs:262:/// Location of a function's `js_shadow_frame_push` line, so its slot-count
+crates/perry-codegen/src/function.rs:324:    /// Phase A sub-phase 2). Emits `js_shadow_frame_push(slot_count)`
+crates/perry-codegen/src/function.rs:331:    /// `js_shadow_frame_pop(loaded_handle)` before every `ret` in
+crates/perry-codegen/src/function.rs:350:    /// `js_shadow_slot_bind` calls until final rendering, so converting the
+crates/perry-codegen/src/function.rs:399:    /// `js_shadow_frame_push` call runs through `entry_post_init_setup`, after
+crates/perry-codegen/src/function.rs:456:        // also holds the entry-hoisted `js_shadow_slot_bind` calls
+crates/perry-codegen/src/function.rs:494:    /// `js_shadow_frame_push` count in place.
+crates/perry-codegen/src/function.rs:864:    ///   `js_shadow_frame_enter` call itself, so every `js_shadow_slot_bind`
+crates/perry-codegen/src/function.rs:914:    /// otherwise the native module keeps `js_shadow_slot_bind` calls while
+crates/perry-codegen/src/function.rs:1307:                "  call void @js_shadow_frame_pop(i64 {})",
+crates/perry-codegen/src/function.rs:1590:                "js_shadow_slot_bind",
+crates/perry-codegen/src/function.rs:1631:        // The spilled function builds the heap shadow frame (`js_shadow_frame_enter`
+crates/perry-codegen/src/function.rs:1632:        // + retained `js_shadow_slot_bind`); the native sibling has neither — its
+crates/perry-codegen/src/function.rs:1637:            spilled_ir.contains("@js_shadow_frame_enter")
+crates/perry-codegen/src/function.rs:1638:                && spilled_ir.contains("@js_shadow_slot_bind"),
+crates/perry-codegen/src/function.rs:1643:            !native_ir.contains("@js_shadow_frame_enter")
+crates/perry-codegen/src/function.rs:1644:                && !native_ir.contains("@js_shadow_slot_bind"),
+crates/perry-codegen/src/function.rs:1669:            "js_shadow_slot_bind",
+crates/perry-codegen/src/function.rs:1679:        assert!(!native_ir.contains("@js_shadow_frame_enter"));
+crates/perry-codegen/src/function.rs:1680:        assert!(!native_ir.contains("@js_shadow_slot_bind"));
+crates/perry-codegen/src/function.rs:1692:        assert!(shadow_ir.contains("call ptr @js_shadow_frame_enter(i32 1)"));
+crates/perry-codegen/src/function.rs:1693:        assert!(shadow_ir.contains("call void @js_shadow_slot_bind(i32 0"));
+crates/perry-codegen/src/function.rs:1694:        assert!(shadow_ir.contains("call void @js_shadow_frame_pop(i64"));
+crates/perry-codegen/src/function.rs:1721:            "js_shadow_slot_bind",
+crates/perry-codegen/src/function.rs:1736:        let enter = position("@js_shadow_frame_enter(");
+crates/perry-codegen/src/function.rs:1737:        let bind = position("call void @js_shadow_slot_bind(");
+crates/perry-codegen/src/codegen/helpers.rs:51:/// `PERRY_SHADOW_STACK=0`/`off`/`false` to disable for bisection.
+crates/perry-codegen/src/codegen/helpers.rs:78:            std::env::var("PERRY_SHADOW_STACK").as_deref(),
+crates/perry-codegen/src/codegen/helpers.rs:98:/// Conflating them made `PERRY_SHADOW_STACK=0` plus native-root lowering (then
+crates/perry-codegen/src/codegen/helpers.rs:99:/// spelled `PERRY_STATEPOINTS=1`, since deleted; `PERRY_RS4GC=1` today) produce a
+crates/perry-codegen/src/codegen/helpers.rs:110:/// true regardless of `PERRY_SHADOW_STACK`, so both spellings must emit
+crates/perry-codegen/src/codegen/helpers.rs:116:/// `PERRY_RS4GC=1` — research pipeline for #7174: root allocas become
+crates/perry-codegen/src/codegen/helpers.rs:135:/// `PERRY_RS4GC` as an explicit override. `Some(true)` forces the backend on
+crates/perry-codegen/src/codegen/helpers.rs:142:    *CACHED.get_or_init(|| match std::env::var("PERRY_RS4GC").as_deref() {
+crates/perry-codegen/src/codegen/helpers.rs:186:    /// lifetime — Perry's heap-backed shadow frame, `js_shadow_frame_enter` +
+crates/perry-codegen/src/codegen/helpers.rs:198:    /// redundant: it also overrides `PERRY_RS4GC` from the environment, so the
+crates/perry-codegen/src/codegen/helpers.rs:199:    /// assertion means the same thing during a `PERRY_RS4GC=0` bisection run as
+crates/perry-codegen/src/codegen/helpers.rs:291:/// instead of a call to `js_shadow_slot_bind` / `js_shadow_slot_set`. The
+crates/perry-codegen/src/codegen/helpers.rs:295:/// `PERRY_INLINE_SHADOW_SLOT=0`/`off`/`false` reverts to the calls, for
+crates/perry-codegen/src/codegen/helpers.rs:296:/// bisection. Independent of `PERRY_SHADOW_STACK`, which switches root
+crates/perry-codegen/src/codegen/helpers.rs:303:            std::env::var("PERRY_INLINE_SHADOW_SLOT").as_deref(),
+crates/perry-codegen/src/codegen/helpers.rs:555:pub(crate) fn root_spill_relocation_threshold() -> usize {
+crates/perry-codegen/src/codegen/helpers.rs:595:mod root_spill_default_tests {
+crates/perry-codegen/src/codegen/helpers.rs:671:    let hard_threshold = root_spill_relocation_threshold();
+crates/perry-codegen/src/codegen/helpers.rs:1891:    /// An explicit `PERRY_RS4GC=1` must still reach `gc_map`'s refusal for an
+crates/perry-codegen/src/codegen/function.rs:889:                    "js_shadow_slot_bind",
+crates/perry-codegen/src/codegen/function.rs:913:                "js_shadow_slot_bind",
+crates/perry-codegen/src/codegen/closure.rs:661:                    "js_shadow_slot_bind",
+crates/perry-codegen/src/codegen/closure.rs:757:                "js_shadow_slot_bind",
+crates/perry-codegen/src/codegen/closure.rs:807:                "js_shadow_slot_bind",
+crates/perry-codegen/src/codegen/closure.rs:939:    // arrival — and reserving a slot there would force a `js_shadow_frame_push`
+crates/perry-codegen/src/codegen/closure.rs:952:                "js_shadow_slot_bind",
+crates/perry-codegen/src/codegen/closure.rs:1646:                name_starts_here && f.contains("@js_shadow_frame_enter")
+crates/perry-codegen/src/codegen/closure.rs:1658:            body.contains("@js_shadow_slot_bind"),
+crates/perry-codegen/src/codegen/closure.rs:1704:                .find("@js_shadow_slot_bind(")
+crates/perry-codegen/src/codegen/closure.rs:1786:                .find("@js_shadow_slot_bind(")
+crates/perry/src/commands/compile/types.rs:574:    /// Useful with `PERRY_RS4GC=1`.
+crates/perry-codegen/src/codegen/literal_method_this_tests.rs:240:        body.lines().any(|l| l.contains("@js_shadow_slot_bind(")
+crates/perry-codegen/src/root_reload_tests.rs:29:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:131:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:156:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:185:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:222:            "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:265:            "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:316:            "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:374:    // #7088's inline slot store emits the SAME `js_shadow_slot_bind` call on
+crates/perry-codegen/src/root_reload_tests.rs:383:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:413:/// contains the `js_shadow_frame_enter` call itself. Bumping the boundary by
+crates/perry-codegen/src/root_reload_tests.rs:417:/// `js_shadow_slot_bind` in the body. Nothing is rooted, and the symptom is
+crates/perry-codegen/src/root_reload_tests.rs:436:            "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:469:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:500:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:504:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:589:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:661:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:690:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:764:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:812:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:854:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:944:        "js_shadow_slot_bind",
+crates/perry-codegen/src/root_reload_tests.rs:1145:            "js_shadow_slot_bind",
+crates/perry-codegen/src/function/precise_roots.rs:14:        .strip_prefix("call void @js_shadow_slot_bind(i32 ")?;
+crates/perry-codegen/src/function/precise_roots.rs:23:        .strip_prefix("call void @js_shadow_slot_set(i32 ")?;
+crates/perry-codegen/src/function/precise_roots.rs:399:        module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
+crates/perry-codegen/src/function/precise_roots.rs:417:            "js_shadow_slot_bind",
+crates/perry-codegen/src/function/precise_roots.rs:488:        module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
+crates/perry-codegen/src/function/precise_roots.rs:501:            "js_shadow_slot_bind",
+crates/perry-codegen/src/function/precise_roots.rs:639:        let ir = r#"declare void @js_shadow_slot_bind(i32, ptr)
+crates/perry-codegen/src/function/precise_roots.rs:648:  call void @js_shadow_slot_bind(i32 0, ptr %slot)
+crates/perry-codegen/src/function/precise_roots.rs:739:  call void @js_shadow_slot_bind(i32 0, ptr %a)
+crates/perry-codegen/src/function/precise_roots.rs:741:  call void @js_shadow_slot_bind(i32 0, ptr %b)
+crates/perry-codegen/src/function/precise_roots.rs:750:        assert!(!lowered.contains("@js_shadow_slot_bind"));
+crates/perry-codegen/src/function/precise_roots/equivalence_tests.rs:211:/// would have derived from its `js_shadow_slot_bind` calls.
+crates/perry-codegen/src/function/precise_roots/equivalence_tests.rs:266:            "  call void @js_shadow_slot_bind(i32 {i}, ptr {})\n",
+crates/perry-codegen/src/function/precise_roots/equivalence_tests.rs:293:                "  call void @js_shadow_slot_set(i32 {}, i64 %v1)",
+crates/perry-codegen/src/function/precise_roots/remat.rs:211:    let rest = trimmed.strip_prefix("call void @js_shadow_slot_bind(i32 ")?;
+crates/perry-codegen/src/stmt/let_stmt.rs:1602:        // call js_shadow_slot_set. LLVM will fold the
+crates/perry-codegen/src/stmt/let_stmt.rs:1607:        // Only fires when PERRY_SHADOW_STACK=1 is set at
+crates/perry-codegen/src/collectors/proven_this_routing_tests.rs:1304:            .find("call void @js_shadow_slot_bind")
+crates/perry-codegen/src/collectors/proven_this_routing_tests.rs:1575:            .any(|line| line.contains("call void @js_shadow_slot_bind") && line.contains(&slot)),
+crates/perry-codegen/src/function/precise_roots/remat/tests.rs:23:declare void @js_shadow_slot_bind(i32, ptr)
+crates/perry-codegen/src/function/precise_roots/remat/tests.rs:35:  call void @js_shadow_slot_bind(i32 0, ptr %s)
+crates/perry-codegen/src/function/precise_roots/remat/tests.rs:36:  call void @js_shadow_slot_bind(i32 1, ptr %k)
+crates/perry-codegen/src/function/precise_roots/remat/tests.rs:37:  call void @js_shadow_slot_bind(i32 2, ptr %ctl)
+crates/perry-codegen/src/stmt/packed_range_global_cache_rooting_tests.rs:183:            .any(|l| l.contains("@js_shadow_slot_bind(") && l.contains(&format!("ptr {slot})"))),
+crates/perry-codegen/src/stmt/boxed_frame_release_tests.rs:95:                if t.starts_with("call void @js_shadow_frame_pop") || t.contains("= load i64, ptr")
+crates/perry-ext-http/src/server/mod.rs:238:            let frame = perry_runtime::gc::js_shadow_frame_push(slot_count);
+crates/perry-ext-http/src/server/mod.rs:249:            perry_runtime::gc::js_shadow_frame_pop(self.frame);
+crates/perry-ext-http/src/server/mod.rs:407:        perry_runtime::gc::js_shadow_slot_set(0, options.bits());
+crates/perry-ext-http/src/server/mod.rs:607:        perry_runtime::gc::js_shadow_slot_set(0, options.bits());
+crates/perry-codegen/src/runtime_decls/arrays.rs:143:    //   js_shadow_frame_push(slot_count: u32) -> u64 (frame handle)
+crates/perry-codegen/src/runtime_decls/arrays.rs:144:    //   js_shadow_frame_pop(frame_handle: u64)
+crates/perry-codegen/src/runtime_decls/arrays.rs:145:    //   js_shadow_slot_set(idx: u32, value: u64)
+crates/perry-codegen/src/runtime_decls/arrays.rs:146:    //   js_shadow_slot_bind(idx: u32, value_slot: *mut u64)
+crates/perry-codegen/src/runtime_decls/arrays.rs:147:    //   js_shadow_frame_enter(slot_count: u32) -> *mut ShadowStackState
+crates/perry-codegen/src/runtime_decls/arrays.rs:149:    // `js_shadow_frame_enter` is `js_shadow_frame_push` returning the address
+crates/perry-codegen/src/runtime_decls/arrays.rs:153:    // emission actually uses; `js_shadow_frame_push` stays declared (and
+crates/perry-codegen/src/runtime_decls/arrays.rs:155:    module.declare_function_with_ret_attrs("js_shadow_frame_enter", PTR, &[I32], "nonnull");
+crates/perry-codegen/src/runtime_decls/arrays.rs:156:    module.declare_function("js_shadow_frame_push", I64, &[I32]);
+crates/perry-codegen/src/runtime_decls/arrays.rs:157:    module.declare_function("js_shadow_frame_pop", VOID, &[I64]);
+crates/perry-codegen/src/runtime_decls/arrays.rs:158:    module.declare_function("js_shadow_slot_set", VOID, &[I32, I64]);
+crates/perry-codegen/src/runtime_decls/arrays.rs:159:    module.declare_function("js_shadow_slot_bind", VOID, &[I32, PTR]);
+crates/perry/src/commands/compile/object_cache.rs:245:/// `PERRY_WRITE_BARRIERS`, `PERRY_SHADOW_STACK`,
+crates/perry/src/commands/compile/object_cache.rs:1104:    //   - PERRY_SHADOW_STACK=0/off/false suppresses generated frame/slot
+crates/perry/src/commands/compile/object_cache.rs:1108:    //     Both are deleted; PERRY_RS4GC is the only spelling now, and it is
+crates/perry/src/commands/compile/object_cache.rs:1150:        env_var("PERRY_SHADOW_STACK").as_deref().unwrap_or(""),
+crates/perry/src/commands/compile/object_cache.rs:1152:    h.field("env_rs4gc", env_var("PERRY_RS4GC").as_deref().unwrap_or(""));
+crates/perry/src/commands/compile/object_cache.rs:1188:        "env_root_spill_relocations",
+crates/perry/src/commands/compile/object_cache.rs:1201:    // `js_shadow_slot_*` calls. Two arms that shared a cached object would
+crates/perry/src/commands/compile/object_cache.rs:1205:        env_var("PERRY_INLINE_SHADOW_SLOT").as_deref().unwrap_or(""),
+crates/perry-codegen/src/stmt/masked_window_region.rs:688:    // slot's address escaped through `js_shadow_slot_bind`, which blocks
+crates/perry-codegen/src/stmt/masked_window_region.rs:755:                        // `js_shadow_slot_set(slot, 0)` TLS hit we now skip.
+crates/perry-codegen/src/stmt/masked_window_region.rs:812:                                "js_shadow_slot_set",
+crates/perry-codegen/src/expr/shadow_inline.rs:6://! `js_shadow_slot_bind(idx, &local)` for a pointer-capable value,
+crates/perry-codegen/src/expr/shadow_inline.rs:7://! `js_shadow_slot_set(idx, 0)` for the "dead from here" clear. #7079 made
+crates/perry-codegen/src/expr/shadow_inline.rs:12://! Read out of the shipped `aarch64` archive, `js_shadow_slot_bind`'s fast path
+crates/perry-codegen/src/expr/shadow_inline.rs:26://! activation. `js_shadow_frame_enter` is `js_shadow_frame_push` with the
+crates/perry-codegen/src/expr/shadow_inline.rs:31://! memory `js_shadow_slot_set` writes, by construction rather than by
+crates/perry-codegen/src/expr/shadow_inline.rs:94:    /// `js_shadow_slot_bind(idx, local_slot)`.
+crates/perry-codegen/src/expr/shadow_inline.rs:97:    /// Equivalent to `js_shadow_slot_set(idx, 0)`.
+crates/perry-codegen/src/expr/shadow_inline.rs:101:/// Emit the inline equivalent of `js_shadow_slot_bind(slot_idx, local_slot)`.
+crates/perry-codegen/src/expr/shadow_inline.rs:109:/// Emit the inline equivalent of `js_shadow_slot_set(slot_idx, 0)`.
+crates/perry-codegen/src/expr/shadow_inline.rs:119:    // i64 words; take the `js_shadow_slot_*` call arm instead (#11378).
+crates/perry-codegen/src/expr/shadow_inline.rs:131:    // dominates (every shipped path), `js_shadow_frame_enter`'s `nonnull`
+crates/perry-codegen/src/expr/shadow_inline.rs:153:            "js_shadow_slot_bind",
+crates/perry-codegen/src/expr/shadow_inline.rs:157:            "js_shadow_slot_set",
+crates/perry-codegen/src/expr/shadow_inline.rs:458:    /// The frame push must go through `js_shadow_frame_enter` and derive the
+crates/perry-codegen/src/expr/shadow_inline.rs:463:    /// `js_shadow_frame_push` and the first two assertions fail; drop the
+crates/perry-codegen/src/expr/shadow_inline.rs:472:            body.contains("call ptr @js_shadow_frame_enter(i32 "),
+crates/perry-codegen/src/expr/shadow_inline.rs:473:            "frame push must go through js_shadow_frame_enter; body:\n{body}"
+crates/perry-codegen/src/expr/shadow_inline.rs:476:            !body.contains("@js_shadow_frame_push("),
+crates/perry/src/commands/compile/object_cache/object_cache_tests.rs:753:        "PERRY_SHADOW_STACK",
+crates/perry/src/commands/compile/object_cache/object_cache_tests.rs:754:        "PERRY_RS4GC",
+crates/perry-ext-streams/src/lib.rs:1465:            let frame = perry_runtime::gc::js_shadow_frame_push(0);
+crates/perry-ext-streams/src/lib.rs:1476:            perry_runtime::gc::js_shadow_frame_pop(self.frame);
+crates/perry-codegen/src/inst.rs:426:                    // `js_shadow_slot_set` is a bounds-checked TLS store
+crates/perry-codegen/src/inst.rs:433:                    && !callee.contains("@js_shadow_slot_set")
+crates/perry-codegen/src/inst.rs:436:                !callee.starts_with("llvm.") && callee != "js_shadow_slot_set"
+crates/perry-codegen/src/temp_root_coverage/mod.rs:165:/// means a `PERRY_RS4GC=0` bisection and CI assert the same thing — the
+crates/perry-codegen/src/gc_map_tests.rs:160:            "perry: native GC roots (PERRY_RS4GC) are not enabled for target \
+crates/perry-codegen/src/expr/instance_misc1.rs:242:                "js_shadow_slot_set",
+crates/perry-runtime/src/exception/savepoints/tests.rs:77:    crate::gc::js_shadow_frame_push(marker);
+crates/perry-runtime/src/exception/savepoints/tests.rs:78:    crate::gc::js_shadow_slot_set(0, (marker as f64).to_bits());
+crates/perry-codegen/src/expr/call_spread_rooting_tests.rs:8://! index, no `js_shadow_frame_enter` is emitted, and **no `js_gc_temp_root_*`
+crates/perry-codegen/src/expr/issue7628_rooting_tests.rs:68://! `js_shadow_frame_enter` is emitted at all, so a frame-width assertion reads
+crates/perry-codegen/src/expr/computed_store_rooting_tests.rs:108:/// env decision (`PERRY_RS4GC`) and a test that silently measured zero under the
+crates/perry-codegen/src/expr/computed_store_rooting_tests.rs:111:/// shadow-stack lowering it is a `js_shadow_slot_bind`. Both arms of each
+crates/perry-codegen/src/expr/computed_store_rooting_tests.rs:115:    ir.matches("alloca ptr addrspace(1)").count() + ir.matches("@js_shadow_slot_bind(").count()
+crates/perry-codegen/src/expr/shadow_slot.rs:196:    // mode that call is real (`js_shadow_slot_set`), and a call inside a
+crates/perry-codegen/src/expr/shadow_slot.rs:235:    // clear would be a redundant `js_shadow_slot_set(idx, 0)` TLS hit.
+crates/perry-codegen/src/expr/shadow_slot.rs:242:    // still holds 0 — this clear is a redundant `js_shadow_slot_set(slot, 0)`
+crates/perry-codegen/src/expr/shadow_slot.rs:253:        "js_shadow_slot_set",
+crates/perry-codegen/src/expr/shadow_slot.rs:290:        "js_shadow_slot_bind",
+crates/perry-codegen/src/expr/shadow_slot.rs:336:            "js_shadow_slot_bind",
+crates/perry-codegen/src/expr/shadow_slot.rs:350:        "js_shadow_slot_bind",
+crates/perry-codegen/src/expr/shadow_slot.rs:358:/// This is the only part of `js_shadow_slot_bind` that is genuinely per-store:
+crates/perry-codegen/src/expr/shadow_slot.rs:481:        // `js_shadow_slot_bind` copies that slot into the shadow frame, marks
+crates/perry-runtime/src/gc/roots/stack_roots.rs:5:use super::shadow_stack::{js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_bind};
+crates/perry-runtime/src/gc/roots/stack_roots.rs:22:    let frame = Frame(js_shadow_frame_push(
+crates/perry-runtime/src/gc/roots/stack_roots.rs:29:        js_shadow_slot_bind(index as u32, unsafe {
+crates/perry-runtime/src/gc/roots/stack_roots.rs:55:        js_shadow_frame_pop(self.0);
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:37:/// liveness flag alongside it. [`js_shadow_slot_bind`] refuses to record a
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:105:/// [`js_shadow_slot_set`] / [`js_shadow_slot_bind`]. That requires the field
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:394:/// aligned `ShadowEntry`s. `js_shadow_frame_push` guarantees this by sizing
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:496:/// NaN-boxed pointer values via `js_shadow_slot_set` /
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:497:/// `js_shadow_slot_bind`). Returns an opaque `frame_handle` (the pre-push
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:507:pub extern "C" fn js_shadow_frame_push(slot_count: u32) -> u64 {
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:514:/// The body of [`js_shadow_frame_push`], factored out so
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:515:/// [`js_shadow_frame_enter`] shares it exactly rather than reimplementing it.
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:540:/// [`js_shadow_frame_push`], but returning the address of this thread's
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:547:/// [`js_shadow_frame_pop`] needs is recoverable without a second call:
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:567:pub extern "C" fn js_shadow_frame_enter(slot_count: u32) -> *mut ShadowStackState {
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:586:/// the return value of the matching `js_shadow_frame_push`. Restores
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:595:/// argument instead of the small index `js_shadow_frame_push` returned —
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:596:/// `js_shadow_frame_pop(9222246136947933185)` → out-of-range header read →
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:601:pub extern "C" fn js_shadow_frame_pop(frame_handle: u64) {
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:618:/// Report an out-of-range `js_shadow_frame_pop` handle without unwinding.
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:643:usually means a caller threaded a NaN-boxed value into js_shadow_frame_pop \
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:644:instead of the index js_shadow_frame_push returned. Reported once per process."
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:668:pub extern "C" fn js_shadow_slot_set(idx: u32, value: u64) {
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:702:pub extern "C" fn js_shadow_slot_bind(idx: u32, value_slot: *mut u64) {
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:740:pub extern "C" fn js_shadow_slot_get(idx: u32) -> u64 {
+crates/perry-runtime/src/gc/roots/shadow_stack.rs:795:/// unwound past. Those functions emitted `js_shadow_frame_pop` before
+crates/perry-runtime/src/gc/roots/temp_roots.rs:85:/// Same defect class as #7145's `js_shadow_frame_pop`: a `debug_assert!(false)`
+crates/perry-codegen/src/expr/slice7_rooting_tests.rs:500:///  * **shadow frame**: the width is `js_shadow_frame_enter`'s argument;
+crates/perry-codegen/src/expr/slice7_rooting_tests.rs:512:        .find(|l| l.contains("@js_shadow_frame_enter(") && !l.trim_start().starts_with("declare"))
+crates/perry-codegen/src/expr/slice8_rooting_tests.rs:13://! `js_shadow_frame_enter` is emitted at all, so a test that counts frame slots
+crates/perry-runtime/src/gc/roots/stack_maps.rs:3://! Under `PERRY_RS4GC=1` the compiler runs `RewriteStatepointsForGC`, which
+crates/perry-codegen/src/expr/mod.rs:1009:    /// frame slot index. Empty when `PERRY_SHADOW_STACK` is off.
+crates/perry-codegen/src/expr/mod.rs:1011:    /// lowering sites to emit `js_shadow_slot_set(idx, bits)` so
+crates/perry-codegen/src/expr/mod.rs:1025:    /// Slot indices that have had at least one `js_shadow_slot_bind` (or
+crates/perry-codegen/src/expr/mod.rs:1028:    /// never-bound slot is a provable no-op (`js_shadow_slot_set(idx, 0)` on
+crates/perry-codegen/src/expr/mod.rs:1111:    /// `_tlv_get_addr`-heavy `js_shadow_slot_set(slot, 0)` that dominated
+crates/perry-codegen/src/expr/property_set/sloppy_class_field.rs:90:    //    protects shadow (`PERRY_RS4GC=0`) and native (`=1`, default)
+crates/perry-codegen/src/expr/scalar_slot_root.rs:9://! `js_shadow_slot_bind` for them:
+crates/perry-codegen/src/expr/scalar_slot_root.rs:31://! pointer-typed local. `js_shadow_slot_bind` records `slot_ptrs[slot] =
+crates/perry-codegen/src/expr/scalar_slot_root.rs:39://! of a bound slot (`visit_shadow_stack_root_slots`, `js_shadow_slot_get`)
+crates/perry-codegen/src/expr/scalar_slot_root.rs:123:        "js_shadow_slot_bind",
+crates/perry-codegen/src/expr/scalar_slot_root.rs:151:/// `js_shadow_slot_bind` records `slot_ptrs[idx] = alloca`, so evacuation
+crates/perry-codegen/src/expr/scalar_slot_root.rs:163:        // lazily-created `js_shadow_frame_push` is already in
+crates/perry-codegen/src/expr/scalar_slot_root.rs:167:            "js_shadow_slot_bind",
+crates/perry-codegen/src/expr/scalar_slot_root.rs:179:/// replaces did** (`js_shadow_slot_bind` dereferences `value_slot`). The load
+crates/perry-runtime/src/object/class_registry/construct/rooted_arguments.rs:18:            crate::gc::js_shadow_frame_pop(self.0);
+crates/perry-runtime/src/object/class_registry/construct/rooted_arguments.rs:21:    let frame = Frame(crate::gc::js_shadow_frame_push(
+crates/perry-runtime/src/object/class_registry/construct/rooted_arguments.rs:25:        crate::gc::js_shadow_slot_bind(index as u32, value.get().cast());
+crates/perry-codegen/src/lower_call/new.rs:314:                // no `js_shadow_slot_bind`, so it copies whatever bits it is
+crates/perry-codegen/src/lower_call/new.rs:782:    // the alloca, and `js_shadow_slot_bind` makes evacuation rewrite the alloca
+crates/perry-runtime/src/gc/tests/layout_trace.rs:197:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/layout_trace.rs:200:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/layout_trace.rs:216:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/layout_trace.rs:219:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/layout_pointer_free_hazard.rs:42:    js_shadow_slot_set(0, ptr_bits(obj));
+crates/perry-runtime/src/gc/tests/layout_pointer_free_hazard.rs:46:    let moved_obj = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/pinned_roots.rs:88:    (js_shadow_slot_get(0) & POINTER_MASK) as *mut T
+crates/perry-runtime/src/gc/tests/pinned_roots.rs:111:    js_shadow_slot_set(0, ptr_bits(parent as usize));
+crates/perry-runtime/src/gc/tests/pinned_roots.rs:122:        js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/pinned_roots.rs:182:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/pinned_roots.rs:303:    js_shadow_slot_set(0, ptr_bits(p as usize));
+crates/perry-runtime/src/gc/tests/pinned_roots.rs:311:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/block_pool_pressure.rs:52:    let frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/block_pool_pressure.rs:62:    js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/support.rs:489:        let frame = js_shadow_frame_push(slot_count);
+crates/perry-runtime/src/gc/tests/support.rs:500:        js_shadow_frame_pop(self.frame);
+crates/perry-runtime/src/gc/tests/boxes.rs:12:    js_shadow_slot_set(0, ptr_bits(closure as usize));
+crates/perry-runtime/src/gc/tests/boxes.rs:16:        (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::closure::ClosureHeader;
+crates/perry-runtime/src/gc/tests/boxes.rs:36:    js_shadow_slot_set(0, ptr_bits(state as usize));
+crates/perry-runtime/src/gc/tests/boxes.rs:37:    js_shadow_slot_set(1, ptr_bits(done as usize));
+crates/perry-runtime/src/gc/tests/boxes.rs:39:    let moved_state = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::r#box::I32Box;
+crates/perry-runtime/src/gc/tests/boxes.rs:40:    let moved_done = (js_shadow_slot_get(1) & POINTER_MASK) as *mut crate::r#box::BoolBox;
+crates/perry-runtime/src/gc/tests/boxes.rs:60:    js_shadow_slot_set(0, ptr_bits(cell as usize));
+crates/perry-runtime/src/gc/tests/boxes.rs:81:    js_shadow_slot_set(0, ptr_bits(closure as usize));
+crates/perry-runtime/src/gc/tests/boxes.rs:83:    let live_closure = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/boxes.rs:87:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/temp_roots.rs:133:    // `js_shadow_slot_set` follows: a malformed index from generated code must
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:41:    js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:66:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:90:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:142:    js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:165:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:199:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:256:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:288:    js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:340:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:422:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:537:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:650:    js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:684:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:701:    js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:745:    js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:770:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:795:    js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:810:    // RAW slot write, deliberately bypassing js_shadow_slot_set: that setter
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:825:    let hidden_after = (js_shadow_slot_get(1) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:873:    js_shadow_slot_set(0, ptr_bits(pre_growth));
+crates/perry-runtime/src/gc/tests/debt_pacer.rs:944:    js_shadow_slot_set(0, ptr_bits(target));
+crates/perry-runtime/src/gc/tests/host_safepoints.rs:19:    js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/host_safepoints.rs:141:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/host_safepoints.rs:193:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/host_safepoints.rs:469:    js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:102:        js_shadow_slot_set(slot, ptr_bits(weak_ref as usize));
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:124:/// time weak processing parks. `js_shadow_slot_set` performs no barrier, so a
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:133:    js_shadow_slot_set(witness_slot, ptr_bits(witness));
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:169:        let weak_ref = f64::from_bits(js_shadow_slot_get(slot));
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:220:    let weak_ref = f64::from_bits(js_shadow_slot_get(slot));
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:263:    let weak_ref = f64::from_bits(js_shadow_slot_get(slot));
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:293:    js_shadow_slot_set(MAP_SLOT, ptr_bits(map as usize));
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:307:        js_shadow_slot_set(slot, ptr_bits(key_ref as usize));
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:317:    let map_value = f64::from_bits(js_shadow_slot_get(MAP_SLOT));
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:321:            crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(slot))).to_bits();
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:353:            f64::from_bits(js_shadow_slot_get(MAP_SLOT)),
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:378:    js_shadow_slot_set(0, ptr_bits(weak_ref as usize));
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:379:    js_shadow_slot_set(1, ptr_bits(target as usize));
+crates/perry-runtime/src/gc/tests/weak_read_barrier.rs:382:    let bits = crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(0))).to_bits();
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:190:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:215:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:230:    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live_malloc as u64);
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:258:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:292:    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:390:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:431:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:453:    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:470:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:510:    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:526:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:560:    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:576:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:613:    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:630:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/incremental_sweep_reclaim.rs:660:    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+crates/perry-runtime/src/gc/roots.rs:59:    js_shadow_frame_enter, js_shadow_frame_pop, js_shadow_frame_push, js_shadow_slot_bind,
+crates/perry-runtime/src/gc/roots.rs:60:    js_shadow_slot_get, js_shadow_slot_set, js_shadow_state_addr, shadow_stack_depth,
+crates/perry-runtime/src/gc/tests/forwarded_stub_membership.rs:84:    js_shadow_slot_set(0, ptr_bits(holder as usize));
+crates/perry-runtime/src/gc/tests/forwarded_stub_membership.rs:109:    let holder_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/forwarded_stub_membership.rs:137:    js_shadow_slot_set(0, ptr_bits(holder as usize));
+crates/perry-runtime/src/gc/tests/forwarded_stub_membership.rs:148:    let holder_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/event_internal_slots.rs:10:        js_shadow_slot_set(0, ptr_bits(owner as usize));
+crates/perry-runtime/src/gc/tests/event_internal_slots.rs:12:        let owner = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/event_internal_slots.rs:50:        let after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/event_internal_slots.rs:63:        js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/event_internal_slots.rs:72:    js_shadow_slot_set(0, ptr_bits(owner as usize));
+crates/perry-runtime/src/gc/tests/event_internal_slots.rs:75:        owner = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/event_internal_slots.rs:107:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/oldgen.rs:799:    let frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/oldgen.rs:807:    js_shadow_slot_set(0, ptr_bits(parent_user));
+crates/perry-runtime/src/gc/tests/oldgen.rs:815:    let parent_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/oldgen.rs:835:    js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/oldgen.rs:892:    let frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/oldgen.rs:900:    js_shadow_slot_set(0, ptr_bits(parent_user));
+crates/perry-runtime/src/gc/tests/oldgen.rs:904:    let parent_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/oldgen.rs:954:    js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:112:    js_shadow_slot_set(0, ptr_bits(lazy));
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:113:    js_shadow_slot_set(1, ptr_bits(proto));
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:120:    let lazy = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:121:    let proto = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:145:    let lazy_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:146:    let proto_after = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:208:    js_shadow_slot_set(0, ptr_bits(owner));
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:216:    let owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:235:    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:240:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:307:        js_shadow_slot_set(0, ptr_bits(owner));
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:313:        let owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:322:        let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/residual_prototype_relocation.rs:330:        js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/heap_accounting.rs:149:        js_shadow_slot_set(0, string_bits(survivor));
+crates/perry-runtime/src/gc/tests/heap_accounting.rs:208:        let survivor_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/heap_accounting.rs:233:        js_shadow_slot_set(0, string_bits(survivor));
+crates/perry-runtime/src/gc/tests/heap_accounting.rs:259:        let survivor_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/adopt_census.rs:49:    js_shadow_slot_set(0, ptr_bits(outer as usize));
+crates/perry-runtime/src/gc/tests/adopt_census.rs:103:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/zero_slot_skip.rs:197:    js_shadow_slot_set(0, ptr_bits(holder as usize));
+crates/perry-runtime/src/gc/tests/zero_slot_skip.rs:204:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying.rs:228:    js_shadow_slot_set(0, ptr_bits(closure as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:231:    let closure_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:272:    js_shadow_slot_set(0, ptr_bits(map as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:274:    let map_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::map::MapHeader;
+crates/perry-runtime/src/gc/tests/copying.rs:337:    js_shadow_slot_set(0, ptr_bits(map as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:339:    let map_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::map::MapHeader;
+crates/perry-runtime/src/gc/tests/copying.rs:448:    js_shadow_slot_set(0, ptr_bits(obj as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:451:    let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:487:    js_shadow_slot_set(0, ptr_bits(closure as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:490:    let closure_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:560:    js_shadow_slot_set(0, ptr_bits(obj as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:563:    let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::object::ObjectHeader;
+crates/perry-runtime/src/gc/tests/copying.rs:630:    js_shadow_slot_set(0, ptr_bits(stale_arr as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:633:    let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:736:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying.rs:739:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:1272:    js_shadow_slot_set(0, ptr_bits(shadow_child));
+crates/perry-runtime/src/gc/tests/copying.rs:1276:    let shadow_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:1294:    js_shadow_slot_bind(0, &mut compiled_local_slot as *mut u64);
+crates/perry-runtime/src/gc/tests/copying.rs:1300:    assert_eq!(js_shadow_slot_get(0), compiled_local_slot);
+crates/perry-runtime/src/gc/tests/copying.rs:1313:    js_shadow_slot_set(0, ptr_bits(dead));
+crates/perry-runtime/src/gc/tests/copying.rs:1314:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/copying.rs:1315:    js_shadow_slot_set(1, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/copying.rs:1318:    let live_after = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:1321:    assert_eq!(js_shadow_slot_get(0), 0);
+crates/perry-runtime/src/gc/tests/copying.rs:1347:    js_shadow_slot_set(0, ptr_bits(large));
+crates/perry-runtime/src/gc/tests/copying.rs:1350:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:1434:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:1437:    let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:1484:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:1487:    let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:1537:    js_shadow_slot_set(0, ptr_bits(clone as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:1540:    let clone_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:1587:    js_shadow_slot_set(0, ptr_bits(old_arr as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:1664:    js_shadow_slot_set(0, ptr_bits(set as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:1666:    let set_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::set::SetHeader;
+crates/perry-runtime/src/gc/tests/copying.rs:1691:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying.rs:1694:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:1759:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:1762:    let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:1788:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying.rs:1791:    let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying.rs:1834:    js_shadow_slot_set(0, capture_bits);
+crates/perry-runtime/src/gc/tests/copying.rs:1865:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/copying.rs:1944:    js_shadow_slot_set(0, ptr_bits(owner));
+crates/perry-runtime/src/gc/tests/copying.rs:1947:    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/telemetry_verifier.rs:236:    js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/telemetry_verifier.rs:263:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/telemetry_verifier.rs:278:    js_shadow_slot_set(0, ptr_bits(old_obj as usize));
+crates/perry-runtime/src/gc/tests/telemetry_verifier.rs:312:    js_shadow_slot_set(0, string_bits(first_live));
+crates/perry-runtime/src/gc/tests/telemetry_verifier.rs:315:        js_shadow_slot_set(slot, string_bits(root));
+crates/perry-runtime/src/gc/tests/telemetry_verifier.rs:352:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/telemetry_verifier.rs:365:    js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/telemetry_verifier.rs:426:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:12:        js_shadow_slot_set(0, ptr_bits(owner as usize));
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:15:        js_shadow_slot_set(1, ptr_bits(class as usize));
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:17:        let owner = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:18:        crate::object::stamp_private_evaluation_brand(owner, f64::from_bits(js_shadow_slot_get(1)));
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:20:        crate::object::private_lexical_brand_push(f64::from_bits(js_shadow_slot_get(1)));
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:22:            f64::from_bits(js_shadow_slot_get(0)),
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:33:        let owner = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:38:        let old_class = (js_shadow_slot_get(1) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:42:            f64::from_bits(js_shadow_slot_get(0)),
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:43:            f64::from_bits(js_shadow_slot_get(1)),
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:51:        let class = (js_shadow_slot_get(1) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:56:            Some(js_shadow_slot_get(1)),
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:61:        let owner = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:68:        js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/private_evaluation_storage.rs:69:        js_shadow_slot_set(1, 0);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:25:        let h = js_shadow_frame_push(slot_count);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:34:            js_shadow_frame_pop(h);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:55:/// Sabotage check: delete the `clear_slots` call in `js_shadow_frame_push`
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:65:        let dead = js_shadow_frame_push(slot_count);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:67:            js_shadow_slot_set(i, 0x7FFD_0000_DEAD_0000 | u64::from(i));
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:74:        js_shadow_frame_pop(dead);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:76:        let fresh = js_shadow_frame_push(slot_count);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:85:                js_shadow_slot_get(i),
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:90:        js_shadow_frame_pop(fresh);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:107:    let dead = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:108:    js_shadow_slot_bind(0, &mut stale_storage as *mut u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:109:    assert_eq!(js_shadow_slot_get(0), 0x7FFD_0000_1111_1111);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:110:    js_shadow_frame_pop(dead);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:112:    let fresh = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:118:    js_shadow_slot_set(0, 0x7FFD_0000_2222_2222);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:123:    assert_eq!(js_shadow_slot_get(0), 0x7FFD_0000_2222_2222);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:130:    js_shadow_frame_pop(fresh);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:147:    let h = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:150:    js_shadow_slot_bind(0, &mut storage as *mut u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:153:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:154:    assert_eq!(js_shadow_slot_get(0), 0, "cleared slot reads as empty");
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:165:    js_shadow_slot_set(0, ptr_bits(0xABCD_EF00));
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:176:    js_shadow_frame_pop(h);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:224:    js_shadow_slot_bind(0, &mut storage as *mut u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:235:        js_shadow_slot_get(0),
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:251:        let nested = js_shadow_frame_push(old_capacity as u32 + 1);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:262:        js_shadow_frame_pop(nested);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:274:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:278:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:283:/// `js_shadow_slot_bind` must root the word the mutator has in the slot at the
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:291:    let h = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:294:    js_shadow_slot_bind(0, &mut storage as *mut u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:297:    js_shadow_slot_bind(1, &mut other as *mut u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:313:    assert_eq!(js_shadow_slot_get(0), ptr_bits(0xCCCC_0000));
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:314:    assert_eq!(js_shadow_slot_get(1), ptr_bits(0xBBBB_0000));
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:319:    js_shadow_frame_pop(h);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:367:    let h = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:368:    js_shadow_slot_set(0, ptr_bits(set_child));
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:370:    js_shadow_slot_bind(1, &mut storage as *mut u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:373:    assert_marked_user_ptr(set_child, "js_shadow_slot_set child");
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:374:    assert_marked_user_ptr(bind_child, "js_shadow_slot_bind child");
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:376:    js_shadow_frame_pop(h);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:401:            js_shadow_slot_set(i, bits);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:416:                js_shadow_slot_get(i),
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:421:        js_shadow_frame_pop(nest.0.pop().expect("frame handle"));
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:437:        js_shadow_slot_set(0, 0x7FFD_0000_0000_0000 | i as u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:442:        assert_eq!(js_shadow_slot_get(0), 0x7FFD_0000_0000_0000 | i as u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:443:        js_shadow_frame_pop(nest.0.pop().expect("frame handle"));
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:455:    let outer = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:456:    js_shadow_slot_set(0, 0x7FFD_0000_0000_00AA);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:460:    let _inner = js_shadow_frame_push(3);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:461:    js_shadow_slot_bind(0, &mut orphan_storage as *mut u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:462:    js_shadow_slot_set(1, 0x7FFD_0000_0000_00CC);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:470:    let after = js_shadow_frame_push(3);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:472:    js_shadow_slot_set(0, 0x7FFD_0000_0000_00DD);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:477:    js_shadow_frame_pop(after);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:478:    js_shadow_frame_pop(outer);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:487:    let h = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:488:    js_shadow_slot_set(0, 0x7FFD_0000_0000_0001);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:493:        js_shadow_frame_pop(bogus);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:496:    assert_eq!(js_shadow_slot_get(0), 0x7FFD_0000_0000_0001);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:497:    js_shadow_frame_pop(h);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:504:// Generated code no longer calls `js_shadow_slot_bind` / `js_shadow_slot_set`
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:506:// the `ShadowStackState` pointer `js_shadow_frame_enter` returned, using the
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:568:/// `js_shadow_frame_enter` must push exactly the frame `js_shadow_frame_push`
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:573:/// `js_shadow_frame_pop` would unbalance the stack.
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:580:    let state = js_shadow_frame_enter(3);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:595:    js_shadow_frame_pop(recovered_handle);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:612:    let state = js_shadow_frame_enter(2);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:620:        js_shadow_slot_get(1),
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:627:    js_shadow_slot_bind(0, &mut other as *mut u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:642:    js_shadow_frame_pop(handle as u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:646:/// dropped -- the same state `js_shadow_slot_set(idx, 0)` leaves, so a later
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:655:    let state = js_shadow_frame_enter(1);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:660:    js_shadow_slot_bind(0, &mut storage as *mut u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:668:    assert_eq!(js_shadow_slot_get(0), 0, "cleared slot reads as dead");
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:671:    js_shadow_slot_set(0, 0x7FFD_0000_0000_2222);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:677:    js_shadow_frame_pop(handle as u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:681:/// evacuating collection exactly as one written through `js_shadow_slot_bind`.
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:691:    let state = js_shadow_frame_enter(1);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:707:        js_shadow_slot_get(0),
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:714:/// `js_shadow_slot_set` / `js_shadow_slot_bind`.
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:734:    let state = js_shadow_frame_enter(2);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:779:    js_shadow_frame_pop(handle as u64);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:788:    let state = js_shadow_frame_enter(1);
+crates/perry-runtime/src/gc/tests/shadow_stack_ops.rs:805:    js_shadow_frame_pop(handle as u64);
+crates/perry-runtime/src/gc/tests/root_words.rs:61:            let frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/root_words.rs:62:            js_shadow_slot_set(0, bits);
+crates/perry-runtime/src/gc/tests/root_words.rs:64:            let after = js_shadow_slot_get(0);
+crates/perry-runtime/src/gc/tests/root_words.rs:65:            js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/root_words.rs:230:    js_shadow_slot_set(0, live as u64);
+crates/perry-runtime/src/gc/tests/root_words.rs:253:    let survivor = js_shadow_slot_get(0);
+crates/perry-runtime/src/gc/tests/roots.rs:13:        Self(js_shadow_frame_push(0))
+crates/perry-runtime/src/gc/tests/roots.rs:19:        js_shadow_frame_pop(self.0);
+crates/perry-runtime/src/gc/tests/roots.rs:503:    let h = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/roots.rs:512:    js_shadow_frame_pop(h);
+crates/perry-runtime/src/gc/tests/roots.rs:551:    let h = js_shadow_frame_push(3);
+crates/perry-runtime/src/gc/tests/roots.rs:555:        assert_eq!(js_shadow_slot_get(i), 0, "slot {} not zero", i);
+crates/perry-runtime/src/gc/tests/roots.rs:557:    js_shadow_frame_pop(h);
+crates/perry-runtime/src/gc/tests/roots.rs:560:    assert_eq!(js_shadow_slot_get(0), 0);
+crates/perry-runtime/src/gc/tests/roots.rs:566:    let h = js_shadow_frame_push(4);
+crates/perry-runtime/src/gc/tests/roots.rs:568:    js_shadow_slot_set(0, 0x7FFD_0000_1234_5678); // POINTER_TAG
+crates/perry-runtime/src/gc/tests/roots.rs:569:    js_shadow_slot_set(1, 0x7FFF_0000_9ABC_DEF0); // STRING_TAG
+crates/perry-runtime/src/gc/tests/roots.rs:570:    js_shadow_slot_set(2, 0); // hole
+crates/perry-runtime/src/gc/tests/roots.rs:571:    js_shadow_slot_set(3, 0x7FF9_0200_0000_6B6F); // SSO "ok"
+crates/perry-runtime/src/gc/tests/roots.rs:572:    assert_eq!(js_shadow_slot_get(0), 0x7FFD_0000_1234_5678);
+crates/perry-runtime/src/gc/tests/roots.rs:573:    assert_eq!(js_shadow_slot_get(1), 0x7FFF_0000_9ABC_DEF0);
+crates/perry-runtime/src/gc/tests/roots.rs:574:    assert_eq!(js_shadow_slot_get(2), 0);
+crates/perry-runtime/src/gc/tests/roots.rs:575:    assert_eq!(js_shadow_slot_get(3), 0x7FF9_0200_0000_6B6F);
+crates/perry-runtime/src/gc/tests/roots.rs:577:    assert_eq!(js_shadow_slot_get(4), 0);
+crates/perry-runtime/src/gc/tests/roots.rs:578:    js_shadow_frame_pop(h);
+crates/perry-runtime/src/gc/tests/roots.rs:584:    let h = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/roots.rs:587:    js_shadow_slot_bind(0, &mut local_slot as *mut u64);
+crates/perry-runtime/src/gc/tests/roots.rs:588:    assert_eq!(js_shadow_slot_get(0), ptr_bits(0x1234_5678));
+crates/perry-runtime/src/gc/tests/roots.rs:591:    assert_eq!(js_shadow_slot_get(0), ptr_bits(0x2222_3333));
+crates/perry-runtime/src/gc/tests/roots.rs:593:    js_shadow_slot_set(0, ptr_bits(0x4444_5555));
+crates/perry-runtime/src/gc/tests/roots.rs:596:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/roots.rs:597:    assert_eq!(js_shadow_slot_get(0), 0);
+crates/perry-runtime/src/gc/tests/roots.rs:600:    js_shadow_frame_pop(h);
+crates/perry-runtime/src/gc/tests/roots.rs:606:    let outer = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/roots.rs:607:    js_shadow_slot_set(0, 0x1111);
+crates/perry-runtime/src/gc/tests/roots.rs:608:    js_shadow_slot_set(1, 0x2222);
+crates/perry-runtime/src/gc/tests/roots.rs:611:    let inner = js_shadow_frame_push(3);
+crates/perry-runtime/src/gc/tests/roots.rs:612:    js_shadow_slot_set(0, 0xAAAA);
+crates/perry-runtime/src/gc/tests/roots.rs:613:    js_shadow_slot_set(1, 0xBBBB);
+crates/perry-runtime/src/gc/tests/roots.rs:614:    js_shadow_slot_set(2, 0xCCCC);
+crates/perry-runtime/src/gc/tests/roots.rs:617:    assert_eq!(js_shadow_slot_get(0), 0xAAAA);
+crates/perry-runtime/src/gc/tests/roots.rs:618:    assert_eq!(js_shadow_slot_get(1), 0xBBBB);
+crates/perry-runtime/src/gc/tests/roots.rs:619:    assert_eq!(js_shadow_slot_get(2), 0xCCCC);
+crates/perry-runtime/src/gc/tests/roots.rs:621:    js_shadow_frame_pop(inner);
+crates/perry-runtime/src/gc/tests/roots.rs:627:    assert_eq!(js_shadow_slot_get(0), 0x1111);
+crates/perry-runtime/src/gc/tests/roots.rs:628:    assert_eq!(js_shadow_slot_get(1), 0x2222);
+crates/perry-runtime/src/gc/tests/roots.rs:630:    js_shadow_frame_pop(outer);
+crates/perry-runtime/src/gc/tests/roots.rs:637:    let h = js_shadow_frame_push(0);
+crates/perry-runtime/src/gc/tests/roots.rs:640:    assert_eq!(js_shadow_slot_get(0), 0);
+crates/perry-runtime/src/gc/tests/roots.rs:641:    js_shadow_frame_pop(h);
+crates/perry-runtime/src/gc/tests/roots.rs:650:        let h = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/roots.rs:651:        js_shadow_slot_set(0, i as u64);
+crates/perry-runtime/src/gc/tests/roots.rs:652:        js_shadow_slot_set(1, (i * 2) as u64);
+crates/perry-runtime/src/gc/tests/roots.rs:658:        assert_eq!(js_shadow_slot_get(0), i as u64);
+crates/perry-runtime/src/gc/tests/roots.rs:659:        assert_eq!(js_shadow_slot_get(1), (i * 2) as u64);
+crates/perry-runtime/src/gc/tests/roots.rs:660:        js_shadow_frame_pop(handles.pop().unwrap());
+crates/perry-runtime/src/gc/tests/roots.rs:676:    let h = js_shadow_frame_push(4);
+crates/perry-runtime/src/gc/tests/roots.rs:678:    js_shadow_slot_set(0, 0x7FFD_0000_1234_5678);
+crates/perry-runtime/src/gc/tests/roots.rs:680:    js_shadow_slot_set(2, 0x7FFF_0000_9ABC_DEF0);
+crates/perry-runtime/src/gc/tests/roots.rs:681:    js_shadow_slot_set(3, 0x7FFA_0000_DEAD_BEEF);
+crates/perry-runtime/src/gc/tests/roots.rs:688:    js_shadow_frame_pop(h);
+crates/perry-runtime/src/gc/tests/roots.rs:694:    let outer = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/roots.rs:695:    js_shadow_slot_set(0, 0xAAAA);
+crates/perry-runtime/src/gc/tests/roots.rs:696:    js_shadow_slot_set(1, 0xBBBB);
+crates/perry-runtime/src/gc/tests/roots.rs:697:    let inner = js_shadow_frame_push(3);
+crates/perry-runtime/src/gc/tests/roots.rs:698:    js_shadow_slot_set(0, 0xCCCC);
+crates/perry-runtime/src/gc/tests/roots.rs:699:    js_shadow_slot_set(1, 0xDDDD);
+crates/perry-runtime/src/gc/tests/roots.rs:700:    js_shadow_slot_set(2, 0xEEEE);
+crates/perry-runtime/src/gc/tests/roots.rs:716:    js_shadow_frame_pop(inner);
+crates/perry-runtime/src/gc/tests/roots.rs:717:    js_shadow_frame_pop(outer);
+crates/perry-runtime/src/gc/tests/roots.rs:725:    let a = js_shadow_frame_push(0);
+crates/perry-runtime/src/gc/tests/roots.rs:726:    let b = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/roots.rs:727:    js_shadow_slot_set(0, 0x1234);
+crates/perry-runtime/src/gc/tests/roots.rs:728:    js_shadow_slot_set(1, 0x5678);
+crates/perry-runtime/src/gc/tests/roots.rs:729:    let c = js_shadow_frame_push(0);
+crates/perry-runtime/src/gc/tests/roots.rs:735:    js_shadow_frame_pop(c);
+crates/perry-runtime/src/gc/tests/roots.rs:736:    js_shadow_frame_pop(b);
+crates/perry-runtime/src/gc/tests/roots.rs:737:    js_shadow_frame_pop(a);
+crates/perry-runtime/src/gc/tests/roots.rs:741:// `js_shadow_frame_pop` epilogues of the functions being unwound past, so
+crates/perry-runtime/src/gc/tests/roots.rs:752:    let run_frame = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/roots.rs:753:    js_shadow_slot_set(0, 0x7FFD_0000_1111_1111);
+crates/perry-runtime/src/gc/tests/roots.rs:754:    js_shadow_slot_set(1, 0x7FFD_0000_2222_2222);
+crates/perry-runtime/src/gc/tests/roots.rs:761:    let _d1 = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/roots.rs:762:    js_shadow_slot_set(0, 0x7FFD_0000_AAAA_AAAA);
+crates/perry-runtime/src/gc/tests/roots.rs:763:    let _d2 = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/roots.rs:764:    js_shadow_slot_set(0, 0x7FFD_0000_BBBB_BBBB);
+crates/perry-runtime/src/gc/tests/roots.rs:765:    let _d3 = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/roots.rs:766:    js_shadow_slot_set(0, 0x7FFD_0000_CCCC_CCCC);
+crates/perry-runtime/src/gc/tests/roots.rs:767:    js_shadow_slot_set(1, 0x7FFD_0000_DDDD_DDDD);
+crates/perry-runtime/src/gc/tests/roots.rs:793:    js_shadow_frame_pop(run_frame);
+crates/perry-runtime/src/gc/tests/roots.rs:798:// real local alloca (`js_shadow_slot_bind`) is the dangerous case — the
+crates/perry-runtime/src/gc/tests/roots.rs:806:    let run_frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/roots.rs:808:    js_shadow_slot_bind(0, &mut run_local as *mut u64);
+crates/perry-runtime/src/gc/tests/roots.rs:813:    let _callee = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/roots.rs:815:    js_shadow_slot_bind(0, &mut callee_local as *mut u64);
+crates/perry-runtime/src/gc/tests/roots.rs:832:    js_shadow_frame_pop(run_frame);
+crates/perry-runtime/src/gc/tests/map_store.rs:60:    js_shadow_slot_set(0, ptr_bits(map as usize));
+crates/perry-runtime/src/gc/tests/map_store.rs:75:    let moved = (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as *mut MapHeader;
+crates/perry-runtime/src/gc/tests/map_store.rs:89:    (js_shadow_slot_get(slot) & crate::value::POINTER_MASK) as *mut MapHeader
+crates/perry-runtime/src/gc/tests/map_store.rs:149:        let frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/map_store.rs:152:        js_shadow_slot_set(0, ptr_bits(map as usize));
+crates/perry-runtime/src/gc/tests/map_store.rs:182:        js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/map_store.rs:202:        let frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/map_store.rs:211:        js_shadow_slot_set(0, ptr_bits(map as usize));
+crates/perry-runtime/src/gc/tests/map_store.rs:262:        js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/scan_fallback.rs:247:    let frame = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/scan_fallback.rs:254:    js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/scan_fallback.rs:511:    let frame = js_shadow_frame_push(2);
+crates/perry-runtime/src/gc/tests/scan_fallback.rs:513:    js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/copying_object_scan.rs:60:        js_shadow_slot_set(0, ptr_bits(parent as usize));
+crates/perry-runtime/src/gc/tests/copying_object_scan.rs:67:        let parent_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying_object_scan.rs:150:        js_shadow_slot_set(0, ptr_bits(parent as usize));
+crates/perry-runtime/src/gc/tests/copying_object_scan.rs:172:            (js_shadow_slot_get(0) & POINTER_MASK) as usize == parent as usize
+crates/perry-runtime/src/gc/tests/concat_site.rs:139:    js_shadow_slot_set(0, handle.to_bits());
+crates/perry-runtime/src/gc/tests/concat_site.rs:143:    let moved_bits = js_shadow_slot_get(0);
+crates/perry-runtime/src/gc/tests/copying_side_tables.rs:31:    js_shadow_slot_set(0, ptr_bits(key));
+crates/perry-runtime/src/gc/tests/copying_side_tables.rs:51:    let key_after_bits = js_shadow_slot_get(0);
+crates/perry-runtime/src/gc/tests/copying_side_tables.rs:105:    js_shadow_slot_set(0, ptr_bits(func));
+crates/perry-runtime/src/gc/tests/copying_side_tables.rs:122:    let func_after_bits = js_shadow_slot_get(0);
+crates/perry-runtime/src/gc/tests/copying_side_tables.rs:169:    js_shadow_slot_set(0, ptr_bits(owner));
+crates/perry-runtime/src/gc/tests/copying_side_tables.rs:188:    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying_side_tables.rs:266:    js_shadow_slot_set(0, ptr_bits(sym_key));
+crates/perry-runtime/src/gc/tests/copying_side_tables.rs:277:    let sym_key_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying_side_tables.rs:320:    js_shadow_slot_set(0, ptr_bits(owner_addr));
+crates/perry-runtime/src/gc/tests/copying_side_tables.rs:351:    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/external_buffer.rs:43:    js_shadow_slot_set(0, ptr_bits(addr));
+crates/perry-runtime/src/gc/tests/external_buffer.rs:48:        js_shadow_slot_get(0),
+crates/perry-runtime/src/gc/tests/external_buffer.rs:56:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/external_buffer.rs:72:    js_shadow_slot_set(0, ptr_bits(ptr as usize));
+crates/perry-runtime/src/gc/tests/external_buffer.rs:74:    js_shadow_slot_set(1, ptr_bits(plain as usize));
+crates/perry-runtime/src/gc/tests/promoted_cohort.rs:145:    js_shadow_slot_set(0, string_bits(kept));
+crates/perry-runtime/src/gc/tests/promoted_cohort.rs:146:    js_shadow_slot_set(1, string_bits(dropped));
+crates/perry-runtime/src/gc/tests/promoted_cohort.rs:158:    js_shadow_slot_set(1, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/promoted_cohort.rs:172:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/promoted_cohort.rs:220:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/promoted_cohort.rs:296:    js_shadow_slot_set(slot, ptr_bits(array as usize));
+crates/perry-runtime/src/gc/tests/promoted_cohort.rs:333:            js_shadow_slot_set(2, ptr_bits(old_parent_of_young_strings(1)));
+crates/perry-runtime/src/gc/tests/promoted_cohort.rs:359:        js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/promoted_cohort.rs:385:        js_shadow_slot_set(slot, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:78:    js_shadow_slot_set(0, ptr_bits(owner));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:85:    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:154:    js_shadow_slot_set(0, string_bits(young_leaf()));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:175:    js_shadow_slot_set(0, ptr_bits(owner));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:189:    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:308:    js_shadow_slot_set(0, string_bits(young_leaf()));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:335:    js_shadow_slot_set(0, ptr_bits(keys as usize));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:344:    let keys_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:398:    js_shadow_slot_set(0, ptr_bits(keys));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:407:    let keys_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:542:    js_shadow_slot_set(0, ptr_bits(keys as usize));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:551:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:572:    js_shadow_slot_set(0, ptr_bits(new_keys as usize));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:578:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:594:    js_shadow_slot_set(0, ptr_bits(new_keys as usize));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:606:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:620:    js_shadow_slot_set(0, ptr_bits(keys as usize));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:628:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:663:        js_shadow_slot_set(slot as u32, ptr_bits(keys as usize));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:713:    js_shadow_slot_set(0, ptr_bits(keys as usize));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:719:    let promoted = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:818:    js_shadow_slot_set(0, string_bits(young_leaf()));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:848:    js_shadow_slot_set(0, ptr_bits(obj));
+crates/perry-runtime/src/gc/tests/young_log_tests.rs:852:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/evacuation.rs:823:    let frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/evacuation.rs:831:    js_shadow_slot_set(0, ptr_bits(parent_user));
+crates/perry-runtime/src/gc/tests/evacuation.rs:835:    let parent_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/evacuation.rs:866:    js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/evacuation.rs:904:    let frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/evacuation.rs:916:    js_shadow_slot_set(0, ptr_bits(parent_user));
+crates/perry-runtime/src/gc/tests/evacuation.rs:923:    let parent_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/evacuation.rs:980:    let parent_after_second = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/evacuation.rs:998:    js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/evacuation.rs:1035:    let frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/evacuation.rs:1037:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/evacuation.rs:1041:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/evacuation.rs:1043:    js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/array_named_props.rs:61:    js_shadow_slot_set(0, ptr_bits(owner as usize));
+crates/perry-runtime/src/gc/tests/array_named_props.rs:70:    let owner = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::array::ArrayHeader;
+crates/perry-runtime/src/gc/tests/array_named_props.rs:131:    js_shadow_slot_set(0, ptr_bits(old_owner));
+crates/perry-runtime/src/gc/tests/array_named_props.rs:135:    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/array_named_props.rs:235:    js_shadow_slot_set(0, ptr_bits(old_owner));
+crates/perry-runtime/src/gc/tests/array_named_props.rs:239:    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/array_named_props.rs:311:    js_shadow_slot_set(0, ptr_bits(old_owner));
+crates/perry-runtime/src/gc/tests/array_named_props.rs:315:    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/layout_inline_mask.rs:172:        js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/layout_inline_mask.rs:192:        let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/native_payload_callbacks.rs:101:    js_shadow_slot_set(0, value.to_bits());
+crates/perry-runtime/src/gc/tests/native_payload_callbacks.rs:114:    let moved = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/native_payload_callbacks.rs:225:    js_shadow_slot_set(0, value.to_bits());
+crates/perry-runtime/src/gc/tests/native_payload_callbacks.rs:228:    assert_ne!(value.to_bits(), js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/native_payload_callbacks.rs:231:        js_shadow_slot_get(0)
+crates/perry-runtime/src/gc/tests/forwarding_verification.rs:22:    js_shadow_slot_set(0, ptr_bits(holder as usize));
+crates/perry-runtime/src/gc/tests/forwarding_verification.rs:24:    js_shadow_slot_set(1, ptr_bits(young));
+crates/perry-runtime/src/gc/tests/forwarding_verification.rs:30:    assert_ne!(js_shadow_slot_get(1), ptr_bits(young));
+crates/perry-runtime/src/gc/tests/helper_stores.rs:131:    js_shadow_slot_set(0, parsed.bits());
+crates/perry-runtime/src/gc/tests/helper_stores.rs:141:    let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+crates/perry-runtime/src/gc/tests/helper_stores.rs:178:    js_shadow_slot_set(0, ptr_bits(result as usize));
+crates/perry-runtime/src/gc/tests/helper_stores.rs:186:    let result_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::array::ArrayHeader;
+crates/perry-runtime/src/gc/tests/step_bounds.rs:39:    js_shadow_slot_set(0, ptr_bits(reg as usize));
+crates/perry-runtime/src/gc/tests/step_bounds.rs:50:    let reg_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/object_create.rs:46:    js_shadow_slot_set(0, obj.to_bits());
+crates/perry-runtime/src/gc/tests/object_create.rs:49:    let moved_obj = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/object_create.rs:124:    js_shadow_slot_set(0, obj.to_bits());
+crates/perry-runtime/src/gc/tests/object_create.rs:130:    let obj = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/object_create.rs:136:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/survival_diag.rs:26:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/lazy_tape_side_alloc.rs:237:    js_shadow_slot_set(0, ptr_bits(lazy as usize));
+crates/perry-runtime/src/gc/tests/lazy_tape_side_alloc.rs:251:        (js_shadow_slot_get(0) & POINTER_MASK) as usize,
+crates/perry-runtime/src/gc/tests/budgeted_step_api.rs:44:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/budgeted_step_api.rs:70:    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+crates/perry-runtime/src/gc/tests/budgeted_step_api.rs:86:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/budgeted_step_api.rs:97:    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+crates/perry-runtime/src/gc/tests/budgeted_step_api.rs:114:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/budgeted_step_api.rs:163:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/budgeted_step_api.rs:178:    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+crates/perry-runtime/src/gc/tests/budgeted_step_api.rs:206:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/budgeted_step_api.rs:232:        js_shadow_slot_get(0) & POINTER_MASK,
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:107:    js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:133:    js_shadow_slot_set(0, string_bits(from_space_addr));
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:135:    let to_space_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:201:        js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:241:            js_shadow_slot_set(0, string_bits(live));
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:244:                (js_shadow_slot_get(0) & POINTER_MASK) as usize,
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:288:        js_shadow_slot_set(0, string_bits(stale));
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:290:        let moved_to = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:321:        js_shadow_slot_set(0, string_bits(stale));
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:323:        let moved_to = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:442:        js_shadow_slot_set(0, string_bits(leaf));
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:498:        js_shadow_slot_set(0, string_bits(leaf));
+crates/perry-runtime/src/gc/tests/fromspace_protect.rs:558:    js_shadow_slot_set(0, string_bits(from_space_addr));
+crates/perry-runtime/src/gc/tests/copying/verify_parent_context.rs:29:            js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying/verify_parent_context.rs:64:        js_shadow_slot_set(0, ptr_bits(young_leaf()));
+crates/perry-runtime/src/gc/tests/buffer_side_tables.rs:63:/// only it pushes the shadow frame that makes `js_shadow_slot_set` an actual
+crates/perry-runtime/src/gc/tests/buffer_side_tables.rs:75:    js_shadow_slot_set(0, ptr_bits(view));
+crates/perry-runtime/src/gc/tests/buffer_side_tables.rs:76:    js_shadow_slot_set(1, ptr_bits(sab));
+crates/perry-runtime/src/gc/tests/buffer_side_tables.rs:214:/// only it pushes the shadow frame that makes `js_shadow_slot_set` an actual
+crates/perry-runtime/src/gc/tests/buffer_side_tables.rs:222:    js_shadow_slot_set(0, ptr_bits(addr));
+crates/perry-runtime/src/gc/tests/buffer_side_tables.rs:310:    js_shadow_slot_set(0, ptr_bits(holder as usize));
+crates/perry-runtime/src/gc/tests/buffer_side_tables.rs:313:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/buffer_side_tables.rs:331:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying/set_index.rs:30:    js_shadow_slot_set(0, ptr_bits(set as usize));
+crates/perry-runtime/src/gc/tests/copying/set_index.rs:32:    let set_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::set::SetHeader;
+crates/perry-runtime/src/gc/tests/copying/set_index.rs:122:    js_shadow_slot_set(0, ptr_bits(set as usize));
+crates/perry-runtime/src/gc/tests/copying/set_index.rs:124:        let set = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::set::SetHeader;
+crates/perry-runtime/src/gc/tests/copying/set_index.rs:129:        let set = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::set::SetHeader;
+crates/perry-runtime/src/gc/tests/copying/set_index.rs:166:    js_shadow_slot_set(0, ptr_bits(set as usize));
+crates/perry-runtime/src/gc/tests/copying/set_index.rs:183:    let set = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::set::SetHeader;
+crates/perry-runtime/src/gc/tests/copying/set_index.rs:220:    js_shadow_slot_set(0, ptr_bits(set as usize));
+crates/perry-runtime/src/gc/tests/copying/set_index.rs:222:    js_shadow_slot_set(1, string_bits(young_leaf()));
+crates/perry-runtime/src/gc/tests/copying/set_index.rs:241:    let set = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::set::SetHeader;
+crates/perry-runtime/src/gc/tests/copying/set_index.rs:261:    js_shadow_slot_set(0, ptr_bits(set as usize));
+crates/perry-runtime/src/gc/tests/copying/set_index.rs:285:    let set = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::set::SetHeader;
+crates/perry-runtime/src/gc/tests/copying/promoted_remembered_7803.rs:89:    js_shadow_slot_set(0, ptr_bits(intermediate));
+crates/perry-runtime/src/gc/tests/copying/promoted_remembered_7803.rs:95:        let intermediate = deref(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copy_slot_decode.rs:30:        js_shadow_slot_set(0, ptr_bits(parent as usize));
+crates/perry-runtime/src/gc/tests/copy_slot_decode.rs:39:        let parent_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copy_slot_decode.rs:172:        js_shadow_slot_set(0, ptr_bits(young as usize));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:391:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:427:    js_shadow_slot_set(0, string_bits(first_live));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:429:        js_shadow_slot_set(slot, string_bits(young_leaf()));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:458:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/cycle_state.rs:908:    js_shadow_slot_set(0, ptr_bits(parent as usize));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:974:    js_shadow_slot_set(0, ptr_bits(owner as usize));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1032:    js_shadow_slot_set(0, ptr_bits(parent as usize));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1108:        js_shadow_slot_set(slot, ptr_bits(weak_ref as usize));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1154:        let weak_ref = f64::from_bits(js_shadow_slot_get(slot));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1176:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1206:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1212:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1260:    js_shadow_slot_set(0, ptr_bits(old_parent as usize));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1267:    js_shadow_slot_set(1, ptr_bits(nursery_candidate_user));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1278:        js_shadow_slot_get(1) & POINTER_MASK,
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1309:        js_shadow_slot_get(0) & POINTER_MASK,
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1321:    js_shadow_slot_set(0, ptr_bits(parent as usize));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1661:    js_shadow_slot_set(0, created.to_bits());
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1668:    let created = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1673:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/cycle_state.rs:1836:    js_shadow_slot_set(0, ptr_bits(promise as usize));
+crates/perry-runtime/src/gc/tests/copying/weakmap_index.rs:23:    f64::from_bits(js_shadow_slot_get(slot))
+crates/perry-runtime/src/gc/tests/copying/weakmap_index.rs:28:    js_shadow_slot_set(slot, ptr_bits(object as usize));
+crates/perry-runtime/src/gc/tests/copying/weakmap_index.rs:33:    js_shadow_slot_set(0, ptr_bits(map as usize));
+crates/perry-runtime/src/gc/tests/copying/weakmap_index.rs:37:    let map = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/copying/weakmap_index.rs:205:    js_shadow_slot_set(1, 0);
+crates/perry-runtime/src/gc/tests/copying/weakmap_index.rs:233:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/copying/weakmap_index.rs:234:    js_shadow_slot_set(1, 0);
+crates/perry-runtime/src/gc/tests/copying/weakmap_index.rs:245:    js_shadow_slot_set(0, ptr_bits(set as usize));
+crates/perry-runtime/src/gc/tests/copying/latch.rs:44:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying/latch.rs:67:    let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/latch.rs:82:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying/latch.rs:88:    let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/latch.rs:106:        (js_shadow_slot_get(0) & POINTER_MASK) as usize,
+crates/perry-runtime/src/gc/tests/copying/latch.rs:123:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying/latch.rs:166:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying/latch.rs:198:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying/latch.rs:269:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying/deferred_finalize_7635.rs:130:    js_shadow_slot_set(0, ptr_bits(obj as usize));
+crates/perry-runtime/src/gc/tests/copying/deferred_finalize_7635.rs:139:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize as *mut ObjectHeader;
+crates/perry-runtime/src/gc/tests/copying/deferred_finalize_7635.rs:155:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying/deferred_finalize_7635.rs:180:    js_shadow_slot_set(0, parsed.bits());
+crates/perry-runtime/src/gc/tests/copying/deferred_finalize_7635.rs:182:    let obj = (js_shadow_slot_get(0) & POINTER_MASK) as usize as *mut ObjectHeader;
+crates/perry-runtime/src/gc/tests/copying/deferred_finalize_7635.rs:218:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize as *mut ObjectHeader;
+crates/perry-runtime/src/gc/tests/copying/deferred_finalize_7635.rs:230:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying/promise_side_tables.rs:27:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/copying/promise_side_tables.rs:59:    js_shadow_slot_set(0, ptr_bits(p_addr));
+crates/perry-runtime/src/gc/tests/copying/promise_side_tables.rs:63:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/shift_queue.rs:26:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying/shift_queue.rs:30:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ArrayHeader;
+crates/perry-runtime/src/gc/tests/copying/shift_queue.rs:39:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying/shift_queue.rs:48:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying/shift_queue.rs:64:        js_shadow_slot_set(0, ptr_bits(current as usize));
+crates/perry-runtime/src/gc/tests/copying/shift_queue.rs:85:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying/adaptive_tenuring.rs:21:        js_shadow_slot_set(slot, string_bits(s as usize));
+crates/perry-runtime/src/gc/tests/copying/adaptive_tenuring.rs:35:    let before = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/adaptive_tenuring.rs:49:    let after_first = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/adaptive_tenuring.rs:63:        let addr = (js_shadow_slot_get(slot) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/adaptive_tenuring.rs:99:        js_shadow_slot_set(slot, ptr_bits(obj as usize));
+crates/perry-runtime/src/gc/tests/copying/verify_malloc_borrow.rs:22:        js_shadow_slot_set(0, ptr_bits(malloc_parent as usize));
+crates/perry-runtime/src/gc/tests/copying/verify_malloc_borrow.rs:24:        js_shadow_slot_set(1, ptr_bits(young));
+crates/perry-runtime/src/gc/tests/copying/verify_malloc_borrow.rs:67:        assert_ne!((js_shadow_slot_get(1) & POINTER_MASK) as usize, young);
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:445:    js_shadow_slot_set(0, ptr_bits(obj as usize));
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:459:    let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:545:    js_shadow_slot_set(0, ptr_bits(obj as usize));
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:546:    let obj_now = || (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:557:    js_shadow_slot_set(1, string_bits(value as usize));
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:564:        f64::from_bits(js_shadow_slot_get(1)),
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:568:    let value_after = (js_shadow_slot_get(1) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:615:    js_shadow_slot_set(0, ptr_bits(obj as usize));
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:616:    let obj_now = || (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:651:    js_shadow_slot_set(1, string_bits(value as usize));
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:656:        f64::from_bits(js_shadow_slot_get(1)),
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:660:        Some(js_shadow_slot_get(1)),
+crates/perry-runtime/src/gc/tests/runtime_roots/transient_handles.rs:666:    let value_after = (js_shadow_slot_get(1) & POINTER_MASK) as *const crate::StringHeader;
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:14:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:18:        arr = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ArrayHeader;
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:27:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:33:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:54:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:63:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:96:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:111:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:112:    js_shadow_slot_set(1, ptr_bits(first));
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:113:    js_shadow_slot_set(2, ptr_bits(second));
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:128:    let rooted_arr = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ArrayHeader;
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:129:    let first_after = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:130:    let second_after = (js_shadow_slot_get(2) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:148:        js_shadow_slot_set(slot, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:158:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying/splice_unshift.rs:194:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying/all_pointer_elements_7469.rs:258:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying/all_pointer_elements_7469.rs:269:    let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize as *mut ArrayHeader;
+crates/perry-runtime/src/gc/tests/copying/all_pointer_elements_7469.rs:290:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:28:    js_shadow_slot_set(0, object_bits(wr));
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:32:    let wr_moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:52:    js_shadow_slot_set(0, object_bits(wr));
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:53:    js_shadow_slot_set(1, object_bits(target)); // strong edge keeps it alive
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:57:    let wr_moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:58:    let target_moved = js_shadow_slot_get(1) & POINTER_MASK;
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:82:    js_shadow_slot_set(0, object_bits(map));
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:83:    js_shadow_slot_set(1, object_bits(live_key));
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:88:        let map_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:94:        let live_v = f64::from_bits(js_shadow_slot_get(1));
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:101:    let map_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:102:    let live_v = f64::from_bits(js_shadow_slot_get(1));
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:132:    js_shadow_slot_set(0, object_bits(reg));
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:149:        let reg_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:184:        let reg_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_semantics.rs:221:        let reg_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:9:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:12:    let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:16:    let survivor_second = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:21:    let survivor_third = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:26:    let promoted = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:66:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:70:    let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:77:    let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:83:    let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:141:    let promoted = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:219:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:223:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:235:    js_shadow_slot_set(0, ptr_bits(live_young));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:243:    js_shadow_slot_set(1, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:294:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:387:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:488:    js_shadow_slot_set(0, ptr_bits(live_young));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:559:    js_shadow_slot_set(0, ptr_bits(live_young));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:598:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:678:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:681:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:745:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:748:    let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:896:    js_shadow_slot_set(0, ptr_bits(date_addr));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:900:    let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:940:    js_shadow_slot_set(0, ptr_bits(old_addr));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:949:    let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:961:    let reloaded_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:979:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:987:    let survivor = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:1105:    js_shadow_slot_set(0, ptr_bits(live_addr));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:1113:    let live_new = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:1146:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:1184:    js_shadow_slot_set(0, ptr_bits(a));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:1198:    js_shadow_slot_set(1, ptr_bits(b));
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:1227:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/copying/survival_and_malloc.rs:1228:    js_shadow_slot_set(1, 0);
+crates/perry-runtime/src/gc/tests/dyn_eval_registry.rs:43:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/dyn_eval_registry.rs:45:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/dyn_eval_registry.rs:52:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/runtime_roots/json_tape_owned.rs:266:        (js_shadow_slot_get(i) & 0x0000_FFFF_FFFF_FFFF) as *mut crate::json_tape::LazyArrayHeader
+crates/perry-runtime/src/gc/tests/runtime_roots/json_tape_owned.rs:269:    js_shadow_slot_set(0, ptr_bits(first as usize));
+crates/perry-runtime/src/gc/tests/runtime_roots/json_tape_owned.rs:272:    js_shadow_slot_set(1, ptr_bits(second as usize));
+crates/perry-runtime/src/gc/tests/runtime_roots/json_tape_owned.rs:287:    js_shadow_slot_set(0, crate::JSValue::undefined().bits());
+crates/perry-runtime/src/gc/tests/runtime_roots/symbol_description.rs:91:    js_shadow_slot_set(0, symbol_ptr_bits(sym));
+crates/perry-runtime/src/gc/tests/runtime_roots/symbol_description.rs:106:    let sym_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut SymbolHeader;
+crates/perry-runtime/src/gc/tests/runtime_roots/symbol_description.rs:141:    js_shadow_slot_set(0, symbol_ptr_bits(keeper));
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:68:    js_shadow_slot_set(
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:75:    js_shadow_slot_set(1, ptr_bits(crate::object::js_object_alloc(0, 1) as usize));
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:76:    js_shadow_slot_set(
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:85:            f64::from_bits(ptr_bits((js_shadow_slot_get(1) & POINTER_MASK) as usize)),
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:86:            f64::from_bits(string_bits((js_shadow_slot_get(2) & POINTER_MASK) as usize)),
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:87:            f64::from_bits(ptr_bits((js_shadow_slot_get(0) & POINTER_MASK) as usize)),
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:93:    let closure = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::closure::ClosureHeader;
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:108:    js_shadow_slot_set(1, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:109:    js_shadow_slot_set(2, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:118:        (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::closure::ClosureHeader;
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:153:    js_shadow_slot_set(0, ptr_bits(crate::weakref::js_weakmap_new() as usize));
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:154:    js_shadow_slot_set(1, ptr_bits(crate::object::js_object_alloc(0, 0) as usize));
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:157:        |slot: u32| f64::from_bits(ptr_bits((js_shadow_slot_get(slot) & POINTER_MASK) as usize));
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:197:    js_shadow_slot_set(2, ptr_bits(crate::object::js_object_alloc(0, 0) as usize));
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:340:    js_shadow_slot_set(0, ptr_bits(obj as usize));
+crates/perry-runtime/src/gc/tests/copying/pointer_publish_7154.rs:348:    let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:36:    js_shadow_slot_set(0, obj_bits(map));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:37:    js_shadow_slot_set(1, obj_bits(live_key));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:42:        let map_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:48:        let live_v = f64::from_bits(js_shadow_slot_get(1));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:55:    let map_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:56:    let live_key_after = js_shadow_slot_get(1) & POINTER_MASK;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:78:    let map_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:79:    let live_v = f64::from_bits(js_shadow_slot_get(1));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:98:    js_shadow_slot_set(0, obj_bits(wr_dead));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:99:    js_shadow_slot_set(1, obj_bits(wr_live));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:100:    js_shadow_slot_set(2, obj_bits(live_target)); // strong edge keeps it alive
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:105:    let wr_dead_after = ptr_bits((js_shadow_slot_get(0) & POINTER_MASK) as usize);
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:106:    let wr_live_after = ptr_bits((js_shadow_slot_get(1) & POINTER_MASK) as usize);
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:107:    let live_target_after = js_shadow_slot_get(2) & POINTER_MASK;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:139:    js_shadow_slot_set(0, obj_bits(map));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:144:    let map_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:154:    let map_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:160:    let map_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:218:    js_shadow_slot_set(0, obj_bits(weak_ref));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:226:        js_shadow_slot_set(slot, obj_bits(unrelated));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:251:    js_shadow_slot_set(0, obj_bits(map));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:252:    js_shadow_slot_set(1, obj_bits(live_key));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:253:    js_shadow_slot_set(2, obj_bits(temp_key));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:255:    let map_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:258:        f64::from_bits(js_shadow_slot_get(1)),
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:263:        f64::from_bits(js_shadow_slot_get(2)),
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:271:            js_shadow_slot_set(2, 0);
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:275:        let map_now = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:283:    let map_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:291:    let live_key_after = js_shadow_slot_get(1) & POINTER_MASK;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:297:    let map_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:299:        crate::weakref::js_weakmap_has(map_v, f64::from_bits(js_shadow_slot_get(1))).to_bits(),
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:322:    js_shadow_slot_set(0, obj_bits(weak_ref));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:323:    js_shadow_slot_set(4, obj_bits(weak_target));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:327:    js_shadow_slot_set(1, obj_bits(map));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:328:    js_shadow_slot_set(5, obj_bits(map_key));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:330:        f64::from_bits(js_shadow_slot_get(1)),
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:331:        f64::from_bits(js_shadow_slot_get(5)),
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:337:    js_shadow_slot_set(2, obj_bits(set));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:338:    js_shadow_slot_set(6, obj_bits(set_key));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:340:        f64::from_bits(js_shadow_slot_get(2)),
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:341:        f64::from_bits(js_shadow_slot_get(6)),
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:348:    js_shadow_slot_set(3, obj_bits(registry));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:349:    js_shadow_slot_set(7, obj_bits(finreg_target));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:351:        f64::from_bits(js_shadow_slot_get(3)),
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:352:        f64::from_bits(js_shadow_slot_get(7)),
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:373:        js_shadow_slot_set(slot, 0);
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:396:        crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(0))).to_bits(),
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:401:        let collection = (js_shadow_slot_get(slot) & POINTER_MASK) as *const crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:457:    js_shadow_slot_set(0, obj_bits(reg));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:462:        let reg_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:506:    let addr = (js_shadow_slot_get(slot) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:523:    js_shadow_slot_set(1, obj_bits(key));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:528:    js_shadow_slot_set(0, obj_bits(map));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:529:    let map_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:539:    let key_now = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:540:    let map_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:547:    let map_after = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:562:    js_shadow_slot_set(1, obj_bits(target));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:566:    js_shadow_slot_set(0, obj_bits(wr));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:571:    let wr_after = ptr_bits((js_shadow_slot_get(0) & POINTER_MASK) as usize);
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:572:    let target_now = js_shadow_slot_get(1) & POINTER_MASK;
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:594:    js_shadow_slot_set(1, obj_bits(target));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:599:    js_shadow_slot_set(0, obj_bits(reg));
+crates/perry-runtime/src/gc/tests/copying/weak_holder_registry.rs:600:    let reg_v = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/native_payload.rs:129:    js_shadow_slot_set(0, value.to_bits());
+crates/perry-runtime/src/gc/tests/native_payload.rs:132:    let value = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/native_payload.rs:158:    js_shadow_slot_set(0, value.to_bits());
+crates/perry-runtime/src/gc/tests/native_payload.rs:165:    let moved = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/native_payload.rs:178:    let moved = f64::from_bits(js_shadow_slot_get(0));
+crates/perry-runtime/src/gc/tests/heap_generation.rs:37:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/heap_generation.rs:47:        (js_shadow_slot_get(0) & POINTER_MASK) as usize,
+crates/perry-runtime/src/gc/tests/heap_generation.rs:60:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/heap_generation.rs:139:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/heap_generation.rs:180:    let _frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/heap_generation.rs:187:    js_shadow_slot_set(0, ptr_bits(parent as usize));
+crates/perry-runtime/src/gc/tests/alloc.rs:1054:    js_shadow_slot_set(0, ptr_bits(live_malloc as usize));
+crates/perry-runtime/src/gc/tests/alloc.rs:1056:    js_shadow_slot_set(1, ptr_bits(rejected_malloc_probe));
+crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs:1081:    let shadow = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs:1082:    js_shadow_slot_set(0, fixture.nursery_bits);
+crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs:1088:    js_shadow_frame_pop(shadow);
+crates/perry-runtime/src/gc/tests/proxy_registry.rs:70:    js_shadow_slot_set(0, proxy.to_bits());
+crates/perry-runtime/src/gc/tests/proxy_registry.rs:78:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/proxy_registry.rs:97:    js_shadow_slot_set(0, ptr_bits(owner as usize));
+crates/perry-runtime/src/gc/tests/proxy_registry.rs:106:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/proxy_registry.rs:119:    js_shadow_slot_set(0, outer.to_bits());
+crates/perry-runtime/src/gc/tests/proxy_registry.rs:126:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/runtime_roots.rs:339:    let shadow = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/runtime_roots.rs:340:    js_shadow_slot_set(0, shadow_bits);
+crates/perry-runtime/src/gc/tests/runtime_roots.rs:348:        js_shadow_slot_get(0),
+crates/perry-runtime/src/gc/tests/runtime_roots.rs:357:    js_shadow_frame_pop(shadow);
+crates/perry-runtime/src/gc/tests/runtime_roots.rs:376:    let shadow = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/runtime_roots.rs:377:    js_shadow_slot_set(0, shadow_bits);
+crates/perry-runtime/src/gc/tests/runtime_roots.rs:382:        js_shadow_slot_get(0),
+crates/perry-runtime/src/gc/tests/runtime_roots.rs:387:    js_shadow_frame_pop(shadow);
+crates/perry-runtime/src/gc/tests/runtime_roots/generator_attach_prototype.rs:81:    js_shadow_slot_set(0, ptr_bits(addr));
+crates/perry-runtime/src/gc/tests/runtime_roots/generator_attach_prototype.rs:92:    (js_shadow_slot_get(0) & POINTER_MASK) as usize
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:70:    js_shadow_slot_set(
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:78:        let obj = (js_shadow_slot_get(slot) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:97:    let obj = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:123:    let sibling = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:139:    let obj_before = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:161:    js_shadow_slot_set(1, ptr_bits(crate::object::js_object_alloc(0, 0) as usize));
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:171:    let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:236:    let obj = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:318:    let obj = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:327:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:328:    js_shadow_slot_set(1, ptr_bits(crate::object::js_object_alloc(0, 0) as usize));
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:389:    js_shadow_slot_set(0, ptr_bits(replacement_before));
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:401:    let replacement_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:412:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:518:    js_shadow_slot_set(
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:522:    let obj = (js_shadow_slot_get(slot) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:533:    js_shadow_slot_set(slot, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:556:    let live_before = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:567:    let live_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:583:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:626:    js_shadow_slot_set(
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:631:    let obj = (js_shadow_slot_get(slot) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:634:    let obj = (js_shadow_slot_get(slot) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:637:    js_shadow_slot_set(slot, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:666:    js_shadow_slot_set(0, ptr_bits(crate::object::object_alloc_plain(0) as usize));
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:668:    let consumer = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:676:    let consumer = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::ObjectHeader;
+crates/perry-runtime/src/gc/tests/shape_keys_descriptor_edge.rs:688:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/idle_reclaim.rs:75:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/idle_reclaim.rs:80:    let rooted = js_shadow_slot_get(0) & POINTER_MASK;
+crates/perry-runtime/src/gc/tests/idle_reclaim.rs:118:        js_shadow_slot_get(0) & POINTER_MASK,
+crates/perry-runtime/src/gc/tests/idle_reclaim.rs:502:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/idle_reclaim.rs:525:    assert_eq!(js_shadow_slot_get(0) & POINTER_MASK, live as u64);
+crates/perry-runtime/src/gc/tests/promote_in_place.rs:144:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/promote_in_place.rs:170:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/promote_in_place.rs:437:    js_shadow_slot_set(0, ptr_bits(parent_arr as usize));
+crates/perry-runtime/src/gc/tests/promote_in_place.rs:463:        (js_shadow_slot_get(0) & POINTER_MASK) as usize,
+crates/perry-runtime/src/gc/tests/promote_in_place.rs:477:    js_shadow_slot_set(0, ptr_bits(parent_arr as usize));
+crates/perry-runtime/src/gc/tests/promote_in_place.rs:535:        js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/promote_in_place.rs:625:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/promote_in_place.rs:634:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/promote_in_place.rs:739:    js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/promote_in_place.rs:764:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/promote_in_place.rs:1052:        js_shadow_slot_set(0, ptr_bits(child));
+crates/perry-runtime/src/gc/tests/layout_trace/element_shape.rs:49:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/layout_trace/element_shape.rs:52:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/layout_trace/element_shape.rs:106:    js_shadow_slot_set(0, ptr_bits(arr as usize));
+crates/perry-runtime/src/gc/tests/layout_trace/element_shape.rs:111:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize as *mut crate::array::ArrayHeader;
+crates/perry-runtime/src/gc/tests/error_side_tables.rs:31:    js_shadow_slot_set(0, error_bits(before_error));
+crates/perry-runtime/src/gc/tests/error_side_tables.rs:35:    let after_error = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/error_side_tables.rs:118:    js_shadow_slot_set(0, error.to_bits());
+crates/perry-runtime/src/gc/tests/error_side_tables.rs:122:    let after_bits = js_shadow_slot_get(0);
+crates/perry-runtime/src/gc/tests/error_side_tables.rs:163:    js_shadow_slot_set(0, error_bits(err));
+crates/perry-runtime/src/gc/tests/error_side_tables.rs:167:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/error_side_tables.rs:199:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/error_side_tables.rs:228:    js_shadow_slot_set(0, error_bits(err));
+crates/perry-runtime/src/gc/tests/error_side_tables.rs:240:    let moved_err = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:157:    js_shadow_slot_set(0, ptr_bits(map_iter));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:158:    js_shadow_slot_set(1, ptr_bits(set_iter));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:162:    let moved_map_iter = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:163:    let moved_set_iter = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:171:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:172:    js_shadow_slot_set(1, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:271:    js_shadow_slot_set(0, ptr_bits(addr));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:322:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:340:    js_shadow_slot_set(0, ptr_bits(live_sym));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:392:    js_shadow_slot_set(0, ptr_bits(live as usize));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:635:    js_shadow_slot_set(0, ptr_bits(addr));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:640:    let moved = js_shadow_slot_get(0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:669:    js_shadow_slot_set(0, ptr_bits(replacement));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:679:    let moved = js_shadow_slot_get(0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:747:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:758:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:790:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:800:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:818:    js_shadow_slot_set(0, ptr_bits(next_keys));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:839:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:848:    js_shadow_slot_set(0, ptr_bits(next_keys));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:871:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:885:    js_shadow_slot_set(0, ptr_bits(next_keys));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:886:    js_shadow_slot_set(1, ptr_bits(live_key));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:898:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:899:    js_shadow_slot_set(1, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:933:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:943:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:982:    js_shadow_slot_set(0, ptr_bits(live));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:996:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables.rs:1035:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/layout_trace/object_layout_invalidation.rs:129:    js_shadow_slot_set(0, ptr_bits(obj as usize));
+crates/perry-runtime/src/gc/tests/layout_trace/object_layout_invalidation.rs:132:    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:147:    js_shadow_slot_set(0, ptr_bits(args as usize));
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:150:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:177:    js_shadow_slot_set(0, ptr_bits(args as usize));
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:178:    js_shadow_slot_set(1, ptr_bits(mapped as usize));
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:182:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:202:    let moved_mapped = (js_shadow_slot_get(1) & POINTER_MASK) as *mut crate::r#box::Box;
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:228:    js_shadow_slot_set(0, ptr_bits(args as usize));
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:232:    let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:335:    js_shadow_slot_set(0, ptr_bits(args as usize));
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:337:    let moved_args = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:344:    js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:367:    js_shadow_slot_set(0, ptr_bits(args as usize));
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:380:        args = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+crates/perry-runtime/src/gc/tests/arguments_objects.rs:406:    let owner = (js_shadow_slot_get(0) & POINTER_MASK) as *mut ObjectHeader;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:88:    js_shadow_slot_set(0, ptr_bits(old_owner));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:92:    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:125:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:142:    js_shadow_slot_set(0, ptr_bits(old_owner));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:143:    js_shadow_slot_set(1, ptr_bits(old_proto));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:147:    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:148:    let new_proto = (js_shadow_slot_get(1) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:159:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:160:    js_shadow_slot_set(1, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:197:    js_shadow_slot_set(0, ptr_bits(old_owner));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:201:    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:218:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:237:    js_shadow_slot_set(0, ptr_bits(old_owner));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:241:    let new_owner = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:258:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:366:    js_shadow_slot_set(0, ptr_bits(old_addr));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:370:    let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:388:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:443:    js_shadow_slot_set(0, ptr_bits(old_addr));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:447:    let new_addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:461:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:531:    js_shadow_slot_set(0, ptr_bits(a as usize));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:532:    js_shadow_slot_set(1, ptr_bits(b as usize));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:536:    let a_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:537:    let b_after = (js_shadow_slot_get(1) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:560:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:561:    js_shadow_slot_set(1, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:661:    let frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:664:    js_shadow_slot_set(0, ptr_bits(keys_before as usize));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:671:    js_shadow_slot_set(0, ptr_bits(owner as usize));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:688:    let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:703:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:704:    js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:717:    let frame = js_shadow_frame_push(1);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:722:    js_shadow_slot_set(0, ptr_bits(addr));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:726:    let live = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:734:    js_shadow_slot_set(0, 0);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/meta_and_shape_records.rs:735:    js_shadow_frame_pop(frame);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/regexp_expandos.rs:65:    js_shadow_slot_set(0, ptr_bits(addr));
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/regexp_expandos.rs:70:    assert_eq!((js_shadow_slot_get(0) & POINTER_MASK) as usize, addr);
+crates/perry-runtime/src/gc/tests/dead_owner_side_tables/regexp_expandos.rs:81:    js_shadow_slot_set(0, 0);
+
+Pinned-main f969b820f rebase addition: object/native_module/constructor_shapes.rs::own_static_thunk used js_shadow_frame_push/pop and js_shadow_slot_bind for five UnsafeCell argument words on native targets. Classification NOT. Commit eb2523f9b replaces those calls with the existing RuntimeHandleScope::root_heap_word_cell and drops the scope before rethrow. No new rooting registry, selector, scanner, or platform exception.

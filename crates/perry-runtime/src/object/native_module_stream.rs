@@ -186,11 +186,20 @@ pub(crate) fn attach_stream_constructor_prototype(constructor_value: f64, name: 
     proto.with_mut_ptr(|p| {
         js_object_set_field(p, 0, JSValue::from_bits(constructor.get_nanbox_u64()))
     });
-    // `Readable`/`Writable`/`Duplex`/`Transform`/`PassThrough` also chain their
-    // own prototype methods onto `<Ctor>.prototype.<m>.call(this, …)` (e.g.
-    // `Duplex.prototype.on` ↔ readable-stream borrows). Expose the EventEmitter
-    // methods on these prototypes too.
-    proto.with_mut_ptr(|p| crate::node_stream::install_event_emitter_prototype_methods(p));
+    // G1 (STREAM-PAYLOAD-DESIGN): the classic stream methods live here, on
+    // `Readable`/`Writable`/`Duplex.prototype`, one receiver-from-`this`
+    // closure each per realm, as in node; `Transform` and `PassThrough`
+    // inherit them through `Duplex.prototype`. `<Ctor>.prototype.<m>.call(this,
+    // …)` borrows (readable-stream) reach the same bodies.
+    let kind = match name {
+        "Readable" => Some(crate::node_stream::StreamProto::Readable),
+        "Writable" => Some(crate::node_stream::StreamProto::Writable),
+        "Duplex" => Some(crate::node_stream::StreamProto::Duplex),
+        _ => None,
+    };
+    if let Some(kind) = kind {
+        proto.with_mut_ptr(|p| crate::node_stream::install_stream_prototype_methods(p, kind));
+    }
     let proto_value =
         proto.with_mut_ptr(|p: *mut ObjectHeader| crate::value::js_nanbox_pointer(p as i64));
     STREAM_EVENT_EMITTER_PROTOTYPES.with(|protos| {

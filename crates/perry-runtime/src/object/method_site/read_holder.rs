@@ -1459,6 +1459,17 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk, acc
     // objects of many shapes): the holder, its ShapeId and the slot word are
     // shared, only the receiver token differs.
     let old_kind = c[HOLDER_KIND] as u64;
+    if accessor
+        && old_kind & HOLDER_ACCESSOR != 0
+        && c[HOLDER_RECV] != 0
+        && c[HOLDER_RECV] != token
+        && crate::object::shapes::shape_record_by_id(c[HOLDER_RECV] as u32).is_none()
+    {
+        // A retired receiver shape cannot compete with this live one. Its
+        // replacement is cache expiry, not continuing polymorphic churn.
+        // Reprime through the same receiver/holder/lane checks below.
+        c[HOLDER_STATE] &= ((1 << STATE_REPRIME_SHIFT) - 1) & !STATE_LATCHED;
+    }
     let old_multi =
         old_kind & (HOLDER_MULTI_ABSENT | HOLDER_ACCESSOR | HOLDER_STUB) == HOLDER_MULTI_ABSENT;
     let same_answer = match w.slot {

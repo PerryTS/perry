@@ -177,40 +177,191 @@ pub(crate) fn is_classic_stream_instance_of(value: f64, constructor_name: &str) 
     if constructor_name == "Stream" {
         return is_classic_stream_instance_value(value);
     }
-
-    let Some(obj) = object_ptr_from_value(value) else {
-        return false;
-    };
-    let Some(constructor) = (unsafe { own_field_by_key_bytes(obj, b"constructor") }) else {
-        return false;
-    };
-    let Some((module, actual)) =
-        (unsafe { crate::object::bound_native_callable_module_and_method(constructor) })
-    else {
-        return false;
-    };
-    if module != "stream" {
+    if object_ptr_from_value(value).is_none() {
         return false;
     }
-    let actual = actual.as_str();
-
+    // G1: an instance's class is its prototype chain, as in node. `Writable`
+    // also answers for any classic stream with a writable side (node's
+    // `Writable[Symbol.hasInstance]`: a Duplex is a Writable).
     match constructor_name {
-        "Readable" => matches!(actual, "Readable" | "Duplex" | "Transform" | "PassThrough"),
-        "Writable" => matches!(actual, "Writable" | "Duplex" | "Transform" | "PassThrough"),
-        "Duplex" => matches!(actual, "Duplex" | "Transform" | "PassThrough"),
-        "Transform" => matches!(actual, "Transform" | "PassThrough"),
-        "PassThrough" => actual == "PassThrough",
+        "Readable" | "Duplex" | "Transform" | "PassThrough" => {
+            super::proto_methods::chain_reaches_stream_prototype(value, constructor_name)
+        }
+        "Writable" => {
+            super::proto_methods::chain_reaches_stream_prototype(value, "Writable")
+                || (is_classic_stream_instance_value(value)
+                    && get_hidden_value(value, hidden_writable_flag_key()).is_some())
+        }
         _ => false,
     }
 }
 
+/// Write a stream's runtime state. The state is the object's own, but never
+/// node-visible as an own key (node keeps it in `_readableState` /
+/// `_writableState` and reads it through prototype getters), so a key the
+/// object does not have yet is DEFINED non-enumerable: `Object.keys`,
+/// `JSON.stringify` and `for…in` skip it structurally (the attribute lives in
+/// the shape's key entry, so later instances reuse the transition). An
+/// existing key keeps its attributes and is stored to as usual.
 pub(super) fn set_hidden_value(
+    value: f64,
+    key: *mut crate::string::StringHeader,
+    field_value: f64,
+) {
+    let Some(obj) = object_ptr_from_value(value) else {
+        return;
+    };
+    // SAFETY: a live ordinary object (checked above); nothing allocates
+    // between the check and the presence probe.
+    if unsafe { crate::object::object_ops::own_key_present(obj, key) } {
+        js_object_set_field_by_name(obj, key, field_value);
+        return;
+    }
+    define_internal_field(obj, key, field_value);
+}
+
+/// Every runtime-internal key a classic stream can carry, in one fixed order.
+/// [`install_stream_state_layout`] defines them all at construction, so a
+/// stream's own key list is complete (and the same for every stream of a
+/// kind) from birth: later writes only store into existing slots, whatever
+/// order the stream's life sets them in. A list that grew key by key in
+/// event order would give streams divergent key lists, and every distinct
+/// list is a layout the shape table keeps.
+const STREAM_STATE_LAYOUT: &[&[u8]] = &[
+    READABLE_FLAG_KEY,
+    WRITABLE_FLAG_KEY,
+    TRANSFORM_FLAG_KEY,
+    READABLE_CHUNKS_KEY,
+    READABLE_SOURCE_ITERATOR_KEY,
+    READABLE_ERROR_KEY,
+    READABLE_SIGNAL_KEY,
+    READABLE_READ_KEY,
+    READABLE_READ_INVOKED_KEY,
+    READABLE_DEFAULT_READ_ERROR_KEY,
+    READABLE_BUFFERED_KEY,
+    READABLE_HWM_KEY,
+    READABLE_PENDING_KEY,
+    READABLE_RESUME_SCHEDULED_KEY,
+    READABLE_BASE64_REMAINDER_KEY,
+    READABLE_UTF8_REMAINDER_KEY,
+    STREAM_DRAIN_SCHEDULED_KEY,
+    STREAM_READABLE_SCHEDULED_KEY,
+    STREAM_END_SCHEDULED_KEY,
+    STREAM_END_EMITTED_KEY,
+    STREAM_ENDED_KEY,
+    STREAM_CAPTURE_REJECTIONS_KEY,
+    STREAM_DISTURBED_KEY,
+    STREAM_PIPES_KEY,
+    STREAM_PIPE_NO_END_KEY,
+    STREAM_PIPE_END_PENDING_KEY,
+    STREAM_AUTO_DESTROY_KEY,
+    STREAM_EMIT_CLOSE_KEY,
+    STREAM_PIPELINE_CALLBACK_DONE_KEY,
+    STREAM_READABLE_LIVE_PUSH_KEY,
+    STREAM_CONSTRUCT_KEY,
+    STREAM_DESTROY_KEY,
+    WRITABLE_WRITE_KEY,
+    WRITABLE_WRITEV_KEY,
+    WRITABLE_FINISH_SCHEDULED_KEY,
+    WRITABLE_FINISH_EMITTED_KEY,
+    WRITABLE_CORKED_KEY,
+    WRITABLE_BUFFERED_KEY,
+    WRITABLE_LENGTH_KEY,
+    WRITABLE_NEED_DRAIN_KEY,
+    WRITABLE_OBJECT_MODE_KEY,
+    WRITABLE_DECODE_STRINGS_KEY,
+    WRITABLE_DEFAULT_ENCODING_KEY,
+    WRITABLE_PENDING_FINISH_CALLBACK_KEY,
+    WRITABLE_FINAL_KEY,
+    WRITABLE_FINAL_INVOKED_KEY,
+    WRITABLE_FINAL_PENDING_KEY,
+    TRANSFORM_CALLBACK_KEY,
+    TRANSFORM_FLUSH_KEY,
+    TRANSFORM_PASSTHROUGH_KEY,
+    TRANSFORM_FINISHING_KEY,
+    TRANSFORM_END_PENDING_KEY,
+    super::write_state::WRITABLE_WRITING_KEY,
+    super::write_state::WRITABLE_SYNC_KEY,
+    super::write_state::WRITABLE_BUFFER_PROCESSING_KEY,
+    super::write_state::TRANSFORM_HELD_CALLBACK_KEY,
+    super::state_view::STREAM_CLOSE_EMITTED_KEY,
+    b"__perryReadableFromPromisePending",
+    b"writableCustomSink",
+    b"duplexPairPeer",
+];
+
+/// Define the whole [`STREAM_STATE_LAYOUT`] on a stream being constructed
+/// (non-enumerable, `undefined`: absent to every runtime read). A key the
+/// object already has (a subclass field of the same name, or a second
+/// constructor body on the same object) is left as it is.
+pub(super) fn install_stream_state_layout(stream: f64) {
+    let Some(obj) = object_ptr_from_value(stream) else {
+        return;
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    for &key in STREAM_STATE_LAYOUT {
+        let key = hidden_key(key);
+        let present = obj.with_mut_ptr::<ObjectHeader, _>(|o| unsafe {
+            crate::object::object_ops::own_key_present(o, key)
+        });
+        if !present {
+            define_internal_field(
+                obj.get_raw_mut_ptr::<ObjectHeader>(),
+                key,
+                f64::from_bits(TAG_UNDEFINED),
+            );
+        }
+    }
+}
+
+/// [`set_hidden_value`] by key bytes.
+pub(super) fn set_internal_value(value: f64, key: &'static [u8], field_value: f64) {
+    set_hidden_value(value, hidden_key(key), field_value);
+}
+
+/// An own data property node shows as an ENUMERABLE own key of a stream
+/// (`_readableState`, `_writableState`, `allowHalfOpen`): an ordinary store.
+pub(super) fn set_visible_own_value(
     value: f64,
     key: *mut crate::string::StringHeader,
     field_value: f64,
 ) {
     if let Some(obj) = object_ptr_from_value(value) {
         js_object_set_field_by_name(obj, key, field_value);
+    }
+}
+
+#[cold]
+fn define_internal_field(
+    obj: *mut ObjectHeader,
+    key: *mut crate::string::StringHeader,
+    value: f64,
+) {
+    #[cfg(test)]
+    if super::native_hooks::stream_sabotage("enumerable_state") {
+        js_object_set_field_by_name(obj, key, value);
+        return;
+    }
+    let entry = crate::object::key_attrs::attr_bits_to_entry(
+        crate::object::PropertyAttrs::new(true, false, true).bits,
+    );
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let key = scope.root_string_ptr(key);
+    let value = scope.root_nanbox_f64(value);
+    // SAFETY: both are rooted; each call re-reads them from the handles.
+    unsafe {
+        crate::object::object_ops::ensure_key_in_keys_array_with_entry(
+            obj.get_raw_mut_ptr::<ObjectHeader>(),
+            key.get_raw_const_ptr::<crate::StringHeader>(),
+            entry,
+        );
+        crate::object::object_ops::define_property_force_store_value(
+            obj.get_raw_mut_ptr::<ObjectHeader>(),
+            key.get_raw_const_ptr::<crate::StringHeader>(),
+            value.get_nanbox_f64(),
+        );
     }
 }
 
@@ -267,6 +418,8 @@ pub(super) fn mark_stream_closed_and_emit_close(stream: f64) {
 pub(super) fn mark_stream_destroyed(stream: f64) {
     set_hidden_value(stream, hidden_key(b"destroyed"), f64::from_bits(TAG_TRUE));
     refresh_readable_aborted_flag(stream);
+    // autoDestroy at normal completion releases a native stream's codec.
+    super::native_hooks::release_on_destroy(stream);
 }
 
 pub(super) fn readable_flowing_value(stream: f64) -> f64 {
@@ -387,6 +540,9 @@ pub(super) fn flush_pending_readable_chunks(stream: f64) {
     {
         schedule_readable_end(s());
     }
+    // The flow consumed the buffer: node's `_read` (a held transform
+    // completion, a parked codec).
+    super::write_state::readable_maybe_read_more(s());
 }
 
 pub(super) fn readable_data_listener_added(stream: f64) {
@@ -757,6 +913,16 @@ pub(super) fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
 }
 
 pub(super) fn schedule_writable_finish_then_transform_end(stream: f64, callback: Option<f64>) {
+    // node's Transform `final` pushes `null` (queueing the readable `end`)
+    // before its callback lets `finish` go, so `end` is queued first when no
+    // user `_final` stands in between.
+    if is_transform_stream(stream)
+        && !has_truthy_hidden(stream, hidden_writable_final_pending_key())
+        && (writable_hidden_final(stream).is_none()
+            || has_truthy_hidden(stream, hidden_writable_final_invoked_key()))
+    {
+        schedule_readable_end(stream);
+    }
     schedule_writable_finish(stream, callback);
     let finish_ready = has_truthy_hidden(stream, hidden_finish_scheduled_key())
         || has_truthy_hidden(stream, hidden_finish_emitted_key());
@@ -782,6 +948,23 @@ pub(super) fn take_pending_writable_finish_callback(stream: f64) -> Option<f64> 
 }
 
 pub(super) fn schedule_pending_writable_finish_if_ready(stream: f64) {
+    if has_truthy_hidden(stream, hidden_transform_end_pending_key())
+        && writable_length(stream) == 0.0
+        && !super::write_state::writable_writing(stream)
+    {
+        // The transform's deferred `end()`: every write completed, so its
+        // flush (or a native stream's Final step) runs now.
+        set_hidden_value(
+            stream,
+            hidden_transform_end_pending_key(),
+            f64::from_bits(TAG_FALSE),
+        );
+        let callback = take_pending_writable_finish_callback(stream);
+        if !finish_transform_stream(stream, callback) {
+            finish_stream(stream, callback);
+        }
+        return;
+    }
     if !stream_hidden_ended(stream)
         || writable_length(stream) > 0.0
         || has_truthy_hidden(stream, hidden_finish_emitted_key())
@@ -1049,13 +1232,40 @@ pub(super) fn writable_hidden_final(value: f64) -> Option<f64> {
 }
 
 pub(super) fn is_transform_stream(stream: f64) -> bool {
-    is_classic_stream_instance_of(stream, "Transform")
+    has_truthy_hidden(stream, hidden_transform_flag_key())
         || transform_hidden_callback(stream).is_some()
         || transform_hidden_flush(stream).is_some()
         || has_truthy_hidden(stream, hidden_transform_passthrough_key())
 }
 
+/// Record that `stream` is a Transform (its init ran Transform's body).
+pub(super) fn mark_transform_stream(stream: f64) {
+    set_hidden_value(
+        stream,
+        hidden_transform_flag_key(),
+        f64::from_bits(TAG_TRUE),
+    );
+}
+
 pub(super) fn finish_transform_stream(stream: f64, callback: Option<f64>) -> bool {
+    if transform_hidden_flush(stream).is_none() {
+        if let Some(hooks) = super::native_hooks::native_write_target(stream) {
+            if has_truthy_hidden(stream, hidden_transform_finishing_key()) {
+                return true;
+            }
+            set_hidden_value(
+                stream,
+                hidden_transform_finishing_key(),
+                f64::from_bits(TAG_TRUE),
+            );
+            // node's `ending`: the readable side stays open for the Final
+            // step's output, so only the writable side's visible flags move.
+            set_visible_writable_ended(stream, true);
+            set_visible_writable(stream, false);
+            super::native_hooks::begin_final(stream, hooks, callback);
+            return true;
+        }
+    }
     let Some(flush) = transform_hidden_flush(stream) else {
         return false;
     };
@@ -1158,7 +1368,7 @@ pub(super) fn uncork_stream(stream: f64) -> f64 {
     if corked > 0.0 {
         set_writable_corked_count(stream, corked - 1.0);
         if corked <= 1.0 {
-            flush_writable_buffered(stream);
+            super::write_state::clear_buffer(stream);
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -1213,67 +1423,6 @@ pub(super) fn build_writev_chunks(buffered: *const crate::array::ArrayHeader, le
         i += 4;
     }
     box_pointer(chunks as *const u8)
-}
-
-pub(super) fn flush_writable_buffered(stream: f64) {
-    let Some(buffered) = buffered_writable_writes(stream) else {
-        return;
-    };
-    let raw = raw_ptr_from_value(buffered);
-    if raw < 0x10000 {
-        return;
-    }
-    let arr = raw as *const crate::array::ArrayHeader;
-    let len = crate::array::js_array_length(arr);
-    set_hidden_value(
-        stream,
-        hidden_writable_buffered_key(),
-        box_pointer(crate::array::js_array_alloc(0) as *const u8),
-    );
-    if len > 4 && writable_hidden_writev(stream).is_some() {
-        let chunks = build_writev_chunks(arr, len);
-        invoke_writable_writev(stream, chunks);
-        let mut i = 0;
-        while i < len {
-            let chunk = crate::array::js_array_get_f64(arr, i);
-            let write_len = if i + 2 < len {
-                crate::array::js_array_get_f64(arr, i + 2)
-            } else {
-                writable_chunk_len(stream, chunk)
-            };
-            let callback = if i + 3 < len {
-                crate::array::js_array_get_f64(arr, i + 3)
-            } else {
-                f64::from_bits(TAG_UNDEFINED)
-            };
-            emit_writable_chunk(stream, chunk);
-            complete_writable_write(stream, write_len, callback, f64::from_bits(TAG_UNDEFINED));
-            i += 4;
-        }
-        return;
-    }
-    let mut i = 0;
-    while i < len {
-        let chunk = crate::array::js_array_get_f64(arr, i);
-        let enc = if i + 1 < len {
-            crate::array::js_array_get_f64(arr, i + 1)
-        } else {
-            f64::from_bits(TAG_UNDEFINED)
-        };
-        let write_len = if i + 2 < len {
-            crate::array::js_array_get_f64(arr, i + 2)
-        } else {
-            writable_chunk_len(stream, chunk)
-        };
-        let callback = if i + 3 < len {
-            crate::array::js_array_get_f64(arr, i + 3)
-        } else {
-            f64::from_bits(TAG_UNDEFINED)
-        };
-        invoke_writable_write(stream, chunk, enc, write_len, callback);
-        emit_writable_chunk(stream, chunk);
-        i += 4;
-    }
 }
 
 pub(super) fn rebind_callback_this(callback: f64, stream: f64) -> f64 {

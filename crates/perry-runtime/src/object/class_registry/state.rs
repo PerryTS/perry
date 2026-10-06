@@ -1353,6 +1353,14 @@ fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
     const CLASS_ID_EVENT_EMITTER: u32 = 0xFFFF0076;
     const CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE: u32 = 0xFFFF0077;
     let (module, symbol) = match parent_id {
+        // G1: the classic stream bases (perry-codegen
+        // `builtin_parent_reserved_class_id`), whose prototypes carry the
+        // stream methods.
+        0xFFFF0071 => ("stream", "Readable"),
+        0xFFFF0072 => ("stream", "Writable"),
+        0xFFFF0073 => ("stream", "Duplex"),
+        0xFFFF0074 => ("stream", "Transform"),
+        0xFFFF0075 => ("stream", "PassThrough"),
         CLASS_ID_EVENT_EMITTER => ("events", "EventEmitter"),
         CLASS_ID_EVENT_EMITTER_ASYNC_RESOURCE => ("events", "EventEmitterAsyncResource"),
         crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY => ("async_hooks", "AsyncLocalStorage"),

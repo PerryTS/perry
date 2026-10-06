@@ -329,6 +329,62 @@ unsafe extern "C" fn drop_payload<T>(resource: *mut c_void, _hint: *mut c_void) 
     drop(Box::from_raw(resource as *mut T));
 }
 
+/// What the cell's `finalizer` word names for a Rust payload: the payload
+/// type's drop, and (for a stream family) the [`StreamHooks`] through which
+/// the runtime's one stream state machine reaches the codec. One static per
+/// payload type, so the word costs no cell growth and the runtime finds the
+/// hooks from the object it already holds (`meta.native_state` -> cell ->
+/// vtable), with no name, table or class switch.
+///
+/// `#[repr(C)]`: a binding crate's family names a vtable of the same layout
+/// (perry-ffi `native_stream`).
+#[repr(C)]
+pub struct PayloadVTable {
+    /// Frees one boxed payload (release, sweep or thread teardown).
+    pub drop: unsafe extern "C" fn(resource: *mut c_void, hint: *mut c_void),
+    /// The stream hooks of a stream family (`None` for every other family).
+    pub stream: Option<&'static StreamHooks>,
+}
+
+pub use crate::node_stream::native_hooks::{
+    StepIn, StepOut, StepStatus, StepTiming, StreamHooks, StreamKind, StreamOp,
+};
+
+/// A payload type that is a stream codec: its family's objects are ordinary
+/// runtime Transforms/Writables whose writes the runtime feeds to `HOOKS.step`
+/// (`node_stream::native_hooks`).
+pub trait StreamPayload: 'static {
+    /// The family's hooks. A `static`, so the vtable naming it is one too.
+    const HOOKS: &'static StreamHooks;
+}
+
+/// The static vtables of a payload type `T`.
+struct VTableOf<T>(std::marker::PhantomData<T>);
+
+impl<T: 'static> VTableOf<T> {
+    const PLAIN: PayloadVTable = PayloadVTable {
+        drop: drop_payload::<T>,
+        stream: None,
+    };
+}
+
+impl<T: StreamPayload> VTableOf<T> {
+    const HOOKED: PayloadVTable = PayloadVTable {
+        drop: drop_payload::<T>,
+        stream: Some(T::HOOKS),
+    };
+}
+
+#[inline(always)]
+fn plain_vtable<T: 'static>() -> &'static PayloadVTable {
+    &VTableOf::<T>::PLAIN
+}
+
+#[inline(always)]
+fn hooked_vtable<T: StreamPayload>() -> &'static PayloadVTable {
+    &VTableOf::<T>::HOOKED
+}
+
 /// Is `word` (an `ObjectMeta.native_state`) a payload cell reference? The
 /// one predicate the meta record's GC arm uses to decide whether the word is
 /// an edge. Only payload families store a POINTER_TAG-boxed word there.
@@ -352,14 +408,51 @@ pub fn alloc<T: 'static>(
     own: &[(&[u8], f64)],
 ) -> f64 {
     let proto = family_prototype(family);
-    alloc_cell(family, Some(payload), external_bytes, own, proto)
+    alloc_cell(
+        family,
+        Some(payload),
+        plain_vtable::<T>(),
+        external_bytes,
+        own,
+        proto,
+    )
+}
+
+/// [`alloc`] for a stream family: the cell's vtable carries `T::HOOKS`. The
+/// caller then runs `node_stream::init_transform_in_place` (or the Writable
+/// twin) on the object, in node's constructor order relative to its own
+/// fields, so the result is an ordinary runtime stream that owns the codec.
+pub fn alloc_stream<T: StreamPayload>(
+    family: &'static NativePayloadFamily,
+    payload: T,
+    external_bytes: usize,
+    own: &[(&[u8], f64)],
+) -> f64 {
+    let proto = family_prototype(family);
+    alloc_cell(
+        family,
+        Some(payload),
+        hooked_vtable::<T>(),
+        external_bytes,
+        own,
+        proto,
+    )
+}
+
+/// The family's per-realm prototype as a value (built on first use).
+pub fn prototype_value(family: &'static NativePayloadFamily) -> f64 {
+    let proto = family_prototype(family);
+    if proto.is_null() {
+        return undefined();
+    }
+    crate::value::js_nanbox_pointer(proto as i64)
 }
 
 /// Allocate an ordinary instance with its permanent cell but no resource.
 /// The first attach establishes the family's payload layout and drop thunk.
 pub fn alloc_closed(family: &'static NativePayloadFamily, own: &[(&[u8], f64)]) -> f64 {
     let proto = family_prototype(family);
-    alloc_cell::<()>(family, None, 0, own, proto)
+    alloc_cell::<()>(family, None, plain_vtable::<()>(), 0, own, proto)
 }
 
 /// Allocate a payload-family instance linked to an already-materialized
@@ -371,12 +464,20 @@ pub fn alloc_with_prototype<T: 'static>(
     own: &[(&[u8], f64)],
     proto: *mut ObjectHeader,
 ) -> f64 {
-    alloc_cell(family, Some(payload), external_bytes, own, proto)
+    alloc_cell(
+        family,
+        Some(payload),
+        plain_vtable::<T>(),
+        external_bytes,
+        own,
+        proto,
+    )
 }
 
 fn alloc_cell<T: 'static>(
     family: &'static NativePayloadFamily,
     payload: Option<T>,
+    vtable: &'static PayloadVTable,
     external_bytes: usize,
     own: &[(&[u8], f64)],
     proto: *mut ObjectHeader,
@@ -397,7 +498,7 @@ fn alloc_cell<T: 'static>(
     for (key, value) in &own_roots {
         set_own(&scope, &obj, key, value.get_nanbox_f64());
     }
-    attach_rooted(&obj, family, payload, external_bytes);
+    attach_rooted(&obj, family, payload, vtable, external_bytes);
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64))
 }
 
@@ -409,6 +510,27 @@ pub fn attach_to_object<T: 'static>(
     value: f64,
     family: &'static NativePayloadFamily,
     payload: T,
+    external_bytes: usize,
+) -> bool {
+    attach_to_object_with(value, family, payload, plain_vtable::<T>(), external_bytes)
+}
+
+/// [`attach_to_object`] for a stream family (`super()` of
+/// `class X extends zlib.Gzip`): the cell's vtable carries `T::HOOKS`.
+pub fn attach_stream_to_object<T: StreamPayload>(
+    value: f64,
+    family: &'static NativePayloadFamily,
+    payload: T,
+    external_bytes: usize,
+) -> bool {
+    attach_to_object_with(value, family, payload, hooked_vtable::<T>(), external_bytes)
+}
+
+fn attach_to_object_with<T: 'static>(
+    value: f64,
+    family: &'static NativePayloadFamily,
+    payload: T,
+    vtable: &'static PayloadVTable,
     external_bytes: usize,
 ) -> bool {
     let Some(obj) = any_object(value) else {
@@ -429,11 +551,12 @@ pub fn attach_to_object<T: 'static>(
             cell,
             family,
             payload,
+            vtable,
             external_bytes,
         )
         .is_ok();
     }
-    attach_rooted(&obj, family, Some(payload), external_bytes);
+    attach_rooted(&obj, family, Some(payload), vtable, external_bytes);
     true
 }
 
@@ -441,6 +564,7 @@ fn attach_rooted<T: 'static>(
     obj: &crate::gc::RuntimeHandle<'_>,
     family: &'static NativePayloadFamily,
     payload: Option<T>,
+    vtable: &'static PayloadVTable,
     external_bytes: usize,
 ) {
     let meta = obj
@@ -460,7 +584,7 @@ fn attach_rooted<T: 'static>(
             } else {
                 type_tag::<T>(family.class_id)
             },
-            drop_payload::<T>,
+            vtable,
             family.name,
         )
     };
@@ -596,6 +720,32 @@ fn payload_cell(value: f64, class_id: u32) -> Result<*mut NativeHandleHeader, Pa
     Ok((word & crate::value::POINTER_MASK) as *mut NativeHandleHeader)
 }
 
+/// The stream hooks of `value`'s attached payload, and its cell, when its
+/// family is a stream family: `meta.native_state` -> cell -> the vtable the
+/// cell's `finalizer` word names. Three loads from the object the caller
+/// already holds; no name, table or class switch, and a subclass instance
+/// that attached the payload in `super()` answers the same way.
+#[inline]
+pub(crate) fn stream_hooks_of(
+    value: f64,
+) -> Option<(&'static StreamHooks, *mut NativeHandleHeader)> {
+    let obj = any_object(value)?;
+    // SAFETY: a live ordinary object (checked by `any_object`).
+    let meta = unsafe { (*obj).meta };
+    if meta.is_null() {
+        return None;
+    }
+    // SAFETY: the meta record of a live object.
+    let word = unsafe { (*meta).native_state };
+    if !is_payload_state_word(word) {
+        return None;
+    }
+    let cell = (word & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
+    // SAFETY: a payload state word names the object's live payload cell.
+    let vtable = unsafe { crate::native_handle::cell_vtable(cell)? };
+    Some((vtable.stream?, cell))
+}
+
 /// Is `value` an instance of `family` (live or closed)?
 #[inline]
 pub fn is_instance(value: f64, family: &NativePayloadFamily) -> bool {
@@ -661,6 +811,9 @@ pub enum CloseOutcome {
 
 pub(crate) const PENDING: u8 = 1;
 pub(crate) const CLOSING: u8 = 2;
+/// The cell's `finalizer` word names a static [`PayloadVTable`] (every Rust
+/// payload cell), not a bare C finalizer (a plain native handle).
+pub(crate) const VTABLE_WORD: u8 = 4;
 
 /// The non-finalized cell states. Finalized cells answer PayloadMiss::Closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -706,7 +859,14 @@ pub fn attach<T: 'static>(
     external_bytes: usize,
 ) -> Result<(), AttachMiss> {
     let cell = payload_cell(value, family.class_id).map_err(|_| AttachMiss::Foreign)?;
-    attach_cell(value, cell, family, payload, external_bytes)
+    attach_cell(
+        value,
+        cell,
+        family,
+        payload,
+        plain_vtable::<T>(),
+        external_bytes,
+    )
 }
 
 fn attach_cell<T: 'static>(
@@ -714,6 +874,7 @@ fn attach_cell<T: 'static>(
     cell: *mut NativeHandleHeader,
     family: &'static NativePayloadFamily,
     payload: T,
+    vtable: &'static PayloadVTable,
     external_bytes: usize,
 ) -> Result<(), AttachMiss> {
     unsafe {
@@ -733,15 +894,18 @@ fn attach_cell<T: 'static>(
         }
         let tag = type_tag::<T>(family.class_id);
         if (*cell).type_id != family.class_id as u64
-            && ((*cell).type_id != tag || (*cell).finalizer != drop_payload::<T> as *mut c_void)
+            && ((*cell).type_id != tag
+                || crate::native_handle::cell_drop_fn(cell).map(|f| f as usize)
+                    != Some(vtable.drop as usize))
         {
             return Err(AttachMiss::Foreign);
         }
-        // alloc_closed cannot know T. Establish the layout/thunk on first
+        // alloc_closed cannot know T. Establish the layout/vtable on first
         // attach; subsequent opens keep both unchanged.
         if (*cell).type_id == family.class_id as u64 {
             (*cell).type_id = tag;
-            (*cell).finalizer = drop_payload::<T> as *mut c_void;
+            (*cell).finalizer = vtable as *const PayloadVTable as *mut c_void;
+            (*cell).flags |= VTABLE_WORD;
         }
         let resource = Box::into_raw(Box::new(payload)) as *mut c_void;
         crate::native_handle::native_handle_attach_rust_payload(cell, resource);

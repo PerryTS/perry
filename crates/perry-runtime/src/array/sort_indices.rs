@@ -31,31 +31,41 @@ pub(super) fn sort_indices(
         if end < len {
             let ascending = le(order[start], order[end]);
             end += 1;
-            while end < len && le(order[end - 1], order[end]) == ascending {
+            while end < len && le(unsafe { *order.get_unchecked(end - 1) }, order[end]) == ascending
+            {
                 end += 1;
             }
             if !ascending {
                 // Strictly descending only: reversing equal elements would
                 // break stability. NaN comparator results are equal upstream.
-                order[start..end].reverse();
+                // start < end <= len follows from the guarded run scan.
+                unsafe {
+                    std::slice::from_raw_parts_mut(order.as_mut_ptr().add(start), end - start)
+                        .reverse();
+                }
             }
         }
         let run_end = end.max(start.saturating_add(MIN_RUN).min(len));
         // Extend short runs with binary insertion. An index can stay in a
         // register across a callback; a copied heap value could not.
         for i in end..run_end {
-            let key = order[i];
+            // i < run_end <= len; binary search keeps start <= lo <= hi <= i.
+            let key = unsafe { *order.get_unchecked(i) };
             let (mut lo, mut hi) = (start, i);
             while lo < hi {
                 let mid = lo + (hi - lo) / 2;
-                if le(order[mid], key) {
+                if le(unsafe { *order.get_unchecked(mid) }, key) {
                     lo = mid + 1;
                 } else {
                     hi = mid;
                 }
             }
-            order.copy_within(lo..i, lo + 1);
-            order[lo] = key;
+            // The shifted range ends at i + 1 <= len and can overlap.
+            unsafe {
+                let order_ptr = order.as_mut_ptr();
+                std::ptr::copy(order_ptr.add(lo), order_ptr.add(lo + 1), i - lo);
+                *order_ptr.add(lo) = key;
+            }
         }
         runs[pending] = Run {
             start,
@@ -104,24 +114,42 @@ fn merge_at(
     runs[i].len += runs[i + 1].len;
     runs.copy_within(i + 2..*pending, i + 1);
     *pending -= 1;
-    if le(order[mid - 1], order[mid]) {
+    // Nonempty adjacent runs prove 0 < mid < end <= order.len().
+    if le(unsafe { *order.get_unchecked(mid - 1) }, unsafe {
+        *order.get_unchecked(mid)
+    }) {
         return;
     }
     // Only the left run needs a snapshot. While it has unconsumed values,
     // dest < right, so forward stores cannot overwrite the right run's next
     // unread index. Once the left run is empty, the right tail is in place.
-    scratch[start..mid].copy_from_slice(&order[start..mid]);
+    // The pending runs are adjacent nonempty partitions of the entry
+    // buffers. Their integer cursors cannot be mutated by the comparator.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            order.as_ptr().add(start),
+            scratch.as_mut_ptr().add(start),
+            mid - start,
+        );
+    }
     let (mut left, mut right, mut dest) = (start, mid, start);
     let (mut left_wins, mut right_wins) = (0, 0);
+    // Adjacent runs partition [start, end), with end <= order.len() and
+    // mid <= scratch.len(). Each iteration has left < mid and right < end;
+    // dest = start + (left - start) + (right - mid) < right. The comparator
+    // receives only copied integer indices and cannot change these cursors or
+    // the privately borrowed permutation buffers.
     while left < mid && right < end {
         // Left wins ties, preserving the order of equivalent source values.
-        if le(scratch[left], order[right]) {
-            order[dest] = scratch[left];
+        if le(unsafe { *scratch.get_unchecked(left) }, unsafe {
+            *order.get_unchecked(right)
+        }) {
+            unsafe { *order.get_unchecked_mut(dest) = *scratch.get_unchecked(left) };
             left += 1;
             left_wins += 1;
             right_wins = 0;
         } else {
-            order[dest] = order[right];
+            unsafe { *order.get_unchecked_mut(dest) = *order.get_unchecked(right) };
             right += 1;
             right_wins += 1;
             left_wins = 0;
@@ -131,21 +159,52 @@ fn merge_at(
         // then binary search. This helps clustered and duplicate-heavy data
         // without imposing a binary search on each random-data comparison.
         if left_wins >= 7 && left < mid && right < end {
-            let take = gallop_prefix(&scratch[left..mid], |item| le(item, order[right]));
-            order[dest..dest + take].copy_from_slice(&scratch[left..left + take]);
+            let remaining =
+                unsafe { std::slice::from_raw_parts(scratch.as_ptr().add(left), mid - left) };
+            let take = gallop_prefix(remaining, |item| {
+                le(item, unsafe { *order.get_unchecked(right) })
+            });
+            // gallop_prefix returns at most remaining.len(); thus
+            // dest + take <= right and both copied ranges are in bounds.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    scratch.as_ptr().add(left),
+                    order.as_mut_ptr().add(dest),
+                    take,
+                );
+            }
             left += take;
             dest += take;
             left_wins = 0;
         } else if right_wins >= 7 && left < mid && right < end {
             // Strictly less on the right: ties must stay behind the left run.
-            let take = gallop_prefix(&order[right..end], |item| !le(scratch[left], item));
-            order.copy_within(right..right + take, dest);
+            let remaining =
+                unsafe { std::slice::from_raw_parts(order.as_ptr().add(right), end - right) };
+            let take = gallop_prefix(remaining, |item| {
+                !le(unsafe { *scratch.get_unchecked(left) }, item)
+            });
+            // The right source and destination can overlap; copy preserves
+            // memmove semantics. take <= end - right and dest < right.
+            unsafe {
+                let order_ptr = order.as_mut_ptr();
+                std::ptr::copy(order_ptr.add(right), order_ptr.add(dest), take);
+            }
             right += take;
             dest += take;
             right_wins = 0;
         }
     }
-    order[dest..dest + mid - left].copy_from_slice(&scratch[left..mid]);
+    // If left == mid this copies zero words. Otherwise right == end and
+    // dest + (mid - left) == end. Both ranges stay within the entry buffers;
+    // separate mutable slice arguments establish that the buffers do not
+    // overlap. The integer scratch allocation never moves during JS calls.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            scratch.as_ptr().add(left),
+            order.as_mut_ptr().add(dest),
+            mid - left,
+        );
+    }
 }
 
 fn gallop_prefix(values: &[u32], mut belongs: impl FnMut(u32) -> bool) -> usize {
@@ -157,7 +216,8 @@ fn gallop_prefix(values: &[u32], mut belongs: impl FnMut(u32) -> bool) -> usize 
     let mut hi = probe.min(values.len());
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        if belongs(values[mid]) {
+        // lo < hi <= values.len() implies lo <= mid < values.len().
+        if belongs(unsafe { *values.get_unchecked(mid) }) {
             lo = mid + 1;
         } else {
             hi = mid;
@@ -272,6 +332,40 @@ mod tests {
         assert!(check(&values) < values.len() + 100);
         let duplicates: Vec<i32> = values.iter().map(|x| x / 100).collect();
         assert!(check(&duplicates) < duplicates.len() + 100);
+    }
+
+    #[test]
+    fn merges_leave_both_slice_guards_untouched() {
+        const GUARD: u32 = 0xfedc_ba98;
+        for n in [0, 1, 31, 32, 33, 65, 129, 1024] {
+            for mode in 0..4 {
+                let mut order = vec![GUARD; n + 34];
+                let mut scratch = vec![GUARD; n + 34];
+                for (i, word) in order[17..17 + n].iter_mut().enumerate() {
+                    *word = i as u32;
+                }
+                let mut calls = 0;
+                sort_indices(&mut order[17..17 + n], &mut scratch[17..17 + n], |a, b| {
+                    calls += 1;
+                    match mode {
+                        0 => a >= b,
+                        1 => true,
+                        2 => false,
+                        _ => calls % 2 == 0,
+                    }
+                });
+                assert!(order[..17]
+                    .iter()
+                    .chain(&order[17 + n..])
+                    .all(|x| *x == GUARD));
+                assert!(scratch[..17]
+                    .iter()
+                    .chain(&scratch[17 + n..])
+                    .all(|x| *x == GUARD));
+                order[17..17 + n].sort_unstable();
+                assert_eq!(order[17..17 + n], (0..n as u32).collect::<Vec<_>>());
+            }
+        }
     }
 
     #[test]

@@ -5,7 +5,7 @@
 //! name `NativePayloadFamily` or call the generic `native_payload::alloc::<T>`.
 //! It describes its family with a `#[repr(C)]` [`PerryPayloadFamily`] instead:
 //! the class id, whether the cell links its owner, the constructor name, a
-//! prototype installer, and the payload's size, alignment and drop thunk. The
+//! prototype installer, and the payload's size, alignment and vtable. The
 //! payload itself is a `Box<T>` the binding allocates and hands over as a raw
 //! pointer; from then on it is an ordinary payload cell, with every rule of
 //! `docs/native-payload-pattern.md`.
@@ -19,7 +19,7 @@
 use std::ffi::c_void;
 
 /// Revision of this ABI. Bumped with any signature or descriptor change.
-pub const PERRY_PAYLOAD_ABI_VERSION: u8 = 1;
+pub const PERRY_PAYLOAD_ABI_VERSION: u8 = 2;
 
 /// A family, as a binding declares it. Lives in a `static` of the binding.
 ///
@@ -43,9 +43,11 @@ pub struct PerryPayloadFamily {
     pub name_len: usize,
     /// Installs the prototype's methods, once per realm. May be absent.
     pub install_prototype: Option<unsafe extern "C" fn(proto: *mut c_void)>,
-    /// Frees one boxed payload. Runs at release, sweep or thread teardown; it
-    /// must not allocate on the GC heap, call JS or touch thread-locals.
-    pub drop_payload: unsafe extern "C" fn(resource: *mut c_void, hint: *mut c_void),
+    /// The payload type's static vtable: its `drop` frees one boxed payload
+    /// (at release, sweep or thread teardown; it must not allocate on the GC
+    /// heap, call JS or touch thread-locals) and its `stream` names the stream
+    /// hooks of a stream family.
+    pub vtable: *const crate::native_payload::PayloadVTable,
     /// `size_of::<T>()` of the payload.
     pub payload_size: usize,
     /// `align_of::<T>()` of the payload.
@@ -76,7 +78,7 @@ pub(crate) const fn payload_abi_layout() -> u64 {
         | (offset_of!(PerryPayloadFamily, class_id) as u64) << 40
         | (offset_of!(PerryPayloadFamily, name) as u64) << 32
         | (offset_of!(PerryPayloadFamily, install_prototype) as u64) << 24
-        | (offset_of!(PerryPayloadFamily, drop_payload) as u64) << 16
+        | (offset_of!(PerryPayloadFamily, vtable) as u64) << 16
         | (offset_of!(PerryPayloadFamily, payload_align) as u64) << 8
         | PERRY_PAYLOAD_ABI_VERSION as u64
 }

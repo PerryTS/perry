@@ -210,7 +210,9 @@ pub(crate) use self::iter_object::{
 pub(crate) use self::iterator::iter_bt_dump;
 pub(crate) use self::iterator::{array_from_spread_value, is_builtin_iterator_class_id};
 pub use self::iterator::{
-    js_array_spread_append, js_for_of_to_array, js_get_async_iterator, js_iterator_to_array,
+    js_array_spread_append, js_for_of_to_array, js_get_async_iterator,
+    js_iterator_close_if_not_done, js_iterator_close_on_throw, js_iterator_delegate_return,
+    js_iterator_delegate_throw, js_iterator_to_array,
 };
 pub use self::join::{js_array_join, js_array_join_value};
 #[cfg(test)]

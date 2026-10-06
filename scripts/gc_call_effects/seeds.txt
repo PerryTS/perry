@@ -79,7 +79,7 @@ panic regex ^core::slice::index::|^core::str::slice_error_fail|^core::cell::pani
 # value's destructor never executes inside a helper.
 teardown regex ^perry_runtime::arena::thread_exit:: -- thread-exit arena release, run from the arena's TLS destructor
 teardown regex ^<perry_runtime::arena::block::Arena as core::ops::drop::Drop>::drop$ -- the arena's TLS destructor
-teardown regex ^core::ptr::drop_glue::<perry_runtime::tls_hot::HotCell< -- a perry_thread_local! value's destructor (TLS teardown)
+teardown regex ^(core::ptr::drop_glue|std::sys::thread_local::native::lazy::destroy)::<perry_runtime::tls_hot::HotCell< -- a perry_thread_local! value's destructor (TLS teardown)
 teardown regex ^std::sys::thread_local::destructors::|^std::sys::thread_local::guard:: -- std's TLS destructor runner: thread exit only
 
 # ------------------------------------------------------------------- extern

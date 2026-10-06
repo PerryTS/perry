@@ -605,8 +605,6 @@ pub(super) fn side_tables() -> Vec<SideTableRow> {
     rows.extend(crate::timer::timer_tables_census());
     rows.push(crate::symbol::symbol_registry_census());
     #[cfg(feature = "regex-engine")]
-    rows.extend(crate::regex::site_test::side_table_census());
-    #[cfg(feature = "regex-engine")]
     rows.push(crate::regex::perex_cache::census());
     let masks = super::layout_tables::per_object_layout_table_sizes();
     rows.push(("gc.layout_slot_masks", masks, masks * 24));
@@ -630,10 +628,6 @@ mod regex_census_tests {
         // census. These rows account for the bounded native cache metadata.
         #[cfg(feature = "regex-engine")]
         assert!(names.contains(&"regex.program_cache"), "rows: {names:?}");
-        assert!(
-            names.contains(&"regex.site_test_headers"),
-            "rows: {names:?}"
-        );
     }
 }
 

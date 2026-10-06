@@ -82,9 +82,8 @@ for (const mode of ['default', 'compact']) {
   const staging = path.join(work, mode);
   fs.mkdirSync(staging);
   const settings = { ...env, TMPDIR: staging, PERRY_LL_OPT_LEVEL: 'z' };
-  for (const key of ['PERRY_RS4GC', 'PERRY_SHADOW_STACK', 'PERRY_INLINE_SHADOW_SLOT', 'PERRY_FULL_OUTLINE_IC']) delete settings[key];
-  if (mode === 'compact') Object.assign(settings, { PERRY_RS4GC: '0', PERRY_SHADOW_STACK: '1',
-    PERRY_INLINE_SHADOW_SLOT: '0', PERRY_FULL_OUTLINE_IC: '1' });
+  for (const key of ['PERRY_FULL_OUTLINE_IC']) delete settings[key];
+  if (mode === 'compact') Object.assign(settings, { PERRY_FULL_OUTLINE_IC: '1' });
   const output = path.join(work, mode + '-app');
   run(mode + '-compile', compiler, ['compile', path.join(source, 'entry.js'),
     '-o', output, '--platform', 'bun', '--bunfs-root', source, '--keep-intermediates',

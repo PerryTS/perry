@@ -270,7 +270,7 @@ mod issue7628_rooting_tests;
 #[cfg(test)]
 mod readonly_collection_tests;
 #[cfg(test)]
-mod regex_site_test_tests;
+mod regex_literal_tests;
 pub(crate) mod shadow_slot;
 #[cfg(test)]
 mod slice7_rooting_tests;
@@ -358,13 +358,6 @@ pub(crate) struct FnCtx<'a> {
     /// module code uses `module_init`.
     pub source_function: String,
     pub source_function_slug: String,
-    /// Public callable symbol when this body is proven to be exactly
-    /// `function () { return /literal/flags; }`.  The proof is structural at
-    /// the HIR function boundary (zero parameters, one return statement, no
-    /// async/generator machinery).  Regex literal lowering passes this
-    /// identity to the runtime only for that shape; ordinary literals retain
-    /// fresh-object semantics.
-    pub regex_factory_identity: Option<String>,
     /// Stable id for the labeled loop currently being lowered.
     pub active_region_id: Option<String>,
     /// Full native-region fact graph collected for this lowered HIR region.
@@ -1008,7 +1001,7 @@ pub(crate) struct FnCtx<'a> {
     pub number_by_construction_locals: &'a std::collections::HashSet<u32>,
 
     /// Gen-GC Phase A sub-phase 3a: pointer-typed local → shadow-
-    /// frame slot index. Empty when `PERRY_SHADOW_STACK` is off.
+    /// frame slot index. Empty on native statepoint targets.
     /// Sub-phase 3b uses this map at `Stmt::Let` / `LocalSet`
     /// lowering sites to emit `js_shadow_slot_set(idx, bits)` so
     /// the frame reflects the live pointer state at the following

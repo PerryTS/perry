@@ -254,7 +254,6 @@ pub(super) fn compile_module_init(
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: "module_init".to_string(),
         source_function_slug: crate::expr::native_region_slug("module_init"),
-        regex_factory_identity: None,
         active_region_id: None,
         native_facts: &init_native_facts,
         locals: HashMap::new(),

@@ -511,16 +511,6 @@ pub(super) fn compile_closure(
     closure_relevant_ids.extend(captures.iter().copied());
 
     let public_llvm_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
-    let regex_factory_identity = (!is_async
-        && !is_generator
-        && params.is_empty()
-        && matches!(
-            body.as_slice(),
-            [perry_hir::Stmt::Return(Some(
-                perry_hir::Expr::RegExp { .. }
-            ))]
-        ))
-    .then(|| public_llvm_name.clone());
     let typed_public_trampoline = if cross_module.typed_f64_closures.contains(&func_id) {
         Some(TypedFunctionTrampolineKind::F64)
     } else if cross_module.typed_i32_closures.contains(&func_id) {
@@ -617,12 +607,6 @@ pub(super) fn compile_closure(
         let capture_root_slots =
             u32::from(captures_this || enclosing_class.is_some() || entry_bound_this)
                 + u32::from(captures_new_target);
-        crate::codegen::helpers::maybe_spill_roots_to_shadow_frame(
-            lf,
-            &llvm_name,
-            m.len() + capture_root_slots as usize,
-            body,
-        );
         lf.enable_shadow_frame(m.len() as u32 + capture_root_slots);
         m
     } else {
@@ -1038,7 +1022,6 @@ pub(super) fn compile_closure(
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: format!("closure_{}", func_id),
         source_function_slug: crate::expr::native_region_slug(&format!("closure_{}", func_id)),
-        regex_factory_identity,
         active_region_id: None,
         native_facts: &native_facts,
         locals,

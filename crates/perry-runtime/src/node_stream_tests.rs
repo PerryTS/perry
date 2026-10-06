@@ -644,10 +644,7 @@ extern "C" fn transform_push_pair_callback(
     cb: f64,
 ) -> f64 {
     let this = receiver.as_f64();
-    let push = js_object_get_field_by_name_f64(
-        raw_ptr_from_value(this) as *const ObjectHeader,
-        hidden_key(b"push"),
-    );
+    let push = bound_method(this, b"push");
     unsafe {
         let _ =
             crate::closure::native_call_value_this(push, receiver, [string_value("a")].as_ptr(), 1);
@@ -811,10 +808,7 @@ fn writable_options_write_callback_is_invoked_by_stub_write() {
     );
 
     let writable = js_node_stream_writable_new(box_pointer(opts as *const u8));
-    let write = js_object_get_field_by_name_f64(
-        raw_ptr_from_value(writable) as *const ObjectHeader,
-        hidden_key(b"write"),
-    );
+    let write = bound_method(writable, b"write");
     let args = [string_value("chunk"), f64::from_bits(TAG_UNDEFINED)];
     unsafe {
         let _ = crate::closure::js_native_call_value(
@@ -901,14 +895,8 @@ fn transform_pipe_chain_applies_callback_output() {
         box_pointer(sink_data as *const u8),
     );
 
-    let src_pipe = js_object_get_field_by_name_f64(
-        raw_ptr_from_value(src) as *const ObjectHeader,
-        hidden_key(b"pipe"),
-    );
-    let upper_pipe = js_object_get_field_by_name_f64(
-        raw_ptr_from_value(upper) as *const ObjectHeader,
-        hidden_key(b"pipe"),
-    );
+    let src_pipe = bound_method(src, b"pipe");
+    let upper_pipe = bound_method(upper, b"pipe");
     let _ = unsafe {
         crate::closure::js_native_call_value(
             src_pipe,
@@ -1331,13 +1319,10 @@ fn stream_methods_use_their_receiver_without_closure_capture() {
 }
 
 #[test]
-fn stream_method_closure_capture_wins_over_a_foreign_receiver() {
+fn bound_stream_method_keeps_its_receiver_over_a_foreign_one() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let other = box_pointer(crate::object::js_object_alloc(0, 0) as *const u8);
-    let end = js_object_get_field_by_name_f64(
-        raw_ptr_from_value(stream) as *const ObjectHeader,
-        hidden_key(b"end"),
-    );
+    let end = bound_method(stream, b"end");
 
     unsafe {
         let _ = crate::closure::native_call_value_this(
@@ -1416,8 +1401,7 @@ fn readable_pipe_stub_returns_destination_and_rejects_missing_destination() {
 #[test]
 fn readable_wrap_method_is_present_and_chainable() {
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
-    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
-    let wrap = js_object_get_field_by_name_f64(obj, hidden_key(b"wrap"));
+    let wrap = bound_method(stream, b"wrap");
     assert_ne!(wrap.to_bits(), TAG_UNDEFINED);
 
     let wrapped = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
@@ -1438,8 +1422,8 @@ fn writable_cork_and_uncork_update_counter_and_return_undefined() {
     let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
     let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
-    let cork = js_object_get_field_by_name_f64(obj, hidden_key(b"cork"));
-    let uncork = js_object_get_field_by_name_f64(obj, hidden_key(b"uncork"));
+    let cork = bound_method(stream, b"cork");
+    let uncork = bound_method(stream, b"uncork");
 
     assert_eq!(writable_corked_count(stream), 0.0);
 
@@ -1568,6 +1552,19 @@ fn writable_write_returns_false_at_high_water_mark() {
     assert_eq!(first.to_bits(), TAG_TRUE);
     assert_eq!(second.to_bits(), TAG_FALSE);
     assert_eq!(writable_length(stream), 2.0);
+    // G2: the second write waits behind the first, which is still in flight.
+    WRITE_CAPTURED.with(|captured| {
+        assert_eq!(captured.borrow().as_slice(), &[b"a".to_vec()]);
+    });
+    let pending = PENDING_WRITE_CALLBACK.with(|pending| pending.borrow_mut().take());
+    unsafe {
+        let _ = crate::closure::js_native_call_value(
+            pending.expect("the first write is in flight"),
+            crate::closure::plain_call_receiver(),
+            [f64::from_bits(TAG_NULL)].as_ptr(),
+            1,
+        );
+    }
     WRITE_CAPTURED.with(|captured| {
         assert_eq!(
             captured.borrow().as_slice(),
@@ -1796,6 +1793,8 @@ fn writable_write_decodes_string_chunks_and_runs_callback() {
     WRITE_CHUNK_STRING_FLAGS.with(|flags| {
         assert_eq!(flags.borrow().as_slice(), &[false, false]);
     });
+    // G2: a write that completed synchronously runs its callback a tick later.
+    let _ = crate::promise::js_promise_run_microtasks();
     WRITE_CALLBACK_COUNT.with(|count| assert_eq!(*count.borrow(), 2));
 }
 
@@ -1849,6 +1848,8 @@ fn writable_decode_strings_false_preserves_string_chunks() {
     WRITE_CHUNK_STRING_FLAGS.with(|flags| {
         assert_eq!(flags.borrow().as_slice(), &[true, true]);
     });
+    // G2: a write that completed synchronously runs its callback a tick later.
+    let _ = crate::promise::js_promise_run_microtasks();
     WRITE_CALLBACK_COUNT.with(|count| assert_eq!(*count.borrow(), 2));
 }
 

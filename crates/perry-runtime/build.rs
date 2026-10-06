@@ -571,6 +571,18 @@ fn emit_instrument_cfgs() {
 }
 
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(perry_native_stack_maps)");
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
+    let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let width = std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH").unwrap_or_default();
+    let vendor = std::env::var("CARGO_CFG_TARGET_VENDOR").unwrap_or_default();
+    if width == "64"
+        && matches!(arch.as_str(), "aarch64" | "x86_64")
+        && (vendor == "apple" || os == "linux" || (os == "windows" && arch == "x86_64"))
+    {
+        println!("cargo:rustc-cfg=perry_native_stack_maps");
+    }
+
     emit_instrument_cfgs();
     println!("cargo:rerun-if-changed=src/ffi/perry_memory_profile.c");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux")
@@ -596,6 +608,7 @@ fn main() {
     // miscompiled under LLVM's one-return assumption (stack-slot
     // coloring across the call). See the header comment in the C file.
     println!("cargo:rerun-if-changed=src/ffi/perry_sjlj.c");
+    println!("cargo:rerun-if-changed=src/ffi/perry_iterator_personality.c");
     // WASI (#11377): setjmp/longjmp on wasm needs the exception-handling
     // proposal and wasi-libc's `libsetjmp`, which the `--target wasi` link
     // wires up (#11378/#11379). Until then the trampoline is not built there,
@@ -603,6 +616,7 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("wasi") {
         cc::Build::new()
             .file("src/ffi/perry_sjlj.c")
+            .file("src/ffi/perry_iterator_personality.c")
             // The trampoline is never unwound through (a raise targeting a
             // generated frame is always innermost-above it), but keep CFI so
             // debuggers and the unwind-table self-check can walk past it.

@@ -83,7 +83,6 @@ NON_HANDLE_TABLES = {
     ("crates/perry-runtime/src/node_stream_readwrite.rs", "HIDDEN_KEYS"),
     ("crates/perry-runtime/src/object/descriptor_state.rs", "DECLARED_FIELD_NAME_HASHES"),
     ("crates/perry-runtime/src/object/descriptor_state.rs", "PROTO_DESCRIPTOR_KEY_HASHES"),
-    ("crates/perry-runtime/src/regex/site_test.rs", "SITE_TEST_HEADERS"),
     ("crates/perry-runtime/src/object/native_module/callable_exports/builtin_closure_metadata.rs", "BUILTIN_CLOSURE_NON_CONSTRUCTABLE"),
     # Class ids are compiler metadata ids, not native-resource handles.
     ("crates/perry-runtime/src/object/class_constructors.rs", "CLASS_CAPTURE_VALUES"),

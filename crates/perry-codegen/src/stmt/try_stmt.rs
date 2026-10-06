@@ -60,9 +60,24 @@ use super::*;
 /// (`lower_async_rejecting_stmts_inner`) — same dispatch, different
 /// exception continuation.
 pub(super) fn emit_eh_dispatch(ctx: &mut FnCtx<'_>, exc_label: &str, normal_label: &str) -> String {
-    ctx.func.personality = Some("perry_eh_personality");
+    emit_eh_dispatch_inner(ctx, exc_label, normal_label, true)
+}
 
-    ctx.block().call_void("js_eh_try_push", &[]);
+fn emit_eh_dispatch_inner(
+    ctx: &mut FnCtx<'_>,
+    exc_label: &str,
+    normal_label: &str,
+    registered: bool,
+) -> String {
+    if !registered {
+        ctx.func.personality = Some("perry_iterator_eh_personality");
+    } else if ctx.func.personality != Some("perry_iterator_eh_personality") {
+        ctx.func.personality = Some("perry_eh_personality");
+    }
+
+    if registered {
+        ctx.block().call_void("js_eh_try_push", &[]);
+    }
 
     let lpad_idx = ctx.new_block("eh.lpad");
     let lpad_label = ctx.block_label(lpad_idx);
@@ -79,12 +94,37 @@ pub(super) fn emit_eh_dispatch(ctx: &mut FnCtx<'_>, exc_label: &str, normal_labe
     lpad_label
 }
 
+fn iterator_cleanup_body(body: &[perry_hir::Stmt]) -> bool {
+    body.iter().any(|s| match s {
+        perry_hir::Stmt::Throw(perry_hir::Expr::Call { callee, .. })
+        | perry_hir::Stmt::Expr(perry_hir::Expr::Call { callee, .. }) =>
+            matches!(&**callee, perry_hir::Expr::ExternFuncRef { name, .. } if name == "js_iterator_close_on_throw"),
+        perry_hir::Stmt::Throw(perry_hir::Expr::NativeMethodCall { module, class_name, object, method, .. })
+        | perry_hir::Stmt::Expr(perry_hir::Expr::NativeMethodCall { module, class_name, object, method, .. }) =>
+            module == "__perry_runtime" && class_name.is_none() && object.is_none() && method == "iteratorCloseOnThrow",
+        perry_hir::Stmt::If { then_branch, else_branch, .. } =>
+            iterator_cleanup_body(then_branch)
+                || else_branch.as_ref().is_some_and(|s| iterator_cleanup_body(s)),
+        _ => false,
+    })
+}
+
+fn unregistered_iterator_cleanup(target: &str, catch: Option<&perry_hir::CatchClause>) -> bool {
+    target.starts_with("x86_64")
+        && target.ends_with("-linux-gnu")
+        && catch
+            .and_then(|c| c.param.as_ref())
+            .is_some_and(|(_, name)| name.starts_with("__forof_err_"))
+        && catch.is_some_and(|c| iterator_cleanup_body(&c.body))
+}
+
 pub(crate) fn lower_try(
     ctx: &mut FnCtx<'_>,
     body: &[perry_hir::Stmt],
     catch: Option<&perry_hir::CatchClause>,
     finally: Option<&[perry_hir::Stmt]>,
 ) -> Result<()> {
+    let registered = !unregistered_iterator_cleanup(ctx.target_triple, catch);
     let try_body_idx = ctx.new_block("try.body");
     let catch_idx = ctx.new_block("try.catch");
     let finally_idx = ctx.new_block("try.finally");
@@ -94,25 +134,29 @@ pub(crate) fn lower_try(
     let finally_label = ctx.block_label(finally_idx);
 
     // --- current block: arm handler, enter body; landing pad → catch ---
-    let lpad_label = emit_eh_dispatch(ctx, &catch_label, &try_body_label);
+    let lpad_label = emit_eh_dispatch_inner(ctx, &catch_label, &try_body_label, registered);
 
     // --- try body (scope active) ---
     ctx.current_block = try_body_idx;
     // Return/break/continue inside the body pop the handler via js_try_end
     // before leaving (see `Stmt::Return` in stmt/mod.rs).
-    ctx.try_depth += 1;
+    ctx.try_depth += usize::from(registered);
     ctx.func.push_eh_scope(lpad_label);
     lower_stmts(ctx, body)?;
     ctx.func.pop_eh_scope();
-    ctx.try_depth -= 1;
+    ctx.try_depth -= usize::from(registered);
     if !ctx.block().is_terminated() {
-        ctx.block().call_void("js_try_end", &[]);
+        if registered {
+            ctx.block().call_void("js_try_end", &[]);
+        }
         ctx.block().br(&finally_label);
     }
 
     // --- catch (reached only through the landing pad) ---
     ctx.current_block = catch_idx;
-    ctx.block().call_void("js_try_end", &[]);
+    if registered {
+        ctx.block().call_void("js_try_end", &[]);
+    }
     if let Some(clause) = catch {
         let exc = ctx.block().call(DOUBLE, "js_get_exception", &[]);
         ctx.block().call_void("js_clear_exception", &[]);
@@ -198,4 +242,90 @@ pub(crate) fn lower_try(
         lower_stmts(ctx, f)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn iterator_cleanup_has_no_normal_path_savepoint() {
+        let mut catch = perry_hir::CatchClause {
+            param: Some((1, "__forof_err_1".into())),
+            body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::Call {
+                callee: Box::new(perry_hir::Expr::ExternFuncRef {
+                    name: "js_iterator_close_on_throw".into(),
+                    param_types: vec![perry_hir::types::Type::Any; 3],
+                    return_type: perry_hir::types::Type::Any,
+                }),
+                args: vec![],
+                type_args: vec![],
+                byte_offset: 0,
+            })],
+        };
+        assert!(unregistered_iterator_cleanup(
+            "x86_64-unknown-linux-gnu",
+            Some(&catch)
+        ));
+        assert!(!unregistered_iterator_cleanup(
+            "aarch64-apple-darwin",
+            Some(&catch)
+        ));
+        catch.param.as_mut().unwrap().1 = "user_catch".into();
+        assert!(!unregistered_iterator_cleanup(
+            "x86_64-unknown-linux-gnu",
+            Some(&catch)
+        ));
+        catch.param.as_mut().unwrap().1 = "__forof_err_1".into();
+        catch.body.clear();
+        assert!(!unregistered_iterator_cleanup(
+            "x86_64-unknown-linux-gnu",
+            Some(&catch)
+        ));
+    }
+    #[test]
+    fn iterator_cleanup_ir_keeps_unwind_edge_without_hot_push_or_pop() {
+        let _pin = crate::codegen::helpers::NativeRootsPin::native();
+        let mut module = perry_hir::Module::new("iterret_cleanup");
+        module.init.push(perry_hir::Stmt::Try {
+            body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::Number(42.0))],
+            catch: Some(perry_hir::CatchClause {
+                param: Some((1, "__forof_err_1".into())),
+                body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::NativeMethodCall {
+                    module: "__perry_runtime".into(),
+                    class_name: None,
+                    object: None,
+                    method: "iteratorCloseOnThrow".into(),
+                    args: vec![
+                        perry_hir::Expr::Undefined,
+                        perry_hir::Expr::Bool(false),
+                        perry_hir::Expr::LocalGet(1),
+                    ],
+                })],
+            }),
+            finally: None,
+        });
+        let opts = crate::CompileOptions {
+            emit_ir_only: true,
+            is_entry_module: true,
+            target: Some("x86_64-unknown-linux-gnu".into()),
+            ..Default::default()
+        };
+        let ir = String::from_utf8(crate::compile_module(&module, opts).unwrap()).unwrap();
+        let main = ir
+            .split("define i32 @main()")
+            .nth(1)
+            .unwrap()
+            .split(
+                "
+}
+",
+            )
+            .next()
+            .unwrap();
+        assert!(main.contains("landingpad"));
+        assert!(main.contains("invoke"));
+        assert!(main.contains("@js_iterator_close_on_throw"));
+        assert!(!main.contains("@js_eh_try_push"));
+        assert!(!main.contains("@js_try_end"));
+    }
 }

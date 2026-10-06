@@ -151,15 +151,12 @@ pub(crate) fn lazy_iter_for_stmt(
 /// Use the runtime GetMethod/Call entry: read `return` once and preserve
 /// the iterator as the receiver without consulting a user-visible `.call`.
 fn iterator_close_stmt(iter_id: LocalId) -> Stmt {
-    Stmt::Expr(Expr::Call {
-        callee: Box::new(Expr::ExternFuncRef {
-            name: "js_iterator_close_if_not_done".to_string(),
-            param_types: vec![Type::Any, Type::Any],
-            return_type: Type::Any,
-        }),
+    Stmt::Expr(Expr::NativeMethodCall {
+        module: "__perry_runtime".to_string(),
+        class_name: None,
+        object: None,
+        method: "iteratorCloseIfNotDone".to_string(),
         args: vec![Expr::LocalGet(iter_id), Expr::Bool(false)],
-        type_args: vec![],
-        byte_offset: 0,
     })
 }
 
@@ -216,10 +213,6 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
     let err_id = ctx.fresh_local();
     let err_name = format!("__forof_err_{}", err_id);
     ctx.locals.push((err_name.clone(), err_id, Type::Any));
-    let ret_err_id = ctx.fresh_local();
-    let ret_err_name = format!("__forof_ret_err_{}", ret_err_id);
-    ctx.locals
-        .push((ret_err_name.clone(), ret_err_id, Type::Any));
 
     let close_on_throw = Stmt::If {
         condition: Expr::Compare {
@@ -229,14 +222,17 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
         },
         then_branch: vec![
             iterator_completion_stmt(state_id, 2.0),
-            Stmt::Try {
-                body: vec![iterator_close_stmt(iter_id)],
-                catch: Some(CatchClause {
-                    param: Some((ret_err_id, ret_err_name)),
-                    body: Vec::new(),
-                }),
-                finally: None,
-            },
+            Stmt::Throw(Expr::NativeMethodCall {
+                module: "__perry_runtime".to_string(),
+                class_name: None,
+                object: None,
+                method: "iteratorCloseOnThrow".to_string(),
+                args: vec![
+                    Expr::LocalGet(iter_id),
+                    Expr::Bool(false),
+                    Expr::LocalGet(err_id),
+                ],
+            }),
         ],
         else_branch: None,
     };
@@ -864,6 +860,22 @@ pub(super) fn lower_stmt_for_of_inner(
             object: Box::new(Expr::LocalGet(result_id)),
             property: "value".to_string(),
         };
+        let guard_binding = binding_pat.is_some_and(|p| !matches!(p, ast::Pat::Ident(_)));
+        let value_id = ctx.fresh_local();
+        ctx.locals
+            .push((format!("__gen_value_{value_id}"), value_id, Type::Any));
+        let value_stmt = Stmt::Let {
+            id: value_id,
+            name: format!("__gen_value_{value_id}"),
+            ty: Type::Any,
+            mutable: false,
+            init: Some(value_expr.clone()),
+        };
+        let value_expr = if needs_await || !guard_binding {
+            value_expr
+        } else {
+            Expr::LocalGet(value_id)
+        };
 
         // Lower loop body
         let mut body_stmts = Vec::new();
@@ -918,9 +930,9 @@ pub(super) fn lower_stmt_for_of_inner(
         } else {
             lower_stmt(ctx, module, &for_of_stmt.body)?;
         }
-        let mut user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
-        body_stmts.append(&mut user_body);
+        let user_body: Vec<Stmt> = module.init.drain(init_before..).collect();
         if needs_await {
+            body_stmts.extend(user_body);
             async_iterator_close::emit_driver(
                 ctx,
                 &mut module.init,
@@ -930,9 +942,32 @@ pub(super) fn lower_stmt_for_of_inner(
                 body_stmts,
             );
         } else {
+            let loop_body = if guard_binding {
+                body_stmts.extend(user_body);
+                vec![
+                    value_stmt,
+                    wrap_lazy_for_of_body_close_on_throw(
+                        ctx,
+                        iter_id,
+                        for_of_stmt.span.lo.0,
+                        body_stmts,
+                    ),
+                ]
+            } else {
+                // Identifier initialization cannot execute user code. Preserve
+                // the direct value binding; an extra Any temporary would add a
+                // second moving-GC root on every successful iteration.
+                body_stmts.push(wrap_lazy_for_of_body_close_on_throw(
+                    ctx,
+                    iter_id,
+                    for_of_stmt.span.lo.0,
+                    user_body,
+                ));
+                body_stmts
+            };
             module
                 .init
-                .push(iter_driver_while_stmt(result_id, next_call, body_stmts));
+                .push(iter_driver_while_stmt(result_id, next_call, loop_body));
         }
 
         ctx.pop_block_scope(for_scope_mark);
@@ -1517,6 +1552,24 @@ pub(super) fn lower_stmt_for_of_inner(
     let mut loop_body = lower_body_stmt(ctx, &for_of_stmt.body)?;
 
     // Build binding statements using the pre-defined variable IDs
+    // IteratorValue errors do not close; errors while assigning its value do.
+    let guard_bindings = use_lazy_iter
+        && match &for_of_stmt.left {
+            ast::ForHead::VarDecl(decl) => decl
+                .decls
+                .first()
+                .is_some_and(|d| !matches!(d.name, ast::Pat::Ident(_))),
+            ast::ForHead::Pat(_) => true,
+            _ => false,
+        };
+    let binding_value = if guard_bindings {
+        let id = ctx.fresh_local();
+        ctx.locals
+            .push((format!("__forof_value_{id}"), id, Type::Any));
+        Some(id)
+    } else {
+        None
+    };
     let binding_stmts = match &for_of_stmt.left {
         ast::ForHead::VarDecl(var_decl) => {
             if let Some(decl) = var_decl.decls.first() {
@@ -1533,10 +1586,14 @@ pub(super) fn lower_stmt_for_of_inner(
                 // path to parity.
                 let item_expr = if use_lazy_iter {
                     // Lazy path: the element is `__result.value`.
-                    Expr::PropertyGet {
-                        byte_offset: 0,
-                        object: Box::new(Expr::LocalGet(result_id)),
-                        property: "value".to_string(),
+                    if let Some(id) = binding_value {
+                        Expr::LocalGet(id)
+                    } else {
+                        Expr::PropertyGet {
+                            byte_offset: 0,
+                            object: Box::new(Expr::LocalGet(result_id)),
+                            property: "value".to_string(),
+                        }
                     }
                 } else {
                     let raw_item_expr = Expr::IndexGet {
@@ -1675,7 +1732,11 @@ pub(super) fn lower_stmt_for_of_inner(
             let binding = pat_head_binding
                 .as_ref()
                 .ok_or_else(|| anyhow!("for-of pattern head not pre-resolved"))?;
-            let mut source = lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id);
+            let mut source = if let Some(id) = binding_value {
+                Expr::LocalGet(id)
+            } else {
+                lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id)
+            };
             if for_of_stmt.is_await && !use_lazy_iter {
                 source = Expr::Await(Box::new(source));
             }
@@ -1684,18 +1745,32 @@ pub(super) fn lower_stmt_for_of_inner(
         _ => return Err(anyhow!("Unsupported for-of left-hand side")),
     };
 
-    // The lazy iterator body owns close via its generated catch/finally.
     if use_lazy_iter {
-        // Wrap ONLY the user body so a throw escaping it runs IteratorClose.
-        // The
-        // element-`.value` read and binding statements stay OUTSIDE the wrapper:
-        // per spec, IteratorValue throwing sets the iterator done and does NOT
-        // close it (`iterator-next-result-value-attr-error`) — only an abrupt
-        // body completion does.
-        let guarded_body =
-            wrap_lazy_for_of_body_close_on_throw(ctx, arr_id, for_of_stmt.span.lo.0, loop_body);
-        let mut full_body = binding_stmts;
-        full_body.push(guarded_body);
+        let mut full_body = Vec::new();
+        let mut guarded_stmts = Vec::new();
+        if let Some(id) = binding_value {
+            full_body.push(Stmt::Let {
+                id,
+                name: format!("__forof_value_{id}"),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(result_id)),
+                    property: "value".to_string(),
+                }),
+            });
+            guarded_stmts.extend(binding_stmts);
+        } else {
+            full_body.extend(binding_stmts);
+        }
+        guarded_stmts.extend(loop_body);
+        full_body.push(wrap_lazy_for_of_body_close_on_throw(
+            ctx,
+            arr_id,
+            for_of_stmt.span.lo.0,
+            guarded_stmts,
+        ));
         module
             .init
             .push(lazy_iter_for_stmt(arr_id, result_id, full_body));

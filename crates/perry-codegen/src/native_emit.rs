@@ -194,73 +194,6 @@ impl FrozenUnit {
     }
 }
 
-/// Apply a typed pre- or post-RS4GC budget request to the lowering-owned functions
-/// that produced a module/unit. The request is expected to make progress for
-/// every named function; otherwise retrying would either preserve the refusal
-/// or loop forever, so fail with the original names and counts instead.
-pub(crate) fn apply_budget_spill_retry<'a>(
-    funcs: impl IntoIterator<Item = &'a mut crate::function::LlFunction>,
-    violations: &[crate::inprocess::Rs4gcBudgetViolation],
-) -> Result<()> {
-    let mut changed = std::collections::HashSet::new();
-    for function in funcs {
-        let Some(violation) = violations
-            .iter()
-            .find(|violation| function.name == violation.name)
-        else {
-            continue;
-        };
-        if function.request_shadow_frame_spill() {
-            changed.insert(violation.name.clone());
-            match &violation.cause {
-                crate::inprocess::Rs4gcBudgetCause::PreRewrite {
-                    root_allocas,
-                    safepoints,
-                    estimated_relocations,
-                } => eprintln!(
-                    "perry: `{}` exceeded the pre-RS4GC relocation estimate ({} managed-root \
-                     allocas + {} non-leaf call-result temporaries across {} call sites = {} \
-                     estimated relocations; cap {}); retrying it with precise GC roots in a \
-                     shadow frame at the requested optimization level (#8583)",
-                    violation.name,
-                    root_allocas,
-                    safepoints,
-                    safepoints,
-                    estimated_relocations,
-                    violation.cap,
-                ),
-                crate::inprocess::Rs4gcBudgetCause::PostRewrite { post_instructions } => {
-                    eprintln!(
-                        "perry: `{}` exceeded the post-RS4GC instruction budget ({} -> {} \
-                         instructions; cap {}); retrying it with precise GC roots in a shadow \
-                         frame at the requested optimization level (#8679)",
-                        violation.name,
-                        violation
-                            .pre_instructions
-                            .map_or_else(|| "unknown".to_string(), |n| n.to_string()),
-                        post_instructions,
-                        violation.cap,
-                    );
-                }
-            }
-        }
-    }
-    let missing: Vec<&str> = violations
-        .iter()
-        .filter(|violation| !changed.contains(&violation.name))
-        .map(|violation| violation.name.as_str())
-        .collect();
-    if missing.is_empty() {
-        Ok(())
-    } else {
-        Err(anyhow!(
-            "RS4GC budget requested a shadow-frame retry for {}, but those \
-             functions were not available for a new lowering (or were already retried)",
-            missing.join(", ")
-        ))
-    }
-}
-
 fn freeze_unit(
     part: &crate::module::OwnedCodegenUnitPart,
     external_declarations: &[(String, String)],
@@ -623,10 +556,9 @@ pub fn compile_module_units_native(
     let frozen = std::sync::atomic::AtomicUsize::new(0);
     let mut slots: Vec<Option<Result<Vec<u8>>>> = (0..parts.len()).map(|_| None).collect();
     // The producer alone touches lowering-owned LlFunction/Rc state. Workers
-    // return their result through a second channel; on a typed budget request
-    // the producer can mutate that still-local graph, freeze it again, and
-    // resubmit it. The in-flight window stays bounded so this retry ability
-    // does not restore the old whole-bundle retention peak.
+    // return their result through a second channel. Once submitted, the
+    // producer releases that graph. The bounded in-flight window keeps the
+    // retained lowering state proportional to worker count.
     let (sender, receiver) =
         std::sync::mpsc::sync_channel::<(usize, Result<FrozenUnit>)>(jobs.max(1));
     let (result_sender, result_receiver) =
@@ -667,7 +599,7 @@ pub fn compile_module_units_native(
         drop(result_sender);
         let freeze_started = std::time::Instant::now();
         let report_step = (unit_total / 20).max(1);
-        let enqueue = |i: usize, part: &crate::module::OwnedCodegenUnitPart, retry: bool| -> bool {
+        let enqueue = |i: usize, part: &crate::module::OwnedCodegenUnitPart| -> bool {
             if unit_timings {
                 // Name the widest body before LLVM ever sees it: the one
                 // irreducible function in a bundle is the one that sets the
@@ -675,8 +607,7 @@ pub fn compile_module_units_native(
                 // not say which (#8583).
                 if let Some(widest) = part.funcs.iter().max_by_key(|f| f.estimated_ir_bytes()) {
                     eprintln!(
-                        "[perry] codegen: {module_prefix}: {}unit {}/{unit_total}: {} fns, ~{:.1} MiB estimated IR, widest {} (~{:.1} MiB)",
-                        if retry { "retry " } else { "" },
+                        "[perry] codegen: {module_prefix}: unit {}/{unit_total}: {} fns, ~{:.1} MiB estimated IR, widest {} (~{:.1} MiB)",
                         i + 1,
                         part.funcs.len(),
                         part.funcs.iter().map(|f| f.estimated_ir_bytes()).sum::<usize>() as f64 / 1_048_576.0,
@@ -689,9 +620,7 @@ pub fn compile_module_units_native(
             if sender.send((i, unit)).is_err() {
                 return false;
             }
-            if retry {
-                return true;
-            }
+
             let done = frozen.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             if show_progress && (done == unit_total || done % report_step == 0) {
                 let elapsed = freeze_started.elapsed().as_secs_f64();
@@ -717,9 +646,10 @@ pub fn compile_module_units_native(
             let part = parts[next]
                 .as_ref()
                 .expect("an undispatched native unit still owns its lowering graph");
-            if !enqueue(next, part, false) {
+            if !enqueue(next, part) {
                 break;
             }
+            parts[next] = None;
             next += 1;
             in_flight += 1;
         }
@@ -730,42 +660,12 @@ pub fn compile_module_units_native(
                 break;
             };
             if let Err(error) = &out {
-                if let Some(violations) = crate::inprocess::rs4gc_budget_retry(error) {
-                    let retry = parts[i]
-                        .as_mut()
-                        .expect("a retryable native unit keeps its lowering graph");
-                    match apply_budget_spill_retry(retry.funcs.iter_mut(), &violations) {
-                        Ok(()) if enqueue(i, retry, true) => continue,
-                        Ok(()) => {
-                            slots[i] = Some(Err(anyhow!(
-                                "native codegen retry queue closed for unit {}/{}",
-                                i + 1,
-                                unit_total
-                            )));
-                        }
-                        Err(retry_error) => {
-                            slots[i] = Some(Err(retry_error.context(format!(
-                                "native codegen unit {}/{} could not honor its RS4GC budget retry: \
-                                 {error:#}",
-                                i + 1,
-                                unit_total
-                            ))));
-                        }
-                    }
-                } else {
-                    if show_progress {
-                        eprintln!(
-                            "[perry] codegen: {module_prefix}: LLVM unit {}/{} failed after {:.1}s: {error:#}",
-                            i + 1,
-                            unit_total,
-                            attempt_elapsed.as_secs_f64()
-                        );
-                    }
-                    slots[i] = Some(out);
+                if show_progress {
+                    eprintln!("[perry] codegen: {module_prefix}: LLVM unit {}/{} failed after {:.1}s: {error:#}",
+                        i + 1, unit_total, attempt_elapsed.as_secs_f64());
                 }
-            } else {
-                slots[i] = Some(out);
             }
+            slots[i] = Some(out);
 
             // A final result no longer needs its Rc/RefCell lowering graph.
             // Drop it now, not after every unit and LLVM worker has finished.
@@ -794,7 +694,8 @@ pub fn compile_module_units_native(
                 let part = parts[next]
                     .as_ref()
                     .expect("an undispatched native unit still owns its lowering graph");
-                if enqueue(next, part, false) {
+                if enqueue(next, part) {
+                    parts[next] = None;
                     next += 1;
                     in_flight += 1;
                 }
@@ -842,18 +743,9 @@ pub fn compile_module_units_diff(
     target: Option<&str>,
     module_prefix: &str,
 ) -> Result<Vec<u8>> {
-    let (bytes_text, text_unit_count) = loop {
-        let units = llmod.render_codegen_units(n);
-        match crate::linker::compile_units_to_object(&units, target) {
-            Ok(bytes) => break (bytes, units.len()),
-            Err(error) => {
-                let Some(violations) = crate::inprocess::rs4gc_budget_retry(&error) else {
-                    return Err(error);
-                };
-                apply_budget_spill_retry(llmod.functions_mut(), &violations)?;
-            }
-        }
-    };
+    let units = llmod.render_codegen_units(n);
+    let text_unit_count = units.len();
+    let bytes_text = crate::linker::compile_units_to_object(&units, target)?;
     match compile_module_units_native(llmod, n, target, module_prefix) {
         Err(e) => {
             eprintln!("perry: [ir-diff] native unit construction FAILED (text arm used): {e:#}");
@@ -891,7 +783,7 @@ pub fn compile_module_native(
 ) -> Result<Vec<u8>> {
     let native_roots = crate::codegen::helpers::native_stack_roots_enabled();
     let (effective_target, args) = plan_for(target, native_roots);
-    loop {
+    {
         let context = Context::create();
         let module = build_native_module(&context, llmod)?;
         debug_dump(&module, module_prefix);
@@ -908,10 +800,7 @@ pub fn compile_module_native(
                 return crate::linker::finish_native_pieces(pieces, &effective_target, &args);
             }
             Err(error) => {
-                let Some(violations) = crate::inprocess::rs4gc_budget_retry(&error) else {
-                    return Err(error);
-                };
-                apply_budget_spill_retry(llmod.functions_mut(), &violations)?;
+                return Err(error);
             }
         }
     }
@@ -1315,6 +1204,25 @@ mod tests {
     }
 
     #[test]
+    fn instruction_budget_never_switches_the_rooting_backend() {
+        let _native = crate::codegen::helpers::NativeRootsPin::native();
+        let mut module = precise_root_fixture(false);
+        let before = module.to_ir();
+        let error = crate::inprocess::with_test_rs4gc_budget(1, || {
+            compile_module_native(&mut module, None, "statepoint_budget_fixture")
+        })
+        .expect_err("the instruction budget must fail closed");
+        assert!(error.to_string().contains("mandatory statepoint rooting"));
+        assert_eq!(
+            before,
+            module.to_ir(),
+            "a budget refusal must not mutate root lowering"
+        );
+        assert!(before.contains("gc \"statepoint-example\""));
+        assert!(!before.contains("call ptr @js_shadow_frame_enter"));
+    }
+
+    #[test]
     fn native_construction_lowers_precise_roots_before_rs4gc() {
         let _native = crate::codegen::helpers::NativeRootsPin::native();
         let mut module = precise_root_fixture(false);
@@ -1339,70 +1247,6 @@ mod tests {
             "a mapped function must be byte-identical after both arms run RS4GC; \
              a behavior-only check is vacuous until a collection"
         );
-    }
-
-    /// #8679: a real backend budget miss must come back through the native
-    /// constructor, mutate the lowering-owned function, rebuild the module,
-    /// and finish emission. The one-instruction cap guarantees that the first
-    /// RS4GC arm trips without constructing a million-instruction fixture;
-    /// the successful result and retained shadow IR prove this is a retry,
-    /// not the former hard refusal or a disabled budget.
-    #[test]
-    fn post_rs4gc_budget_retries_with_a_shadow_frame() {
-        let _native = crate::codegen::helpers::NativeRootsPin::native();
-        let mut module = precise_root_fixture(false);
-        let before = module
-            .deduped_function_refs()
-            .into_iter()
-            .find(|function| function.name == "native_root_diff_fixture")
-            .expect("fixture function exists before the retry")
-            .to_ir();
-        assert!(before.contains("gc \"statepoint-example\""), "{before}");
-        assert!(!before.contains("@js_shadow_frame_enter"), "{before}");
-
-        let object = crate::inprocess::with_test_rs4gc_budget(1, || {
-            compile_module_native(&mut module, None, "rs4gc_budget_retry_fixture")
-        })
-        .expect("a post-RS4GC budget miss must spill and retry successfully");
-        assert!(!object.is_empty());
-
-        let retried = module
-            .deduped_function_refs()
-            .into_iter()
-            .find(|function| function.name == "native_root_diff_fixture")
-            .expect("fixture function survives the retry");
-        assert!(retried.spills_roots_to_shadow_frame());
-        let after = retried.to_ir();
-        assert!(!after.contains("gc \"statepoint-example\""), "{after}");
-        assert!(after.contains("@js_shadow_frame_enter"), "{after}");
-        assert!(after.contains("@js_shadow_slot_bind"), "{after}");
-        assert!(after.contains("@js_shadow_frame_pop"), "{after}");
-    }
-
-    /// The reported Claude bundle takes the split-unit worker path. Its retry
-    /// source must stay on the producer thread (the `LlFunction` graph is not
-    /// `Send`) while LLVM reports the typed violation from a worker. A compact
-    /// map would prove the worker silently missed the test cap and kept the
-    /// statepoint lowering; no map proves the successful object came from the
-    /// resubmitted shadow-frame unit.
-    #[test]
-    fn split_unit_budget_retry_returns_a_shadow_rooted_object() {
-        let _native = crate::codegen::helpers::NativeRootsPin::native();
-        let mut module = precise_root_fixture(true);
-        let before = module.render_codegen_units(2);
-        assert!(
-            before
-                .iter()
-                .any(|unit| unit.contains("gc \"statepoint-example\"")),
-            "fixture must initially send a mapped function through RS4GC"
-        );
-
-        let object = crate::inprocess::with_test_rs4gc_budget(1, || {
-            compile_module_units_native(&mut module, 2, None, "rs4gc_split_budget_retry_fixture")
-        })
-        .expect("a worker budget miss must be re-lowered and resubmitted");
-        assert!(!object.is_empty());
-        assert_no_compact_gc_map(&object, "budget-retried split native");
     }
 
     #[test]
@@ -1548,14 +1392,11 @@ pub fn compile_module_diff(
     target: Option<&str>,
     module_prefix: &str,
 ) -> Result<Vec<u8>> {
-    loop {
+    {
         match compile_module_diff_once(llmod, target, module_prefix) {
             Ok(bytes) => return Ok(bytes),
             Err(error) => {
-                let Some(violations) = crate::inprocess::rs4gc_budget_retry(&error) else {
-                    return Err(error);
-                };
-                apply_budget_spill_retry(llmod.functions_mut(), &violations)?;
+                return Err(error);
             }
         }
     }

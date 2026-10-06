@@ -162,7 +162,7 @@ pub(crate) fn main_ir_for(name: &str, init: Vec<Stmt>) -> String {
 ///
 /// Every claim in this module is about the emission contract, not about how a
 /// slot is spelled, so stating it once per lowering is the honest form. It also
-/// means a `PERRY_RS4GC=0` bisection and CI assert the same thing — the
+/// means a a platform-rooting test and CI assert the same thing — the
 /// divergence #7493 spent a week diagnosing.
 pub(crate) fn under_both_lowerings(mut body: impl FnMut(&str)) {
     {

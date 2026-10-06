@@ -82,15 +82,6 @@ const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 
-// Shape ids — pick a band well clear of fs streams (`STREAM_SHAPE_ID =
-// 0x7FFF_FE40` + method_count). The base ids are spaced 0x40 (64
-// slots) apart so each constructor's `base + method_count` lands in
-// its own band and stays a unique shape-cache key — Readable's method
-// set now includes iterator and EventEmitter helpers, so the historical
-// 16-slot spacing no longer left enough headroom.
-const READABLE_SHAPE_ID: u32 = 0x7FFF_FE60;
-const WRITABLE_SHAPE_ID: u32 = 0x7FFF_FEA0;
-const DUPLEX_SHAPE_ID: u32 = 0x7FFF_FEE0;
 // #1540: shape band for the WHATWG web-stream interop stubs returned by
 // `Readable/Writable/Duplex.toWeb`. Placed above the Duplex band so it
 // can't collide as method sets grow.
@@ -132,6 +123,10 @@ const TRANSFORM_CALLBACK_KEY: &[u8] = b"__perryTransformCallback";
 const TRANSFORM_FLUSH_KEY: &[u8] = b"__perryTransformFlush";
 const TRANSFORM_PASSTHROUGH_KEY: &[u8] = b"__perryTransformPassThrough";
 const TRANSFORM_FINISHING_KEY: &[u8] = b"__perryTransformFinishing";
+/// `end()` ran on a Transform with writes still in flight (node's `ending`).
+const TRANSFORM_END_PENDING_KEY: &[u8] = b"__perryTransformEndPending";
+/// A Transform (direct, subclass, PassThrough, or a native-payload family).
+const TRANSFORM_FLAG_KEY: &[u8] = b"__perryIsTransform";
 // #1534: direction + disturbed bits so the static introspection helpers
 // (`Readable.isReadable` / `isDisturbed` / `isErrored`) answer per-stream
 // instead of with a uniform stub. Set at construction / on first read.
@@ -1111,28 +1106,6 @@ fn pipe_destination_is_missing(dest: f64) -> bool {
     value.is_undefined() || value.is_null()
 }
 
-extern "C" fn transform_write_callback(
-    closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-    err: f64,
-    value: f64,
-) -> f64 {
-    if closure.is_null() {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    let stream = js_closure_get_capture_f64(closure, 0);
-    let len = js_closure_get_capture_f64(closure, 1);
-    let callback = js_closure_get_capture_f64(closure, 2);
-    if err.to_bits() != TAG_UNDEFINED && err.to_bits() != TAG_NULL {
-        complete_writable_write(stream, len, callback, err);
-        destroy_stream(stream, err);
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    push_callback_value(stream, value);
-    complete_writable_write(stream, len, callback, f64::from_bits(TAG_UNDEFINED));
-    f64::from_bits(TAG_UNDEFINED)
-}
-
 extern "C" fn transform_flush_callback(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
@@ -1272,35 +1245,6 @@ fn push_callback_value(stream: f64, value: f64) {
     }
 }
 
-fn invoke_transform_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: f64) {
-    if has_truthy_hidden(stream, hidden_transform_passthrough_key()) {
-        let _ = push_chunk(stream, chunk);
-        complete_writable_write(stream, len, callback, f64::from_bits(TAG_UNDEFINED));
-        return;
-    }
-    if let Some(transform) = transform_hidden_callback(stream) {
-        let cb = js_closure_alloc(
-            crate::fn_info!(transform_write_callback, 2; with_declared(2)),
-            3,
-        );
-        js_closure_set_capture_f64(cb, 0, stream);
-        js_closure_set_capture_f64(cb, 1, len);
-        js_closure_set_capture_f64(cb, 2, callback);
-        let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
-        let args = [chunk, enc, cb_value];
-        unsafe {
-            let _ = crate::closure::native_call_value_this(
-                transform,
-                crate::closure::JsThis::from_f64(stream),
-                args.as_ptr(),
-                args.len(),
-            );
-        }
-        return;
-    }
-    throw_missing_stream_method("The _transform() method is not implemented");
-}
-
 #[cold]
 fn throw_missing_stream_method(message: &str) -> ! {
     let s = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -1376,30 +1320,6 @@ fn writable_default_encoding(stream: f64) -> f64 {
         .unwrap_or_else(|| literal_string_value(b"utf8"))
 }
 
-fn write_writable_chunk(stream: f64, chunk: f64, enc: f64, cb: f64) -> f64 {
-    if stream_hidden_ended(stream) {
-        let err = writable_write_after_end_error();
-        let _ = emit_stream_event(stream, literal_string_value(b"error"), &[err]);
-        return f64::from_bits(TAG_FALSE);
-    }
-    if JSValue::from_bits(chunk.to_bits()).is_null() {
-        throw_writable_null_chunk();
-    }
-    let (chunk, enc, callback) = normalize_write_args(stream, chunk, enc, cb);
-    let len = writable_chunk_len(stream, chunk);
-    add_writable_length(stream, len);
-    let ret = writable_backpressure_return(stream);
-    if writable_corked_count(stream) > 0.0 {
-        buffer_writable_write(stream, chunk, enc, len, callback);
-    } else if is_transform_stream(stream) {
-        invoke_transform_write(stream, chunk, enc, len, callback);
-    } else {
-        invoke_writable_write(stream, chunk, enc, len, callback);
-        emit_writable_chunk(stream, chunk);
-    }
-    ret
-}
-
 fn writable_backpressure_return(stream: f64) -> f64 {
     let len = writable_length(stream);
     let hwm = get_hidden_value(stream, hidden_key(b"writableHighWaterMark")).unwrap_or(16384.0);
@@ -1413,42 +1333,6 @@ fn writable_chunk_len(stream: f64, chunk: f64) -> f64 {
         1.0
     } else {
         chunk_byte_len(chunk) as f64
-    }
-}
-
-fn complete_writable_write(stream: f64, len: f64, callback: f64, err: f64) {
-    subtract_writable_length(stream, len);
-    let has_error = err.to_bits() != TAG_UNDEFINED && err.to_bits() != TAG_NULL;
-    if is_callable_value(callback) {
-        let arg = if err.to_bits() == TAG_UNDEFINED {
-            f64::from_bits(TAG_NULL)
-        } else {
-            err
-        };
-        let args = [arg];
-        unsafe {
-            let _ = crate::closure::js_native_call_value(
-                callback,
-                crate::closure::plain_call_receiver(),
-                args.as_ptr(),
-                args.len(),
-            );
-        }
-    }
-    if has_error {
-        destroy_stream(stream, err);
-        return;
-    }
-    if writable_length(stream) == 0.0 {
-        let should_emit_drain = writable_need_drain_raw(stream)
-            && !stream_hidden_ended(stream)
-            && !has_truthy_hidden(stream, hidden_key(b"destroyed"));
-        set_writable_need_drain(stream, false);
-        if should_emit_drain {
-            let _ = emit_stream_event(stream, literal_string_value(b"drain"), &[]);
-        }
-        finish_pending_pipe_destination_if_ready(stream);
-        schedule_pending_writable_finish_if_ready(stream);
     }
 }
 
@@ -1496,6 +1380,21 @@ fn finish_stream_with_args(stream: f64, chunk: f64, encoding: f64, cb: f64) {
         let _ = write_writable_chunk(stream, chunk, encoding, f64::from_bits(TAG_UNDEFINED));
     }
     flush_writable_buffered(stream);
+    // G2: a transform's flush (or a native stream's Final step) runs only once
+    // every write has completed, as node's prefinish does.
+    if is_transform_stream(stream) && (writable_length(stream) > 0.0 || writable_writing(stream)) {
+        // node's `ending`: no more writes, `writableEnded` reads true, but the
+        // readable side stays open for the outputs still to come.
+        set_visible_writable_ended(stream, true);
+        set_visible_writable(stream, false);
+        set_pending_writable_finish_callback(stream, callback);
+        set_hidden_value(
+            stream,
+            hidden_transform_end_pending_key(),
+            f64::from_bits(TAG_TRUE),
+        );
+        return;
+    }
     if finish_transform_stream(stream, callback) {
         return;
     }
@@ -1914,10 +1813,6 @@ pub use readwrite::*;
 mod readable_read;
 use readable_read::*;
 
-#[path = "node_stream_duplex_methods.rs"]
-mod duplex_method_table;
-use duplex_method_table::*;
-
 #[path = "node_stream_compose_live.rs"]
 mod compose_live;
 use compose_live::*;
@@ -1940,6 +1835,13 @@ mod keepalive;
 #[path = "node_stream_destroy_state.rs"]
 mod destroy_state;
 
+pub(crate) mod native_hooks;
+mod proto_methods;
+pub(crate) use proto_methods::{install_stream_prototype_methods, StreamProto};
+mod write_state;
+pub use constructors::{init_transform_in_place, init_writable_payload_in_place};
+use write_state::*;
+
 #[cfg(test)]
 #[path = "node_stream_tests.rs"]
 mod tests;
@@ -1951,3 +1853,27 @@ mod tests_extra;
 #[cfg(test)]
 #[path = "node_stream_state_tests.rs"]
 mod state_tests;
+
+/// `stream.<name>.bind(stream)`: a stream method as a value that keeps its
+/// receiver. G1 puts the methods on the prototypes, so a method read off an
+/// instance is node's unbound function; tests that call it detached bind it,
+/// as JS code must.
+#[cfg(test)]
+pub(super) fn bound_method(stream: f64, name: &'static [u8]) -> f64 {
+    let method = crate::object::js_object_get_field_by_name_f64(
+        raw_ptr_from_value(stream) as *const crate::object::ObjectHeader,
+        hidden_key(name),
+    );
+    unsafe { crate::closure::js_function_bind(method, [stream].as_ptr(), 1) }
+}
+
+/// Test seams for `gc::tests::native_payload_streams`.
+#[cfg(test)]
+pub(crate) fn test_append_chunk_bytes(value: f64, out: &mut Vec<u8>) {
+    append_chunk_bytes(value, out, 0);
+}
+
+#[cfg(test)]
+pub(crate) fn test_buffer_value_from_bytes(bytes: &[u8]) -> f64 {
+    buffer_value_from_bytes(bytes)
+}

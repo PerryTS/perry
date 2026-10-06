@@ -68951,15 +68951,12 @@ msgstr "`--statepoint-report[=json]`"
 
 #: src/cli/flags.md:307
 msgid ""
-"Report native-stack GC root pressure: calls with live roots, audited non-"
-"collecting calls omitted, relocations, plain-map fallbacks, and live-root "
-"widths. Research-only; requires `PERRY_RS4GC=1`, the one native-root backend "
-"(the plain stack-map and explicit-bridge modes it also named are gone)"
+"Report native-stack GC root pressure: calls with live roots, audited "
+"non-collecting calls omitted, relocations, plain-map fallbacks, and "
+"live-root widths. Research-only; reports the mandatory native "
+"statepoint backend (the plain stack-map and explicit-bridge modes it "
+"also named are gone)"
 msgstr ""
-"네이티브 스택 GC 루트 압력 보고: 라이브 루트와 함께 호출, 감사되지 않은 수집 "
-"호출을 생략, 이전, 평면 지도 재발, 라이브 루트 너비. 연구용으로만; "
-"`PERRY_RS4GC=1`, 원본 루트 백엔드를 필요로 합니다. (스탠 스택 맵과 익스플리시"
-"트 브리지 모드도 사라졌습니다.)"
 
 #: src/cli/flags.md:309
 msgid ""
@@ -77776,17 +77773,15 @@ msgstr "Perry 그림자 프레임"
 
 #: src/internals/garbage-collector.md:188
 msgid ""
-"This is target-aware, not host-aware. `PERRY_RS4GC=0` selects the shadow "
-"lowering for bisection; `PERRY_RS4GC=1` requests native roots and fails "
-"closed if the target cannot emit/read them. `PERRY_SHADOW_STACK=0` disables "
-"only the shadow lowering—native-root analysis remains enabled when native "
-"roots are the selected backend."
+"Rooting is selected by the target. Native platforms always use LLVM "
+"statepoints; environment controls and function-size estimates cannot "
+"select shadow frames. Long-lived managed locals retain LLVM stack "
+"storage and appear as direct frame locations in the statepoint stack "
+"map. The compact map records contiguous native homes as a range, so "
+"both machine code and metadata grow linearly with the locals and "
+"safepoints. Moving collection rewrites those same locations before "
+"generated code reloads them."
 msgstr ""
-"이것은 목표가 아니라 호스트가 아닙니다. `PERRY_RS4GC=0`는 셈을 위한 그림자 하"
-"락을 선택합니다. `PERRY_RS4GC=1`는 네이티브 루트를 요청하고 목표가 emit/read"
-"를 할 수 없다면 닫을 수 없습니다. `PERRY_SHADOW_STACK=0`는 그림자를 낮추는 기"
-"능만 비활성화합니다. 네이티브 루트 분석은 네이티브 루트가 선택한 백엔드일 때"
-"만 비활성화됩니다."
 
 #: src/internals/garbage-collector.md:194
 msgid ""
@@ -78099,14 +78094,6 @@ msgstr "`PERRY_GC_HEAP_LIMIT=N`"
 #: src/internals/garbage-collector.md:328
 msgid "override the process heap budget in MiB"
 msgstr "MiB에서 프로세스 힙 예산을 대체"
-
-#: src/internals/garbage-collector.md:329
-msgid "`PERRY_RS4GC=0`"
-msgstr "`PERRY_RS4GC=0`"
-
-#: src/internals/garbage-collector.md:329
-msgid "select shadow roots on a native-root-capable target"
-msgstr "네이티브 루트-능력 있는 목표에 그림자 뿌리를 선택"
 
 #: src/internals/garbage-collector.md:330
 msgid "`PERRY_CONSERVATIVE_STACK_SCAN=full`"
@@ -78927,25 +78914,18 @@ msgstr ""
 #: src/internals/gc-rooting-invariant.md:188
 msgid ""
 "**A fourth class was on this list until #7663 and is now covered: the "
-"lowering that actually ships.** The corpus used to be compiled under "
-"`PERRY_RS4GC=0` — the shadow stack — because the checker anchored on "
-"`@js_shadow_slot_bind` and the native lowering emits zero of them. That made "
-"a green `gc-root-dominance` a statement about a lowering that has not been "
-"the default on any walkable-frame target since #7370. **Run both**, and know "
-"which one you ran:"
+"lowering that actually ships.** The corpus used to be compiled under a"
+" forced shadow lowering — the shadow stack — because the checker "
+"anchored on `@js_shadow_slot_bind` and the native lowering emits zero "
+"of them. That made a green `gc-root-dominance` a statement about a "
+"lowering that has not been the default on any walkable-frame target "
+"since #7370. **Run both**, and know which one you ran:"
 msgstr ""
-"**네 번째 클래스는 7663번까지 이 목록에 있었고 지금은 커버되었습니다.** 코퍼"
-"스는 `PERRY_RS4GC=0`  그림자 스택 로 컴파일되었는데, 왜냐하면 "
-"`@js_shadow_slot_bind`에 앵커를 얹은 체크머와 네이티브 로저링이 0을 방출하기 "
-"때문입니다. 초록색 `gc-root-dominance`는 #7370 이후 어떤 걸을 수 있는 프레임 "
-"목표물에도 기본이 되지 않는 하락에 대한 진술입니다. **둘 다 실행**그리고 어"
-"느 쪽을 실행했는지 알아:"
 
 #: src/internals/gc-rooting-invariant.md:197
 #, fuzzy
-msgid ""
-"# SHADOW (PERRY_RS4GC=0): still the lowering on arm64_32 watchOS and ARM64\n"
-msgstr "# SHADOW (PERRY_RS4GC=0): 여전히 arm64_32 watchOS 및 ARM64의 낮출"
+msgid "# SHADOW: the actual WASI platform lowering. Anchors on root stores.\n"
+msgstr ""
 
 #: src/internals/gc-rooting-invariant.md:213
 msgid ""
@@ -79386,11 +79366,9 @@ msgstr "'call [^@]*@js_[A-Za-z0-9_.$]*('"
 
 #: src/internals/gc-rooting-invariant.md:389
 msgid ""
-"`PERRY_INLINE_SHADOW_SLOT=0` makes every root store the "
-"`js_shadow_slot_bind` call form the checker anchors on."
+"The WASI platform uses the `js_shadow_slot_bind` call form the "
+"shadow-root checker anchors on."
 msgstr ""
-"`PERRY_INLINE_SHADOW_SLOT=0`는 모든 루트 스토어에서 `js_shadow_slot_bind` 호"
-"출 형태를 커 앵커로 만듭니다."
 
 #: src/internals/gc-rooting-invariant.md:392
 msgid ""
@@ -87711,9 +87689,6 @@ msgstr ""
 
 #~ msgid "emit human-readable collector diagnostics"
 #~ msgstr "인간으로 읽을 수 있는 수집기 진단기를 발산합니다"
-
-#~ msgid "# NATIVE (PERRY_RS4GC=1): the default everywhere else. Anchors on"
-#~ msgstr "# NATIVE (PERRY_RS4GC=1): 다른 모든 곳에서 기본 어"
 
 #~ msgid "\"gc-live\""
 #~ msgstr "\"gc-live\""

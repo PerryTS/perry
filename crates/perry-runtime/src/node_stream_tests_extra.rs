@@ -18,9 +18,8 @@ use super::*;
 #[test]
 fn stream_max_listeners_default_and_override_round_trip() {
     let stream = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
-    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
-    let get_max = js_object_get_field_by_name_f64(obj, hidden_key(b"getMaxListeners"));
-    let set_max = js_object_get_field_by_name_f64(obj, hidden_key(b"setMaxListeners"));
+    let get_max = bound_method(stream, b"getMaxListeners");
+    let set_max = bound_method(stream, b"setMaxListeners");
 
     let initial = unsafe {
         crate::closure::js_native_call_value(
@@ -53,10 +52,7 @@ fn stream_max_listeners_default_and_override_round_trip() {
     assert_eq!(updated, 25.0);
 
     let other = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
-    let other_get = js_object_get_field_by_name_f64(
-        raw_ptr_from_value(other) as *const ObjectHeader,
-        hidden_key(b"getMaxListeners"),
-    );
+    let other_get = bound_method(other, b"getMaxListeners");
     let other_initial = unsafe {
         crate::closure::js_native_call_value(
             other_get,
@@ -79,10 +75,9 @@ fn stream_max_listeners_default_and_override_round_trip() {
 #[test]
 fn stream_event_names_raw_listeners_and_prepend_chainability() {
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
-    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
-    let raw_listeners = js_object_get_field_by_name_f64(obj, hidden_key(b"rawListeners"));
-    let event_names = js_object_get_field_by_name_f64(obj, hidden_key(b"eventNames"));
-    let prepend = js_object_get_field_by_name_f64(obj, hidden_key(b"prependListener"));
+    let raw_listeners = bound_method(stream, b"rawListeners");
+    let event_names = bound_method(stream, b"eventNames");
+    let prepend = bound_method(stream, b"prependListener");
 
     let raw = unsafe {
         crate::closure::js_native_call_value(
@@ -174,12 +169,18 @@ fn stream_event_names_raw_listeners_and_prepend_chainability() {
 #[test]
 fn stream_listener_count_and_listeners_reflect_data_end_storage() {
     let stream = js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED));
-    let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
-    let on = js_object_get_field_by_name_f64(obj, hidden_key(b"on"));
-    let listener_count = js_object_get_field_by_name_f64(obj, hidden_key(b"listenerCount"));
-    let listeners = js_object_get_field_by_name_f64(obj, hidden_key(b"listeners"));
-    let add_listener = js_object_get_field_by_name_f64(obj, hidden_key(b"addListener"));
-    assert_eq!(on.to_bits(), add_listener.to_bits());
+    let on = bound_method(stream, b"on");
+    let listener_count = bound_method(stream, b"listenerCount");
+    let listeners = bound_method(stream, b"listeners");
+    // node: `addListener` IS `on`, one function on the prototype.
+    let unbound = |name: &'static [u8]| {
+        crate::object::js_object_get_field_by_name_f64(
+            raw_ptr_from_value(stream) as *const crate::object::ObjectHeader,
+            hidden_key(name),
+        )
+        .to_bits()
+    };
+    assert_eq!(unbound(b"on"), unbound(b"addListener"));
 
     let cb1 = box_pointer(
         js_closure_alloc(crate::fn_info!(noop_listener, 0; with_declared(0)), 0) as *const u8,
@@ -284,14 +285,8 @@ fn pipe_and_unpipe_emit_destination_events_with_source() {
     let dest = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let dest_handle = raw_ptr_from_value(dest) as i64;
     let dest_obj = raw_ptr_from_value(dest) as *const ObjectHeader;
-    let pipe = js_object_get_field_by_name_f64(
-        raw_ptr_from_value(src) as *const ObjectHeader,
-        hidden_key(b"pipe"),
-    );
-    let unpipe = js_object_get_field_by_name_f64(
-        raw_ptr_from_value(src) as *const ObjectHeader,
-        hidden_key(b"unpipe"),
-    );
+    let pipe = bound_method(src, b"pipe");
+    let unpipe = bound_method(src, b"unpipe");
 
     let pipe_listener = js_closure_alloc(
         crate::fn_info!(capture_expected_arg_listener, 1; with_declared(1)),
@@ -349,10 +344,7 @@ fn readable_from_pipe_ends_destination() {
     let src = js_node_stream_readable_from(box_pointer(arr as *const u8));
     let dest = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let dest_handle = raw_ptr_from_value(dest) as i64;
-    let pipe = js_object_get_field_by_name_f64(
-        raw_ptr_from_value(src) as *const ObjectHeader,
-        hidden_key(b"pipe"),
-    );
+    let pipe = bound_method(src, b"pipe");
 
     let data = box_pointer(
         js_closure_alloc(crate::fn_info!(noop_listener, 0; with_declared(0)), 0) as *const u8,
@@ -394,14 +386,8 @@ fn readable_from_pipe_chain_ends_tail_destination() {
     let middle = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let sink = js_node_stream_passthrough_new(f64::from_bits(TAG_UNDEFINED));
     let sink_handle = raw_ptr_from_value(sink) as i64;
-    let src_pipe = js_object_get_field_by_name_f64(
-        raw_ptr_from_value(src) as *const ObjectHeader,
-        hidden_key(b"pipe"),
-    );
-    let middle_pipe = js_object_get_field_by_name_f64(
-        raw_ptr_from_value(middle) as *const ObjectHeader,
-        hidden_key(b"pipe"),
-    );
+    let src_pipe = bound_method(src, b"pipe");
+    let middle_pipe = bound_method(middle, b"pipe");
 
     let sink_data = box_pointer(js_closure_alloc(
         crate::fn_info!(noop_listener, 0; with_declared(0)),
@@ -464,9 +450,9 @@ fn pause_resume_track_readable_flowing_and_events() {
     test_install_manual_read(stream);
     let handle = raw_ptr_from_value(stream) as i64;
     let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
-    let pause = js_object_get_field_by_name_f64(obj, hidden_key(b"pause"));
-    let resume = js_object_get_field_by_name_f64(obj, hidden_key(b"resume"));
-    let is_paused = js_object_get_field_by_name_f64(obj, hidden_key(b"isPaused"));
+    let pause = bound_method(stream, b"pause");
+    let resume = bound_method(stream, b"resume");
+    let is_paused = bound_method(stream, b"isPaused");
 
     assert_eq!(
         js_object_get_field_by_name_f64(obj, readable_flowing_key()).to_bits(),
@@ -911,8 +897,8 @@ fn writable_corked_counter_tracks_cork_balance() {
     let stream = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));
     let handle = raw_ptr_from_value(stream) as i64;
     let obj = raw_ptr_from_value(stream) as *const ObjectHeader;
-    let cork = js_object_get_field_by_name_f64(obj, hidden_key(b"cork"));
-    let uncork = js_object_get_field_by_name_f64(obj, hidden_key(b"uncork"));
+    let cork = bound_method(stream, b"cork");
+    let uncork = bound_method(stream, b"uncork");
 
     assert_eq!(js_node_stream_method_writable_corked(handle), 0.0);
     assert_eq!(
@@ -1039,7 +1025,7 @@ fn writable_backpressure_tracks_length_need_drain_and_drain_event() {
 }
 
 #[test]
-fn writable_write_returns_false_before_sync_callback_clears_length() {
+fn writable_write_returns_true_once_a_sync_callback_cleared_its_length() {
     WRITE_CAPTURED.with(|captured| captured.borrow_mut().clear());
 
     let opts = crate::object::js_object_alloc(0, 2);
@@ -1055,9 +1041,11 @@ fn writable_write_returns_false_before_sync_callback_clears_length() {
     let handle = raw_ptr_from_value(stream) as i64;
     let undefined = f64::from_bits(TAG_UNDEFINED);
 
+    // node: the return is computed after `_write`, whose synchronous callback
+    // already gave the length back (`true`, length 0, no drain owed).
     assert_eq!(
         js_node_stream_method_write(handle, string_value("xx"), undefined, undefined).to_bits(),
-        TAG_FALSE
+        TAG_TRUE
     );
     assert_eq!(js_node_stream_method_writable_length(handle), 0.0);
     assert_eq!(
@@ -1325,10 +1313,7 @@ fn readable_auto_destroy_false_does_not_close_after_end() {
 fn stream_destroy_with_error_marks_errored_state() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(js_node_stream_readable_new(f64::from_bits(TAG_UNDEFINED)));
-    let destroy = scope.root_nanbox_f64(js_object_get_field_by_name_f64(
-        raw_ptr_from_value(stream.get_nanbox_f64()) as *const ObjectHeader,
-        hidden_key(b"destroy"),
-    ));
+    let destroy = scope.root_nanbox_f64(bound_method(stream.get_nanbox_f64(), b"destroy"));
     let err = scope.root_nanbox_f64(string_value("boom"));
     let error_listener = scope.root_raw_mut_ptr(js_closure_alloc(
         crate::fn_info!(noop_listener, 0; with_declared(0)),
@@ -1393,10 +1378,11 @@ fn readable_exposes_async_dispose_symbol_method() {
     };
 
     assert!(is_callable_value(method));
+    // G1: `Readable.prototype[Symbol.asyncDispose]`, called on the stream.
     let result = unsafe {
-        crate::closure::js_native_call_value(
+        crate::closure::native_call_value_this(
             method,
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(stream),
             std::ptr::null(),
             0,
         )

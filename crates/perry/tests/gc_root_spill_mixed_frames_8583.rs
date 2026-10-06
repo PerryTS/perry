@@ -1,31 +1,6 @@
-//! #8583 root spilling — mixed statepoint / shadow-frame stacks are GC-correct.
-//!
-//! Root spilling lets one function keep its GC roots in a heap shadow frame
-//! (the pre-#7370 lowering) while the rest of the program keeps native
-//! statepoint roots, so a minified-bundle entry function whose relocation
-//! fan-out would hang the optimizer stays compilable. The soundness question
-//! it raises is new: a single call stack now carries BOTH kinds of frame, and
-//! a moving minor must find and rewrite the live roots in each. Nothing on
-//! `main` exercised that combination before this feature.
-//!
-//! This is a differential test with no node oracle. The same program is
-//! compiled twice from identical source:
-//!
-//!   * `PERRY_ROOT_SPILL_RELOCATIONS=0` — spilling disabled, every function on
-//!     native statepoints (the pre-#8583 lowering);
-//!   * `PERRY_ROOT_SPILL_RELOCATIONS=1` — spill anything with a root and a
-//!     call, so `run`/`make`/`main` take the shadow frame while the call-free
-//!     accessor `leaf` stays on statepoints — a genuinely mixed stack.
-//!
-//! Both binaries run under every moving-collector configuration and must
-//! produce byte-identical output. If the spilled frame's roots were invisible
-//! to the collector, a relocating minor would leave a stale pointer and the
-//! checksum would diverge (or the run would crash) in the `=1` arm only.
-//!
-//! The `=1` compile is also checked to have actually spilled (its stderr names
-//! the shadow-frame functions), so a future change that stops spilling turns
-//! this test into a tautology loudly rather than silently.
-
+//! #12023: supported targets always use statepoints, including long-lived
+//! native homes. Removed environment selectors cannot change root coverage.
+//! Both builds run every moving-GC configuration and must agree.
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -33,11 +8,7 @@ fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-/// `leaf` reads a field and makes no call: at `PERRY_ROOT_SPILL_RELOCATIONS=1`
-/// its estimate is `slots × 0 = 0`, so it stays on native statepoints while its
-/// callers spill. `run` holds `a`/`b`/`keep` live across allocating calls, so a
-/// minor that fires inside `make` must find those roots in `run`'s shadow frame
-/// and the `leaf` argument in `leaf`'s statepoint frame on the same stack.
+/// Keep caller roots alive across allocating callee calls and collection.
 const SOURCE: &str = r#"
 function leaf(o: { v: number }): number {
   return o.v;
@@ -85,13 +56,24 @@ fn compile(dir: &std::path::Path, spill_threshold: &str) -> (PathBuf, String) {
     let entry = dir.join("main.ts");
     let output = dir.join(format!("bin_spill_{spill_threshold}"));
     std::fs::write(&entry, SOURCE).expect("write entry");
-    let out = Command::new(perry_bin())
+    let ir = dir.join(format!("ir_{spill_threshold}"));
+    std::fs::create_dir_all(&ir).unwrap();
+    let mut command = Command::new(perry_bin());
+    if spill_threshold == "1" {
+        command
+            .env("PERRY_RS4GC", "0")
+            .env("PERRY_SHADOW_STACK", "0")
+            .env("PERRY_INLINE_SHADOW_SLOT", "0");
+    }
+    let out = command
         .current_dir(dir)
         .arg("compile")
         .arg(&entry)
         .arg("-o")
         .arg(&output)
         .arg("--no-cache")
+        .arg("--no-auto-optimize")
+        .env("PERRY_SAVE_LL", &ir)
         .env("PERRY_ROOT_SPILL_RELOCATIONS", spill_threshold)
         .output()
         .expect("run perry compile");
@@ -101,7 +83,32 @@ fn compile(dir: &std::path::Path, spill_threshold: &str) -> (PathBuf, String) {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr),
     );
-    (output, String::from_utf8_lossy(&out.stderr).into_owned())
+    let mut files: Vec<_> = std::fs::read_dir(ir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "ll"))
+        .collect();
+    files.sort();
+    let text = files
+        .into_iter()
+        .map(|path| std::fs::read_to_string(path).unwrap())
+        .collect::<String>();
+    assert!(
+        text.contains("gc \"statepoint-example\""),
+        "native rooting must be visible in saved IR"
+    );
+    for call in [
+        "call ptr @js_shadow_frame_enter",
+        "call i64 @js_shadow_frame_push",
+        "call void @js_shadow_slot_bind",
+        "call void @js_shadow_slot_set",
+    ] {
+        assert!(
+            !text.contains(call),
+            "native IR retained shadow traffic: {call}"
+        );
+    }
+    (output, text)
 }
 
 fn run_arms(binary: &std::path::Path, dir: &std::path::Path, label: &str) -> String {
@@ -111,6 +118,19 @@ fn run_arms(binary: &std::path::Path, dir: &std::path::Path, label: &str) -> Str
     }
     arms.push(vec![("PERRY_GEN_GC", "0")]);
 
+    arms.extend([
+        vec![("PERRY_GC_FORCE_EVACUATE", "1")],
+        vec![
+            ("PERRY_GC_FORCE_EVACUATE", "1"),
+            ("PERRY_GC_VERIFY_EVACUATION", "1"),
+            ("PERRY_GC_VERIFY_MARK", "1"),
+        ],
+        vec![
+            ("PERRY_GC_MOVING_SAFEPOINT", "1"),
+            ("PERRY_GC_SCHEDULE_ALLOC_KB", "64"),
+        ],
+        vec![("PERRY_GC_BUDGETED_OLD_RECLAIM", "1")],
+    ]);
     let mut first: Option<String> = None;
     for arm in &arms {
         let mut cmd = Command::new(binary);
@@ -153,34 +173,22 @@ fn run_arms(binary: &std::path::Path, dir: &std::path::Path, label: &str) -> Str
 }
 
 #[test]
-fn mixed_statepoint_and_shadow_frames_survive_a_relocating_minor() {
+fn removed_rooting_selectors_cannot_disable_statepoints() {
     let dir = tempfile::tempdir().expect("tempdir");
-
-    // All-native reference and aggressively-spilled arm, from identical source.
-    let (native_bin, _native_err) = compile(dir.path(), "0");
-    let (spilled_bin, spilled_err) = compile(dir.path(), "1");
-
-    // The spilled compile must have actually spilled, or the differential below
-    // proves nothing. The report names each shadow-framed function at default
-    // verbosity (#8421: the change is never silent).
-    assert!(
-        spilled_err.contains("keeps its")
-            && spilled_err.contains("in a shadow frame instead of statepoints"),
-        "PERRY_ROOT_SPILL_RELOCATIONS=1 was expected to spill at least one \
-         function, but the compile reported none:\nstderr:\n{spilled_err}"
+    let (native_bin, native_ir) = compile(dir.path(), "0");
+    let (ignored_bin, ignored_ir) = compile(dir.path(), "1");
+    assert_eq!(
+        native_ir, ignored_ir,
+        "removed selectors changed the native-root IR"
     );
-
     let native_out = run_arms(&native_bin, dir.path(), "native");
-    let spilled_out = run_arms(&spilled_bin, dir.path(), "spilled");
-
+    let ignored_out = run_arms(&ignored_bin, dir.path(), "removed selectors");
     assert!(
         native_out.starts_with("r:"),
         "unexpected program output: {native_out:?}"
     );
     assert_eq!(
-        native_out, spilled_out,
-        "mixed statepoint/shadow-frame stacks (spilled) diverged from the \
-         all-statepoint build (native): a live root in a spilled frame was not \
-         found or not rewritten by a moving minor (#8583)"
+        native_out, ignored_out,
+        "a root was lost or not rewritten under moving GC"
     );
 }

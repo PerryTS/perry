@@ -111,11 +111,7 @@ fn compile(dir: &Path, entry: &str, explain: bool) -> (PathBuf, Output) {
         .arg("--trace")
         .arg("llvm")
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
-        .env("PERRY_RUNTIME_DIR", target_debug_dir())
-        // The clone contract under test is the portable tagged shadow slot;
-        // this also avoids Windows' unsupported RS4GC + funclet-EH pairing in
-        // the exception fixture.
-        .env("PERRY_RS4GC", "0");
+        .env("PERRY_RUNTIME_DIR", target_debug_dir());
     if explain {
         command.arg("--opt-report=json").arg("--explain-lowering");
     }

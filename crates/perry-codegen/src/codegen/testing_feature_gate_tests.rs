@@ -259,16 +259,12 @@ fn host_target_lowering_default_is_native_roots() {
     use super::helpers::{rs4gc_enabled, set_native_roots_for_target};
     use crate::testing::NativeRootsPin;
 
-    // `PERRY_RS4GC` is an explicit, process-global override cached in a
-    // `OnceLock`; under it the DEFAULT is not what is being measured.
-    if std::env::var("PERRY_RS4GC").is_ok() {
-        return;
-    }
-
     for triple in [
         "aarch64-apple-darwin",
         "arm64-apple-macosx15.0.0",
         "x86_64-unknown-linux-gnu",
+        "aarch64-unknown-linux-ohos",
+        "x86_64-pc-windows-msvc",
     ] {
         set_native_roots_for_target(triple);
         assert!(
@@ -306,6 +302,17 @@ fn host_target_lowering_default_is_native_roots() {
         }
     }
 
+    for triple in [
+        "aarch64-linux-android",
+        "x86_64-linux-android",
+        "aarch64-pc-windows-msvc",
+        "x86_64-unknown-freebsd",
+        "wasm32-wasip2",
+    ] {
+        set_native_roots_for_target(triple);
+        assert!(!rs4gc_enabled(), "{triple} has no native map reader");
+    }
+
     // A target whose frame bases the runtime cannot resolve must still fall
     // back to the shadow stack — otherwise `gc_map` refuses and the compile
     // fails outright. This arm is what makes the assertion above a statement
@@ -317,7 +324,7 @@ fn host_target_lowering_default_is_native_roots() {
          back to the shadow stack there"
     );
     // …and an explicit pin still outranks it, which is what lets a test assert
-    // native-roots IR while a `PERRY_RS4GC=0` sweep is in progress.
+    // native-roots IR while a an unsupported platform is selected.
     {
         let _pin = NativeRootsPin::native();
         assert!(

@@ -24,8 +24,8 @@ REPO = Path(__file__).resolve().parent.parent
 NEVER_SHIPPED_NURSERY = r"PERRY_" r"NURSERY_MB"
 KNOB_RE = re.compile(
     rf"\b(?:PERRY_GEN_GC(?:_[A-Z0-9_]+)?|PERRY_GC_[A-Z0-9_]+|"
-    rf"{NEVER_SHIPPED_NURSERY}|PERRY_WRITE_BARRIERS|PERRY_SHADOW_STACK|"
-    rf"PERRY_RS4GC|PERRY_STACKMAP_WALKER|PERRY_CONSERVATIVE_STACK_SCAN)\b"
+    rf"{NEVER_SHIPPED_NURSERY}|PERRY_WRITE_BARRIERS|PERRY_" r"SHADOW_STACK|"
+    rf"PERRY_" r"RS4GC|PERRY_STACKMAP_WALKER|PERRY_CONSERVATIVE_STACK_SCAN)\b"
 )
 # A knob is "owned" either by a direct environment read or by one of the two
 # shared boolean-ish readers (#7991) — the latter ARE environment reads, one
@@ -72,6 +72,8 @@ HISTORICAL_DOCS = {
     "docs/ecs-perf-case-study.md",
     "docs/generational-gc-plan.md",
     "docs/statepoint-gc-experiment.md",
+    "docs/engine-plan-history.md",
+    "docs/audits/statepoints-only-12023.md",
 }
 
 # Script-owned output plumbing shares the PERRY_GC_ prefix but is intentionally

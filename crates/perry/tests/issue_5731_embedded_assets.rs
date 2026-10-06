@@ -77,9 +77,6 @@ catch (e) { console.log("throwMissing: yes"); }
         .arg("./dist/**")
         .arg("-o")
         .arg(&output);
-    if cfg!(windows) {
-        compile_command.env("PERRY_RS4GC", "0");
-    }
     let compile = compile_command.output().expect("run perry compile");
     assert!(
         compile.status.success(),

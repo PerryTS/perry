@@ -5,7 +5,7 @@
 //! hot TLS cache. No live subsystem state is mirrored or journaled, and the
 //! cold restore path continues to use each subsystem's own cleanup rules.
 
-use crate::gc::ShadowSavepoint;
+use crate::gc::FrameRootSavepoint;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Subsystems whose savepoint is skipped until they first hold state.
@@ -21,6 +21,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 pub(crate) mod catch_subsystem {
     /// Always captured; folded to a constant `true` test.
     pub(crate) const ALWAYS: u32 = 1 << 31;
+    #[cfg(any(test, not(perry_native_stack_maps)))]
     pub(crate) const SHADOW_FRAMES: u32 = 1 << 0;
     pub(crate) const PUMP: u32 = 1 << 1;
     pub(crate) const SET_FOREACH: u32 = 1 << 2;
@@ -30,12 +31,6 @@ pub(crate) mod catch_subsystem {
     pub(crate) const PRIVATE_LEXICAL_BRAND: u32 = 1 << 6;
     pub(crate) const DERIVED_SUPER_BINDING: u32 = 1 << 7;
     pub(crate) const PRIVATE_MEMBER_ACCESS_HINTS: u32 = 1 << 8;
-    // Each of these two is read only from the module that owns its stack, and
-    // both modules are feature-gated (`regex/site_test.rs` behind
-    // `regex-engine`, `dyn_eval` behind `dyn-eval`). Gate the bits the same
-    // way, or a build without the feature fails `-D warnings` as dead code.
-    #[cfg(feature = "regex-engine")]
-    pub(crate) const REGEX_FACTORY: u32 = 1 << 9;
     pub(crate) const DYN_EVAL: u32 = 1 << 10;
     pub(crate) const NAMESPACE_OVERRIDE: u32 = 1 << 11;
 }
@@ -58,6 +53,7 @@ fn note_catch_subsystem_used_slow(bit: u32) {
 }
 
 #[inline(always)]
+#[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) fn catch_subsystem_used(bit: u32) -> bool {
     (CATCH_SUBSYSTEMS_USED.load(Ordering::Relaxed) | catch_subsystem::ALWAYS) & bit != 0
 }
@@ -92,11 +88,6 @@ impl<T> CatchStack<T> {
     #[inline]
     pub(crate) fn truncate(&mut self, len: usize) {
         self.items.truncate(len);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn clear(&mut self) {
-        self.items.clear();
     }
 
     #[inline]
@@ -174,10 +165,10 @@ macro_rules! catch_savepoints {
 catch_savepoints! {
     // #1830, #6951: both shadow frames and expression temp roots. The frame
     // half latches inside the provider; temp roots are always read.
-    shadow: ShadowSavepoint,
-    capture: crate::gc::shadow_stack_savepoint,
-    restore: crate::gc::shadow_stack_restore,
-    latch: catch_subsystem::ALWAYS, idle: crate::gc::shadow_stack_savepoint();
+    shadow: FrameRootSavepoint,
+    capture: crate::gc::frame_root_savepoint,
+    restore: crate::gc::frame_root_restore,
+    latch: catch_subsystem::ALWAYS, idle: crate::gc::frame_root_savepoint();
     // Longjmp skips RuntimeHandleScope drops.
     runtime_handles: usize,
     capture: crate::gc::runtime_handle_stack_savepoint,
@@ -237,11 +228,6 @@ catch_savepoints! {
     capture: crate::object::namespace_override_stack_savepoint,
     restore: crate::object::namespace_override_stack_restore,
     latch: catch_subsystem::NAMESPACE_OVERRIDE, idle: 0;
-    #[cfg(feature = "regex-engine")]
-    regex_factory: usize,
-    capture: crate::regex::site_test::active_factory_stack_savepoint,
-    restore: crate::regex::site_test::active_factory_stack_restore,
-    latch: catch_subsystem::REGEX_FACTORY, idle: 0;
     // #6559: rooted interpreter values AND the packed call depth.
     // Always present: the capture/restore forward to the interpreter once
     // `dyn-eval` is installed, and capture answers the idle value otherwise
@@ -264,7 +250,8 @@ catch_savepoints! {
 /// that scanner. A moving minor that runs while a `try` is open — before any
 /// throw crosses it — must rewrite this copy too, or a later throw restores a
 /// from-space address. Bounded by `try_depth <= MAX_TRY_DEPTH`, same as every
-/// other read of this slab.
+/// other read of this growing storage. No pointer into the vector is cached:
+/// the caller obtains the current slice through `ExceptionState` for each scan.
 pub(super) fn scan_pending_trap_roots_mut(
     savepoints: &mut [std::mem::MaybeUninit<CatchSavepoint>],
     try_depth: usize,

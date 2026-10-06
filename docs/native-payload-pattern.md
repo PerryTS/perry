@@ -215,3 +215,45 @@ keyed by id. For sqlite this includes NODE_SQLITE_CUSTOM_FUNCTIONS,
 NODE_SQLITE_CUSTOM_AGGREGATES, NODE_SQLITE_ACTIVE_AGGREGATES,
 scan_node_sqlite_roots_mut and release_node_sqlite_authorizer_in_freed_ranges.
 These deletions belong to the family lanes; the runtime API adds none of them.
+
+## Stream families (STREAM-PAYLOAD-DESIGN)
+
+A family whose node objects are streams (zlib's `Gzip`…, crypto's `Hash`,
+`Cipheriv`, `Sign`…) is an ordinary runtime Transform/Writable whose payload
+holds only the codec. There is one stream state machine: the runtime's
+writable buffer, readable queue, listeners and pipes.
+
+* **Hooks.** The payload cell's `finalizer` word names a static
+  `PayloadVTable { drop, stream }`; a stream family's vtable carries its
+  `StreamHooks { kind, timing, lazy, step, error, release }`
+  (`node_stream/native_hooks.rs`). The runtime reaches them from the object:
+  `meta.native_state` -> cell -> vtable. In-tree: `impl StreamPayload for T
+  { const HOOKS = &T_HOOKS; }` and `native_payload::alloc_stream` /
+  `attach_stream_to_object`. Binding crates: perry-ffi `native_stream`
+  (`payload_vtable::<T>(Some(&HOOKS))`, layout-checked by
+  `js_perry_stream_abi_layout`).
+* **Construction** mirrors node's constructor body: allocate with the family
+  prototype (whose chain reaches `Transform.prototype` / `Writable.prototype`)
+  and node's pre-fields, then `node_stream::init_transform_in_place(obj,
+  opts)` (or `init_writable_payload_in_place`), then the post-fields. The
+  instance owns no methods; its runtime state is non-enumerable.
+* **Steps.** Every write reaches `step(payload, &StepIn, &mut StepOut)`
+  through the writable machinery (serialized writes, the buffered-write
+  array). `step` calls no JS, allocates nothing on the GC heap and keeps no
+  pointer into `StepIn::input` (borrowed from the traced chunk for that step
+  only). Its output (in the payload's scratch) is copied into an
+  exact-length Buffer and pushed through the runtime's `push`. `MORE` steps
+  again, `NEED_INPUT` completes the write, `ENDED` (Final only) ends the
+  readable side, `ERROR` destroys with `error(owner, code)`.
+  `StepOut::external_bytes` restates the cell's external bytes after every
+  step. The runner parks while the readable side is at its highWaterMark
+  (node's Transform `kCallback`) and resumes when it drains.
+* **Timing.** `DEFERRED` (zlib) runs the steps from an immediate (`data`
+  never fires inside `write()`); `INLINE` (crypto) runs them inside `write()`.
+* **Release.** `destroy()` and autoDestroy call `release(owner)` (close the
+  payload; zlib also sets `_handle = null`) synchronously, before any event
+  is queued. Deferred jobs hold the stream as a traced capture, so a stream
+  family is `links_owner: false`.
+* **Overrides.** A JS `_transform`/`_flush` captured at init (an option, or a
+  subclass override) takes precedence over the hooks; the family prototype's
+  builtin `_transform` runs the same step for `super._transform(...)`.

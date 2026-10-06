@@ -67617,14 +67617,12 @@ msgstr "`--statepoint-report[=json]`"
 
 #: src/cli/flags.md:307
 msgid ""
-"Report native-stack GC root pressure: calls with live roots, audited non-"
-"collecting calls omitted, relocations, plain-map fallbacks, and live-root "
-"widths. Research-only; requires `PERRY_RS4GC=1`, the one native-root backend "
-"(the plain stack-map and explicit-bridge modes it also named are gone)"
+"Report native-stack GC root pressure: calls with live roots, audited "
+"non-collecting calls omitted, relocations, plain-map fallbacks, and "
+"live-root widths. Research-only; reports the mandatory native "
+"statepoint backend (the plain stack-map and explicit-bridge modes it "
+"also named are gone)"
 msgstr ""
-"报告原生堆的 GC 根压力:带有活根的调用,被审计的未收集的调用被省略,迁移,平面地"
-"图回落和活根宽度. 仅用于研究;需要`PERRY_RS4GC=1`,一个原生根后端 (它也命名的平"
-"面堆地图和明确桥模式已经消失)"
 
 #: src/cli/flags.md:309
 msgid ""
@@ -76127,15 +76125,15 @@ msgstr "Perry 影像框架"
 
 #: src/internals/garbage-collector.md:188
 msgid ""
-"This is target-aware, not host-aware. `PERRY_RS4GC=0` selects the shadow "
-"lowering for bisection; `PERRY_RS4GC=1` requests native roots and fails "
-"closed if the target cannot emit/read them. `PERRY_SHADOW_STACK=0` disables "
-"only the shadow lowering—native-root analysis remains enabled when native "
-"roots are the selected backend."
+"Rooting is selected by the target. Native platforms always use LLVM "
+"statepoints; environment controls and function-size estimates cannot "
+"select shadow frames. Long-lived managed locals retain LLVM stack "
+"storage and appear as direct frame locations in the statepoint stack "
+"map. The compact map records contiguous native homes as a range, so "
+"both machine code and metadata grow linearly with the locals and "
+"safepoints. Moving collection rewrites those same locations before "
+"generated code reloads them."
 msgstr ""
-"这是一个目标,而不是主机. `PERRY_RS4GC=0` 选择阴影降低进行分区; "
-"`PERRY_RS4GC=1` 要求本地根,如果目标不能 emit/read 它们,则关闭失败. 当选定的后"
-"端是原生根时,`PERRY_SHADOW_STACK=0`只禁用阴影降低原生根分析仍然启用."
 
 #: src/internals/garbage-collector.md:194
 msgid ""
@@ -76437,14 +76435,6 @@ msgstr "`PERRY_GC_HEAP_LIMIT=N`"
 #: src/internals/garbage-collector.md:328
 msgid "override the process heap budget in MiB"
 msgstr "在 MiB 中覆盖过程堆预算"
-
-#: src/internals/garbage-collector.md:329
-msgid "`PERRY_RS4GC=0`"
-msgstr "`PERRY_RS4GC=0`"
-
-#: src/internals/garbage-collector.md:329
-msgid "select shadow roots on a native-root-capable target"
-msgstr "在一个具有原生根能力的目标上选择影子根"
 
 #: src/internals/garbage-collector.md:330
 msgid "`PERRY_CONSERVATIVE_STACK_SCAN=full`"
@@ -77223,22 +77213,18 @@ msgstr ""
 #: src/internals/gc-rooting-invariant.md:188
 msgid ""
 "**A fourth class was on this list until #7663 and is now covered: the "
-"lowering that actually ships.** The corpus used to be compiled under "
-"`PERRY_RS4GC=0` — the shadow stack — because the checker anchored on "
-"`@js_shadow_slot_bind` and the native lowering emits zero of them. That made "
-"a green `gc-root-dominance` a statement about a lowering that has not been "
-"the default on any walkable-frame target since #7370. **Run both**, and know "
-"which one you ran:"
+"lowering that actually ships.** The corpus used to be compiled under a"
+" forced shadow lowering — the shadow stack — because the checker "
+"anchored on `@js_shadow_slot_bind` and the native lowering emits zero "
+"of them. That made a green `gc-root-dominance` a statement about a "
+"lowering that has not been the default on any walkable-frame target "
+"since #7370. **Run both**, and know which one you ran:"
 msgstr ""
-"**现在已经被覆盖了:实际上运输的降低.** 之前,该库被编译为 `PERRY_RS4GC=0`  影"
-"子堆,因为检查器定在 `@js_shadow_slot_bind` 上,原生降低发出了零. 这使得绿色的"
-"`gc-root-dominance`是一个关于降低的声明, **两者都运行**并且知道你跑了哪一个:"
 
 #: src/internals/gc-rooting-invariant.md:197
 #, fuzzy
-msgid ""
-"# SHADOW (PERRY_RS4GC=0): still the lowering on arm64_32 watchOS and ARM64\n"
-msgstr "# 阴影 (PERRY_RS4GC=0):仍然是arm64_32,watchOS和ARM64的降低"
+msgid "# SHADOW: the actual WASI platform lowering. Anchors on root stores.\n"
+msgstr ""
 
 #: src/internals/gc-rooting-invariant.md:213
 msgid ""
@@ -77643,11 +77629,9 @@ msgstr "'call [^@]*@js_[A-Za-z0-9_.$]*('"
 
 #: src/internals/gc-rooting-invariant.md:389
 msgid ""
-"`PERRY_INLINE_SHADOW_SLOT=0` makes every root store the "
-"`js_shadow_slot_bind` call form the checker anchors on."
+"The WASI platform uses the `js_shadow_slot_bind` call form the "
+"shadow-root checker anchors on."
 msgstr ""
-"`PERRY_INLINE_SHADOW_SLOT=0`使每个根存储 `js_shadow_slot_bind`调用表格的检查"
-"器."
 
 #: src/internals/gc-rooting-invariant.md:392
 msgid ""
@@ -85580,9 +85564,6 @@ msgstr ""
 
 #~ msgid "emit human-readable collector diagnostics"
 #~ msgstr "发出人类可读的收集器诊断"
-
-#~ msgid "# NATIVE (PERRY_RS4GC=1): the default everywhere else. Anchors on"
-#~ msgstr "# 本地 (PERRY_RS4GC=1):其他地方的默认. 着"
 
 #~ msgid "\"gc-live\""
 #~ msgstr "\"gc-live\""

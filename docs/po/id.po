@@ -70020,16 +70020,12 @@ msgstr "`--statepoint-report[=json]`"
 
 #: src/cli/flags.md:307
 msgid ""
-"Report native-stack GC root pressure: calls with live roots, audited non-"
-"collecting calls omitted, relocations, plain-map fallbacks, and live-root "
-"widths. Research-only; requires `PERRY_RS4GC=1`, the one native-root backend "
-"(the plain stack-map and explicit-bridge modes it also named are gone)"
+"Report native-stack GC root pressure: calls with live roots, audited "
+"non-collecting calls omitted, relocations, plain-map fallbacks, and "
+"live-root widths. Research-only; reports the mandatory native "
+"statepoint backend (the plain stack-map and explicit-bridge modes it "
+"also named are gone)"
 msgstr ""
-"Pelaporan tekanan akar GC tumpukan asli: panggilan dengan root hidup, "
-"panggilan yang tidak dikumpulkan yang diaudit dihilangkan, relokasi, "
-"kemunduran peta polos, dan lebar root hidup. Penelitian saja; membutuhkan "
-"`PERRY_RS4GC=1`, satu native-root backend (pelan stack-map dan eksplisit-"
-"bridge mode yang juga disebut hilang)"
 
 #: src/cli/flags.md:309
 msgid ""
@@ -79119,17 +79115,15 @@ msgstr "Perry frame bayangan"
 
 #: src/internals/garbage-collector.md:188
 msgid ""
-"This is target-aware, not host-aware. `PERRY_RS4GC=0` selects the shadow "
-"lowering for bisection; `PERRY_RS4GC=1` requests native roots and fails "
-"closed if the target cannot emit/read them. `PERRY_SHADOW_STACK=0` disables "
-"only the shadow lowering—native-root analysis remains enabled when native "
-"roots are the selected backend."
+"Rooting is selected by the target. Native platforms always use LLVM "
+"statepoints; environment controls and function-size estimates cannot "
+"select shadow frames. Long-lived managed locals retain LLVM stack "
+"storage and appear as direct frame locations in the statepoint stack "
+"map. The compact map records contiguous native homes as a range, so "
+"both machine code and metadata grow linearly with the locals and "
+"safepoints. Moving collection rewrites those same locations before "
+"generated code reloads them."
 msgstr ""
-"Ini target-aware, tidak host-aware. `PERRY_RS4GC=0` memilih shadow lowering "
-"untuk bisection; `PERRY_RS4GC=1` meminta root asli dan gagal ditutup jika "
-"target tidak dapat emit/read mereka. `PERRY_SHADOW_STACK=0` menonaktifkan "
-"hanya shadow loweringnative-root analysis tetap diaktifkan ketika root asli "
-"adalah backend yang dipilih."
 
 #: src/internals/garbage-collector.md:194
 msgid ""
@@ -79450,14 +79444,6 @@ msgstr "`PERRY_GC_HEAP_LIMIT=N`"
 #: src/internals/garbage-collector.md:328
 msgid "override the process heap budget in MiB"
 msgstr "Mengganti anggaran heap proses di MiB"
-
-#: src/internals/garbage-collector.md:329
-msgid "`PERRY_RS4GC=0`"
-msgstr "`PERRY_RS4GC=0`"
-
-#: src/internals/garbage-collector.md:329
-msgid "select shadow roots on a native-root-capable target"
-msgstr "pilih akar bayangan pada target yang mampu root asli"
 
 #: src/internals/garbage-collector.md:330
 msgid "`PERRY_CONSERVATIVE_STACK_SCAN=full`"
@@ -80313,27 +80299,18 @@ msgstr ""
 #: src/internals/gc-rooting-invariant.md:188
 msgid ""
 "**A fourth class was on this list until #7663 and is now covered: the "
-"lowering that actually ships.** The corpus used to be compiled under "
-"`PERRY_RS4GC=0` — the shadow stack — because the checker anchored on "
-"`@js_shadow_slot_bind` and the native lowering emits zero of them. That made "
-"a green `gc-root-dominance` a statement about a lowering that has not been "
-"the default on any walkable-frame target since #7370. **Run both**, and know "
-"which one you ran:"
+"lowering that actually ships.** The corpus used to be compiled under a"
+" forced shadow lowering — the shadow stack — because the checker "
+"anchored on `@js_shadow_slot_bind` and the native lowering emits zero "
+"of them. That made a green `gc-root-dominance` a statement about a "
+"lowering that has not been the default on any walkable-frame target "
+"since #7370. **Run both**, and know which one you ran:"
 msgstr ""
-"**Kelas keempat ada di daftar ini sampai #7663 dan sekarang tercakup: "
-"penurunan yang benar-benar kapal.** Korpus digunakan untuk dikompilasi di "
-"bawah `PERRY_RS4GC=0`  the shadow stack  karena checker berlabuh pada "
-"`@js_shadow_slot_bind` dan native lowering mengeluarkan nol dari mereka. "
-"Yang membuat hijau `gc-root-dominance` pernyataan tentang menurunkan yang "
-"belum default pada setiap target walk-frame sejak # 7370. **Jalankan "
-"keduanya**, dan tahu yang mana yang Anda lari:"
 
 #: src/internals/gc-rooting-invariant.md:197
 #, fuzzy
-msgid ""
-"# SHADOW (PERRY_RS4GC=0): still the lowering on arm64_32 watchOS and ARM64\n"
+msgid "# SHADOW: the actual WASI platform lowering. Anchors on root stores.\n"
 msgstr ""
-"# SHADOW (PERRY_RS4GC=0): masih menurunkan pada arm64_32 watchOS dan ARM64"
 
 #: src/internals/gc-rooting-invariant.md:213
 msgid ""
@@ -80798,11 +80775,9 @@ msgstr "'call [^@]*@js_[A-Za-z0-9_.$]*('"
 
 #: src/internals/gc-rooting-invariant.md:389
 msgid ""
-"`PERRY_INLINE_SHADOW_SLOT=0` makes every root store the "
-"`js_shadow_slot_bind` call form the checker anchors on."
+"The WASI platform uses the `js_shadow_slot_bind` call form the "
+"shadow-root checker anchors on."
 msgstr ""
-"`PERRY_INLINE_SHADOW_SLOT=0` membuat setiap root store `js_shadow_slot_bind` "
-"panggilan bentuk checker jangkar pada."
 
 #: src/internals/gc-rooting-invariant.md:392
 msgid ""
@@ -89440,9 +89415,6 @@ msgstr ""
 
 #~ msgid "emit human-readable collector diagnostics"
 #~ msgstr "memancarkan diagnostik kolektor yang dapat dibaca manusia"
-
-#~ msgid "# NATIVE (PERRY_RS4GC=1): the default everywhere else. Anchors on"
-#~ msgstr "# NATIVE (PERRY_RS4GC=1): default di tempat lain. Anchor di atas"
 
 #~ msgid "\"gc-live\""
 #~ msgstr "\"gc-live\""

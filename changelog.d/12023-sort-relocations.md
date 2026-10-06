@@ -1,0 +1,1 @@
+Remove redundant bounds checks from the private integer merge buffers using their cursor invariants. This removes unnecessary panic-location relocations after native-root lowering, without changing comparator behavior or rooting.

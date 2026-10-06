@@ -149,6 +149,16 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         "EventEmitterAsyncResource" => 0xFFFF0077,
         "AsyncLocalStorage" => 0xFFFF0078,
         "AsyncResource" => 0xFFFF0079,
+        // G1 (STREAM-PAYLOAD-DESIGN): `class X extends Readable` must link
+        // `X.prototype` to node's `Readable.prototype`, which carries the
+        // stream methods; the instances own only their state. Keep in sync
+        // with the classic-stream ids of `lower_instanceof` above and
+        // `reserved_native_parent_prototype_bits` in perry-runtime.
+        "Readable" => 0xFFFF0071,
+        "Writable" => 0xFFFF0072,
+        "Duplex" => 0xFFFF0073,
+        "Transform" => 0xFFFF0074,
+        "PassThrough" => 0xFFFF0075,
         _ => return None,
     })
 }
@@ -1285,40 +1295,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Receiver is a NaN-tagged i64 RegExpHeader pointer; arg is
         // a NaN-tagged string. Both must be unboxed before the call.
         Expr::RegExpTest { regex, string } => {
-            // A literal used directly as this one receiver cannot escape: the
-            // HIR node owns the literal expression and publishes only the
-            // call result.  Construct (or fetch) the site's rooted header
-            // before evaluating the argument, resolving `.test` at the same
-            // pre-argument point as an ordinary call.  This ordering matters
-            // for `/x/.test(patchPrototype())`: it invokes the method value
-            // captured before the patch.
-            if let Expr::RegExp { pattern, flags } = regex.as_ref() {
-                let (receiver, site_key) =
-                    super::logical_collections::lower_regexp_site_test_receiver(
-                        ctx, pattern, flags,
-                    );
-                let method = ctx.block().call(
-                    DOUBLE,
-                    "js_regexp_site_test_get_method",
-                    &[(I64, &site_key), (DOUBLE, &receiver)],
+            // Literal construction always creates an ordinary fresh object.
+            // Resolve its method with the same call lowering as any receiver.
+            if matches!(regex.as_ref(), Expr::RegExp { .. }) {
+                return lower_expr(
+                    ctx,
+                    &Expr::Call {
+                        callee: Box::new(Expr::PropertyGet {
+                            object: regex.clone(),
+                            property: "test".to_string(),
+                            byte_offset: 0,
+                        }),
+                        args: vec![*string.clone()],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    },
                 );
-                return rooting::with_rooted_group(ctx, 2, |ctx, roots| {
-                    let receiver = roots.adopt_emitted(ctx, rooting::Repr::Boxed, &receiver, true);
-                    let method = roots.adopt_emitted(ctx, rooting::Repr::Boxed, &method, true);
-                    let argument = lower_expr(ctx, string)?;
-                    let receiver = roots.reread_emitted(ctx, receiver);
-                    let method = roots.reread_emitted(ctx, method);
-                    Ok(ctx.block().call(
-                        DOUBLE,
-                        "js_regexp_site_test_dispatch",
-                        &[
-                            (I64, &site_key),
-                            (DOUBLE, &receiver),
-                            (DOUBLE, &method),
-                            (DOUBLE, &argument),
-                        ],
-                    ))
-                });
             }
             // #7154: the receiver is live across BOTH the string operand's own
             // lowering and the `js_jsvalue_to_string_coerce` below it, and the

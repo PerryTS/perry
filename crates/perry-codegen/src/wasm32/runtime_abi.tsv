@@ -271,7 +271,7 @@ js_async_local_storage_disable	void	i64
 js_async_local_storage_enter_with	void	i64,f64
 js_async_local_storage_exit	f64	i64,f64,i64
 js_async_local_storage_get_store	f64	i64
-js_async_local_storage_new	f64
+js_async_local_storage_new	f64	
 js_async_local_storage_run	f64	i64,f64,f64,i64
 js_async_local_storage_static_bind_direct	f64	f64,i64
 js_async_local_storage_static_snapshot_direct	f64	i64
@@ -1048,7 +1048,7 @@ js_dom_exception_new	ptr	f64,f64
 js_dom_exception_subclass_init	f64	f64,f64,f64
 js_domain_add	f64	i64,f64
 js_domain_bind	f64	i64,f64
-js_domain_create	f64
+js_domain_create	f64	
 js_domain_emit_error	bool	i64,f64,f64,bool
 js_domain_enter	f64	i64
 js_domain_exit	f64	i64
@@ -1686,6 +1686,9 @@ js_iter_result_set_f64	f64	f64,i32s
 js_iter_result_set_i1	f64	i32s,i32s
 js_iter_result_set_i32	f64	i32s,i32s
 js_iterator_close_if_not_done	f64	f64,f64
+js_iterator_close_on_throw	f64	f64,f64,f64
+js_iterator_delegate_return	f64	f64,f64
+js_iterator_delegate_throw	f64	f64,f64
 js_iterator_from	f64	f64
 js_iterator_next_result	f64	f64
 js_iterator_rest_to_array	f64	f64,f64
@@ -2042,6 +2045,7 @@ js_net_socket_address_get_flowlabel	f64	i64
 js_net_socket_address_get_port	f64	i64
 js_net_socket_address_new	i64	f64
 js_net_socket_address_parse	f64	i64
+js_net_socket_address_parse_value	f64	f64
 js_net_socket_alloc	i64	
 js_net_socket_connect	i64	f64,f64,f64
 js_net_socket_cork	i64	i64
@@ -2105,6 +2109,7 @@ js_net_validate_create_server_options	void	f64
 js_net_validate_default_auto_select_family	i32s	f64
 js_net_validate_default_auto_select_family_attempt_timeout	i32s	f64
 js_net_validate_listen_port	void	f64
+js_net_validate_socket_address_parse_input	i64	f64
 js_net_validate_socket_timeout	void	f64
 js_net_validate_tos	i32s	f64
 js_new_from_handle	f64	f64,i64,i64
@@ -3179,13 +3184,7 @@ js_regexp_exec_get_index	f64
 js_regexp_get_flags	ptr	ptr
 js_regexp_get_source	ptr	ptr
 js_regexp_new	ptr	ptr,ptr
-js_regexp_new_factory_site	ptr	ptr,ptr,i64,i64
-js_regexp_new_site	ptr	ptr,ptr,i64
-js_regexp_site_factory_call_method	f64	i64,f64,f64
-js_regexp_site_factory_call_value	f64	i64,f64
-js_regexp_site_test_dispatch	f64	i64,f64,f64,f64
-js_regexp_site_test_get_method	f64	i64,f64
-js_regexp_site_test_new	ptr	ptr,ptr,i64
+js_regexp_literal	ptr	ptr,ptr,i64
 js_regexp_test	i32s	ptr,ptr
 js_regexp_to_string	ptr	ptr
 js_region_guard_pack	i64	i32u,i32u,i64,i64,i64,i64,i64
@@ -3705,6 +3704,7 @@ js_symbol_typeof	ptr
 js_symbol_well_known_async_iterator	f64	
 js_symbol_well_known_iterator	f64	
 js_syntaxerror_new	ptr	ptr
+js_ta_read_receiver_is_kind	i32s	f64,i32s
 js_tagged_template_get_or_init	ptr	i64,ptr,ptr
 js_tagged_template_register_raw	ptr	ptr,ptr
 js_tdz_suppress_begin	void	
@@ -3950,6 +3950,7 @@ js_typescript_transpile_module	ptr	ptr,f64
 js_u8_buffer_read_f64	f64	ptr,i32s
 js_u8_from_base64	ptr	i64,f64
 js_u8_from_hex	ptr	i64
+js_u8_resolve_read_data	usize	f64
 js_u8_set_from_base64	f64	i64,i64,f64
 js_u8_set_from_hex	f64	i64,i64
 js_u8_to_base64	ptr	i64,f64
@@ -4148,6 +4149,7 @@ js_value_is_promise	i32s	f64
 js_value_length_f64	f64	f64
 js_value_length_property_f64	f64	f64
 js_value_length_property_ic_f64	f64	f64,ptr
+js_value_length_property_key_ic_f64	f64	f64,ptr,ptr
 js_value_to_locale_string	f64	f64
 js_value_to_object	ptr	i64
 js_value_to_str_ptr_for_ffi	i64	f64
@@ -4673,6 +4675,7 @@ perry_media_set_now_playing	void	f64,i64,i64,i64,i64
 perry_media_set_rate	void	f64,f64
 perry_media_set_volume	void	f64,f64
 perry_media_stop	void	f64
+perry_native_iterator_cleanup_before_trap	i32s	
 perry_next_wake_ms	f64	
 perry_object_header_abi_revision	i32u	
 perry_plugin_count	i64	
@@ -4723,5 +4726,3 @@ perry_updater_record_response	i64	f64
 perry_updater_refresh_due	i64	
 perry_watchos_classes_registered	void	
 setInterval	i64	i64,f64
-js_net_socket_address_parse_value	f64	f64
-js_net_validate_socket_address_parse_input	i64	f64

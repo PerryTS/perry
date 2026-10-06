@@ -2700,13 +2700,7 @@ js_regexp_exec_get_index	Leaf
 js_regexp_get_flags	Reenters
 js_regexp_get_source	Reenters
 js_regexp_new	Reenters
-js_regexp_new_factory_site	Reenters
-js_regexp_new_site	Reenters
-js_regexp_site_factory_call_method	Reenters
-js_regexp_site_factory_call_value	Reenters
-js_regexp_site_test_dispatch	Reenters
-js_regexp_site_test_get_method	Reenters
-js_regexp_site_test_new	Reenters
+js_regexp_literal	Reenters
 js_regexp_test	Reenters
 js_regexp_to_string	Reenters
 js_region_guard_pack	Reenters
@@ -2975,13 +2969,6 @@ js_set_value_at	Reenters
 js_set_value_raw_at	Reenters
 js_set_values_iter_obj	Reenters
 js_setenv	Reenters
-js_shadow_frame_enter	Leaf
-js_shadow_frame_pop	Leaf
-js_shadow_frame_push	Leaf
-js_shadow_slot_bind	Leaf
-js_shadow_slot_get	Leaf
-js_shadow_slot_set	Leaf
-js_shadow_state_addr	Leaf
 js_shape_ordinary_inline_slot_for_key	Reenters
 js_shape_register_static_seed	Leaf
 js_shape_run_static_seed	Reenters
@@ -3838,6 +3825,9 @@ js_zlib_inflate_sync	Reenters
 js_zlib_native_dispatch	Reenters
 js_zlib_process_pending	Reenters
 js_zlib_resolve_level	Reenters
+js_zlib_stream_error	Reenters
+js_zlib_stream_iterator	Reenters
+js_zlib_stream_option	Reenters
 js_zlib_unzip	Reenters
 js_zlib_unzip_sync	Reenters
 js_zlib_validate_buffer_arg	Reenters
@@ -4007,3 +3997,7 @@ redirect_lazy_to_materialized	Reenters
 setInterval	Reenters
 js_net_socket_address_parse_value	Reenters
 js_net_validate_socket_address_parse_input	Reenters
+js_iterator_close_on_throw	Reenters
+js_iterator_delegate_return	Reenters
+js_iterator_delegate_throw	Reenters
+perry_native_iterator_cleanup_before_trap	Leaf

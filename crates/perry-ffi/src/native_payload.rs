@@ -6,7 +6,7 @@
 //! separately linked binding cannot instantiate. A binding declares its
 //! family as a `static` [`PayloadFamily`] instead (class id, owner link,
 //! constructor name, prototype installer, and the payload's size, alignment
-//! and drop thunk, all derived from `T` by [`PayloadFamily::new`]) and calls
+//! and vtable, all derived from `T` by [`PayloadFamily::new`]) and calls
 //! the functions here, which forward to the same runtime code the in-tree
 //! families use: one cell, one lifecycle, one owner link.
 //!
@@ -17,7 +17,7 @@
 use std::ffi::c_void;
 
 /// Revision of the payload ABI this file is written against.
-const PAYLOAD_ABI_VERSION: u8 = 1;
+const PAYLOAD_ABI_VERSION: u8 = 2;
 
 /// A family, declared once per binding as a `static`.
 ///
@@ -33,7 +33,7 @@ pub struct PayloadFamily {
     name: *const u8,
     name_len: usize,
     install_prototype: Option<unsafe extern "C" fn(proto: *mut c_void)>,
-    drop_payload: unsafe extern "C" fn(resource: *mut c_void, hint: *mut c_void),
+    vtable: *const crate::native_stream::PayloadVTable,
     payload_size: usize,
     payload_align: usize,
 }
@@ -48,7 +48,7 @@ const fn layout_digest() -> u64 {
         | (offset_of!(PayloadFamily, class_id) as u64) << 40
         | (offset_of!(PayloadFamily, name) as u64) << 32
         | (offset_of!(PayloadFamily, install_prototype) as u64) << 24
-        | (offset_of!(PayloadFamily, drop_payload) as u64) << 16
+        | (offset_of!(PayloadFamily, vtable) as u64) << 16
         | (offset_of!(PayloadFamily, payload_align) as u64) << 8
         | PAYLOAD_ABI_VERSION as u64
 }

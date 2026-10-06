@@ -207,3 +207,125 @@ fn fromspace_scan_skips_but_counts_forwarded_owners_7154() {
         (*young_header).gc_flags &= !GC_FLAG_FORWARDED;
     }
 }
+
+/// Plant a bare reference to `young` at byte `offset` of `holder`'s payload.
+///
+/// # Safety
+/// `holder` must have at least `offset + 8` bytes of payload.
+unsafe fn plant_bare_at(holder: *mut u8, offset: usize, young: *mut u8) {
+    std::ptr::write_unaligned(holder.add(offset) as *mut u64, young as u64);
+}
+
+/// A string's bytes past `byte_len` are unused capacity: `js_string_append`
+/// allocates twice the length and fills the rest by in-place appends, each of
+/// which writes its bytes before `byte_len` covers them. Until then they hold
+/// the previous occupant's words. tsc's 107 KB `src +=` string carried 628 of
+/// them on main (2026-10-06), reported as 489 dangling and 139 missing
+/// rewrites. The bound is the string's own `byte_len`: the same word is an
+/// offender as soon as `byte_len` covers it, so strings are not skipped
+/// wholesale, and the excluded words are counted.
+#[test]
+fn fromspace_scan_bounds_a_string_by_its_byte_len() {
+    let header_bytes = std::mem::size_of::<crate::string::StringHeader>();
+    let capacity = 64usize;
+    let holder = crate::arena::arena_alloc_gc_old(header_bytes + capacity, 8, GC_TYPE_STRING);
+    let young = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    // A word-aligned slot well past a 4-byte text.
+    let slot = 40usize;
+    unsafe {
+        std::ptr::write_bytes(holder, 0, header_bytes + capacity);
+        let sh = holder as *mut crate::string::StringHeader;
+        (*sh).utf16_len = 4;
+        (*sh).byte_len = 4;
+        (*sh).capacity = capacity as u32;
+        let young_header = header_from_user_ptr(young) as *mut GcHeader;
+        (*young_header).gc_flags &= !GC_FLAG_FORWARDED;
+    }
+
+    let baseline = scan_heap_for_fromspace_refs();
+    unsafe {
+        plant_bare_at(holder, slot, young);
+    }
+    let in_slack = scan_heap_for_fromspace_refs();
+    assert_eq!(
+        in_slack.dangling, baseline.dangling,
+        "a word past the string's byte_len is unused capacity, not a reference"
+    );
+
+    // The same word, once byte_len covers it, is scanned again.
+    unsafe {
+        (*(holder as *mut crate::string::StringHeader)).byte_len = (slot + 8 - header_bytes) as u32;
+    }
+    let covered = scan_heap_for_fromspace_refs();
+    assert!(
+        covered.dangling > baseline.dangling,
+        "a word inside byte_len must still be scanned (baseline={}, covered={})",
+        baseline.dangling,
+        covered.dangling
+    );
+    assert_eq!(
+        in_slack.leaf_slack_words_skipped - covered.leaf_slack_words_skipped,
+        3,
+        "the excluded capacity must be counted: covering three more words of          the string must lower the skip count by three"
+    );
+
+    unsafe {
+        std::ptr::write_bytes(holder.add(slot), 0, 8);
+        (*(holder as *mut crate::string::StringHeader)).byte_len = 4;
+    }
+}
+
+/// A buffer's bytes past `capacity` are allocation padding that nothing ever
+/// writes. fastify's 123-byte response buffers ended in one word holding their
+/// last 3 bytes and 5 padding bytes left by an earlier pointer, which decoded
+/// as a dangling nursery address (2026-10-06, nondeterministic: it depends on
+/// what the memory held). Only whole words inside the declared bytes count.
+#[test]
+fn fromspace_scan_bounds_a_buffer_by_its_capacity() {
+    let header_bytes = std::mem::size_of::<crate::buffer::BufferHeader>();
+    let capacity = 123usize;
+    let holder = crate::arena::arena_alloc_gc_old(header_bytes + capacity, 8, GC_TYPE_BUFFER);
+    let young = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
+    // The word that holds bytes 120..123 of the data and 5 padding bytes.
+    let slot = 128usize;
+    unsafe {
+        let total = (*(header_from_user_ptr(holder) as *const GcHeader)).size as usize;
+        assert!(
+            total - GC_HEADER_SIZE >= slot + 8,
+            "test premise: the padded payload reaches the straddling word"
+        );
+        std::ptr::write_bytes(holder, 0, slot + 8);
+        let bh = holder as *mut crate::buffer::BufferHeader;
+        (*bh).length = capacity as u32;
+        (*bh).capacity = capacity as u32;
+        let young_header = header_from_user_ptr(young) as *mut GcHeader;
+        (*young_header).gc_flags &= !GC_FLAG_FORWARDED;
+    }
+
+    let baseline = scan_heap_for_fromspace_refs();
+    unsafe {
+        plant_bare_at(holder, slot, young);
+    }
+    let straddling = scan_heap_for_fromspace_refs();
+    assert_eq!(
+        straddling.dangling, baseline.dangling,
+        "a word that runs past the buffer's capacity is padding, not a reference"
+    );
+
+    // Declare the whole word as buffer bytes and it is scanned again.
+    unsafe {
+        (*(holder as *mut crate::buffer::BufferHeader)).capacity = (slot + 8 - header_bytes) as u32;
+    }
+    let covered = scan_heap_for_fromspace_refs();
+    assert!(
+        covered.dangling > baseline.dangling,
+        "a word inside the buffer's capacity must still be scanned (baseline={}, covered={})",
+        baseline.dangling,
+        covered.dangling
+    );
+
+    unsafe {
+        std::ptr::write_bytes(holder.add(slot), 0, 8);
+        (*(holder as *mut crate::buffer::BufferHeader)).capacity = capacity as u32;
+    }
+}

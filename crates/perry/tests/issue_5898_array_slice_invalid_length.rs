@@ -94,7 +94,6 @@ console.log("tail", selected.length, selected[0]);
         .arg("--no-cache")
         .env("PERRY_LIB_DIR", &runtime_dir)
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
-        .env("PERRY_RS4GC", "0")
         .output()
         .expect("run perry compile");
     assert!(

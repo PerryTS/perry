@@ -863,6 +863,45 @@ pub fn transform_generator_function_with_extra_captures(
     mutable_captures.sort();
     mutable_captures.dedup();
 
+    // Cold abrupt resumes reuse the existing private .next dispatcher. Capturing
+    // that closure keeps user replacement of the public next property irrelevant.
+    // Simple generators retain their existing allocation and capture layout.
+    let sync_resume_id = if !is_async_generator
+        && (!delegations.is_empty() || has_yielding_finally || !catches.is_empty())
+    {
+        Some(alloc_local(next_local_id))
+    } else {
+        None
+    };
+    let abrupt_captures = {
+        let mut ids = captures.clone();
+        ids.extend(sync_resume_id);
+        ids.sort();
+        ids
+    };
+    let resume_sync = |body: Vec<Stmt>| -> Stmt {
+        if let Some(id) = sync_resume_id {
+            Stmt::If {
+                condition: Expr::Bool(true),
+                then_branch: vec![
+                    Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(false)))),
+                    Stmt::Return(Some(Expr::Call {
+                        callee: Box::new(Expr::LocalGet(id)),
+                        args: vec![Expr::Undefined],
+                        type_args: vec![],
+                        byte_offset: 0,
+                    })),
+                ],
+                else_branch: None,
+            }
+        } else {
+            Stmt::While {
+                condition: Expr::Bool(true),
+                body,
+            }
+        }
+    };
+
     let next_func_id_val = {
         let id = *next_func_id;
         *next_func_id += 1;
@@ -988,17 +1027,38 @@ pub fn transform_generator_function_with_extra_captures(
             Box::new(Expr::Bool(true)),
         )));
         // Spec `yield *` step 6.c: when suspended inside a `yield *`, `return(v)`
-        // forwards to the delegated iterator's `return` method (async generators
-        // only; `delegations` is empty otherwise). Each route returns on a match,
-        // so control falls through to the generic completion below only when not
-        // suspended in a delegation.
+        // forwards to the delegated iterator's `return` method. Completed sync
+        // delegations fall through to the outer generator's finally routing.
+        let return_threw_id = if !is_async_generator
+            && !delegations.is_empty()
+            && (!catches.is_empty() || has_yielding_finally)
+        {
+            let id = alloc_local(next_local_id);
+            return_resume_body.push(Stmt::Let {
+                id,
+                name: "__yield_star_return_threw".to_string(),
+                ty: Type::Boolean,
+                mutable: true,
+                init: Some(Expr::Bool(false)),
+            });
+            Some(id)
+        } else {
+            None
+        };
         return_resume_body.extend(build_yield_star_return_routes(
             &delegations,
             state_id,
             return_param_id,
             done_id,
             next_local_id,
+            &catches,
+            &finallys,
+            pending_type_id,
+            pending_value_id,
+            &hoisted_ids,
+            return_threw_id,
         ));
+        let completion_start = return_resume_body.len();
         // Unhandled path: mark done, run pending non-yielding finallys, return
         // {v, true}. A finally that itself `return`s supersedes `v` (rewritten to
         // an iter-result return inside build_finally_run_stmts); a finally that
@@ -1055,13 +1115,25 @@ pub fn transform_generator_function_with_extra_captures(
                 // Sync generators re-drive the finally inline in this closure —
                 // no microtask suspend is needed (they have no `await`), and the
                 // finally's `yield`s return `{value, done: false}` directly.
-                return_resume_body.push(Stmt::While {
-                    condition: Expr::Bool(true),
-                    body: while_body_for_return,
-                });
+                return_resume_body.push(resume_sync(while_body_for_return.clone()));
             }
         } else {
             return_resume_body.extend(return_fallback);
+        }
+        if let Some(error_id) = return_threw_id {
+            let mut completion = return_resume_body.split_off(completion_start);
+            if has_yielding_finally {
+                completion.pop(); // All resumed routes share the dispatcher below.
+            }
+            return_resume_body.push(Stmt::If {
+                condition: Expr::Unary {
+                    op: UnaryOp::Not,
+                    operand: Box::new(Expr::LocalGet(error_id)),
+                },
+                then_branch: completion,
+                else_branch: None,
+            });
+            return_resume_body.push(resume_sync(while_body_for_return));
         }
         // #4445: wrap with the executing guard + a catch that clears `executing`
         // and marks `done` on any escaping throw (also wraps returns in a Promise
@@ -1087,7 +1159,7 @@ pub fn transform_generator_function_with_extra_captures(
             }],
             return_type: Type::Any,
             body: return_body,
-            captures: captures.clone(),
+            captures: abrupt_captures.clone(),
             mutable_captures: mutable_captures.clone(),
             captures_this,
             captures_new_target: false,
@@ -1161,10 +1233,7 @@ pub fn transform_generator_function_with_extra_captures(
         // Exactly one delegation route or the ordinary catch/throw fallback
         // runs, then every non-throwing path resumes through this shared loop.
         throw_resume_body.extend(yield_star_throw_routes);
-        throw_resume_body.push(Stmt::While {
-            condition: Expr::Bool(true),
-            body: while_body_for_throw,
-        });
+        throw_resume_body.push(resume_sync(while_body_for_throw));
         // #6709: for async generators, `.next`/`.throw` are thin outer closures
         // driving a shared async-step `__agstep` closure so inner `await`s
         // suspend on the microtask queue; sync generators keep direct closures.
@@ -1322,7 +1391,7 @@ pub fn transform_generator_function_with_extra_captures(
                 }],
                 return_type: Type::Any,
                 body: throw_body,
-                captures: captures.clone(),
+                captures: abrupt_captures.clone(),
                 mutable_captures: mutable_captures.clone(),
                 captures_this,
                 captures_new_target: false,
@@ -1370,6 +1439,18 @@ pub fn transform_generator_function_with_extra_captures(
                 is_generator: false,
             };
             (next_closure, throw_closure)
+        };
+        let next_closure = if let Some(id) = sync_resume_id {
+            new_body.push(Stmt::Let {
+                id,
+                name: "__gen_resume".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(next_closure),
+            });
+            Expr::LocalGet(id)
+        } else {
+            next_closure
         };
         let iter_obj = Expr::Object(vec![
             ("next".to_string(), next_closure),

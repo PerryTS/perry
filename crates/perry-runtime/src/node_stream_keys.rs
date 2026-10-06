@@ -154,6 +154,16 @@ pub(super) fn hidden_transform_finishing_key() -> *mut crate::string::StringHead
 }
 
 #[inline]
+pub(super) fn hidden_transform_end_pending_key() -> *mut crate::string::StringHeader {
+    hidden_key(TRANSFORM_END_PENDING_KEY)
+}
+
+#[inline]
+pub(super) fn hidden_transform_flag_key() -> *mut crate::string::StringHeader {
+    hidden_key(TRANSFORM_FLAG_KEY)
+}
+
+#[inline]
 pub(super) fn hidden_readable_flag_key() -> *mut crate::string::StringHeader {
     hidden_key(READABLE_FLAG_KEY)
 }

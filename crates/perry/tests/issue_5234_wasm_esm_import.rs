@@ -434,7 +434,6 @@ fn wasm_esm_import_instantiates_and_exposes_exports() {
         .arg("--no-cache")
         .arg("--strict-dynamic-import")
         .env("PERRY_NO_AUTO_OPTIMIZE", "1")
-        .env("PERRY_RS4GC", "0")
         .env("PERRY_RUNTIME_DIR", runtime_dir())
         .env("PERRY_WORKSPACE_ROOT", workspace_root())
         .output()

@@ -248,15 +248,12 @@ impl LlModule {
     /// varargs — the symbol is only ever *named* on define lines and in the
     /// unwind tables; generated code never calls it.
     pub fn declare_personality(&mut self) {
-        if self.declared_names.contains("perry_eh_personality") {
-            return;
+        for name in ["perry_eh_personality", "perry_iterator_eh_personality"] {
+            if self.declared_names.insert(name.to_string()) {
+                self.declarations
+                    .push((name.to_string(), format!("declare i32 @{name}(...)")));
+            }
         }
-        self.declared_names
-            .insert("perry_eh_personality".to_string());
-        self.declarations.push((
-            "perry_eh_personality".to_string(),
-            "declare i32 @perry_eh_personality(...)".to_string(),
-        ));
     }
 
     /// [`Self::declare_function`] with LLVM *return* parameter attributes

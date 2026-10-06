@@ -638,7 +638,7 @@ fn not_object_condition(result: Expr) -> Expr {
     }
 }
 
-/// Build the `gen.return(v)` forwarding routes for an async generator's `.return`
+/// Build the `gen.return(v)` forwarding routes for a generator's `.return`
 /// closure. When the generator is suspended inside a `yield *` delegation
 /// (`state` within a recorded [`DelegationRoute`] interval), `return(v)` must
 /// forward to the delegated iterator's `return` method rather than completing
@@ -657,13 +657,33 @@ fn not_object_condition(result: Expr) -> Expr {
 /// it always returns, so control only falls through to the generic completion
 /// path when not suspended in a `yield *`. The thrown `TypeError` and the
 /// returned iter-results are caught / promise-wrapped by
-/// `wrap_generator_resume_body`. Empty for sync generators (no routes recorded).
+/// `wrap_generator_resume_body`. Sync completion falls through to the outer finally.
+#[allow(clippy::too_many_arguments)]
+fn sync_delegate_call(route: &DelegationRoute, name: &str, value: LocalId) -> Expr {
+    route.await_result(Expr::Call {
+        callee: Box::new(Expr::ExternFuncRef {
+            name: name.to_string(),
+            param_types: vec![Type::Any, Type::Any],
+            return_type: Type::Any,
+        }),
+        args: vec![Expr::LocalGet(route.iter_id), Expr::LocalGet(value)],
+        type_args: vec![],
+        byte_offset: 0,
+    })
+}
+
 pub(crate) fn build_yield_star_return_routes(
     delegations: &[DelegationRoute],
     state_id: LocalId,
     return_param_id: LocalId,
     done_id: LocalId,
     next_local_id: &mut u32,
+    catches: &[CatchRoute],
+    finallys: &[FinallyRoute],
+    pending_type_id: LocalId,
+    pending_value_id: LocalId,
+    hoisted_ids: &std::collections::HashSet<LocalId>,
+    return_threw_id: Option<LocalId>,
 ) -> Vec<Stmt> {
     let mut out = Vec::with_capacity(delegations.len());
     for route in delegations {
@@ -697,7 +717,7 @@ pub(crate) fn build_yield_star_return_routes(
             }),
         };
         // if (__m === undefined || __m === null) { done = true; return {v, true}; }
-        let no_method = Stmt::If {
+        let mut no_method = Stmt::If {
             condition: Expr::Logical {
                 op: LogicalOp::Or,
                 left: Box::new(Expr::Compare {
@@ -726,19 +746,11 @@ pub(crate) fn build_yield_star_return_routes(
             name: "__yield_star_ret_r".to_string(),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::Await(Box::new(Expr::Call {
-                callee: Box::new(Expr::PropertyGet {
-                    byte_offset: 0,
-                    object: Box::new(Expr::LocalGet(m_id)),
-                    property: "call".to_string(),
-                }),
-                args: vec![
-                    Expr::LocalGet(route.iter_id),
-                    Expr::LocalGet(return_param_id),
-                ],
-                type_args: vec![],
-                byte_offset: 0,
-            }))),
+            init: Some(if route.is_async {
+                route.invoke_method(m_id, vec![Expr::LocalGet(return_param_id)])
+            } else {
+                Expr::Undefined
+            }),
         };
         // if (Type(__r) is not Object) throw new TypeError(...);
         let obj_check = Stmt::If {
@@ -750,7 +762,7 @@ pub(crate) fn build_yield_star_return_routes(
         };
         // if (__r.done) { done = true; return {__r.value, true}; }
         // else            return {__r.value, false};   // re-yield, generator not done
-        let dispatch_done = Stmt::If {
+        let mut dispatch_done = Stmt::If {
             condition: Expr::PropertyGet {
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(r_id)),
@@ -777,16 +789,93 @@ pub(crate) fn build_yield_star_return_routes(
             )))]),
         };
 
+        let protocol = if route.is_async {
+            vec![read_method, no_method, call_ret, obj_check, dispatch_done]
+        } else {
+            // A completed delegation is a return completion of the outer
+            // generator too: run its enclosing finally through the shared path.
+            if let Stmt::If { else_branch, .. } = &mut dispatch_done {
+                // GeneratorYield returns an unfinished inner result unchanged.
+                *else_branch = Some(vec![Stmt::Return(Some(Expr::LocalGet(r_id)))]);
+            }
+            if let Stmt::If { then_branch, .. } = &mut dispatch_done {
+                *then_branch = vec![Stmt::Expr(Expr::LocalSet(
+                    return_param_id,
+                    Box::new(Expr::PropertyGet {
+                        byte_offset: 0,
+                        object: Box::new(Expr::LocalGet(r_id)),
+                        property: "value".to_string(),
+                    }),
+                ))];
+            }
+            let call_ret = Stmt::Let {
+                id: r_id,
+                name: "__yield_star_ret_r".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(sync_delegate_call(
+                    route,
+                    "js_iterator_delegate_return",
+                    return_param_id,
+                )),
+            };
+            if let Stmt::If {
+                condition,
+                then_branch,
+                else_branch,
+            } = &mut no_method
+            {
+                *condition = Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(r_id)),
+                    right: Box::new(Expr::Undefined),
+                };
+                then_branch.clear();
+                *else_branch = Some(vec![dispatch_done]);
+            }
+            if catches.is_empty() && finallys.is_empty() {
+                // The generator's existing resume handler completes on errors.
+                vec![call_ret, no_method]
+            } else {
+                let error_id = alloc_local(next_local_id);
+                let mut fallback = build_finally_run_stmts(finallys, state_id, hoisted_ids);
+                fallback.push(Stmt::Throw(Expr::LocalGet(error_id)));
+                let mut on_error = build_abrupt_routing(
+                    catches,
+                    finallys,
+                    state_id,
+                    pending_type_id,
+                    pending_value_id,
+                    &Expr::LocalGet(error_id),
+                    true,
+                    1.0,
+                    false,
+                    false,
+                    fallback,
+                );
+                if let Some(id) = return_threw_id {
+                    on_error.push(Stmt::Expr(Expr::LocalSet(id, Box::new(Expr::Bool(true)))));
+                }
+                vec![Stmt::Try {
+                    body: vec![call_ret, no_method],
+                    catch: Some(CatchClause {
+                        param: Some((error_id, "__yield_star_return_e".to_string())),
+                        body: on_error,
+                    }),
+                    finally: None,
+                }]
+            }
+        };
         out.push(Stmt::If {
             condition: in_interval,
-            then_branch: vec![read_method, no_method, call_ret, obj_check, dispatch_done],
+            then_branch: protocol,
             else_branch: None,
         });
     }
     out
 }
 
-/// Build the `gen.throw(e)` forwarding routes for an async generator's `.throw`
+/// Build the `gen.throw(e)` forwarding routes for a generator's `.throw`
 /// closure. When the generator is suspended inside a `yield *` delegation
 /// (`state` within a recorded [`DelegationRoute`] interval), `throw(e)` must
 /// forward to the delegated iterator's `throw` method rather than routing the
@@ -913,16 +1002,11 @@ pub(crate) fn build_yield_star_throw_routes(
                     name: "__yield_star_close_r".to_string(),
                     ty: Type::Any,
                     mutable: false,
-                    init: Some(Expr::Await(Box::new(Expr::Call {
-                        callee: Box::new(Expr::PropertyGet {
-                            byte_offset: 0,
-                            object: Box::new(Expr::LocalGet(ret_m_id)),
-                            property: "call".to_string(),
-                        }),
-                        args: vec![Expr::LocalGet(route.iter_id)],
-                        type_args: vec![],
-                        byte_offset: 0,
-                    }))),
+                    init: Some(if route.is_async {
+                        route.invoke_method(ret_m_id, vec![])
+                    } else {
+                        Expr::Undefined
+                    }),
                 },
                 Stmt::If {
                     condition: not_object_condition(Expr::LocalGet(ic_id)),
@@ -961,19 +1045,11 @@ pub(crate) fn build_yield_star_throw_routes(
         // __del_result = await __m.call(iterator, e);
         let call_throw = Stmt::Expr(Expr::LocalSet(
             route.result_id,
-            Box::new(Expr::Await(Box::new(Expr::Call {
-                callee: Box::new(Expr::PropertyGet {
-                    byte_offset: 0,
-                    object: Box::new(Expr::LocalGet(m_id)),
-                    property: "call".to_string(),
-                }),
-                args: vec![
-                    Expr::LocalGet(route.iter_id),
-                    Expr::LocalGet(throw_param_id),
-                ],
-                type_args: vec![],
-                byte_offset: 0,
-            }))),
+            Box::new(if route.is_async {
+                route.invoke_method(m_id, vec![Expr::LocalGet(throw_param_id)])
+            } else {
+                Expr::Undefined
+            }),
         ));
 
         // if (Type(__del_result) is not Object) throw new TypeError(...);
@@ -988,10 +1064,29 @@ pub(crate) fn build_yield_star_throw_routes(
         // On success, re-drive the dispatch loop from the drive loop's condition
         // state: it reads `__del_result.done` and either exits the loop (resuming
         // the outer body past the `yield *`) or re-yields `__del_result.value`.
-        let set_state = Stmt::Expr(Expr::LocalSet(
-            state_id,
-            Box::new(Expr::Number(route.resume_state as f64)),
-        ));
+        let set_state = if route.is_async {
+            Stmt::Expr(Expr::LocalSet(
+                state_id,
+                Box::new(Expr::Number(route.resume_state as f64)),
+            ))
+        } else {
+            Stmt::If {
+                condition: Expr::PropertyGet {
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(route.result_id)),
+                    property: "done".to_string(),
+                },
+                // IteratorComplete was read once above: continue after the
+                // drive loop instead of testing the result a second time.
+                then_branch: vec![Stmt::Expr(Expr::LocalSet(
+                    state_id,
+                    Box::new(Expr::Number(route.suspend_state_hi as f64)),
+                ))],
+                // Keep the existing suspended resume state so next(v) drives
+                // delegate.next(v), rather than re-yielding this throw result.
+                else_branch: Some(vec![Stmt::Return(Some(Expr::LocalGet(route.result_id)))]),
+            }
+        };
 
         // Wrap the protocol work so an abrupt completion at the `yield *` site
         // (inner `throw` rejection / non-object result / `throw`-undefined
@@ -1011,7 +1106,7 @@ pub(crate) fn build_yield_star_throw_routes(
         fallback.push(Stmt::Throw(Expr::LocalGet(de_id)));
         let route_to_outer_catch = build_abrupt_routing(
             catches,
-            &[], // async can't re-raise from a yielding finally; finallys handled in fallback
+            if route.is_async { &[] } else { finallys },
             state_id,
             pending_type_id,
             pending_value_id,
@@ -1022,8 +1117,27 @@ pub(crate) fn build_yield_star_throw_routes(
             false,
             fallback,
         );
+        let protocol_body = if route.is_async {
+            vec![read_method, no_method, call_throw, obj_check, set_state]
+        } else {
+            vec![
+                Stmt::Expr(Expr::LocalSet(
+                    route.result_id,
+                    Box::new(sync_delegate_call(
+                        route,
+                        "js_iterator_delegate_throw",
+                        throw_param_id,
+                    )),
+                )),
+                set_state,
+            ]
+        };
+        if !route.is_async && catches.is_empty() && finallys.is_empty() {
+            branches.push((in_interval, protocol_body));
+            continue;
+        }
         let protocol = Stmt::Try {
-            body: vec![read_method, no_method, call_throw, obj_check, set_state],
+            body: protocol_body,
             catch: Some(CatchClause {
                 param: Some((de_id, "__yield_star_throw_e".to_string())),
                 body: route_to_outer_catch,
@@ -1042,4 +1156,115 @@ pub(crate) fn build_yield_star_throw_routes(
         }];
     }
     out
+}
+
+#[cfg(test)]
+mod sync_delegation_result_tests {
+    use super::*;
+
+    #[test]
+    fn unfinished_return_and_throw_results_are_preserved() {
+        let route = DelegationRoute {
+            is_async: false,
+            suspend_state_lo: 0,
+            suspend_state_hi: 4,
+            iter_id: 1,
+            result_id: 2,
+            resume_state: 1,
+        };
+        let mut next_local_id = 10;
+        let routes = build_yield_star_return_routes(
+            std::slice::from_ref(&route),
+            3,
+            4,
+            5,
+            &mut next_local_id,
+            &[],
+            &[],
+            6,
+            7,
+            &std::collections::HashSet::new(),
+            None,
+        );
+        let Stmt::If { then_branch, .. } = &routes[0] else {
+            panic!("route");
+        };
+        let Stmt::If {
+            else_branch: Some(protocol),
+            ..
+        } = &then_branch[1]
+        else {
+            panic!("method");
+        };
+        let Stmt::Let {
+            id: result_id,
+            init: Some(Expr::Call { callee, .. }),
+            ..
+        } = &then_branch[0]
+        else {
+            panic!("outlined result");
+        };
+        assert!(
+            matches!(&**callee, Expr::ExternFuncRef { name, .. } if name == "js_iterator_delegate_return")
+        );
+        let Stmt::If {
+            else_branch: Some(yielded),
+            ..
+        } = protocol.last().unwrap()
+        else {
+            panic!("done");
+        };
+        assert!(matches!(&yielded[0], Stmt::Return(Some(Expr::LocalGet(id))) if id == result_id));
+        let routes = build_yield_star_throw_routes(
+            &[route],
+            &[],
+            &[],
+            3,
+            4,
+            6,
+            7,
+            &std::collections::HashSet::new(),
+            &mut next_local_id,
+            vec![Stmt::Throw(Expr::LocalGet(4))],
+        );
+        let Stmt::If { then_branch, .. } = &routes[0] else {
+            panic!("route");
+        };
+        let Stmt::If {
+            then_branch: finished,
+            else_branch: Some(yielded),
+            ..
+        } = then_branch.last().unwrap()
+        else {
+            panic!("done");
+        };
+        assert!(matches!(&yielded[0], Stmt::Return(Some(Expr::LocalGet(2)))));
+        assert!(
+            matches!(&finished[0], Stmt::Expr(Expr::LocalSet(3, value)) if matches!(**value, Expr::Number(4.0)))
+        );
+    }
+    #[test]
+    fn sync_protocol_calls_do_not_get_the_call_property() {
+        let route = DelegationRoute {
+            is_async: false,
+            suspend_state_lo: 0,
+            suspend_state_hi: 4,
+            iter_id: 1,
+            result_id: 2,
+            resume_state: 1,
+        };
+        for name in ["js_iterator_delegate_return", "js_iterator_delegate_throw"] {
+            let call = sync_delegate_call(&route, name, 10);
+            let Expr::Call { callee, args, .. } = call else {
+                panic!("protocol work must be a shared runtime call");
+            };
+            assert!(
+                matches!(*callee, Expr::ExternFuncRef { name: ref actual, .. } if actual == name)
+            );
+            assert!(matches!(
+                args.as_slice(),
+                [Expr::LocalGet(1), Expr::LocalGet(10)]
+            ));
+        }
+    }
 }

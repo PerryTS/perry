@@ -12,6 +12,16 @@ pub(super) fn allocation_point() {
 }
 
 pub(super) fn read_stream_with_size_arg(stream: f64, size: f64) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let s = scope.root_nanbox_f64(stream);
+    let chunk = scope.root_nanbox_f64(read_stream_with_size_arg_inner(stream, size));
+    // node's `read()` calls `_read` once the buffer is below the mark: a
+    // Transform's held write completion runs, a parked codec resumes.
+    super::write_state::readable_maybe_read_more(s.get_nanbox_f64());
+    chunk.get_nanbox_f64()
+}
+
+fn read_stream_with_size_arg_inner(stream: f64, size: f64) -> f64 {
     let size_value = JSValue::from_bits(size.to_bits());
     if size_value.is_undefined() || !size_value.is_number() {
         return read_stream_default_size(stream);

@@ -45,105 +45,18 @@ pub(crate) fn function_body_returns_generator_object(body: &[perry_hir::Stmt]) -
     })
 }
 
-/// Compile a single user function into the module.
-/// Shadow-stack push/pop + slot-set emission for every user
-/// function. Default ON as of Phase D part 2 (v0.5.238); set
-/// `PERRY_SHADOW_STACK=0`/`off`/`false` to disable for bisection.
-/// Cached at first call so subsequent compile_* calls skip the
-/// env-var lookup.
-///
-/// When adding a `PERRY_*` reader using this pattern, register it in
-/// `BUILD_CACHE_ENV_VARS` in `crates/perry/src/commands/compile/build_cache.rs`.
-/// Only readers that cannot change emitted code belong in that file's
-/// `BUILD_CACHE_ENV_EXCLUSIONS`, with a reason. The OnceLock caches the reader;
-/// the registry keeps compiled objects from being reused across settings.
-///
-/// Why on by default now: the shadow stack precisely covers every
-/// pointer-typed local in compiled JS frames, complementing the
-/// conservative C-stack scan. With Phase A complete and the GC
-/// tracer consuming the shadow stack as a parallel root source
-/// (v0.5.221), enabling it is a strict-improvement default —
-/// fewer over-promoted objects in generational mode, no change
-/// in observed correctness, modest per-function-entry overhead
-/// (one frame_push call + N slot stores at safepoints) that's
-/// invisible on every measured benchmark. Phase D part 2 then
-/// uses the shadow stack's authoritative JS-frame coverage to
-/// shrink the conservative scanner — which only makes sense once
-/// the shadow stack is guaranteed to be live.
-pub(super) fn shadow_stack_enabled() -> bool {
-    use std::sync::OnceLock;
-    static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        let on = !matches!(
-            std::env::var("PERRY_SHADOW_STACK").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        );
-        on
-    })
-}
-
-/// Whether the precise-root **analysis** runs — i.e. whether
-/// `collect_pointer_typed_locals` assigns slot indices at all.
-///
-/// #7326 is the distinction this function exists to draw. There are two
-/// separable questions and one knob used to answer both:
-///
-/// 1. *Which locals hold GC pointers, and where must each stay live?*
-///    That is the analysis. It is backend-independent.
-/// 2. *How is the answer represented in the emitted code?* — Perry's
-///    heap-backed shadow frame, or a native stack map. That is the lowering,
-///    and it is chosen inside `LlFunction` (`enable_shadow_frame_inner` and
-///    `reserve_shadow_slot` both return the native path first).
-///
-/// Conflating them made `PERRY_SHADOW_STACK=0` plus native-root lowering (then
-/// spelled `PERRY_STATEPOINTS=1`, since deleted; `PERRY_RS4GC=1` today) produce a
-/// binary with **no precise frame roots at all** — the analysis was switched
-/// off, so the statepoint lowering had nothing to lower. No `__perry_gcmap`
-/// section, same size as a plain shadow-off build, correct output. Nothing
-/// distinguished it from a good build until a collection freed a live object.
-/// #7332 made that combination a hard error as a stopgap; splitting the
-/// predicate makes it *expressible* instead, which is the prerequisite for the
-/// shadow stack's lowering ever being removed — a mode nobody can select is a
-/// mode nobody can measure.
-///
-/// Acceptance property, asserted by test: with statepoints on, this returns
-/// true regardless of `PERRY_SHADOW_STACK`, so both spellings must emit
-/// byte-identical code.
+/// Precise-root analysis always runs. Only target capabilities select its lowering.
 pub(crate) fn precise_root_analysis_enabled() -> bool {
-    shadow_stack_enabled() || native_stack_roots_enabled()
+    true
 }
 
-/// `PERRY_RS4GC=1` — research pipeline for #7174: root allocas become
-/// `ptr addrspace(1)`, functions are tagged `gc "statepoint-example"`, and
-/// each module is piped through `opt -passes='function(mem2reg),
-/// rewrite-statepoints-for-gc'` before clang. LLVM then inserts every
-/// statepoint, relocation, and downstream-use rewrite itself — replacing the
-/// explicit bridge's hand emission and its conservative CFG-union liveness.
-/// Requires an `opt` binary (`PERRY_LLVM_OPT`, Homebrew LLVM, or PATH).
+/// Statepoints are mandatory wherever the runtime can consume native maps.
 pub(crate) fn rs4gc_enabled() -> bool {
     #[cfg(any(test, feature = "testing"))]
     if let Some(pinned) = NATIVE_ROOTS_OVERRIDE.with(|c| c.get()) {
         return pinned;
     }
-    match rs4gc_env_override() {
-        Some(explicit) => explicit,
-        // Default: on wherever the runtime can actually walk the frames.
-        None => NATIVE_ROOTS_TARGET_OK.with(|c| c.get()),
-    }
-}
-
-/// `PERRY_RS4GC` as an explicit override. `Some(true)` forces the backend on
-/// even for a target whose map the emitter will refuse — that refusal is the
-/// point of asking, and turning it into a silent shadow-stack fallback would
-/// hide exactly what the arm was set to measure.
-fn rs4gc_env_override() -> Option<bool> {
-    use std::sync::OnceLock;
-    static CACHED: OnceLock<Option<bool>> = OnceLock::new();
-    *CACHED.get_or_init(|| match std::env::var("PERRY_RS4GC").as_deref() {
-        Ok("1") | Ok("on") | Ok("true") => Some(true),
-        Ok("0") | Ok("off") | Ok("false") => Some(false),
-        _ => None,
-    })
+    NATIVE_ROOTS_TARGET_OK.with(|c| c.get())
 }
 
 thread_local! {
@@ -193,12 +106,7 @@ impl NativeRootsPin {
     /// `ptr addrspace(1)` root allocas, `gc "statepoint-example"`, relocations
     /// inserted by LLVM.
     ///
-    /// This is today's default on every target the runtime can walk, so a test
-    /// that wants it does not strictly *need* the pin — but a pin is not
-    /// redundant: it also overrides `PERRY_RS4GC` from the environment, so the
-    /// assertion means the same thing during a `PERRY_RS4GC=0` bisection run as
-    /// it does in CI. Without it, a whole-suite sweep under the process-global
-    /// env knob silently retargets every unpinned test at the other lowering.
+    /// Test-only override for assertions that share platform-rooting fixtures.
     pub fn native() -> Self {
         NativeRootsPin(NATIVE_ROOTS_OVERRIDE.with(|c| c.replace(Some(true))))
     }
@@ -241,7 +149,14 @@ pub(crate) fn set_native_roots_for_target(triple: &str) {
     // arch check and is COFF, but its CONTEXT layout and register model differ,
     // so no frame would ever be visited.
     let windows_ok = !triple.contains("windows") || triple.starts_with("x86_64");
-    NATIVE_ROOTS_TARGET_OK.with(|c| c.set(arch_ok && windows_ok));
+    // Match the runtime section locator and walker, not merely the ELF format.
+    // Android has a distinct target_os and no native map reader. OpenHarmony
+    // exposes target_os=linux and uses the Linux reader.
+    let reader_ok = triple.contains("apple")
+        || triple.contains("darwin")
+        || triple.contains("windows")
+        || (triple.contains("linux") && !triple.contains("android"));
+    NATIVE_ROOTS_TARGET_OK.with(|c| c.set(arch_ok && windows_ok && reader_ok));
 }
 
 thread_local! {
@@ -284,26 +199,9 @@ pub(crate) fn gc_safepoint_only_contract_enabled() -> bool {
     })
 }
 
-/// Inline shadow-slot store gate (#7088). Default ON.
-///
-/// When enabled, a store to a GC-rooted local is emitted as an address
-/// computation and a pair of stores against this thread's `ShadowStackState`
-/// instead of a call to `js_shadow_slot_bind` / `js_shadow_slot_set`. The
-/// runtime entry points stay exported, and are what the emitted code falls
-/// back to when no state pointer is available for the activation.
-///
-/// `PERRY_INLINE_SHADOW_SLOT=0`/`off`/`false` reverts to the calls, for
-/// bisection. Independent of `PERRY_SHADOW_STACK`, which switches root
-/// emission off entirely; with the shadow stack off there is nothing to inline.
+/// Inline shadow slots exist only on targets without native stack maps.
 pub(crate) fn inline_shadow_slot_enabled() -> bool {
-    use std::sync::OnceLock;
-    static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        !matches!(
-            std::env::var("PERRY_INLINE_SHADOW_SLOT").as_deref(),
-            Ok("0") | Ok("off") | Ok("false")
-        )
-    })
+    !native_stack_roots_enabled()
 }
 
 /// Inline-hot-small gate. Default ON. When enabled, small functions
@@ -462,164 +360,6 @@ pub(crate) fn inline_hot_small_max_call_sites() -> u32 {
     })
 }
 
-/// Statepoint relocation estimate above which a function keeps its GC roots
-/// in a stable shadow-frame home instead of native statepoints (#8583,
-/// #11926).
-///
-/// `rewrite-statepoints-for-gc` adds one relocation per GC value live across
-/// each safepoint, so the optimizer's post-rewrite cost scales with
-/// `live_roots × safepoints`. Past a point that fan-out makes the `-Os`/`-O3`
-/// middle-end super-linear and the compile does not finish (the Claude Code
-/// bundle's 68 MB entry body measured 795 root slots × ~106k safepoints ≈ 8.4e7
-/// and grew 439k → 6.5M instructions under RS4GC; without RS4GC the same unit
-/// optimized at `-Os` in ~5s). Real functions sit orders of magnitude below
-/// this: hundreds of call sites times tens of slots is ~1e4–1e5.
-///
-/// The old default (#8620) protected only against the compile-time cliff.
-/// Synthetic entry functions with a controlled `slots × safepoints` estimate
-/// were compiled at `-Os` with spilling OFF (pure RS4GC fan-out) and the
-/// `@main` codegen unit timed:
-///
-/// | estimate | fan-out finish |
-/// |---------:|---------------:|
-/// |     8.0M |         ~325 s |
-/// |    16.0M |         ~235 s |
-/// |    32.0M |  ~511 s (8.5m) |
-/// |    40.0M |  did not finish in 20 min |
-/// |    48.0M |  did not finish in 20 min |
-///
-/// #11926 found a much earlier machine-code crossover. A function with 102
-/// conservatively estimated live roots and 25 source safepoints (estimate
-/// 2,550) emitted 38,743 bytes through RS4GC and 29,766 bytes through the
-/// stable-home lowering. At 200 values/calls the two forms were 1,832,708 and
-/// 248,858 bytes respectively: RS4GC grew quadratically because every live SSA
-/// GC value was relocated at every statepoint, while the shadow-frame slots
-/// stayed put. On arm64 that 235,808-instruction body also crosses the 100k
-/// fast-emission ceiling and falls to LLVM's much larger O0 machine pipeline.
-///
-/// The low crossover applies only inside the measured domain: at least 25
-/// safepoints, with named root slots outnumbering safepoints by more than 2:1.
-/// That distinguishes the issue's many-live-locals shape from call-heavy
-/// functions, where adding one hypothetical live temporary per call is a
-/// deliberately loose compile-time overestimate. 2,048 is immediately below
-/// the smallest measured witness (2,550). The old 32M hard ceiling remains for
-/// every shape, and the post-RS4GC instruction budget (#8586/#8679,
-/// inprocess.rs) still backstops anything the source estimate misses.
-///
-/// `PERRY_ROOT_SPILL_RELOCATIONS=<n>` overrides it; `0` disables spilling
-/// (every function stays on native statepoints, the pre-#8583 behavior).
-const DEFAULT_ROOT_SPILL_RELOCATIONS: usize = 32_000_000;
-const DEFAULT_ROOT_HOME_RELOCATIONS: usize = 2_048;
-const ROOT_HOME_MIN_SAFEPOINTS: usize = 25;
-
-pub(crate) fn root_spill_relocation_threshold() -> usize {
-    std::env::var("PERRY_ROOT_SPILL_RELOCATIONS")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .unwrap_or(DEFAULT_ROOT_SPILL_RELOCATIONS)
-}
-
-/// The lower, code-size-driven threshold shares the existing override. An
-/// explicit value keeps its historical meaning as the one selector ceiling;
-/// in particular `0` still disables every shadow-frame spill.
-fn root_home_relocation_threshold() -> usize {
-    std::env::var("PERRY_ROOT_SPILL_RELOCATIONS")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .unwrap_or(DEFAULT_ROOT_HOME_RELOCATIONS)
-}
-
-fn root_home_size_candidate(slot_count: usize, sites: usize, estimate: usize) -> bool {
-    sites >= ROOT_HOME_MIN_SAFEPOINTS
-        && slot_count > sites.saturating_mul(2)
-        && estimate > root_home_relocation_threshold()
-}
-
-/// The relocation estimate for a function with `slot_count` GC-root slots and
-/// a body containing `safepoint_sites` call-like expressions. Saturating so a
-/// pathological product cannot wrap.
-/// The root population RS4GC actually relocates: named pointer locals plus
-/// ~one live pointer temporary per call result (#8583). Production and the
-/// threshold tests must agree on this composition — computing it in only one
-/// of the two is how the endpoint tests silently stop guarding the real
-/// formula.
-pub(crate) fn spill_live_root_count(slot_count: usize, safepoint_sites: usize) -> usize {
-    slot_count.saturating_add(safepoint_sites)
-}
-
-pub(crate) fn root_relocation_estimate(slot_count: usize, safepoint_sites: usize) -> usize {
-    slot_count.saturating_mul(safepoint_sites)
-}
-
-#[cfg(test)]
-#[path = "root_spill_default_tests.rs"]
-mod root_spill_default_tests;
-
-/// Decide whether `func` should spill its roots to the shadow frame, and if so
-/// mark it (BEFORE its `enable_*_shadow_frame` call) and report it. Only
-/// meaningful under native stack-map roots — the shadow frame is already the
-/// lowering otherwise. Reporting is at default verbosity because #8421 requires
-/// that a change to how a function is compiled is never silent; the message
-/// states that the optimization level is unchanged.
-pub(super) fn maybe_spill_roots_to_shadow_frame(
-    func: &mut crate::function::LlFunction,
-    fn_name: &str,
-    slot_count: usize,
-    body: &[perry_hir::Stmt],
-) {
-    if !native_stack_roots_enabled() {
-        return;
-    }
-    let hard_threshold = root_spill_relocation_threshold();
-    if hard_threshold == 0 {
-        return;
-    }
-    let sites = crate::collectors::count_safepoint_sites(body);
-    // #8583 (unit-4 / `__33499` of the Claude Code bundle): `slot_count` is the
-    // shadow-slot map size — the count of *named* pointer-typed locals — but
-    // that is NOT the root population RS4GC relocates. A call-heavy minified
-    // closure produces one pointer-typed *temporary* per call result (the
-    // constructed IR carries ~one `alloca ptr addrspace(1)` per call), and each
-    // is live across the later safepoints; those temporaries dominate the true
-    // root count yet are invisible to `collect_pointer_typed_locals`. `__33499`
-    // measured ~20.3k named-and-anonymous pointer roots × ~20.3k safepoints, but
-    // its `slot_count` alone was ~100x smaller, so `slot_count × sites` fell
-    // under the threshold, the function stayed on statepoints, and RS4GC then
-    // fanned out for >3 h / ~30 GiB (never reaching the #8586 post-rewrite
-    // budget assertion, which only fires *after* the rewrite it never finishes).
-    // Count each safepoint as contributing ~one live pointer temporary. This is
-    // an over-approximation biased toward spilling — the intended direction (a
-    // false-positive shadow frame is cheap; a missed fan-out is not).
-    let live_roots = spill_live_root_count(slot_count, sites);
-    let estimate = root_relocation_estimate(live_roots, sites);
-    let hard_limit = estimate > hard_threshold;
-    let size_crossover = root_home_size_candidate(slot_count, sites, estimate);
-    if !hard_limit && !size_crossover {
-        return;
-    }
-    func.request_shadow_frame_spill();
-    if hard_limit {
-        eprintln!(
-            "perry: `{fn_name}` keeps its {live_roots} GC roots (incl. call-result temporaries) in a \
-             shadow frame instead of statepoints: an estimated {estimate} relocations ({live_roots} \
-             roots × {sites} safepoints) would make rewrite-statepoints-for-gc fan-out super-linear in \
-             the optimizer (> {hard_threshold}). The function is still compiled at the requested \
-             optimization level; only its GC-root representation changes, and its roots stay \
-             precise (#8583). Override with PERRY_ROOT_SPILL_RELOCATIONS."
-        );
-    } else {
-        let size_threshold = root_home_relocation_threshold();
-        eprintln!(
-            "perry: `{fn_name}` keeps its {slot_count} named GC roots in stable shadow-frame \
-             homes: an estimated {estimate} relocations ({live_roots} roots incl. call-result \
-             temporaries × {sites} safepoints) would grow statepoint spill/reload code \
-             super-linearly (> {size_threshold}). The function is still compiled at the \
-             requested optimization level; only its GC-root representation changes, and its \
-             roots stay precise (#11926). Override with PERRY_ROOT_SPILL_RELOCATIONS."
-        );
-    }
-}
-
 /// #10663: a function body with at least this many property stores outside
 /// any loop outlines those stores' inline caches.
 ///
@@ -682,7 +422,6 @@ pub(super) fn enable_module_init_shadow_frame(
     // #8583: the module-entry body is the minified-bundle IIFE — the function
     // that fans out catastrophically under RS4GC. Decide its root lowering
     // before the frame is built.
-    maybe_spill_roots_to_shadow_frame(func, "main", shadow_slot_map.len(), stmts);
     func.enable_post_init_shadow_frame(shadow_slot_map.len() as u32);
     let shadow_slot_clears_after_stmt =
         crate::collectors::collect_shadow_slot_clear_points(stmts, &shadow_slot_map);
@@ -1789,25 +1528,6 @@ mod native_roots_target_tests {
                  not hard-fail in gc_map"
             );
         }
-    }
-
-    /// An explicit `PERRY_RS4GC=1` must still reach `gc_map`'s refusal for an
-    /// unsupported target. Turning that into a silent shadow-stack fallback
-    /// would hide exactly what the arm was set to measure.
-    #[test]
-    fn the_target_default_is_a_default_not_a_veto() {
-        set_native_roots_for_target("riscv64gc-unknown-linux-gnu");
-        assert!(
-            !rs4gc_enabled(),
-            "unset env + unsupported target = fall back"
-        );
-        // The override path is env-driven and process-cached, so it is asserted
-        // by the CI arms rather than re-read here; this pins the shape that the
-        // target decision is consulted ONLY when there is no explicit answer.
-        assert!(
-            rs4gc_env_override().is_none() || rs4gc_env_override().is_some(),
-            "override is a tri-state"
-        );
     }
 }
 

@@ -80,7 +80,7 @@ const GC_MAP_MAGIC: &[u8; 4] = b"PGCM";
 /// every statepoint (base, derived) pair to one slot on the false premise
 /// that Perry emits no interior pointers; the runtime decoder fails closed on
 /// a version mismatch, so both sides bump together.
-const GC_MAP_VERSION: u8 = 6;
+const GC_MAP_VERSION: u8 = 7;
 /// Section the compact map is emitted into, and the label it is given.
 const GC_MAP_LABEL: &str = "_perry_gc_map";
 /// Mach-O keeps its own segment so the runtime's lookup is unchanged. ld64
@@ -118,6 +118,8 @@ pub(crate) const COFF_SECTION_NAME: &str = ".pgcmap";
 const LOCATION_DIRECT: u8 = 2;
 const LOCATION_INDIRECT: u8 = 3;
 
+pub(crate) const HOME_RANGE_ID: u64 = 0x5045_5252_0000_0000;
+
 /// One safepoint: where it is in its function, and which frame slots are live.
 ///
 /// `instruction_offset` is the **assembly expression**, not a number: at `-O3`
@@ -127,6 +129,8 @@ const LOCATION_INDIRECT: u8 = 3;
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Record {
     instruction_offset: String,
+    /// One directly reported LLVM alloca range (register, offset, GC words).
+    native_range: Option<(u16, i32, u32)>,
     /// `(dwarf_reg, frame_offset)`, deduplicated and sorted by frame offset.
     roots: Vec<(u16, i32)>,
     /// #7803: DERIVED (interior) pointer slots, each tied to the base root it
@@ -543,6 +547,8 @@ fn decode_v3(block: &RawBlock) -> Result<Vec<FunctionMap>, String> {
             let mut records = Vec::with_capacity(count);
             for index in 0..count {
                 let record_start = pos;
+                let point_id =
+                    read_u64(bytes, pos).ok_or_else(|| truncated("statepoint ID", pos))?;
                 let instruction_offset = block
                     .symbols
                     .get(&(pos + 8))
@@ -575,6 +581,27 @@ fn decode_v3(block: &RawBlock) -> Result<Vec<FunctionMap>, String> {
                     locations.push((kind, size, dwarf_reg, offset));
                     pos += 12;
                 }
+
+                // LLVM emits explicitly supplied gc-live allocas AFTER
+                // base/derived pairs. Our client ID gives the range length;
+                // its Direct location supplies the actual native address.
+                let native_range = if point_id & 0xffff_ffff_0000_0000 == HOME_RANGE_ID {
+                    let words = point_id as u32;
+                    let (kind, size, reg, offset) = locations
+                        .pop()
+                        .ok_or_else(|| format!("{symbol}: native home range has no location"))?;
+                    if kind != LOCATION_DIRECT || size != 8 || words == 0 {
+                        return Err(format!("{symbol}: invalid native home range location"));
+                    }
+                    let extent = i32::try_from(u64::from(words - 1) * 8)
+                        .map_err(|_| format!("{symbol}: native home range exceeds i32"))?;
+                    offset
+                        .checked_add(extent)
+                        .ok_or_else(|| format!("{symbol}: native home range offset overflow"))?;
+                    Some((reg, offset, words))
+                } else {
+                    None
+                };
 
                 let is_root_slot = |&(kind, size, _, _): &(u8, u16, u16, i32)| {
                     matches!(kind, LOCATION_DIRECT | LOCATION_INDIRECT) && size == 8
@@ -674,6 +701,7 @@ fn decode_v3(block: &RawBlock) -> Result<Vec<FunctionMap>, String> {
                 derived.sort_unstable_by_key(|&(_, _, offset)| offset);
                 records.push(Record {
                     instruction_offset,
+                    native_range,
                     roots,
                     derived,
                 });
@@ -773,6 +801,29 @@ struct CompactStream {
     function_offsets: Vec<u32>,
 }
 
+fn same_roots(a: &Record, b: &Record) -> bool {
+    a.roots == b.roots && a.derived == b.derived && a.native_range == b.native_range
+}
+
+fn root_count(record: &Record) -> usize {
+    record.roots.len()
+        + record
+            .native_range
+            .map_or(0, |(_, _, words)| words as usize)
+}
+
+#[cfg(all(test, feature = "llvm-inprocess"))]
+fn root_slots(record: &Record) -> impl Iterator<Item = (u16, i32)> + '_ {
+    record.roots.iter().copied().chain(
+        record
+            .native_range
+            .into_iter()
+            .flat_map(|(reg, offset, words)| {
+                (0..words).map(move |i| (reg, offset + (i as i32) * 8))
+            }),
+    )
+}
+
 fn encode_stream(functions: &[FunctionMap]) -> Result<CompactStream, String> {
     let mut stream = Vec::new();
     let mut function_offsets = Vec::with_capacity(functions.len());
@@ -789,9 +840,9 @@ fn encode_stream(functions: &[FunctionMap]) -> Result<CompactStream, String> {
                 stream.len()
             )
         })?);
-        let mut previous_record: Option<(&Vec<(u16, i32)>, &Vec<(u32, u16, i32)>)> = None;
+        let mut previous_record: Option<&Record> = None;
         for record in &function.records {
-            if previous_record == Some((&record.roots, &record.derived)) {
+            if previous_record.is_some_and(|previous| same_roots(previous, record)) {
                 // Repeat flag: the live set (bases AND deriveds) is the
                 // previous record's.
                 push_varint(&mut stream, 1);
@@ -803,7 +854,7 @@ fn encode_stream(functions: &[FunctionMap]) -> Result<CompactStream, String> {
             let has_derived = u64::from(!record.derived.is_empty());
             push_varint(
                 &mut stream,
-                ((record.roots.len() as u64) << 2) | (has_derived << 1),
+                ((root_count(record) as u64) << 2) | (has_derived << 1),
             );
 
             // Deltas are zigzagged rather than emitted raw. `decode_v3` sorts
@@ -819,6 +870,16 @@ fn encode_stream(functions: &[FunctionMap]) -> Result<CompactStream, String> {
             //   0 = frame pointer, 1 = stack pointer, 2 = explicit DWARF
             //   register number as a following varint.
             encode_slots(&mut stream, record.roots.iter().copied());
+            if let Some((reg, offset, words)) = record.native_range {
+                let delta = record
+                    .roots
+                    .last()
+                    .map_or(offset, |&(_, previous)| offset.wrapping_sub(previous));
+                // v7 tag 3 describes a contiguous range in constant space.
+                push_varint(&mut stream, (zigzag(delta) << 2) | 3);
+                push_varint(&mut stream, u64::from(reg));
+                push_varint(&mut stream, u64::from(words));
+            }
             if !record.derived.is_empty() {
                 push_varint(&mut stream, record.derived.len() as u64);
                 // Base indices first (into the sorted roots list), then the
@@ -832,7 +893,7 @@ fn encode_stream(functions: &[FunctionMap]) -> Result<CompactStream, String> {
                     record.derived.iter().map(|&(_, reg, off)| (reg, off)),
                 );
             }
-            previous_record = Some((&record.roots, &record.derived));
+            previous_record = Some(record);
         }
     }
     Ok(CompactStream {
@@ -948,21 +1009,52 @@ fn verify_roundtrip(functions: &[FunctionMap], compact: &CompactStream) -> Resul
                 function.symbol
             ));
         }
-        let mut previous: Option<(Vec<(u16, i32)>, Vec<(u32, u16, i32)>)> = None;
+        let mut previous: Option<&Record> = None;
         for (index, record) in function.records.iter().enumerate() {
             let where_ = || format!("{} record {index}", function.symbol);
             let (header, next) = read_varint(stream, cursor)
                 .ok_or_else(|| format!("{}: truncated record header", where_()))?;
             cursor = next;
-            let decoded = if header & 1 == 1 {
-                previous
-                    .clone()
-                    .ok_or_else(|| format!("{}: repeat flag with no previous live set", where_()))?
-            } else {
+            if header & 1 == 1 {
+                let prior = previous.ok_or_else(|| {
+                    format!("{}: repeat flag with no previous live set", where_())
+                })?;
+                if !same_roots(prior, record) {
+                    return Err(format!("{}: repeat flag changed its live set", where_()));
+                }
+                continue;
+            }
+            let decoded = {
                 let count = (header >> 2) as usize;
                 let has_derived = header & 2 != 0;
-                let (roots, next) = decode_slots(stream, cursor, count, &where_)?;
+                if count != root_count(record) {
+                    return Err(format!("{}: decoded root count changed", where_()));
+                }
+                let (roots, next) = decode_slots(stream, cursor, record.roots.len(), &where_)?;
                 cursor = next;
+                if let Some((expected_reg, expected_offset, expected_words)) = record.native_range {
+                    let (value, next) = read_varint(stream, cursor)
+                        .ok_or_else(|| format!("{}: truncated range", where_()))?;
+                    let (reg, next) = read_varint(stream, next)
+                        .ok_or_else(|| format!("{}: truncated range register", where_()))?;
+                    let (words, next) = read_varint(stream, next)
+                        .ok_or_else(|| format!("{}: truncated range length", where_()))?;
+                    let delta = unzigzag((value >> 2) as u32);
+                    let offset = roots
+                        .last()
+                        .map_or(delta, |&(_, old)| old.wrapping_add(delta));
+                    if value & 3 != 3
+                        || reg != u64::from(expected_reg)
+                        || offset != expected_offset
+                        || words != u64::from(expected_words)
+                    {
+                        return Err(format!(
+                            "{}: native root range changed during encoding",
+                            where_()
+                        ));
+                    }
+                    cursor = next;
+                }
                 let derived = if has_derived {
                     let (derived_count, next) = read_varint(stream, cursor)
                         .ok_or_else(|| format!("{}: truncated derived count", where_()))?;
@@ -1005,7 +1097,7 @@ fn verify_roundtrip(functions: &[FunctionMap], compact: &CompactStream) -> Resul
                     record.derived
                 ));
             }
-            previous = Some(decoded);
+            previous = Some(record);
         }
     }
     if cursor != stream.len() {
@@ -1241,7 +1333,7 @@ fn compact_stack_map_asm(asm: &str, target: &str) -> Result<Option<(String, GcMa
         roots: functions
             .iter()
             .flat_map(|f| f.records.iter())
-            .map(|r| r.roots.len())
+            .map(root_count)
             .sum(),
     };
 
@@ -1314,7 +1406,10 @@ pub(crate) fn decode_stack_map_roots(
         .map(|f| {
             (
                 f.symbol,
-                f.records.into_iter().map(|r| r.roots).collect::<Vec<_>>(),
+                f.records
+                    .iter()
+                    .map(|r| root_slots(r).collect())
+                    .collect::<Vec<_>>(),
             )
         })
         .collect())
@@ -1369,7 +1464,7 @@ pub fn compact_and_assemble(
     // same blob as LP64 — a narrow pointer is not a separate case at all.
     if !arch_supported {
         return Err(anyhow!(
-            "perry: native GC roots (PERRY_RS4GC) are not supported for target \
+            "perry: statepoint GC roots are not supported for target \
              `{target}` — its roots are recorded against frame bases this \
              runtime cannot resolve, and the collector would segfault rather \
              than report anything. Tracked for #7173."
@@ -1388,7 +1483,7 @@ pub fn compact_and_assemble(
     // collector cannot find, with no diagnostic.
     if matches!(format_for(target), ObjectFormat::Coff) && !target.starts_with("x86_64") {
         return Err(anyhow!(
-            "perry: native GC roots (PERRY_RS4GC) are not enabled for target \
+            "perry: statepoint GC roots are not enabled for target \
              `{target}` yet — the COFF section and its PE lookup exist, but the \
              runtime's Windows stack walker is x86-64 only, so no frame would \
              ever be visited and the collector would free live objects. \

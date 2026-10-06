@@ -345,7 +345,7 @@ fn pin_object_non_young_call_sites_are_never_young() {
         let cell = crate::native_handle::native_handle_new_rust_payload(
             Box::into_raw(Box::new(1u8)) as *mut std::ffi::c_void,
             0x11919,
-            drop_latch_probe,
+            &LATCH_PROBE_VTABLE,
             "latch callback probe",
         );
         let cell_header = header_from_user_ptr(cell as *const u8);
@@ -372,6 +372,12 @@ fn pin_object_non_young_call_sites_are_never_young() {
 unsafe extern "C" fn drop_latch_probe(resource: *mut std::ffi::c_void, _: *mut std::ffi::c_void) {
     drop(Box::from_raw(resource as *mut u8));
 }
+
+static LATCH_PROBE_VTABLE: crate::native_payload::PayloadVTable =
+    crate::native_payload::PayloadVTable {
+        drop: drop_latch_probe,
+        stream: None,
+    };
 
 /// The actual link_ref path retains a movable owner without bringing back the
 /// preflight walk. T2 separately proves that its pin is a traced root.
