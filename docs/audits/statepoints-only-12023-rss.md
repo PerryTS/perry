@@ -33,7 +33,7 @@ There are 15 runs per arm, workload and mode (300 executions).
 Both complete ELF files were read before the batch. The committed harness also
 repeats this warming before each pair. Raw run metrics, SHA-256 identities, ranges,
 all collection counts, and paired RSS differences are in
-[statepoints-only-12023-rss.json](statepoints-only-12023-rss.json).
+`/root/claude-lanes/sp-work` (raw receipts retained off-branch).
 Full logs/scripts remain in `/root/claude-lanes/sp-work`.
 
 ## Attribution before the cache control

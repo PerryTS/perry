@@ -2,7 +2,7 @@
 
 The owner authorized shipment and accepted the previously measured tsc cycle increase as a stack-home/L1 traffic trade, with a fix-forward follow-up. The requested final pre-PR checks pass.
 
-Source identities: main `4b6f9f75f62314d5b0acb0d37735498f0db6fe42` versus measured implementation `8a2c7041a4d74fd41e2c693e82e52b469577466a`. These are the source identities for the recorded correctness and measurement runs, including RegExp S4. The final branch is subsequently rebased onto main `81e65f33ebdc72d75431b03427dcbfb2f153d7b1`; the documentation-only correction below does not change rooting semantics.
+Source identities: main `4b6f9f75f62314d5b0acb0d37735498f0db6fe42` versus measured implementation `8a2c7041a4d74fd41e2c693e82e52b469577466a`. These are the source identities for the recorded correctness and measurement runs, including RegExp S4. The final branch is subsequently rebased onto main `c1c251496bb57e9d90076ab7167a2bfe361e4389`; the documentation-only correction below does not change rooting semantics.
 
 ## Growing catch snapshots
 
@@ -38,25 +38,30 @@ Five interleaved pairs per workload per THP mode, core 59, ASLR disabled, inside
 
 Tsc has three copying minors and zero full collections on both arms in both modes. Cycles and L1 misses are retained in the raw spot-check data; this short run does not replace the previously accepted cycle comparison.
 
-## Scope and documentation correction
+## Scope and minimal documentation correction
 
-Version metadata matches current main exactly. Workflow switch removals and all statepoint audit files remain. The coordinator corrected the earlier instruction to strip the documentation changes: those files must stop advertising the removed switches.
+Version metadata matches current main exactly. Workflow switch removals and the Markdown statepoint audit summaries remain. All six raw JSON audit receipts are removed from the branch; raw measurements remain in the lane's results directories.
 
-The two historical benchmark labels in `docs/engine-plan.md` were updated from current main, preserving the measurements without advertising a deleted switch. Catalogs were also restored from current main, then regenerated from the current English sources with `docs/i18n.sh extract` and `sync`, using the repository's pinned mdbook 0.5.4, i18n helpers 0.4.0 and gettext 0.21. Main's catalogs were stale relative to its newer sources, so regeneration includes those source updates rather than reverting them.
+The two historical benchmark labels in `docs/engine-plan.md` were updated from current main, preserving the measurements without advertising a deleted switch. Catalogs were restored from current main again after the coordinator rejected the full regeneration diff. The final catalog patch changes only seven entries in the POT and eight entries per translation: paragraphs/examples affected by the deleted switches, the deleted control row, and one obsolete entry. Changed translations use English fallback until retranslated. Every unrelated entry remains byte-identical to main.
 
-Gettext retained obsolete entries and fuzzy translations containing the removed switch names. Gettext's `msggrep` removes only entries containing those names; a subsequent repository sync restores current source entries with English fallback where their translations require an update. Unrelated obsolete entries and translations are retained. No old branch catalog was copied, and the env-knob checker remains unchanged.
+The final catalog diff is 255 additions and 532 deletions across eleven files. Each translation changes 65–78 lines; the POT changes 46. There is no blanket reformatting or catalog regeneration in the final tree.
 
-| Documentation correction check | Result |
-|---|---|
-| Env-knob drift gate and self-test | pass |
-| Ten catalog format checks | pass |
-| Repeat extract/sync freshness | identical catalog hashes |
-| English and ten translated documentation builds | pass |
-| Documentation links and checker self-test | pass |
-| I18n toolchain tests | four pass |
-| fmt | pass |
-| Release build sanity: compiler and static runtime/stdlib wrappers | `cargo check` passes with eight jobs on CPUs 0–55 |
+### Baseline catalog freshness
 
-Only documentation and generated catalogs changed in this correction, so the previously recorded runtime, GC, dominance and witness results were not rerun. Rooting semantics remain unchanged. Scripts and receipts for this correction are in `/root/claude-lanes/sp-work/docs-fix`.
+The literal freshness gate is `git diff --exit-code -- docs/po` after `docs/i18n.sh extract` and `sync`, in the release-tag/manual `Deploy Docs` workflow. PR CI instead runs `docs/scripts/test_i18n_toolchain.py`. The pinned toolchain is mdbook 0.5.4, i18n helpers 0.4.0 and gettext 0.21.
+
+Running that same pinned extraction/sync against a separate current-main checkout proves the full rewrite predates this patch: main changes eleven files by **+417,770 /−443,927 lines** and fails freshness. A separate snapshot of the minimally edited head changes eleven files by **+417,593 /−443,672 lines** and fails the same check. Both snapshots are kept separate from the branch catalogs. The comparison checkout was main `81e65f33e`; the later rebase onto `c1c251496` leaves all catalog sources, tooling and workflow inputs byte-identical. The knob, documentation and toolchain checks and fmt also pass after that rebase. This is a reported inherited deployment-gate failure, not a passing freshness check or a weakened gate.
+
+| Documentation correction check | Main | Head |
+|---|---|---|
+| Env-knob drift gate and self-test | pass | pass |
+| Ten catalog format checks | pass | pass |
+| Release docs extraction/sync freshness | inherited failure | same failure |
+| English and ten translated documentation builds | pass | pass |
+| Documentation links and checker self-test | pass | pass |
+| I18n toolchain tests | four pass | four pass |
+| fmt | pass | pass |
+
+No production code changed in either documentation correction. The preceding correction's release compiler/static-wrapper `cargo check` passed; runtime, GC, dominance and witness results were not rerun unnecessarily. Rooting semantics remain unchanged. Comparison scripts and receipts are in `/root/claude-lanes/sp-work/docs-minimal`.
 
 Raw scripts, measurements, diagnostics and the verified binary archive are preserved in `/root/claude-lanes/sp-work/final-pr`. Owned build targets were removed. No push or PR was performed.
