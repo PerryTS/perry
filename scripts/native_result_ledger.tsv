@@ -10,7 +10,10 @@ js_bun_serve	NR_HANDLE_ID	crates/perry-ext-http/src/server/bun_server.rs	i64
 js_bun_sqlite_database_call	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/bun.rs	Handle
 js_bun_sqlite_database_query	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/bun.rs	Handle
 js_bun_sqlite_database_run	NR_GCPTR	crates/perry-stdlib/src/sqlite/bun.rs	*mut ObjectHeader
+js_bun_sqlite_database_serialize	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_db.rs	*mut BufferHeader
 js_bun_sqlite_database_transaction	NR_GCPTR	crates/perry-stdlib/src/sqlite/bun.rs	*mut ClosureHeader
+js_bun_sqlite_statement_all	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_db.rs	*mut ArrayHeader
+js_bun_sqlite_statement_run	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_db.rs	*mut ObjectHeader
 js_bun_sqlite_statement_values	NR_GCPTR	crates/perry-stdlib/src/sqlite/bun.rs	*mut ArrayHeader
 js_bun_tcp_listen	NR_HANDLE_ID	crates/perry-ext-net/src/bun_tcp.rs	i64
 js_bun_transpiler_new	NR_HANDLE_ID	crates/perry-ext-typescript/src/bun.rs	Handle
@@ -109,22 +112,6 @@ js_node_https_server_listen	NR_HANDLE_ID	crates/perry-ext-http/src/server/https_
 js_node_https_server_ref	NR_HANDLE_ID	crates/perry-ext-http/src/server/https_server.rs	i64
 js_node_https_server_set_timeout_method	NR_HANDLE_ID	crates/perry-ext-http/src/server/https_server.rs	i64
 js_node_https_server_unref	NR_HANDLE_ID	crates/perry-ext-http/src/server/https_server.rs	i64
-js_node_sqlite_database_sync_call	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/node_db.rs	Handle
-js_node_sqlite_database_sync_create_session	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/node_stmt_session.rs	Handle
-js_node_sqlite_database_sync_create_tag_store	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/node_tag_store.rs	Handle
-js_node_sqlite_database_sync_limits	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/node_stmt_session.rs	Handle
-js_node_sqlite_database_sync_prepare	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/node_db.rs	Handle
-js_node_sqlite_database_sync_serialize	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_db.rs	*mut BufferHeader
-js_node_sqlite_session_call	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/node_stmt_session.rs	Handle
-js_node_sqlite_session_changeset	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_stmt_session.rs	*mut BufferHeader
-js_node_sqlite_session_patchset	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_stmt_session.rs	*mut BufferHeader
-js_node_sqlite_sql_tag_store_all	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_tag_store.rs	*mut ArrayHeader
-js_node_sqlite_sql_tag_store_db	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/node_tag_store.rs	Handle
-js_node_sqlite_sql_tag_store_run	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_tag_store.rs	*mut ObjectHeader
-js_node_sqlite_statement_sync_all	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_stmt_session.rs	*mut ArrayHeader
-js_node_sqlite_statement_sync_call	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/node_stmt_session.rs	Handle
-js_node_sqlite_statement_sync_columns	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_stmt_session.rs	*mut ArrayHeader
-js_node_sqlite_statement_sync_run	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_stmt_session.rs	*mut ObjectHeader
 js_node_stream_method_event_names	NR_GCPTR	crates/perry-runtime/src/node_stream_event_emitter.rs	i64
 js_node_stream_method_listeners	NR_GCPTR	crates/perry-runtime/src/node_stream_event_emitter.rs	i64
 js_node_stream_method_raw_listeners	NR_GCPTR	crates/perry-runtime/src/node_stream_event_emitter.rs	i64

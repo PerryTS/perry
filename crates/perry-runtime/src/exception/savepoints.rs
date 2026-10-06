@@ -115,7 +115,7 @@ macro_rules! catch_savepoints {
     ($($(#[$attr:meta])* $name:ident: $ty:ty,
         capture: $capture:path, restore: $restore:path,
         latch: $latch:expr, idle: $idle:expr;)*) => {
-        #[derive(Clone, Copy)]
+        #[derive(Clone, Copy, Debug, PartialEq)]
         pub(super) struct CatchSavepoint {
             $($(#[$attr])* $name: $ty,)*
         }
@@ -127,6 +127,22 @@ macro_rules! catch_savepoints {
                 Self {
                     $($(#[$attr])* $name: if used & $latch != 0 { $capture() } else { $idle },)*
                 }
+            }
+
+            /// A native call's handler is captured at its first callback and
+            /// reused by the rest. Only runtime handle scopes differ between
+            /// its callbacks (each trampoline roots its own converted
+            /// arguments); every other managed stack is back at the
+            /// native-call baseline whenever a callback starts.
+            #[inline]
+            pub(super) fn refresh_native_roots(&mut self) {
+                #[cfg(test)]
+                if crate::native_payload::callback_sabotage("catch_refresh") {
+                    return;
+                }
+                self.runtime_handles = crate::gc::runtime_handle_stack_savepoint();
+                #[cfg(test)]
+                assert_eq!(*self, Self::capture(), "native helper changed managed catch state");
             }
 
             pub(super) fn restore(self) {
@@ -261,6 +277,10 @@ pub(super) fn scan_pending_trap_roots_mut(
         // SAFETY: every slot below `try_depth` was written by `capture()` in
         // `try_push_with_kind` before `try_depth` advanced past it.
         let entry = unsafe { entry.assume_init_mut() };
+        #[cfg(test)]
+        if crate::native_payload::callback_sabotage("catch_new_target_trace") {
+            continue;
+        }
         visitor.visit_nanbox_u64_slot(&mut entry.new_target);
     }
 }

@@ -701,7 +701,20 @@ pub(crate) fn lower_module_decl(
                                     // HANDLE_*_DISPATCH; don't register them as
                                     // typed native instances or property reads can
                                     // be routed through native-class method lowering.
+                                    // node:sqlite objects are ordinary objects with
+                                    // prototypes (#11919), whatever the local alias.
+                                    let sqlite_export = ctx
+                                        .lookup_native_module(class_name)
+                                        .and_then(|(m, export)| (m == "sqlite").then_some(export))
+                                        .flatten();
                                     let module_name = match (class_name, module_name.as_deref()) {
+                                        _ if matches!(
+                                            sqlite_export,
+                                            Some("DatabaseSync" | "StatementSync" | "Session")
+                                        ) =>
+                                        {
+                                            None
+                                        }
                                         ("StringDecoder", Some("string_decoder"))
                                         | ("Recoverable" | "REPLServer", Some("repl"))
                                         | (
@@ -1070,12 +1083,6 @@ pub(crate) fn lower_module_decl(
                                                         "inspector" | "inspector/promises",
                                                         "Session"
                                                     )
-                                                    | (
-                                                        "sqlite",
-                                                        "DatabaseSync"
-                                                            | "Session"
-                                                            | "StatementSync"
-                                                    )
                                             );
                                             if is_known_native_class {
                                                 ctx.register_native_instance(
@@ -1129,15 +1136,6 @@ pub(crate) fn lower_module_decl(
                                                             ) => Some("PoolConnection"),
                                                             ("better-sqlite3", "prepare") => {
                                                                 Some("Statement")
-                                                            }
-                                                            ("sqlite", "prepare") => {
-                                                                Some("StatementSync")
-                                                            }
-                                                            ("sqlite", "createTagStore") => {
-                                                                Some("SQLTagStore")
-                                                            }
-                                                            ("sqlite", "createSession") => {
-                                                                Some("Session")
                                                             }
                                                             _ => None,
                                                         };

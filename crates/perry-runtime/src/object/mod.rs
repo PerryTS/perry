@@ -61,7 +61,9 @@ pub use alloc::{
 };
 #[cfg(feature = "regex-engine")]
 pub(crate) use alloc_basic::object_alloc_plain_born;
-pub(crate) use alloc_basic::{object_alloc_born, object_alloc_filled_birth, object_alloc_plain};
+pub(crate) use alloc_basic::{
+    object_alloc_born, object_alloc_filled_birth, object_alloc_plain, object_alloc_unpublished,
+};
 #[allow(unused_imports)]
 pub(crate) use alloc_plain::mark_object_plain_ordinary;
 pub use assign::*;
@@ -227,7 +229,9 @@ pub(crate) mod own_override;
 mod own_override_builtin_install_tests;
 #[cfg(test)]
 mod own_override_push_tests;
-pub(crate) use object_ops::{ensure_key_in_keys_array, install_builtin_getter};
+pub(crate) use object_ops::{
+    ensure_key_in_keys_array, install_builtin_getter, install_own_builtin_accessor,
+};
 mod object_ops_frozen;
 mod polymorphic_index;
 #[cfg(test)]

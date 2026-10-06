@@ -347,6 +347,7 @@ fn pin_object_non_young_call_sites_are_never_young() {
             0x11919,
             &LATCH_PROBE_VTABLE,
             "latch callback probe",
+            false,
         );
         let cell_header = header_from_user_ptr(cell as *const u8);
         assert_eq!((*cell_header).gc_flags & GC_FLAG_ARENA, 0);

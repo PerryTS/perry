@@ -759,6 +759,7 @@ pub(super) fn lower_builtin_new<'a>(
         }
         // node:sqlite DatabaseSync — keep full NaN-boxed values for path and
         // options so the runtime can preserve Node-shaped validation errors.
+        // The result is an ordinary object (#11919).
         "DatabaseSync" => {
             // #6986: `path_value` was held in a bare SSA register across
             // `options_value`'s lowering (an arbitrary user expression).
@@ -774,12 +775,11 @@ pub(super) fn lower_builtin_new<'a>(
                 None => undef(),
             };
             let blk = ctx.block();
-            let handle = blk.call(
-                I64,
+            Ok(Some(blk.call(
+                DOUBLE,
                 "js_node_sqlite_database_sync_new",
                 &[(DOUBLE, &path_value), (DOUBLE, &options_value)],
-            );
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+            )))
         }
         "StatementSync" => {
             // #6986: `arg0` was held in a bare SSA register across `arg1`'s
@@ -796,12 +796,11 @@ pub(super) fn lower_builtin_new<'a>(
                 None => undef(),
             };
             let blk = ctx.block();
-            let handle = blk.call(
-                I64,
+            Ok(Some(blk.call(
+                DOUBLE,
                 "js_node_sqlite_statement_sync_new",
                 &[(DOUBLE, &arg0), (DOUBLE, &arg1)],
-            );
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+            )))
         }
         "Session" => {
             // #6986: `arg0` was held in a bare SSA register across `arg1`'s
@@ -818,12 +817,11 @@ pub(super) fn lower_builtin_new<'a>(
                 None => undef(),
             };
             let blk = ctx.block();
-            let handle = blk.call(
-                I64,
+            Ok(Some(blk.call(
+                DOUBLE,
                 "js_node_sqlite_session_new",
                 &[(DOUBLE, &arg0), (DOUBLE, &arg1)],
-            );
-            Ok(Some(nanbox_pointer_inline(blk, &handle)))
+            )))
         }
         // async_hooks.AsyncLocalStorage — `new AsyncLocalStorage()` produces a
         // real handle so `.run(store, cb)` / `.getStore()` / `.enterWith(store)`

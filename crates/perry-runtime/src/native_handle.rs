@@ -1,7 +1,7 @@
 //! GC-managed opaque native handles for external native-library bindings.
 //!
 //! A native handle is a Perry heap value whose payload contains only native
-//! metadata and a raw resource pointer, plus an optional traced owner slot for
+//! metadata and a raw resource pointer, plus optional traced owner and callbacks slots for
 //! callback payloads. The resource pointer is not a Perry heap edge and
 //! finalizers must be basic native cleanup callbacks only.
 
@@ -68,21 +68,24 @@ pub struct NativeHandleHeader {
     pub external_bytes: u64,
 }
 
-const LEGACY_CELL_SIZE: usize = if cfg!(target_pointer_width = "64") {
+const CELL_SIZE: usize = if cfg!(target_pointer_width = "64") {
     136
 } else if std::mem::align_of::<u64>() == 8 {
     128
 } else {
     124
 };
-const _: () = assert!(std::mem::size_of::<NativeHandleHeader>() == LEGACY_CELL_SIZE);
+const _: () = assert!(std::mem::size_of::<NativeHandleHeader>() == CELL_SIZE);
 
+#[inline]
 pub(crate) fn current_thread_id() -> u64 {
     // Cached per thread: a Rust-payload method checks it on every call, and
     // hashing `std::thread::current().id()` clones an `Arc` and runs SipHash.
     std::thread_local! {
         static CURRENT_THREAD_ID: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
     }
+    #[cold]
+    #[inline(never)]
     fn compute() -> u64 {
         let mut hasher = DefaultHasher::new();
         std::thread::current().id().hash(&mut hasher);
@@ -217,6 +220,7 @@ unsafe fn native_handle_new(
     finalizer: *mut c_void,
     debug_name_ptr: *const u8,
     debug_name_len: i64,
+    callbacks: bool,
 ) -> f64 {
     let ptr_value = resource_ptr as *mut c_void;
     let stored_ownership = if ptr_value.is_null() {
@@ -225,7 +229,11 @@ unsafe fn native_handle_new(
         ownership
     };
     let handle = crate::gc::gc_malloc(
-        std::mem::size_of::<NativeHandleHeader>(),
+        if callbacks {
+            std::mem::size_of::<crate::native_payload::NativeCallbackCell>()
+        } else {
+            std::mem::size_of::<NativeHandleHeader>()
+        },
         crate::gc::GC_TYPE_NATIVE_HANDLE,
     ) as *mut NativeHandleHeader;
     (*handle).magic = NATIVE_HANDLE_MAGIC;
@@ -254,6 +262,11 @@ unsafe fn native_handle_new(
     ) as _;
     (*handle).busy = 0;
     (*handle).flags = 0;
+    if callbacks {
+        (*handle).flags |= crate::native_payload::CALLBACK_STORAGE;
+        (*(handle as *mut crate::native_payload::NativeCallbackCell)).callbacks = 0;
+        (*(handle as *mut crate::native_payload::NativeCallbackCell)).catch = std::ptr::null_mut();
+    }
     (*handle)._pad1 = Default::default();
     (*handle).external_bytes = 0;
     f64::from_bits(crate::value::JSValue::pointer(handle as *const u8).bits())
@@ -377,6 +390,7 @@ pub(crate) unsafe fn native_handle_new_rust_payload(
     type_id: u64,
     vtable: &'static crate::native_payload::PayloadVTable,
     debug_name: &str,
+    callbacks: bool,
 ) -> *mut NativeHandleHeader {
     runtime_main_thread_id();
     let word = vtable as *const crate::native_payload::PayloadVTable as *mut c_void;
@@ -389,6 +403,7 @@ pub(crate) unsafe fn native_handle_new_rust_payload(
         word,
         debug_name.as_ptr(),
         debug_name.len() as i64,
+        callbacks,
     );
     let cell = crate::value::JSValue::from_bits(value.to_bits()).as_pointer::<NativeHandleHeader>()
         as *mut NativeHandleHeader;
@@ -558,6 +573,7 @@ pub extern "C" fn js_native_handle_new_owned(
             finalizer,
             debug_name_ptr,
             debug_name_len,
+            false,
         )
     }
 }
@@ -583,6 +599,7 @@ pub extern "C" fn js_native_handle_new_borrowed(
             ptr::null_mut(),
             debug_name_ptr,
             debug_name_len,
+            false,
         )
     }
 }
@@ -916,7 +933,8 @@ mod tests {
             assert_eq!((*gc).obj_type, crate::gc::GC_TYPE_NATIVE_HANDLE);
             assert!(!crate::gc::gc_type_is_pointer_free((*gc).obj_type));
             assert_eq!((*handle).owner, 0);
-            assert_eq!(std::mem::size_of::<NativeHandleHeader>(), LEGACY_CELL_SIZE);
+            assert_eq!((*handle).flags & crate::native_payload::CALLBACK_STORAGE, 0);
+            assert_eq!(std::mem::size_of::<NativeHandleHeader>(), CELL_SIZE);
             assert!(!crate::gc::gc_type_is_movable((*gc).obj_type));
         }
     }

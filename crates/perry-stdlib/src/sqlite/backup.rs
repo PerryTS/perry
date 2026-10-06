@@ -1,10 +1,8 @@
 use super::*;
-use crate::common::{get_handle, Handle};
 use perry_runtime::{
-    buffer::is_registered_buffer,
-    closure::{js_closure_call1, ClosureHeader},
-    js_get_string_pointer_unified, js_nanbox_pointer, js_object_alloc, js_object_set_field_by_name,
-    js_string_from_bytes, JSValue, ObjectHeader, StringHeader,
+    buffer::is_registered_buffer, js_get_string_pointer_unified, js_nanbox_pointer,
+    js_object_alloc, js_object_set_field_by_name, js_string_from_bytes, JSValue, ObjectHeader,
+    StringHeader,
 };
 use rusqlite::{ffi, Connection, OpenFlags};
 use std::ffi::{CStr, CString};
@@ -13,7 +11,7 @@ pub(crate) struct NodeSqliteBackupOptions {
     source: String,
     target: String,
     rate: i32,
-    progress: Option<*const ClosureHeader>,
+    pub(crate) progress: Option<f64>,
 }
 
 impl Default for NodeSqliteBackupOptions {
@@ -28,9 +26,9 @@ impl Default for NodeSqliteBackupOptions {
 }
 
 pub(crate) struct NodeSqliteBackupError {
-    message: String,
-    errcode: Option<i32>,
-    errstr: Option<String>,
+    pub(crate) message: String,
+    pub(crate) errcode: Option<i32>,
+    pub(crate) errstr: Option<String>,
 }
 
 pub(crate) fn sqlite_errstr(code: i32) -> String {
@@ -287,52 +285,38 @@ pub(crate) unsafe fn parse_node_sqlite_backup_options(
     options.rate = int32_option(options_value, "rate", options.rate);
     options.source = string_option(options_value, "source", Some("main")).unwrap();
     options.target = string_option(options_value, "target", Some("main")).unwrap();
-    options.progress = function_option(options_value, "progress").and_then(closure_ptr_from_value);
+    options.progress = function_option(options_value, "progress");
     options
 }
 
-pub(crate) unsafe fn database_handle_from_backup_source(value: f64) -> Handle {
-    let js = value_from_f64(value);
-    if !js.is_pointer() {
-        throw_type("The \"sourceDb\" argument must be an object.");
-    }
-    let handle = raw_addr_from_value(value) as Handle;
-    if get_handle::<NodeSqliteDbHandle>(handle).is_none() {
-        throw_type("The \"sourceDb\" argument must be an instance of DatabaseSync.");
-    }
-    handle
-}
-
-pub(crate) unsafe fn call_backup_progress(
-    progress: *const ClosureHeader,
-    total_pages: i32,
-    remaining_pages: i32,
-) {
-    let info = js_object_alloc(0, 2);
+/// The `{ totalPages, remainingPages }` argument of a backup progress call.
+pub(crate) unsafe fn backup_progress_info(total_pages: i32, remaining_pages: i32) -> f64 {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let info = scope.root_raw_mut_ptr(js_object_alloc(0, 2));
     let total_key = js_string_from_bytes(b"totalPages".as_ptr(), "totalPages".len() as u32);
-    let remaining_key =
-        js_string_from_bytes(b"remainingPages".as_ptr(), "remainingPages".len() as u32);
     js_object_set_field_by_name(
-        info,
+        info.get_raw_mut_ptr::<ObjectHeader>(),
         total_key,
         f64::from_bits(JSValue::number(total_pages as f64).bits()),
     );
+    let remaining_key =
+        js_string_from_bytes(b"remainingPages".as_ptr(), "remainingPages".len() as u32);
     js_object_set_field_by_name(
-        info,
+        info.get_raw_mut_ptr::<ObjectHeader>(),
         remaining_key,
         f64::from_bits(JSValue::number(remaining_pages as f64).bits()),
     );
-    js_closure_call1(
-        progress,
-        perry_runtime::closure::plain_call_receiver(),
-        f64::from_bits(JSValue::object_ptr(info as *mut u8).bits()),
-    );
+    f64::from_bits(JSValue::object_ptr(info.get_raw_mut_ptr::<ObjectHeader>() as *mut u8).bits())
 }
 
+/// Copy `source` into the database at `path`. `progress(total, remaining)`
+/// runs between steps; returning `false` stops the copy (its exception is
+/// pending on the source database).
 pub(crate) unsafe fn perform_node_sqlite_backup(
-    source_conn: &Connection,
+    source: *mut ffi::sqlite3,
     path: &str,
     options: &NodeSqliteBackupOptions,
+    mut progress: impl FnMut(i32, i32) -> bool,
 ) -> Result<i32, NodeSqliteBackupError> {
     let destination = Connection::open_with_flags(
         resolve_sqlite_path(path),
@@ -357,7 +341,7 @@ pub(crate) unsafe fn perform_node_sqlite_backup(
     let backup = ffi::sqlite3_backup_init(
         destination.handle(),
         target_name.as_ptr(),
-        source_conn.handle(),
+        source,
         source_name.as_ptr(),
     );
     if backup.is_null() {
@@ -373,10 +357,11 @@ pub(crate) unsafe fn perform_node_sqlite_backup(
         total_pages = ffi::sqlite3_backup_pagecount(backup);
         let remaining_pages = ffi::sqlite3_backup_remaining(backup);
 
-        if remaining_pages != 0 {
-            if let Some(progress) = options.progress {
-                call_backup_progress(progress, total_pages, remaining_pages);
-            }
+        if remaining_pages != 0
+            && options.progress.is_some()
+            && !progress(total_pages, remaining_pages)
+        {
+            break;
         }
 
         if rc == ffi::SQLITE_DONE {

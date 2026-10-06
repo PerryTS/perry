@@ -100,6 +100,10 @@ pub extern "C" fn js_set_native_events_dispatch(func: JsNativeQuerystringDispatc
 
 /// Set the node:sqlite module dispatcher. Registered by perry-stdlib at
 /// startup so captured and dynamic-imported sqlite exports reach stdlib.
+/// `construct` argument of the sqlite dispatch hook: materialize the
+/// export's native-payload prototype (no arguments, no instance).
+pub const NATIVE_SQLITE_DISPATCH_PROTOTYPE: i32 = 2;
+
 #[no_mangle]
 pub extern "C" fn js_set_native_sqlite_dispatch(func: JsNativeSqliteDispatchFn) {
     JS_NATIVE_SQLITE_DISPATCH.store(func as *mut (), Ordering::SeqCst);

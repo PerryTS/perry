@@ -252,8 +252,6 @@ pub(crate) fn register_native_from_new_and_calls(
                                         Some("PoolConnection")
                                     }
                                     ("better-sqlite3", "prepare") => Some("Statement"),
-                                    ("sqlite", "prepare") => Some("StatementSync"),
-                                    ("sqlite", "createSession") => Some("Session"),
                                     _ => None,
                                 };
                                 if let Some(class_name) = returns_handle {
@@ -336,7 +334,9 @@ fn native_instance_for_new_ident(
     let module_name = if let Some((m, method)) = ctx.lookup_native_module(local_name) {
         match (m, method) {
             ("url", Some("URL" | "URLSearchParams"))
-            | ("util", Some("TextEncoder" | "TextDecoder")) => None,
+            | ("util", Some("TextEncoder" | "TextDecoder"))
+            // node:sqlite objects are ordinary objects with prototypes (#11919).
+            | ("sqlite", Some("DatabaseSync" | "StatementSync" | "Session")) => None,
             _ => Some(m.to_string()),
         }
     } else if user_class_defined {
@@ -393,7 +393,6 @@ fn native_instance_for_new_member(
             | ("net" | "node:net", "BlockList" | "SocketAddress")
             | ("dns" | "dns/promises", "Resolver")
             | ("vm", "SourceTextModule" | "SyntheticModule")
-            | ("sqlite", "DatabaseSync")
     ) || (module_name == "stream"
         && STREAM_CTOR_NAMES.contains(&class_name));
     if !is_known_native_class {

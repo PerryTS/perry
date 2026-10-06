@@ -298,32 +298,10 @@ unsafe fn prop_http_agent(handle: i64, property_name: &str) -> Option<f64> {
 
 #[cfg(feature = "database-sqlite")]
 unsafe fn prop_sqlite(handle: i64, property_name: &str) -> Option<f64> {
-    {
-        if let Some(v) =
-            crate::sqlite::dispatch_node_sqlite_database_property(handle, property_name)
-        {
-            return Some(v);
-        }
-        if let Some(v) =
-            crate::sqlite::dispatch_node_sqlite_tag_store_property(handle, property_name)
-        {
-            return Some(v);
-        }
-        if let Some(v) =
-            crate::sqlite::dispatch_node_sqlite_statement_property(handle, property_name)
-        {
-            return Some(v);
-        }
-        if let Some(v) = crate::sqlite::dispatch_node_sqlite_limits_property(handle, property_name)
-        {
-            return Some(v);
-        }
-        if let Some(v) = crate::sqlite::dispatch_node_sqlite_session_property(handle, property_name)
-        {
-            return Some(v);
-        }
+    if let Some(v) = crate::sqlite::dispatch_bun_sqlite_database_property(handle, property_name) {
+        return Some(v);
     }
-    None
+    crate::sqlite::dispatch_bun_sqlite_statement_property(handle, property_name)
 }
 
 #[cfg(feature = "external-http-server-pump")]

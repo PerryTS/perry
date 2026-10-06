@@ -1,8 +1,6 @@
 use super::*;
-use crate::common::{get_handle, Handle};
 use perry_runtime::{
     buffer::{is_any_array_buffer, is_data_view, is_registered_buffer},
-    closure::js_closure_call_array,
     js_array_alloc, js_array_get, js_array_length, js_array_push, js_get_string_pointer_unified,
     js_object_alloc_null_proto, js_object_get_field_by_name, js_object_set_field,
     js_object_set_keys, js_string_from_bytes, ArrayHeader, BigIntHeader, JSValue, ObjectHeader,
@@ -12,7 +10,6 @@ use rusqlite::{ffi, types::Value as SqliteValue, Connection};
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_void};
-use std::sync::atomic::Ordering;
 
 /// Convert SQLite value to JSValue
 pub(crate) unsafe fn sqlite_value_to_jsvalue(value: &SqliteValue) -> JSValue {
@@ -81,9 +78,20 @@ pub(crate) unsafe fn sqlite_c_string_value(ptr: *const c_char) -> JSValue {
 }
 
 pub(crate) unsafe fn sqlite_error_message(conn: &Connection) -> String {
-    CStr::from_ptr(ffi::sqlite3_errmsg(conn.handle()))
+    sqlite_errmsg_raw(conn.handle())
+}
+
+pub(crate) unsafe fn sqlite_errmsg_raw(db: *mut ffi::sqlite3) -> String {
+    CStr::from_ptr(ffi::sqlite3_errmsg(db))
         .to_string_lossy()
         .into_owned()
+}
+
+/// Throw `ERR_SQLITE_ERROR` for a raw connection's current error state.
+pub(crate) unsafe fn throw_sqlite_error_from_db(db: *mut ffi::sqlite3) -> ! {
+    let errcode = ffi::sqlite3_extended_errcode(db);
+    let message = sqlite_errmsg_raw(db);
+    throw_sqlite_error_ext(&message, errcode)
 }
 
 pub(crate) unsafe fn prepare_node_raw_statement(conn: &Connection, sql: &str) -> RawNodeStatement {
@@ -103,20 +111,15 @@ pub(crate) unsafe fn prepare_node_raw_statement(conn: &Connection, sql: &str) ->
     RawNodeStatement { ptr: raw }
 }
 
-pub(crate) unsafe fn update_node_expanded_sql(
-    stmt: &NodeSqliteStmtHandle,
-    raw_stmt: *mut ffi::sqlite3_stmt,
-) {
+/// `sqlite3_expanded_sql` as an owned string (empty when unavailable).
+pub(crate) unsafe fn expanded_sql_of(raw_stmt: *mut ffi::sqlite3_stmt) -> String {
     let expanded = ffi::sqlite3_expanded_sql(raw_stmt);
-    let text = if expanded.is_null() {
+    if expanded.is_null() {
         String::new()
     } else {
         let text = CStr::from_ptr(expanded).to_string_lossy().into_owned();
         ffi::sqlite3_free(expanded.cast::<c_void>());
         text
-    };
-    if let Ok(mut cached) = stmt.expanded_sql.lock() {
-        *cached = text;
     }
 }
 
@@ -134,26 +137,51 @@ pub(crate) fn bigint_to_i64(ptr: *const BigIntHeader) -> Option<i64> {
     }
 }
 
-pub(crate) unsafe fn node_sqlite_bind_error(conn: &Connection, rc: c_int) {
-    if rc != ffi::SQLITE_OK {
-        throw_sqlite_error_from_conn(conn);
+/// Why a parameter could not be bound, as plain data: the caller finalizes
+/// its statement before throwing ([`BindError::throw`]).
+pub(crate) enum BindError {
+    Type(String),
+    ArgValue(String),
+    InvalidState(String),
+    Sqlite { message: String, code: i32 },
+}
+
+impl BindError {
+    pub(crate) unsafe fn throw(self) -> ! {
+        match self {
+            BindError::Type(message) => throw_type(&message),
+            BindError::ArgValue(message) => throw_arg_value(&message),
+            BindError::InvalidState(message) => throw_invalid_state(&message),
+            BindError::Sqlite { message, code } => throw_sqlite_error_ext(&message, code),
+        }
+    }
+}
+
+unsafe fn bind_rc(db: *mut ffi::sqlite3, rc: c_int) -> Result<(), BindError> {
+    if rc == ffi::SQLITE_OK {
+        Ok(())
+    } else {
+        Err(BindError::Sqlite {
+            message: sqlite_errmsg_raw(db),
+            code: ffi::sqlite3_extended_errcode(db),
+        })
     }
 }
 
 pub(crate) unsafe fn bind_node_sqlite_value(
-    conn: &Connection,
+    db: *mut ffi::sqlite3,
     raw_stmt: *mut ffi::sqlite3_stmt,
     index: c_int,
     value: f64,
-) {
+) -> Result<(), BindError> {
     let js = value_from_f64(value);
     let rc = if js.is_null() {
         ffi::sqlite3_bind_null(raw_stmt, index)
     } else if js.is_undefined() || js.is_bool() {
-        throw_type(&format!(
+        return Err(BindError::Type(format!(
             "Provided value cannot be bound to SQLite parameter {}.",
             index
-        ));
+        )));
     } else if js.is_any_string() {
         let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
         if ptr.is_null() {
@@ -173,7 +201,9 @@ pub(crate) unsafe fn bind_node_sqlite_value(
         ffi::sqlite3_bind_double(raw_stmt, index, js.as_int32() as f64)
     } else if js.is_bigint() {
         let Some(value) = bigint_to_i64(js.as_bigint_ptr()) else {
-            throw_arg_value("BigInt value is too large to bind.");
+            return Err(BindError::ArgValue(
+                "BigInt value is too large to bind.".to_string(),
+            ));
         };
         ffi::sqlite3_bind_int64(raw_stmt, index, value)
     } else if js.is_number() {
@@ -198,13 +228,13 @@ pub(crate) unsafe fn bind_node_sqlite_value(
         if let Some(status) = status {
             status
         } else {
-            throw_type(&format!(
+            return Err(BindError::Type(format!(
                 "Provided value cannot be bound to SQLite parameter {}.",
                 index
-            ));
+            )));
         }
     };
-    node_sqlite_bind_error(conn, rc);
+    bind_rc(db, rc)
 }
 
 pub(crate) unsafe fn node_args_from_array(args_arr: *const ArrayHeader) -> Vec<f64> {
@@ -251,11 +281,11 @@ pub(crate) fn has_sqlite_parameter_prefix(name: &str) -> bool {
 }
 
 pub(crate) unsafe fn bind_node_sqlite_params(
-    stmt: &NodeSqliteStmtHandle,
-    conn: &Connection,
+    flags: StmtFlags,
+    db: *mut ffi::sqlite3,
     raw_stmt: *mut ffi::sqlite3_stmt,
     args_arr: *const ArrayHeader,
-) {
+) -> Result<(), BindError> {
     let args = node_args_from_array(args_arr);
     let mut positional_start = 0usize;
     let mut named_params: Option<f64> = None;
@@ -285,8 +315,8 @@ pub(crate) unsafe fn bind_node_sqlite_params(
     }
 
     if let Some(named_value) = named_params {
-        let allow_bare = stmt.allow_bare_named_parameters.load(Ordering::Relaxed);
-        let allow_unknown = stmt.allow_unknown_named_parameters.load(Ordering::Relaxed);
+        let allow_bare = flags.allow_bare_named_parameters;
+        let allow_unknown = flags.allow_unknown_named_parameters;
         if !closure_ptr_from_value(named_value).is_some() {
             let keys = perry_runtime::object::js_object_keys_value(named_value);
             let key_count = js_array_length(keys);
@@ -299,10 +329,10 @@ pub(crate) unsafe fn bind_node_sqlite_params(
                 if allow_bare {
                     if let Some(fulls) = bare_names.get(&bare) {
                         if fulls.len() > 1 {
-                            throw_invalid_state(&format!(
+                            return Err(BindError::InvalidState(format!(
                                 "Cannot create bare named parameter '{}' because of conflicting names '{}' and '{}'.",
                                 bare, fulls[0], fulls[1]
-                            ));
+                            )));
                         }
                     }
                 }
@@ -320,11 +350,14 @@ pub(crate) unsafe fn bind_node_sqlite_params(
                     if allow_unknown {
                         continue;
                     }
-                    throw_invalid_state(&format!("Unknown named parameter '{}'", key));
+                    return Err(BindError::InvalidState(format!(
+                        "Unknown named parameter '{}'",
+                        key
+                    )));
                 };
                 let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
                 let value = js_object_get_field_by_name(obj, key_ptr);
-                bind_node_sqlite_value(conn, raw_stmt, index, f64_from_jsvalue(value));
+                bind_node_sqlite_value(db, raw_stmt, index, f64_from_jsvalue(value))?;
             }
         }
     }
@@ -344,24 +377,29 @@ pub(crate) unsafe fn bind_node_sqlite_params(
         // Node raises ERR_SQLITE_ERROR with errcode 25 (SQLITE_RANGE) when
         // more anonymous values are supplied than the statement has
         // anonymous parameters (#6561).
-        throw_sqlite_error_ext("column index out of range", ffi::SQLITE_RANGE);
+        return Err(BindError::Sqlite {
+            message: "column index out of range".to_string(),
+            code: ffi::SQLITE_RANGE,
+        });
     }
     for (offset, index) in positional_indices.into_iter().enumerate() {
         if let Some(value) = args.get(positional_start + offset).copied() {
-            bind_node_sqlite_value(conn, raw_stmt, index, value);
+            bind_node_sqlite_value(db, raw_stmt, index, value)?;
         }
     }
+    Ok(())
 }
 
 pub(crate) unsafe fn bind_node_sqlite_positional_params(
-    conn: &Connection,
+    db: *mut ffi::sqlite3,
     raw_stmt: *mut ffi::sqlite3_stmt,
     values: &[f64],
-) {
+) -> Result<(), BindError> {
     let param_count = ffi::sqlite3_bind_parameter_count(raw_stmt).max(0) as usize;
     for (offset, value) in values.iter().take(param_count).enumerate() {
-        bind_node_sqlite_value(conn, raw_stmt, (offset + 1) as c_int, *value);
+        bind_node_sqlite_value(db, raw_stmt, (offset + 1) as c_int, *value)?;
     }
+    Ok(())
 }
 
 pub(crate) unsafe fn node_sqlite_integer_value(value: i64, read_bigints: bool) -> JSValue {
@@ -479,82 +517,6 @@ pub(crate) unsafe fn node_sqlite_closure_arity(callback: f64) -> c_int {
     perry_runtime::closure::closure_arity(closure).unwrap_or(0) as c_int
 }
 
-pub(crate) unsafe fn node_sqlite_call_closure(callback: f64, args: &[f64]) -> f64 {
-    let Some(closure) = closure_ptr_from_value(callback) else {
-        throw_plain_type("value is not a function");
-    };
-    js_closure_call_array(
-        closure as i64,
-        perry_runtime::closure::plain_call_receiver(),
-        if args.is_empty() {
-            std::ptr::null()
-        } else {
-            args.as_ptr()
-        },
-        args.len() as i64,
-    )
-}
-
-pub(crate) unsafe fn node_sqlite_value_arg(
-    value: *mut ffi::sqlite3_value,
-    use_bigints: bool,
-) -> JSValue {
-    if value.is_null() {
-        return JSValue::null();
-    }
-    match ffi::sqlite3_value_type(value) {
-        ffi::SQLITE_NULL => JSValue::null(),
-        ffi::SQLITE_INTEGER => {
-            node_sqlite_integer_value(ffi::sqlite3_value_int64(value), use_bigints)
-        }
-        ffi::SQLITE_FLOAT => JSValue::number(ffi::sqlite3_value_double(value)),
-        ffi::SQLITE_TEXT => {
-            let ptr = ffi::sqlite3_value_text(value);
-            if ptr.is_null() {
-                return JSValue::null();
-            }
-            let len = ffi::sqlite3_value_bytes(value) as usize;
-            let bytes = std::slice::from_raw_parts(ptr, len);
-            JSValue::string_ptr(js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32))
-        }
-        ffi::SQLITE_BLOB => {
-            let len = ffi::sqlite3_value_bytes(value) as usize;
-            let ptr = ffi::sqlite3_value_blob(value);
-            let input = if len > 0 && !ptr.is_null() {
-                std::slice::from_raw_parts(ptr as *const u8, len)
-            } else {
-                &[]
-            };
-            JSValue::from_bits(
-                perry_runtime::buffer::bytes::from_slice(
-                    perry_runtime::buffer::bytes::Brand::Uint8Array,
-                    input,
-                )
-                .to_bits(),
-            )
-        }
-        _ => JSValue::null(),
-    }
-}
-
-pub(crate) unsafe fn node_sqlite_callback_args(
-    argc: c_int,
-    argv: *mut *mut ffi::sqlite3_value,
-    use_bigints: bool,
-) -> Vec<f64> {
-    let argc = argc.max(0) as usize;
-    let mut args = Vec::with_capacity(argc);
-    for index in 0..argc {
-        let value = if argv.is_null() {
-            std::ptr::null_mut()
-        } else {
-            *argv.add(index)
-        };
-        args.push(f64_from_jsvalue(node_sqlite_value_arg(value, use_bigints)));
-    }
-    args
-}
-
 pub(crate) unsafe fn node_sqlite_blob_like_bytes(value: f64) -> Option<Vec<u8>> {
     let raw = raw_addr_from_value(value);
     if raw < 0x1000 {
@@ -614,170 +576,6 @@ pub(crate) unsafe fn node_sqlite_result_value(ctx: *mut ffi::sqlite3_context, va
     }
 }
 
-pub(crate) unsafe extern "C" fn node_sqlite_scalar_callback(
-    ctx: *mut ffi::sqlite3_context,
-    argc: c_int,
-    argv: *mut *mut ffi::sqlite3_value,
-) {
-    let info = ffi::sqlite3_user_data(ctx) as *mut NodeSqliteCustomFunction;
-    if info.is_null() {
-        sqlite_result_error(ctx, "SQLite function is not available");
-        return;
-    }
-    let args = node_sqlite_callback_args(argc, argv, (*info).use_bigint_arguments);
-    let result = node_sqlite_call_closure((*info).callback, &args);
-    node_sqlite_result_value(ctx, result);
-}
-
-pub(crate) unsafe extern "C" fn node_sqlite_scalar_destroy(data: *mut c_void) {
-    let info = data as *mut NodeSqliteCustomFunction;
-    unregister_node_sqlite_custom_function(info);
-    if !info.is_null() {
-        drop(Box::from_raw(info));
-    }
-}
-
-pub(crate) unsafe fn node_sqlite_aggregate_start(aggregate: &NodeSqliteCustomAggregate) -> f64 {
-    if closure_ptr_from_value(aggregate.start).is_some() {
-        node_sqlite_call_closure(aggregate.start, &[])
-    } else {
-        aggregate.start
-    }
-}
-
-pub(crate) unsafe fn node_sqlite_aggregate_state(
-    ctx: *mut ffi::sqlite3_context,
-    aggregate: &NodeSqliteCustomAggregate,
-    create: bool,
-) -> Option<*mut NodeSqliteAggregateState> {
-    let slot = ffi::sqlite3_aggregate_context(
-        ctx,
-        if create {
-            std::mem::size_of::<*mut NodeSqliteAggregateState>() as c_int
-        } else {
-            0
-        },
-    ) as *mut *mut NodeSqliteAggregateState;
-    if slot.is_null() {
-        if create {
-            ffi::sqlite3_result_error_nomem(ctx);
-        }
-        return None;
-    }
-    if (*slot).is_null() && create {
-        let initial = node_sqlite_aggregate_start(aggregate);
-        perry_runtime::gc::js_write_barrier_root_nanbox(initial.to_bits());
-        let state = Box::into_raw(Box::new(NodeSqliteAggregateState { state: initial }));
-        register_node_sqlite_aggregate_state(state);
-        *slot = state;
-    }
-    if (*slot).is_null() {
-        None
-    } else {
-        Some(*slot)
-    }
-}
-
-pub(crate) unsafe fn node_sqlite_aggregate_apply(
-    ctx: *mut ffi::sqlite3_context,
-    argc: c_int,
-    argv: *mut *mut ffi::sqlite3_value,
-    callback: f64,
-) {
-    let aggregate = ffi::sqlite3_user_data(ctx) as *mut NodeSqliteCustomAggregate;
-    if aggregate.is_null() {
-        sqlite_result_error(ctx, "SQLite aggregate is not available");
-        return;
-    }
-    let Some(state) = node_sqlite_aggregate_state(ctx, &*aggregate, true) else {
-        return;
-    };
-    let mut args = Vec::with_capacity(argc.max(0) as usize + 1);
-    args.push((*state).state);
-    args.extend(node_sqlite_callback_args(
-        argc,
-        argv,
-        (*aggregate).use_bigint_arguments,
-    ));
-    let next = node_sqlite_call_closure(callback, &args);
-    perry_runtime::gc::js_write_barrier_root_nanbox(next.to_bits());
-    (*state).state = next;
-}
-
-pub(crate) unsafe extern "C" fn node_sqlite_aggregate_step(
-    ctx: *mut ffi::sqlite3_context,
-    argc: c_int,
-    argv: *mut *mut ffi::sqlite3_value,
-) {
-    let aggregate = ffi::sqlite3_user_data(ctx) as *mut NodeSqliteCustomAggregate;
-    if aggregate.is_null() {
-        sqlite_result_error(ctx, "SQLite aggregate is not available");
-        return;
-    }
-    node_sqlite_aggregate_apply(ctx, argc, argv, (*aggregate).step);
-}
-
-pub(crate) unsafe extern "C" fn node_sqlite_aggregate_inverse(
-    ctx: *mut ffi::sqlite3_context,
-    argc: c_int,
-    argv: *mut *mut ffi::sqlite3_value,
-) {
-    let aggregate = ffi::sqlite3_user_data(ctx) as *mut NodeSqliteCustomAggregate;
-    if aggregate.is_null() {
-        sqlite_result_error(ctx, "SQLite aggregate is not available");
-        return;
-    }
-    let Some(inverse) = (*aggregate).inverse else {
-        sqlite_result_error(ctx, "SQLite aggregate inverse is not available");
-        return;
-    };
-    node_sqlite_aggregate_apply(ctx, argc, argv, inverse);
-}
-
-pub(crate) unsafe fn node_sqlite_aggregate_emit(ctx: *mut ffi::sqlite3_context, finalize: bool) {
-    let aggregate = ffi::sqlite3_user_data(ctx) as *mut NodeSqliteCustomAggregate;
-    if aggregate.is_null() {
-        sqlite_result_error(ctx, "SQLite aggregate is not available");
-        return;
-    }
-    let Some(state) = node_sqlite_aggregate_state(ctx, &*aggregate, true) else {
-        return;
-    };
-    let value = if finalize && (*aggregate).inverse.is_some() {
-        (*state).state
-    } else if let Some(result) = (*aggregate).result {
-        node_sqlite_call_closure(result, &[(*state).state])
-    } else {
-        (*state).state
-    };
-    node_sqlite_result_value(ctx, value);
-    if finalize {
-        let slot = ffi::sqlite3_aggregate_context(ctx, 0) as *mut *mut NodeSqliteAggregateState;
-        if !slot.is_null() && !(*slot).is_null() {
-            let state_ptr = *slot;
-            unregister_node_sqlite_aggregate_state(state_ptr);
-            drop(Box::from_raw(state_ptr));
-            *slot = std::ptr::null_mut();
-        }
-    }
-}
-
-pub(crate) unsafe extern "C" fn node_sqlite_aggregate_final(ctx: *mut ffi::sqlite3_context) {
-    node_sqlite_aggregate_emit(ctx, true);
-}
-
-pub(crate) unsafe extern "C" fn node_sqlite_aggregate_value(ctx: *mut ffi::sqlite3_context) {
-    node_sqlite_aggregate_emit(ctx, false);
-}
-
-pub(crate) unsafe extern "C" fn node_sqlite_aggregate_destroy(data: *mut c_void) {
-    let aggregate = data as *mut NodeSqliteCustomAggregate;
-    unregister_node_sqlite_custom_aggregate(aggregate);
-    if !aggregate.is_null() {
-        drop(Box::from_raw(aggregate));
-    }
-}
-
 pub(crate) unsafe fn set_object_keys_from_names(obj: *mut ObjectHeader, names: &[String]) {
     let mut keys = js_array_alloc(names.len() as u32);
     for name in names {
@@ -800,19 +598,19 @@ pub(crate) unsafe fn make_null_proto_object(
 }
 
 pub(crate) unsafe fn node_sqlite_row_value(
-    stmt: &NodeSqliteStmtHandle,
+    flags: StmtFlags,
     raw_stmt: *mut ffi::sqlite3_stmt,
 ) -> JSValue {
-    node_sqlite_row_value_with_mode(stmt, raw_stmt, stmt.return_arrays.load(Ordering::Relaxed))
+    node_sqlite_row_value_with_mode(flags, raw_stmt, flags.return_arrays)
 }
 
 pub(crate) unsafe fn node_sqlite_row_value_with_mode(
-    stmt: &NodeSqliteStmtHandle,
+    flags: StmtFlags,
     raw_stmt: *mut ffi::sqlite3_stmt,
     return_arrays: bool,
 ) -> JSValue {
     let column_count = ffi::sqlite3_column_count(raw_stmt);
-    let read_bigints = stmt.read_bigints.load(Ordering::Relaxed);
+    let read_bigints = flags.read_bigints;
     if return_arrays {
         let mut arr = js_array_alloc(column_count as u32);
         for index in 0..column_count {
@@ -834,81 +632,6 @@ pub(crate) unsafe fn node_sqlite_row_value_with_mode(
         values.push(node_sqlite_column_value(raw_stmt, index, read_bigints));
     }
     JSValue::object_ptr(make_null_proto_object(&names, &values) as *mut u8)
-}
-
-pub(crate) unsafe fn with_node_sqlite_statement<R, F>(
-    stmt_handle: Handle,
-    params_arr: *const ArrayHeader,
-    action: F,
-) -> R
-where
-    F: FnOnce(&Connection, &NodeSqliteStmtHandle, *mut ffi::sqlite3_stmt) -> R,
-{
-    let stmt = get_handle::<NodeSqliteStmtHandle>(stmt_handle)
-        .unwrap_or_else(|| throw_invalid_state("statement has been finalized"));
-    if stmt.finalized.load(Ordering::Relaxed) {
-        throw_invalid_state("statement has been finalized");
-    }
-    stmt.iteration_epoch.fetch_add(1, Ordering::Relaxed);
-    let db = get_handle::<NodeSqliteDbHandle>(stmt.db_handle)
-        .unwrap_or_else(|| throw_invalid_state("database is not open"));
-    let conn_ptr = {
-        let conn_guard = db
-            .conn
-            .lock()
-            .unwrap_or_else(|_| throw_invalid_state("database is not open"));
-        if let Some(conn) = conn_guard.as_ref() {
-            conn as *const Connection
-        } else {
-            drop(conn_guard);
-            throw_invalid_state("database is not open");
-        }
-    };
-    let conn = &*conn_ptr;
-    let raw = prepare_node_raw_statement(conn, &stmt.sql);
-    let raw_ptr = raw.ptr;
-    bind_node_sqlite_params(stmt, conn, raw_ptr, params_arr);
-    update_node_expanded_sql(stmt, raw_ptr);
-    let result = action(conn, stmt, raw_ptr);
-    drop(raw);
-    result
-}
-
-pub(crate) unsafe fn with_node_sqlite_statement_positional<R, F>(
-    stmt_handle: Handle,
-    values: &[f64],
-    action: F,
-) -> R
-where
-    F: FnOnce(&Connection, &NodeSqliteStmtHandle, *mut ffi::sqlite3_stmt) -> R,
-{
-    let stmt = get_handle::<NodeSqliteStmtHandle>(stmt_handle)
-        .unwrap_or_else(|| throw_invalid_state("statement has been finalized"));
-    if stmt.finalized.load(Ordering::Relaxed) {
-        throw_invalid_state("statement has been finalized");
-    }
-    let db = get_handle::<NodeSqliteDbHandle>(stmt.db_handle)
-        .unwrap_or_else(|| throw_invalid_state("database is not open"));
-    let conn_ptr = {
-        let conn_guard = db
-            .conn
-            .lock()
-            .unwrap_or_else(|_| throw_invalid_state("database is not open"));
-        if let Some(conn) = conn_guard.as_ref() {
-            conn as *const Connection
-        } else {
-            drop(conn_guard);
-            throw_invalid_state("database is not open");
-        }
-    };
-    let conn = &*conn_ptr;
-    let raw = prepare_node_raw_statement(conn, &stmt.sql);
-    let raw_ptr = raw.ptr;
-    bind_node_sqlite_positional_params(conn, raw_ptr, values);
-    update_node_expanded_sql(stmt, raw_ptr);
-    let result = action(conn, stmt, raw_ptr);
-    drop(raw);
-    result
 }
 
 /// Build packed keys (null-separated) and a shape_id from column names.

@@ -48,3 +48,10 @@ rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes"]
 # rather than silent — but it is still a mistake).
 [target.'cfg(target_arch = "x86_64")']
 rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes", "-C", "force-frame-pointers=yes"]
+
+# The bundled SQLite is built as node's is in this one respect: node compiles
+# it with SQLITE_DEFAULT_MEMSTATUS=0 (`PRAGMA compile_options` on node 26),
+# so every sqlite3_malloc skips the global memory-statistics mutex and
+# counters. Nothing in perry reads SQLite's memory statistics.
+[env]
+LIBSQLITE3_FLAGS = "-DSQLITE_DEFAULT_MEMSTATUS=0"

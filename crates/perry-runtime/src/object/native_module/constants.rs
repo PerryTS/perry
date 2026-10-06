@@ -520,8 +520,6 @@ pub(crate) unsafe fn get_native_module_constant(
         },
         "sqlite" => match property {
             "constants" => Some(create_sub_namespace("sqlite.constants")),
-            "Session" => Some(sqlite_session_constructor_value()),
-            "StatementSync" => Some(sqlite_statement_sync_constructor_value()),
             _ => None,
         },
         "sqlite.constants" => sqlite_const(property),
