@@ -8,26 +8,34 @@ The typed-array copy wrapper retains its strict typed-array admission before ent
 
 The shared `copy_value` implementation has a test-only collecting callback and a missing-root sabotage. Its witness checks the precise root mark before sweeping, runs a full collection between destination allocation and source-byte resolution, and compares every copied byte. A missing root turns the witness red before a stale pointer can be dereferenced. No production cache, latch, side table or environment switch was added.
 
-## Remaining layout decisions
+## Decision 88 and layout coordination
 
-The design fixes `[length:u32, capacity-or-offset:u32, data-or-owner:ptr]` at 16 bytes, with inline data immediately at +16. It does not assign storage for an owner's lazily materialized ArrayBuffer identity edge. That edge is needed to delete `BUFFER_AB_ALIAS` while preserving `.buffer` identity and aliasing; a view's +8 word is already its store-owner edge. The native/resizable extension can hold it, but a one-byte inline owner has no extension slot under the stated layout.
+Decision 88 settles the cost and metadata policy: the cell remains 16 bytes, with no owner trailer. A materialized ArrayBuffer identity is an ordinary hidden internal-key property in the owner's shape and property storage. Nested pins retain B1's header protocol, process-shared owners remain permanently pinned, and count overflow uses hidden property storage. None of these fields may move to an address table.
 
-The proposed header state also needs pin storage. ELEM_KIND (4), OWNER (1), PLACEMENT (2), RESIZABLE, DETACHED, LENGTH_TRACKING and SHARED_BACKING require 11 reserved bits. GC survival age uses 3 more, and the current byte pin protocol uses 6 (count plus prior-pin state). Moving pins into owner metadata is necessary. The approved cost is +8 bytes per small owner, so an additional always-present 8-byte owner trailer would need a cost decision.
+The current buffer expando implementation is still `buffer::own_props`' address-keyed map; it is not ordinary shaped property storage and cannot be used as the replacement for `BUFFER_AB_ALIAS`. The attachment needs to be introduced with the cell layout. Lazy native-store attachment on first property write is being worked through, keeping the fixed inline cell at 16 bytes and charging the additional shape storage only to materialized properties.
 
-A concrete option is an 8-byte owner trailer referencing lazily allocated owner metadata (ArrayBuffer edge, pin count/prior-pin state, resize bookkeeping); views remain exactly 16 bytes. It preserves inline bytes at +16 but adds 16 bytes per small owner in total, rather than the approved 8. Native owners can embed the same metadata in their extension. SHARED_BACKING can derive from Shared placement, leaving the layout state in reserved bits 6–15 and preserving GC age and freeze/seal/prevent-extension bits 0–5. Owner tracing must then visit its materialized ArrayBuffer identity edge as well as views tracing their store-owner edge.
+The existing `NativeTypedViewHeader` in `native_arena.rs` duplicates the old TypedArray prefix (kind/element size/storage/flags at +8, owner at +16, cached data at +24). B4 must replace it with the shared byte-cell prefix and owner resolution; preserving that duplicate would fail the one-layout contract. This file is in ump's protected region scope. Prefix coordination has been raised with the coordinator, and no edit to it or to allocator/placement/fetch files has been made. The source layout and all emitted paths will switch together after this cross-owner interface is settled. The concrete interface must keep the common length/capacity-or-offset words and owner/data pointer at +8, stamp element kind and owner/view state in the GC header, and publish disposal in owner header state before releasing native bytes. Native views must resolve the owner at access time instead of using +24 cached data. NativeArena generation and POD-view semantics still belong to that lane; B4 must not silently remove them.
 
-These decisions were raised with the owner. No unified layout or emitted access path is committed pending resolution. Ump's placement/allocator/region files, fetch work, runtime node_stream files, ext-zlib implementation, versions, and external application state are untouched.
+B2c will land separately on origin/main; this lane continues on its existing base and will rebase when that happens. The bundle is no longer a dependency to wait for.
+
+## Ranged copies and retained typed transforms
+
+The next preparation milestone removes `Buffer.copyBytesFrom`'s borrowed slice/raw receiver across destination allocation. The byte API now accepts a clamped range, roots the source first, pins the destination, and resolves the source again in `no_gc` after allocation. Offsets and lengths remain element counts for typed input; copying preserves raw bytes of all twelve kinds.
+
+Typed-array reversal and default sorted copies use a typed byte allocation capability and the same retained range-copy rule. Reversal copies lanes without boxing BigInts and preserves Float64 NaN payloads and signed zero. Shared-source copies retain the existing unordered atomic read at the element width, then write those raw bits into private destination storage; they do not replace shared lane reads with memcpy. Array materialization retains its source, result and one reused candidate root. The numeric comparator-sort path retains its receiver across user callbacks and uses bounds-checked write-back. `with` retains its source and replacement across coercion and allocation, and pins the result while BigInt reads may allocate. `findLast` and `findLastIndex` retain their receiver, callback and candidate, and re-read roots after each predicate call.
+
+The new witnesses force full collection between allocation and byte resolution, compare ranged copies of every typed kind (private and shared stores), and preserve a NaN payload through reversal. A predicate witness performs three full collections while checking that its typed receiver, callback and boxed BigInt candidate were marked by precise roots; a missing receiver root fails before sweeping. No new production cache, latch, name check or side table is introduced.
 
 ## Census and deletion status
 
 | Inventory | Before | This milestone |
 |---|---:|---:|
 | Original design census (production / test rows) | 350 / 230 | Same historical census |
-| Explicitly closed production rows in inherited ledger | 73 | 74 |
-| Source-layout ratchet debt | 284 | 284 |
+| Explicitly closed production rows in inherited ledger | 73 | 82 |
+| Source-layout ratchet debt | 284 | 279 |
 | Symbol payload screens in the three runtime brand probes | 3 | 0 |
 
-The additional closed row is the direct `buffer_alloc` in `typed_array_to_array_buffer`, now routed through the byte API. That accessor module is exempt from the layout ratchet, so this lifetime fix does not reduce the ratchet count. The ledger is a list of conversions, not a claim that all other historical rows are current outstanding sites.
+The first preparation closed `typed_array_to_array_buffer`'s direct allocation. This milestone additionally closes all five historical `copy_bytes.rs` creation/length-write rows and three typed-transform creation rows. Five source-ratchet entries disappear, including the array-materialization write matched by the original broad result-header pattern. The ledger records conversions; it is not a claim that all other historical rows are current outstanding sites.
 
 | Machinery | Deleted in this milestone | Remaining |
 |---|---|---|
@@ -37,15 +45,16 @@ The additional closed row is the direct `buffer_alloc` in `typed_array_to_array_
 
 ## Verification status
 
-Preparation verification completed on qb6, in `/root/codex-lanes/cx-bufb4b`, release profile, CPUs 0–55, at most eight Cargo jobs and single-threaded tests. The starting tree is B2c part-1 `e2f2c84ae1`; refreshed origin/main is `899aecd6f9`. The rebased B2c bundle was absent at the last check and B2c has not appeared on that origin/main. These are preparation checks, not the requested final verification on a rebased main-combined head.
+Preparation verification completed on qb6, in `/root/codex-lanes/cx-bufb4b`, release profile, CPUs 0–55, at most eight Cargo jobs and single-threaded tests. The starting tree is B2c part-1 `e2f2c84ae1`; refreshed origin/main is `e87628eb18`. B2c has not appeared on that origin/main. These are preparation checks, not the requested final verification on a rebased main-combined head. The complete retained-transform milestone passes 5,173 runtime unit tests (zero failures, five ignored), one integration test, and has eight ignored doc tests. Ten focused B4 tests pass, with all fourteen runtime sabotage invocations RED. Mac and Linux SHA-256 hashes agree for all ten changed runtime/test sources.
 
 | Contract / check | Witness / sabotage | Status |
 |---|---|---|
 | Source retained across byte-copy allocation and full GC | Precise root mark, forced full collection, copied-byte comparison; copy_root and copy_kind | PASS / both RED |
 | Owned-native resolution | Numeric-kind resolved-slot contract; native_resolution | PASS / RED |
 | Persistent-symbol prefix and header brand authority | Three symbol factories and buffer/header_brand_tests; symbol_header | PASS / RED |
-| Existing B4 owner checks, detach, view edge, transfer and u32 admission | Inherited buffer_b4 witnesses and child sabotages | Six focused tests PASS; ten runtime sabotage invocations RED |
-| Layout ratchet | Nine child-process source sabotages | PASS / nine RED; 284 sites remain |
+| Retained typed copies and predicates, atomic lane width | Full-collection root marks, raw bits, callback candidate; typed_copy_root, find_receiver_root, shared_lane_copy | PASS / all RED |
+| Existing B4 owner checks, detach, view edge, transfer and u32 admission | Inherited buffer_b4 witnesses and child sabotages | PASS / all RED; total ten focused tests and fourteen runtime sabotage invocations |
+| Layout ratchet | Nine child-process source sabotages | PASS / nine RED; 279 sites remain |
 | Runtime root-holder inventory | Inventory gate | PASS |
 | GC header constants | Gate and one-bit sabotage self-test | PASS / RED |
 | Node-version consistency | All registered restatements and exemptions | PASS |
@@ -63,6 +72,6 @@ Preparation verification completed on qb6, in `/root/codex-lanes/cx-bufb4b`, rel
 | bench_buffer_readwrite | Not measured |
 | ECS u32 | Not measured |
 
-The first full runtime run exposed two resolved-slot failures because the new byte-API copy factory creates a native-backed ArrayBuffer; the owned-versus-borrowed distinction above fixes that representation admission. It also ran the superseded fabricated-headerless-symbol fixture. The corrected final release suite passes 5,169 unit tests (zero failures, five ignored), one integration test, and has eight ignored doc tests. Six focused B4 tests pass and all ten runtime sabotage invocations are RED. Linux and Mac SHA-256 hashes agree for all seven changed runtime/test source files. Reproducible counts and source hashes are in `scripts/fixtures/buffer_b4_preparation_verification.json`; raw logs are retained in the lane hostdir.
+The first full runtime run exposed two resolved-slot failures because the new byte-API copy factory creates a native-backed ArrayBuffer; the owned-versus-borrowed distinction above fixes that representation admission. It also ran the superseded fabricated-headerless-symbol fixture. The corrected first-preparation release suite passed 5,169 unit tests (zero failures, five ignored), one integration test, and has eight ignored doc tests. That first preparation passed six focused B4 tests and all ten runtime sabotage invocations were RED. Linux and Mac SHA-256 hashes agreed for all seven changed runtime/test source files. Reproducible counts and source hashes are in `scripts/fixtures/buffer_b4_preparation_verification.json`; raw logs are retained in the lane hostdir. The latest retained-transform verification is recorded separately in `scripts/fixtures/buffer_b4_lifetime_verification.json` with its ten-source hashes, 5,173-unit-test result and fourteen sabotage invocations.
 
 The unified header's +8-byte small-buffer RSS effect has not been introduced or measured. There is no B4 performance acceptance claim. Full runtime/stdlib/codegen/ffi/ext-zlib A/B suites, gap-union comparison, all real-program and kernel measurements, zero-debt gate, layout T-tests and the B2c/current-main rebase remain required before a B4 delivery is landable.

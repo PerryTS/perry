@@ -63,6 +63,235 @@ fn typed_array_copy_roots_source_across_destination_collection() {
 }
 
 #[test]
+fn ranged_byte_copy_retains_source_and_counts_typed_elements() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _force = ForcedEvacuationTestGuard::on();
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_named_mutable_root_scanner("pinned", crate::gc::pin::scan_pinned_object_roots_mut);
+    for kind in crate::typedarray::KIND_INT8..=crate::typedarray::KIND_FLOAT16 {
+        let scope = RuntimeHandleScope::new();
+        let size = crate::typedarray::elem_size_for_kind(kind);
+        let source = scope.root_raw_mut_ptr(crate::typedarray::typed_array_alloc(kind, 4));
+        let input = bits(source.get_raw_mut_ptr::<crate::typedarray::TypedArrayHeader>());
+        bytes::no_gc(|scope| unsafe {
+            for (index, byte) in bytes::bytes_mut(input, scope)
+                .unwrap()
+                .iter_mut()
+                .enumerate()
+            {
+                *byte = (index + 37) as u8;
+            }
+        });
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        for (offset, length, expected_start, expected_len) in [
+            (1.0, 2.0, size, 2 * size),
+            (2.0, undefined, 2 * size, 2 * size),
+            (3.0, 99.0, 3 * size, size),
+            (99.0, undefined, 4 * size, 0),
+        ] {
+            let out = buffer::js_buffer_copy_bytes_from(input, offset, length);
+            let out = scope.root_raw_mut_ptr(out);
+            bytes::no_gc(|scope| {
+                let actual =
+                    bytes::bytes(bits(out.get_raw_mut_ptr::<buffer::BufferHeader>()), scope)
+                        .unwrap();
+                let expected: Vec<u8> = (expected_start..expected_start + expected_len)
+                    .map(|i| (i + 37) as u8)
+                    .collect();
+                assert_eq!(actual, expected, "raw-byte range for kind {kind}");
+            });
+        }
+    }
+    // Leave no caller root for this source: the shared implementation must
+    // retain it from allocation through the collecting callback and copy.
+    let source = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_UINT32, 4);
+    for i in 0..4 {
+        crate::typedarray::js_typed_array_set(source, i, (37 + i) as f64);
+    }
+    let out = bytes::copy_range_with_collection(
+        Brand::Buffer,
+        bits(source),
+        4,
+        8,
+        collect_between_allocation_and_copy,
+    )
+    .unwrap();
+    bytes::no_gc(|scope| {
+        let expected: Vec<u8> = [38_u32, 39]
+            .into_iter()
+            .flat_map(u32::to_ne_bytes)
+            .collect();
+        assert_eq!(bytes::bytes(out, scope).unwrap(), expected);
+    });
+}
+
+#[test]
+fn typed_lane_copies_preserve_bits_and_retain_their_source() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _force = ForcedEvacuationTestGuard::on();
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_named_mutable_root_scanner("pinned", crate::gc::pin::scan_pinned_object_roots_mut);
+    for kind in crate::typedarray::KIND_INT8..=crate::typedarray::KIND_FLOAT16 {
+        let size = crate::typedarray::elem_size_for_kind(kind);
+        let source = crate::typedarray::typed_array_alloc(kind, 4);
+        let expected: Vec<u8> = (0..4 * size).map(|i| (i + 37) as u8).collect();
+        bytes::no_gc(|scope| unsafe {
+            bytes::bytes_mut(bits(source), scope)
+                .unwrap()
+                .copy_from_slice(&expected);
+        });
+        let copied = bytes::copy_typed_range_with_collection(
+            bits(source),
+            1,
+            2,
+            true,
+            collect_between_allocation_and_copy,
+        )
+        .unwrap();
+        let addr = JSValue::from_bits(copied.to_bits()).as_pointer::<u8>() as usize;
+        assert_eq!(crate::typedarray::lookup_typed_array_kind(addr), Some(kind));
+        bytes::no_gc(|scope| {
+            let actual = bytes::bytes(copied, scope).unwrap();
+            let expected: Vec<u8> = expected[size..3 * size]
+                .chunks_exact(size)
+                .rev()
+                .flatten()
+                .copied()
+                .collect();
+            assert_eq!(actual, expected, "reverse raw lanes of kind {kind}");
+        });
+    }
+    // Reversing Float64 lanes must preserve a NaN's payload and both zeros.
+    let source = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_FLOAT64, 3);
+    let expected = [0x7ff8_1234_5678_9abc_u64, 0, 1_u64 << 63];
+    bytes::no_gc(|scope| unsafe {
+        let data = bytes::bytes_mut(bits(source), scope).unwrap();
+        for (slot, value) in data.chunks_exact_mut(8).zip(expected) {
+            slot.copy_from_slice(&value.to_ne_bytes());
+        }
+    });
+    let reversed = crate::typedarray::js_typed_array_to_reversed(source);
+    bytes::no_gc(|scope| {
+        let expected: Vec<u8> = expected
+            .into_iter()
+            .rev()
+            .flat_map(u64::to_ne_bytes)
+            .collect();
+        assert_eq!(bytes::bytes(bits(reversed), scope).unwrap(), expected);
+    });
+}
+
+extern "C" fn collect_in_typed_find(
+    callback: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    candidate: f64,
+    index: f64,
+    receiver: f64,
+) -> f64 {
+    clear_marks();
+    clear_mark_seeds();
+    let valid = build_valid_pointer_set();
+    mark_mutable_registered_roots(&valid);
+    let owner = JSValue::from_bits(receiver.to_bits()).as_pointer::<u8>() as usize;
+    assert_marked_user_ptr(owner, "findLast receiver across its callback");
+    assert_marked_user_ptr(callback as usize, "findLast callback across its body");
+    let candidate = (candidate.to_bits() & crate::value::POINTER_MASK) as usize;
+    assert_marked_user_ptr(candidate, "BigInt findLast candidate across its callback");
+    clear_marks();
+    clear_mark_seeds();
+    let before = gc_total_collection_count();
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    assert!(gc_total_collection_count() > before);
+    f64::from_bits(if index == 1.0 {
+        crate::value::TAG_TRUE
+    } else {
+        crate::value::TAG_FALSE
+    })
+}
+
+#[test]
+fn shared_typed_copies_keep_atomic_lane_width_and_raw_bits() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_named_mutable_root_scanner("pinned", crate::gc::pin::scan_pinned_object_roots_mut);
+    for kind in crate::typedarray::KIND_INT8..=crate::typedarray::KIND_FLOAT16 {
+        let size = crate::typedarray::elem_size_for_kind(kind);
+        let backing = buffer::js_shared_array_buffer_new((4 * size) as i32);
+        let source =
+            crate::typedarray_view::js_typed_array_view(kind as i32, bits(backing), 0.0, 4.0);
+        assert!(crate::typedarray::typed_array_has_shared_backing(source));
+        let expected: Vec<u8> = (0..4 * size).map(|i| (i + 37) as u8).collect();
+        // No worker accesses this fixture while its bytes are initialized.
+        bytes::no_gc(|scope| unsafe {
+            bytes::bytes_mut(bits(source), scope)
+                .unwrap()
+                .copy_from_slice(&expected);
+        });
+        let copied = bytes::copy_typed_range_with_collection(
+            bits(source),
+            1,
+            2,
+            true,
+            collect_between_allocation_and_copy,
+        )
+        .unwrap();
+        bytes::no_gc(|scope| {
+            let expected: Vec<u8> = expected[size..3 * size]
+                .chunks_exact(size)
+                .rev()
+                .flatten()
+                .copied()
+                .collect();
+            assert_eq!(
+                bytes::bytes(copied, scope).unwrap(),
+                expected,
+                "shared kind {kind}"
+            );
+        });
+    }
+}
+
+#[test]
+fn typed_find_last_retains_receiver_callback_and_bigint_candidate() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _force = ForcedEvacuationTestGuard::on();
+    register_runtime_handle_root_scanner_for_tests();
+    for find_index in [false, true] {
+        let (source, callback) = {
+            let scope = RuntimeHandleScope::new();
+            let source = scope.root_raw_mut_ptr(crate::typedarray::typed_array_alloc(
+                crate::typedarray::KIND_BIGUINT64,
+                4,
+            ));
+            for i in 0..4 {
+                crate::typedarray::set_bigint_lane_bits(source.get_raw_mut_ptr(), i, 37 + i as u64);
+            }
+            let callback =
+                crate::closure::js_closure_alloc(crate::fn_info!(collect_in_typed_find, 3), 0);
+            (source.get_raw_mut_ptr(), callback)
+        };
+        let before = gc_total_collection_count();
+        if find_index {
+            assert_eq!(
+                crate::typedarray::js_typed_array_find_last_index(source, callback),
+                1.0
+            );
+        } else {
+            let value = crate::typedarray::js_typed_array_find_last(source, callback);
+            assert!(JSValue::from_bits(value.to_bits()).is_bigint());
+            let value = (value.to_bits() & crate::value::POINTER_MASK)
+                as *const crate::bigint::BigIntHeader;
+            assert_eq!(unsafe { (*value).limbs[0] }, 38);
+        }
+        assert!(
+            gc_total_collection_count() >= before + 3,
+            "three collecting predicate calls"
+        );
+    }
+}
+
+#[test]
 fn views_observe_owner_resize_and_detach_after_a_live_collection() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _force = ForcedEvacuationTestGuard::on();
@@ -227,6 +456,22 @@ fn persistent_symbols_have_a_leaf_header_at_p_minus_eight() {
 fn each_compatible_b4_sabotage_turns_its_witness_red() {
     assert!(!fault("unused"));
     for (fault, witness) in [
+        (
+            "shared_lane_copy",
+            "gc::tests::buffer_b4::shared_typed_copies_keep_atomic_lane_width_and_raw_bits",
+        ),
+        (
+            "find_receiver_root",
+            "gc::tests::buffer_b4::typed_find_last_retains_receiver_callback_and_bigint_candidate",
+        ),
+        (
+            "typed_copy_root",
+            "gc::tests::buffer_b4::typed_lane_copies_preserve_bits_and_retain_their_source",
+        ),
+        (
+            "copy_root",
+            "gc::tests::buffer_b4::ranged_byte_copy_retains_source_and_counts_typed_elements",
+        ),
         (
             "copy_root",
             "gc::tests::buffer_b4::typed_array_copy_roots_source_across_destination_collection",
