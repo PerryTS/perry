@@ -215,7 +215,7 @@ codegen-units = 1
 lto = false
 codegen-units = 256
 incremental = true
-debug = true
+debug = "line-tables-only"
 debug-assertions = true
 strip = false
 opt-level = 0
@@ -231,6 +231,7 @@ opt-level = 0
 # Optimized local developer profile retained for existing tests and CI.
 [profile.perry-dev]
 inherits = "release"
+debug = "line-tables-only"
 lto = false
 codegen-units = 16
 incremental = true

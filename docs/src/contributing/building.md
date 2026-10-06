@@ -198,6 +198,15 @@ perry/
 - [Architecture](architecture.md) — Crate map and pipeline overview
 - See `CLAUDE.md` for detailed implementation notes and pitfalls
 
+## Development debug information
+
+`dev` (including tests) and `perry-dev` use `line-tables-only` debug information
+to retain file/line backtraces while reducing build storage and linking work.
+Variable inspection in a debugger requires an explicit local override, such as
+`CARGO_PROFILE_DEV_DEBUG=2 make build-dev`. Production stripping is unchanged.
+
+The policy is checked by `python3 scripts/check_dev_debug.py` in PR lint.
+
 ## Cached Linux linking
 
 Use `make mbx-deps` and the cached Make targets for local builds. Linux GNU
