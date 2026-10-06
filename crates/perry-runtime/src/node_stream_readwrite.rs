@@ -1518,36 +1518,28 @@ pub(super) fn is_invalid_readable_from_input(value: f64) -> bool {
 }
 
 pub(super) fn uint8array_byte_chunks(raw: usize) -> f64 {
-    let arr = crate::array::js_array_alloc(0);
-    if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
-        return box_pointer(arr as *const u8);
+    // Resolve the B1 view before any JS allocation. This legacy conversion
+    // produces scalar byte chunks, so its source copy cannot borrow across
+    // allocation of those array entries.
+    let bytes = crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(box_pointer(raw as *const u8), scope)
+            .map(|bytes| bytes.to_vec())
+            .unwrap_or_default()
+    });
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(bytes.len() as u32));
+    for byte in bytes {
+        let grown = out.with_mut_ptr(|arr| crate::array::js_array_push_f64(arr, byte as f64));
+        out.set_raw_mut_ptr(grown);
     }
-    unsafe {
-        let buf = raw as *const crate::buffer::BufferHeader;
-        let len = (*buf).length as usize;
-        let data = crate::buffer::buffer_data(buf);
-        let mut out = arr;
-        for i in 0..len {
-            out = crate::array::js_array_push_f64(out, *data.add(i) as f64);
-        }
-        box_pointer(out as *const u8)
-    }
+    box_pointer(out.get_raw_const_ptr())
 }
 
-pub(super) fn typed_uint8array_byte_chunks(raw: usize) -> Option<f64> {
+fn typed_uint8array_byte_chunks(raw: usize) -> Option<f64> {
     if crate::typedarray::lookup_typed_array_kind(raw) != Some(crate::typedarray::KIND_UINT8) {
         return None;
     }
-    let ta = raw as *const crate::typedarray::TypedArrayHeader;
-    let len = crate::typedarray::js_typed_array_length(ta).max(0) as u32;
-    let mut out = crate::array::js_array_alloc(len);
-    for i in 0..len {
-        out = crate::array::js_array_push_f64(
-            out,
-            crate::typedarray::js_typed_array_get(ta, i as i32),
-        );
-    }
-    Some(box_pointer(out as *const u8))
+    Some(uint8array_byte_chunks(raw))
 }
 
 pub(super) fn collection_iterable_chunks(raw: usize) -> Option<f64> {
@@ -1708,12 +1700,12 @@ pub(super) fn append_buffer_bytes(raw: usize, out: &mut Vec<u8>) {
     if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
         return;
     }
-    unsafe {
-        let buf = raw as *const crate::buffer::BufferHeader;
-        let len = (*buf).length as usize;
-        let data = crate::buffer::buffer_data(buf);
-        out.extend_from_slice(std::slice::from_raw_parts(data, len));
-    }
+    crate::buffer::bytes::no_gc(|scope| {
+        let value = box_pointer(raw as *const u8);
+        if let Ok(bytes) = crate::buffer::bytes::bytes(value, scope) {
+            out.extend_from_slice(bytes);
+        }
+    });
 }
 
 pub(super) fn append_array_chunks(raw: usize, out: &mut Vec<u8>, depth: u8) {
