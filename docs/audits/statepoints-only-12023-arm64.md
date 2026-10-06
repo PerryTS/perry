@@ -1,3 +1,5 @@
+Latest acceptance receipts: [main 77071e3d9 acceptance pass](statepoints-only-12023-acceptance.md). Acceptance remains blocked by the explicitly recorded performance rows.
+
 # #12023 sequential arm64 follow-up: commander acceptance remains blocked
 
 The retained implementation uses linear native statepoint homes and ordinary SSA statepoints for bounded root sets. Shadow-frame selection remains limited to platforms without native stack-map readers. The five follow-up prototypes are excluded from delivery because none met CPU and RSS <= base across all measured workloads.
