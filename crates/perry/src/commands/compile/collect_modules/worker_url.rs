@@ -71,7 +71,6 @@ pub(super) fn record(
 /// uses worker_threads. Returns the targets still to be collected.
 pub(super) fn accept_pending(
     ctx: &mut CompilationContext,
-    entry: &Path,
     visited: &HashSet<PathBuf>,
 ) -> Vec<PathBuf> {
     if !ctx.uses_worker_threads {
@@ -79,10 +78,6 @@ pub(super) fn accept_pending(
     }
     let mut to_collect = Vec::new();
     for candidate in std::mem::take(&mut ctx.worker_url_candidates) {
-        // The entry module runs `main`; it has no init a worker could start.
-        if candidate.target == entry {
-            continue;
-        }
         if !visited.contains(&candidate.target) && !to_collect.contains(&candidate.target) {
             to_collect.push(candidate.target.clone());
         }

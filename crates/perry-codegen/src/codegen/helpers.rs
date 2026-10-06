@@ -695,8 +695,9 @@ pub(super) fn enable_module_init_shadow_frame(
 /// `PERRY_WRITE_BARRIERS=0`/`off`/`false` to disable emission for
 /// benchmark/debug bisection. `=1`/`on`/`true` remain accepted and
 /// equivalent to the default.
-/// #10399: whether the program being compiled constructs a `worker_threads`
-/// Worker anywhere in its module graph.
+/// #10399: whether the program may construct a `worker_threads` Worker.
+/// Namespace and CommonJS constructors can be opaque to call-site lowering,
+/// so the driver also counts worker_threads use anywhere in the module graph.
 ///
 /// When it does, the module-init once-guard (`__perry_init_done_*`) and the
 /// module-global value slots are emitted **thread-local**, so every worker
@@ -712,8 +713,8 @@ pub(super) fn enable_module_init_shadow_frame(
 ///
 /// Set once by the compile driver before any module codegen runs, and folded
 /// into the object-cache key (a cached `.o` from a worker-free build must not
-/// be served to a build that has one). A program with no Worker keeps the
-/// process-wide globals and pays no TLS cost.
+/// be served to a build that has one). Programs without worker_threads use
+/// keep process-wide globals and pay no TLS cost.
 static PROGRAM_HAS_WORKER: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 

@@ -132,7 +132,7 @@ pub(crate) fn collect_modules(
                 stack.push(WorkFrame::Enter(child));
             }
         }
-        let workers = worker_url::accept_pending(ctx, &entry_canonical, visited);
+        let workers = worker_url::accept_pending(ctx, visited);
         if !workers.is_empty() {
             stack.extend(workers.into_iter().rev().map(WorkFrame::EnterWorkerUrl));
             continue;
