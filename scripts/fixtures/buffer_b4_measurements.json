@@ -2487,5 +2487,7 @@
       "rss_noise_floor_kb": 668,
       "instruction_delta_pct": -0.03920043496543624
     }
-  }
+  },
+  "final_b1_base": "16b16c96f3cb1f4f81a4bee62dc78c94be59cf83",
+  "final_rebase_note": "Test-only and documentation additions since tested f3e5910; no production change."
 }

@@ -1535,5 +1535,12 @@
       "head": 2,
       "delta": 2
     }
-  ]
+  ],
+  "final_b1_base": "16b16c96f3cb1f4f81a4bee62dc78c94be59cf83",
+  "final_rebase_note": "B1 additions since f3e5910 are documentation and cfg(test) only; the added FFI witness uses the public scoped byte API. Production measurement sources remain unchanged.",
+  "ffi_buffer_tests": {
+    "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 69 filtered out; finished in 0.00s",
+    "native_input_sabotage": "RED",
+    "features": "runtime-link"
+  }
 }
