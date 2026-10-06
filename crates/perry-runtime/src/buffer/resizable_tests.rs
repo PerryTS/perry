@@ -23,9 +23,10 @@ fn resize(buf: *mut BufferHeader, len: u32) {
 #[test]
 fn resize_never_moves_the_payload_and_reserves_max_once() {
     let buf = resizable::alloc_resizable_array_buffer(4, 4096);
-    let data = buffer_data(buf);
+    let pin = bytes::pin(boxed(buf)).unwrap();
+    let data = pin.as_ptr();
     unsafe {
-        assert_eq!((*buf).length, 4);
+        assert_eq!(super::store::length(buf as usize) as u32, 4);
         assert_eq!((*buf).capacity, 4096, "capacity IS the reservation");
     }
     assert_eq!(resizable_max_byte_length(buf as usize), Some(4096));
@@ -34,17 +35,24 @@ fn resize_never_moves_the_payload_and_reserves_max_once() {
     for len in [4096u32, 0, 17, 4096, 1] {
         resize(buf, len);
         unsafe {
-            assert_eq!((*buf).length, len);
+            assert_eq!(super::store::length(buf as usize) as u32, len);
             assert_eq!((*buf).capacity, 4096);
         }
-        assert_eq!(buffer_data(buf), data, "views alias this address raw");
+        bytes::no_gc(|_| {
+            assert_eq!(
+                bytes::span(boxed(buf), false).unwrap().ptr as *const u8,
+                data,
+                "resize keeps the pinned address"
+            )
+        });
     }
 }
 
 #[test]
 fn a_grow_zero_fills_exactly_what_it_exposes() {
     let buf = resizable::alloc_resizable_array_buffer(8, 64);
-    let data = buffer_data_mut(buf);
+    let pin = bytes::pin(boxed(buf)).unwrap();
+    let data = pin.as_ptr() as *mut u8;
     unsafe {
         // Dirty the whole reservation behind the API's back: a regrow must not
         // let any of it through.
@@ -66,7 +74,8 @@ fn a_large_shrink_and_regrow_never_leaks_old_bytes() {
     // clear, the OS zero-fills" path): dirty every byte, drop it all, regrow.
     const MAX: u32 = 4 * 1024 * 1024;
     let buf = resizable::alloc_resizable_array_buffer(0, MAX as i32);
-    let data = buffer_data_mut(buf);
+    let pin = bytes::pin(boxed(buf)).unwrap();
+    let data = pin.as_ptr() as *mut u8;
     for round in 0..3u8 {
         resize(buf, MAX);
         let bytes = unsafe { std::slice::from_raw_parts_mut(data, MAX as usize) };
@@ -114,7 +123,7 @@ fn byte_views_track_go_out_of_bounds_and_come_back() {
     let whole = js_uint8array_new(boxed(buf));
     let fixed = js_uint8array_view(boxed(buf), 4.0, 4.0);
     let tail = js_uint8array_view(boxed(buf), 6.0, undefined());
-    let len = |v: *mut BufferHeader| unsafe { (*v).length };
+    let len = |v: *mut BufferHeader| unsafe { super::store::length(v as usize) as u32 };
     assert_eq!((len(whole), len(fixed), len(tail)), (8, 4, 2));
     assert!(view::is_length_tracking(whole as usize));
     assert!(!view::is_length_tracking(fixed as usize));
@@ -152,8 +161,7 @@ fn a_view_over_a_fixed_buffer_is_never_marked_tracking() {
     assert!(!view::is_out_of_bounds_view(view as usize));
     // Relength on a non-resizable backing is never requested; if it were it
     // would treat the view as fixed-length and keep it.
-    view::relength_views_of_resized_backing(plain as usize, 16);
-    assert_eq!(unsafe { (*view).length }, 16);
+    assert_eq!(unsafe { super::store::length(view as usize) as u32 }, 16);
 }
 
 #[test]
@@ -182,8 +190,10 @@ fn typed_array_views_floor_track_and_survive_growth_past_their_birth_length() {
     // write must land in the BACKING (which reserves max), not the header.
     js_typed_array_set(tracking, 3, 123456.0);
     assert_eq!(js_typed_array_get(tracking, 3), 123456.0);
-    let raw = unsafe { std::slice::from_raw_parts(buffer_data(buf).add(12), 4) };
-    assert_eq!(i32::from_le_bytes(raw.try_into().unwrap()), 123456);
+    bytes::no_gc(|scope| {
+        let raw = &bytes::bytes(boxed(buf), scope).unwrap()[12..16];
+        assert_eq!(i32::from_le_bytes(raw.try_into().unwrap()), 123456);
+    });
 
     resize(buf, 4);
     assert_eq!(js_typed_array_length(tracking), 1);
@@ -207,18 +217,30 @@ fn data_views_track_and_report_out_of_bounds() {
     let fixed = unbox(js_data_view_new(boxed(buf), 4.0, 4.0));
     resize(buf, 16);
     unsafe {
-        assert_eq!(((*tracking).length, (*fixed).length), (16, 4));
+        assert_eq!(
+            (
+                super::store::length(tracking as usize) as u32,
+                super::store::length(fixed as usize) as u32
+            ),
+            (16, 4)
+        );
     }
     resize(buf, 6);
     unsafe {
-        assert_eq!(((*tracking).length, (*fixed).length), (6, 0));
+        assert_eq!(
+            (
+                super::store::length(tracking as usize) as u32,
+                super::store::length(fixed as usize) as u32
+            ),
+            (6, 0)
+        );
     }
     assert!(is_out_of_bounds_data_view(fixed as usize));
     assert!(!is_out_of_bounds_data_view(tracking as usize));
     resize(buf, 8);
     assert!(!is_out_of_bounds_data_view(fixed as usize));
     unsafe {
-        assert_eq!((*fixed).length, 4);
+        assert_eq!(super::store::length(fixed as usize) as u32, 4);
     }
 }
 
@@ -226,7 +248,11 @@ fn data_views_track_and_report_out_of_bounds() {
 fn transfer_preserves_resizability_and_to_fixed_length_drops_it() {
     let buf = resizable::alloc_resizable_array_buffer(4, 8);
     unsafe {
-        std::ptr::copy_nonoverlapping([9u8, 8, 7, 6].as_ptr(), buffer_data_mut(buf), 4);
+        bytes::no_gc(|scope| {
+            bytes::bytes_mut(boxed(buf), scope)
+                .unwrap()
+                .copy_from_slice(&[9, 8, 7, 6])
+        });
     }
     let moved = unbox(array_buffer_transfer(buf as usize, &[], true));
     assert!(is_detached_buffer(buf as usize));
@@ -234,7 +260,7 @@ fn transfer_preserves_resizability_and_to_fixed_length_drops_it() {
     unsafe {
         assert_eq!((*moved).length, 4);
         assert_eq!(
-            std::slice::from_raw_parts(buffer_data(moved), 4),
+            &bytes::ReadLease::new(boxed(moved)).unwrap()[..],
             &[9, 8, 7, 6]
         );
     }
@@ -246,16 +272,12 @@ fn transfer_preserves_resizability_and_to_fixed_length_drops_it() {
 }
 
 #[test]
-fn a_dead_buffers_resizable_mark_is_pruned() {
+fn a_fresh_cell_does_not_inherit_resizability() {
     let buf = resizable::alloc_resizable_array_buffer(1, 2);
-    let before = header::test_resizable_registry_len();
     assert!(is_resizable_buffer(buf as usize));
-    header::finalize_collected_dead_buffer(buf as usize);
-    assert!(
-        !is_resizable_buffer(buf as usize),
-        "a recycled address must not inherit resizability (#6080 ABA class)"
-    );
-    assert_eq!(header::test_resizable_registry_len(), before - 1);
+    let fresh = js_array_buffer_new(1);
+    assert!(!is_resizable_buffer(fresh as usize));
+    assert_eq!(unsafe { (*fresh).link }, 0);
 }
 
 #[test]

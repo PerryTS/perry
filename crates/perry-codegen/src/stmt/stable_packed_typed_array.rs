@@ -348,7 +348,11 @@ pub(super) fn install_views(ctx: &mut FnCtx<'_>, admission: &Admission) -> Insta
         let (data_slot, length_slot, length) = {
             let header = ctx.block().inttoptr(I64, raw);
             let length = ctx.block().load(I32, &header);
-            let data = ctx.block().gep(I8, &header, &[(I32, "16")]);
+            let data = ctx.block().gep(
+                I8,
+                &header,
+                &[(I32, &crate::runtime_abi::BYTES_STORE.to_string())],
+            );
             let data_slot = ctx.func.alloca_entry(PTR);
             let length_slot = ctx.func.alloca_entry(I32);
             ctx.block().store(PTR, &data, &data_slot);
@@ -372,7 +376,7 @@ pub(super) fn install_views(ctx: &mut FnCtx<'_>, admission: &Admission) -> Insta
                 element_width_bytes: 4,
                 index_unit: BufferIndexUnit::Element,
                 view_byte_offset: Some(0),
-                length_offset_from_data: -16,
+                length_offset_from_data: 0,
                 alias: AliasState::NoAliasGuarded {
                     guard_id: "stable_packed_u32_columns".to_string(),
                 },

@@ -613,7 +613,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // before the registry probe below could route it. The managed header tag
     // already read above selects the typed authority first; the registry
     // remains the liveness/layout proof, exactly as for Map/Set.
-    if receiver_tag.0 == crate::gc::GC_TYPE_TYPED_ARRAY
+    if crate::gc::is_typed_array_type(receiver_tag.0)
         && crate::typedarray::lookup_typed_array_kind(raw_ptr as usize).is_some()
     {
         return crate::typedarray::js_typed_array_get(

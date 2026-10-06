@@ -26,13 +26,13 @@ pub extern "C" fn js_buffer_to_string_range(
         return js_string_from_bytes(ptr::null(), 0);
     }
 
-    unsafe {
-        let len = (*buf_ptr).length as i32;
+    {
+        let source =
+            super::bytes::ReadLease::new(crate::value::js_nanbox_pointer(buf_ptr as i64)).unwrap();
+        let len = source.len() as i32;
         let s = start.max(0).min(len);
         let e = end.max(s).min(len);
-        let slice_len = (e - s) as usize;
-        let data = buffer_data(buf_ptr).add(s as usize);
-        let bytes = std::slice::from_raw_parts(data, slice_len);
+        let bytes = &source[s as usize..e as usize];
 
         match encoding {
             // v0.5.772 perf: encode directly into a fresh StringHeader without
@@ -75,10 +75,10 @@ pub extern "C" fn js_buffer_to_string(
         return js_string_from_bytes(ptr::null(), 0);
     }
 
-    unsafe {
-        let len = (*buf_ptr).length as usize;
-        let data = buffer_data(buf_ptr);
-        let bytes = std::slice::from_raw_parts(data, len);
+    {
+        let source =
+            super::bytes::ReadLease::new(crate::value::js_nanbox_pointer(buf_ptr as i64)).unwrap();
+        let bytes = &*source;
 
         match encoding {
             // v0.5.772 perf: hex/base64 outputs are pure ASCII — the in-place
@@ -237,10 +237,11 @@ pub extern "C" fn js_buffer_print(buf_ptr: *const BufferHeader) {
         println!("<Buffer >");
         return;
     }
-    unsafe {
-        let len = (*buf_ptr).length as usize;
-        let data = buffer_data(buf_ptr);
-        let bytes = std::slice::from_raw_parts(data, len);
+    {
+        let source =
+            super::bytes::ReadLease::new(crate::value::js_nanbox_pointer(buf_ptr as i64)).unwrap();
+        let len = source.len();
+        let bytes = &*source;
         let mut out = String::with_capacity(9 + len * 3);
         out.push_str("<Buffer");
         for (i, b) in bytes.iter().enumerate() {
@@ -272,7 +273,7 @@ pub extern "C" fn js_buffer_length(buf_ptr: *const BufferHeader) -> i32 {
     if buf_ptr.is_null() || (buf_ptr as usize) < 0x1000 {
         return 0;
     }
-    unsafe { (*buf_ptr).length as i32 }
+    unsafe { super::store::length(buf_ptr as usize) as i32 }
 }
 
 /// Materialize a buffer (Uint8Array) as a regular Array of f64 byte values.
@@ -293,17 +294,15 @@ pub fn buffer_to_array(buf_ptr: *const BufferHeader) -> *mut ArrayHeader {
         return crate::array::js_array_alloc(0);
     }
     unsafe {
-        let len = (*buf_ptr).length as usize;
-        let result = crate::array::js_array_alloc(len as u32);
-        if len == 0 {
-            return result;
+        let source =
+            super::bytes::ReadLease::new(crate::value::js_nanbox_pointer(buf_ptr as i64)).unwrap();
+        let len = source.len();
+        let array = crate::array::js_array_alloc(len as u32);
+        let dst = crate::array::array_elements_ptr(array) as *mut f64;
+        for (i, byte) in source.iter().enumerate() {
+            *dst.add(i) = *byte as f64;
         }
-        let src = buffer_data(buf_ptr);
-        let dst = crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
-        for i in 0..len {
-            *dst.add(i) = (*src.add(i)) as f64;
-        }
-        (*result).length = len as u32;
-        result
+        (*array).length = len as u32;
+        array
     }
 }

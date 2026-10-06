@@ -19,8 +19,7 @@ fn certificate_raw_output_preserves_der() {
         "raw",
     );
     let ptr = JSValue::from_bits(raw.to_bits()).as_pointer::<crate::buffer::BufferHeader>();
-    let actual = unsafe {
-        std::slice::from_raw_parts(crate::buffer::buffer_data(ptr), (*ptr).length as usize)
-    };
-    assert_eq!(actual, der);
+    let actual =
+        crate::buffer::bytes::ReadLease::new(crate::value::js_nanbox_pointer(ptr as i64)).unwrap();
+    assert_eq!(&actual[..], der);
 }

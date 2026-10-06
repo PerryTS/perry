@@ -25,7 +25,6 @@
 use anyhow::Result;
 use perry_hir::{BinaryOp, Expr};
 
-use crate::nanbox::POINTER_MASK_I64;
 use crate::native_value::{
     BoundsState, BufferAccessMode, BufferElem, ExpectedNativeRep, LoweredValue,
     MaterializationReason,
@@ -146,29 +145,11 @@ fn record_rejection(ctx: &mut FnCtx<'_>, receiver_id: u32, reason: &str) {
 /// Pointer/inline-storage/kind cache guard.  Returns the unboxed header address
 /// and the guard condition.  The address is used only on a passing edge.
 fn emit_receiver_guard(ctx: &mut FnCtx<'_>, object_box: &str) -> (String, String) {
-    let tag_mask = crate::nanbox::i64_literal(crate::nanbox::TAG_MASK);
-    let blk = ctx.block();
-    let object_bits = blk.bitcast_double_to_i64(object_box);
-    let raw = blk.and(I64, &object_bits, POINTER_MASK_I64);
-    let tagged = blk.and(I64, &object_bits, &tag_mask);
-    let is_pointer = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
-    // #10516: the kind-cache tag carries the receiver's storage: an
-    // external-storage typed array (a view) caches `kind | 0x80`, so the
-    // kind compare below rejects it. No process-wide view count.
-    let slot = blk.lshr(I64, &raw, "3");
-    let slot = blk.and(I64, &slot, "63");
-    let entry_ptr = blk.gep(
-        "[64 x i64]",
-        "@PERRY_TA_KIND_CACHE",
-        &[(I64, "0"), (I64, &slot)],
-    );
-    let entry = blk.load(I64, &entry_ptr);
-    let cached_addr = blk.lshr(I64, &entry, "8");
-    let address_matches = blk.icmp_eq(I64, &cached_addr, &raw);
-    let kind = blk.and(I64, &entry, "255");
-    let kind_matches = blk.icmp_eq(I64, &kind, &UINT32_KIND.to_string());
-    let guard = blk.and(I1, &is_pointer, &address_matches);
-    (raw, blk.and(I1, &guard, &kind_matches))
+    super::byte_cell::inline_owner_guard(
+        ctx,
+        object_box,
+        super::byte_cell::brand_for_kind(UINT32_KIND as u8),
+    )
 }
 
 fn emit_index_range_guard(ctx: &mut FnCtx<'_>, index_box: &str) -> String {
@@ -306,7 +287,7 @@ pub(super) fn try_lower_guarded_uint32_add(
     ctx.current_block = load_idx;
     let old_value = {
         let blk = ctx.block();
-        let data_base = blk.add(I64, &raw, "16");
+        let data_base = blk.add(I64, &raw, &crate::runtime_abi::BYTES_STORE.to_string());
         let byte_offset = blk.shl(I64, &index_i64, "2");
         let address = blk.add(I64, &data_base, &byte_offset);
         let ptr = blk.inttoptr(I64, &address);
@@ -337,7 +318,7 @@ pub(super) fn try_lower_guarded_uint32_add(
     ctx.current_block = store_idx;
     {
         let blk = ctx.block();
-        let data_base = blk.add(I64, &post_raw, "16");
+        let data_base = blk.add(I64, &post_raw, &crate::runtime_abi::BYTES_STORE.to_string());
         let byte_offset = blk.shl(I64, &index_i64, "2");
         let address = blk.add(I64, &data_base, &byte_offset);
         let ptr = blk.inttoptr(I64, &address);

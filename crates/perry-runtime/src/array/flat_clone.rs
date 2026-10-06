@@ -240,16 +240,16 @@ pub(crate) fn dense_spread_copy(value: f64) -> *mut ArrayHeader {
         // and pre-#7497 the sibling `js_array_clone` memcpy'd from the
         // pre-collection address, i.e. out of retired from-space.
         let src = read_src();
-        let result =
+        let array =
             crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
-        if src.is_null() || result.is_null() {
+        if src.is_null() || array.is_null() {
             return js_array_alloc(0);
         }
         if len > 0 {
             let src_elements =
                 crate::array::array_elements_ptr(src as *const ArrayHeader) as *const u64;
             let dst_elements =
-                crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut u64;
+                crate::array::array_elements_ptr(array as *const ArrayHeader) as *mut u64;
             // GC_STORE_AUDIT(BARRIERED): bulk copy into an unpublished array,
             // followed by the exact layout/barrier rebuild below.
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
@@ -258,10 +258,10 @@ pub(crate) fn dense_spread_copy(value: f64) -> *mut ArrayHeader {
                     ptr::write(dst_elements.add(i), crate::value::TAG_UNDEFINED);
                 }
             }
-            (*result).length = len;
-            rebuild_array_layout_exact(result);
+            (*array).length = len;
+            rebuild_array_layout_exact(array);
         }
-        result
+        array
     }
 }
 
@@ -536,9 +536,8 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         // copy path. Array.from permits array-like proxies as well as iterables.
         if let Some(proxy) = array_ptr_as_proxy(raw_addr as *const ArrayHeader) {
             let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-            let result =
-                super::from_concat::array_from_full(undefined, proxy, undefined, undefined);
-            return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+            let array = super::from_concat::array_from_full(undefined, proxy, undefined, undefined);
+            return crate::value::js_nanbox_get_pointer(array) as *mut ArrayHeader;
         }
         if let Some(dispatch) = crate::object::handle_property_dispatch() {
             let method = b"@@iterator";
@@ -704,19 +703,19 @@ pub extern "C" fn js_array_clone(src: *const ArrayHeader) -> *mut ArrayHeader {
         let result_h =
             scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_array_alloc(len) as i64));
         let src = crate::value::js_nanbox_get_pointer(src_h.get_nanbox_f64()) as *const ArrayHeader;
-        let result =
+        let array =
             crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
         if len > 0 {
             let src_elements =
                 crate::array::array_elements_ptr(src as *const ArrayHeader) as *const f64;
             let dst_elements =
-                crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
+                crate::array::array_elements_ptr(array as *const ArrayHeader) as *mut f64;
             // GC_STORE_AUDIT(BARRIERED): clone bulk copy is followed by exact layout/barrier rebuild.
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
-            (*result).length = len;
-            rebuild_array_layout_exact(result);
+            (*array).length = len;
+            rebuild_array_layout_exact(array);
         }
-        result
+        array
     }
 }
 
@@ -744,9 +743,9 @@ pub extern "C" fn js_array_entries(arr: *const ArrayHeader) -> *mut ArrayHeader 
                 // Set entries yield `[value, value]` pairs in JS.
                 let values = crate::set::js_set_to_array(arr as *const crate::set::SetHeader);
                 let len = (*values).length;
-                let result = js_array_alloc(len);
-                (*result).length = len;
-                clear_array_numeric_layout(result);
+                let array = js_array_alloc(len);
+                (*array).length = len;
+                clear_array_numeric_layout(array);
                 for i in 0..len as usize {
                     let v = js_array_get_f64(values, i as u32);
                     let pair = js_array_alloc(2);
@@ -755,21 +754,21 @@ pub extern "C" fn js_array_entries(arr: *const ArrayHeader) -> *mut ArrayHeader 
                     store_array_slot(pair, 1, v.to_bits());
                     rebuild_array_layout(pair);
                     let pair_value = crate::value::js_nanbox_pointer(pair as i64);
-                    store_array_slot(result, i, pair_value.to_bits());
+                    store_array_slot(array, i, pair_value.to_bits());
                 }
-                rebuild_array_layout(result);
-                return result;
+                rebuild_array_layout(array);
+                return array;
             }
             _ => {}
         }
         let len = (*arr).length;
-        let result = js_array_alloc(len);
-        (*result).length = len;
-        clear_array_numeric_layout(result);
+        let array = js_array_alloc(len);
+        (*array).length = len;
+        clear_array_numeric_layout(array);
         let src_elements =
             crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let dst_elements =
-            crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
+            crate::array::array_elements_ptr(array as *const ArrayHeader) as *mut f64;
         for i in 0..len as usize {
             // Build a 2-element [index, value] pair as an inner array.
             let pair = js_array_alloc(2);
@@ -785,9 +784,9 @@ pub extern "C" fn js_array_entries(arr: *const ArrayHeader) -> *mut ArrayHeader 
             let pair_value = crate::value::js_nanbox_pointer(pair as i64);
             // GC_STORE_AUDIT(BARRIERED): outer entries slot is immediately recorded via note_array_slot.
             *dst_elements.add(i) = pair_value;
-            note_array_slot(result, i, pair_value.to_bits());
+            note_array_slot(array, i, pair_value.to_bits());
         }
-        result
+        array
     }
 }
 
@@ -812,15 +811,15 @@ pub extern "C" fn js_array_keys(arr: *const ArrayHeader) -> *mut ArrayHeader {
             _ => {}
         }
         let len = (*arr).length;
-        let result = js_array_alloc(len);
-        (*result).length = len;
+        let array = js_array_alloc(len);
+        (*array).length = len;
         let dst_elements =
-            crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
+            crate::array::array_elements_ptr(array as *const ArrayHeader) as *mut f64;
         for i in 0..len as usize {
             // GC_STORE_AUDIT(POINTER_FREE): keys array stores numeric indices only.
             *dst_elements.add(i) = i as f64;
         }
-        result
+        array
     }
 }
 
@@ -853,18 +852,18 @@ pub extern "C" fn js_array_values(arr: *const ArrayHeader) -> *mut ArrayHeader {
         let result_h =
             scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_array_alloc(len) as i64));
         let arr = crate::value::js_nanbox_get_pointer(src_h.get_nanbox_f64()) as *const ArrayHeader;
-        let result =
+        let array =
             crate::value::js_nanbox_get_pointer(result_h.get_nanbox_f64()) as *mut ArrayHeader;
         if len > 0 {
             let src_elements =
                 crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
             let dst_elements =
-                crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
+                crate::array::array_elements_ptr(array as *const ArrayHeader) as *mut f64;
             // GC_STORE_AUDIT(BARRIERED): values bulk copy is followed by layout/barrier rebuild.
             ptr::copy_nonoverlapping(src_elements, dst_elements, len as usize);
-            (*result).length = len;
-            rebuild_array_layout(result);
+            (*array).length = len;
+            rebuild_array_layout(array);
         }
-        result
+        array
     }
 }

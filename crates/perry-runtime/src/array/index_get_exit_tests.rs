@@ -215,15 +215,15 @@ fn a_live_view_changes_the_route_and_not_the_element() {
     let direct = js_packed_arraylike_index_get(receiver, 1.0, std::ptr::null_mut());
     assert_eq!(direct, 2.5, "the exit must serve this receiver");
 
-    // The site's inline arm computes the data pointer as `header + 16`, and
-    // its whole licence to do that is the receiver's inline storage byte
-    // (#10516). External storage sends the read here instead, and it must
-    // still answer 2.5 — through the dispatcher, whose `data_ptr` consults the
-    // view registries (none hold this array, so it reads the header's own
-    // elements).
-    unsafe { (*ta).storage = crate::typedarray::TA_STORAGE_EXTERNAL };
-    let guarded = js_packed_arraylike_index_get(receiver, 1.0, std::ptr::null_mut());
-    unsafe { (*ta).storage = crate::typedarray::TA_STORAGE_INLINE };
+    let view = crate::buffer::store::new_view(
+        crate::typedarray::type_for_kind(KIND_FLOAT64),
+        ta as usize,
+        0,
+        2,
+        false,
+    );
+    let guarded =
+        js_packed_arraylike_index_get(nanbox(view.cast::<u8>()), 1.0, std::ptr::null_mut());
     assert_eq!(
         guarded, 2.5,
         "external storage must change the ROUTE, never the element"

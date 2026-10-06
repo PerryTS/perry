@@ -49,7 +49,7 @@ pub(super) fn copy_from_uint8_buffer(
         return typed_array_alloc(dst_kind, 0);
     }
     unsafe {
-        let len = (*src).length;
+        let len = crate::typedarray::element_length(src);
         let out = typed_array_alloc(dst_kind, len);
         for i in 0..len as usize {
             let v = crate::buffer::js_buffer_get(src, i as i32) as f64;

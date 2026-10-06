@@ -336,6 +336,12 @@ enum ActiveReceiverData {
 pub(crate) struct ByteViewParamAccess {
     pub valid_i1: String,
     pub data_i64: String,
+    pub receiver_root_slot: String,
+    pub owner_root_slot: String,
+    pub data_slot: String,
+    pub length_slot: String,
+    pub valid_slot: String,
+    pub brands: Vec<u8>,
 }
 
 /// Entries are kept in installation order so refresh IR is deterministic.
@@ -344,7 +350,6 @@ pub(crate) struct ByteViewParamAccess {
 #[derive(Debug, Default)]
 pub(crate) struct ReceiverDescriptorTable {
     byte_view_params: std::collections::HashMap<u32, ByteViewParamAccess>,
-    typed_read_params: std::collections::HashMap<u32, String>,
     entries: Vec<ActiveReceiverDescriptor>,
     /// 5L (step5 DESIGN §4.1): the scoped Number-local sets, innermost last.
     /// Each is the set a guarded clone proved for its own body: the locals
@@ -358,14 +363,6 @@ pub(crate) struct ReceiverDescriptorTable {
 }
 
 impl ReceiverDescriptorTable {
-    pub(crate) fn materialize_typed_read_param(&mut self, receiver: u32, valid_i1: String) {
-        self.typed_read_params.insert(receiver, valid_i1);
-    }
-
-    pub(crate) fn typed_read_param(&self, receiver: u32) -> Option<&String> {
-        self.typed_read_params.get(&receiver)
-    }
-
     pub(crate) fn materialize_byte_view_param(
         &mut self,
         receiver: u32,
@@ -376,6 +373,10 @@ impl ReceiverDescriptorTable {
 
     pub(crate) fn byte_view_param(&self, receiver: u32) -> Option<&ByteViewParamAccess> {
         self.byte_view_params.get(&receiver)
+    }
+
+    pub(crate) fn hoisted_byte_params(&self) -> Vec<ByteViewParamAccess> {
+        self.byte_view_params.values().cloned().collect()
     }
 
     /// Whether an active scope has already materialised `receiver`.

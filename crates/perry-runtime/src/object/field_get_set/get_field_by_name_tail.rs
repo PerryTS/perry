@@ -460,8 +460,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // numeric-length views whose static type the codegen doesn't recognize;
         // pre-fix, only Uint8Array worked (it's a registered buffer) so
         // multi-byte `.byteLength` returned undefined.
-        if let Some(kind) = (gc_type == crate::gc::GC_TYPE_TYPED_ARRAY
-            || gc_type == crate::gc::GC_TYPE_NATIVE_TYPED_VIEW)
+        if let Some(kind) = crate::gc::is_typed_array_type(gc_type)
             .then(|| crate::typedarray::lookup_typed_array_kind(obj as usize))
             .flatten()
         {

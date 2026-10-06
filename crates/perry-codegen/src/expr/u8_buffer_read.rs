@@ -1,49 +1,16 @@
-//! Inline checked byte read for an **untracked** `Uint8Array` receiver (#9342).
-//!
-//! Motivating shape — `s += buf[i]` inside a function over a module-global
-//! `const buf = new Uint8Array(N)` (the bench_buffer_readwrite in-function
-//! cliff: 560ms vs node's 38ms, 12×). The tracked fresh-view path
-//! (`buffer_access.rs::lower_buffer_load`) only serves `let` bindings whose
-//! construction the same function saw; a module-global (or any
-//! class-proven-but-untracked) receiver fell back to a per-element
-//! `js_uint8array_index_get_value` call feeding a dynamic add.
-//!
-//! The typed-array sibling (`ta_param_f64_read.rs`) cannot serve this shape:
-//! perry's `Uint8Array` is a `BufferHeader` in the **buffer** registries —
-//! bytes inline at `header + 8`, `length: u32` at offset 0 — invisible to
-//! `lookup_typed_array_kind` and laid out differently from a
-//! `TypedArrayHeader` (data at +16). Hence a buffer-lane twin:
-//!
-//!  * **guard**: NaN-box pointer tag + full-address hit in
-//!    `PERRY_U8_INLINE_CACHE` (`perry-runtime/src/buffer/header.rs`), whose
-//!    entries name live, u8-marked, owning inline-storage `BufferHeader`s
-//!    only. Foreign-backed buffers and registered views are excluded. The
-//!    cache is primed by the slow arm and invalidated on buffer death and
-//!    address reuse, so a hit is proof of the layout contract;
-//!  * **bounds**: `idx ult length` (`ult` also rejects negative indices);
-//!    out-of-bounds merges the `TAG_UNDEFINED` double, matching
-//!    `js_buffer_index_get_value`;
-//!  * **load**: `zext(load i8 (addr + 8 + idx))` widened via `uitofp` — the
-//!    numeric element, bit-exact with the runtime helper's in-range answer;
-//!  * **slow arm**: `js_u8_buffer_read_f64`, which primes the cache and
-//!    delegates to `js_uint8array_index_get_value` — bug-exact semantics for
-//!    every receiver the guard rejects, including #8111 stale-hint recovery.
-//!
-//! READS ONLY. An inline **write** twin would bypass the `buffer/view.rs`
-//! write-propagation protocol and desynchronize slice/`new Uint8Array(ab)`
-//! aliases (#1205). Views stay excluded from owning-storage admission. A
-//! separate miss arm accepts their pointer-storage layout and loads from the
-//! authoritative backing. Sibling writes are immediately visible; the view
-//! does not contain a byte snapshot (#9360/#7219).
+//! Header-guarded Uint8Array and Buffer reads through the common byte cell.
+//! Owner reads resolve inline/out-of-line data; fixed views resolve their
+//! flattened owner. Bagged, resizable, detached and shared stores use the
+//! runtime arm. Loop parameters hoist data/length and root receiver/owner.
 
 use anyhow::Result;
 use perry_hir::Expr;
 
 use super::index_get::numeric_index_has_integer_array_index_proof;
 use super::{lower_expr, lower_expr_as_i32, FnCtx};
-use crate::nanbox::{double_literal, i64_literal, TAG_UNDEFINED};
+use crate::nanbox::{double_literal, TAG_UNDEFINED};
 use crate::native_value::{BoundsState, BufferAccessMode, LoweredValue};
-use crate::types::{DOUBLE, I1, I16, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, I1, I32, I64, I8};
 
 /// `PERRY_U8_INLINE_READ=0` kill switch (default on).
 fn u8_inline_read_enabled() -> bool {
@@ -135,9 +102,9 @@ fn lower_u8_buffer_checked_load(
     object: &Expr,
     index: &Expr,
 ) -> Result<String> {
-    let param_access = byte_view_param_for(ctx, object);
     let obj_box = lower_expr(ctx, object)?;
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
+    let param_access = byte_view_param_for(ctx, object);
 
     let chk_idx = ctx.new_block("u8b.get.chk");
     let load_idx = ctx.new_block("u8b.get.load");
@@ -152,34 +119,41 @@ fn lower_u8_buffer_checked_load(
 
     let bits = ctx.block().bitcast_double_to_i64(&obj_box);
     let raw = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-    // Entry-resolved owning and view storage share the bounds/load path. A
-    // failed proof retains the existing guarded receiver recovery below.
-    if let Some(access) = &param_access {
-        let cache_idx = ctx.new_block("u8b.get.cache");
-        let cache_label = ctx.block_label(cache_idx);
+    let access = if let Some(param) = &param_access {
+        let admitted = ctx.new_block("u8b.hoisted");
+        let admitted_l = ctx.block_label(admitted);
         ctx.block()
-            .cond_br(&access.valid_i1, &slow_label, &cache_label);
-        ctx.current_block = cache_idx;
-    }
-    {
-        let blk = ctx.block();
-        let tag_mask = i64_literal(crate::nanbox::TAG_MASK);
-        let tagged = blk.and(I64, &bits, &tag_mask);
-        let is_ptr = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
-        let hit = emit_u8_cache_holds(blk, &raw);
-        let g = blk.and(I1, &is_ptr, &hit);
-        blk.cond_br(&g, &chk_label, &slow_label);
-    }
+            .cond_br(&param.valid_i1, &admitted_l, &slow_label);
+        ctx.current_block = admitted;
+        let len = ctx.block().load(I32, &param.length_slot);
+        super::byte_cell::Access {
+            word: String::new(),
+            raw: raw.clone(),
+            owner: raw.clone(),
+            data: param.data_i64.clone(),
+            len,
+        }
+    } else {
+        super::byte_cell::resolve(
+            ctx,
+            &obj_box,
+            &[
+                crate::runtime_abi::GC_TYPE_BUFFER,
+                crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY,
+            ],
+            &slow_label,
+        )
+    };
+    ctx.block().br(&chk_label);
 
     // ---- chk: bounds against `BufferHeader.length` (u32 at offset 0) ----
     ctx.current_block = chk_idx;
     {
         let blk = ctx.block();
-        let hdr_ptr = blk.inttoptr(I64, &raw);
-        let len = blk.load(I32, &hdr_ptr);
+        let len = &access.len;
         // `ult` also rejects a negative index (wraps huge unsigned) — JS
         // `buf[-1]` is undefined; the oob arm merges `TAG_UNDEFINED`.
-        let in_bounds = blk.icmp_ult(I32, &idx_i32, &len);
+        let in_bounds = blk.icmp_ult(I32, &idx_i32, len);
         blk.cond_br(&in_bounds, &load_label, &oob_label);
     }
 
@@ -187,7 +161,7 @@ fn lower_u8_buffer_checked_load(
     ctx.current_block = load_idx;
     let (load_val, load_end) = {
         let blk = ctx.block();
-        let data_base = blk.add(I64, &raw, "8");
+        let data_base = &access.data;
         let idx_i64 = blk.zext(I32, &idx_i32, I64);
         let addr = blk.add(I64, &data_base, &idx_i64);
         let ptr = blk.inttoptr(I64, &addr);
@@ -222,17 +196,14 @@ fn lower_u8_buffer_checked_load(
         param_access.as_ref(),
     );
     ctx.current_block = fallback_idx;
-    let (slow_val, slow_end) = {
-        let blk = ctx.block();
-        let value = blk.call(
-            DOUBLE,
-            "js_u8_buffer_read_f64",
-            &[(I64, &raw), (I32, &idx_i32)],
-        );
-        let end = blk.label.clone();
-        blk.br(&merge_label);
-        (value, end)
-    };
+    let slow_val = ctx.block().call(
+        DOUBLE,
+        "js_u8_buffer_read_f64",
+        &[(I64, &raw), (I32, &idx_i32)],
+    );
+    super::byte_cell::refresh_hoisted_byte_accesses(ctx);
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
 
     // ---- merge ----
     ctx.current_block = merge_idx;
@@ -263,41 +234,34 @@ fn lower_u8_buffer_checked_load(
 
 /// Pointer tag + full-address admission hit for `obj_box`. Returns
 /// `(hit, raw_address)`, both in the current block.
-fn emit_u8_cache_admission(ctx: &mut FnCtx<'_>, obj_box: &str) -> (String, String) {
-    let tag_mask = i64_literal(crate::nanbox::TAG_MASK);
-    let blk = ctx.block();
-    let obj_bits = blk.bitcast_double_to_i64(obj_box);
-    let raw = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
-    let tagged = blk.and(I64, &obj_bits, &tag_mask);
-    let is_ptr = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
-    let admitted = emit_u8_cache_holds(blk, &raw);
-    (blk.and(I1, &is_ptr, &admitted), raw)
+fn emit_u8_header_admission(
+    ctx: &mut FnCtx<'_>,
+    obj_box: &str,
+    miss: &str,
+) -> super::byte_cell::Access {
+    super::byte_cell::resolve(
+        ctx,
+        obj_box,
+        &[
+            crate::runtime_abi::GC_TYPE_BUFFER,
+            crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY,
+        ],
+        miss,
+    )
 }
 
-/// `i1`: `PERRY_U8_INLINE_CACHE` holds exactly `raw`. The cache is two-way
-/// set-associative (#10515): `raw` may sit in either slot of the pair
-/// `(raw >> 3) & 62`, which duplicates
-/// `perry-runtime/src/buffer/header.rs::u8_inline_cache_pair` — keep in sync.
-/// Full-address compares, so an empty slot (0) never matches a real pointer.
-pub(crate) fn emit_u8_cache_holds(blk: &mut crate::block::LlBlock, raw: &str) -> String {
-    let shifted = blk.lshr(I64, raw, "3");
-    let pair = blk.and(I64, &shifted, "62");
-    let second = blk.or(I64, &pair, "1");
-    let first_ptr = blk.gep(
-        "[64 x i64]",
-        "@PERRY_U8_INLINE_CACHE",
-        &[(I64, "0"), (I64, &pair)],
+/// Access uses the common cell header and current owner storage. Any derived
+/// data address is consumed without collection, or retained with its owner.
+pub(crate) fn emit_u8_inline_header_guard(blk: &mut crate::block::LlBlock, raw: &str) -> String {
+    let h = super::byte_cell::header_word(blk, raw);
+    let t = blk.and(I64, &h, &(0xffu64 | (1 << 23)).to_string());
+    let node = blk.icmp_eq(I64, &t, &crate::runtime_abi::GC_TYPE_BUFFER.to_string());
+    let u8 = blk.icmp_eq(
+        I64,
+        &t,
+        &crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY.to_string(),
     );
-    let second_ptr = blk.gep(
-        "[64 x i64]",
-        "@PERRY_U8_INLINE_CACHE",
-        &[(I64, "0"), (I64, &second)],
-    );
-    let first = blk.load(I64, &first_ptr);
-    let second = blk.load(I64, &second_ptr);
-    let in_first = blk.icmp_eq(I64, &first, raw);
-    let in_second = blk.icmp_eq(I64, &second, raw);
-    blk.or(I1, &in_first, &in_second)
+    blk.or(I1, &node, &u8)
 }
 
 /// `idx ult length` against an admitted buffer's `u32` length at offset 0.
@@ -311,7 +275,7 @@ fn emit_u8_in_bounds(ctx: &mut FnCtx<'_>, raw: &str, idx_i32: &str) -> String {
 
 fn emit_u8_byte_ptr(ctx: &mut FnCtx<'_>, raw: &str, idx_i32: &str) -> String {
     let blk = ctx.block();
-    let data_base = blk.add(I64, raw, "8");
+    let data_base = raw;
     let idx_i64 = blk.zext(I32, idx_i32, I64);
     let addr = blk.add(I64, &data_base, &idx_i64);
     blk.inttoptr(I64, &addr)
@@ -334,15 +298,17 @@ pub(crate) fn emit_u8_cached_get_i32(
     let load_label = ctx.block_label(load_idx);
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
-    let (hit, raw) = emit_u8_cache_admission(ctx, obj_box);
+    let access = emit_u8_header_admission(ctx, obj_box, &slow_label);
+    let raw = &access.raw;
+    let hit = "true";
     ctx.block().cond_br(&hit, &chk_label, &slow_label);
 
     ctx.current_block = chk_idx;
-    let in_bounds = emit_u8_in_bounds(ctx, &raw, idx_i32);
+    let in_bounds = ctx.block().icmp_ult(I32, idx_i32, &access.len);
     ctx.block().cond_br(&in_bounds, &load_label, &slow_label);
 
     ctx.current_block = load_idx;
-    let ptr = emit_u8_byte_ptr(ctx, &raw, idx_i32);
+    let ptr = emit_u8_byte_ptr(ctx, &access.data, idx_i32);
     let (fast_val, fast_end) = {
         let blk = ctx.block();
         let byte = blk.load(I8, &ptr);
@@ -388,15 +354,17 @@ pub(crate) fn emit_u8_cached_get_value(
     let load_label = ctx.block_label(load_idx);
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
-    let (hit, raw) = emit_u8_cache_admission(ctx, obj_box);
+    let access = emit_u8_header_admission(ctx, obj_box, &slow_label);
+    let raw = &access.raw;
+    let hit = "true";
     ctx.block().cond_br(&hit, &chk_label, &slow_label);
 
     ctx.current_block = chk_idx;
-    let in_bounds = emit_u8_in_bounds(ctx, &raw, idx_i32);
+    let in_bounds = ctx.block().icmp_ult(I32, idx_i32, &access.len);
     ctx.block().cond_br(&in_bounds, &load_label, &slow_label);
 
     ctx.current_block = load_idx;
-    let ptr = emit_u8_byte_ptr(ctx, &raw, idx_i32);
+    let ptr = emit_u8_byte_ptr(ctx, &access.data, idx_i32);
     let (fast_val, fast_end) = {
         let blk = ctx.block();
         let byte = blk.load(I8, &ptr);
@@ -438,20 +406,8 @@ pub(crate) fn emit_u8_cached_get_value(
     )
 }
 
-/// #10515: the byte store of an untyped `obj[i] = v` whose receiver is an
-/// admitted `Uint8Array` (a `PERRY_U8_INLINE_CACHE` hit: a live, owning,
-/// inline-storage byte view). The same facts the runtime's
-/// `cached_u8_index_set` checks after its receiver-classification ladder, read
-/// here first, from the receiver's address and the operands:
-///
-/// * the index is a number in `[0, 2^31)` that is an exact integer and below
-///   the buffer's `u32` length at offset 0 (an integer-valued double is its
-///   own canonical index; `-0` stores at 0, as `ToPropertyKey(-0)` is `"0"`);
-/// * the value is a plain number (no NaN-box tag, so `ToNumber` runs no user
-///   code) in `(-2^31, 2^31)`, whose truncation's low byte is `ToUint8`.
-///
-/// Anything else, including NaN, an infinity or a larger magnitude (whose
-/// `ToUint8` needs the modulo), runs `slow` — the complete `[[Set]]`.
+/// Access uses the common cell header and current owner storage. Any derived
+/// data address is consumed without collection, or retained with its owner.
 pub(crate) fn emit_u8_cached_dyn_set(
     ctx: &mut FnCtx<'_>,
     obj_box: &str,
@@ -467,7 +423,16 @@ pub(crate) fn emit_u8_cached_dyn_set(
     let store_label = ctx.block_label(store_idx);
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
-    let (hit, raw) = emit_u8_cache_admission(ctx, obj_box);
+    let access = super::byte_cell::resolve_write(
+        ctx,
+        obj_box,
+        &[
+            crate::runtime_abi::GC_TYPE_BUFFER,
+            crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY,
+        ],
+        &slow_label,
+    );
+    let hit = "true";
     {
         let blk = ctx.block();
         // Range tests before any `fptosi`, whose out-of-range result is poison.
@@ -494,7 +459,7 @@ pub(crate) fn emit_u8_cached_dyn_set(
         (idx_i32, val_i32)
     };
     let ok = {
-        let in_bounds = emit_u8_in_bounds(ctx, &raw, &idx_i32);
+        let in_bounds = ctx.block().icmp_ult(I32, &idx_i32, &access.len);
         let blk = ctx.block();
         let idx_back = blk.sitofp(I32, &idx_i32, DOUBLE);
         let is_int = blk.fcmp("oeq", &idx_back, idx_d);
@@ -503,7 +468,7 @@ pub(crate) fn emit_u8_cached_dyn_set(
     ctx.block().cond_br(&ok, &store_label, &slow_label);
 
     ctx.current_block = store_idx;
-    let ptr = emit_u8_byte_ptr(ctx, &raw, &idx_i32);
+    let ptr = emit_u8_byte_ptr(ctx, &access.data, &idx_i32);
     {
         let blk = ctx.block();
         let byte = blk.trunc(I32, &val_i32, I8);
@@ -536,15 +501,25 @@ pub(crate) fn emit_u8_cached_set_i32(
     let store_label = ctx.block_label(store_idx);
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
-    let (hit, raw) = emit_u8_cache_admission(ctx, obj_box);
+    let access = super::byte_cell::resolve_write(
+        ctx,
+        obj_box,
+        &[
+            crate::runtime_abi::GC_TYPE_BUFFER,
+            crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY,
+        ],
+        &slow_label,
+    );
+    let raw = &access.raw;
+    let hit = "true";
     ctx.block().cond_br(&hit, &chk_label, &slow_label);
 
     ctx.current_block = chk_idx;
-    let in_bounds = emit_u8_in_bounds(ctx, &raw, idx_i32);
+    let in_bounds = ctx.block().icmp_ult(I32, idx_i32, &access.len);
     ctx.block().cond_br(&in_bounds, &store_label, &slow_label);
 
     ctx.current_block = store_idx;
-    let ptr = emit_u8_byte_ptr(ctx, &raw, idx_i32);
+    let ptr = emit_u8_byte_ptr(ctx, &access.data, idx_i32);
     {
         let blk = ctx.block();
         let byte = blk.trunc(I32, val_i32, I8);
@@ -568,80 +543,10 @@ pub(crate) fn emit_u8_cached_set_i32(
 pub(crate) fn emit_u8_view_data_guard(
     ctx: &mut FnCtx<'_>,
     obj_box: &str,
-    raw: &str,
+    _raw: &str,
     miss_label: &str,
 ) -> String {
-    let header_idx = ctx.new_block("u8v.header");
-    let data_idx = ctx.new_block("u8v.data");
-    let header_label = ctx.block_label(header_idx);
-    let data_label = ctx.block_label(data_idx);
-    let floor =
-        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
-    let ceiling =
-        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
-    {
-        let blk = ctx.block();
-        let bits = blk.bitcast_double_to_i64(obj_box);
-        let tag = blk.and(I64, &bits, &i64_literal(crate::nanbox::TAG_MASK));
-        let is_ptr = blk.icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_I64);
-        let above = blk.icmp_uge(I64, raw, &floor);
-        let below = blk.icmp_ult(I64, raw, &ceiling);
-        let low = blk.and(I64, raw, "7");
-        let aligned = blk.icmp_eq(I64, &low, "0");
-        let ok = blk.and(I1, &is_ptr, &above);
-        let ok = blk.and(I1, &ok, &below);
-        let ok = blk.and(I1, &ok, &aligned);
-        blk.cond_br(&ok, &header_label, miss_label);
-    }
-    ctx.current_block = header_idx;
-    {
-        let blk = ctx.block();
-        let type_addr = blk.sub(I64, raw, &crate::runtime_abi::GC_HEADER_SIZE.to_string());
-        let type_ptr = blk.inttoptr(I64, &type_addr);
-        let kind = blk.load(I8, &type_ptr);
-        let node = blk.icmp_eq(I8, &kind, &crate::runtime_abi::GC_TYPE_BUFFER.to_string());
-        let u8 = blk.icmp_eq(
-            I8,
-            &kind,
-            &crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY.to_string(),
-        );
-        let byte_brand = blk.or(I1, &node, &u8);
-        let reserved_addr = blk.add(I64, &type_addr, "2");
-        let reserved_ptr = blk.inttoptr(I64, &reserved_addr);
-        let reserved = blk.load(I16, &reserved_ptr);
-        let flag = blk.and(
-            I16,
-            &reserved,
-            &crate::runtime_abi::GC_BUFFER_VIEW_DATA.to_string(),
-        );
-        let pointer_layout = blk.icmp_ne(I16, &flag, "0");
-        let payload = blk.inttoptr(I64, raw);
-        let first = blk.load(I32, &payload);
-        let not_symbol = blk.icmp_ne(
-            I32,
-            &first,
-            &crate::runtime_abi::SYMBOL_HEADER_MAGIC.to_string(),
-        );
-        let ok = blk.and(I1, &byte_brand, &pointer_layout);
-        let ok = blk.and(I1, &ok, &not_symbol);
-        blk.cond_br(&ok, &data_label, miss_label);
-    }
-    ctx.current_block = data_idx;
-    emit_u8_view_data_load(ctx, raw)
-}
-
-/// Only called after the view-layout guard. Loading PTR keeps this native
-/// pointer slot correct on ILP32 targets too.
-pub(crate) fn emit_u8_view_data_load(ctx: &mut FnCtx<'_>, raw: &str) -> String {
-    let blk = ctx.block();
-    let slot = blk.add(
-        I64,
-        raw,
-        &crate::runtime_abi::BUFFER_VIEW_DATA_OFFSET.to_string(),
-    );
-    let slot = blk.inttoptr(I64, &slot);
-    let data = blk.load(PTR, &slot);
-    blk.ptrtoint(&data, I64)
+    emit_u8_header_admission(ctx, obj_box, miss_label).data
 }
 
 fn emit_u8_view_get_value(
@@ -708,13 +613,16 @@ pub(crate) fn emit_u8_atomic_load_f64(
 }
 
 pub(crate) fn byte_view_param_for(
-    ctx: &FnCtx<'_>,
+    ctx: &mut FnCtx<'_>,
     object: &Expr,
 ) -> Option<crate::collectors::ByteViewParamAccess> {
-    match object {
-        Expr::LocalGet(id) => ctx.receiver_descriptors.byte_view_param(*id).cloned(),
-        _ => None,
-    }
+    let Expr::LocalGet(id) = object else {
+        return None;
+    };
+    let mut access = ctx.receiver_descriptors.byte_view_param(*id)?.clone();
+    access.valid_i1 = ctx.block().load(I1, &access.valid_slot);
+    access.data_i64 = ctx.block().load(I64, &access.data_slot);
+    Some(access)
 }
 
 /// Amortize entry validation only for indexed reads in loops. Single-read
@@ -793,13 +701,14 @@ pub(crate) fn loop_param_is_read(body: &[perry_hir::Stmt], id: u32) -> bool {
 }
 
 pub(crate) fn materialize_byte_view_param(ctx: &mut FnCtx<'_>, id: u32, boxed: &str) {
-    let data_i64 = ctx
-        .block()
-        .call(I64, "js_u8_resolve_read_data", &[(DOUBLE, boxed)]);
-    let valid_i1 = ctx.block().icmp_ne(I64, &data_i64, "0");
-    ctx.receiver_descriptors.materialize_byte_view_param(
+    super::byte_cell::materialize_param(
+        ctx,
         id,
-        crate::collectors::ByteViewParamAccess { valid_i1, data_i64 },
+        boxed,
+        &[
+            crate::runtime_abi::GC_TYPE_BUFFER,
+            crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY,
+        ],
     );
 }
 

@@ -84,12 +84,12 @@ impl TransferredBacking {
         let backing = super::header::take_owned_backing(source).unwrap_or_else(|| {
             // Inline and addon-owned stores cannot leave their original owner.
             // Move to native storage once, after successful clone validation.
-            let data = if crate::typedarray::lookup_typed_array_kind(source).is_some() {
-                crate::typedarray::data_ptr(source as *const crate::typedarray::TypedArrayHeader)
-            } else {
-                super::buffer_data(source as *const super::BufferHeader)
-            };
-            Backing::copy(data, self.length)
+            super::bytes::no_gc(|scope| {
+                let bytes =
+                    super::bytes::bytes(crate::value::js_nanbox_pointer(source as i64), scope)
+                        .expect("validated transfer source");
+                Backing::copy(bytes.as_ptr(), self.length)
+            })
         });
         #[cfg(test)]
         let backing = if super::bytes::b4_sabotage("transfer_copy") {
@@ -127,7 +127,7 @@ impl Clone for TransferredBacking {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::buffer::{buffer_data, js_array_buffer_new, BufferHeader};
+    use crate::buffer::{js_array_buffer_new, BufferHeader};
     use crate::gc::RuntimeHandleScope;
     use crate::thread::{deserialize_nanbox_on_current_thread, serialize_message};
     use crate::value::{JSValue, POINTER_MASK};
@@ -137,6 +137,14 @@ mod tests {
         let lock = crate::gc::global_side_table_test_lock();
         crate::gc::register_runtime_handle_root_scanner_for_tests();
         lock
+    }
+
+    fn byte_address(buffer: *const BufferHeader) -> usize {
+        crate::buffer::bytes::no_gc(|_| {
+            crate::buffer::bytes::span(crate::value::js_nanbox_pointer(buffer as i64), false)
+                .unwrap()
+                .ptr as usize
+        })
     }
 
     fn count() -> usize {
@@ -153,7 +161,7 @@ mod tests {
         let scope = RuntimeHandleScope::new();
         let source = js_array_buffer_new(32 * 1024 * 1024);
         let source_root = scope.root_raw_mut_ptr(source);
-        let original = buffer_data(source) as usize;
+        let original = byte_address(source);
         unsafe {
             *(original as *mut u8) = 37;
             *(original as *mut u8).add(32 * 1024 * 1024 - 1) = 91;
@@ -178,7 +186,7 @@ mod tests {
                 let root = scope.root_nanbox_u64(bits);
                 let received = (bits & POINTER_MASK) as *const BufferHeader;
                 assert_eq!(
-                    buffer_data(received) as usize,
+                    byte_address(received),
                     original,
                     "transfer must move the original allocation"
                 );
@@ -186,7 +194,7 @@ mod tests {
                 drop(message);
                 collect();
                 let received = (root.get_nanbox_u64() & POINTER_MASK) as *const BufferHeader;
-                assert_eq!(*buffer_data(received), 37);
+                assert_eq!(crate::buffer::js_buffer_get(received, 0), 37);
                 crate::buffer::bytes::no_gc(|scope| {
                     let data = crate::buffer::bytes::bytes(
                         crate::value::js_nanbox_pointer(received as i64),
@@ -209,7 +217,7 @@ mod tests {
         let before = count();
         let (message, original) = std::thread::spawn(|| {
             let source = js_array_buffer_new(1024 * 1024);
-            let original = buffer_data(source) as usize;
+            let original = byte_address(source);
             unsafe {
                 *(original as *mut u8) = 81;
             }
@@ -228,8 +236,8 @@ mod tests {
         let scope = RuntimeHandleScope::new();
         let root = scope.root_nanbox_u64(unsafe { deserialize_nanbox_on_current_thread(&message) });
         let received = (root.get_nanbox_u64() & POINTER_MASK) as *const BufferHeader;
-        assert_eq!(buffer_data(received) as usize, original);
-        assert_eq!(unsafe { *buffer_data(received) }, 81);
+        assert_eq!(byte_address(received), original);
+        assert_eq!(crate::buffer::js_buffer_get(received, 0), 81);
         crate::buffer::detach_array_buffer(received as usize);
         assert_eq!(count(), before);
     }
@@ -299,9 +307,9 @@ mod tests {
         let scope = RuntimeHandleScope::new();
         let source = js_array_buffer_new(64);
         let root = scope.root_raw_mut_ptr(source);
-        let data = buffer_data(source);
-        unsafe {
-            *(data as *mut u8) = 123;
+        let data = byte_address(source);
+        {
+            crate::buffer::js_buffer_set(source, 0, 123);
         }
         assert!(unsafe {
             serialize_message(
@@ -321,8 +329,11 @@ mod tests {
         }
         .is_err());
         assert!(!crate::buffer::is_detached_buffer(source as usize));
-        assert_eq!(buffer_data(root.get_raw_mut_ptr::<BufferHeader>()), data);
-        assert_eq!(unsafe { *data }, 123);
+        assert_eq!(byte_address(root.get_raw_mut_ptr::<BufferHeader>()), data);
+        assert_eq!(
+            crate::buffer::js_buffer_get(root.get_raw_mut_ptr::<BufferHeader>(), 0),
+            123
+        );
         crate::buffer::detach_array_buffer(source as usize);
         assert_eq!(count(), before);
     }
@@ -345,11 +356,11 @@ mod tests {
         let b = scope.root_nanbox_u64(unsafe { deserialize_nanbox_on_current_thread(&copy) });
         let ap = (a.get_nanbox_u64() & POINTER_MASK) as *mut BufferHeader;
         let bp = (b.get_nanbox_u64() & POINTER_MASK) as *mut BufferHeader;
-        assert_ne!(buffer_data(ap), buffer_data(bp));
-        unsafe {
-            *crate::buffer::buffer_data_mut(ap) = 55;
+        assert_ne!(byte_address(ap), byte_address(bp));
+        {
+            crate::buffer::js_buffer_set(ap, 0, 55);
         }
-        assert_eq!(unsafe { *buffer_data(bp) }, 0);
+        assert_eq!(crate::buffer::js_buffer_get(bp, 0), 0);
         crate::buffer::detach_array_buffer(ap as usize);
         crate::buffer::detach_array_buffer(bp as usize);
     }

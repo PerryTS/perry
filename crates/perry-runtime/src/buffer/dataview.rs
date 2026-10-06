@@ -183,7 +183,7 @@ unsafe fn read_bytes<const N: usize>(buf: *const BufferHeader, offset: i64) -> [
     if buf.is_null() || offset < 0 {
         throw_dataview_oob();
     }
-    let len = (*buf).length as i64;
+    let len = (super::store::length(buf as usize) as u32) as i64;
     if offset + (N as i64) > len {
         // Failure path only: a view its resizable buffer shrank past has a
         // zeroed length, and the spec's answer for it is a TypeError
@@ -205,7 +205,7 @@ unsafe fn write_bytes(buf: *mut BufferHeader, offset: i64, bytes: &[u8]) {
     if buf.is_null() || offset < 0 {
         throw_dataview_oob();
     }
-    let len = (*buf).length as i64;
+    let len = (super::store::length(buf as usize) as u32) as i64;
     // Detach zeroes every registered view's length before decommitting backing
     // pages. Keep the common non-empty path table-free; only a zero-length view
     // needs to distinguish detached TypeError from ordinary RangeError.
@@ -421,8 +421,7 @@ fn data_view_direct_receiver(recv: f64, method_name: &str) -> Option<usize> {
     // `dv.getFloat64 = fn` style shadows live in the buffer own-props table;
     // the monotonic flag keeps this probe (a process-global mutex) off the
     // hot path for programs that never store props on a buffer.
-    if super::buffer_own_props_possible() && super::buffer_get_own_prop(addr, method_name).is_some()
-    {
+    if super::buffer_get_own_prop(addr, method_name).is_some() {
         return None;
     }
     Some(addr)

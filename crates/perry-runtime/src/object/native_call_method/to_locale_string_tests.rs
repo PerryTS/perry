@@ -57,16 +57,11 @@ fn typed(kind: u8, values: &[f64]) -> f64 {
 }
 
 fn buffer(bytes: &[u8]) -> *mut crate::buffer::BufferHeader {
-    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
-    unsafe {
-        (*buf).length = bytes.len() as u32;
-        std::ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            crate::buffer::buffer_data_mut(buf),
-            bytes.len(),
-        );
-    }
-    buf
+    crate::JSValue::from_bits(
+        crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes).to_bits(),
+    )
+    .as_pointer::<crate::buffer::BufferHeader>()
+    .cast_mut()
 }
 
 // ---------------------------------------------------------------------------

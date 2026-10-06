@@ -31,25 +31,13 @@ pub extern "C" fn js_buffer_equals(
         return 0;
     }
 
-    unsafe {
-        let len1 = (*p1).length;
-        let len2 = (*p2).length;
-
-        if len1 != len2 {
-            return 0;
-        }
-
-        let data1 = buffer_data(p1);
-        let data2 = buffer_data(p2);
-
-        for i in 0..len1 as usize {
-            if *data1.add(i) != *data2.add(i) {
-                return 0;
-            }
-        }
-
-        1
-    }
+    super::bytes::no_gc(|scope| {
+        let a =
+            super::bytes::bytes(crate::value::js_nanbox_pointer(p1 as i64), scope).unwrap_or(&[]);
+        let b =
+            super::bytes::bytes(crate::value::js_nanbox_pointer(p2 as i64), scope).unwrap_or(&[]);
+        i32::from(a == b)
+    })
 }
 
 /// Lexicographic compare of two buffers (Buffer.compare semantics).
@@ -67,17 +55,13 @@ pub extern "C" fn js_buffer_compare(a: *const BufferHeader, b: *const BufferHead
     if pb.is_null() {
         return 1;
     }
-    unsafe {
-        let la = (*pa).length as usize;
-        let lb = (*pb).length as usize;
-        let da = std::slice::from_raw_parts(buffer_data(pa), la);
-        let db = std::slice::from_raw_parts(buffer_data(pb), lb);
-        match da.cmp(db) {
-            std::cmp::Ordering::Less => -1,
-            std::cmp::Ordering::Equal => 0,
-            std::cmp::Ordering::Greater => 1,
-        }
-    }
+    super::bytes::no_gc(|scope| {
+        let a =
+            super::bytes::bytes(crate::value::js_nanbox_pointer(pa as i64), scope).unwrap_or(&[]);
+        let b =
+            super::bytes::bytes(crate::value::js_nanbox_pointer(pb as i64), scope).unwrap_or(&[]);
+        ordering(a.cmp(b))
+    })
 }
 
 /// Lexicographic compare over Node's range-argument form:
@@ -102,34 +86,26 @@ pub extern "C" fn js_buffer_compare_range(
     if pb.is_null() {
         return 1;
     }
-    unsafe {
-        let la = (*pa).length as i32;
-        let lb = (*pb).length as i32;
-        // Node throws ERR_OUT_OF_RANGE when any range arg is outside
-        // [0, length] or when start > end. The previous silent-clamp
-        // matched Perry's pre-error-shape convention; align with Node
-        // now that the error helper exists.
+    let result = super::bytes::no_gc(|scope| {
+        let a =
+            super::bytes::bytes(crate::value::js_nanbox_pointer(pa as i64), scope).unwrap_or(&[]);
+        let b =
+            super::bytes::bytes(crate::value::js_nanbox_pointer(pb as i64), scope).unwrap_or(&[]);
         if target_start < 0
             || target_end < target_start
-            || target_end > lb
+            || target_end as usize > b.len()
             || source_start < 0
             || source_end < source_start
-            || source_end > la
+            || source_end as usize > a.len()
         {
-            super::numeric::throw_out_of_range();
+            return None;
         }
-        let ss = source_start;
-        let se = source_end;
-        let ts = target_start;
-        let te = target_end;
-        let da = std::slice::from_raw_parts(buffer_data(pa).add(ss as usize), (se - ss) as usize);
-        let db = std::slice::from_raw_parts(buffer_data(pb).add(ts as usize), (te - ts) as usize);
-        match da.cmp(db) {
-            std::cmp::Ordering::Less => -1,
-            std::cmp::Ordering::Equal => 0,
-            std::cmp::Ordering::Greater => 1,
-        }
-    }
+        Some(ordering(
+            a[source_start as usize..source_end as usize]
+                .cmp(&b[target_start as usize..target_end as usize]),
+        ))
+    });
+    result.unwrap_or_else(|| super::numeric::throw_out_of_range())
 }
 
 /// Search for a byte sequence in a buffer.
@@ -137,9 +113,10 @@ fn buffer_index_of_bytes(buf: *const BufferHeader, needle: &[u8], start: i32) ->
     if buf.is_null() {
         return -1;
     }
-    unsafe {
-        let len = (*buf).length as usize;
-        let data = std::slice::from_raw_parts(buffer_data(buf), len);
+    super::bytes::no_gc(|scope| {
+        let data =
+            super::bytes::bytes(crate::value::js_nanbox_pointer(buf as i64), scope).unwrap_or(&[]);
+        let len = data.len();
         let from = if start < 0 {
             ((len as i32) + start).max(0) as usize
         } else {
@@ -157,7 +134,7 @@ fn buffer_index_of_bytes(buf: *const BufferHeader, needle: &[u8], start: i32) ->
             }
         }
         -1
-    }
+    })
 }
 
 /// Reverse search for a byte sequence in a buffer.
@@ -165,9 +142,10 @@ fn buffer_last_index_of_bytes(buf: *const BufferHeader, needle: &[u8], start: i3
     if buf.is_null() {
         return -1;
     }
-    unsafe {
-        let len = (*buf).length as usize;
-        let data = std::slice::from_raw_parts(buffer_data(buf), len);
+    super::bytes::no_gc(|scope| {
+        let data =
+            super::bytes::bytes(crate::value::js_nanbox_pointer(buf as i64), scope).unwrap_or(&[]);
+        let len = data.len();
         if needle.is_empty() {
             return if start < 0 {
                 ((len as i32) + start).clamp(0, len as i32)
@@ -190,7 +168,7 @@ fn buffer_last_index_of_bytes(buf: *const BufferHeader, needle: &[u8], start: i3
             }
         }
         -1
-    }
+    })
 }
 
 /// The needle bytes of an SSO (inline short string) needle under `encoding`,
@@ -236,10 +214,11 @@ fn buffer_search_needle_with_encoding(
         0
     };
     if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
-        let other = raw_ptr as *const BufferHeader;
-        return unsafe {
-            Some(std::slice::from_raw_parts(buffer_data(other), (*other).length as usize).to_vec())
-        };
+        return super::bytes::no_gc(|scope| {
+            super::bytes::bytes(crate::value::js_nanbox_pointer(raw_ptr as i64), scope)
+                .ok()
+                .map(<[u8]>::to_vec)
+        });
     }
     if top16 == 0x7FFF {
         let str_ptr = (needle_bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
@@ -301,10 +280,12 @@ pub extern "C" fn js_buffer_index_of_enc(
         0
     };
     if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
-        let other = raw_ptr as *const BufferHeader;
-        let needle_slice =
-            unsafe { std::slice::from_raw_parts(buffer_data(other), (*other).length as usize) };
-        return buffer_index_of_bytes(buf, needle_slice, start);
+        return super::bytes::no_gc(|scope| {
+            let needle =
+                super::bytes::bytes(crate::value::js_nanbox_pointer(raw_ptr as i64), scope)
+                    .unwrap_or(&[]);
+            buffer_index_of_bytes(buf, needle, start)
+        });
     }
     // String needle (STRING_TAG-boxed)
     if top16 == 0x7FFF {
@@ -385,31 +366,48 @@ pub extern "C" fn js_buffer_includes_enc(
 #[no_mangle]
 pub extern "C" fn js_buffer_to_json(buf_ptr: f64) -> f64 {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *const BufferHeader;
-    let obj = crate::object::js_object_alloc(0, 2);
-    unsafe {
+    let source = (!buf.is_null()).then(|| {
+        super::bytes::ReadLease::new(crate::value::js_nanbox_pointer(buf as i64)).unwrap()
+    });
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let obj = handles.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
+    {
         let type_key = crate::string::js_string_from_bytes(b"type".as_ptr(), 4);
         let type_val = crate::string::js_string_from_bytes(b"Buffer".as_ptr(), 6);
         crate::object::js_object_set_field_by_name(
-            obj,
+            obj.get_raw_mut_ptr(),
             type_key,
             f64::from_bits(crate::JSValue::string_ptr(type_val).bits()),
         );
 
-        let arr = crate::array::js_array_alloc(0);
-        let mut arr_ptr = arr;
-        if !buf.is_null() {
-            let len = (*buf).length as usize;
-            let data = buffer_data(buf);
-            for i in 0..len {
-                arr_ptr = crate::array::js_array_push_f64(arr_ptr, *data.add(i) as f64);
+        let arr = handles.root_raw_mut_ptr(crate::array::js_array_alloc(0));
+        if let Some(source) = source.as_ref() {
+            for byte in source.iter() {
+                arr.set_raw_mut_ptr(crate::array::js_array_push_f64(
+                    arr.get_raw_mut_ptr(),
+                    *byte as f64,
+                ));
             }
         }
         let data_key = crate::string::js_string_from_bytes(b"data".as_ptr(), 4);
         crate::object::js_object_set_field_by_name(
-            obj,
+            obj.get_raw_mut_ptr(),
             data_key,
-            f64::from_bits(crate::JSValue::pointer(arr_ptr as *mut u8).bits()),
+            f64::from_bits(
+                crate::JSValue::pointer(arr.get_raw_mut_ptr::<ArrayHeader>() as *mut u8).bits(),
+            ),
         );
     }
-    f64::from_bits(crate::JSValue::pointer(obj as *mut u8).bits())
+    f64::from_bits(
+        crate::JSValue::pointer(obj.get_raw_mut_ptr::<crate::object::ObjectHeader>() as *mut u8)
+            .bits(),
+    )
+}
+
+fn ordering(order: std::cmp::Ordering) -> i32 {
+    match order {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
 }

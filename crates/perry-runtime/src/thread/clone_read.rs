@@ -187,7 +187,7 @@ impl<'s> Reader<'s> {
                 // Same process-global store (#4913), no copy. Its header
                 // carries the SharedArrayBuffer brand (#10694), so this
                 // thread's checks recognise it without registering it.
-                JSValue::pointer(*addr as *const u8).bits()
+                JSValue::pointer(crate::shared_sab::wrap_shared_sab(*addr).cast::<u8>()).bits()
             }
             // The boundary rejects these before anything is read.
             SerializedValue::Unsupported(_) => TAG_UNDEFINED,

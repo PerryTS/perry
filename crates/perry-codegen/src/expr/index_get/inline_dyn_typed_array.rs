@@ -413,7 +413,11 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     // take. The typed-array path reaches the same guard set by the same
     // AND-reduction and is unchanged.
     ctx.current_block = ta_brand_idx;
-    let is_typed_array = ctx.block().icmp_eq(I8, &gc_type, "11"); // GC_TYPE_TYPED_ARRAY
+    let role = ctx.block().and(I8, &gc_type, "192");
+    let family = ctx.block().icmp_eq(I8, &role, "64");
+    let brand = ctx.block().and(I8, &gc_type, "31");
+    let typed = ctx.block().icmp_ule(I8, &brand, "11");
+    let is_typed_array = ctx.block().and(I1, &family, &typed);
     ctx.block()
         .cond_br(&is_typed_array, &ta_kind_guard_label, &elem_kind_label);
 
@@ -422,49 +426,19 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     // either, so it leaves straight through the exit rather than re-testing
     // `GC_TYPE_OBJECT` it is guaranteed to fail.
     ctx.current_block = ta_kind_guard_idx;
-    let (ta_kind, ta_ok) = {
-        let blk = ctx.block();
-        // #10516: the receiver's own storage byte (header byte 10,
-        // `TA_STORAGE_INLINE` = 0) licenses `data == header + 16`.
-        let storage_addr = blk.add(I64, &object_raw, "10");
-        let storage_ptr = blk.inttoptr(I64, &storage_addr);
-        let storage = blk.load(I8, &storage_ptr);
-        let inline_storage = blk.icmp_eq(I8, &storage, "0");
-        let kind_addr = blk.add(I64, &object_raw, "8");
-        let kind_ptr = blk.inttoptr(I64, &kind_addr);
-        let kind_i8 = blk.load(I8, &kind_ptr);
-        let kind = blk.zext(I8, &kind_i8, I64);
-        // kinds 0..=8 (Int8 .. Uint8Clamped); rejects BigInt 9/10 and Float16
-        // 11, whose lanes are not plain Numbers.
-        let kind_ok = blk.icmp_ule(I64, &kind, "8");
-        // `length` is `TypedArrayHeader` word 0.
-        let len_ptr = blk.inttoptr(I64, &object_raw);
-        let len = blk.load(I32, &len_ptr);
-        let len_i64 = blk.zext(I32, &len, I64);
-        let in_bounds = blk.icmp_ult(I64, &object_idx_i64, &len_i64);
-        let ok = blk.and(I1, &inline_storage, &kind_ok);
-        (kind, blk.and(I1, &ok, &in_bounds))
-    };
+    let brands: Vec<u8> = (0..9)
+        .map(super::super::byte_cell::brand_for_kind)
+        .collect();
+    let access = super::super::byte_cell::resolve(ctx, obj_box, &brands, &object_miss_label);
+    let h = super::super::byte_cell::header_word(ctx.block(), &object_raw);
+    let (ta_kind, ta_elem_size) = super::super::byte_cell::kind_and_width(ctx.block(), &h);
+    let len_i64 = ctx.block().zext(I32, &access.len, I64);
+    let ta_ok = ctx.block().icmp_ult(I64, &object_idx_i64, &len_i64);
     ctx.block()
         .cond_br(&ta_ok, &ta_width_label, &object_miss_label);
-
-    // `elem_size` (byte 9) is written from `kind` by `typed_array_alloc`, so
-    // the brand guard's `kind <= KIND_UINT8_CLAMPED` already bounds it to
-    // {1,2,4,8} — the same pairing the runtime's own `load_at` trusts for its
-    // offset and its load type. `tav.w1` is the final else, not a fourth test.
     ctx.current_block = ta_width_idx;
-    let (ta_elem_size, ta_addr) = {
-        let blk = ctx.block();
-        let size_addr = blk.add(I64, &object_raw, "9");
-        let size_ptr = blk.inttoptr(I64, &size_addr);
-        let size_i8 = blk.load(I8, &size_ptr);
-        let elem_size = blk.zext(I8, &size_i8, I64);
-        let offset = blk.mul(I64, &object_idx_i64, &elem_size);
-        // `data = header + size_of::<TypedArrayHeader>()`, proven by the
-        // inline storage byte above.
-        let data_base = blk.add(I64, &object_raw, "16");
-        (elem_size, blk.add(I64, &data_base, &offset))
-    };
+    let offset = ctx.block().mul(I64, &object_idx_i64, &ta_elem_size);
+    let ta_addr = ctx.block().add(I64, &access.data, &offset);
     let is_width8 = ctx.block().icmp_eq(I64, &ta_elem_size, "8");
     ctx.block()
         .cond_br(&is_width8, &ta_w8_label, &ta_width4_label);
@@ -588,18 +562,8 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     ctx.block()
         .cond_br(&elem_is_object, &elem_meta_label, &u8_brand_label);
 
-    // ---- #10515: an admitted owning byte view (`Uint8Array` / `Buffer`) ----
-    //
-    // A byte-view receiver (`GC_TYPE_BUFFER` / `GC_TYPE_BUFFER_UINT8ARRAY`,
-    // #10694) whose full address is in
-    // `PERRY_U8_INLINE_CACHE` is, by that cache's contract, a live registered
-    // byte view with `length` at offset 0 and its bytes inline at `+8` — the
-    // same proof `u8_buffer_read.rs` loads on for a `Uint8Array`-typed
-    // receiver. Untyped `b[i]` over a Buffer used to leave through the exit
-    // and the typed-array + buffer registry probes on every element. The
-    // cache is primed by the runtime byte accessors on a miss, and anything
-    // it does not hold is offered to the pointer-backed byte-view miss arm.
-    // ArrayBuffers, DataViews, foreign spans and out-of-range indices exit.
+    // Buffer and Uint8Array use the shared byte header and owner resolution.
+    // Non-indexed byte brands and invalid indices take the runtime exit.
     ctx.current_block = u8_brand_idx;
     {
         let blk = ctx.block();
@@ -614,7 +578,7 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
             &crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY.to_string(),
         );
         let is_buffer = blk.or(I1, &is_node_buffer, &is_uint8array);
-        let admitted = crate::expr::u8_buffer_read::emit_u8_cache_holds(blk, &object_raw);
+        let admitted = crate::expr::u8_buffer_read::emit_u8_inline_header_guard(blk, &object_raw);
         let hit = blk.and(I1, &is_buffer, &admitted);
         blk.cond_br(&hit, &u8_bounds_label, &u8_view_label);
     }
@@ -657,7 +621,11 @@ pub(in crate::expr) fn lower_inline_dyn_typed_array_get_with_byte_view_param(
     ctx.current_block = u8_load_idx;
     let u8_value = {
         let blk = ctx.block();
-        let data = blk.add(I64, &object_raw, "8");
+        let data = blk.add(
+            I64,
+            &object_raw,
+            &crate::runtime_abi::BYTES_STORE.to_string(),
+        );
         let addr = blk.add(I64, &data, &object_idx_i64);
         let ptr = blk.inttoptr(I64, &addr);
         let byte = blk.load(I8, &ptr);

@@ -182,7 +182,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     // byte, before the receiver-classification ladder below re-derives the
     // same fact from the buffer registries. A miss changes nothing.
     if let Some(index) = numeric_key_i32_index(idx) {
-        if let Some(byte) = crate::buffer::cached_u8_read(raw as usize, index) {
+        if let Some(byte) = crate::buffer::admitted_u8_read(raw as usize, index) {
             return byte as f64;
         }
     }

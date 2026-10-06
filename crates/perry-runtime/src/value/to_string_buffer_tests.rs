@@ -15,7 +15,11 @@ fn boxed(ptr: *mut crate::buffer::BufferHeader) -> f64 {
 fn with_printable_bytes(ptr: *mut crate::buffer::BufferHeader) -> f64 {
     unsafe {
         (*ptr).length = 2;
-        std::ptr::copy_nonoverlapping(b"hi".as_ptr(), crate::buffer::buffer_data_mut(ptr), 2);
+        crate::buffer::bytes::no_gc(|scope| {
+            crate::buffer::bytes::bytes_mut(crate::value::js_nanbox_pointer(ptr as i64), scope)
+                .unwrap()
+                .copy_from_slice(b"hi")
+        });
     }
     boxed(ptr)
 }

@@ -7935,6 +7935,7 @@ fn emit_armed_gc_loop_safepoint(ctx: &mut FnCtx<'_>) {
             blk.store(I64, &handle, &recipe.base_handle_slot);
         }
     }
+    crate::expr::byte_cell::refresh_hoisted_byte_accesses(ctx);
     // Loop regions' array bases (S3), from the same GC-updated roots.
     crate::stmt::region_loop::emit_poll_refresh(ctx)
         .expect("a region array binding lowers as a plain load");

@@ -128,7 +128,6 @@ fn rewrite_visitor_name(kind: GcRewriteDescriptorKind) -> &'static str {
         GcRewriteDescriptorKind::Map => "MapEntries",
         GcRewriteDescriptorKind::LazyArray => "LazyArrayFields",
         GcRewriteDescriptorKind::Set => "SetElements",
-        GcRewriteDescriptorKind::NativeTypedView => "NativeTypedViewFields",
         GcRewriteDescriptorKind::NativePodView => "NativePodViewFields",
         GcRewriteDescriptorKind::ObjectMeta => "ObjectMeta",
         GcRewriteDescriptorKind::MetaOnly => "MetaOnlyFields",

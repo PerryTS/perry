@@ -113,9 +113,13 @@ fn a_persistent_symbol_is_rejected_by_its_header_brand() {
 #[test]
 fn a_buffer_whose_length_word_equals_the_symbol_magic_is_still_a_buffer() {
     let buf = buffer_alloc(8);
-    let saved = unsafe { (*buf).length };
-    unsafe { (*buf).length = crate::symbol::SYMBOL_MAGIC };
+    let saved = unsafe { super::store::length(buf as usize) as u32 };
+    unsafe {
+        super::store::set_length(buf as usize, crate::symbol::SYMBOL_MAGIC);
+    }
     let seen = is_registered_buffer(buf as usize);
-    unsafe { (*buf).length = saved };
+    unsafe {
+        super::store::set_length(buf as usize, saved);
+    }
     assert!(seen);
 }

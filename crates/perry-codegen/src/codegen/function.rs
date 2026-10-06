@@ -14,7 +14,7 @@ use crate::native_value::{
 };
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
 
 use super::helpers::precise_root_analysis_enabled;
 use super::helpers::{inline_hot_small_enabled, inline_hot_small_size_cap, INLINE_HOT_SMALL_MIN};
@@ -1509,7 +1509,7 @@ pub(super) fn compile_function(
                 element_width_bytes: 1,
                 index_unit: BufferIndexUnit::Byte,
                 view_byte_offset: None,
-                length_offset_from_data: -8,
+                length_offset_from_data: 0,
                 alias: AliasState::Unknown,
                 length_source: Some(LengthSource::Unknown),
                 native_owned: None,
@@ -1563,7 +1563,7 @@ pub(super) fn compile_function(
             let handle = crate::expr::unbox_to_i64(blk, &arg_val);
             let handle_ptr = blk.inttoptr(I64, &handle);
             // TypedArrayHeader layout: length at +0, data at +16.
-            let data_ptr = blk.gep(I8, &handle_ptr, &[(I32, "16")]);
+            let data_ptr = blk.call(PTR, "js_native_buffer_data_ptr", &[(DOUBLE, &arg_val)]);
             let data_slot = ctx.func.alloca_entry(PTR);
             ctx.block().store(PTR, &data_ptr, &data_slot);
             let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
@@ -1573,13 +1573,13 @@ pub(super) fn compile_function(
                 p.id,
                 BufferViewSlot {
                     data_slot,
-                    length_slot: None,
+                    length_slot: Some(handle_ptr),
                     scope_idx: Some(scope_idx),
                     elem,
                     element_width_bytes: width,
                     index_unit: BufferIndexUnit::Element,
                     view_byte_offset: Some(0),
-                    length_offset_from_data: -16,
+                    length_offset_from_data: 0,
                     // Distinct `TaPtr` args are distinct fresh allocations
                     // (the Tier A call-site match rejects duplicate locals),
                     // so pairwise noalias holds by construction.

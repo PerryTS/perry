@@ -454,13 +454,7 @@ pub unsafe extern "C" fn js_dynamic_object_get_property(
 
     if crate::typedarray_named::is_metadata_name(name_slice) {
         if let Some(header) = crate::value::addr_class::try_read_gc_header(ptr as usize) {
-            if matches!(
-                header.obj_type,
-                crate::gc::GC_TYPE_BUFFER
-                    | crate::gc::GC_TYPE_BUFFER_UINT8ARRAY
-                    | crate::gc::GC_TYPE_TYPED_ARRAY
-                    | crate::gc::GC_TYPE_NATIVE_TYPED_VIEW
-            ) {
+            if crate::gc::is_byte_family_type(header.obj_type) {
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let receiver = scope.root_nanbox_f64(obj_value);
                 let key = crate::string::intern_ascii_literal(name_slice);
@@ -898,9 +892,7 @@ mod length_handle_band_tests {
                     obj_type: crate::gc::GC_TYPE_TYPED_ARRAY,
                     gc_flags: 0,
                     _reserved: 0,
-                    size: (crate::gc::GC_HEADER_SIZE
-                        + std::mem::size_of::<crate::typedarray::TypedArrayHeader>()
-                        + 37) as u32,
+                    size: (crate::gc::GC_HEADER_SIZE + crate::codegen_abi::BYTES_STORE + 37) as u32,
                 },
             );
             let ptr = raw
@@ -923,11 +915,7 @@ mod length_handle_band_tests {
                 crate::typedarray::TypedArrayHeader {
                     length: 37,
                     capacity: 37,
-                    kind: crate::typedarray::KIND_UINT8,
-                    elem_size: 1,
-                    storage: crate::typedarray::TA_STORAGE_INLINE,
-                    flags: 0,
-                    _pad: [0; 4],
+                    link: 0,
                 },
             );
 

@@ -14,8 +14,8 @@ pub fn format_typed_array(ta: *const TypedArrayHeader) -> String {
         return "TypedArray(0) []".to_string();
     }
     unsafe {
-        let kind = (*ta).kind;
-        let len = (*ta).length as usize;
+        let kind = crate::typedarray::element_kind(ta);
+        let len = crate::typedarray::element_length(ta) as usize;
         let name = name_for_kind(kind);
         if len == 0 {
             return format!("{}(0) []", name);

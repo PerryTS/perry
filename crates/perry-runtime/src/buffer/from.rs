@@ -17,12 +17,12 @@ pub extern "C" fn js_buffer_from_string(
     encoding: i32,
 ) -> *mut BufferHeader {
     if str_ptr.is_null() || (str_ptr as usize) < 0x1000 {
-        return buffer_alloc(0);
+        return super::pool::copy(0);
     }
 
     // #7341: `str_bytes` borrows the StringHeader's payload, and every arm of
     // `buffer_from_str_bytes` allocates before reading it — the UTF-8 arm most
-    // plainly: `buffer_alloc(len)` then `copy_nonoverlapping(str_bytes...)`.
+    // plainly: `super::pool::copy(len)` then `copy_nonoverlapping(str_bytes...)`.
     // An evacuating minor inside that allocation relocates the string, leaving
     // the slice pointing at retired from-space, and the copy reads it. That is
     // the stale-`memmove` fault the from-space quarantine reports.
@@ -60,9 +60,13 @@ fn buffer_from_str_bytes(str_bytes: &[u8], encoding: i32) -> *mut BufferHeader {
             _ => {
                 // UTF-8 (default)
                 let len = str_bytes.len();
-                let buf = buffer_alloc(len as u32);
-                (*buf).length = len as u32;
-                ptr::copy_nonoverlapping(str_bytes.as_ptr(), buffer_data_mut(buf), len);
+                let buf = super::pool::copy(len as u32);
+                super::store::set_length(buf as usize, len as u32);
+                super::bytes::no_gc(|scope| {
+                    super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+                        .unwrap()
+                        .copy_from_slice(str_bytes);
+                });
                 buf
             }
         }
@@ -81,10 +85,14 @@ pub(crate) fn buffer_string_bytes_for_encoding(str_bytes: &[u8], encoding: i32) 
 
 fn buffer_from_vec(out: Vec<u8>) -> *mut BufferHeader {
     unsafe {
-        let buf = buffer_alloc(out.len() as u32);
-        (*buf).length = out.len() as u32;
+        let buf = super::pool::copy(out.len() as u32);
+        super::store::set_length(buf as usize, out.len() as u32);
         if !out.is_empty() {
-            ptr::copy_nonoverlapping(out.as_ptr(), buffer_data_mut(buf), out.len());
+            super::bytes::no_gc(|scope| {
+                super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+                    .unwrap()
+                    .copy_from_slice(&out);
+            });
         }
         buf
     }
@@ -249,11 +257,11 @@ unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader>
         return None;
     }
 
+    let roots = crate::gc::RuntimeHandleScope::new();
+    let source = roots.root_raw_const_ptr(ptr as *const crate::object::ObjectHeader);
     let length_key = js_string_from_bytes(b"length".as_ptr(), 6);
-    let length_value = crate::object::js_object_get_field_by_name(
-        ptr as *const crate::object::ObjectHeader,
-        length_key,
-    );
+    let length_value =
+        source.with_const_ptr(|obj| crate::object::js_object_get_field_by_name(obj, length_key));
     if length_value.is_undefined() {
         return None;
     }
@@ -263,24 +271,25 @@ unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader>
     } else if length_value.is_number() {
         length_value.as_number()
     } else {
-        return Some(buffer_alloc(0));
+        return Some(super::pool::copy(0));
     };
 
     if !length.is_finite() || length <= 0.0 {
-        return Some(buffer_alloc(0));
+        return Some(super::pool::copy(0));
     }
 
     let len = length.trunc().min(u32::MAX as f64) as u32;
-    let buf = buffer_alloc(len);
-    (*buf).length = len;
-    let buf_data = buffer_data_mut(buf);
-
+    let buf = super::pool::copy(len);
+    super::store::set_length(buf as usize, len);
+    let result = roots.root_raw_mut_ptr(buf);
     for i in 0..len {
-        let value = crate::object::js_object_get_index_polymorphic(ptr as i64, i as f64);
-        *buf_data.add(i as usize) = buffer_byte_from_js_value(value);
+        let value = source.with_const_ptr::<crate::object::ObjectHeader, _>(|obj| {
+            crate::object::js_object_get_index_polymorphic(obj as i64, i as f64)
+        });
+        let byte = buffer_byte_from_js_value(value);
+        js_buffer_set(result.get_raw_mut_ptr(), i as i32, byte as i32);
     }
-
-    Some(buf)
+    Some(result.get_raw_mut_ptr())
 }
 
 unsafe fn buffer_from_object_to_primitive(value: f64, encoding: i32) -> Option<*mut BufferHeader> {
@@ -348,7 +357,7 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
     };
 
     if ptr < 0x1000 {
-        return buffer_alloc(0);
+        return super::pool::copy(0);
     }
 
     // ArrayBuffer / SharedArrayBuffer inputs create a Buffer view over the
@@ -359,30 +368,17 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
 
     // Check if it's a buffer (copy it)
     if is_registered_buffer(ptr) {
-        let src = ptr as *const BufferHeader;
+        let source = super::bytes::ReadLease::new(value_f64).unwrap();
+        let buf = super::pool::copy(source.len() as u32);
         unsafe {
-            let len = (*src).length;
-            let buf = buffer_alloc(len);
-            (*buf).length = len;
-            std::ptr::copy_nonoverlapping(buffer_data(src), buffer_data_mut(buf), len as usize);
-            // Issue #1225: Node's `Buffer.from(src)` carves the copy out of the
-            // shared 8 KiB pool slab so `src.buffer === cp.buffer`.  Perry has
-            // no pool, but we still need that `===` identity to hold for
-            // userland code that compares `.buffer` references.  Propagate
-            // src's resolved alias onto the copy; chained copies collapse to
-            // the same root so `Buffer.from(Buffer.from(src)).buffer ===
-            // src.buffer` also holds.
-            //
-            // Skip when src is a plain `Uint8Array` — Node's
-            // `Buffer.from(uint8Array)` allocates a fresh ArrayBuffer for the
-            // copy and never shares with the source.  Only honest Buffers go
-            // through the pool.
-            if !is_uint8array_buffer(ptr) {
-                let alias = resolve_buffer_ab_alias(ptr);
-                set_buffer_ab_alias(buf as usize, alias);
-            }
-            buf
+            super::store::set_length(buf as usize, source.len() as u32);
         }
+        super::bytes::no_gc(|scope| unsafe {
+            super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+                .unwrap()
+                .copy_from_slice(&source);
+        });
+        buf
     } else if let Some(buf) = unsafe { buffer_from_object_value_of(ptr, value_f64, encoding) } {
         buf
     } else if let Some(buf) = unsafe { buffer_from_array_like_object(ptr) } {
@@ -398,6 +394,10 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
 /// Create a Buffer from an array of numbers
 #[no_mangle]
 pub extern "C" fn js_buffer_from_array(arr_ptr: *const ArrayHeader) -> *mut BufferHeader {
+    buffer_from_array_with_brand(arr_ptr, crate::gc::GC_TYPE_BUFFER)
+}
+
+fn buffer_from_array_with_brand(arr_ptr: *const ArrayHeader, brand: u8) -> *mut BufferHeader {
     // #6486: `clean_arr_ptr` (rather than a manual tag strip + raw deref)
     // follows the GC_FLAG_FORWARDED chain a `push`-grown array leaves at its
     // old address (#233). A caller holding the stale pre-grow pointer —
@@ -407,7 +407,7 @@ pub extern "C" fn js_buffer_from_array(arr_ptr: *const ArrayHeader) -> *mut Buff
     // sized buffer. It also validates the header and materializes lazy arrays.
     let arr_ptr = crate::array::clean_arr_ptr(arr_ptr);
     if arr_ptr.is_null() {
-        return buffer_alloc(0);
+        return super::pool::copy(0);
     }
 
     unsafe {
@@ -423,10 +423,14 @@ pub extern "C" fn js_buffer_from_array(arr_ptr: *const ArrayHeader) -> *mut Buff
             .map(|i| buffer_byte_from_js_value(crate::array::js_array_get_f64(arr_ptr, i)))
             .collect();
 
-        let buf = buffer_alloc(len);
-        (*buf).length = len;
+        let buf = super::pool::place(brand, super::pool::Init::Copy, len);
+        super::store::set_length(buf as usize, len);
         if !bytes.is_empty() {
-            ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_data_mut(buf), bytes.len());
+            super::bytes::no_gc(|scope| {
+                super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+                    .unwrap()
+                    .copy_from_slice(&bytes);
+            });
         }
 
         buf
@@ -454,11 +458,11 @@ pub extern "C" fn js_buffer_from_arraybuffer_slice(
         0
     };
     if raw < 0x1000 || !is_registered_buffer(raw) {
-        return buffer_alloc(0);
+        return super::pool::copy(0);
     }
     unsafe {
         let src = raw as *const BufferHeader;
-        let src_len = (*src).length as i32;
+        let src_len = (super::store::length(src as usize) as u32) as i32;
         let start = byte_offset.max(0).min(src_len);
         let available = src_len - start;
         let take = if length < 0 {
@@ -469,7 +473,6 @@ pub extern "C" fn js_buffer_from_arraybuffer_slice(
         let take = take as u32;
         let start = start as u32;
         let dst = super::view::alloc(src, start, take);
-        set_buffer_ab_alias(dst as usize, resolve_buffer_ab_alias(raw));
         dst
     }
 }
@@ -478,7 +481,7 @@ pub extern "C" fn js_buffer_from_arraybuffer_slice(
 /// marks the resulting buffer so it formats as `Uint8Array(N) [ ... ]`.
 #[no_mangle]
 pub extern "C" fn js_uint8array_from_array(arr_ptr: *const ArrayHeader) -> *mut BufferHeader {
-    let buf = js_buffer_from_array(arr_ptr);
+    let buf = buffer_from_array_with_brand(arr_ptr, crate::gc::GC_TYPE_BUFFER_UINT8ARRAY);
     mark_as_uint8array(buf as usize);
     buf
 }
@@ -497,9 +500,13 @@ fn js_uint8array_from_source(source: f64) -> *mut BufferHeader {
 
     unsafe {
         let buf = buffer_alloc(bytes.len() as u32);
-        (*buf).length = bytes.len() as u32;
+        super::store::set_length(buf as usize, bytes.len() as u32);
         if !bytes.is_empty() {
-            ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_data_mut(buf), bytes.len());
+            super::bytes::no_gc(|scope| {
+                super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+                    .unwrap()
+                    .copy_from_slice(&bytes);
+            });
         }
         mark_as_uint8array(buf as usize);
         buf
@@ -546,7 +553,7 @@ pub extern "C" fn js_uint8array_alloc(length: i32) -> *mut BufferHeader {
     let length = uint8array_length_or_throw(length as f64);
     let buf = buffer_alloc(length);
     unsafe {
-        (*buf).length = length;
+        super::store::set_length(buf as usize, length);
         // `buffer_alloc` hands back old-arena memory that is NOT guaranteed
         // zeroed: the old generation reclaims and re-hands dirty blocks, and
         // only pristine mmap pages read as zero. `new Uint8Array(n)` (and the
@@ -558,7 +565,11 @@ pub extern "C" fn js_uint8array_alloc(length: i32) -> *mut BufferHeader {
         // unrelated codegen change shifted these allocations onto reclaimed
         // blocks.
         if length > 0 {
-            ptr::write_bytes(buffer_data_mut(buf), 0, length as usize);
+            super::bytes::no_gc(|scope| {
+                super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+                    .unwrap()
+                    .fill(0);
+            });
         }
     }
     mark_as_uint8array(buf as usize);
@@ -603,10 +614,9 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
                 }
                 let src = raw as *const BufferHeader;
                 unsafe {
-                    let len = (*src).length as i32;
+                    let len = (super::store::length(src as usize) as u32) as i32;
                     let view = js_buffer_slice(src, 0, len);
                     mark_as_uint8array(view as usize);
-                    set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(raw));
                     // No explicit length: over a resizable ArrayBuffer the
                     // view's length follows `byteLength` (#10873).
                     super::view::mark_length_tracking(view as usize);
@@ -615,17 +625,19 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
             }
             // Source is itself a Uint8Array → ECMAScript spec copies the
             // bytes into a fresh storage region.
-            let src = raw as *const BufferHeader;
+            let source =
+                super::bytes::ReadLease::new(crate::value::js_nanbox_pointer(raw as i64)).unwrap();
+            let dst = buffer_alloc(source.len() as u32);
             unsafe {
-                let len = (*src).length;
-                let dst = buffer_alloc(len);
-                (*dst).length = len;
-                if len > 0 {
-                    ptr::copy_nonoverlapping(buffer_data(src), buffer_data_mut(dst), len as usize);
-                }
-                mark_as_uint8array(dst as usize);
-                return dst;
+                super::store::set_length(dst as usize, source.len() as u32);
             }
+            mark_as_uint8array(dst as usize);
+            super::bytes::no_gc(|scope| unsafe {
+                super::bytes::bytes_mut(crate::value::js_nanbox_pointer(dst as i64), scope)
+                    .unwrap()
+                    .copy_from_slice(&source);
+            });
+            return dst;
         }
         if let Some(src_kind) = crate::typedarray::lookup_typed_array_kind(raw) {
             if crate::typedarray::bigint::is_bigint_kind(src_kind) {
@@ -633,14 +645,18 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
             }
             let src = raw as *const crate::typedarray::TypedArrayHeader;
             unsafe {
+                let roots = crate::gc::RuntimeHandleScope::new();
+                let source = roots.root_raw_const_ptr(src);
                 let len = crate::typedarray::js_typed_array_length(src).max(0) as u32;
-                let dst = buffer_alloc(len);
-                (*dst).length = len;
-                let dst_data = buffer_data_mut(dst);
+                let result = roots.root_raw_mut_ptr(buffer_alloc(len));
+                super::store::set_length(result.get_raw_mut_ptr::<BufferHeader>() as usize, len);
                 for i in 0..len as usize {
-                    let value = crate::typedarray::js_typed_array_get(src, i as i32);
-                    *dst_data.add(i) = buffer_byte_from_js_value(value);
+                    let value = source
+                        .with_const_ptr(|src| crate::typedarray::js_typed_array_get(src, i as i32));
+                    let byte = buffer_byte_from_js_value(value);
+                    js_buffer_set(result.get_raw_mut_ptr(), i as i32, byte as i32);
                 }
+                let dst = result.get_raw_mut_ptr();
                 mark_as_uint8array(dst as usize);
                 return dst;
             }
@@ -708,7 +724,7 @@ pub extern "C" fn js_uint8array_view(
     }
     let src = raw as *const BufferHeader;
     unsafe {
-        let total_len = (*src).length as i64;
+        let total_len = (super::store::length(src as usize) as u32) as i64;
         // #4103: spec `RangeError` for an out-of-range view. `BYTES_PER_ELEMENT`
         // is 1 for `Uint8Array`, so there is no alignment constraint — only the
         // offset and (offset + length) bounds against the backing buffer.
@@ -732,7 +748,6 @@ pub extern "C" fn js_uint8array_view(
         let end = start.saturating_add(len).min(total_len as i32);
         let view = js_buffer_slice(src, start, end);
         mark_as_uint8array(view as usize);
-        set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(raw));
         if requested.is_none() {
             super::view::mark_length_tracking(view as usize);
         }
@@ -907,7 +922,7 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
     }
 
     let src = addr as *const BufferHeader;
-    let total_len = unsafe { (*src).length as i64 };
+    let total_len = unsafe { (super::store::length(src as usize) as u32) as i64 };
 
     // Step 9: offset must not exceed the backing buffer's byteLength.
     if offset > total_len {
@@ -946,7 +961,6 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
         super::view::mark_length_tracking(view as usize);
     }
     mark_as_data_view(view as usize);
-    set_buffer_ab_alias(view as usize, resolve_buffer_ab_alias(addr));
     f64::from_bits(crate::value::JSValue::pointer(view as *mut u8).bits())
 }
 
@@ -986,11 +1000,14 @@ fn validate_buffer_alloc_size(size: i32) -> u32 {
 #[no_mangle]
 pub extern "C" fn js_buffer_alloc(size: i32, fill: i32) -> *mut BufferHeader {
     let size = validate_buffer_alloc_size(size);
-    let buf = buffer_alloc(size);
+    let buf = super::pool::place(crate::gc::GC_TYPE_BUFFER, super::pool::Init::Zeroed, size);
     unsafe {
-        (*buf).length = size;
-        let data = buffer_data_mut(buf);
-        ptr::write_bytes(data, fill as u8, size as usize);
+        super::store::set_length(buf as usize, size);
+        super::bytes::no_gc(|scope| {
+            super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+                .unwrap()
+                .fill(fill as u8);
+        });
     }
     buf
 }
@@ -1007,51 +1024,9 @@ pub extern "C" fn js_buffer_alloc_fill_value(
     let size = validate_buffer_alloc_size(size);
     let buf = buffer_alloc(size);
     unsafe {
-        (*buf).length = size;
-        let data = buffer_data_mut(buf);
-        if size == 0 {
-            return buf;
-        }
-
-        let bits = fill_value.to_bits();
-        let jsval = crate::JSValue::from_bits(bits);
-        // Numeric fills — Node coerces the fill arg through ToUint32 and
-        // writes the low byte. Raw f64, INT32-tagged, bool, undefined and
-        // null all flow through this path (undefined/null → 0, true/false
-        // → 1/0). Pre-fix only raw f64 was recognised, so a `Buffer.alloc(N, 65)`
-        // whose argument propagated as INT32_TAG was misread as a pointer
-        // and produced a zero-filled buffer.
-        if jsval.is_number() {
-            ptr::write_bytes(data, fill_value as i64 as u8, size as usize);
-            return buf;
-        }
-        if jsval.is_int32() {
-            ptr::write_bytes(data, jsval.as_int32() as u8, size as usize);
-            return buf;
-        }
-        if jsval.is_bool() {
-            let b = if jsval.as_bool() { 1u8 } else { 0u8 };
-            ptr::write_bytes(data, b, size as usize);
-            return buf;
-        }
-        if jsval.is_undefined() || jsval.is_null() {
-            ptr::write_bytes(data, 0, size as usize);
-            return buf;
-        }
-
-        let src = js_buffer_from_value(bits as i64, encoding);
-        if src.is_null() || (*src).length == 0 {
-            ptr::write_bytes(data, 0, size as usize);
-            return buf;
-        }
-
-        let src_len = (*src).length as usize;
-        let src_data = buffer_data(src);
-        for i in 0..(size as usize) {
-            *data.add(i) = *src_data.add(i % src_len);
-        }
+        super::store::set_length(buf as usize, size);
     }
-    buf
+    js_buffer_fill_value_range(buf, fill_value, 0, i32::MAX, encoding)
 }
 
 /// Fill an existing buffer with a byte value. Returns the same buffer pointer.
@@ -1084,7 +1059,7 @@ pub extern "C" fn js_buffer_fill_range(
         }
     };
     unsafe {
-        let len = (*buf).length as usize;
+        let len = (super::store::length(buf as usize) as u32) as usize;
         let start = if start < 0 {
             ((len as i32) + start).max(0) as usize
         } else {
@@ -1098,8 +1073,13 @@ pub extern "C" fn js_buffer_fill_range(
         if start >= end {
             return buf;
         }
-        let data = buffer_data_mut(buf);
-        ptr::write_bytes(data.add(start), value as u8, end - start);
+        super::bytes::no_gc(|scope| {
+            if let Ok(bytes) =
+                super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+            {
+                bytes[start..end].fill(value as u8);
+            }
+        });
     }
     buf
 }
@@ -1125,71 +1105,73 @@ pub extern "C" fn js_buffer_fill_value_range(
             buf
         }
     };
-    unsafe {
-        let len = (*buf).length as usize;
-        let start = if start < 0 {
-            ((len as i32) + start).max(0) as usize
-        } else {
-            (start as usize).min(len)
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let target = handles.root_raw_mut_ptr(buf);
+    let value = crate::JSValue::from_bits(fill_value.to_bits());
+    let byte = if value.is_number() {
+        Some(fill_value as i64 as u8)
+    } else if value.is_int32() {
+        Some(value.as_int32() as u8)
+    } else if value.is_bool() {
+        Some(u8::from(value.as_bool()))
+    } else if value.is_undefined() || value.is_null() {
+        Some(0)
+    } else {
+        None
+    };
+    let source = byte
+        .is_none()
+        .then(|| js_buffer_from_value(fill_value.to_bits() as i64, encoding));
+    let source = source.map(|ptr| {
+        super::bytes::no_gc(|scope| {
+            super::bytes::bytes(crate::value::js_nanbox_pointer(ptr as i64), scope)
+                .unwrap_or(&[])
+                .to_vec()
+        })
+    });
+    super::bytes::no_gc(|scope| unsafe {
+        let current = target.get_raw_mut_ptr::<BufferHeader>();
+        let Ok(dst) =
+            super::bytes::bytes_mut(crate::value::js_nanbox_pointer(current as i64), scope)
+        else {
+            return;
         };
-        let end = if end < 0 {
-            ((len as i32) + end).max(0) as usize
-        } else {
-            (end as usize).min(len)
+        let clamp = |x: i32| {
+            if x < 0 {
+                (dst.len() as i64 + x as i64).max(0) as usize
+            } else {
+                (x as usize).min(dst.len())
+            }
         };
+        let start = clamp(start);
+        let end = clamp(end);
         if start >= end {
-            return buf;
+            return;
         }
-
-        let data = buffer_data_mut(buf);
-        let dst = data.add(start);
-        let count = end - start;
-        let bits = fill_value.to_bits();
-        let jsval = crate::JSValue::from_bits(bits);
-
-        let write_byte = |byte: u8| {
-            ptr::write_bytes(dst, byte, count);
-        };
-
-        if jsval.is_number() {
-            write_byte(fill_value as i64 as u8);
-            return buf;
+        let dst = &mut dst[start..end];
+        if let Some(byte) = byte {
+            dst.fill(byte);
+            return;
         }
-        if jsval.is_int32() {
-            write_byte(jsval.as_int32() as u8);
-            return buf;
+        let src = source.as_deref().unwrap_or(&[]);
+        if src.is_empty() {
+            dst.fill(0);
+            return;
         }
-        if jsval.is_bool() {
-            write_byte(if jsval.as_bool() { 1 } else { 0 });
-            return buf;
+        for (i, byte) in dst.iter_mut().enumerate() {
+            *byte = src[i % src.len()];
         }
-        if jsval.is_undefined() || jsval.is_null() {
-            write_byte(0);
-            return buf;
-        }
-
-        let src = js_buffer_from_value(bits as i64, encoding);
-        if src.is_null() || (*src).length == 0 {
-            write_byte(0);
-            return buf;
-        }
-
-        let src_len = (*src).length as usize;
-        let src_data = buffer_data(src);
-        for i in 0..count {
-            *dst.add(i) = *src_data.add(i % src_len);
-        }
-    }
-    buf
+    });
+    target.get_raw_mut_ptr()
 }
 
 /// Allocate an uninitialized buffer
 #[no_mangle]
 pub extern "C" fn js_buffer_alloc_unsafe(size: i32) -> *mut BufferHeader {
     let size = validate_buffer_alloc_size(size);
-    let buf = buffer_alloc(size);
+    let buf = super::pool::place(crate::gc::GC_TYPE_BUFFER, super::pool::Init::Unsafe, size);
     unsafe {
-        (*buf).length = size;
+        super::store::set_length(buf as usize, size);
     }
     buf
 }
@@ -1257,6 +1239,8 @@ fn js_buffer_concat_impl(
         return buffer_alloc(0);
     }
 
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let array_root = handles.root_raw_const_ptr(arr_ptr);
     unsafe {
         let len = (*arr_ptr).length as usize;
         let arr_data =
@@ -1280,32 +1264,41 @@ fn js_buffer_concat_impl(
                 throw_buffer_concat_invalid_arg_type(i, element);
             }
             let buf_ptr = raw_bits as *const BufferHeader;
-            actual_total_size = actual_total_size.saturating_add((*buf_ptr).length as usize);
+            actual_total_size = actual_total_size
+                .saturating_add((super::store::length(buf_ptr as usize) as u32) as usize);
         }
         let total_size = requested_total_length.unwrap_or(actual_total_size);
         let total_size = total_size.min(u32::MAX as usize);
 
         // Allocate result buffer
-        let result = buffer_alloc(total_size as u32);
-        (*result).length = total_size as u32;
-        ptr::write_bytes(buffer_data_mut(result), 0, total_size);
-
-        // Copy data
-        let mut offset: usize = 0;
-        for i in 0..len {
-            let raw_bits = strip_nanbox((*arr_data.add(i)).to_bits());
-            let buf_ptr = raw_bits as *const BufferHeader;
-            let buf_len = (*buf_ptr).length as usize;
-            let remaining = total_size.saturating_sub(offset);
-            if remaining == 0 {
-                break;
+        let result = super::pool::place(
+            crate::gc::GC_TYPE_BUFFER,
+            super::pool::Init::Unsafe,
+            total_size as u32,
+        );
+        super::store::set_length(result as usize, total_size as u32);
+        super::bytes::no_gc(|scope| {
+            let dst =
+                super::bytes::bytes_mut(crate::value::js_nanbox_pointer(result as i64), scope)
+                    .unwrap();
+            dst.fill(0);
+            let arr_data =
+                crate::array::array_elements_ptr(array_root.get_raw_const_ptr::<ArrayHeader>())
+                    as *const f64;
+            let mut offset = 0;
+            for i in 0..len {
+                let raw = strip_nanbox((*arr_data.add(i)).to_bits());
+                let source =
+                    super::bytes::bytes(crate::value::js_nanbox_pointer(raw as i64), scope)
+                        .unwrap_or(&[]);
+                let count = source.len().min(total_size.saturating_sub(offset));
+                if count == 0 {
+                    continue;
+                }
+                dst[offset..offset + count].copy_from_slice(&source[..count]);
+                offset += count;
             }
-            let copy_len = buf_len.min(remaining);
-            let src_data = buffer_data(buf_ptr);
-            let dst_data = buffer_data_mut(result).add(offset);
-            ptr::copy_nonoverlapping(src_data, dst_data, copy_len);
-            offset += copy_len;
-        }
+        });
 
         result
     }

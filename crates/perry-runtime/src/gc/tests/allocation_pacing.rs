@@ -40,8 +40,8 @@ fn nursery_garbage_cannot_reset_mature_reclaim_backoff() {
     );
     let keep = crate::value::JSValue::from_bits(js_shadow_slot_get(0))
         .as_pointer::<crate::buffer::BufferHeader>();
-    unsafe {
-        assert_eq!(*((keep as *const u8).add(8)), 37);
+    {
+        assert_eq!(crate::buffer::js_buffer_get(keep, 0), 37);
     }
     js_shadow_frame_pop(frame);
 }
@@ -72,8 +72,8 @@ fn an_owed_boundary_full_does_not_start_a_redundant_budgeted_minor() {
     assert!(crate::arena::old_gen_in_use_bytes() < old_before - 16 * MIB);
     let keep = crate::value::JSValue::from_bits(js_shadow_slot_get(1))
         .as_pointer::<crate::buffer::BufferHeader>();
-    unsafe {
-        assert_eq!(*((keep as *const u8).add(8)), 37);
+    {
+        assert_eq!(crate::buffer::js_buffer_get(keep, 0), 37);
     }
     assert_eq!(test_debt(), (0, 0));
     js_shadow_frame_pop(frame);
@@ -110,8 +110,8 @@ fn a_parked_budgeted_minor_cannot_block_a_dead_large_buffer_burst() {
     assert!(crate::arena::old_gen_in_use_bytes() < old_before - 16 * MIB);
     let keep = crate::value::JSValue::from_bits(js_shadow_slot_get(1))
         .as_pointer::<crate::buffer::BufferHeader>();
-    unsafe {
-        assert_eq!(*((keep as *const u8).add(8)), 37);
+    {
+        assert_eq!(crate::buffer::js_buffer_get(keep, 0), 37);
     }
     assert_eq!(test_debt(), (0, 0));
     js_shadow_frame_pop(frame);
@@ -217,7 +217,7 @@ fn large_buffer_burst_reclaims_at_a_precise_boundary_and_keeps_roots() {
         .as_pointer::<crate::buffer::BufferHeader>();
     unsafe {
         assert_eq!((*keep).length, MIB as u32);
-        assert_eq!(*((keep as *const u8).add(8)), 37);
+        assert_eq!(crate::buffer::js_buffer_get(keep, 0), 37);
     }
     assert_eq!(test_debt(), (0, 0), "only the completed full pays the debt");
     let collections = gc_total_collection_count();

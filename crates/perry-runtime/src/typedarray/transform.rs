@@ -22,7 +22,7 @@ pub fn typed_array_to_array(ta: *const TypedArrayHeader) -> *mut crate::array::A
     let scope = crate::gc::RuntimeHandleScope::new();
     let source = scope.root_raw_const_ptr(ta);
     unsafe {
-        let len = (*ta).length;
+        let len = crate::typedarray::element_length(ta);
         let result = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len));
         let value = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
         for i in 0..len as usize {
@@ -72,11 +72,11 @@ fn typed_array_default_number_cmp(a: &f64, b: &f64) -> std::cmp::Ordering {
 /// lanes (signed/unsigned) — `load_at` boxes each element as a fresh BigInt
 /// pointer, and sorting those bit patterns scrambled the array.
 unsafe fn typed_array_sort_default_in_place(ta: *mut TypedArrayHeader) {
-    let len = (*ta).length as usize;
+    let len = crate::typedarray::element_length(ta) as usize;
     if len <= 1 {
         return;
     }
-    match (*ta).kind {
+    match crate::typedarray::element_kind(ta) {
         KIND_BIGINT64 => {
             let base = data_ptr_mut(ta) as *mut i64;
             std::slice::from_raw_parts_mut(base, len).sort_unstable();
@@ -194,11 +194,11 @@ pub extern "C" fn js_typed_array_sort_with_comparator(
         return ta_clean;
     }
     unsafe {
-        let len = (*ta_clean).length as usize;
+        let len = crate::typedarray::element_length(ta_clean) as usize;
         if len <= 1 {
             return ta_clean;
         }
-        let kind = (*ta_clean).kind;
+        let kind = crate::typedarray::element_kind(ta_clean);
         if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
             // Sort the raw lanes with lazy per-compare boxing; the receiver is
             // rooted so the write-back targets its CURRENT address even when a
@@ -292,8 +292,8 @@ pub extern "C" fn js_typed_array_to_sorted_with_comparator(
         return typed_array_alloc(KIND_FLOAT64, 0);
     }
     unsafe {
-        let kind = (*ta).kind;
-        let len = (*ta).length as usize;
+        let kind = crate::typedarray::element_kind(ta);
+        let len = crate::typedarray::element_length(ta) as usize;
         if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
             // Copy the raw lanes out FIRST (owned buffer), sort with lazy
             // per-compare boxing (no unrooted BigInt boxes parked across
@@ -358,8 +358,8 @@ pub extern "C" fn js_typed_array_with(
     let source = scope.root_raw_const_ptr(ta);
     let value = scope.root_nanbox_f64(value);
     unsafe {
-        let kind = (*ta).kind;
-        let len = (*ta).length as usize;
+        let kind = crate::typedarray::element_kind(ta);
+        let len = crate::typedarray::element_length(ta) as usize;
         // ECMA ToIntegerOrInfinity: NaN -> 0, reject non-finite / out-of-range
         // with RangeError("Invalid typed array index") (Node parity, #2792).
         let rel = if index.is_nan() { 0.0 } else { index };
@@ -416,7 +416,7 @@ pub extern "C" fn js_typed_array_find_last(
     let callback = scope.root_raw_const_ptr(callback);
     let candidate = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
     unsafe {
-        let len = (*ta).length as usize;
+        let len = crate::typedarray::element_length(ta) as usize;
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
@@ -462,7 +462,7 @@ pub extern "C" fn js_typed_array_find_last_index(
     let callback = scope.root_raw_const_ptr(callback);
     let candidate = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
     unsafe {
-        let len = (*ta).length as usize;
+        let len = crate::typedarray::element_length(ta) as usize;
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.

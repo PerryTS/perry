@@ -1396,10 +1396,9 @@ mod tests {
         // `is_object_pointer` (no buffer guard in the pretty path) and SIGSEGV.
         unsafe {
             let b = crate::buffer::js_buffer_alloc(3, 0);
-            let data = (b as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
-            *data = 1;
-            *data.add(1) = 2;
-            *data.add(2) = 3;
+            for i in 0..3 {
+                crate::buffer::js_buffer_set(b, i, i + 1);
+            }
             let mut out = String::new();
             stringify_buffer_pretty(b as *const u8, &mut out, "  ", 0);
             assert_eq!(
