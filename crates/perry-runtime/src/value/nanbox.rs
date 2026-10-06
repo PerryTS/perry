@@ -403,8 +403,9 @@ pub extern "C" fn js_nanbox_is_string(value: f64) -> i32 {
 /// materialization could move or free before the call runs.
 const FFI_SSO_SLOTS: usize = 16;
 
-#[repr(C)]
+#[repr(C, align(8))]
 struct FfiSsoSlot {
+    gc_header: crate::gc::GcHeader,
     header: crate::string::StringHeader,
     bytes: [u8; crate::value::SHORT_STRING_MAX_LEN],
 }
@@ -414,6 +415,12 @@ crate::perry_thread_local! {
         0,
         (0..FFI_SSO_SLOTS)
             .map(|_| FfiSsoSlot {
+                gc_header: crate::gc::GcHeader {
+                    obj_type: crate::gc::GC_TYPE_STRING,
+                    gc_flags: 0,
+                    _reserved: 0,
+                    size: std::mem::size_of::<FfiSsoSlot>() as u32,
+                },
                 header: crate::string::StringHeader {
                     utf16_len: 0,
                     byte_len: 0,
@@ -444,6 +451,10 @@ pub extern "C" fn js_ffi_arg_ptr(value: f64) -> i64 {
         // slot's address is handed out as an integer.
         let (next, slots) = unsafe { &mut *cell.get() };
         let slot = &mut slots[*next];
+        #[cfg(test)]
+        if std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("ffi_sso_header") {
+            slot.gc_header.obj_type = crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER | 0x20;
+        }
         *next = (*next + 1) % FFI_SSO_SLOTS;
         slot.bytes[..n].copy_from_slice(&buf[..n]);
         // SSO holds ASCII only, so UTF-16 length equals byte length.
@@ -456,4 +467,45 @@ pub extern "C" fn js_ffi_arg_ptr(value: f64) -> i64 {
         };
         &slot.header as *const crate::string::StringHeader as i64
     })
+}
+
+#[cfg(test)]
+mod ffi_sso_header_tests {
+    #[test]
+    fn every_native_short_string_scratch_slot_has_a_string_prefix() {
+        std::thread::spawn(|| {
+            for i in 0..super::FFI_SSO_SLOTS * 4 {
+                let text = format!("n{i}");
+                let value = crate::value::JSValue::short_string_unchecked(text.as_bytes());
+                let addr = super::js_ffi_arg_ptr(f64::from_bits(value.bits())) as usize;
+                assert_eq!(addr & 7, 0);
+                let h = unsafe { crate::gc::header_from_trusted_user_ptr(addr as *const u8) };
+                assert_eq!(unsafe { (*h).obj_type }, crate::gc::GC_TYPE_STRING);
+                assert!(!crate::buffer::is_registered_buffer(addr));
+                assert!(crate::typedarray::lookup_typed_array_kind(addr).is_none());
+                let string = addr as *const crate::string::StringHeader;
+                let bytes = unsafe {
+                    std::slice::from_raw_parts(
+                        string
+                            .cast::<u8>()
+                            .add(std::mem::size_of::<crate::string::StringHeader>()),
+                        (*string).byte_len as usize,
+                    )
+                };
+                assert_eq!(bytes, text.as_bytes());
+            }
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn corrupt_native_short_string_prefix_turns_the_invariant_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "value::nanbox::ffi_sso_header_tests::every_native_short_string_scratch_slot_has_a_string_prefix", "--nocapture"])
+            .env("PERRY_B4_SABOTAGE", "ffi_sso_header")
+            .output().unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(!child.status.success());
+    }
 }

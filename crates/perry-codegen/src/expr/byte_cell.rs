@@ -17,6 +17,8 @@ pub(crate) fn materialize_param(ctx: &mut FnCtx<'_>, id: u32, boxed: &str, brand
     if !omit_owner {
         super::scalar_slot_root::root_entry_alloca(ctx, &owner_root_slot);
     }
+    ctx.block().retain_byte_owner_root_slot(&receiver_root_slot);
+    ctx.block().retain_byte_owner_root_slot(&owner_root_slot);
     ctx.block().emit_raw(format!(
         "; bytes.hoist.roots receiver={} owner={}",
         receiver_root_slot.trim_start_matches('%'),
@@ -36,19 +38,6 @@ pub(crate) fn materialize_param(ctx: &mut FnCtx<'_>, id: u32, boxed: &str, brand
     refresh_param(ctx, &access);
     ctx.receiver_descriptors
         .materialize_byte_view_param(id, access);
-}
-
-pub(crate) fn keep_cached_owner_alive(
-    ctx: &mut FnCtx<'_>,
-    access: &crate::collectors::ByteViewParamAccess,
-) {
-    for slot in [&access.receiver_root_slot, &access.owner_root_slot] {
-        let value = ctx.block().load(DOUBLE, slot);
-        let bits = ctx.block().bitcast_double_to_i64(&value);
-        ctx.block().emit_raw(format!(
-            "call void asm sideeffect \"\", \"r\"(i64 {bits}) \"gc-leaf-function\""
-        ));
-    }
 }
 
 fn refresh_param(ctx: &mut FnCtx<'_>, access: &crate::collectors::ByteViewParamAccess) {
@@ -85,17 +74,7 @@ fn refresh_param(ctx: &mut FnCtx<'_>, access: &crate::collectors::ByteViewParamA
 }
 
 pub(crate) fn refresh_hoisted_byte_accesses(ctx: &mut FnCtx<'_>) {
-    for (receiver, owner) in ctx.receiver_descriptors.retained_byte_owners() {
-        for slot in [&receiver, &owner] {
-            let value = ctx.block().load(DOUBLE, slot);
-            let bits = ctx.block().bitcast_double_to_i64(&value);
-            ctx.block().emit_raw(format!(
-                "call void asm sideeffect \"\", \"r\"(i64 {bits}) \"gc-leaf-function\""
-            ));
-        }
-    }
     for access in ctx.receiver_descriptors.hoisted_byte_params() {
-        keep_cached_owner_alive(ctx, &access);
         refresh_param(ctx, &access);
     }
 }
@@ -423,6 +402,8 @@ pub(crate) fn retain_fresh_local_owner(ctx: &mut FnCtx<'_>, boxed: &str) {
         .block()
         .phi(DOUBLE, &[(boxed, &owner_l), (&owner, &view_end)]);
     ctx.block().store(DOUBLE, &owner, &owner_slot);
+    ctx.block().retain_byte_owner_root_slot(&receiver_slot);
+    ctx.block().retain_byte_owner_root_slot(&owner_slot);
     ctx.receiver_descriptors
         .retain_byte_owner(receiver_slot, owner_slot);
 }

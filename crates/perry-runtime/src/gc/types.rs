@@ -147,7 +147,7 @@ pub const GC_TYPE_MAX: u8 = 0x7f;
 /// ArrayBuffer, SharedArrayBuffer, DataView, KeyObject, CryptoKey)?
 #[inline(always)]
 pub const fn is_buffer_family_type(obj_type: u8) -> bool {
-    is_byte_family_type(obj_type) && ((obj_type & 0x1f) == 0 || (obj_type & 0x1f) >= 12)
+    matches!(obj_type & !0x20, 0x40 | 0x4c..=0x52)
 }
 
 /// Is `obj_type` a `BufferHeader` cell whose JS value is a `Uint8Array`
@@ -155,22 +155,22 @@ pub const fn is_buffer_family_type(obj_type: u8) -> bool {
 /// `KeyObject`'s or a `CryptoKey`'s storage)?
 #[inline(always)]
 pub const fn is_uint8array_buffer_type(obj_type: u8) -> bool {
-    is_byte_family_type(obj_type) && matches!(obj_type & 0x1f, 0 | 16 | 17)
+    matches!(obj_type & !0x20, 0x40 | 0x50 | 0x51)
 }
 
 #[inline(always)]
 pub const fn is_byte_family_type(obj_type: u8) -> bool {
-    obj_type & 0xc0 == 0x40 && obj_type & 0x1f <= 18
+    (obj_type & !0x20).wrapping_sub(0x40) <= 18
 }
 
 #[inline(always)]
 pub const fn is_byte_view_type(obj_type: u8) -> bool {
-    is_byte_family_type(obj_type) && obj_type & 0x20 != 0
+    obj_type.wrapping_sub(0x60) <= 18
 }
 
 #[inline(always)]
 pub const fn is_typed_array_type(obj_type: u8) -> bool {
-    is_byte_family_type(obj_type) && obj_type & 0x1f <= 11
+    (obj_type & !0x20).wrapping_sub(0x40) <= 11
 }
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
@@ -1714,6 +1714,21 @@ mod header_admission_tests {
                 super::gc_type_is_known(kind),
                 super::gc_type_info(kind).is_some(),
                 "header kind {kind:#x}"
+            );
+            // Exhaust the whole type-byte domain against the declarative
+            // brand/role contract, independently of the masked-range form.
+            let brand = kind & 0x1f;
+            let bytes = kind & 0xc0 == 0x40 && brand <= 18;
+            assert_eq!(super::is_byte_family_type(kind), bytes);
+            assert_eq!(super::is_byte_view_type(kind), bytes && kind & 0x20 != 0);
+            assert_eq!(super::is_typed_array_type(kind), bytes && brand <= 11);
+            assert_eq!(
+                super::is_buffer_family_type(kind),
+                bytes && (brand == 0 || brand >= 12)
+            );
+            assert_eq!(
+                super::is_uint8array_buffer_type(kind),
+                bytes && matches!(brand, 0 | 16 | 17)
             );
         }
     }

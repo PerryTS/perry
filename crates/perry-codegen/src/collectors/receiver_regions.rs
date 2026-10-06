@@ -368,10 +368,6 @@ impl ReceiverDescriptorTable {
         self.retained_byte_owners.push((receiver, owner));
     }
 
-    pub(crate) fn retained_byte_owners(&self) -> Vec<(String, String)> {
-        self.retained_byte_owners.clone()
-    }
-
     pub(crate) fn has_hoisted_byte_owners(&self) -> bool {
         !self.byte_view_params.is_empty() || !self.retained_byte_owners.is_empty()
     }
