@@ -259,22 +259,15 @@ pub(crate) fn path_from_value(v: f64) -> String {
 /// BufferHeader values.
 pub(crate) fn bytes_from_value(v: f64) -> Vec<u8> {
     unsafe {
-        if crate::buffer::js_buffer_is_buffer(v.to_bits() as i64) == 1 {
-            let buf = buffer_ptr_from_value(v);
-            if !buf.is_null() {
-                let len = (*buf).length as usize;
-                let data = crate::buffer::buffer_data(buf);
-                return std::slice::from_raw_parts(data, len).to_vec();
-            }
-        }
-        // #10694: the brand probes read the cell's header, so only a POINTER
-        // payload or an allocator-owned raw word is an address here.
         let addr = crate::value::addr_class::object_ref_addr(v);
-        if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-            let ta = addr as *const crate::typedarray::TypedArrayHeader;
-            if let Some(bytes) = crate::typedarray::typed_array_bytes(ta) {
-                return bytes.to_vec();
-            }
+        if crate::buffer::is_registered_buffer(addr)
+            || crate::typedarray::lookup_typed_array_kind(addr).is_some()
+        {
+            return crate::buffer::bytes::no_gc(|scope| {
+                crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(addr as i64), scope)
+                    .map(<[u8]>::to_vec)
+                    .unwrap_or_default()
+            });
         }
         // Both string representations; empty for anything that is not a
         // string (`extract_string_ptr` is heap-`STRING_TAG` only, #8122).
@@ -322,15 +315,15 @@ fn encoding_tag_from_options(options_value: f64) -> i32 {
 }
 
 fn bytes_from_buffer_value(value: f64) -> Vec<u8> {
-    unsafe {
-        let buf = buffer_ptr_from_value(value);
-        if buf.is_null() {
-            return Vec::new();
-        }
-        let len = (*buf).length as usize;
-        let data = crate::buffer::buffer_data(buf);
-        std::slice::from_raw_parts(data, len).to_vec()
+    let buf = buffer_ptr_from_value(value);
+    if buf.is_null() {
+        return Vec::new();
     }
+    crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(buf as i64), scope)
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default()
+    })
 }
 
 fn bytes_from_string_value(value: f64, encoding_tag: i32) -> Vec<u8> {
@@ -338,11 +331,7 @@ fn bytes_from_string_value(value: f64, encoding_tag: i32) -> Vec<u8> {
     if buf.is_null() {
         return Vec::new();
     }
-    unsafe {
-        let len = (*buf).length as usize;
-        let data = crate::buffer::buffer_data(buf);
-        std::slice::from_raw_parts(data, len).to_vec()
-    }
+    bytes_from_buffer_value(crate::value::js_nanbox_pointer(buf as i64))
 }
 
 mod write_file_input;

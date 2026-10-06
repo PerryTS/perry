@@ -122,22 +122,12 @@ pub(crate) fn cp_value_to_bytes(value: f64) -> Vec<u8> {
     if JSValue::from_bits(bits).is_pointer() {
         let raw = (bits & crate::value::POINTER_MASK) as usize;
         if raw >= 0x10000 {
-            if crate::buffer::is_registered_buffer(raw) {
-                let buf = raw as *const crate::buffer::BufferHeader;
-                unsafe {
-                    let len = (*buf).length as usize;
-                    let data =
-                        crate::buffer::buffer_data(buf as *const crate::buffer::BufferHeader);
-                    return std::slice::from_raw_parts(data, len).to_vec();
-                }
-            }
-            if crate::typedarray::lookup_typed_array_kind(raw).is_some() {
-                let ta = raw as *const crate::typedarray::TypedArrayHeader;
-                unsafe {
-                    if let Some(bytes) = crate::typedarray::typed_array_bytes(ta) {
-                        return bytes.to_vec();
-                    }
-                }
+            if let Some(bytes) = crate::buffer::bytes::no_gc(|scope| {
+                crate::buffer::bytes::bytes(value, scope)
+                    .ok()
+                    .map(<[u8]>::to_vec)
+            }) {
+                return bytes;
             }
         }
     }

@@ -291,15 +291,7 @@ pub(crate) unsafe fn options_string_field(options_value: f64, field: &[u8]) -> O
 }
 
 pub(crate) fn buffer_value_from_bytes(bytes: &[u8]) -> f64 {
-    let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
-    if !buf.is_null() {
-        unsafe {
-            let data = crate::buffer::buffer_data_mut(buf);
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), data, bytes.len());
-            (*buf).length = bytes.len() as u32;
-        }
-    }
-    f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
+    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes)
 }
 
 pub(crate) fn bytes_to_readdir_value(bytes: &[u8], as_buffer: bool) -> f64 {

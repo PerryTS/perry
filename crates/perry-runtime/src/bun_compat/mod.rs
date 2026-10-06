@@ -187,12 +187,12 @@ fn payload_bytes(value: f64) -> Result<Vec<u8>, f64> {
     if is_string_value(value) {
         return Ok(value_to_string(value).into_bytes());
     }
-    let mut binary_len = 0u32;
-    let binary_ptr = unsafe {
-        crate::buffer::js_value_buffer_or_typedarray_data(value, &mut binary_len as *mut u32)
-    };
-    if !binary_ptr.is_null() {
-        return Ok(unsafe { std::slice::from_raw_parts(binary_ptr, binary_len as usize) }.to_vec());
+    if let Some(bytes) = crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(value, scope)
+            .ok()
+            .map(<[u8]>::to_vec)
+    }) {
+        return Ok(bytes);
     }
     if heap_ptr_from_value(value).is_some() {
         if let Some(path_value) = object_field(value, BUN_FILE_PATH_KEY) {
@@ -376,15 +376,7 @@ fn array_buffer_from_bytes(bytes: &[u8]) -> f64 {
 }
 
 fn uint8_array_from_bytes(bytes: &[u8]) -> f64 {
-    let buffer = crate::buffer::js_uint8array_alloc(bytes.len() as i32);
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            crate::buffer::buffer_data_mut(buffer),
-            bytes.len(),
-        );
-    }
-    f64::from_bits(JSValue::pointer(buffer as *const u8).bits())
+    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Uint8Array, bytes)
 }
 
 /// `Bun.file(path)` — BunFile-like lazy handle.

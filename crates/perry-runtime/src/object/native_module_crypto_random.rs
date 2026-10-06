@@ -75,36 +75,28 @@ pub(super) unsafe fn random_fill_sync(target: f64, offset_bits: f64, size_bits: 
     use rand::Rng;
 
     let addr = value_addr(target);
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let ta = addr as *mut crate::typedarray::TypedArrayHeader;
-        if let Some(data) = crate::typedarray::typed_array_bytes_mut(ta) {
-            let elem_size = (*ta).elem_size as usize;
-            let len = if elem_size == 0 {
-                0
-            } else {
-                data.len() / elem_size
-            };
-            let (start_elem, count_elem) = range(len, offset_bits, size_bits);
-            let start = start_elem.saturating_mul(elem_size);
-            let end = start
-                .saturating_add(count_elem.saturating_mul(elem_size))
-                .min(data.len());
-            if end > start {
-                rand::rng().fill_bytes(&mut data[start..end]);
-            }
-            return target;
-        }
-        invalid_buf(target);
-    }
-    if crate::buffer::is_registered_buffer(addr) {
-        let buf = addr as *mut crate::buffer::BufferHeader;
-        let total = (*buf).length as usize;
-        let (start, count) = range(total, offset_bits, size_bits);
-        if count > 0 {
-            let data = crate::buffer::buffer_data_mut(buf);
-            rand::rng().fill_bytes(std::slice::from_raw_parts_mut(data.add(start), count));
-        }
-        return target;
-    }
-    invalid_buf(target);
+    let elem_size = if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+        crate::typedarray::elem_size_for_kind(kind).max(1)
+    } else if crate::buffer::is_registered_buffer(addr) {
+        1
+    } else {
+        invalid_buf(target)
+    };
+    let value = crate::value::js_nanbox_pointer(addr as i64);
+    let byte_len = crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(value, scope).map(<[u8]>::len)
+    })
+    .unwrap_or_else(|_| invalid_buf(target));
+    let (start, count) = range(byte_len / elem_size, offset_bits, size_bits);
+    let start = start.saturating_mul(elem_size);
+    let count = count
+        .saturating_mul(elem_size)
+        .min(byte_len.saturating_sub(start));
+    crate::buffer::bytes::no_gc(|scope| {
+        let data = crate::buffer::bytes::bytes_mut(value, scope)?;
+        rand::rng().fill_bytes(&mut data[start..start + count]);
+        Ok::<_, crate::buffer::bytes::NotBytes>(())
+    })
+    .unwrap_or_else(|_| invalid_buf(target));
+    target
 }

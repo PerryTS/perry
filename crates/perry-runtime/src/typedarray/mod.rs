@@ -275,18 +275,6 @@ pub const TA_CACHE_NEGATIVE: u64 = 0xFF;
 pub static PERRY_TA_KIND_CACHE: [AtomicU64; TA_KIND_CACHE_SLOTS] =
     [const { AtomicU64::new(0) }; TA_KIND_CACHE_SLOTS];
 
-// The generic kind cache deliberately uses the exact slot formula duplicated
-// by codegen. Large, equal-sized ECS columns can therefore share the same low
-// address bits and continually evict one another. Whole-loop admission needs
-// the stronger, persistent fact "this exact address is an owning Uint32Array",
-// so keep a separate direct cache whose index folds higher address bits too.
-// A hit is safe until unregister: a TypedArray header's kind and owning/view
-// storage class never change during its lifetime, and unregister clears both
-// caches before an address can be reused.
-const INLINE_OWNING_U32_CACHE_SLOTS: usize = 64;
-static INLINE_OWNING_U32_CACHE: [AtomicU64; INLINE_OWNING_U32_CACHE_SLOTS] =
-    [const { AtomicU64::new(0) }; INLINE_OWNING_U32_CACHE_SLOTS];
-
 /// The [`PERRY_TA_KIND_CACHE`] tag for the registered typed array at `ta`:
 /// its kind, plus [`TA_CACHE_EXTERNAL_STORAGE`] when its elements do not
 /// follow the header (#10516).
@@ -309,7 +297,6 @@ unsafe fn kind_cache_tag(ta: *const TypedArrayHeader, kind: u8) -> u64 {
 pub(crate) fn note_external_storage(ta: *mut TypedArrayHeader) {
     unsafe { (*ta).storage = TA_STORAGE_EXTERNAL };
     ta_kind_cache_invalidate(ta as usize);
-    inline_owning_u32_cache_invalidate(ta as usize);
 }
 
 #[inline]
@@ -336,50 +323,14 @@ fn ta_kind_cache_invalidate(addr: usize) {
     }
 }
 
-#[inline]
-fn inline_owning_u32_cache_slot(addr: usize) -> usize {
-    let word = addr >> 3;
-    let mixed = word ^ (word >> 6) ^ (word >> 12);
-    mixed & (INLINE_OWNING_U32_CACHE_SLOTS - 1)
-}
-
-#[inline]
-fn inline_owning_u32_cache_get(addr: usize) -> bool {
-    INLINE_OWNING_U32_CACHE[inline_owning_u32_cache_slot(addr)].load(Ordering::Relaxed)
-        == addr as u64
-}
-
-#[inline]
-fn inline_owning_u32_cache_store(addr: usize) {
-    INLINE_OWNING_U32_CACHE[inline_owning_u32_cache_slot(addr)]
-        .store(addr as u64, Ordering::Relaxed);
-}
-
-#[inline]
-fn inline_owning_u32_cache_invalidate(addr: usize) {
-    let slot = inline_owning_u32_cache_slot(addr);
-    if INLINE_OWNING_U32_CACHE[slot].load(Ordering::Relaxed) == addr as u64 {
-        INLINE_OWNING_U32_CACHE[slot].store(0, Ordering::Relaxed);
-    }
-}
-
-/// Forget process-wide admission facts before a retiring arena block can be
-/// reused by another thread (#11463). The per-thread registry disappears at
-/// thread exit, but these two atomic caches otherwise outlive its allocations.
-/// Do not touch TLS here: its destruction order is not guaranteed.
+/// Drop exported kind-cache entries before retiring arena memory is reused.
+/// No separate whole-loop admission cache remains.
 pub(crate) fn invalidate_caches_in_range(start: usize, end: usize) {
-    for (cache, shift) in [
-        (&PERRY_TA_KIND_CACHE[..], 8),
-        (&INLINE_OWNING_U32_CACHE[..], 0),
-    ] {
-        for slot in cache {
-            let entry = slot.load(Ordering::Relaxed);
-            let address = (entry >> shift) as usize;
-            if (start..end).contains(&address) {
-                // A different thread can replace a colliding slot while we
-                // inspect it. Clear only the entry from the retiring block.
-                let _ = slot.compare_exchange(entry, 0, Ordering::Relaxed, Ordering::Relaxed);
-            }
+    for slot in &PERRY_TA_KIND_CACHE {
+        let entry = slot.load(Ordering::Relaxed);
+        let address = (entry >> 8) as usize;
+        if (start..end).contains(&address) {
+            let _ = slot.compare_exchange(entry, 0, Ordering::Relaxed, Ordering::Relaxed);
         }
     }
 }
@@ -418,7 +369,6 @@ pub fn register_typed_array(ptr: *const TypedArrayHeader, kind: u8) {
 pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
     let owner = ptr as usize;
     ta_kind_cache_invalidate(owner);
-    inline_owning_u32_cache_invalidate(owner);
     crate::typedarray_view::clear_view_meta(owner);
     crate::typedarray_props::typed_array_clear_own_props(owner);
     crate::typedarray_props::typed_array_clear_no_extend(owner);
@@ -671,13 +621,8 @@ pub extern "C" fn js_typed_array_masked_window_data_ptr(receiver: f64) -> i64 {
     data_ptr(addr as *const TypedArrayHeader) as i64
 }
 
-/// One-time loop admission primitive for erased ECS component columns. Return
-/// the stable owning-header address only for an exact inline `Uint32Array`.
-/// Use the admission-specific address cache first, then consult the
-/// authoritative registry on a miss. The generic direct-mapped kind cache is
-/// intentionally not authority here: sibling columns can collide there,
-/// which is harmless for individual accesses but must not make a whole-loop
-/// proof spuriously fail forever.
+/// Whole-loop admission reads the receiver header as the authority. Views
+/// and external stores cannot satisfy the owning-inline proof.
 #[inline]
 pub(crate) fn inline_u32_addr(receiver: f64) -> usize {
     let value = crate::value::JSValue::from_bits(receiver.to_bits());
@@ -685,17 +630,25 @@ pub(crate) fn inline_u32_addr(receiver: f64) -> usize {
         return 0;
     }
     let addr = value.as_pointer::<TypedArrayHeader>() as usize;
-    if inline_owning_u32_cache_get(addr) {
-        return addr;
-    }
-    if lookup_typed_array_kind(addr) != Some(KIND_UINT32)
-        || crate::native_arena::is_native_typed_view(addr as *const TypedArrayHeader)
-        || crate::typedarray_view::view_meta_of(addr).is_some()
-    {
+    if !crate::value::addr_class::is_plausible_heap_addr(addr) {
         return 0;
     }
-    inline_owning_u32_cache_store(addr);
-    addr
+    #[cfg(test)]
+    if crate::buffer::bytes::b4_sabotage("u32_admission") {
+        return addr;
+    }
+    unsafe {
+        let h = crate::gc::header_from_trusted_user_ptr(addr as *const u8);
+        let ta = addr as *const TypedArrayHeader;
+        if (*h).obj_type == crate::gc::GC_TYPE_TYPED_ARRAY
+            && (*ta).kind == KIND_UINT32
+            && (*ta).storage == TA_STORAGE_INLINE
+        {
+            addr
+        } else {
+            0
+        }
+    }
 }
 
 #[inline]
@@ -1351,23 +1304,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn owning_u32_admission_cache_skips_registry_and_invalidates() {
+    fn owning_u32_admission_reads_current_header() {
         let ta = typed_array_alloc(KIND_UINT32, 16);
         let boxed = crate::value::js_nanbox_pointer(ta as i64);
-
-        let before = test_typed_array_registry_probe_count();
         assert_eq!(inline_u32_addr(boxed), ta as usize);
-        let primed = test_typed_array_registry_probe_count();
-        assert_eq!(primed, before + 1);
+        unsafe {
+            (*ta).storage = TA_STORAGE_EXTERNAL;
+        }
+        assert_eq!(inline_u32_addr(boxed), 0);
+        unsafe {
+            (*ta).storage = TA_STORAGE_INLINE;
+            (*ta).kind = KIND_INT32;
+        }
+        assert_eq!(inline_u32_addr(boxed), 0);
+        unsafe {
+            (*ta).kind = KIND_UINT32;
+        }
         assert_eq!(inline_u32_addr(boxed), ta as usize);
-        assert_eq!(test_typed_array_registry_probe_count(), primed);
-
-        // Unregistering (what the finalizer does at death) must drop the
-        // admission, so the next access re-derives it from the header.
-        unregister_typed_array(ta);
-        assert!(!inline_owning_u32_cache_get(ta as usize));
-        assert_eq!(inline_u32_addr(boxed), ta as usize);
-        assert_eq!(test_typed_array_registry_probe_count(), primed + 1);
     }
 
     #[test]

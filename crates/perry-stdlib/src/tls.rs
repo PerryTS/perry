@@ -821,11 +821,11 @@ unsafe fn jsvalue_to_bytes(value: f64) -> Option<Vec<u8>> {
         return value_to_string(value).map(|s| s.into_bytes());
     }
     if v.is_pointer() {
-        let mut len = 0u32;
-        let data = perry_runtime::buffer::js_value_buffer_or_typedarray_data(value, &mut len);
-        if !data.is_null() {
-            return Some(std::slice::from_raw_parts(data, len as usize).to_vec());
-        }
+        return perry_runtime::buffer::bytes::no_gc(|scope| {
+            perry_runtime::buffer::bytes::bytes(value, scope)
+                .ok()
+                .map(<[u8]>::to_vec)
+        });
     }
     None
 }

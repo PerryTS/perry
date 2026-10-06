@@ -1,7 +1,7 @@
 use super::*;
 use crate::common::{get_handle, Handle};
 use perry_runtime::{
-    buffer::{buffer_data, is_registered_buffer, BufferHeader},
+    buffer::is_registered_buffer,
     closure::{js_closure_call1, ClosureHeader},
     js_get_string_pointer_unified, js_nanbox_pointer, js_object_alloc, js_object_set_field_by_name,
     js_string_from_bytes, JSValue, ObjectHeader, StringHeader,
@@ -193,18 +193,16 @@ pub(crate) unsafe fn bytes_from_path_like(value: f64) -> Option<Vec<u8>> {
     if raw < 0x1000 {
         return None;
     }
-    if is_registered_buffer(raw) {
-        let buffer = raw as *const BufferHeader;
-        let bytes = std::slice::from_raw_parts(buffer_data(buffer), (*buffer).length as usize);
-        return Some(bytes.to_vec());
-    }
-    if perry_runtime::typedarray::lookup_typed_array_kind(raw)
-        == Some(perry_runtime::typedarray::KIND_UINT8)
+    if is_registered_buffer(raw)
+        || perry_runtime::typedarray::lookup_typed_array_kind(raw)
+            == Some(perry_runtime::typedarray::KIND_UINT8)
     {
-        let bytes = perry_runtime::typedarray::typed_array_bytes(
-            raw as *const perry_runtime::typedarray::TypedArrayHeader,
-        )?;
-        return Some(bytes.to_vec());
+        return perry_runtime::buffer::bytes::no_gc(|scope| {
+            let value = f64::from_bits(JSValue::pointer(raw as *const u8).bits());
+            perry_runtime::buffer::bytes::bytes(value, scope)
+                .ok()
+                .map(<[u8]>::to_vec)
+        });
     }
     None
 }

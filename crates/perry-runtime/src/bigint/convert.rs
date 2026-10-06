@@ -403,10 +403,13 @@ pub extern "C" fn js_bigint_to_buffer(
     let limbs = bigint_limbs_or_zero(a);
     let length = if length <= 0 { 32 } else { length as usize };
 
-    let result = crate::buffer::buffer_alloc(length as u32);
+    let (value, pin) = crate::buffer::bytes::new_bytes(
+        crate::buffer::bytes::Brand::Buffer,
+        length,
+        crate::buffer::bytes::Init::Uninit,
+    );
     unsafe {
-        (*result).length = length as u32;
-        let data = crate::buffer::buffer_data_mut(result);
+        let data = pin.as_mut_ptr();
 
         // Extract bytes from the pre-allocation limb snapshot
         // (little-endian in memory) and write in big-endian order.
@@ -418,7 +421,9 @@ pub extern "C" fn js_bigint_to_buffer(
             *data.add(length - 1 - i) = byte;
         }
     }
-    result
+    crate::value::JSValue::from_bits(value.to_bits())
+        .as_pointer::<crate::buffer::BufferHeader>()
+        .cast_mut()
 }
 
 /// Convert BigInt to f64 (may lose precision)

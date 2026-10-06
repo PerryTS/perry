@@ -47,27 +47,39 @@ pub(super) use sha2::{Digest as Sha256Digest, Sha224, Sha256, Sha384, Sha512, Sh
 // as of sha3 0.12 (RustCrypto/hashes#869).
 pub(super) use shake::{ExtendableOutput, Shake128, Shake256, XofReader};
 
+#[cfg(test)]
+pub(super) fn b2c_sabotage(fault: &str) -> bool {
+    std::env::var("PERRY_B2C_SABOTAGE").ok().as_deref() == Some(fault)
+}
+
 pub(super) use crate::common::bytes_from_header as string_from_header;
 
-/// Extract the raw bytes from a pointer that might be a Buffer, a
-/// StringHeader, or anything that uses the `[u32 byte-length prefix][bytes]`
-/// layout. StringHeader has `utf16_len` at offset 0 and `byte_len` at
-/// offset 4; BufferHeader has `length` at offset 0 and `capacity` at
-/// offset 4. Both have the payload bytes immediately after the 8-byte
-/// header, and both store the byte count (in UTF-8 / as raw bytes) in
-/// the same u32 slot for our purposes — but we pick the correct field
-/// based on whether the pointer is a registered Buffer.
+/// Copy a byte value through the scoped API, or read a crypto string argument.
 pub(super) unsafe fn bytes_from_ptr(ptr: i64) -> Vec<u8> {
     let addr = ptr as usize;
     if addr < 0x1000 {
         return Vec::new();
     }
-    if perry_runtime::buffer::is_registered_buffer(addr) {
-        let buf = ptr as *const perry_runtime::buffer::BufferHeader;
-        let len = (*buf).length as usize;
-        let data =
-            perry_runtime::buffer::buffer_data(buf as *const perry_runtime::buffer::BufferHeader);
-        return std::slice::from_raw_parts(data, len).to_vec();
+    if perry_runtime::buffer::is_registered_buffer(addr)
+        || perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some()
+    {
+        let data = perry_runtime::buffer::bytes::no_gc(|scope| {
+            perry_runtime::buffer::bytes::bytes(
+                f64::from_bits(JSValue::pointer(addr as *const u8).bits()),
+                scope,
+            )
+            .map(<[u8]>::to_vec)
+            .unwrap_or_default()
+        });
+        #[cfg(test)]
+        let data = if b2c_sabotage("crypto_borrow") && !data.is_empty() {
+            let mut data = data;
+            data[0] ^= 0xff;
+            data
+        } else {
+            data
+        };
+        return data;
     }
     // Fall back to StringHeader layout — the common case for literal
     // strings passed to crypto functions.
@@ -81,14 +93,21 @@ pub(super) unsafe fn bytes_from_ptr(ptr: i64) -> Vec<u8> {
 pub(super) unsafe fn alloc_buffer_from_slice(
     bytes: &[u8],
 ) -> *mut perry_runtime::buffer::BufferHeader {
-    let buf = perry_runtime::buffer::buffer_alloc(bytes.len() as u32);
-    if buf.is_null() {
-        return buf;
-    }
-    (*buf).length = bytes.len() as u32;
-    let dst = perry_runtime::buffer::buffer_data_mut(buf);
-    std::ptr::copy_nonoverlapping(bytes.as_ptr(), dst, bytes.len());
-    buf
+    #[cfg(test)]
+    let bytes = if b2c_sabotage("crypto_output") && !bytes.is_empty() {
+        &bytes[..bytes.len() - 1]
+    } else {
+        bytes
+    };
+    JSValue::from_bits(
+        perry_runtime::buffer::bytes::from_slice(
+            perry_runtime::buffer::bytes::Brand::Buffer,
+            bytes,
+        )
+        .to_bits(),
+    )
+    .as_pointer::<perry_runtime::buffer::BufferHeader>()
+    .cast_mut()
 }
 
 #[derive(Clone, Copy)]

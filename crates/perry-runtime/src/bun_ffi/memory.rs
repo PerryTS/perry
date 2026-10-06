@@ -144,14 +144,15 @@ pub(crate) unsafe fn node_view_value(
     let copy_jv = JSValue::from_bits(copy_arg.to_bits());
     let copy = copy_jv.is_undefined() || crate::value::js_is_truthy(copy_arg) != 0;
     let buffer = if copy {
-        let buffer = crate::buffer::buffer_alloc(length);
-        std::ptr::copy_nonoverlapping(
-            address as *const u8,
-            crate::buffer::buffer_data_mut(buffer),
-            length as usize,
-        );
-        (*buffer).length = length;
-        buffer
+        JSValue::from_bits(
+            crate::buffer::bytes::from_slice(
+                crate::buffer::bytes::Brand::Buffer,
+                std::slice::from_raw_parts(address as *const u8, length as usize),
+            )
+            .to_bits(),
+        )
+        .as_pointer::<crate::buffer::BufferHeader>()
+        .cast_mut()
     } else {
         crate::buffer::buffer_alloc_foreign(address as *mut u8, length)
     };

@@ -466,17 +466,11 @@ unsafe fn array_buffer(bytes: &[u8]) -> u64 {
 }
 
 unsafe fn new_buffer(bytes: &[u8]) -> *mut crate::buffer::BufferHeader {
-    let len = u32::try_from(bytes.len()).expect("cloned buffer exceeds u32::MAX bytes");
-    let buffer = crate::buffer::buffer_alloc(len);
-    (*buffer).length = len;
-    if !bytes.is_empty() {
-        ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            crate::buffer::buffer_data_mut(buffer),
-            bytes.len(),
-        );
-    }
-    buffer
+    JSValue::from_bits(
+        crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes).to_bits(),
+    )
+    .as_pointer::<crate::buffer::BufferHeader>()
+    .cast_mut()
 }
 
 unsafe fn owned_typed_array(kind: u8, length: u32, bytes: &[u8]) -> u64 {

@@ -83,37 +83,20 @@ fn unbox_pointer(v: f64) -> *mut c_void {
 /// source. Accepts both `Uint8Array` (TypedArrayHeader, kind=KIND_UINT8) and
 /// raw ArrayBuffer-style `BufferHeader`. Returns `None` if the JSValue isn't
 /// a recognised byte buffer.
-fn extract_bytes(jsval: f64) -> Option<(*const u8, usize)> {
-    let ptr = unbox_pointer(jsval);
-    if ptr.is_null() {
+fn extract_bytes(jsval: f64) -> Option<Vec<u8>> {
+    let addr = unbox_pointer(jsval) as usize;
+    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+        if crate::typedarray::elem_size_for_kind(kind) != 1 {
+            return None;
+        }
+    } else if !crate::buffer::is_registered_buffer(addr) {
         return None;
     }
-    let addr = ptr as usize;
-
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-        // KIND_UINT8 = 0 per typedarray.rs (Int8=0,Uint8=1 — verify via
-        // elem_size_for_kind which returns 1 for both byte kinds anyway).
-        // We accept any single-byte kind for bytes input — wasmi treats it
-        // as raw u8.
-        if crate::typedarray::elem_size_for_kind(kind) == 1 {
-            let header = addr as *const crate::typedarray::TypedArrayHeader;
-            if let Some(bytes) = unsafe { crate::typedarray::typed_array_bytes(header) } {
-                return Some((bytes.as_ptr(), bytes.len()));
-            }
-        }
-    }
-
-    if crate::buffer::is_registered_buffer(addr)
-        || crate::buffer::is_array_buffer(addr)
-        || crate::buffer::is_uint8array_buffer(addr)
-    {
-        let header = addr as *const crate::buffer::BufferHeader;
-        let len = unsafe { (*header).length as usize };
-        let data = crate::buffer::buffer_data(header as *const crate::buffer::BufferHeader);
-        return Some((data, len));
-    }
-
-    None
+    crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(addr as i64), scope)
+            .ok()
+            .map(<[u8]>::to_vec)
+    })
 }
 
 /// Extract a UTF-8 byte view of a JS string. Accepts StringHeader-backed
@@ -201,11 +184,12 @@ fn rejected_promise_value(reason: f64) -> f64 {
 /// delivery: `new WebAssembly.Module` throws synchronously, `compile` /
 /// `instantiate` reject their promise.
 fn module_new_value(bytes_jsval: f64) -> Result<f64, f64> {
-    let Some((ptr, len)) = extract_bytes(bytes_jsval) else {
+    let Some(bytes) = extract_bytes(bytes_jsval) else {
         return Err(wasm_type_error_value(
             "WebAssembly.Module: argument must be a Uint8Array or ArrayBuffer",
         ));
     };
+    let (ptr, len) = (bytes.as_ptr(), bytes.len());
     let mut err: *mut c_char = std::ptr::null_mut();
     let module = unsafe { perry_wasm_host_module_new(ptr, len, &mut err) };
     if module.is_null() {
@@ -268,18 +252,18 @@ fn array_value(arr: *mut crate::array::ArrayHeader) -> f64 {
 }
 
 fn array_buffer_from_bytes(data: *const u8, len: usize) -> f64 {
-    let len_i32 = len.min(i32::MAX as usize) as i32;
-    let buf = crate::buffer::js_array_buffer_new(len_i32);
-    if !buf.is_null() && !data.is_null() && len_i32 > 0 {
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                data,
-                crate::buffer::buffer_data_mut(buf),
-                len_i32 as usize,
-            );
-        }
+    let len = len.min(i32::MAX as usize);
+    if data.is_null() {
+        return crate::buffer::bytes::new_bytes(
+            crate::buffer::bytes::Brand::ArrayBuffer,
+            len,
+            crate::buffer::bytes::Init::Zero,
+        )
+        .0;
     }
-    crate::value::js_nanbox_pointer(buf as i64)
+    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::ArrayBuffer, unsafe {
+        std::slice::from_raw_parts(data, len)
+    })
 }
 
 fn make_module_object(module: *mut c_void) -> f64 {
@@ -380,9 +364,10 @@ fn empty_array_value() -> f64 {
 /// `WebAssembly.validate(bytes)` — returns boolean.
 #[no_mangle]
 pub extern "C" fn js_webassembly_validate(bytes_jsval: f64) -> f64 {
-    let Some((ptr, len)) = extract_bytes(bytes_jsval) else {
+    let Some(bytes) = extract_bytes(bytes_jsval) else {
         return nanbox_bool(false);
     };
+    let (ptr, len) = (bytes.as_ptr(), bytes.len());
     let ok = unsafe { perry_wasm_host_validate(ptr, len) } != 0;
     nanbox_bool(ok)
 }
@@ -1539,11 +1524,12 @@ pub extern "C" fn js_webassembly_instantiate(bytes_jsval: f64, imports_jsval: f6
             nanbox_undefined(),
         ));
     }
-    let Some((ptr, len)) = extract_bytes(bytes_jsval) else {
+    let Some(bytes) = extract_bytes(bytes_jsval) else {
         return rejected_promise_value(wasm_type_error_value(
             "WebAssembly.instantiate: argument must be a Uint8Array or ArrayBuffer",
         ));
     };
+    let (ptr, len) = (bytes.as_ptr(), bytes.len());
     let mut err: *mut c_char = std::ptr::null_mut();
     let module = unsafe { perry_wasm_host_module_new(ptr, len, &mut err) };
     if module.is_null() {

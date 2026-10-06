@@ -161,25 +161,22 @@ impl AtomicView {
     /// table key that lets cross-thread `wait`/`notify` rendezvous (#4913).
     /// Returns 0 if the backing pointer can't be resolved.
     fn slot_addr(&self, index: i32) -> usize {
-        match self {
-            AtomicView::TypedArray { ptr, kind } => unsafe {
-                let base = crate::typedarray::typed_array_bytes(*ptr)
-                    .map(|b| b.as_ptr() as usize)
-                    .unwrap_or(0);
-                if base == 0 {
-                    return 0;
-                }
-                base + (index.max(0) as usize) * atomic_elem_size(*kind)
-            },
-            AtomicView::Uint8ArrayBuffer(ptr) => {
-                let base =
-                    crate::buffer::buffer_data(*ptr as *const crate::buffer::BufferHeader) as usize;
-                if base == 0 {
-                    return 0;
-                }
-                base + index.max(0) as usize
-            }
-        }
+        let (value, elem) = match self {
+            AtomicView::TypedArray { ptr, kind } => (
+                crate::value::js_nanbox_pointer(*ptr as i64),
+                atomic_elem_size(*kind),
+            ),
+            AtomicView::Uint8ArrayBuffer(ptr) => (crate::value::js_nanbox_pointer(*ptr as i64), 1),
+        };
+        // This address is a futex identity, not a borrowed byte reference.
+        // Wait/notify only admits process-lifetime shared stores.
+        crate::buffer::bytes::no_gc(|scope| {
+            crate::buffer::bytes::bytes(value, scope)
+                .ok()
+                .map_or(0, |bytes| {
+                    bytes.as_ptr() as usize + index.max(0) as usize * elem
+                })
+        })
     }
 
     fn get_bigint_bits(&self, index: i32) -> u64 {
@@ -370,15 +367,16 @@ fn typed_array_bigint_bits(ta: *const TypedArrayHeader, index: i32) -> u64 {
         if index as u32 >= (*ta).length {
             return 0;
         }
-        let data = crate::typedarray::typed_array_bytes(ta).unwrap_or(&[]);
-        let off = (index as usize).saturating_mul((*ta).elem_size as usize);
-        let bytes = data.get(off..off + 8).unwrap_or(&[]);
-        if bytes.len() != 8 {
-            return 0;
-        }
-        u64::from_ne_bytes([
-            bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-        ])
+        crate::buffer::bytes::no_gc(|scope| {
+            let data =
+                crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(ta as i64), scope)
+                    .unwrap_or(&[]);
+            let off = (index as usize).saturating_mul((*ta).elem_size as usize);
+            let Some(bytes) = data.get(off..off + 8) else {
+                return 0;
+            };
+            u64::from_ne_bytes(bytes.try_into().unwrap())
+        })
     }
 }
 
@@ -396,13 +394,17 @@ fn typed_array_set_bigint_bits(ta: *mut TypedArrayHeader, index: i32, value: u64
         if index as u32 >= (*ta).length {
             return;
         }
-        let Some(data) = crate::typedarray::typed_array_bytes_mut(ta) else {
-            return;
-        };
-        let off = (index as usize).saturating_mul((*ta).elem_size as usize);
-        if let Some(slot) = data.get_mut(off..off + 8) {
-            slot.copy_from_slice(&value.to_ne_bytes());
-        }
+        crate::buffer::bytes::no_gc(|scope| {
+            let Ok(data) =
+                crate::buffer::bytes::bytes_mut(crate::value::js_nanbox_pointer(ta as i64), scope)
+            else {
+                return;
+            };
+            let off = (index as usize).saturating_mul((*ta).elem_size as usize);
+            if let Some(slot) = data.get_mut(off..off + 8) {
+                slot.copy_from_slice(&value.to_ne_bytes());
+            }
+        });
     }
 }
 

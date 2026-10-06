@@ -27,7 +27,7 @@
 
 use std::sync::Mutex;
 
-use crate::buffer::{buffer_alloc, buffer_data_mut, mark_as_uint8array, BufferHeader};
+use crate::buffer::BufferHeader;
 use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
 use crate::string::{js_string_from_bytes, StringHeader};
 
@@ -412,22 +412,13 @@ pub extern "C" fn js_text_encoder_encode_llvm(value: f64) -> i64 {
         (d, l)
     };
 
-    let buf = buffer_alloc(len as u32);
-    unsafe {
-        (*buf).length = len as u32;
-        if len > 0 {
-            std::ptr::copy_nonoverlapping(data_ptr, buffer_data_mut(buf), len);
-        }
-    }
-    mark_as_uint8array(buf as usize);
-
-    buf as i64
-}
-
-#[derive(Clone, Copy)]
-enum TextEncoderDest {
-    Buffer(*mut BufferHeader),
-    TypedArray(*mut crate::typedarray::TypedArrayHeader),
+    crate::value::JSValue::from_bits(
+        crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Uint8Array, unsafe {
+            std::slice::from_raw_parts(data_ptr, len)
+        })
+        .to_bits(),
+    )
+    .as_pointer::<BufferHeader>() as i64
 }
 
 fn text_value_pointer_addr(value: f64) -> usize {
@@ -510,17 +501,17 @@ fn text_encoder_encode_into_source(source: f64) -> *const StringHeader {
     ptr
 }
 
-fn text_encoder_encode_into_dest(dest: f64) -> TextEncoderDest {
+fn text_encoder_encode_into_dest(dest: f64) -> f64 {
     let addr = text_value_pointer_addr(dest);
     if addr >= 0x1000 {
         if crate::typedarray::lookup_typed_array_kind(addr) == Some(crate::typedarray::KIND_UINT8) {
-            return TextEncoderDest::TypedArray(addr as *mut crate::typedarray::TypedArrayHeader);
+            return dest;
         }
         if crate::buffer::is_registered_buffer(addr)
             && !crate::buffer::is_any_array_buffer(addr)
             && !crate::buffer::is_data_view(addr)
         {
-            return TextEncoderDest::Buffer(addr as *mut BufferHeader);
+            return dest;
         }
     }
 
@@ -581,35 +572,18 @@ pub extern "C" fn js_text_encoder_encode_into_llvm(source: f64, dest: f64) -> i6
     let str_ptr = text_encoder_encode_into_source(source);
     let dest = text_encoder_encode_into_dest(dest);
 
-    unsafe {
+    let (read, written) = crate::buffer::bytes::no_gc(|scope| unsafe {
         let src_len = (*str_ptr).byte_len as usize;
         let src_data = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let src = std::slice::from_raw_parts(src_data, src_len);
-        let dest_len = match dest {
-            TextEncoderDest::Buffer(dest_ptr) => (*dest_ptr).length as usize,
-            TextEncoderDest::TypedArray(dest_ptr) => {
-                crate::typedarray::typed_array_bytes_mut(dest_ptr)
-                    .map(|bytes| bytes.len())
-                    .unwrap_or(0)
-            }
+        let Ok(bytes) = crate::buffer::bytes::bytes_mut(dest, scope) else {
+            return (0, 0);
         };
-        let (read, written) = text_encoder_prefix_len(src, dest_len);
-
-        match dest {
-            TextEncoderDest::Buffer(dest_ptr) => {
-                for (idx, byte) in src.iter().copied().take(written).enumerate() {
-                    crate::buffer::js_buffer_set(dest_ptr, idx as i32, byte as i32);
-                }
-            }
-            TextEncoderDest::TypedArray(dest_ptr) => {
-                if let Some(bytes) = crate::typedarray::typed_array_bytes_mut(dest_ptr) {
-                    bytes[..written].copy_from_slice(&src[..written]);
-                }
-            }
-        }
-
-        text_encoder_result(read, written) as i64
-    }
+        let (read, written) = text_encoder_prefix_len(src, bytes.len());
+        bytes[..written].copy_from_slice(&src[..written]);
+        (read, written)
+    });
+    text_encoder_result(read, written) as i64
 }
 
 /// `decoder.decode(buf)` — UTF-8 decode a NaN-boxed `BufferHeader` value.
@@ -654,38 +628,28 @@ pub extern "C" fn js_text_decoder_decode_llvm(handle: f64, value: f64) -> i64 {
         throw_invalid_decode_input();
     }
 
-    // Route by concrete kind so the byte offset/length is honored and only
-    // genuine buffer sources are accepted.
-    let bytes: &[u8] = unsafe {
-        if crate::typedarray::lookup_typed_array_kind(ptr_usize).is_some() {
-            // TypedArray view (incl. Uint16Array, sliced subarray, etc.).
-            match crate::typedarray::typed_array_bytes(
-                ptr_usize as *const crate::typedarray::TypedArrayHeader,
-            ) {
-                Some(b) => b,
-                None => throw_invalid_decode_input(),
-            }
-        } else if crate::buffer::is_data_view(ptr_usize)
-            || crate::buffer::is_any_array_buffer(ptr_usize)
-            || crate::buffer::is_registered_buffer(ptr_usize)
-        {
-            // DataView, (Shared)ArrayBuffer, or a registered Buffer/Uint8Array
-            // — all BufferHeader-backed. Their bytes are not necessarily
-            // INLINE, though: a registered view (a DataView, a `Buffer.from(ab)`
-            // window, a subarray) keeps a construction-time copy that only
-            // registry-routed writes refresh, so a multi-byte typed array over
-            // the same backing decoded as pre-write bytes. Resolve the window
-            // the way every other native-span consumer does (#6515).
-            let buf = ptr_usize as *const BufferHeader;
-            let len = (*buf).length as usize;
-            std::slice::from_raw_parts(crate::buffer::resolve_span_data_ptr(buf), len)
-        } else {
-            // Plain arrays, plain objects, strings — reject like Node.
-            throw_invalid_decode_input();
+    let value = crate::value::js_nanbox_pointer(ptr_usize as i64);
+    match crate::buffer::bytes::pin(value) {
+        Ok(pin) => decode_bytes(
+            unsafe { std::slice::from_raw_parts(pin.as_ptr(), pin.len()) },
+            encoding,
+            fatal,
+            label,
+        ),
+        Err(
+            crate::buffer::bytes::NotBytes::UnstableForeign
+            | crate::buffer::bytes::NotBytes::Frozen,
+        ) => {
+            // Foreign engines have no retain protocol. Copy in a borrow scope
+            // before decoding can allocate the returned JavaScript string.
+            let input = crate::buffer::bytes::no_gc(|scope| {
+                crate::buffer::bytes::bytes(value, scope).map(<[u8]>::to_vec)
+            })
+            .unwrap_or_else(|_| throw_invalid_decode_input());
+            decode_bytes(&input, encoding, fatal, label)
         }
-    };
-
-    decode_bytes(bytes, encoding, fatal, label)
+        Err(_) => throw_invalid_decode_input(),
+    }
 }
 
 fn throw_invalid_decode_input() -> ! {

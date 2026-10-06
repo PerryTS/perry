@@ -2,8 +2,7 @@ use super::*;
 use crate::common::{get_handle, register_handle, Handle};
 use perry_runtime::{
     buffer::{
-        buffer_alloc, buffer_data, buffer_data_mut, is_any_array_buffer, is_data_view,
-        is_registered_buffer, is_uint8array_buffer, mark_as_uint8array, BufferHeader,
+        is_any_array_buffer, is_data_view, is_registered_buffer, is_uint8array_buffer, BufferHeader,
     },
     js_get_string_pointer_unified, js_nanbox_pointer, js_promise_rejected, js_promise_resolved,
     JSValue, Promise, StringHeader,
@@ -142,19 +141,16 @@ unsafe fn node_sqlite_path_bytes(value: f64) -> Option<Vec<u8>> {
     if raw < 0x1000 {
         return None;
     }
-    if is_registered_buffer(raw) && is_uint8array_buffer(raw) {
-        let buffer = raw as *const BufferHeader;
-        return Some(
-            std::slice::from_raw_parts(buffer_data(buffer), (*buffer).length as usize).to_vec(),
-        );
-    }
-    if perry_runtime::typedarray::lookup_typed_array_kind(raw)
-        == Some(perry_runtime::typedarray::KIND_UINT8)
+    if (is_registered_buffer(raw) && is_uint8array_buffer(raw))
+        || perry_runtime::typedarray::lookup_typed_array_kind(raw)
+            == Some(perry_runtime::typedarray::KIND_UINT8)
     {
-        return perry_runtime::typedarray::typed_array_bytes(
-            raw as *const perry_runtime::typedarray::TypedArrayHeader,
-        )
-        .map(ToOwned::to_owned);
+        return perry_runtime::buffer::bytes::no_gc(|scope| {
+            let value = f64::from_bits(JSValue::pointer(raw as *const u8).bits());
+            perry_runtime::buffer::bytes::bytes(value, scope)
+                .ok()
+                .map(<[u8]>::to_vec)
+        });
     }
     None
 }
@@ -425,12 +421,15 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_serialize(
             throw_sqlite_error_from_conn(conn);
         }
         let len = size as usize;
-        let buffer = buffer_alloc(len as u32);
-        (*buffer).length = len as u32;
-        mark_as_uint8array(buffer as usize);
-        if len > 0 {
-            std::ptr::copy_nonoverlapping(image, buffer_data_mut(buffer), len);
-        }
+        let buffer = JSValue::from_bits(
+            perry_runtime::buffer::bytes::from_slice(
+                perry_runtime::buffer::bytes::Brand::Uint8Array,
+                std::slice::from_raw_parts(image, len),
+            )
+            .to_bits(),
+        )
+        .as_pointer::<perry_runtime::buffer::BufferHeader>()
+        .cast_mut();
         ffi::sqlite3_free(image.cast());
         buffer
     })
@@ -445,18 +444,17 @@ pub unsafe extern "C" fn js_node_sqlite_database_sync_deserialize(
     let raw = raw_addr_from_value(image_value);
     let bytes = if perry_runtime::typedarray::lookup_typed_array_kind(raw)
         == Some(perry_runtime::typedarray::KIND_UINT8)
+        || (raw >= 0x1000
+            && is_registered_buffer(raw)
+            && !is_any_array_buffer(raw)
+            && !is_data_view(raw))
     {
-        perry_runtime::typedarray::typed_array_bytes(
-            raw as *const perry_runtime::typedarray::TypedArrayHeader,
-        )
-        .map(ToOwned::to_owned)
-    } else if raw >= 0x1000
-        && is_registered_buffer(raw)
-        && !is_any_array_buffer(raw)
-        && !is_data_view(raw)
-    {
-        let buffer = raw as *const BufferHeader;
-        Some(std::slice::from_raw_parts(buffer_data(buffer), (*buffer).length as usize).to_vec())
+        perry_runtime::buffer::bytes::no_gc(|scope| {
+            let value = f64::from_bits(JSValue::pointer(raw as *const u8).bits());
+            perry_runtime::buffer::bytes::bytes(value, scope)
+                .ok()
+                .map(<[u8]>::to_vec)
+        })
     } else {
         None
     }

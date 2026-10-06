@@ -471,18 +471,7 @@ pub extern "C" fn js_url_file_url_to_path(url_f64: f64, options_f64: f64) -> f64
 pub extern "C" fn js_url_file_url_to_path_buffer(url_f64: f64, options_f64: f64) -> f64 {
     let windows = options_windows_flag(options_f64);
     let bytes = file_url_to_path_bytes(url_f64, windows);
-    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
-    unsafe {
-        (*buf).length = bytes.len() as u32;
-        if !bytes.is_empty() {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                crate::buffer::buffer_data_mut(buf),
-                bytes.len(),
-            );
-        }
-    }
-    crate::value::js_nanbox_pointer(buf as i64)
+    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, &bytes)
 }
 
 /// Percent-encode a file-URL path component (after separator normalization),

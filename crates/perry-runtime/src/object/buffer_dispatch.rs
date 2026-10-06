@@ -374,11 +374,12 @@ unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
 }
 
 unsafe fn secret_key_jwk_object(buf_ptr: *mut crate::buffer::BufferHeader) -> f64 {
-    let bytes = std::slice::from_raw_parts(
-        crate::buffer::buffer_data(buf_ptr as *const crate::buffer::BufferHeader),
-        (*buf_ptr).length as usize,
-    );
-    let encoded = perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    let encoded = crate::buffer::bytes::no_gc(|scope| {
+        let bytes =
+            crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(buf_ptr as i64), scope)
+                .expect("live secret key");
+        perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+    });
     let obj = js_object_alloc(0, 2);
     let kty_key = crate::string::js_string_from_bytes(b"kty".as_ptr(), 3);
     let kty_val = crate::string::js_string_from_bytes(b"oct".as_ptr(), 3);
@@ -461,17 +462,10 @@ unsafe fn secret_to_crypto_key(addr: usize, algorithm_bits: f64) -> f64 {
     // and the KeyObject keeps being one. A buffer's flavor is its GC type
     // (#10694), so the key bytes go into a fresh cell carrying the CryptoKey
     // brand rather than re-branding the KeyObject's own cell.
-    let src = addr as *const crate::buffer::BufferHeader;
-    let len = (*src).length;
-    let out = crate::buffer::buffer_alloc(len);
-    (*out).length = len;
-    if len > 0 {
-        std::ptr::copy_nonoverlapping(
-            crate::buffer::buffer_data(src),
-            crate::buffer::buffer_data_mut(out),
-            len as usize,
-        );
-    }
+    let input = crate::value::js_nanbox_pointer(addr as i64);
+    let value = crate::buffer::bytes::copy_value(crate::buffer::bytes::Brand::Buffer, input)
+        .expect("live key bytes");
+    let out = JSValue::from_bits(value.to_bits()).as_pointer::<crate::buffer::BufferHeader>();
     crate::buffer::mark_as_crypto_key(out as usize, algo_id, hash_id, 1);
     f64::from_bits(JSValue::pointer(out as *mut u8).bits())
 }
@@ -769,13 +763,11 @@ pub unsafe fn dispatch_buffer_method(
             let final_ = if args.len() >= 3 { rel(args[2]) } else { len };
             let count = (final_ - from).min(len - to);
             if count > 0 {
-                let data = crate::buffer::buffer_data_mut(buf_ptr);
-                let block: Vec<u8> = (0..count as usize)
-                    .map(|i| *data.add(from as usize + i))
-                    .collect();
-                for (i, b) in block.into_iter().enumerate() {
-                    *data.add(to as usize + i) = b;
-                }
+                crate::buffer::bytes::no_gc(|scope| {
+                    if let Ok(data) = crate::buffer::bytes::bytes_mut(buf_f64, scope) {
+                        data.copy_within(from as usize..(from + count) as usize, to as usize);
+                    }
+                });
             }
             buf_f64
         }
@@ -861,23 +853,11 @@ pub unsafe fn dispatch_buffer_method(
             if matches!(format.as_deref(), Some("jwk")) {
                 return secret_key_jwk_object(buf_ptr);
             }
-            let bytes = std::slice::from_raw_parts(
-                crate::buffer::buffer_data(buf_ptr as *const crate::buffer::BufferHeader),
-                (*buf_ptr).length as usize,
-            );
-            let out = crate::buffer::buffer_alloc(bytes.len() as u32);
-            if !out.is_null() {
-                std::ptr::copy_nonoverlapping(
-                    bytes.as_ptr(),
-                    crate::buffer::buffer_data_mut(out),
-                    bytes.len(),
-                );
-                (*out).length = bytes.len() as u32;
-                // Node returns a `Buffer` (Uint8Array subclass) here so
-                // `instanceof Uint8Array` must hold on the result.
-                crate::buffer::mark_as_uint8array(out as usize);
-            }
-            f64::from_bits(JSValue::pointer(out as *mut u8).bits())
+            crate::buffer::bytes::copy_value(
+                crate::buffer::bytes::Brand::Uint8Array,
+                crate::value::js_nanbox_pointer(addr as i64),
+            )
+            .expect("live key bytes")
         }
         "toCryptoKey" if crate::buffer::is_secret_key(addr) && !args.is_empty() => {
             secret_to_crypto_key(addr, args[0])
