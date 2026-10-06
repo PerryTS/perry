@@ -18,7 +18,7 @@ pub struct BufferHeader {
 }
 
 #[inline]
-fn buffer_payload_size(capacity: usize) -> usize {
+pub(crate) fn buffer_payload_size(capacity: usize) -> usize {
     std::mem::size_of::<BufferHeader>() + capacity
 }
 

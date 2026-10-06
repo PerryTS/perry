@@ -268,10 +268,9 @@ unsafe fn scan_object(header: *mut GcHeader, report: &mut FromSpaceScanReport) {
             std::mem::size_of::<crate::string::StringHeader>()
                 + (*(user as *const crate::string::StringHeader)).byte_len as usize,
         ),
-        t if crate::gc::is_buffer_family_type(t) => Some(
-            std::mem::size_of::<crate::buffer::BufferHeader>()
-                + (*(user as *const crate::buffer::BufferHeader)).capacity as usize,
-        ),
+        t if crate::gc::is_buffer_family_type(t) => Some(crate::buffer::buffer_payload_size(
+            (*(user as *const crate::buffer::BufferHeader)).capacity as usize,
+        )),
         _ => None,
     };
     if let Some(bytes) = declared_bytes {

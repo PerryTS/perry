@@ -282,7 +282,7 @@ fn fromspace_scan_bounds_a_string_by_its_byte_len() {
 /// what the memory held). Only whole words inside the declared bytes count.
 #[test]
 fn fromspace_scan_bounds_a_buffer_by_its_capacity() {
-    let header_bytes = std::mem::size_of::<crate::buffer::BufferHeader>();
+    let header_bytes = crate::buffer::buffer_payload_size(0);
     let capacity = 123usize;
     let holder = crate::arena::arena_alloc_gc_old(header_bytes + capacity, 8, GC_TYPE_BUFFER);
     let young = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
