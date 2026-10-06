@@ -199,11 +199,19 @@ fn each_b1_sabotage_turns_its_live_witness_red() {
             "native_backed_alloc_buffer_consumer_preserves_the_pointer_word",
         ),
         ("no_gc_assert", "no_gc_byte_allocation_is_rejected"),
+        (
+            "tls_output",
+            "tls::b1_output_tests::certificate_raw_output_preserves_der",
+        ),
     ] {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
             .args([
                 "--exact",
-                &format!("gc::tests::buffer_bytes::{witness}"),
+                &if witness.contains("::") {
+                    witness.to_string()
+                } else {
+                    format!("gc::tests::buffer_bytes::{witness}")
+                },
                 "--nocapture",
             ])
             .env("PERRY_B1_SABOTAGE", fault)

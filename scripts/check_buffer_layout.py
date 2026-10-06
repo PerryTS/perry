@@ -15,6 +15,7 @@ BASE = ROOT / 'scripts/buffer_layout_baseline.json'
 PATTERNS = [
     re.compile(r'size_of\s*::\s*<\s*(?:[\w:]+::)?(?:BufferHeader|TypedArrayHeader)\s*>'),
     re.compile(r'\b(?:buf(?:fer)?(?:_data|_ptr)?|ta|view|result)\s*(?:as\s+\*\s*(?:const|mut)\s+u8\s*)?\)?\s*\.add\(\s*(?:8|16)\s*\)'),
+    re.compile(r'\.(?:add|gep)\([^;]*"(?:8|16|10)"'),
     re.compile(r'\(\*(?:buf(?:fer)?(?:_ptr)?|ta|view|result|backing)\)\.(?:length|capacity)\s*=(?!=)'),
 ]
 def inventory(root=ROOT):
@@ -38,7 +39,9 @@ def main():
     args = ap.parse_args()
     if args.self_test:
         for planted in ['let dst = (buf as *mut u8).add(8);', '(*buffer).length = 8;',
-                        'std::mem::size_of::<crate::buffer::BufferHeader>()']:
+                        'std::mem::size_of::<crate::buffer::BufferHeader>()',
+                        'let data = blk.add(I64, &raw, "8");',
+                        'let data = blk.gep(I8, &header, &[(I32, "16")]);']:
             assert any(p.search(planted) for p in PATTERNS), planted
         print('buffer-layout planted writers: RED')
         return

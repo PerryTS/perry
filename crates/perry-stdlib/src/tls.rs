@@ -710,7 +710,13 @@ unsafe fn json_value_from_str(json: &str) -> f64 {
 }
 
 unsafe fn buffer_from_bytes(bytes: &[u8]) -> f64 {
-    perry_runtime::buffer::bytes::from_slice(perry_runtime::buffer::bytes::Brand::Buffer, bytes)
+    let result = perry_runtime::buffer::bytes::from_slice(
+        perry_runtime::buffer::bytes::Brand::Buffer,
+        bytes,
+    );
+    #[cfg(test)]
+    crate::buffer_b1_test_support::sabotage_output("tls", result);
+    result
 }
 
 fn certificate_attr_value(atv: &x509_cert::attr::AttributeTypeAndValue) -> String {
@@ -1758,3 +1764,6 @@ static KEEP_TLS_FFI: KeepTlsFfi<23> = KeepTlsFfi([
     js_tls_socket_set_max_send_fragment as *const (),
     js_tls_process_pending as *const (),
 ]);
+
+#[cfg(test)]
+mod b1_output_tests;

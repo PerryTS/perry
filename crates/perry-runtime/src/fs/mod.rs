@@ -928,7 +928,8 @@ unsafe fn buffer_from_file_bytes(bytes: &[u8]) -> *mut crate::buffer::BufferHead
     crate::value::JSValue::from_bits(
         crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes).to_bits(),
     )
-    .as_pointer()
+    .as_pointer::<crate::buffer::BufferHeader>()
+    .cast_mut()
 }
 
 /// Recursively remove a directory or file.

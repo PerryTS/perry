@@ -320,14 +320,21 @@ pub unsafe extern "C" fn js_keccak256_native_bytes(
 
     let hash = keccak256(data);
 
-    perry_runtime::value::JSValue::from_bits(
+    let result = perry_runtime::value::JSValue::from_bits(
         perry_runtime::buffer::bytes::from_slice(
             perry_runtime::buffer::bytes::Brand::Buffer,
             &hash,
         )
         .to_bits(),
     )
-    .as_pointer()
+    .as_pointer::<perry_runtime::buffer::BufferHeader>()
+    .cast_mut();
+    #[cfg(test)]
+    crate::buffer_b1_test_support::sabotage_output(
+        "ethers",
+        f64::from_bits(JSValue::pointer(result.cast()).bits()),
+    );
+    result
 }
 
 /// formatUnits(value: bigint, decimals: number) -> string
@@ -508,3 +515,6 @@ fn parse_units_to_string(value: &str, decimals: usize) -> String {
         result.to_string()
     }
 }
+
+#[cfg(test)]
+mod b1_output_tests;

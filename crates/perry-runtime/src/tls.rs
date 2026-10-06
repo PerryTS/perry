@@ -684,6 +684,13 @@ pub unsafe fn tls_legacy_certificate_object(der: &[u8], detailed: bool) -> f64 {
         set_rooted_object_field(&obj, "subjectaltname", string_value(&san));
     }
     let raw = crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, &der);
+    #[cfg(test)]
+    if crate::buffer::bytes::sabotage("tls_output") {
+        let ptr = JSValue::from_bits(raw.to_bits())
+            .as_pointer::<crate::buffer::BufferHeader>()
+            .cast_mut();
+        *crate::buffer::buffer_data_mut(ptr) ^= 1;
+    }
     set_rooted_object_field(&obj, "raw", raw);
     set_rooted_object_field(&obj, "valid_from", string_value(""));
     set_rooted_object_field(&obj, "valid_to", string_value(""));
@@ -1699,3 +1706,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod b1_output_tests;

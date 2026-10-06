@@ -471,7 +471,8 @@ pub extern "C" fn js_perry_read_embedded(path_value: f64) -> *mut crate::buffer:
     crate::value::JSValue::from_bits(
         crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes).to_bits(),
     )
-    .as_pointer()
+    .as_pointer::<crate::buffer::BufferHeader>()
+    .cast_mut()
 }
 
 // Keep the FFI symbols external under the thin-LTO + `strip=true` release

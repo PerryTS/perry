@@ -26,8 +26,8 @@ PROGRAMS = {
     'worker_heavy': ('worker_heavy.ts', [], False),
 }
 KERNELS = {
-    'matmul': '16_matrix_multiply.ts',
-    'prime_sieve': '11_prime_sieve.ts',
+    'matmul': 'matmul.ts',
+    'prime_sieve': 'prime_sieve.ts',
     'bench_buffer_readwrite': 'bench_buffer_readwrite.ts',
 }
 NODE = ['node', '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON', '--experimental-strip-types']
@@ -57,7 +57,7 @@ def compile_arm(root, arm, names):
     status = {}
     for name in names:
         if name in KERNELS:
-            relative, args, cwd = KERNELS[name], [], source/'benchmarks/suite'
+            relative, args, cwd = KERNELS[name], [], root/'realprog/kernels'
         else:
             relative, args, package = PROGRAMS[name]
             cwd = root/'realprog'/('pk' if package else '')
@@ -131,7 +131,7 @@ def measure(root, names, thp_off):
                     # Identical binary control, interleaved with each A/B pair.
                     prefix = root/'measure/trials'/f'{name}.{trial}.noise'
                     noise_counter = Path(str(prefix)+'.stat')
-                    control = run(['perf', 'stat', '-x', ';', '-e', 'instructions:u', '-o', str(noise_counter), *cmd],
+                    control = run(['perf', 'stat', '-x', ';', '-e', 'instructions:u', '-o', str(noise_counter), '/usr/bin/time', '-f', '%M', '-o', str(Path(str(prefix)+'.rss')), *cmd],
                                   cwd, env, prefix)
                     if control.returncode: raise RuntimeError(f'noise control failed: {prefix}')
                     instructions = next(int(l.split(';')[0]) for l in noise_counter.read_text().splitlines()

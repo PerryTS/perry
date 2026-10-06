@@ -359,3 +359,6 @@ pub extern "C" fn js_cron_timer_has_pending() -> i32 {
 pub mod container;
 #[cfg(feature = "container")]
 pub use container::*;
+
+#[cfg(test)]
+mod buffer_b1_test_support;

@@ -1407,10 +1407,13 @@ fn pipes_for(id: i64) -> Vec<u64> {
 }
 
 unsafe fn make_buffer(bytes: &[u8]) -> Option<f64> {
-    Some(perry_runtime::buffer::bytes::from_slice(
+    let result = perry_runtime::buffer::bytes::from_slice(
         perry_runtime::buffer::bytes::Brand::Buffer,
         bytes,
-    ))
+    );
+    #[cfg(test)]
+    crate::buffer_b1_test_support::sabotage_output("zlib", result);
+    Some(result)
 }
 
 /// Forward a `.pipe(dest)` chunk: `dest.write(Buffer.from(bytes))`. Builds the
@@ -1931,3 +1934,6 @@ mod stream_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod b1_output_tests;

@@ -46,7 +46,7 @@ fn check_abi() {
 /// Proof token for a scope without allocation, JavaScript, or safepoints.
 pub struct NoGc<'s>(PhantomData<&'s mut &'s ()>);
 /// Do not allocate, call JS, or poll while a borrow is held.
-pub fn no_gc<R>(f: impl for<'s> FnOnce(&NoGc<'s>) -> R) -> R {
+pub fn no_gc<R>(f: impl for<'s> FnOnce(&'s NoGc<'s>) -> R) -> R {
     #[cfg(debug_assertions)]
     struct Guard;
     #[cfg(debug_assertions)]
