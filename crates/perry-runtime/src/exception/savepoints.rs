@@ -30,12 +30,6 @@ pub(crate) mod catch_subsystem {
     pub(crate) const PRIVATE_LEXICAL_BRAND: u32 = 1 << 6;
     pub(crate) const DERIVED_SUPER_BINDING: u32 = 1 << 7;
     pub(crate) const PRIVATE_MEMBER_ACCESS_HINTS: u32 = 1 << 8;
-    // Each of these two is read only from the module that owns its stack, and
-    // both modules are feature-gated (`regex/site_test.rs` behind
-    // `regex-engine`, `dyn_eval` behind `dyn-eval`). Gate the bits the same
-    // way, or a build without the feature fails `-D warnings` as dead code.
-    #[cfg(feature = "regex-engine")]
-    pub(crate) const REGEX_FACTORY: u32 = 1 << 9;
     pub(crate) const DYN_EVAL: u32 = 1 << 10;
     pub(crate) const NAMESPACE_OVERRIDE: u32 = 1 << 11;
 }
@@ -92,11 +86,6 @@ impl<T> CatchStack<T> {
     #[inline]
     pub(crate) fn truncate(&mut self, len: usize) {
         self.items.truncate(len);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn clear(&mut self) {
-        self.items.clear();
     }
 
     #[inline]
@@ -237,11 +226,6 @@ catch_savepoints! {
     capture: crate::object::namespace_override_stack_savepoint,
     restore: crate::object::namespace_override_stack_restore,
     latch: catch_subsystem::NAMESPACE_OVERRIDE, idle: 0;
-    #[cfg(feature = "regex-engine")]
-    regex_factory: usize,
-    capture: crate::regex::site_test::active_factory_stack_savepoint,
-    restore: crate::regex::site_test::active_factory_stack_restore,
-    latch: catch_subsystem::REGEX_FACTORY, idle: 0;
     // #6559: rooted interpreter values AND the packed call depth.
     // Always present: the capture/restore forward to the interpreter once
     // `dyn-eval` is installed, and capture answers the idle value otherwise

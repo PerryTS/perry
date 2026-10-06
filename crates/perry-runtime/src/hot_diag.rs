@@ -269,14 +269,6 @@ pub struct RegexDiag {
     /// CONTENT-keyed cache; a site hit never reaches it, so the two are
     /// disjoint and `site_key_hit + site_hit <= new`.
     pub new_site_key_hit: u64,
-    /// `.test` evaluations served by a site-rooted RegExp header instead of a
-    /// fresh header allocation.
-    pub site_test_no_alloc: u64,
-    /// Validation declines, split so a perf run proves which guard fired.
-    pub site_test_declined: u64,
-    pub site_test_declined_patched_prototype: u64,
-    pub site_test_declined_callee_mismatch: u64,
-    pub site_test_declined_non_literal: u64,
     /// Runtime read-site admission for exec, symbol methods and species.
     /// The legacy refresh field stays zero; there is no aggregate proof.
     pub proof_exec_hit: u64,
@@ -464,8 +456,7 @@ impl RegexDiag {
              desc_regexp_probes={} desc_regexp_meta_negative={} \
              barrier_taken={} barrier_gated={} header_bytes={} site_verify_bytes={} \
              side_table_inserts={} site_key_hit={} ptr_ins={} src_ins={} \
-             ptr_rm={} src_rm={} rekeys={} site_test_no_alloc={} \
-             site_test_declined={}(patched_prototype={},callee_mismatch={},non_literal={})",
+             ptr_rm={} src_rm={} rekeys={}",
             self.new_calls,
             self.new_validated_hit,
             self.new_site_hit,
@@ -501,11 +492,6 @@ impl RegexDiag {
             self.pointer_table_removals,
             self.source_table_removals,
             self.side_table_rekeys,
-            self.site_test_no_alloc,
-            self.site_test_declined,
-            self.site_test_declined_patched_prototype,
-            self.site_test_declined_callee_mismatch,
-            self.site_test_declined_non_literal,
         );
         // Merge by content (prefix, len, flags): distinct literal sites with
         // the same pattern are one row.

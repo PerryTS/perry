@@ -71,9 +71,11 @@ pub(crate) fn test_native_pieces() -> usize {
     perex_replace_storage::NATIVE_PIECES.with(std::cell::Cell::get)
 }
 #[cfg(feature = "regex-engine")]
+mod literal;
+#[cfg(feature = "regex-engine")]
 mod perex_substitution;
 #[cfg(feature = "regex-engine")]
-pub(crate) mod site_test;
+pub use literal::js_regexp_literal;
 #[cfg(feature = "regex-engine")]
 pub use perex_replace::{js_string_replace_all_js, js_string_replace_js};
 #[cfg(feature = "regex-engine")]
@@ -404,28 +406,6 @@ pub(super) fn throw_regexp_syntax_error(message: &str) -> ! {
 pub extern "C" fn js_regexp_new(
     pattern: *const StringHeader,
     flags: *const StringHeader,
-) -> *mut RegExpHeader {
-    js_regexp_new_impl(pattern, flags, 0)
-}
-
-/// Literal construction entry point retained for the current generated ABI.
-/// Until AOT program emission is connected, this uses the same Perex compiler
-/// as dynamic construction. The old site cache is no longer a constructor path.
-#[cfg(feature = "regex-engine")]
-#[no_mangle]
-pub extern "C" fn js_regexp_new_site(
-    pattern: *const StringHeader,
-    flags: *const StringHeader,
-    site_key: i64,
-) -> *mut RegExpHeader {
-    js_regexp_new_impl(pattern, flags, site_key as usize)
-}
-
-#[cfg(feature = "regex-engine")]
-fn js_regexp_new_impl(
-    pattern: *const StringHeader,
-    flags: *const StringHeader,
-    _site_key: usize,
 ) -> *mut RegExpHeader {
     perex_api::finish(perex_construct::new(pattern, flags))
 }

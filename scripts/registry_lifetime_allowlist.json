@@ -421,12 +421,6 @@
       "why": "module.findSourceMap cache keyed by canonical filename: once per distinct file with an inline map, not per call"
     },
     {
-      "file": "crates/perry-runtime/src/regex/site_test.rs",
-      "name": "SITE_TEST_HEADERS",
-      "verdict": "bounded_by_program",
-      "why": "Keyed by compiler-emitted regex call-site keys: one cached header per source site"
-    },
-    {
       "file": "crates/perry-runtime/src/shared_sab.rs",
       "name": "SHARED_SAB_REGISTRY",
       "verdict": "open_leak",

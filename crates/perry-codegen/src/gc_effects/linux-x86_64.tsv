@@ -2700,13 +2700,7 @@ js_regexp_exec_get_index	Leaf
 js_regexp_get_flags	Reenters
 js_regexp_get_source	Reenters
 js_regexp_new	Reenters
-js_regexp_new_factory_site	Reenters
-js_regexp_new_site	Reenters
-js_regexp_site_factory_call_method	Reenters
-js_regexp_site_factory_call_value	Reenters
-js_regexp_site_test_dispatch	Reenters
-js_regexp_site_test_get_method	Reenters
-js_regexp_site_test_new	Reenters
+js_regexp_literal	Reenters
 js_regexp_test	Reenters
 js_regexp_to_string	Reenters
 js_region_guard_pack	Reenters

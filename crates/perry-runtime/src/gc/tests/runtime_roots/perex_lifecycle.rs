@@ -169,13 +169,12 @@ fn perex_lifecycle_literal_and_dynamic_construction_have_independent_state() {
     let scope = RuntimeHandleScope::new();
     let source = text(&scope, "born[0-9]+built");
     let flags = text(&scope, "g");
-    static SITE: u64 = 0x5045524558;
+    let site = Box::leak(Box::new(0u64)) as *mut u64;
     let mut owners = Vec::new();
     for _ in 0..2 {
         owners.push(scope.root_raw_mut_ptr(source.with_const_ptr(|source| {
-            flags.with_const_ptr(|flags| {
-                crate::regex::js_regexp_new_site(source, flags, &SITE as *const u64 as i64)
-            })
+            flags
+                .with_const_ptr(|flags| crate::regex::js_regexp_literal(source, flags, site as i64))
         })));
     }
     owners.push(regex(&scope, "born[0-9]+built", "g"));
@@ -301,4 +300,55 @@ fn regexp_active_binding_survives_eviction_and_relocation() {
     drop(scope);
     gc_collect_minor();
     assert_eq!(programs(), before);
+}
+
+#[test]
+fn regexp_literal_site_is_the_only_root_and_rewrites_after_moving_gc() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    super::perex_public::register_host_roots();
+    let site = Box::leak(Box::new(0u64)) as *mut u64;
+    let old = {
+        let scope = RuntimeHandleScope::new();
+        let source = text(&scope, "site-only-root");
+        let flags = text(&scope, "g");
+        let re = scope.root_raw_mut_ptr(source.with_const_ptr(|s| {
+            flags.with_const_ptr(|f| crate::regex::js_regexp_literal(s, f, site as i64))
+        }));
+        assert!(matches(&re, "site-only-root"));
+        let data = unsafe { (*site & crate::value::POINTER_MASK) as usize };
+        assert!(
+            crate::arena::pointer_in_nursery(data),
+            "premise: young data"
+        );
+        data
+    };
+    crate::regex::perex_cache::clear_for_tests();
+    let cycles = copying_minor_cycles();
+    gc_collect_minor();
+    assert!(
+        copying_minor_cycles() > cycles,
+        "premise: copying minor ran"
+    );
+    let moved = unsafe { (*site & crate::value::POINTER_MASK) as usize };
+    assert_ne!(old, moved, "site root must be rewritten");
+    assert!(!build_valid_pointer_set().contains(&old));
+    assert!(build_valid_pointer_set().contains(&moved));
+    let scope = RuntimeHandleScope::new();
+    // Hit must not parse flags or probe the compile cache; null operands are
+    // deliberately unusable as source input. The site has all matcher data.
+    let re = scope.root_raw_mut_ptr(crate::regex::js_regexp_literal(
+        std::ptr::null(),
+        std::ptr::null(),
+        site as i64,
+    ));
+    assert!(matches(&re, "site-only-root"));
+    assert_eq!(
+        re.with_const_ptr(|p| crate::regex::regexp_data_ptr(p) as usize),
+        unsafe { (*site & crate::value::POINTER_MASK) as usize }
+    );
+    gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    assert!(matches(&re, "site-only-root"));
 }

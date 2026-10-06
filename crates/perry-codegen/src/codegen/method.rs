@@ -548,7 +548,6 @@ pub(super) fn compile_method(
             "{}.{}",
             class.name, method.name
         )),
-        regex_factory_identity: None,
         active_region_id: None,
         native_facts: &native_facts,
         locals,
