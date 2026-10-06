@@ -1712,7 +1712,7 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
         "pic.miss.call",
         "pget.recv_merge",
         // #10498: the class-accessor arm on the compare's false edge, ahead of
-        // the front: seven guards that decline to the front, and the direct
+        // the front: the shared guard program declines to the front, and the direct
         // getter call (`verify_accessor_arm` pins the chain).
         "pic.acc.empty",
         "pic.acc.cache",

@@ -37,30 +37,29 @@ fn retired_way_precedes_cursor_without_churn() {
     }; WAYS];
     entries[7].token = (PIC_ID_TOKEN_BIT | u64::from(expired)) as i64;
     retire(expired, keys);
-    let mut next = 3;
+    let mut site = Site {
+        primary_class: entries[0],
+        entries: entries[1..].to_vec(),
+        next: 3,
+        holders: Vec::new(),
+        holder_next: 0,
+        accessor_hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+        accessor_depth: 0,
+    };
     let fresh = (PIC_ID_TOKEN_BIT | u64::from(receiver_shape(CID, 90_003))) as i64;
-    assert_eq!(
-        unsafe { publication_way(&entries, &mut next, fresh, CID) },
-        7
-    );
-    assert_eq!(next, 3, "expiry does not advance or arm the cursor");
+    assert_eq!(unsafe { publication_way(&mut site, fresh, CID) }, 7);
+    assert_eq!(site.next, 3, "expiry does not advance or arm the cursor");
     // A matching live way still wins over an expired one.
     assert_eq!(
-        unsafe { publication_way(&entries, &mut next, entries[0].token, CID) },
+        unsafe { publication_way(&mut site, entries[0].token, CID) },
         0
     );
-    entries[7] = entries[0];
-    entries[11] = EMPTY;
-    assert_eq!(
-        unsafe { publication_way(&entries, &mut next, fresh, CID) },
-        11
-    );
-    entries[11] = entries[0];
-    assert_eq!(
-        unsafe { publication_way(&entries, &mut next, fresh, CID) },
-        3
-    );
-    assert_eq!(next, 4);
+    site.entries[6] = entries[0];
+    site.entries[10] = EMPTY;
+    assert_eq!(unsafe { publication_way(&mut site, fresh, CID) }, 11);
+    site.entries[10] = entries[0];
+    assert_eq!(unsafe { publication_way(&mut site, fresh, CID) }, 3);
+    assert_eq!(site.next, 4);
 }
 
 #[test]
@@ -99,7 +98,7 @@ fn retired_absent_replacement_does_not_arm_sharing() {
     let record = (cache[SITE_WORD] as u64 & crate::value::POINTER_MASK) as usize as *mut Site;
     let s = unsafe { &mut *record };
     assert_eq!(s.next & ABSENT_CHURN, 0, "expiry is not live-shape churn");
-    assert!(s.entries.iter().all(|e| !e.multi_absent()));
+    assert!(s.class_entries().all(|e| !e.multi_absent()));
     // Genuine replacement of a live absent way still arms sharing.
     r.parent_class_id = shapes[WAYS + 1].0;
     unsafe { publish(&mut cache, &*r, &w) };
@@ -110,7 +109,7 @@ fn retired_absent_replacement_does_not_arm_sharing() {
     r.parent_class_id = owned_receiver_shape(CID, 92_000).0;
     unsafe { publish(&mut cache, &*r, &data) };
     assert_ne!(s.next & ABSENT_CHURN, 0);
-    for e in &s.entries {
+    for e in s.class_entries() {
         unsafe { e.drop_block() };
     }
     unsafe { drop(Box::from_raw(record)) };
@@ -166,4 +165,76 @@ fn full_shared_set_rehashes_retired_receivers_before_refusal() {
     assert!(unsafe { entry.add_receiver(extra) });
     assert_eq!(entry.slot & !MULTI_ABSENT, ABSENT_RECEIVERS / 2 + 1);
     unsafe { entry.drop_block() };
+}
+
+#[test]
+fn retired_holder_and_intermediate_reclaim_only_the_expired_way() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    const CID: u32 = 0x0C3C_9012;
+    for intermediate in [false, true] {
+        let (expired, keys) = owned_receiver_shape(CID, 93_000 + u64::from(intermediate));
+        let live = receiver_shape(CID, 93_100 + u64::from(intermediate));
+        let mut hops = [(1, if intermediate { expired } else { live })];
+        let proof = Entry {
+            token: (PIC_ID_TOKEN_BIT | u64::from(live)) as i64,
+            class_id: CID,
+            depth: 2,
+            holder: 1,
+            holder_shape: if intermediate { live } else { expired },
+            hops: hops.as_mut_ptr(),
+            ..EMPTY
+        };
+        assert!(!unsafe { proof.retired() });
+        let mut site = Site {
+            primary_class: Entry {
+                token: proof.token + 1,
+                holder: 0,
+                depth: 0,
+                hops: std::ptr::null_mut(),
+                ..proof
+            },
+            entries: vec![proof],
+            next: 0,
+            holders: Vec::new(),
+            holder_next: 0,
+            accessor_hops: [(0, 0); HOLDER_MAX_DEPTH - 1],
+            accessor_depth: 0,
+        };
+        site.primary_class.token = (PIC_ID_TOKEN_BIT
+            | u64::from(receiver_shape(CID, 93_200 + u64::from(intermediate))))
+            as i64;
+        retire(expired, keys);
+        assert!(unsafe { site.entries[0].retired() });
+        let fresh = (PIC_ID_TOKEN_BIT
+            | u64::from(receiver_shape(CID, 93_300 + u64::from(intermediate))))
+            as i64;
+        assert_eq!(unsafe { publication_way(&mut site, fresh, CID) }, 1);
+        assert_eq!(site.next, 0, "expiry must preserve the live way and cursor");
+    }
+}
+
+#[test]
+fn ordinary_memo_expires_receiver_holder_and_intermediate_shapes() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    const CID: u32 = 0x0C3C_9013;
+    let live = receiver_shape(CID, 94_000);
+    for position in 0..3 {
+        let (expired, keys) = owned_receiver_shape(CID, 94_001 + position);
+        let mut words = HolderEntry([0; HOLDER_STATE - HOLDER_RECV]);
+        words[HOLDER_RECV] =
+            (PIC_ID_TOKEN_BIT | u64::from(if position == 0 { expired } else { live })) as i64;
+        words[HOLDER_SHAPE] = i64::from(if position == 1 { expired } else { live });
+        words[HOLDER_KIND] = (HOLDER_STUB | (2 << HOLDER_DEPTH_SHIFT)) as i64;
+        words[HOLDER_HOP_SHAPES] = i64::from(if position == 2 { expired } else { live });
+        assert!(!unsafe { super::super::holder_entry_retired(&words) });
+        retire(expired, keys);
+        assert!(unsafe { super::super::holder_entry_retired(&words) });
+        // Accessor pairs/code words must never be mistaken for hop ShapeIds.
+        if position != 2 {
+            words[HOLDER_KIND] = HOLDER_ACCESSOR as i64;
+            assert!(unsafe { super::super::holder_entry_retired(&words) });
+        }
+    }
 }

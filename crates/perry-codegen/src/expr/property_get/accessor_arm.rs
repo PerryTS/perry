@@ -1,40 +1,5 @@
-//! The read site's accessor arm (#10498): `recv.k` where `k` is an accessor
-//! the receiver inherits from its direct prototype, answered by two ShapeId
-//! compares, one lane load and a direct call: of a compiled class getter, or
-//! of the runtime's closure-getter entry for any other function-object getter
-//! (a compiled function body or a builtin thunk).
-//!
-//! The runtime primes the entry in the site's own cache
-//! (`perry-runtime/src/object/method_site/read_holder.rs`, kind
-//! `PIC_HOLDER_ACCESSOR_BIT`). Every fact the hit uses is a shape fact or the
-//! lane's own value:
-//!
-//! * the receiver's ShapeId (the token) proves `k` is not own and names the
-//!   receiver's prototype identity, hence the holder: a recorded serial, or a
-//!   bare class whose registry link retires the holder's ShapeId if it is
-//!   ever replaced (`class_registry::retire_displaced_decl_prototype`);
-//! * the holder's ShapeId proves `k`'s slot is still an accessor lane;
-//! * the lane still holds the primed pair, which names the getter.
-//!
-//! Emitted on the MRU compare's false edge, ahead of the GC-leaf front:
-//!
-//! ```text
-//!   packed == PACKED_GET_EMPTY                     else FRONT
-//!   c = @site ; c != null                          else FRONT
-//!   (u32)c[RECV] == [recv+4]                       else FRONT
-//!   c[KIND] & ACCESSOR                             else FRONT
-//!   [c[OBJ]+4] == (u32)c[SHAPE]                    else FRONT
-//!   no worker && c[GETTER] != 0                    else FRONT
-//!   [c[OBJ] + HDR + 8*(u32)c[KIND]] == POINTER_TAG | c[PAIR]   else FRONT
-//!   r = c[GETTER](recv, c[PAIR])
-//! ```
-//!
-//! Only a site whose MRU word was never primed takes the arm: a site that
-//! also reads own data keeps its misses on the front, which declines the
-//! accessor kind, and the collecting slow call asks the same entry first. A
-//! worker's start (`PERRY_METHOD_SITE_WORKERS_PRESENT`) sends every read to
-//! the front: holder entries belong to the primary heap.
-
+//! Primary accessor validation is the shared guard program expanded into LLVM.
+//! Saved receiver answers use the collecting runtime backend after a miss.
 use super::super::FnCtx;
 use crate::runtime_abi as abi;
 use crate::types::{I1, I32, I64, I8, PTR};
@@ -64,10 +29,6 @@ pub(super) fn emit_class_accessor_arm(
     let call_idx = ctx.new_block("pic.acc.call");
     let cache_l = ctx.block_label(cache_idx);
     let recv_l = ctx.block_label(recv_idx);
-    let kind_l = ctx.block_label(kind_idx);
-    let holder_l = ctx.block_label(holder_idx);
-    let lane_l = ctx.block_label(lane_idx);
-    let call_l = ctx.block_label(call_idx);
 
     // A site that reads own data has a primed MRU word; its accessor reads
     // stay on the front and the slow call.
@@ -87,83 +48,26 @@ pub(super) fn emit_class_accessor_arm(
         blk.cond_br(&present, &recv_l, miss_label);
         cache
     };
-    let word = |ctx: &mut FnCtx<'_>, index: usize| -> String {
-        let blk = ctx.block();
-        let p = blk.gep(I64, &cache, &[(I64, &index.to_string())]);
-        blk.load(I64, &p)
+
+    let mut guards = EmittedGuards {
+        ctx,
+        cache,
+        recv_biased,
+        header_bytes,
+        miss_label,
+        recv_idx,
+        kind_idx,
+        holder_idx,
+        lane_idx,
+        call_idx,
+        kind: String::new(),
+        holder: String::new(),
+        pair: String::new(),
+        getter: String::new(),
     };
-
-    // The receiver token against the receiver's ShapeId, re-read here so the
-    // hot compare's load keeps its single use. A token is
-    // `PIC_ID_TOKEN_BIT | ShapeId` and an empty entry is 0, so its low half
-    // is a ShapeId or 0; a receiver word equal to a ShapeId proves a live
-    // ordinary object of that shape (#10828 rule 3), and 0 is never one.
-    ctx.current_block = recv_idx;
-    let recv_word = word(ctx, abi::PIC_HOLDER_RECV_WORD);
-    {
-        let blk = ctx.block();
-        let sid_ptr = crate::expr::receiver_range::emit_field_ptr(blk, recv_biased, 4);
-        let sid = blk.load(I32, &sid_ptr);
-        let primed = blk.trunc(I64, &recv_word, I32);
-        let same = blk.icmp_eq(I32, &sid, &primed);
-        blk.cond_br(&same, &kind_l, miss_label);
-    }
-
-    ctx.current_block = kind_idx;
-    let kind = word(ctx, abi::PIC_HOLDER_KIND_WORD);
-    {
-        let blk = ctx.block();
-        let bit = blk.and(I64, &kind, &abi::PIC_HOLDER_ACCESSOR_BIT.to_string());
-        let accessor = blk.icmp_ne(I64, &bit, "0");
-        blk.cond_br(&accessor, &holder_l, miss_label);
-    }
-
-    // The holder's ShapeId against the primed one.
-    ctx.current_block = holder_idx;
-    let holder = word(ctx, abi::PIC_HOLDER_OBJ_WORD);
-    let holder_shape = word(ctx, abi::PIC_HOLDER_SHAPE_WORD);
-    {
-        let blk = ctx.block();
-        let sid_addr = blk.add(I64, &holder, "4");
-        let sid_ptr = blk.inttoptr(I64, &sid_addr);
-        let sid = blk.load(I32, &sid_ptr);
-        let primed = blk.trunc(I64, &holder_shape, I32);
-        let same = blk.icmp_eq(I32, &sid, &primed);
-        blk.cond_br(&same, &lane_l, miss_label);
-    }
-
-    // No worker, and a getter to call. An entry the slow call answers (a
-    // setter-only pair, or a lane in the holder's spill storage, whose kind
-    // does not name an inline slot) has getter word 0, so it leaves here,
-    // before the inline lane load.
-    ctx.current_block = lane_idx;
-    let pair = word(ctx, abi::PIC_HOLDER_PAIR_WORD);
-    let getter = word(ctx, abi::PIC_HOLDER_GETTER_WORD);
-    let inline_idx = ctx.new_block("pic.acc.inline");
-    let inline_l = ctx.block_label(inline_idx);
-    {
-        let blk = ctx.block();
-        let workers = blk.load_atomic_seq_cst(I8, "@PERRY_METHOD_SITE_WORKERS_PRESENT", 1);
-        let workers = blk.zext(I8, &workers, I32);
-        let no_workers = blk.icmp_eq(I32, &workers, "0");
-        let has_getter = blk.icmp_ne(I64, &getter, "0");
-        let ok = blk.and(I1, &no_workers, &has_getter);
-        blk.cond_br(&ok, &inline_l, miss_label);
-    }
-
-    // The inline lane still holds the primed pair.
-    ctx.current_block = inline_idx;
-    {
-        let blk = ctx.block();
-        let slot = blk.and(I64, &kind, "4294967295");
-        let base_addr = blk.add(I64, &holder, &header_bytes.to_string());
-        let base = blk.inttoptr(I64, &base_addr);
-        let lane_ptr = blk.gep(I64, &base, &[(I64, &slot)]);
-        let lane = blk.load(I64, &lane_ptr);
-        let tagged = blk.or(I64, &pair, crate::nanbox::POINTER_TAG_I64);
-        let same = blk.icmp_eq(I64, &lane, &tagged);
-        blk.cond_br(&same, &call_l, miss_label);
-    }
+    let Ok(()) = abi::accessor_guards::validate(&mut guards);
+    let pair = guards.pair;
+    let getter = guards.getter;
 
     // The getter runs user code: a versioned loop records its bailout here,
     // as on the collecting slow call.
@@ -175,4 +79,107 @@ pub(super) fn emit_class_accessor_arm(
     let end = blk.label.clone();
     blk.br(merge_label);
     (value, end)
+}
+
+/// Emission backend: validation expands into main's primary guard sequence.
+/// No runtime selector call, extra receiver conversion or cached result load.
+struct EmittedGuards<'c, 'm> {
+    ctx: &'c mut FnCtx<'m>,
+    cache: String,
+    recv_biased: &'c str,
+    header_bytes: i64,
+    miss_label: &'c str,
+    recv_idx: usize,
+    kind_idx: usize,
+    holder_idx: usize,
+    lane_idx: usize,
+    call_idx: usize,
+    kind: String,
+    holder: String,
+    pair: String,
+    getter: String,
+}
+
+impl EmittedGuards<'_, '_> {
+    fn word(&mut self, index: usize) -> String {
+        let blk = self.ctx.block();
+        let p = blk.gep(I64, &self.cache, &[(I64, &index.to_string())]);
+        blk.load(I64, &p)
+    }
+}
+
+impl abi::accessor_guards::AccessorGuards for EmittedGuards<'_, '_> {
+    type Failure = core::convert::Infallible;
+
+    fn receiver(&mut self) -> Result<(), Self::Failure> {
+        self.ctx.current_block = self.recv_idx;
+        let recv_word = self.word(abi::PIC_HOLDER_RECV_WORD);
+        let next = self.ctx.block_label(self.kind_idx);
+        let blk = self.ctx.block();
+        let sid_ptr = crate::expr::receiver_range::emit_field_ptr(blk, self.recv_biased, 4);
+        let sid = blk.load(I32, &sid_ptr);
+        let primed = blk.trunc(I64, &recv_word, I32);
+        let same = blk.icmp_eq(I32, &sid, &primed);
+        blk.cond_br(&same, &next, self.miss_label);
+        Ok(())
+    }
+
+    fn kind(&mut self) -> Result<(), Self::Failure> {
+        self.ctx.current_block = self.kind_idx;
+        self.kind = self.word(abi::PIC_HOLDER_KIND_WORD);
+        let next = self.ctx.block_label(self.holder_idx);
+        let blk = self.ctx.block();
+        let bit = blk.and(I64, &self.kind, &abi::PIC_HOLDER_ACCESSOR_BIT.to_string());
+        let accessor = blk.icmp_ne(I64, &bit, "0");
+        blk.cond_br(&accessor, &next, self.miss_label);
+        Ok(())
+    }
+
+    fn holder(&mut self) -> Result<(), Self::Failure> {
+        self.ctx.current_block = self.holder_idx;
+        self.holder = self.word(abi::PIC_HOLDER_OBJ_WORD);
+        let holder_shape = self.word(abi::PIC_HOLDER_SHAPE_WORD);
+        let next = self.ctx.block_label(self.lane_idx);
+        let blk = self.ctx.block();
+        let sid_addr = blk.add(I64, &self.holder, "4");
+        let sid_ptr = blk.inttoptr(I64, &sid_addr);
+        let sid = blk.load(I32, &sid_ptr);
+        let primed = blk.trunc(I64, &holder_shape, I32);
+        let same = blk.icmp_eq(I32, &sid, &primed);
+        blk.cond_br(&same, &next, self.miss_label);
+        Ok(())
+    }
+
+    fn callable(&mut self) -> Result<(), Self::Failure> {
+        self.ctx.current_block = self.lane_idx;
+        self.pair = self.word(abi::PIC_HOLDER_PAIR_WORD);
+        self.getter = self.word(abi::PIC_HOLDER_GETTER_WORD);
+        let inline_idx = self.ctx.new_block("pic.acc.inline");
+        let next = self.ctx.block_label(inline_idx);
+        let blk = self.ctx.block();
+        let workers = blk.load_atomic_seq_cst(I8, "@PERRY_METHOD_SITE_WORKERS_PRESENT", 1);
+        let workers = blk.zext(I8, &workers, I32);
+        let no_workers = blk.icmp_eq(I32, &workers, "0");
+        // Publication stores getter=0 for setter-only and spill answers.
+        // A nonzero getter therefore proves that the next load is inline.
+        let has_getter = blk.icmp_ne(I64, &self.getter, "0");
+        let ok = blk.and(I1, &no_workers, &has_getter);
+        blk.cond_br(&ok, &next, self.miss_label);
+        self.ctx.current_block = inline_idx;
+        Ok(())
+    }
+
+    fn lane(&mut self) -> Result<(), Self::Failure> {
+        let next = self.ctx.block_label(self.call_idx);
+        let blk = self.ctx.block();
+        let slot = blk.and(I64, &self.kind, "4294967295");
+        let base_addr = blk.add(I64, &self.holder, &self.header_bytes.to_string());
+        let base = blk.inttoptr(I64, &base_addr);
+        let lane_ptr = blk.gep(I64, &base, &[(I64, &slot)]);
+        let lane = blk.load(I64, &lane_ptr);
+        let tagged = blk.or(I64, &self.pair, crate::nanbox::POINTER_TAG_I64);
+        let same = blk.icmp_eq(I64, &lane, &tagged);
+        blk.cond_br(&same, &next, self.miss_label);
+        Ok(())
+    }
 }

@@ -1351,15 +1351,18 @@ fn outlined_mru_hit_enabled() -> bool {
 /// the situation the invariant is meant to rule out — which is the opposite
 /// of what a behavioural twin is for.
 ///
-/// Word 2 (the Array-subclass named-prefix token) and the polymorphic ways are
-/// deliberately NOT served here: they are 2.5 % of primes between them and
-/// each needs its own proof. They keep falling through to the handler.
+/// After an MRU miss, serve the same polymorphic ways and holder entries as
+/// the inline diamond's `js_object_get_field_ic_front`. A positive way state
+/// admits only inline slots; priming never cascades an overflow slot into a
+/// way. Holder answers validate the receiver and every recorded hop/holder
+/// shape on each use; declared-class entries also validate the class lookup
+/// generation. Accessors still decline to the collecting handler.
 ///
 /// # Safety
 /// `obj_handle` is the receiver with the NaN-box tag already masked off, and
 /// the caller has established that the tag was `POINTER`. `cache_slot` is the
 /// codegen-emitted per-site slot or null.
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn pic_outlined_mru_hit(
     obj_handle: *const ObjectHeader,
     cache_slot: *mut PicCacheSlot,
@@ -1388,8 +1391,9 @@ pub(crate) unsafe fn pic_outlined_mru_hit(
         return None;
     }
     let c = &*cache;
-    if c[0] != (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64 {
-        return None;
+    let token = (stamp as u64 | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
+    if c[0] != token {
+        return pic_outlined_other_hit(obj_handle, c, token);
     }
     let slot = c[1];
     if (slot as u64) & u64::from(crate::proxy::IC_SLOT_OVERFLOW_BIT) != 0 {
@@ -1399,6 +1403,36 @@ pub(crate) unsafe fn pic_outlined_mru_hit(
         *((obj_handle as *const u8).add(std::mem::size_of::<ObjectHeader>() + slot as usize * 8)
             as *const f64),
     )
+}
+
+/// Keep the second-chance checks off the inline MRU body. Growing that body
+/// past LLVM's inline budget adds a helper call to every monomorphic hit.
+/// The cold hint keeps a monomorphic hit falling through to its return.
+#[cold]
+#[inline(never)]
+unsafe fn pic_outlined_other_hit(
+    obj_handle: *const ObjectHeader,
+    c: &PicCache,
+    token: i64,
+) -> Option<f64> {
+    if c[PIC_WAY_STATE] > 0 {
+        for w in 0..PIC_WAYS {
+            if c[PIC_WAY_BASE + 2 * w] == token {
+                let slot = c[PIC_WAY_BASE + 2 * w + 1] as usize;
+                return Some(
+                    *((obj_handle as *const u8).add(std::mem::size_of::<ObjectHeader>() + slot * 8)
+                        as *const f64),
+                );
+            }
+        }
+    }
+    crate::object::method_site::read_holder::primary_entry_answer(c, token)
+        .or_else(|| {
+            let bits =
+                crate::object::method_site::read_holder::class_entry_answer(c, obj_handle, token);
+            (bits != crate::value::TAG_HOLE).then_some(bits)
+        })
+        .map(f64::from_bits)
 }
 
 #[no_mangle]
@@ -2769,3 +2803,6 @@ mod poly_pic_tests {
 
 #[cfg(test)]
 mod c3c_pic_tests;
+
+#[cfg(test)]
+mod outlined_hit_tests;
