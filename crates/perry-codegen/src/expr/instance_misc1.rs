@@ -159,6 +159,17 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         "Duplex" => 0xFFFF0073,
         "Transform" => 0xFFFF0074,
         "PassThrough" => 0xFFFF0075,
+        "Gzip" => perry_abi::native_class_ids::GZIP,
+        "Gunzip" => perry_abi::native_class_ids::GUNZIP,
+        "Deflate" => perry_abi::native_class_ids::DEFLATE,
+        "Inflate" => perry_abi::native_class_ids::INFLATE,
+        "DeflateRaw" => perry_abi::native_class_ids::DEFLATE_RAW,
+        "InflateRaw" => perry_abi::native_class_ids::INFLATE_RAW,
+        "Unzip" => perry_abi::native_class_ids::UNZIP,
+        "BrotliCompress" => perry_abi::native_class_ids::BROTLI_COMPRESS,
+        "BrotliDecompress" => perry_abi::native_class_ids::BROTLI_DECOMPRESS,
+        "ZstdCompress" => perry_abi::native_class_ids::ZSTD_COMPRESS,
+        "ZstdDecompress" => perry_abi::native_class_ids::ZSTD_DECOMPRESS,
         _ => return None,
     })
 }

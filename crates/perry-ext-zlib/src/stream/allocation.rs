@@ -25,14 +25,3 @@ impl brotli::enc::combined_alloc::BrotliAlloc for CountingAlloc {}
 pub(super) fn inflate_bytes() -> usize {
     std::mem::size_of::<miniz_oxide::inflate::stream::InflateState>()
 }
-pub(super) fn deflate_bytes() -> usize {
-    // miniz_oxide 0.9.1: CompressorOxide boxes HuffmanOxide, the LZ codes,
-    // LocalBuf and HashBuffers' dictionary + two u16 chain tables.
-    std::mem::size_of::<miniz_oxide::deflate::core::CompressorOxide>()
-        + 3 * 288 * (2 + 2 + 1)
-        + 65536
-        + (65536 * 13) / 10
-        + 32768
-        + 258
-        + 2 * 32768 * 2
-}

@@ -134,9 +134,7 @@ pub(crate) fn install_fetch() {
 }
 
 pub(crate) const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001);
-pub(crate) const POINTER_TAG_BITS: u64 = 0x7FFD_0000_0000_0000;
-pub(crate) const POINTER_MASK_BITS: u64 = 0x0000_FFFF_FFFF_FFFF;
-
+#[cfg(feature = "external-http-client-pump")]
 pub(crate) fn nanbox_handle_value(handle: i64) -> f64 {
-    f64::from_bits(POINTER_TAG_BITS | (handle as u64 & POINTER_MASK_BITS))
+    f64::from_bits(0x7FFD_0000_0000_0000 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
 }

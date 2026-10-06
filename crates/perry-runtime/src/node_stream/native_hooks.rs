@@ -357,18 +357,29 @@ pub(super) fn begin_write(
 
 /// `_final` for a hooked Transform: the Final record runs once every buffered
 /// write is done (`end()` reaches this only when the writable side drained).
-/// `callback` is `end()`'s callback, called after `finish` as for a JS
-/// Transform's flush.
+/// Deferred families finish their writable side before their asynchronous
+/// flush completes; inline families finish after producing final output.
 pub(super) fn begin_final(stream: f64, hooks: &'static StreamHooks, callback: Option<f64>) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let s = scope.root_nanbox_f64(stream);
     let cb = scope.root_nanbox_f64(callback.unwrap_or(f64::from_bits(TAG_UNDEFINED)));
+    let deferred = hooks.timing == StepTiming::DEFERRED;
+    if deferred {
+        schedule_writable_finish(
+            s.get_nanbox_f64(),
+            is_callable_value(cb.get_nanbox_f64()).then_some(cb.get_nanbox_f64()),
+        );
+    }
     install_record(
         s.get_nanbox_f64(),
         REC_FINAL,
         f64::from_bits(TAG_UNDEFINED),
         0.0,
-        cb.get_nanbox_f64(),
+        if deferred {
+            f64::from_bits(TAG_UNDEFINED)
+        } else {
+            cb.get_nanbox_f64()
+        },
         0.0,
     );
     drive(s.get_nanbox_f64(), hooks);
@@ -577,6 +588,9 @@ pub(crate) fn run_native_steps(stream: f64) {
             // side draining (`resume_parked`) completes it.
             break;
         }
+        // The native loop is an allocating loop too. There is no borrowed
+        // input or output here; the owner and its current record are traced.
+        crate::gc::js_gc_loop_safepoint();
         let Some((_, cell)) = crate::native_payload::stream_hooks_of(st()) else {
             break;
         };
@@ -636,15 +650,24 @@ pub(crate) fn run_native_steps(stream: f64) {
             NATIVE_CONSUMED_KEY,
             (start + out.consumed.min(total - start)) as f64,
         );
+        // Each output root lasts one step. Rooting in the outer runner scope
+        // would keep the entire decompressed output alive until EOF.
+        let step_scope = crate::gc::RuntimeHandleScope::new();
+        let cell = step_scope.root_raw_mut_ptr(cell);
         // Copy the output out of the payload's scratch before anything that
         // can allocate or run JS.
         let output = (out.out_len > 0 && !out.out.is_null()).then(|| {
             // SAFETY: the step returned `out_len` readable bytes at `out`.
             let bytes = unsafe { std::slice::from_raw_parts(out.out, out.out_len) };
-            scope.root_nanbox_f64(buffer_value_from_bytes(bytes))
+            step_scope.root_nanbox_f64(buffer_value_from_bytes(bytes))
         });
         // SAFETY: the cell is alive (its owner is rooted above).
-        unsafe { crate::native_handle::native_handle_set_external_bytes(cell, out.external_bytes) };
+        unsafe {
+            crate::native_handle::native_handle_set_external_bytes(
+                cell.get_raw_mut_ptr(),
+                out.external_bytes,
+            )
+        };
         if let Some(after_step) = hooks.after_step {
             unsafe { after_step(st()) };
             if stream_destroyed(st()) {
@@ -784,6 +807,13 @@ fn fail_record(stream: f64, hooks: &'static StreamHooks, code: u32) {
     let s = scope.root_nanbox_f64(stream);
     // SAFETY: the family's error builder; the step has returned.
     let err = scope.root_nanbox_f64(unsafe { (hooks.error)(s.get_nanbox_f64(), code) });
+    // A binding may terminate its owner from its native error notification,
+    // as Node's zlib onerror does. Such a notification never completes the
+    // pending transform callback; the normal destroy path owns teardown.
+    if stream_destroyed(s.get_nanbox_f64()) {
+        clear_record(s.get_nanbox_f64());
+        return;
+    }
     let callback_only = number_slot(s.get_nanbox_f64(), NATIVE_OP_KEY) > CALLBACK_ONLY;
     let op = operation(number_slot(s.get_nanbox_f64(), NATIVE_OP_KEY));
     let len = number_slot(s.get_nanbox_f64(), NATIVE_LEN_KEY);

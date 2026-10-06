@@ -568,6 +568,20 @@ unsafe fn prop_crypto(handle: i64, property_name: &str) -> Option<f64> {
     None
 }
 
+// Per-feature slot fills, called from the owning feature's install.
+#[cfg(all(
+    feature = "tls-runtime",
+    not(target_os = "ios"),
+    not(target_os = "android")
+))]
+pub(super) fn install_tls() {
+    PROP_TLS.set(prop_tls);
+}
+#[cfg(feature = "bundled-streams")]
+pub(super) fn install_streams() {
+    PROP_STREAMS.set(prop_streams);
+}
+
 #[cfg(feature = "external-http-client-pump")]
 pub(super) fn install_external_http_client() {
     PROP_HTTP_AGENT.set(prop_http_agent);

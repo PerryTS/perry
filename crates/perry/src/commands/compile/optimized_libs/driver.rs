@@ -383,25 +383,14 @@ pub(crate) fn build_optimized_libs(
             if original_features.contains(&"tls") {
                 features.insert("external-tls-server");
             }
-            // #1843 — when the flip strips the compression base feature and
-            // routes `node:zlib` to perry-ext-zlib, activate
-            // `external-zlib-pump` to retain lost-static-type dispatch
-            // (`gz.write()`/`.on()`/`.pipe()`) into
-            // `js_ext_zlib_dispatch_method`. perry-ext-zlib registers its
-            // own deferred-event pump and keepalive contributor.
-            // `module_to_features` maps `zlib` to `compression-gzip` since
-            // the per-codec split;
-            // keep matching the legacy `compression` umbrella too so a
-            // future mapping change cannot silently drop the adapter.
+            // The same provider serves both builds. Resolve module exports
+            // from the separately linked archive in an optimized build.
             if original_features.contains(&"compression-gzip")
                 || original_features.contains(&"compression")
             {
                 features.insert("external-zlib-pump");
-                // The per-codec add-ons imply `compression-gzip` at the Cargo
-                // level, so leaving them enabled would compile the bundled
-                // zlib module back in and duplicate perry-ext-zlib's
-                // `js_zlib_*` symbols at link. The ext crate carries all
-                // codecs, so nothing is lost by dropping them here.
+                // The binding already carries every codec; avoid compiling
+                // a second copy of its dependencies through the stdlib rlib.
                 features.remove("compression-brotli");
                 features.remove("compression-zstd");
             }

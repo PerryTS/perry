@@ -93,6 +93,7 @@ struct Inflate {
     input: Input,
     engine: Box<miniz_oxide::inflate::stream::InflateState>,
     finished: bool,
+    zlib_header: bool,
 }
 impl Inflate {
     fn new(input: Input, zlib_header: bool) -> Self {
@@ -104,6 +105,7 @@ impl Inflate {
                 miniz_oxide::DataFormat::Raw
             }),
             finished: false,
+            zlib_header,
         }
     }
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
@@ -128,10 +130,16 @@ impl Inflate {
                 Ok(s) => Some(s),
                 Err(miniz_oxide::MZError::Buf) => None,
                 Err(_) => {
-                    return Err(io::Error::new(
-                        ErrorKind::InvalidData,
-                        "incorrect header check",
-                    ))
+                    let message = if self.engine.last_status()
+                        == miniz_oxide::inflate::TINFLStatus::Adler32Mismatch
+                    {
+                        "incorrect data check"
+                    } else if !self.zlib_header {
+                        "invalid block type"
+                    } else {
+                        "incorrect header check"
+                    };
+                    return Err(io::Error::new(ErrorKind::InvalidData, message));
                 }
             };
             self.input.consume(consumed);
@@ -449,6 +457,7 @@ struct Zstd {
     input: Input,
     engine: zstd::zstd_safe::DCtx<'static>,
     boundary: bool,
+    last_error: usize,
 }
 impl Zstd {
     fn new(input: Input) -> io::Result<Self> {
@@ -460,6 +469,7 @@ impl Zstd {
                 ctx
             },
             boundary: false,
+            last_error: 0,
         })
     }
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
@@ -478,10 +488,13 @@ impl Zstd {
             }
             let mut input = zstd::zstd_safe::InBuffer { src: bytes, pos: 0 };
             let mut output = zstd::zstd_safe::OutBuffer::around(out);
-            let remaining = self
-                .engine
-                .decompress_stream(&mut output, &mut input)
-                .map_err(zstd_error)?;
+            let remaining = match self.engine.decompress_stream(&mut output, &mut input) {
+                Ok(n) => n,
+                Err(code) => {
+                    self.last_error = code;
+                    return Err(zstd_error(code));
+                }
+            };
             let consumed = input.pos;
             let written = output.pos();
             self.input.consume(consumed);
@@ -536,19 +549,37 @@ impl Decoder {
         }
     }
     fn native_bytes(&self) -> usize {
-        match self {
-            Self::Gzip(g) => {
-                if matches!(g.stage, GzipStage::Body(_)) {
-                    allocation::inflate_bytes()
-                } else {
-                    0
+        let prefix = match self {
+            Self::Gzip(g) => match &g.stage {
+                GzipStage::Header(_, i)
+                | GzipStage::Trailer(i, _, _)
+                | GzipStage::Next(i)
+                | GzipStage::Done(i) => i.prefix.capacity(),
+                GzipStage::Body(i) => i.input.prefix.capacity(),
+            },
+            Self::Zlib(i) | Self::Raw(i) => i.input.prefix.capacity(),
+            Self::Brotli(i) => i.input.prefix.capacity(),
+            Self::Zstd(i) => i.input.prefix.capacity(),
+            Self::Sniff(i) => i.prefix.capacity(),
+        };
+        prefix
+            + match self {
+                Self::Gzip(g) => {
+                    if matches!(g.stage, GzipStage::Body(_)) {
+                        allocation::inflate_bytes()
+                    } else {
+                        0
+                    }
                 }
+                Self::Zlib(_) | Self::Raw(_) => allocation::inflate_bytes(),
+                Self::Brotli(b) => {
+                    std::mem::size_of::<BrotliState>()
+                        + b.allocated.0.get()
+                        + 3 * std::mem::size_of::<usize>()
+                }
+                Self::Zstd(z) => z.engine.sizeof(),
+                Self::Sniff(_) => 0,
             }
-            Self::Zlib(_) | Self::Raw(_) => allocation::inflate_bytes(),
-            Self::Brotli(b) => std::mem::size_of::<BrotliState>() + b.allocated.0.get(),
-            Self::Zstd(z) => z.engine.sizeof(),
-            Self::Sniff(_) => 0,
-        }
     }
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         if let Self::Sniff(input) = self {
@@ -586,16 +617,8 @@ fn zstd_error(code: usize) -> io::Error {
     )
 }
 
-struct FlateEncoder {
-    engine: Box<miniz_oxide::deflate::core::CompressorOxide>,
-    gzip: bool,
-    level: Compression,
-    header: bool,
-    finished: bool,
-    crc: flate2::Crc,
-}
 enum Encoder {
-    Flate(FlateEncoder),
+    Flate(super::zlib_encoder::Encoder),
     Brotli(
         Box<brotli::enc::encode::BrotliEncoderStateStruct<allocation::CountingAlloc>>,
         allocation::CountingAlloc,
@@ -605,25 +628,9 @@ enum Encoder {
 impl Encoder {
     fn new(codec: Codec, level: Compression) -> io::Result<Self> {
         Ok(match codec {
-            Codec::Gzip | Codec::Deflate | Codec::DeflateRaw => Self::Flate(FlateEncoder {
-                engine: {
-                    let mut engine = Box::<miniz_oxide::deflate::core::CompressorOxide>::default();
-                    engine.set_format_and_level(
-                        if matches!(codec, Codec::Deflate) {
-                            miniz_oxide::DataFormat::Zlib
-                        } else {
-                            miniz_oxide::DataFormat::Raw
-                        },
-                        level.level() as u8,
-                    );
-                    engine
-                },
-                gzip: matches!(codec, Codec::Gzip),
-                level,
-                header: false,
-                finished: false,
-                crc: flate2::Crc::new(),
-            }),
+            Codec::Gzip | Codec::Deflate | Codec::DeflateRaw => {
+                Self::Flate(super::zlib_encoder::Encoder::new(codec, level)?)
+            }
             Codec::BrotliCompress => {
                 let alloc = allocation::CountingAlloc::default();
                 let mut state = Box::new(brotli::enc::encode::BrotliEncoderStateStruct::new(
@@ -648,8 +655,10 @@ impl Encoder {
     }
     fn native_bytes(&self) -> usize {
         match self {
-            Self::Flate(_) => allocation::deflate_bytes(),
-            Self::Brotli(state, alloc) => std::mem::size_of_val(&**state) + alloc.0.get(),
+            Self::Flate(f) => f.native_bytes(),
+            Self::Brotli(state, alloc) => {
+                std::mem::size_of_val(&**state) + alloc.0.get() + 3 * std::mem::size_of::<usize>()
+            }
             Self::Zstd(ctx) => ctx.sizeof(),
         }
     }
@@ -662,71 +671,7 @@ impl Encoder {
         use perry_ffi::native_stream::{StepStatus, StreamOp};
         let final_op = op.op == StreamOp::FINAL;
         match self {
-            Self::Flate(f) => {
-                if f.gzip && !f.header {
-                    f.header = true;
-                    let os = if cfg!(target_os = "macos") {
-                        19
-                    } else if cfg!(target_os = "windows") {
-                        10
-                    } else {
-                        3
-                    };
-                    let xfl = if f.level == Compression::best() {
-                        2
-                    } else if f.level == Compression::fast() {
-                        4
-                    } else {
-                        0
-                    };
-                    output[..10].copy_from_slice(&[31, 139, 8, 0, 0, 0, 0, 0, xfl, os]);
-                    return Ok((0, 10, StepStatus::MORE));
-                }
-                if f.finished {
-                    if f.gzip {
-                        output[..4].copy_from_slice(&f.crc.sum().to_le_bytes());
-                        output[4..8].copy_from_slice(&f.crc.amount().to_le_bytes());
-                        f.gzip = false;
-                        return Ok((0, 8, StepStatus::ENDED));
-                    }
-                    return Ok((0, 0, StepStatus::ENDED));
-                }
-                let flush = if final_op {
-                    miniz_oxide::MZFlush::Finish
-                } else if op.op == StreamOp::FLUSH {
-                    match op.flush_kind {
-                        0 => miniz_oxide::MZFlush::None,
-                        1 => miniz_oxide::MZFlush::Partial,
-                        2 => miniz_oxide::MZFlush::Sync,
-                        4 => miniz_oxide::MZFlush::Finish,
-                        _ => miniz_oxide::MZFlush::Full,
-                    }
-                } else {
-                    miniz_oxide::MZFlush::None
-                };
-                let result =
-                    miniz_oxide::deflate::stream::deflate(&mut f.engine, bytes, output, flush);
-                let status = result.status.map_err(|e| {
-                    io::Error::new(ErrorKind::InvalidData, format!("deflate: {e:?}"))
-                })?;
-                let consumed = result.bytes_consumed;
-                let written = result.bytes_written;
-                f.crc.update(&bytes[..consumed]);
-                f.finished = status == miniz_oxide::MZStatus::StreamEnd;
-                Ok((
-                    consumed,
-                    written,
-                    if f.finished && final_op && !f.gzip {
-                        StepStatus::ENDED
-                    } else if f.finished && !final_op {
-                        StepStatus::NEED_INPUT
-                    } else if final_op || consumed < bytes.len() || written == output.len() {
-                        StepStatus::MORE
-                    } else {
-                        StepStatus::NEED_INPUT
-                    },
-                ))
-            }
+            Self::Flate(f) => f.step(op, bytes, output),
             Self::Brotli(state, _) => {
                 use brotli::enc::encode::BrotliEncoderOperation;
                 let operation = if final_op {
@@ -796,6 +741,19 @@ impl Encoder {
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static PAYLOAD_COUNTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+#[cfg(test)]
+impl Drop for Payload {
+    fn drop(&mut self) {
+        PAYLOAD_COUNTS.with(|n| {
+            let (created, dropped) = n.get();
+            n.set((created, dropped + 1));
+        });
+    }
+}
 /// Only codec state and scratch: the runtime owns all records and queues.
 pub(super) struct Payload {
     codec: Codec,
@@ -803,23 +761,36 @@ pub(super) struct Payload {
     decoder: Option<Decoder>,
     encoder: Option<Encoder>,
     scratch: Vec<u8>,
+    output_offset: usize,
     bytes_written: usize,
     error: Option<String>,
 }
 impl Payload {
     pub(super) fn new(codec: Codec, level: Compression, chunk_size: usize) -> io::Result<Self> {
+        #[cfg(test)]
+        let chunk_size = if sabotage("unbounded_output") {
+            chunk_size * 16384
+        } else {
+            chunk_size
+        };
         let decoder = Decoder::new(codec);
         let encoder = if decoder.is_none() {
             Some(Encoder::new(codec, level)?)
         } else {
             None
         };
+        #[cfg(test)]
+        PAYLOAD_COUNTS.with(|n| {
+            let (created, dropped) = n.get();
+            n.set((created + 1, dropped));
+        });
         Ok(Self {
             codec,
             level,
             decoder,
             encoder,
             scratch: vec![0; chunk_size],
+            output_offset: 0,
             bytes_written: 0,
             error: None,
         })
@@ -842,9 +813,10 @@ impl Payload {
         } else {
             unsafe { std::slice::from_raw_parts(op.input, op.len) }
         };
+        let start = self.output_offset;
         let result = if let Some(decoder) = &mut self.decoder {
             decoder.input().borrow(bytes, op.op == StreamOp::FINAL);
-            let result = decoder.read(&mut self.scratch);
+            let result = decoder.read(&mut self.scratch[start..]);
             let consumed = decoder.input().clear_borrow();
             match result {
                 Ok(n) => Ok((
@@ -867,12 +839,13 @@ impl Payload {
             self.encoder
                 .as_mut()
                 .unwrap()
-                .step(op, bytes, &mut self.scratch)
+                .step(op, bytes, &mut self.scratch[start..])
         };
         match result {
             Ok((consumed, written, status)) => {
                 out.consumed = consumed;
-                out.out = self.scratch.as_ptr();
+                out.out = unsafe { self.scratch.as_ptr().add(start) };
+                self.output_offset = (start + written) % self.scratch.len();
                 out.out_len = written;
                 out.status = status;
                 self.bytes_written += consumed;
@@ -887,26 +860,51 @@ impl Payload {
                 self.error = Some(e.to_string());
             }
         }
+        #[cfg(test)]
+        if sabotage("corrupt_output") && out.out_len > 0 {
+            self.scratch[start] ^= 1;
+        }
         out.external_bytes = self.external_bytes();
     }
     pub(super) fn bytes_written(&self) -> usize {
         self.bytes_written
     }
-    pub(super) fn error_message(&self) -> Option<String> {
-        self.error.clone()
+    pub(super) fn error_details(&self, code: u32) -> (String, String, i32) {
+        let message = self
+            .error
+            .clone()
+            .unwrap_or_else(|| "Decompression failed".into());
+        if let Some(Decoder::Brotli(b)) = &self.decoder {
+            if (b.state.error_code as i32) < 0 {
+                let name = format!("{:?}", b.state.error_code);
+                return (
+                    message,
+                    format!("ERR__{}", name.strip_prefix("BROTLI_DECODER_").unwrap()),
+                    b.state.error_code as i32,
+                );
+            }
+        }
+        if let Some(Decoder::Zstd(z)) = &self.decoder {
+            if z.last_error != 0 {
+                let code = unsafe { zstd::zstd_safe::zstd_sys::ZSTD_getErrorCode(z.last_error) };
+                return (message, format!("{code:?}"), code as i32);
+            }
+        }
+        (
+            message,
+            if code == 5 {
+                "Z_BUF_ERROR"
+            } else {
+                "Z_DATA_ERROR"
+            }
+            .into(),
+            -(code as i32),
+        )
     }
-    pub(super) fn params(&mut self, level: Compression) {
+    pub(super) fn params(&mut self, level: Compression, strategy: i32) {
         self.level = level;
         if let Some(Encoder::Flate(f)) = &mut self.encoder {
-            f.level = level;
-            f.engine.set_format_and_level(
-                if matches!(self.codec, Codec::Deflate) {
-                    miniz_oxide::DataFormat::Zlib
-                } else {
-                    miniz_oxide::DataFormat::Raw
-                },
-                level.level() as u8,
-            );
+            f.params(level, strategy);
         }
     }
     pub(super) fn reset(&mut self) -> io::Result<()> {

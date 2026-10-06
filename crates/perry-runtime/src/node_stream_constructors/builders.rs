@@ -563,6 +563,18 @@ fn init_transform_kind(this: f64, opts: f64, how: StreamInit, passthrough: bool)
     } else if let Some(flush) = &subclass_flush {
         set_hidden_value(t(), hidden_transform_flush_key(), flush.get_nanbox_f64());
     }
+    if transform_hidden_flush(t()).is_none()
+        && crate::node_stream::native_hooks::hooks_of(t())
+            .is_some_and(|h| h.timing == crate::node_stream::native_hooks::StepTiming::DEFERRED)
+    {
+        let flush = js_object_get_field_by_name_f64(
+            object_ptr_from_value(t()).unwrap(),
+            hidden_key(b"_flush"),
+        );
+        if is_callable_value(flush) {
+            set_hidden_value(t(), hidden_transform_flush_key(), flush);
+        }
+    }
     mark_transform_stream(t());
     if passthrough && transform_hidden_callback(t()).is_none() {
         set_hidden_value(
