@@ -53,10 +53,7 @@ impl Target {
 
     /// The callback at `index + offset`, read now.
     unsafe fn callback(self, offset: u32) -> f64 {
-        match self.owner() {
-            Some(owner) => native_payload::callback_at(owner, &DB_FAMILY, self.index + offset),
-            None => undefined_f64(),
-        }
+        native_payload::callback_from_link(self.link, self.index + offset)
     }
 
     /// Park `error` on the owner (the first pending exception wins).

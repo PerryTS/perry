@@ -117,8 +117,10 @@ source of truth: no owner registries, address maps or per-family latches.
 `NativePayloadFamily::links_owner` opts into one traced, NaN-boxed owner slot
 on the stable malloc cell. Both marking and relocation visit it. The owner store uses
 `runtime_write_barrier_external_slot`, the exact-slot barrier that recognizes
-malloc parents (`runtime_write_barrier_slot` only remembers old arena parents). The cell
-remains 136 bytes; families without callbacks keep the slot zero.
+malloc parents (`runtime_write_barrier_slot` only remembers old arena parents). The cell also has a traced `callbacks` slot, mirroring the runtime-owned
+JS-state callbacks array. Both edges use the exact malloc-parent barrier and
+are visited for marking and relocation. The cell is 144 bytes on 64-bit
+targets; families without callbacks keep both slots zero.
 
 | Class | Native callback lifetime | Examples | Owner edge |
 |---|---|---|---|
@@ -144,7 +146,10 @@ S checklist:
    before `CallbackSites`, so it closes first. C xDestroy does not free sites.
 2. A trampoline calls `link_owner`; `None` returns the C error or no-op
    without JS. Root the owner immediately, and read it only through that
-   handle after allocation or JS. Read the callback from the owner's array.
+   handle after allocation or JS. `callback_from_link` reads the traced
+   callbacks slot after the last argument allocation, without owner-key
+   lookup. Use `set_callback`, `state_set`, or `state_set_memo` to replace or
+   clear the callbacks array; these keep the state field and cell slot in sync.
 3. Call JS only through `call_from_native`. It catches a throw, parks the
    exact value in `pendingException`, sets PENDING and returns `Err(())`.
    Further callbacks return the error without running JS: the first throw
@@ -155,7 +160,10 @@ S checklist:
    the borrow before calling C. Hold neither `&mut T` nor a mutex over a call
    that can re-enter JS. Bracket every callback-capable call (step, exec,
    prepare, close, backup, changeset_apply) with `enter` and `finish`.
-5. Finish immediately when C returns, before result conversion or anything
+5. A loop may obtain `owner_link` once while its owner stays rooted, then
+   use `enter_link` per C call. This checks OPEN and creator-thread affinity
+   on every entry without validating the moving JS receiver again.
+   Finish immediately when C returns, before result conversion or anything
    that can throw. `CallEnd::Threw(value)` throws that exact value outside C;
    `CallEnd::Closed` throws the family's closed error without converting or
    returning partial results. A callback throw takes priority over close.

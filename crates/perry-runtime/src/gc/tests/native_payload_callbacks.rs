@@ -392,11 +392,13 @@ fn t9_wrong_thread_link_owner_never_throws() {
     let value = owner();
     let link = np::owner_link(value, &FAMILY).unwrap();
     let result = std::thread::spawn(move || {
-        crate::exception::catch_js_throw(|| unsafe { np::link_owner(link) })
+        crate::exception::catch_js_throw(|| unsafe {
+            (np::link_owner(link), np::enter_link(link).err())
+        })
     })
     .join()
     .unwrap();
-    assert_eq!(result, Ok(None));
+    assert_eq!(result, Ok((None, Some(PayloadMiss::Closed))));
     assert_eq!(
         unsafe { np::link_owner(link) }.map(f64::to_bits),
         Some(value.to_bits())
@@ -494,6 +496,122 @@ fn t12_caught_nested_throw_leaves_busy_zero() {
 }
 
 #[test]
+fn callback_cell_slot_moves_grows_replaces_and_clears() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _reset = Reset::new();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(owner());
+    let cb = scope.root_nanbox_f64(closure(crate::fn_info!(returns, 0)));
+    np::set_callback(value.get_nanbox_f64(), &FAMILY, 0, cb.get_nanbox_f64());
+    let link = np::owner_link(value.get_nanbox_f64(), &FAMILY).unwrap();
+    let before = unsafe { (*cell(link)).callbacks };
+    let trace = collect_minor_trace(GcTriggerKind::MallocCount);
+    assert!(trace.copying_nursery.eligible);
+    let after = np::callbacks(value.get_nanbox_f64(), &FAMILY).to_bits();
+    assert_ne!(before, after, "fixture must move the callbacks array");
+    assert_eq!(unsafe { (*cell(link)).callbacks }, after);
+    assert_eq!(
+        unsafe { np::callback_from_link(link, 0) }.to_bits(),
+        cb.get_nanbox_f64().to_bits()
+    );
+    np::set_callback(value.get_nanbox_f64(), &FAMILY, 4096, cb.get_nanbox_f64());
+    assert_eq!(
+        unsafe { np::callback_from_link(link, 4096) }.to_bits(),
+        cb.get_nanbox_f64().to_bits()
+    );
+    let replacement = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::array::js_array_alloc(0) as i64,
+    ));
+    np::state_set(
+        value.get_nanbox_f64(),
+        &FAMILY,
+        b"callbacks",
+        replacement.get_nanbox_f64(),
+    );
+    assert_eq!(
+        unsafe { np::callback_from_link(link, 0) }.to_bits(),
+        TAG_UNDEFINED
+    );
+    np::set_callback(value.get_nanbox_f64(), &FAMILY, 0, cb.get_nanbox_f64());
+    crate::state_key_memo!(static MEMO_TEST_CALLBACKS);
+    np::state_set_memo(
+        value.get_nanbox_f64(),
+        &FAMILY,
+        b"callbacks",
+        f64::from_bits(TAG_UNDEFINED),
+        &MEMO_TEST_CALLBACKS,
+    );
+    assert_eq!(
+        unsafe { np::callback_from_link(link, 0) }.to_bits(),
+        TAG_UNDEFINED
+    );
+}
+
+#[test]
+fn callback_cell_slot_marks_its_array_without_another_edge() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _reset = Reset::new();
+    let _no_stack = ConservativeScanDisabledGuard::new();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(owner());
+    np::set_callback(
+        value.get_nanbox_f64(),
+        &FAMILY,
+        0,
+        closure(crate::fn_info!(returns, 0)),
+    );
+    let link = np::owner_link(value.get_nanbox_f64(), &FAMILY).unwrap();
+    let array_addr = unsafe { (*cell(link)).callbacks } as usize & POINTER_MASK as usize;
+    // Remove the duplicate state edge without using the synchronizing API:
+    // only the cell slot may keep this array alive in this fixture.
+    let state = np::js_state(value.get_nanbox_f64(), &FAMILY, false);
+    let key = crate::string::intern_ascii_literal(b"callbacks");
+    crate::object::js_object_set_field_by_name(
+        (state.to_bits() & POINTER_MASK) as *mut crate::object::ObjectHeader,
+        key,
+        f64::from_bits(TAG_UNDEFINED),
+    );
+    clear_marks();
+    clear_mark_seeds();
+    let valid_ptrs = build_valid_pointer_set();
+    mark_mutable_registered_roots(&valid_ptrs);
+    drain_incremental_mark_barrier_seeds(&valid_ptrs);
+    assert_ne!(
+        unsafe { (*header_from_user_ptr(array_addr as *const u8)).gc_flags } & GC_FLAG_MARKED,
+        0,
+        "the cell's callback slot must mark the array"
+    );
+}
+
+#[test]
+fn callback_cell_slot_barrier_is_exact_for_malloc_parent() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _reset = Reset::new();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(owner());
+    let cb = closure(crate::fn_info!(returns, 0));
+    np::set_callback(value.get_nanbox_f64(), &FAMILY, 0, cb);
+    let link = np::owner_link(value.get_nanbox_f64(), &FAMILY).unwrap();
+    let _ = barrier::remembered_dirty_snapshot();
+    reset_remembered_set();
+    let replacement = crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64);
+    np::state_set(value.get_nanbox_f64(), &FAMILY, b"callbacks", replacement);
+    let header = unsafe { header_from_user_ptr(cell(link) as *const u8) } as usize;
+    let snapshot = barrier::remembered_dirty_snapshot();
+    assert!(
+        snapshot
+            .external_dirty_entries
+            .iter()
+            .any(|&(_, h)| h == header)
+            || snapshot.fallback_headers.contains(&header),
+        "callback slot must remember its malloc parent"
+    );
+}
+
+#[test]
 fn every_sabotage_makes_its_runtime_witness_red() {
     let exe = std::env::current_exe().unwrap();
     for (fault, witness) in [
@@ -515,6 +633,22 @@ fn every_sabotage_makes_its_runtime_witness_red() {
             "t2_cell_ref_keeps_owner_and_callback_through_full_gc",
         ),
         ("barrier", "t3_owner_store_has_a_remembered_barrier"),
+        (
+            "callback_trace",
+            "callback_cell_slot_moves_grows_replaces_and_clears",
+        ),
+        (
+            "callback_trace",
+            "callback_cell_slot_marks_its_array_without_another_edge",
+        ),
+        (
+            "callback_sync",
+            "callback_cell_slot_moves_grows_replaces_and_clears",
+        ),
+        (
+            "callback_barrier",
+            "callback_cell_slot_barrier_is_exact_for_malloc_parent",
+        ),
         (
             "catch",
             "t4_t5_throw_identity_first_throw_wins_and_c_returns",

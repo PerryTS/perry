@@ -51,6 +51,11 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use crate::native_handle::NativeHandleHeader;
 use crate::object::ObjectHeader;
 
+#[path = "native_payload_slots.rs"]
+mod callback_slots;
+pub use callback_slots::{callback_at, callback_from_link};
+use callback_slots::{store_callbacks, sync_callbacks};
+
 /// A family: one class id, one payload type, one prototype per realm.
 pub struct NativePayloadFamily {
     /// The family's id from `native_class_ids.rs`.
@@ -688,6 +693,9 @@ fn attach_rooted<T: 'static>(
             let owner = crate::value::js_nanbox_pointer(obj as i64).to_bits();
             // GC_STORE_AUDIT(BARRIERED): malloc cell -> nursery owner.
             (*cell).owner = owner;
+            if let Some(state) = raw_js_state(obj) {
+                store_callbacks(cell, raw_field_memo(state, b"callbacks", &CALLBACKS_MEMO));
+            }
             #[cfg(test)]
             if callback_sabotage("barrier") {
                 return;
@@ -1143,11 +1151,27 @@ pub struct NativeCallGuard {
 }
 
 pub fn enter(value: f64, family: &NativePayloadFamily) -> Result<NativeCallGuard, PayloadMiss> {
-    let link = owner_link(value, family)?;
-    unsafe {
+    if !family.links_owner {
+        return Err(PayloadMiss::Foreign);
+    }
+    let cell = payload_cell(value, family.class_id)?;
+    unsafe { enter_link(OwnerLink(cell as usize)) }
+}
+
+/// Enter through a previously validated, stable owner link. Each entry still
+/// checks OPEN and thread affinity; keep the owner rooted for the entire call.
+///
+/// # Safety
+/// As [`link_owner`]; `link` must remain live until the returned guard finishes.
+#[inline]
+pub unsafe fn enter_link(link: OwnerLink) -> Result<NativeCallGuard, PayloadMiss> {
+    {
         let cell = link.0 as *mut NativeHandleHeader;
         if crate::native_handle::rust_payload_ptr_on_owner_thread(cell).is_null() {
             return Err(PayloadMiss::Closed);
+        }
+        if (*cell).owner == 0 {
+            return Err(PayloadMiss::Foreign);
         }
         #[cfg(test)]
         if callback_sabotage("reentry") && (*cell).busy != 0 {
@@ -1177,11 +1201,14 @@ impl NativeCallGuard {
     pub fn finish(self) -> Result<(), CallEnd> {
         unsafe {
             let cell = self.link.0 as *mut NativeHandleHeader;
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let owner = scope.root_nanbox_f64(f64::from_bits((*cell).owner));
             assert_ne!((*cell).busy, 0, "unbalanced native call");
             (*cell).busy -= 1;
             let closing = (*cell).flags & CLOSING != 0;
+            if (*cell).flags & (PENDING | CLOSING) == 0 {
+                return Ok(());
+            }
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let owner = scope.root_nanbox_f64(f64::from_bits((*cell).owner));
             let result = if (*cell).flags & PENDING != 0 {
                 let state = root_pointer::<ObjectHeader>(
                     &scope,
@@ -1376,7 +1403,9 @@ pub fn callbacks(owner: f64, family: &NativePayloadFamily) -> f64 {
         }
     }
     let scope = crate::gc::RuntimeHandleScope::new();
-    let state = root_pointer::<ObjectHeader>(&scope, js_state(owner, family, true));
+    let owner = scope.root_nanbox_f64(owner);
+    let state =
+        root_pointer::<ObjectHeader>(&scope, js_state(owner.get_nanbox_f64(), family, true));
     let existing = state_field_memo(&state, b"callbacks", &CALLBACKS_MEMO);
     if crate::JSValue::from_bits(existing.to_bits()).is_pointer() {
         return existing;
@@ -1386,6 +1415,15 @@ pub fn callbacks(owner: f64, family: &NativePayloadFamily) -> f64 {
         crate::value::js_nanbox_pointer(p as i64)
     });
     set_state_field(&scope, &state, b"callbacks", value);
+    // Re-read the array after the state store, which may collect.
+    sync_callbacks(
+        owner.get_nanbox_f64(),
+        family,
+        b"callbacks",
+        array.with_mut_ptr::<crate::array::ArrayHeader, _>(|p| {
+            crate::value::js_nanbox_pointer(p as i64)
+        }),
+    );
     array
         .with_mut_ptr::<crate::array::ArrayHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64))
 }
@@ -1410,6 +1448,14 @@ pub fn set_callback(owner: f64, family: &NativePayloadFamily, index: u32, f: f64
     set_state_field(
         &scope,
         &state,
+        b"callbacks",
+        updated.with_mut_ptr::<crate::array::ArrayHeader, _>(|p| {
+            crate::value::js_nanbox_pointer(p as i64)
+        }),
+    );
+    sync_callbacks(
+        owner.get_nanbox_f64(),
+        family,
         b"callbacks",
         updated.with_mut_ptr::<crate::array::ArrayHeader, _>(|p| {
             crate::value::js_nanbox_pointer(p as i64)
@@ -1554,30 +1600,6 @@ pub unsafe fn call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Resu
             let _ = set_pending_exception(f64::from_bits((*cell).owner), err);
             Err(())
         }
-    }
-}
-
-/// The callback registered at `index` in the owner's callbacks array
-/// (`undefined` when absent). Never allocates.
-pub fn callback_at(owner: f64, family: &NativePayloadFamily, index: u32) -> f64 {
-    let Some(obj) = instance_of(owner, family.class_id) else {
-        return undefined();
-    };
-    unsafe {
-        let Some(state) = raw_js_state(obj) else {
-            return undefined();
-        };
-        let array = crate::value::JSValue::from_bits(
-            raw_field_memo(state, b"callbacks", &CALLBACKS_MEMO).to_bits(),
-        );
-        if !array.is_pointer() {
-            return undefined();
-        }
-        let arr = array.as_pointer::<crate::array::ArrayHeader>();
-        if index >= crate::array::js_array_length(arr) {
-            return undefined();
-        }
-        f64::from_bits(crate::array::js_array_get(arr, index).bits())
     }
 }
 
@@ -1897,6 +1919,7 @@ pub fn state_set_memo(
         }),
         None => set_state_field(&scope, &state, key, v.get_nanbox_f64()),
     }
+    sync_callbacks(owner.get_nanbox_f64(), family, key, v.get_nanbox_f64());
 }
 
 /// Store `v` as the field `key` of an instance's JS state (created on
@@ -1911,6 +1934,7 @@ pub fn state_set(value: f64, family: &NativePayloadFamily, key: &[u8], v: f64) {
     }
     let state = root_pointer::<ObjectHeader>(&scope, state);
     set_state_field(&scope, &state, key, v.get_nanbox_f64());
+    sync_callbacks(owner.get_nanbox_f64(), family, key, v.get_nanbox_f64());
 }
 
 /// Define an own accessor on an instance, for families whose node objects

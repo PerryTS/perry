@@ -155,6 +155,7 @@ unsafe fn live_stmt<'a>(this: f64) -> (&'a mut NodeStmt, f64) {
 pub(crate) struct Stepper<'a, 's> {
     db: &'a RuntimeHandle<'s>,
     raw_db: *mut ffi::sqlite3,
+    link: perry_runtime::native_payload::OwnerLink,
     stmt: *mut ffi::sqlite3_stmt,
     pub(crate) flags: StmtFlags,
 }
@@ -193,9 +194,11 @@ impl<'a, 's> Stepper<'a, 's> {
                 error.throw();
             }
         }
+        let link = native_payload::owner_link(db.get_nanbox_f64(), &DB_FAMILY).unwrap();
         Stepper {
             db,
             raw_db,
+            link,
             stmt,
             flags,
         }
@@ -212,7 +215,9 @@ impl<'a, 's> Stepper<'a, 's> {
     /// Advance one row. `false` at the end (the statement is then reset).
     pub(crate) unsafe fn step(&mut self) -> bool {
         let (stmt, raw_db) = (self.stmt, self.raw_db);
-        let ((rc, error), end) = guarded(self.db.get_nanbox_f64(), || {
+        let guard = native_payload::enter_link(self.link)
+            .unwrap_or_else(|_| throw_invalid_state("database is not open"));
+        let (rc, error) = {
             let rc = ffi::sqlite3_step(stmt);
             let error =
                 (rc != ffi::SQLITE_ROW && rc != ffi::SQLITE_DONE).then(|| capture_error(raw_db));
@@ -222,7 +227,8 @@ impl<'a, 's> Stepper<'a, 's> {
                 ffi::sqlite3_reset(stmt);
             }
             (rc, error)
-        });
+        };
+        let end = guard.finish();
         if let Err(end) = end {
             self.forget_or_finalize();
             throw_call_end(end);

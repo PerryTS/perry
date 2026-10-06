@@ -1,7 +1,7 @@
 //! GC-managed opaque native handles for external native-library bindings.
 //!
 //! A native handle is a Perry heap value whose payload contains only native
-//! metadata and a raw resource pointer, plus an optional traced owner slot for
+//! metadata and a raw resource pointer, plus optional traced owner and callbacks slots for
 //! callback payloads. The resource pointer is not a Perry heap edge and
 //! finalizers must be basic native cleanup callbacks only.
 
@@ -50,6 +50,8 @@ pub struct NativeHandleHeader {
     #[cfg(target_pointer_width = "64")]
     pub finalizer: *mut c_void,
     pub owner: u64,
+    /// Traced callback array for payload families; never a root by itself.
+    pub callbacks: u64,
     #[cfg(target_pointer_width = "64")]
     pub debug_name_len: u16,
     pub busy: u16,
@@ -68,14 +70,14 @@ pub struct NativeHandleHeader {
     pub external_bytes: u64,
 }
 
-const LEGACY_CELL_SIZE: usize = if cfg!(target_pointer_width = "64") {
-    136
+const CELL_SIZE: usize = if cfg!(target_pointer_width = "64") {
+    144
 } else if std::mem::align_of::<u64>() == 8 {
-    128
+    136
 } else {
-    124
+    132
 };
-const _: () = assert!(std::mem::size_of::<NativeHandleHeader>() == LEGACY_CELL_SIZE);
+const _: () = assert!(std::mem::size_of::<NativeHandleHeader>() == CELL_SIZE);
 
 pub(crate) fn current_thread_id() -> u64 {
     // Cached per thread: a Rust-payload method checks it on every call, and
@@ -247,6 +249,7 @@ unsafe fn native_handle_new(
         ptr::null_mut()
     };
     (*handle).owner = 0;
+    (*handle).callbacks = 0;
     (*handle).debug_name_len = init_debug_name(
         &mut (*handle).debug_name,
         debug_name_ptr,
@@ -916,7 +919,8 @@ mod tests {
             assert_eq!((*gc).obj_type, crate::gc::GC_TYPE_NATIVE_HANDLE);
             assert!(!crate::gc::gc_type_is_pointer_free((*gc).obj_type));
             assert_eq!((*handle).owner, 0);
-            assert_eq!(std::mem::size_of::<NativeHandleHeader>(), LEGACY_CELL_SIZE);
+            assert_eq!((*handle).callbacks, 0);
+            assert_eq!(std::mem::size_of::<NativeHandleHeader>(), CELL_SIZE);
             assert!(!crate::gc::gc_type_is_movable((*gc).obj_type));
         }
     }
