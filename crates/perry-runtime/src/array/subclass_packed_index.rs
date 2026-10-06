@@ -163,7 +163,7 @@ pub extern "C" fn js_packed_arraylike_index_get(
 #[inline(never)]
 fn cached_u8_packed_get(addr: usize, index: u32) -> Option<f64> {
     let idx = i32::try_from(index).ok()?;
-    crate::buffer::cached_u8_read(addr, idx).map(f64::from)
+    crate::buffer::admitted_u8_read(addr, idx).map(f64::from)
 }
 
 #[cfg(feature = "keepalive-anchors")]

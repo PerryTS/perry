@@ -345,7 +345,7 @@ pub extern "C" fn js_array_slice(
         let result_box =
             crate::array::species::array_species_create(recv_value, slice_len as usize);
         let is_plain = crate::array::species::species_result_is_plain_array(result_box);
-        let result = crate::value::js_nanbox_get_pointer(result_box) as *mut ArrayHeader;
+        let array = crate::value::js_nanbox_get_pointer(result_box) as *mut ArrayHeader;
 
         // Copy elements — use spec-generic Get when the source is exotic
         // (has Array.prototype or Object.prototype indexed properties) so
@@ -355,9 +355,9 @@ pub extern "C" fn js_array_slice(
             crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let src_exotic = crate::array::array_iteration_is_exotic(arr);
         if is_plain {
-            (*result).length = slice_len;
+            (*array).length = slice_len;
             let dst_elements =
-                crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
+                crate::array::array_elements_ptr(array as *const ArrayHeader) as *mut f64;
             for i in 0..slice_len as usize {
                 let src_idx = start_idx as usize + i;
                 let v = if src_exotic {
@@ -372,13 +372,13 @@ pub extern "C" fn js_array_slice(
                 if src_exotic {
                     // Publish before the next getter can collect or throw,
                     // leaving the species result reachable with a partial copy.
-                    note_array_slot(result, i, v.to_bits());
+                    note_array_slot(array, i, v.to_bits());
                 } else {
                     // GC_STORE_AUDIT(BARRIERED): raw source reads cannot call out; rebuild follows the copy.
                     ptr::write(dst_elements.add(i), v);
                 }
             }
-            rebuild_array_layout(result);
+            rebuild_array_layout(array);
         } else {
             // Custom species container: CreateDataPropertyOrThrow per element.
             for i in 0..slice_len as usize {
@@ -399,6 +399,6 @@ pub extern "C" fn js_array_slice(
             }
         }
 
-        result
+        array
     }
 }

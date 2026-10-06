@@ -364,14 +364,16 @@ fn typed_array_bigint_bits(ta: *const TypedArrayHeader, index: i32) -> u64 {
                 crate::native_arena::native_view_from_typed_array(ta),
             );
         }
-        if index as u32 >= (*ta).length {
+        if index as u32 >= crate::typedarray::element_length(ta) {
             return 0;
         }
         crate::buffer::bytes::no_gc(|scope| {
             let data =
                 crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(ta as i64), scope)
                     .unwrap_or(&[]);
-            let off = (index as usize).saturating_mul((*ta).elem_size as usize);
+            let off = (index as usize).saturating_mul(crate::typedarray::elem_size_for_kind(
+                crate::typedarray::element_kind(ta),
+            ) as usize);
             let Some(bytes) = data.get(off..off + 8) else {
                 return 0;
             };
@@ -391,7 +393,7 @@ fn typed_array_set_bigint_bits(ta: *mut TypedArrayHeader, index: i32, value: u64
                 crate::native_arena::native_view_from_typed_array(ta as *const TypedArrayHeader),
             );
         }
-        if index as u32 >= (*ta).length {
+        if index as u32 >= crate::typedarray::element_length(ta) {
             return;
         }
         crate::buffer::bytes::no_gc(|scope| {
@@ -400,7 +402,9 @@ fn typed_array_set_bigint_bits(ta: *mut TypedArrayHeader, index: i32, value: u64
             else {
                 return;
             };
-            let off = (index as usize).saturating_mul((*ta).elem_size as usize);
+            let off = (index as usize).saturating_mul(crate::typedarray::elem_size_for_kind(
+                crate::typedarray::element_kind(ta),
+            ) as usize);
             if let Some(slot) = data.get_mut(off..off + 8) {
                 slot.copy_from_slice(&value.to_ne_bytes());
             }

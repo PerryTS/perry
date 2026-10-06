@@ -287,7 +287,7 @@ fn fromspace_scan_bounds_a_buffer_by_its_capacity() {
     let holder = crate::arena::arena_alloc_gc_old(header_bytes + capacity, 8, GC_TYPE_BUFFER);
     let young = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     // The word that holds bytes 120..123 of the data and 5 padding bytes.
-    let slot = 128usize;
+    let slot = crate::codegen_abi::BYTES_STORE + 120;
     unsafe {
         let total = (*(header_from_user_ptr(holder) as *const GcHeader)).size as usize;
         assert!(

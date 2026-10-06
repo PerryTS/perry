@@ -3414,7 +3414,6 @@ js_typeerror_new_with_cause	AllocOnly
 js_u8_buffer_read_f64	Reenters
 js_u8_from_base64	Reenters
 js_u8_from_hex	ThrowOnly
-js_u8_resolve_read_data	Leaf
 js_u8_set_from_base64	Reenters
 js_u8_set_from_hex	Reenters
 js_u8_to_base64	Reenters

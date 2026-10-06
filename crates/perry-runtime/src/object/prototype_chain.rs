@@ -535,6 +535,17 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
     // receiver) records it in its meta record. Non-object owners fall through
     // to the residual registry.
     unsafe {
+        if crate::value::addr_class::try_read_tracked_gc_header(obj_ptr)
+            .is_some_and(|h| crate::gc::is_byte_family_type(h.as_ref().obj_type))
+        {
+            crate::buffer::store::bag_set(
+                obj_ptr,
+                crate::buffer::store::PROTOTYPE_KEY,
+                f64::from_bits(proto_bits),
+                true,
+            );
+            return;
+        }
         if let Some(obj) = meta_capable_object(obj_ptr) {
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_raw_mut_ptr(obj);
@@ -649,6 +660,12 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
     // a residual registry entry (the write path classifies identically), so
     // a miss for a shaped object is authoritative.
     unsafe {
+        if crate::value::addr_class::try_read_tracked_gc_header(obj_ptr)
+            .is_some_and(|h| crate::gc::is_byte_family_type(h.as_ref().obj_type))
+        {
+            return crate::buffer::store::bag_get(obj_ptr, crate::buffer::store::PROTOTYPE_KEY)
+                .map(f64::to_bits);
+        }
         if let Some(obj) = meta_capable_object(obj_ptr) {
             let bits = crate::object::shapes::object_prototype_word(obj);
             return (bits != 0).then_some(bits);
@@ -1040,13 +1057,14 @@ pub(crate) fn object_static_prototypes_maybe_nonempty() -> bool {
 /// value traced or rewritten.
 #[inline]
 pub(crate) fn residual_prototype_owner_type(obj_type: u8) -> bool {
-    !matches!(
-        obj_type,
-        crate::gc::GC_TYPE_STRING
-            | crate::gc::GC_TYPE_BIGINT
-            | crate::gc::GC_TYPE_OBJECT_META
-            | crate::gc::GC_TYPE_REGEX_PROGRAM
-    )
+    !crate::gc::is_byte_family_type(obj_type)
+        && !matches!(
+            obj_type,
+            crate::gc::GC_TYPE_STRING
+                | crate::gc::GC_TYPE_BIGINT
+                | crate::gc::GC_TYPE_OBJECT_META
+                | crate::gc::GC_TYPE_REGEX_PROGRAM
+        )
 }
 
 /// Migrate the residual side-table entry when an owner's allocation address

@@ -97,7 +97,7 @@ fn test_process_global_sab_backing_survives_full_gc_unrooted() {
     let _guard = GcTestIsolationGuard::new();
 
     let buf = crate::buffer::js_shared_array_buffer_new(64);
-    let addr = buf as usize;
+    let addr = crate::shared_sab::shared_store_owner(buf as usize).unwrap();
     assert!(crate::shared_sab::is_shared_sab(addr));
 
     // Deliberately unrooted. The backing is never freed, so this must be a
@@ -145,12 +145,9 @@ fn test_dead_buffer_own_property_entry_pruned_on_full_gc() {
     // so only a FULL trace can prove them dead.)
     full_gc();
 
-    assert_eq!(
-        crate::buffer::buffer_get_own_prop(addr, "tag"),
-        None,
-        "a dead buffer's own-property entry must be pruned — the table is \
-         address-keyed, so a recycled address inherits the dead buffer's \
-         expandos, and the GC root scanner keeps retaining their values"
+    assert!(
+        live_buffer_type(addr).is_none(),
+        "the owner must really die"
     );
 }
 
@@ -198,13 +195,12 @@ fn test_dead_uint8array_extensibility_entry_pruned_on_full_gc() {
     full_gc();
 
     assert!(
-        !crate::typedarray_props::typed_array_owner_no_extend(addr),
-        "a recycled address must not inherit a dead Uint8Array's integrity state"
+        live_buffer_type(addr).is_none(),
+        "the owner must really die"
     );
-    assert!(
-        crate::buffer::buffer_get_own_prop(addr, "existing").is_none(),
-        "the canonical property table must be pruned with its dead owner"
-    );
+    let fresh = crate::buffer::js_uint8array_alloc(32) as usize;
+    assert!(!crate::typedarray_props::typed_array_owner_no_extend(fresh));
+    assert_eq!(crate::buffer::buffer_get_own_prop(fresh, "existing"), None);
 }
 
 /// A LIVE buffer keeps its own properties across a full collection. Without
@@ -235,28 +231,25 @@ fn test_live_buffer_keeps_its_own_properties_across_full_gc() {
 /// show this — before the fix the table grew monotonically for the life of the
 /// process.
 #[test]
-fn test_buffer_own_props_table_drains_after_owners_die() {
+fn test_buffer_property_bags_die_with_their_owners() {
     let _guard = GcTestIsolationGuard::new();
-
-    const N: usize = 512;
-    let base = crate::buffer::test_buffer_own_props_owner_count();
-    for i in 0..N {
-        let addr = crate::buffer::buffer_alloc(32) as usize;
-        crate::buffer::buffer_set_own_prop(addr, "tag", i as f64);
-    }
-    assert!(
-        crate::buffer::test_buffer_own_props_owner_count() >= base + N,
-        "test premise: {N} owners were recorded"
+    let owner = crate::buffer::buffer_alloc(32) as usize;
+    crate::buffer::buffer_set_own_prop(owner, "tag", 7.0);
+    let bag = unsafe { crate::buffer::store::bag(owner) } as usize;
+    assert_ne!(bag, 0, "the property must create real storage");
+    clear_marks();
+    clear_mark_seeds();
+    let valid = build_valid_pointer_set();
+    mark_mutable_registered_roots(&valid);
+    assert_eq!(
+        unsafe { (*header_from_user_ptr(bag as *const u8)).gc_flags & GC_FLAG_MARKED },
+        0,
+        "no root may retain the property bag after its owner dies"
     );
-
+    clear_marks();
+    clear_mark_seeds();
     full_gc();
-
-    let after = crate::buffer::test_buffer_own_props_owner_count();
-    assert!(
-        after <= base,
-        "the own-property table must drain when its owners die: {after} owners \
-         remain, expected at most the pre-test {base}"
-    );
+    assert!(live_buffer_type(owner).is_none());
 }
 
 /// The invariant that makes every address-keyed buffer registry legitimate in

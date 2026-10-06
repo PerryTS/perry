@@ -1961,10 +1961,14 @@ fn test_bigint64_sort_comparator_boxes_survive_copied_minor_gc() {
     let lanes: [i64; 6] = [42, -7, 1_000_000_000_007, 0, -900_000_000_001, 13];
     let ta = crate::typedarray::typed_array_alloc(crate::typedarray::KIND_BIGINT64, 6);
     unsafe {
-        let base = crate::typedarray::data_ptr_mut(ta) as *mut i64;
-        for (i, v) in lanes.iter().enumerate() {
-            *base.add(i) = *v;
-        }
+        crate::buffer::bytes::no_gc(|scope| {
+            let bytes =
+                crate::buffer::bytes::bytes_mut(crate::value::js_nanbox_pointer(ta as i64), scope)
+                    .unwrap();
+            for (i, v) in lanes.iter().enumerate() {
+                bytes[i * 8..i * 8 + 8].copy_from_slice(&v.to_ne_bytes());
+            }
+        });
     }
 
     let before = gc_collection_count();
@@ -1977,7 +1981,10 @@ fn test_bigint64_sort_comparator_boxes_survive_copied_minor_gc() {
         "comparator should force copied-minor GCs during the BigInt64 sort"
     );
     unsafe {
-        let base = crate::typedarray::data_ptr_mut(sorted) as *const i64;
+        let lease =
+            crate::buffer::bytes::ReadLease::new(crate::value::js_nanbox_pointer(sorted as i64))
+                .unwrap();
+        let base = lease.as_ptr() as *const i64;
         let mut expected = lanes;
         expected.sort_unstable();
         for (i, v) in expected.iter().enumerate() {

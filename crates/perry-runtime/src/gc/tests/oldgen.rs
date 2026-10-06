@@ -26,8 +26,8 @@ fn test_large_buffer_and_typed_array_enter_valid_pointer_set() {
         "large old TypedArray must be in the valid pointer set"
     );
 
-    let buffer_data = buffer + std::mem::size_of::<crate::buffer::BufferHeader>();
-    let typed_array_data = typed_array + std::mem::size_of::<crate::typedarray::TypedArrayHeader>();
+    let buffer_data = buffer + crate::codegen_abi::BYTES_STORE;
+    let typed_array_data = typed_array + crate::codegen_abi::BYTES_STORE;
     assert_eq!(valid_ptrs.enclosing_object(buffer_data), Some(buffer));
     assert_eq!(
         valid_ptrs.enclosing_object(typed_array_data),

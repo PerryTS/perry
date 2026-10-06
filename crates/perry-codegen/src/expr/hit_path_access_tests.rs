@@ -96,12 +96,12 @@ fn declared_typed_array_length_reads_the_header_inline() {
     let arm = block_body(&ir, "plen.typed_array")
         .unwrap_or_else(|| panic!("no typed-array length arm:\n{ir}"));
     assert!(
-        arm.contains("icmp eq i8") && arm.contains(", 11"),
+        arm.contains("icmp uge i8") && arm.contains(", 64") && arm.contains(", 76"),
         "the arm must test GC_TYPE_TYPED_ARRAY:\n{arm}"
     );
     assert!(
-        arm.contains("load atomic i8")
-            && arm.contains("@PERRY_TYPED_NAMED_PROPS_INVALIDATED")
+        ir.contains("load atomic i8")
+            && ir.contains("@PERRY_TYPED_NAMED_PROPS_INVALIDATED") && ir.contains("plen.byte_header")
             && !arm.lines().any(|l| l.contains("add i64") && l.trim_end().ends_with(", 10")),
         "the live length is valid for shared views, but metadata edits must withdraw the proof:\n{arm}"
     );
@@ -151,13 +151,13 @@ fn declared_typed_array_unproven_index_access_is_inline() {
     ));
     assert!(
         get.contains("ta.read.load")
-            && get.contains("ta.read.pointer")
+            && get.contains("bytes.store")
             && get.contains("@js_dyn_index_get("),
         "declared typed-array read must use the inline arm:\n{get}"
     );
     let hot = super::class_field_barrier_tests::block_body(&get, "ta.read.load.").unwrap();
     assert!(
-        hot.contains("load atomic i64") && !hot.contains("call double"),
+        hot.contains("load i64") && !hot.contains("call double"),
         "in-bounds reads must load the lane without dispatch: {hot}"
     );
     let set = probe_ir(&module(

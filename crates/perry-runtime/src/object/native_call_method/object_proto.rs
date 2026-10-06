@@ -538,7 +538,7 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
         if target_gc_type != crate::gc::GC_TYPE_CLOSURE
             && target_gc_type != crate::gc::GC_TYPE_ERROR
             && target_gc_type != crate::gc::GC_TYPE_ARRAY
-            && target_gc_type != crate::gc::GC_TYPE_TYPED_ARRAY
+            && !crate::gc::is_typed_array_type(target_gc_type)
             && !crate::gc::is_buffer_family_type(target_gc_type)
         {
             return false;

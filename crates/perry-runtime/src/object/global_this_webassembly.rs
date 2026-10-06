@@ -1819,8 +1819,8 @@ mod tests {
         // Write a marker byte and confirm grow copies it over.
         let before = js_object_get_field_by_name_f64(instance, named_key(b"buffer"));
         let before_buf = memory_buffer_ptr(before).unwrap();
-        unsafe {
-            *crate::buffer::buffer_data_mut(before_buf) = 0xAB;
+        {
+            crate::buffer::js_buffer_set(before_buf, 0, 0xAB);
         }
 
         let old_pages = match wasm_memory_grow_on(instance_value, 2.0) {
@@ -1833,7 +1833,7 @@ mod tests {
         let after_buf = memory_buffer_ptr(after).unwrap();
         unsafe {
             assert_eq!((*after_buf).length, 3 * WASM_PAGE_BYTES);
-            assert_eq!(*crate::buffer::buffer_data_mut(after_buf), 0xAB);
+            assert_eq!(crate::buffer::js_buffer_get(after_buf, 0), 0xAB);
         }
 
         // Negative delta → TypeError arm; absurd delta → RangeError arm.

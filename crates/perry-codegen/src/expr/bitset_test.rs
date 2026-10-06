@@ -18,7 +18,7 @@
 use anyhow::Result;
 use perry_hir::{BinaryOp, Expr, UnaryOp};
 
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::{DOUBLE, I32, I64};
 
 use super::{lower_expr, FnCtx};
 
@@ -149,45 +149,20 @@ pub(super) fn try_lower_u32_bitset_test(
     // The process-global cache uses `(receiver_address << 8) | kind`. An
     // exact address hit is also what makes the later header load safe; no
     // receiver-derived address is dereferenced before this branch.
-    let raw = {
-        let blk = ctx.block();
-        let bits = blk.bitcast_double_to_i64(&mask_box);
-        let raw = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-        let tag = blk.and(
-            I64,
-            &bits,
-            &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
-        );
-        let is_pointer = blk.icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_I64);
-        // #10516: the kind-cache tag carries the receiver's storage: an
-        // external-storage typed array (a view) caches `kind | 0x80`, so the
-        // kind compare below rejects it. No process-wide view count.
-        let slot = blk.lshr(I64, &raw, "3");
-        let slot = blk.and(I64, &slot, "63");
-        let cache_ptr = blk.gep(
-            "[64 x i64]",
-            "@PERRY_TA_KIND_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let cache_entry = blk.load(I64, &cache_ptr);
-        let cached_addr = blk.lshr(I64, &cache_entry, "8");
-        let address_matches = blk.icmp_eq(I64, &cached_addr, &raw);
-        let kind = blk.and(I64, &cache_entry, "255");
-        // Numeric typed-array kind 5 is Uint32Array. Other kinds retain the
-        // canonical property read and ToNumeric behavior in the slow arm.
-        let is_uint32 = blk.icmp_eq(I64, &kind, "5");
-        let guard = blk.and(I1, &is_pointer, &address_matches);
-        let guard = blk.and(I1, &guard, &is_uint32);
-        blk.cond_br(&guard, &header_label, &slow_label);
-        raw
-    };
+    let access = super::byte_cell::resolve(
+        ctx,
+        &mask_box,
+        &[super::byte_cell::brand_for_kind(5)],
+        &slow_label,
+    );
+    let raw = access.raw;
+    ctx.block().br(&header_label);
 
     // The cache hit above proves `raw` is the live Uint32Array header. Its
     // first word is the u32 length; only an in-bounds access may bypass
     // `[[Get]]` because OOB access can observe prototype semantics.
     ctx.current_block = header_idx;
-    let header_ptr = ctx.block().inttoptr(I64, &raw);
-    let length = ctx.block().load(I32, &header_ptr);
+    let length = access.len.clone();
     let in_bounds = ctx.block().icmp_ult(I32, &word_i32, &length);
     ctx.block().cond_br(&in_bounds, &fast_label, &slow_label);
 

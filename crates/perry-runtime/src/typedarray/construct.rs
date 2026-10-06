@@ -379,8 +379,8 @@ fn typed_array_copy_from_typed_array(
         return typed_array_alloc(dst_kind, 0);
     }
     unsafe {
-        bigint::validate_copy_kinds(dst_kind, (*src).kind);
-        let len = (*src).length;
+        bigint::validate_copy_kinds(dst_kind, crate::typedarray::element_kind(src));
+        let len = crate::typedarray::element_length(src);
         let out = typed_array_alloc(dst_kind, len);
         for i in 0..len as usize {
             let v = load_at(src, i);
@@ -423,7 +423,7 @@ pub extern "C" fn js_typed_array_new_from_array(
     // GC_FLAG_FORWARDED header at the old address — and the caller may
     // still hold that stale pre-grow pointer. `clean_arr_ptr` follows the
     // forwarding chain (#233) exactly like every element read below does
-    // via `js_array_get_f64`; raw-dereferencing `(*arr).length` instead
+    // via `js_array_get_f64`; raw-dereferencing `crate::typedarray::element_length(arr)` instead
     // read the forwarding pointer's bytes as length/capacity, so
     // `new Float32Array(arr)` saw a garbage element count while
     // `arr.length` and indexed reads (which follow the chain) stayed

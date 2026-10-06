@@ -357,7 +357,8 @@ fn detached_bit_and_nested_pin_count_do_not_overlap() {
     let owner = JSValue::from_bits(value.to_bits()).as_pointer::<u8>() as usize;
     let pins: Vec<_> = (0..31).map(|_| bytes::pin(value).unwrap()).collect();
     assert!(!buffer::is_detached_buffer(owner));
-    assert!(matches!(bytes::pin(value), Err(bytes::NotBytes::PinLimit)));
+    let overflow_pin = bytes::pin(value).expect("pin overflow uses the hidden bag");
+    drop(overflow_pin);
     buffer::detach_array_buffer(owner);
     assert!(buffer::is_detached_buffer(owner));
     for pin in &pins {
@@ -456,6 +457,16 @@ fn persistent_symbols_have_a_leaf_header_at_p_minus_eight() {
 fn each_compatible_b4_sabotage_turns_its_witness_red() {
     assert!(!fault("unused"));
     for (fault, witness) in [
+        ("attach_moves_bytes", "gc::tests::u8_inline_cache::thirty_one_pins_expando_and_buffer_keep_inline_bytes_in_place"),
+        ("pin_overflow", "gc::tests::u8_inline_cache::thirty_second_pin_uses_a_hidden_property_and_unpins_cleanly"),
+        (
+            "pool_root",
+            "gc::tests::buffer_b4::pool_identity_alignment_rollover_and_root_are_real_owner_edges",
+        ),
+        (
+            "pool_identity",
+            "gc::tests::buffer_b4::pool_identity_alignment_rollover_and_root_are_real_owner_edges",
+        ),
         (
             "shared_lane_copy",
             "gc::tests::buffer_b4::shared_typed_copies_keep_atomic_lane_width_and_raw_bits",
@@ -482,7 +493,7 @@ fn each_compatible_b4_sabotage_turns_its_witness_red() {
         ),
         (
             "native_resolution",
-            "typedarray::resolved_read_tests::typed_array_reads_use_resolved_slot_for_every_numeric_kind",
+            "typedarray::resolved_read_tests::native_resolution_uses_the_view_owner_and_offset",
         ),
         (
             "symbol_header",
@@ -528,4 +539,53 @@ fn each_compatible_b4_sabotage_turns_its_witness_red() {
         );
         eprintln!("B4 sabotage {fault}: RED");
     }
+}
+
+#[test]
+fn pool_identity_alignment_rollover_and_root_are_real_owner_edges() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    buffer::pool::reset_for_test();
+    crate::object::native_module::set_buffer_pool_size(8192.0);
+    if !fault("pool_root") {
+        gc_register_named_mutable_root_scanner("b4 pool", buffer::pool::scan_pool_roots_mut);
+    }
+    let first = buffer::pool::copy(3);
+    let second = buffer::pool::place(GC_TYPE_BUFFER, buffer::pool::Init::Unsafe, 5);
+    let owner = unsafe { buffer::store::owner(first as usize) };
+    assert_ne!(owner, first as usize);
+    assert_eq!(unsafe { buffer::store::owner(second as usize) }, owner);
+    assert_eq!(unsafe { (*first).capacity }, 0);
+    assert_eq!(unsafe { (*second).capacity }, 8);
+    assert_eq!(buffer::buffer_backing_array_buffer(first as usize), owner);
+    assert_eq!(buffer::buffer_backing_array_buffer(second as usize), owner);
+    let unpooled = buffer::pool::place(GC_TYPE_BUFFER, buffer::pool::Init::Copy, 4096);
+    assert_eq!(
+        unsafe { buffer::store::owner(unpooled as usize) },
+        unpooled as usize
+    );
+    let zeroed = buffer::js_buffer_alloc(3, 0);
+    assert_eq!(
+        unsafe { buffer::store::owner(zeroed as usize) },
+        zeroed as usize
+    );
+    let u8 = buffer::js_uint8array_alloc(3);
+    assert_eq!(unsafe { buffer::store::owner(u8 as usize) }, u8 as usize);
+    clear_marks();
+    clear_mark_seeds();
+    let valid = build_valid_pointer_set();
+    mark_mutable_registered_roots(&valid);
+    assert_marked_user_ptr(owner, "pool retained by its per-agent root");
+    clear_marks();
+    clear_mark_seeds();
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    // No JS view or pin roots the pool at this collection; its own scanner must.
+    let next = buffer::pool::copy(3);
+    assert_eq!(unsafe { buffer::store::owner(next as usize) }, owner);
+    for _ in 0..3 {
+        let _ = buffer::pool::copy(3000);
+    }
+    let last = buffer::pool::copy(3000);
+    assert_ne!(unsafe { buffer::store::owner(last as usize) }, owner);
+    buffer::pool::reset_for_test();
 }

@@ -189,13 +189,13 @@ mod tests {
 
         assert!(crate::buffer::is_array_buffer(address));
         assert_eq!(unsafe { (*buffer).length }, 2);
-        assert_eq!(crate::buffer::buffer_data(buffer), unsafe {
-            bytes.as_ptr().add(1)
+        crate::buffer::bytes::no_gc(|scope| {
+            assert_eq!(
+                crate::buffer::bytes::bytes(value, scope).unwrap().as_ptr(),
+                unsafe { bytes.as_ptr().add(1) }
+            );
         });
-
-        unsafe {
-            *crate::buffer::buffer_data_mut(buffer).add(1) = 99;
-        }
+        crate::buffer::js_buffer_set(buffer, 1, 99);
         assert_eq!(bytes, [10, 20, 99, 0]);
 
         // The wrapper owns no native bytes; finalization only forgets the

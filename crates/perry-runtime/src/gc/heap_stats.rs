@@ -96,25 +96,22 @@ pub(crate) fn heap_stats() -> HeapStats {
 /// Inspect storage ownership, rather than the view's visible byteLength.
 /// No allocations or collection are allowed while these pointers are read.
 unsafe fn backing_bytes(header: &GcHeader, user: *mut u8) -> (u64, u64) {
-    if is_buffer_family_type(header.obj_type) {
-        if crate::buffer::view::lookup(user as usize).is_some()
-            || crate::buffer::is_detached_buffer(user as usize)
-        {
-            return (0, 0);
-        }
+    if crate::gc::is_byte_family_type(header.obj_type)
+        && !crate::gc::is_byte_view_type(header.obj_type)
+        && header._reserved & crate::codegen_abi::BYTES_DETACHED == 0
+    {
         let bytes = (*user.cast::<crate::buffer::BufferHeader>()).capacity as u64;
-        let array_buffer = !matches!(
-            header.obj_type,
-            GC_TYPE_BUFFER_SECRET_KEY | GC_TYPE_BUFFER_CRYPTO_KEY
+        return (
+            bytes,
+            if matches!(
+                header.obj_type,
+                GC_TYPE_BUFFER_SECRET_KEY | GC_TYPE_BUFFER_CRYPTO_KEY
+            ) {
+                0
+            } else {
+                bytes
+            },
         );
-        return (bytes, if array_buffer { bytes } else { 0 });
-    }
-    if header.obj_type == GC_TYPE_TYPED_ARRAY {
-        let ta = &*user.cast::<crate::typedarray::TypedArrayHeader>();
-        if ta.storage == crate::typedarray::TA_STORAGE_INLINE {
-            let bytes = ta.capacity as u64 * ta.elem_size as u64;
-            return (bytes, bytes);
-        }
     }
     (0, 0)
 }
@@ -128,7 +125,7 @@ mod memory_accounting_tests {
         let before = heap_stats();
         let buf = crate::buffer::buffer_alloc(4 * 1024 * 1024);
         unsafe {
-            (*buf).length = (*buf).capacity;
+            crate::buffer::store::set_length(buf as usize, (*buf).capacity);
         }
         crate::buffer::mark_as_array_buffer(buf as usize);
         let owned = heap_stats();

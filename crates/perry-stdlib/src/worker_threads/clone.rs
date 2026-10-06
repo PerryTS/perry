@@ -95,7 +95,14 @@ mod transfer_tests {
     fn worker_data_adopts_transfer_once_and_roots_repeated_reads() {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let source = perry_runtime::buffer::js_array_buffer_new(16);
-        let original = perry_runtime::buffer::buffer_data(source);
+        let original = perry_runtime::buffer::bytes::no_gc(|scope| {
+            perry_runtime::buffer::bytes::bytes(
+                perry_runtime::value::js_nanbox_pointer(source as i64),
+                scope,
+            )
+            .unwrap()
+            .as_ptr() as usize
+        });
         let message = unsafe {
             perry_runtime::thread::serialize_message(
                 JSValue::pointer(source.cast()).bits(),
@@ -112,7 +119,17 @@ mod transfer_tests {
         assert_eq!(root.get_nanbox_f64().to_bits(), second.to_bits());
         let buffer = perry_runtime::value::js_nanbox_get_pointer(second)
             as *const perry_runtime::buffer::BufferHeader;
-        assert_eq!(perry_runtime::buffer::buffer_data(buffer), original);
+        perry_runtime::buffer::bytes::no_gc(|scope| {
+            assert_eq!(
+                perry_runtime::buffer::bytes::bytes(
+                    perry_runtime::value::js_nanbox_pointer(buffer as i64),
+                    scope
+                )
+                .unwrap()
+                .as_ptr() as usize,
+                original
+            )
+        });
         assert_eq!(unsafe { (*buffer).length }, 16);
         CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = None);
     }

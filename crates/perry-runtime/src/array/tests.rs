@@ -371,7 +371,7 @@ fn test_array_clone_prefers_buffer_registry_before_gc_header_probe() {
         // every buffer pointer) plus the 8-byte-aligned header+capacity.
         let expected_next = fake_prev as usize
             + crate::gc::GC_HEADER_SIZE
-            + ((std::mem::size_of::<crate::buffer::BufferHeader>() + 8 + 7) & !7);
+            + ((crate::codegen_abi::BYTES_STORE + 8 + 7) & !7);
         if buf as usize == expected_next {
             adjacent = Some((fake_prev, buf));
             break;
@@ -380,13 +380,14 @@ fn test_array_clone_prefers_buffer_registry_before_gc_header_probe() {
     let (fake_prev, buf) = adjacent.expect("expected adjacent small-buffer slab allocations");
 
     unsafe {
-        *crate::buffer::buffer_data_mut(fake_prev) = crate::gc::GC_TYPE_STRING;
-        (*buf).length = 4;
-        std::ptr::copy_nonoverlapping(
-            [1u8, 2, 3, 4].as_ptr(),
-            crate::buffer::buffer_data_mut(buf),
-            4,
-        );
+        crate::buffer::store::set_length(fake_prev as usize, 8);
+        crate::buffer::js_buffer_set(fake_prev, 0, crate::gc::GC_TYPE_STRING as i32);
+        crate::buffer::store::set_length(buf as usize, 4);
+        crate::buffer::bytes::no_gc(|scope| {
+            crate::buffer::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+                .unwrap()
+                .copy_from_slice(&[1, 2, 3, 4])
+        });
     }
 
     let cloned = js_array_clone(buf as *const ArrayHeader);

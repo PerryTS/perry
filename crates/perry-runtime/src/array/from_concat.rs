@@ -1006,7 +1006,7 @@ unsafe fn dense_concat_array_source(src: *const ArrayHeader) -> Option<(*const A
 /// Returns `None` with the result untouched (length still 0) when any
 /// precondition fails; the caller's spec-shaped per-source flow takes over.
 unsafe fn try_concat_all_dense(
-    result: *mut ArrayHeader,
+    array: *mut ArrayHeader,
     recv: *const ArrayHeader,
     args_ptr: *const f64,
     count: i32,
@@ -1048,13 +1048,13 @@ unsafe fn try_concat_all_dense(
         return None;
     }
     let total = total as u32;
-    if total > (*result).capacity {
+    if total > (*array).capacity {
         return None;
     }
     // Pass 2: copy. Nothing below allocates or bails, so no GC can move a
     // source or the result mid-copy and no shared-demote runs twice — which
     // is what makes the single deferred rebuild sound.
-    let dst = crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
+    let dst = crate::array::array_elements_ptr(array as *const ArrayHeader) as *mut f64;
     let mut off: usize = 0;
     let copy_array = |src: *const ArrayHeader, len: u32, off: &mut usize| {
         if len == 0 {
@@ -1090,9 +1090,9 @@ unsafe fn try_concat_all_dense(
             off += 1;
         }
     }
-    (*result).length = total;
-    crate::array::rebuild_array_layout_exact(result);
-    Some(result)
+    (*array).length = total;
+    crate::array::rebuild_array_layout_exact(array);
+    Some(array)
 }
 
 /// Bulk fast path for `append_spread_array` (#6386): a plain, dense,
@@ -1104,18 +1104,18 @@ unsafe fn try_concat_all_dense(
 /// dense arrays. Returns `None` when any precondition fails so the caller
 /// falls back to the spec-shaped loop below.
 unsafe fn try_append_spread_array_dense(
-    result: *mut ArrayHeader,
+    array: *mut ArrayHeader,
     src: *const ArrayHeader,
 ) -> Option<*mut ArrayHeader> {
     // A masked proxy id is not a dereferenceable ArrayHeader.
     if let Some(proxy) = crate::array::array_ptr_as_proxy(src) {
         // Concat uses HasProperty/Get, never @@iterator. Resolve this inside
         // the existing proxy guard so the ordinary bulk-copy path is unchanged.
-        return Some(append_concat_proxy(result, proxy));
+        return Some(append_concat_proxy(array, proxy));
     }
     let src = clean_arr_ptr(src);
     if src.is_null() {
-        return Some(result);
+        return Some(array);
     }
     let raw = src as usize;
     if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
@@ -1136,19 +1136,19 @@ unsafe fn try_append_spread_array_dense(
     }
     let src_len = (*src).length;
     if src_len == 0 {
-        return Some(result);
+        return Some(array);
     }
     if src_len > (*src).capacity {
         return None;
     }
-    let result = crate::array::clean_arr_ptr_mut(result);
-    if result.is_null() || std::ptr::eq(result as *const ArrayHeader, src) {
+    let array = crate::array::clean_arr_ptr_mut(array);
+    if array.is_null() || std::ptr::eq(array as *const ArrayHeader, src) {
         return None;
     }
     // The result is freshly allocated by the concat entry points, but a
     // sealed/frozen dest would make `js_array_grow` return it un-grown and
     // the bulk copy would overflow its capacity — keep the guard explicit.
-    if crate::array::array_is_frozen(result) || crate::array::array_is_sealed_or_no_extend(result) {
+    if crate::array::array_is_frozen(array) || crate::array::array_is_sealed_or_no_extend(array) {
         return None;
     }
     // Validation pass, no side effects: holes need the spec
@@ -1162,9 +1162,9 @@ unsafe fn try_append_spread_array_dense(
             return None;
         }
     }
-    let dest_len = (*result).length;
+    let dest_len = (*array).length;
     let new_len = dest_len.checked_add(src_len)?;
-    let (result, src) = if new_len > (*result).capacity {
+    let (array, src) = if new_len > (*array).capacity {
         // Growing can allocate → GC can run. `result` is rooted inside
         // `js_array_grow`; root `src` too (it may be an unrooted snapshot,
         // e.g. from `array_subclass_dense_snapshot`) and re-resolve both.
@@ -1173,16 +1173,16 @@ unsafe fn try_append_spread_array_dense(
         // `js_array_grow` allocates and can move `src`; `across_const` runs it
         // and hands back the post-collection address (#7341).
         let (grown, src_after) = src_handle
-            .across_const::<ArrayHeader, _>(|| crate::array::js_array_grow(result, new_len));
+            .across_const::<ArrayHeader, _>(|| crate::array::js_array_grow(array, new_len));
         (grown, clean_arr_ptr(src_after))
     } else {
-        (result, src)
+        (array, src)
     };
-    if result.is_null() || src.is_null() {
+    if array.is_null() || src.is_null() {
         return None;
     }
     let src_elems = crate::array::array_elements_ptr(src as *const ArrayHeader) as *const f64;
-    let dst_elems = crate::array::array_elements_ptr(result as *const ArrayHeader) as *mut f64;
+    let dst_elems = crate::array::array_elements_ptr(array as *const ArrayHeader) as *mut f64;
     // GC_STORE_AUDIT(BARRIERED): concat bulk copy is followed by exact layout/barrier rebuild.
     std::ptr::copy_nonoverlapping(
         src_elems,
@@ -1199,9 +1199,9 @@ unsafe fn try_append_spread_array_dense(
             crate::string::js_string_addref_if_heap_string(v);
         }
     }
-    (*result).length = new_len;
-    crate::array::rebuild_array_layout_exact(result);
-    Some(result)
+    (*array).length = new_len;
+    crate::array::rebuild_array_layout_exact(array);
+    Some(array)
 }
 
 /// Indexed concat of a proxy, preserving holes and observing its traps.

@@ -468,10 +468,7 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
                 }
             }
         }
-        GcRewriteDescriptorKind::NativeTypedView => {
-            let view = user_ptr as *mut crate::native_arena::NativeTypedViewHeader;
-            visit(fixed_slot(&mut (*view).owner as *mut _ as *mut u64));
-        }
+
         GcRewriteDescriptorKind::NativePodView => {
             let view = user_ptr as *mut crate::native_arena::NativePodViewHeader;
             visit(fixed_slot(&mut (*view).owner as *mut _ as *mut u64));
@@ -534,12 +531,16 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             }
         }
         GcRewriteDescriptorKind::Buffer => {
-            crate::buffer::view::visit_backing_slot(user_ptr as usize, |slot| {
-                visit(fixed_slot(slot));
-            });
-            crate::buffer::visit_ab_alias_slot(user_ptr as usize, |slot| {
-                visit(fixed_slot(slot));
-            });
+            let cell = user_ptr as *mut crate::buffer::BufferHeader;
+            #[cfg(test)]
+            let trace_link = !crate::buffer::bytes::b4_sabotage("view_edge");
+            #[cfg(not(test))]
+            let trace_link = true;
+            if (*cell).link != 0 && trace_link {
+                visit(fixed_slot(
+                    std::ptr::addr_of_mut!((*cell).link).cast::<u64>(),
+                ));
+            }
         }
         GcRewriteDescriptorKind::WeakStorage => {
             let storage = user_ptr as *mut crate::weakref::storage::WeakStorage;

@@ -439,8 +439,8 @@ fn unsupported_transfer_type_name(obj_type: u8) -> &'static str {
         gc::GC_TYPE_ERROR => "Error",
         gc::GC_TYPE_MAP => "Map",
         gc::GC_TYPE_LAZY_ARRAY => "lazy (unmaterialized) JSON array",
+        t if gc::is_typed_array_type(t) => "TypedArray",
         t if gc::is_buffer_family_type(t) => "Buffer",
-        gc::GC_TYPE_TYPED_ARRAY => "TypedArray",
         gc::GC_TYPE_SET => "Set",
         gc::GC_TYPE_NATIVE_ARENA_OWNER
         | gc::GC_TYPE_NATIVE_TYPED_VIEW

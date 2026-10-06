@@ -25,7 +25,6 @@ extern "C" {
         bit_length: u32,
     );
     fn perry_thread_exit_probe_object_prototype_recorded(owner: usize) -> bool;
-    fn js_u8_buffer_read_f64(target: *const u8, index: i32) -> f64;
 }
 
 extern "C" fn probe_thunk(
@@ -321,66 +320,29 @@ fn thread_exit_releases_the_threads_buffer_own_props() {
     );
 }
 
-/// Membership of the CryptoKey buffer `key` in the process-global external
-/// CryptoKey metadata registry, and of the byte view `view` in
-/// `PERRY_U8_INLINE_CACHE`, in that order. (The external Uint8Array registry
-/// this used to check is gone: a buffer's brand is its header, #10694.) Reads no thread-local, so the
-/// thread-exit probe below may call it.
-///
-/// Two addresses because since #11589 key material is never admitted to the
-/// inline-access cache (a key is not integer-indexed), so the key buffer can
-/// no longer witness the cache's release; an ordinary `Buffer` on the same
-/// thread does.
-fn external_buffer_registrations(key: usize, view: usize) -> [bool; 2] {
-    [
-        perry_runtime::buffer::external_registries_hold_for_test(key),
-        perry_runtime::buffer::u8_inline_cache_holds_for_test(view),
-    ]
-}
-
-/// #11547: the external-buffer test's buffer address, and what the tables held
-/// for it when its thread's arena was released.
-///
-/// Checking the tables after `join` cannot tell the dead buffer from a new one.
-/// The dying thread's arena goes back to the allocator, and a concurrent test
-/// (`thread_exit_releases_the_threads_crypto_key_entries` registers a CryptoKey
-/// Buffer through the same `js_buffer_mark_as_crypto_key_external`) can be
-/// given the same address and register it again. So the verdict is taken
-/// INSIDE the release instead: [`record_external_buffer_release`] is a
-/// thread-exit range hook that runs after the external-buffer registries' own
-/// hook, while the block is still owned by the exiting thread and so cannot
-/// belong to anyone else.
-///
-/// Holds `(key, view, seen)`: the CryptoKey buffer, the cache-admitted byte
-/// view, and the verdict.
-#[allow(clippy::type_complexity)]
-static EXTERNAL_BUFFER_EXIT_PROBE: std::sync::Mutex<(usize, usize, Option<[bool; 2]>)> =
-    std::sync::Mutex::new((0, 0, None));
+/// Record CryptoKey metadata while the exiting thread still owns its heap.
+/// Checking after join could mistake a new allocation at the same address
+/// for metadata left behind by the dead thread.
+static EXTERNAL_BUFFER_EXIT_PROBE: std::sync::Mutex<(usize, Option<bool>)> =
+    std::sync::Mutex::new((0, None));
 
 fn record_external_buffer_release(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
     let mut probe = EXTERNAL_BUFFER_EXIT_PROBE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let (key, view, seen) = *probe;
-    // First release only: once the addresses are back with the allocator, a
-    // later tenant's own thread exit reports them again. Both live on the same
-    // thread, so its one release covers both.
-    if key != 0 && seen.is_none() && freed.contains(key) && freed.contains(view) {
-        probe.2 = Some(external_buffer_registrations(key, view));
+    let (key, seen) = *probe;
+    if key != 0 && seen.is_none() && freed.contains(key) {
+        probe.1 = Some(perry_runtime::buffer::external_registries_hold_for_test(
+            key,
+        ));
     }
 }
 
-/// Verdict on what [`record_external_buffer_release`] saw: `Err` names the
-/// first table that still held the dead buffer when its thread was released.
-fn external_buffer_release_verdict(seen: Option<[bool; 2]>) -> Result<(), &'static str> {
-    const TABLES: [&str; 2] = [
-        "EXTERNAL_CRYPTO_KEY_META_REGISTRY outlived the thread",
-        "PERRY_U8_INLINE_CACHE outlived the thread",
-    ];
-    let seen = seen.ok_or("the thread's release never reported the buffer's range")?;
-    match seen.iter().position(|&held| held) {
-        Some(i) => Err(TABLES[i]),
-        None => Ok(()),
+fn external_buffer_release_verdict(seen: Option<bool>) -> Result<(), &'static str> {
+    match seen {
+        Some(false) => Ok(()),
+        Some(true) => Err("EXTERNAL_CRYPTO_KEY_META_REGISTRY outlived the thread"),
+        None => Err("the thread's release never reported the buffer's range"),
     }
 }
 
@@ -390,50 +352,23 @@ fn thread_exit_releases_the_threads_external_buffer_registrations() {
         let scope = RuntimeHandleScope::new();
         let buf = scope.root_raw_mut_ptr(perry_runtime::buffer::js_buffer_alloc(16, 0));
         let addr = buf.get_raw_mut_ptr::<u8>() as usize;
-        // webcrypto's CryptoKey registration: the external metadata registry.
-        // This also registers their thread-exit hook, so it runs before the
-        // probe registered below.
+        // Registration installs the cleanup hook before the observing hook.
         unsafe { js_buffer_mark_as_crypto_key_external(addr, 1, 0, 1, 1, 0, 0) };
-        // The codegen inline-read slow arm primes PERRY_U8_INLINE_CACHE — for
-        // a byte view. It must refuse the key (#11589: key material is not
-        // integer-indexed), so an ordinary Buffer carries the cache probe.
-        let view = scope.root_raw_mut_ptr(perry_runtime::buffer::js_buffer_alloc(16, 0));
-        let view_addr = view.get_raw_mut_ptr::<u8>() as usize;
-        unsafe { js_u8_buffer_read_f64(addr as *const u8, 0) };
-        unsafe { js_u8_buffer_read_f64(view_addr as *const u8, 0) };
-        let key_admitted = perry_runtime::buffer::u8_inline_cache_holds_for_test(addr);
-        *EXTERNAL_BUFFER_EXIT_PROBE.lock().unwrap() = (addr, view_addr, None);
+        *EXTERNAL_BUFFER_EXIT_PROBE.lock().unwrap() = (addr, None);
         perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
             record_external_buffer_release,
         );
-        (external_buffer_registrations(addr, view_addr), key_admitted)
+        perry_runtime::buffer::external_registries_hold_for_test(addr)
     })
     .join()
     .unwrap();
-    let (alive, key_admitted) = alive;
-    let seen = std::mem::replace(
-        &mut *EXTERNAL_BUFFER_EXIT_PROBE.lock().unwrap(),
-        (0, 0, None),
-    )
-    .2;
-    assert!(
-        !key_admitted,
-        "key material must never enter the inline element-access cache"
-    );
-    assert_eq!(
-        alive, [true; 2],
-        "every registration must exist while its thread lives"
-    );
+    let seen = std::mem::replace(&mut *EXTERNAL_BUFFER_EXIT_PROBE.lock().unwrap(), (0, None)).1;
+    assert!(alive, "the registration must exist while its thread lives");
     if let Err(table) = external_buffer_release_verdict(seen) {
         panic!("{table}");
     }
 }
 
-/// #11547 regression: a buffer registered at the dead one's address after the
-/// release must not fail the verdict, and the verdict must still fail when
-/// the release left an entry behind or never saw the range. The newcomer is a
-/// real registered buffer on this thread, which is exactly what the
-/// address-only check used to report as "outlived".
 #[test]
 fn external_buffer_verdict_is_taken_at_release_not_by_address() {
     let scope = RuntimeHandleScope::new();
@@ -445,17 +380,13 @@ fn external_buffer_verdict_is_taken_at_release_not_by_address() {
         "the newcomer is registered, so an address-only check would fail"
     );
     assert_eq!(
-        external_buffer_release_verdict(Some([false; 2])),
+        external_buffer_release_verdict(Some(false)),
         Ok(()),
         "a newcomer at a released address was reported as the dead buffer"
     );
     assert_eq!(
-        external_buffer_release_verdict(Some([true, false])),
+        external_buffer_release_verdict(Some(true)),
         Err("EXTERNAL_CRYPTO_KEY_META_REGISTRY outlived the thread")
-    );
-    assert_eq!(
-        external_buffer_release_verdict(Some([false, true])),
-        Err("PERRY_U8_INLINE_CACHE outlived the thread")
     );
     assert!(
         external_buffer_release_verdict(None).is_err(),

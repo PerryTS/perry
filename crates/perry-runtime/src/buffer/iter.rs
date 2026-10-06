@@ -45,9 +45,11 @@ fn unbox_buffer_ptr(value: f64) -> *mut BufferHeader {
 }
 
 unsafe fn alloc_iterator(buf_ptr: *mut BufferHeader, kind: i32) -> f64 {
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let buffer = handles.root_raw_mut_ptr(buf_ptr);
     let obj = js_object_alloc(BUFFER_ITERATOR_CLASS_ID, 3);
     // Field 0: backing buffer (NaN-boxed pointer).
-    let buf_nan = js_nanbox_pointer(buf_ptr as i64);
+    let buf_nan = js_nanbox_pointer(buffer.get_raw_mut_ptr::<BufferHeader>() as i64);
     js_object_set_field(obj, 0, JSValue::from_bits(buf_nan.to_bits()));
     // Field 1: cursor index, starts at 0.
     js_object_set_field(obj, 1, JSValue::number(0.0));
@@ -133,7 +135,7 @@ pub unsafe fn dispatch_buffer_iterator_method(
             let len = if buf_ptr.is_null() {
                 0u32
             } else {
-                (*buf_ptr).length
+                super::store::length(buf_ptr as usize) as u32
             };
 
             if idx >= len {
@@ -147,8 +149,7 @@ pub unsafe fn dispatch_buffer_iterator_method(
             let byte = if buf_ptr.is_null() {
                 0u8
             } else {
-                let data = buffer_data(buf_ptr);
-                *data.add(idx as usize)
+                js_buffer_get(buf_ptr, idx as i32) as u8
             };
 
             let value = match kind {

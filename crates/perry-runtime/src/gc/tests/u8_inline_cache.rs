@@ -1,237 +1,177 @@
-//! Lifecycle proof for the #9342 `PERRY_U8_INLINE_CACHE` admission cache.
-//!
-//! The cache contract ("an entry names a live, u8-marked, inline-storage
-//! `BufferHeader`") is held up by two invalidation sites — buffer death
-//! (`finalize_collected_dead_buffer`) and address re-issue
-//! (`register_buffer`) — riding the same chokepoints as every other buffer
-//! identity table. A stale hit is SILENT (the emitted reader would interpret
-//! the new tenant's memory as `(length, bytes)`), so each site is proved here
-//! by a test that fails when that specific call is removed: delete the
-//! finalize call and `test_dead_u8_entry_pruned_on_full_gc` fails; delete the
-//! register call and `test_reissued_address_does_not_inherit_admission`
-//! fails.
-
+//! B4 cell admission and lifetime witnesses; no address cache exists.
 use super::super::*;
 use super::support::*;
+use crate::buffer::{self, bytes};
 
 fn full_gc() {
+    let before = gc_total_collection_count();
     let _ =
         gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    assert!(gc_total_collection_count() > before);
 }
 
-/// Prime admits a `mark_as_uint8array`-marked inline-storage buffer, and the
-/// entry means what the emitted guard thinks it means: header `length` at
-/// offset 0, live bytes at `header + 8`.
 #[test]
-fn test_prime_admits_inline_u8_and_contract_holds() {
+fn all_byte_brands_have_the_common_cell_and_one_header() {
     let _guard = GcTestIsolationGuard::new();
-
-    let buf = crate::buffer::buffer_alloc(16);
-    let addr = buf as usize;
-    unsafe {
-        (*buf).length = 16;
-        *crate::buffer::buffer_data_mut(buf).add(3) = 0xAB;
+    for kind in 0..12 {
+        let p = crate::typedarray::typed_array_alloc(kind, 3);
+        let h = unsafe { buffer::store::header(p as usize) };
+        assert_eq!(
+            unsafe { (*h).obj_type },
+            crate::typedarray::type_for_kind(kind)
+        );
+        assert_eq!(unsafe { (*p).length }, 3);
+        assert_eq!(unsafe { (*p).link }, 0);
+        assert!(!gc_type_is_movable(unsafe { (*h).obj_type }));
+        assert_eq!(
+            bytes::no_gc(
+                |_| bytes::span(crate::value::js_nanbox_pointer(p as i64), false)
+                    .unwrap()
+                    .ptr as usize
+            ),
+            p as usize + crate::codegen_abi::BYTES_STORE
+        );
     }
-
-    // Unmarked: a Node `Buffer`, whose element semantics are a Uint8Array's
-    // (#10515 admits it).
-    crate::buffer::u8_inline_cache_try_prime(addr);
-    assert!(
-        crate::buffer::test_u8_inline_cache_holds(addr),
-        "an inline-storage Buffer must be admitted"
-    );
-
-    crate::buffer::mark_as_uint8array(addr);
-    crate::buffer::u8_inline_cache_try_prime(addr);
-    assert!(
-        crate::buffer::test_u8_inline_cache_holds(addr),
-        "a marked inline-storage Uint8Array must be admitted"
-    );
-
-    // The emitted reader's view of an admitted entry: length then byte.
-    let len = unsafe { *(addr as *const u32) };
-    let byte = unsafe { *((addr + 8 + 3) as *const u8) };
-    assert_eq!(len, 16, "length must be readable at header offset 0");
-    assert_eq!(byte, 0xAB, "bytes must be inline at header + 8");
+    assert_eq!(crate::codegen_abi::BYTES_STORE, 16);
 }
 
-/// A foreign-backed wrapper (header-only allocation, bytes owned elsewhere)
-/// must never be admitted — `header + 8` is past its allocation.
 #[test]
-fn test_prime_rejects_foreign_backed_wrapper() {
+fn foreign_and_view_headers_resolve_the_real_window() {
     let _guard = GcTestIsolationGuard::new();
-
-    let mut bytes = [7u8; 8];
-    let buf = crate::buffer::buffer_alloc_foreign(bytes.as_mut_ptr(), bytes.len() as u32);
-    let addr = buf as usize;
-    crate::buffer::mark_as_uint8array(addr);
-    crate::buffer::u8_inline_cache_try_prime(addr);
-    assert!(
-        !crate::buffer::test_u8_inline_cache_holds(addr),
-        "a foreign-backed wrapper must not be admitted: its bytes are not \
-         inline and the emitted load would read past the allocation"
-    );
-    crate::buffer::finalize_collected_dead_buffer(addr);
-}
-
-/// A registered Uint8Array view has no inline payload. Runtime reads resolve
-/// to shared backing bytes; admitting it would read past its header on a
-/// cache hit (#9360/#7219/#10056).
-#[test]
-fn test_prime_rejects_registered_view() {
-    let _guard = GcTestIsolationGuard::new();
-
-    let backing = crate::buffer::js_array_buffer_new(4);
-    let boxed_backing = crate::value::js_nanbox_pointer(backing as i64);
-    let view = crate::buffer::js_uint8array_new(boxed_backing);
-    let addr = view as usize;
-
-    unsafe {
-        *crate::buffer::buffer_data_mut(backing).add(1) = 0xAB;
-    }
-    assert_eq!(
-        crate::buffer::js_buffer_index_get_value(view, 1),
-        0xAB as f64,
-        "test premise: the runtime read resolves the view to its backing"
-    );
-    assert_eq!(
-        unsafe { *crate::buffer::buffer_data(view).add(1) },
-        0xAB,
-        "runtime and native accessors must expose the same shared bytes"
-    );
-    assert_ne!(crate::buffer::buffer_data(view), unsafe {
-        (view as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>())
+    let mut data = [3; 16];
+    let owner = buffer::header::buffer_alloc_foreign(data.as_mut_ptr(), 16);
+    buffer::mark_as_uint8array(owner as usize);
+    let view = buffer::js_buffer_slice(owner, 3, 9);
+    assert_eq!(unsafe { (*view).link }, owner as usize);
+    assert_eq!(unsafe { (*view).capacity }, 3);
+    bytes::no_gc(|_| {
+        assert_eq!(
+            bytes::span(crate::value::js_nanbox_pointer(view as i64), false)
+                .unwrap()
+                .ptr as *const u8,
+            unsafe { data.as_ptr().add(3) }
+        )
     });
-
-    crate::buffer::u8_inline_cache_try_prime(addr);
-    assert!(
-        !crate::buffer::test_u8_inline_cache_holds(addr),
-        "a registered view must not be admitted: cache-hit reads bypass the \
-         authoritative backing"
-    );
+    buffer::js_buffer_set(view, 0, 91);
+    assert_eq!(data[3], 91);
+    buffer::detach_array_buffer(owner as usize);
+    assert_eq!(buffer::js_buffer_length(view), 0);
 }
 
-/// Death pruning: a dead buffer's admission must not survive the full trace
-/// that collects it — the recycled address's next tenant is arbitrary memory
-/// to the emitted reader. Fails if `finalize_collected_dead_buffer` loses its
-/// `u8_inline_cache_invalidate` call.
 #[test]
-fn test_dead_u8_entry_pruned_on_full_gc() {
+fn rebranding_has_no_stale_address_admission() {
     let _guard = GcTestIsolationGuard::new();
-
-    let addr = crate::buffer::buffer_alloc(16) as usize;
-    crate::buffer::mark_as_uint8array(addr);
-    crate::buffer::u8_inline_cache_try_prime(addr);
-    assert!(
-        crate::buffer::test_u8_inline_cache_holds(addr),
-        "test premise: the buffer is admitted while live"
-    );
-
-    // No roots: dead at the full trace (buffers are TENURED old-gen residents).
-    full_gc();
-
-    assert!(
-        !crate::buffer::test_u8_inline_cache_holds(addr),
-        "a dead buffer's inline-read admission must be pruned on the trace \
-         that collects it — a stale hit reads the next tenant's memory as \
-         (length, bytes)"
-    );
+    let owner = buffer::js_buffer_alloc(8, 29);
+    assert_eq!(buffer::admitted_u8_read(owner as usize, 0), Some(29));
+    buffer::mark_as_array_buffer(owner as usize);
+    assert_eq!(buffer::admitted_u8_read(owner as usize, 0), None);
+    buffer::mark_as_uint8array(owner as usize);
+    assert_eq!(buffer::admitted_u8_read(owner as usize, 0), Some(29));
 }
 
-/// Re-issue pruning: registering a fresh buffer at an address must clear any
-/// admission the previous tenant held (belt and suspenders over death
-/// pruning, mirroring `register_buffer`'s own-props clear). Fails if
-/// `register_buffer` loses its `u8_inline_cache_invalidate` call.
 #[test]
-fn test_reissued_address_does_not_inherit_admission() {
-    let _guard = GcTestIsolationGuard::new();
-
-    let buf = crate::buffer::buffer_alloc(16);
-    let addr = buf as usize;
-    crate::buffer::mark_as_uint8array(addr);
-    crate::buffer::u8_inline_cache_try_prime(addr);
-    assert!(crate::buffer::test_u8_inline_cache_holds(addr));
-
-    // Simulate the re-issue path directly: a new tenant registering at the
-    // same address (the death finalizer is deliberately NOT run first, so
-    // this passes only on register_buffer's own clear).
-    crate::buffer::register_buffer(buf);
-    assert!(
-        !crate::buffer::test_u8_inline_cache_holds(addr),
-        "a re-registered address must not inherit the dead tenant's \
-         inline-read admission"
-    );
-}
-
-/// #10515: the non-integer-indexed brands that share `BufferHeader` storage —
-/// ArrayBuffer, SharedArrayBuffer, DataView (whose payload holds its data
-/// pointer) — are never admitted, and a brand mark that arrives after a prime
-/// revokes the admission. Fails if `u8_inline_cache_try_prime` stops asking
-/// the brand, or a `mark_as_*` loses its invalidation.
-#[test]
-fn test_non_byte_view_brands_are_never_admitted() {
-    let _guard = GcTestIsolationGuard::new();
-
-    type Mark = fn(usize);
-    let marks: [(&str, Mark); 3] = [
-        ("ArrayBuffer", crate::buffer::mark_as_array_buffer),
-        (
-            "SharedArrayBuffer",
-            crate::buffer::mark_as_shared_array_buffer,
-        ),
-        ("DataView", crate::buffer::mark_as_data_view),
-    ];
-    for (brand, mark) in marks {
-        let buf = crate::buffer::buffer_alloc(16);
-        let addr = buf as usize;
-        unsafe { (*buf).length = 16 };
-        mark(addr);
-        crate::buffer::u8_inline_cache_try_prime(addr);
-        assert!(
-            !crate::buffer::test_u8_inline_cache_holds(addr),
-            "a {brand} is not integer-indexed and must not be admitted"
-        );
-
-        // Mark AFTER a prime: the admission must be revoked.
-        let buf = crate::buffer::buffer_alloc(16);
-        let addr = buf as usize;
-        unsafe { (*buf).length = 16 };
-        crate::buffer::u8_inline_cache_try_prime(addr);
-        assert!(
-            crate::buffer::test_u8_inline_cache_holds(addr),
-            "test premise: a plain Buffer is admitted"
-        );
-        mark(addr);
-        assert!(
-            !crate::buffer::test_u8_inline_cache_holds(addr),
-            "marking a primed buffer as a {brand} must revoke its admission"
-        );
-    }
-}
-
-/// #10515: the runtime byte accessors answer an admitted buffer from the cache
-/// and prime a fresh one on its first access, so the SECOND access of an owning
-/// buffer through any runtime route is a cache hit.
-#[test]
-fn test_runtime_byte_access_primes_and_hits() {
-    let _guard = GcTestIsolationGuard::new();
-
-    let buf = crate::buffer::buffer_alloc(8);
-    let addr = buf as usize;
-    unsafe { (*buf).length = 8 };
-    assert!(!crate::buffer::test_u8_inline_cache_holds(addr));
-    crate::buffer::js_buffer_set(buf, 2, 0x1FF);
-    assert!(
-        crate::buffer::test_u8_inline_cache_holds(addr),
-        "the first byte store must prime the admission"
-    );
-    assert_eq!(crate::buffer::cached_u8_read(addr, 2), Some(0xFF));
-    assert!(crate::buffer::cached_u8_write(addr, 3, 7));
-    assert_eq!(crate::buffer::js_buffer_get(buf, 3), 7);
+fn bagged_view_keeps_owner_and_properties_across_full_collection() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let owner = buffer::js_buffer_alloc(64, 29);
+    let view = buffer::js_buffer_slice(owner, 7, 19);
+    buffer::buffer_set_own_prop(view as usize, "tag", 7.0);
+    let bag = unsafe { buffer::store::bag(view as usize) };
+    assert!(!bag.is_null());
     assert_eq!(
-        crate::buffer::cached_u8_read(addr, 8),
-        None,
-        "out of range leaves the cache"
+        unsafe { buffer::store::owner(view as usize) },
+        owner as usize
     );
-    assert!(!crate::buffer::cached_u8_write(addr, -1, 1));
+    assert_eq!(unsafe { (*view).link }, bag as usize);
+    js_shadow_slot_set(0, ptr_bits(view as usize));
+    full_gc();
+    assert!(
+        unsafe { crate::value::addr_class::try_read_tracked_gc_header(owner as usize) }.is_some()
+    );
+    assert_eq!(buffer::js_buffer_get(view, 0), 29);
+    assert_eq!(buffer::buffer_get_own_prop(view as usize, "tag"), Some(7.0));
+}
+
+#[test]
+fn thirty_one_pins_expando_and_buffer_keep_inline_bytes_in_place() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_named_mutable_root_scanner(
+        "b4 pinned",
+        crate::gc::pin::scan_pinned_object_roots_mut,
+    );
+    let owner = buffer::js_buffer_alloc(64, 29);
+    let value = crate::value::js_nanbox_pointer(owner as i64);
+    let pins: Vec<_> = (0..31).map(|_| bytes::pin(value).unwrap()).collect();
+    let before = pins[0].as_ptr();
+    buffer::buffer_set_own_prop(owner as usize, "tag", 7.0);
+    let ab = buffer::buffer_backing_array_buffer(owner as usize);
+    bytes::no_gc(|_| {
+        assert_eq!(bytes::span(value, false).unwrap().ptr as *const u8, before);
+        assert_eq!(
+            bytes::span(crate::value::js_nanbox_pointer(ab as i64), false)
+                .unwrap()
+                .ptr as *const u8,
+            before
+        );
+    });
+    assert_eq!(buffer::js_buffer_get(owner, 0), 29);
+    full_gc();
+    for pin in &pins {
+        assert_eq!(pin.as_ptr(), before);
+        assert_eq!(unsafe { *pin.as_ptr() }, 29);
+    }
+    drop(pins);
+    assert_eq!(
+        unsafe { (*buffer::store::header(owner as usize))._reserved & 0x3e00 },
+        0
+    );
+}
+
+#[test]
+fn thirty_second_pin_uses_a_hidden_property_and_unpins_cleanly() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_named_mutable_root_scanner(
+        "b4 pinned",
+        crate::gc::pin::scan_pinned_object_roots_mut,
+    );
+    let owner = buffer::js_buffer_alloc(64, 29);
+    let value = crate::value::js_nanbox_pointer(owner as i64);
+    let mut pins: Vec<_> = (0..32).map(|_| bytes::pin(value).unwrap()).collect();
+    assert_eq!(
+        unsafe { buffer::store::bag_get(owner as usize, buffer::store::PIN_OVERFLOW_KEY) },
+        Some(1.0)
+    );
+    assert!(buffer::buffer_own_prop_names(owner as usize).is_empty());
+    drop(pins.pop());
+    assert_eq!(
+        unsafe { buffer::store::bag_get(owner as usize, buffer::store::PIN_OVERFLOW_KEY) },
+        Some(0.0)
+    );
+    drop(pins);
+    assert_eq!(
+        unsafe { (*buffer::store::header(owner as usize))._reserved & 0x3e00 },
+        0
+    );
+}
+
+#[test]
+fn agent_sab_metadata_never_writes_the_process_store_header() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    gc_register_named_mutable_root_scanner(
+        "b4 pinned",
+        crate::gc::pin::scan_pinned_object_roots_mut,
+    );
+    let owner = crate::shared_sab::alloc_shared_sab(16);
+    let block = crate::shared_sab::shared_store_owner(owner as usize).unwrap();
+    let header = unsafe { buffer::store::header(block) };
+    let before = unsafe { *(header as *const u64) };
+    js_shadow_slot_set(0, ptr_bits(owner as usize));
+    let pin = bytes::pin(crate::value::js_nanbox_pointer(owner as i64)).unwrap();
+    buffer::buffer_set_own_prop(owner as usize, "tag", 7.0);
+    full_gc();
+    assert_eq!(unsafe { *(header as *const u64) }, before);
+    assert_eq!(
+        crate::shared_sab::shared_store_owner(owner as usize),
+        Some(block)
+    );
+    drop(pin);
 }

@@ -108,10 +108,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // (#10516), so a guard comparing the tag with the expected kind admits
     // only receivers whose `header + 16 + idx*elem_size` is the runtime
     // `data_ptr`.
-    module.add_external_global("PERRY_TA_KIND_CACHE", "[64 x i64]");
     // #9342: Uint8Array inline-read admission cache (buffer/header.rs).
-    module.add_external_global("PERRY_U8_INLINE_CACHE", "[64 x i64]");
-    module.add_external_global("PERRY_TA_OWN_PROPS_PRESENT", I8);
     module.add_external_global("PERRY_TYPED_NAMED_PROPS_INVALIDATED", I8);
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
     module.declare_function("js_event_target_subclass_init", DOUBLE, &[DOUBLE, I32]);

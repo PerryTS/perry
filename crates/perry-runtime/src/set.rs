@@ -1875,23 +1875,23 @@ pub extern "C" fn js_set_to_array(set: *const SetHeader) -> *mut crate::array::A
     unsafe {
         let set = set_handle.get_raw_const_ptr::<SetHeader>();
         let size = (*set).size as usize;
-        let result = crate::array::js_array_alloc(size as u32);
-        let result_handle = scope.root_raw_mut_ptr(result);
+        let array = crate::array::js_array_alloc(size as u32);
+        let result_handle = scope.root_raw_mut_ptr(array);
         maybe_force_helper_gc_for_test();
         if size > 0 {
             let set = set_handle.get_raw_const_ptr::<SetHeader>();
-            let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            let array = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
             let src = (*set).elements as *const f64;
-            let dst = crate::array::array_elements_ptr(result as *const crate::array::ArrayHeader)
+            let dst = crate::array::array_elements_ptr(array as *const crate::array::ArrayHeader)
                 as *mut f64;
             // GC_STORE_AUDIT(BARRIERED): Set-to-array bulk copy is followed by exact layout/barrier rebuild.
             ptr::copy_nonoverlapping(src, dst, size);
-            (*result).length = size as u32;
-            crate::array::rebuild_array_layout_exact(result);
+            (*array).length = size as u32;
+            crate::array::rebuild_array_layout_exact(array);
         }
-        let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-        mark_set_iterator_array(result);
-        result
+        let array = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        mark_set_iterator_array(array);
+        array
     }
 }
 

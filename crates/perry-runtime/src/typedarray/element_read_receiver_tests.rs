@@ -110,8 +110,8 @@ fn js_typed_array_get_reads_a_plain_array_receiver() {
     let _serialized = crate::array::test_serialize();
     let arr = plain_array(&[99.0, 101.0]);
 
-    // Pre-#8100 both of these were 0.0: `(*ta).length` read the ArrayHeader's
-    // length (2, so the bounds check passed), `(*ta).kind` read the low byte
+    // Pre-#8100 both of these were 0.0: `crate::typedarray::element_length(ta)` read the ArrayHeader's
+    // length (2, so the bounds check passed), `crate::typedarray::element_kind(ta)` read the low byte
     // of element 0's NaN box (0 == KIND_INT8) and `elem_size` the next (0).
     assert_eq!(js_typed_array_get(as_typed(arr), 0), 99.0);
     assert_eq!(js_typed_array_get(as_typed(arr), 1), 101.0);
@@ -400,7 +400,6 @@ fn uint8_helpers_still_serve_a_uint8_clamped_array() {
 /// Elements are written first, so the payload is a real per-kind lane store.
 fn header_only_typed_array(kind: u8, values: &[f64]) -> *mut TypedArrayHeader {
     let ta = typed(kind, values);
-    unregister_typed_array(ta);
     ta
 }
 
@@ -479,7 +478,7 @@ fn js_typed_array_index_get_dynamic_still_reads_a_uint8array_buffer_owner() {
     // the typed-array lane reader would answer something other than 250.
     let buf = crate::buffer::buffer_alloc(3);
     unsafe {
-        (*buf).length = 3;
+        crate::buffer::store::set_length(buf as usize, 3);
     }
     crate::buffer::js_buffer_set(buf, 0, 250);
     crate::buffer::js_buffer_set(buf, 2, 7);

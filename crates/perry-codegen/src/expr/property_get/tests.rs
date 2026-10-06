@@ -1897,11 +1897,11 @@ fn guarded_length_reads_admit_byte_views_and_use_a_pooled_cold_key() {
         .unwrap_or_else(|| panic!("expected the typed metadata guard:\n{ir}"));
     let typed = typed.split("\n\n").next().unwrap();
     assert!(
-        typed.contains(", 10") && typed.contains(", 26"),
+        typed.contains(", 64") && typed.contains(", 76"),
         "Buffer and Uint8Array type bytes must be admitted:\n{typed}"
     );
     assert!(
-        typed.contains("@PERRY_TYPED_NAMED_PROPS_INVALIDATED"),
+        ir.contains("@PERRY_TYPED_NAMED_PROPS_INVALIDATED") && ir.contains("plen.byte_header"),
         "metadata overrides must withdraw the proof:\n{typed}"
     );
     assert!(!ir.contains("call double @js_value_length_property_ic_f64"));

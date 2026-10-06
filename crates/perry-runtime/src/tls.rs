@@ -688,7 +688,10 @@ pub unsafe fn tls_legacy_certificate_object(der: &[u8], detailed: bool) -> f64 {
         let ptr = JSValue::from_bits(raw.to_bits())
             .as_pointer::<crate::buffer::BufferHeader>()
             .cast_mut();
-        *crate::buffer::buffer_data_mut(ptr) ^= 1;
+        crate::buffer::bytes::no_gc(|scope| {
+            crate::buffer::bytes::bytes_mut(crate::value::js_nanbox_pointer(ptr as i64), scope)
+                .unwrap()[0] ^= 1
+        });
     }
     set_rooted_object_field(&obj, "raw", raw);
     set_rooted_object_field(&obj, "valid_from", string_value(""));

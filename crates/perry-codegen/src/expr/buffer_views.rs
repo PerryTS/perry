@@ -4,7 +4,7 @@ use crate::native_value::{
     AliasState, BoundsState, BufferElem, BufferIndexUnit, BufferViewPointerState, BufferViewSlot,
     LengthSource, LoweredValue, MaterializationReason, NativeOwnedViewFact,
 };
-use crate::types::{I32, I64, I8, PTR};
+use crate::types::{I32, I64, PTR};
 
 use super::{unbox_to_i64, FnCtx};
 
@@ -373,7 +373,14 @@ pub(crate) fn update_buffer_view_for_assignment(
         let blk = ctx.block();
         let handle = unbox_to_i64(blk, lowered_value);
         let handle_ptr = blk.inttoptr(I64, &handle);
-        let data_ptr = blk.gep(I8, &handle_ptr, &[(I32, "8")]);
+        let data_ptr = blk.call(
+            PTR,
+            "js_native_buffer_data_ptr",
+            &[(crate::types::DOUBLE, lowered_value)],
+        );
+        let len = blk.call(I32, "js_buffer_length", &[(PTR, &handle_ptr)]);
+        let length_slot = ctx.func.alloca_entry(I32);
+        ctx.block().store(I32, &len, &length_slot);
         // Reuse the binding's own slot only when no OTHER view reads it: a
         // same-storage alias (`alias_buffer_view_slot`) shares the slot, and
         // overwriting it would point that alias at this new buffer.
@@ -392,13 +399,13 @@ pub(crate) fn update_buffer_view_for_assignment(
             id,
             BufferViewSlot {
                 data_slot,
-                length_slot: None,
+                length_slot: Some(length_slot),
                 scope_idx: None,
                 elem: BufferElem::U8,
                 element_width_bytes: 1,
                 index_unit: BufferIndexUnit::Byte,
                 view_byte_offset: Some(0),
-                length_offset_from_data: -8,
+                length_offset_from_data: 0,
                 alias: AliasState::MayAlias,
                 length_source: Some(LengthSource::Unknown),
                 native_owned: None,

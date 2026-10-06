@@ -77,13 +77,8 @@ pub const GC_TYPE_CLOSURE: u8 = 4;
 /// bytes of the two BYTE-VIEW buffer brands, a Node `Buffer` and a
 /// `BufferHeader`-backed `Uint8Array` (#10694: a buffer's flavor is its type
 /// byte). Emitted byte-access guards accept exactly these two.
-pub const GC_TYPE_BUFFER: u8 = 10;
-pub const GC_TYPE_BUFFER_UINT8ARRAY: u8 = 26;
-/// A buffer view stores its resolved native byte pointer at payload +8.
-/// The backing GC edge remains traced by the buffer descriptor. This bit
-/// never admits a view to the owning-buffer inline-storage cache.
-pub const GC_BUFFER_VIEW_DATA: u16 = 0x100;
-pub const BUFFER_VIEW_DATA_OFFSET: usize = 8;
+pub const GC_TYPE_BUFFER: u8 = 0x4c;
+pub const GC_TYPE_BUFFER_UINT8ARRAY: u8 = 0x40;
 /// Header-less symbols must be screened before trusting a buffer layout.
 pub const SYMBOL_HEADER_MAGIC: u32 = 0x5359_4D42;
 /// `gc::GC_FLAG_FORWARDED` (GcHeader byte 1): an evacuated from-space stub.
@@ -736,8 +731,18 @@ pub const PACKED_ADD_CONSTFN_SLOT: u64 = 1 << 14;
 pub const CLOSURE_CAPTURES_THIS_FLAG: u32 = 0x8000_0000;
 pub const CLOSURE_NO_THIS_REBIND_FLAG: u32 = 0x4000_0000;
 
-/// Numeric typed-array resolved ArrayBuffer storage contract.
-pub const TA_STORAGE_RESOLVED: u8 = 2;
-pub const TA_DATA_OFFSET: usize = 16;
+// Unified byte cell: the type byte carries the element brand and view role.
+pub const BYTES_LEN: usize = 0;
+pub const BYTES_AUX: usize = 4;
+pub const BYTES_LINK: usize = 8;
+pub const BYTES_STORE: usize = 16;
+pub const BYTES_TYPE_BASE: u8 = 0x40;
+pub const BYTES_TYPE_VIEW: u8 = 0x20;
+pub const BYTES_TYPE_BRAND_MASK: u8 = 0x1f;
+pub const BYTES_OUT_OF_LINE: u16 = 1 << 7;
+pub const BYTES_LENGTH_TRACKING: u16 = 1 << 7;
+pub const BYTES_RESIZABLE: u16 = 1 << 8;
+pub const BYTES_DETACHED: u16 = 1 << 14;
+pub const BYTES_ELEMENT_SHIFT: [u8; 19] = [0, 0, 0, 1, 1, 2, 2, 1, 2, 3, 3, 3, 0, 0, 0, 0, 0, 0, 0];
 
 pub mod native_class_ids;

@@ -610,12 +610,8 @@ mod tests {
     fn payload_bytes_preserves_uint8array_binary_data() {
         let expected = [0, 127, 128, 255];
         let buffer = crate::buffer::js_uint8array_alloc(expected.len() as i32);
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                expected.as_ptr(),
-                crate::buffer::buffer_data_mut(buffer),
-                expected.len(),
-            );
+        for (i, byte) in expected.iter().enumerate() {
+            crate::buffer::js_buffer_set(buffer, i as i32, *byte as i32);
         }
         let value = f64::from_bits(JSValue::pointer(buffer as *const u8).bits());
         assert_eq!(payload_bytes(value).unwrap(), expected);

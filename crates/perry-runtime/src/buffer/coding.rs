@@ -59,15 +59,20 @@ const HEX_ENCODE_TABLE: &[u8; 16] = b"0123456789abcdef";
 #[inline]
 pub fn hex_decode_into_buffer(input: &[u8]) -> *mut BufferHeader {
     let max_out = input.len() / 2;
-    let buf = buffer_alloc(max_out as u32);
+    let buf = super::pool::copy(max_out as u32);
     if max_out == 0 {
         unsafe {
-            (*buf).length = 0;
+            super::store::set_length(buf as usize, 0);
         }
         return buf;
     }
     unsafe {
-        let dst = buffer_data_mut(buf);
+        super::store::set_length(buf as usize, max_out as u32);
+    }
+    super::bytes::no_gc(|scope| unsafe {
+        let dst = super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+            .unwrap()
+            .as_mut_ptr();
         let mut written = 0usize;
         let mut i = 0usize;
         let n = input.len() & !1; // pair count (drop trailing odd byte, matches Node)
@@ -84,8 +89,8 @@ pub fn hex_decode_into_buffer(input: &[u8]) -> *mut BufferHeader {
             }
             i += 2;
         }
-        (*buf).length = written as u32;
-    }
+        super::store::set_length(buf as usize, written as u32);
+    });
     buf
 }
 
@@ -130,15 +135,20 @@ pub fn hex_encode_into_string(input: &[u8]) -> *mut StringHeader {
 #[inline]
 pub fn base64_decode_into_buffer(input: &[u8]) -> *mut BufferHeader {
     let max_out = input.len().saturating_mul(3) / 4 + 3;
-    let buf = buffer_alloc(max_out as u32);
+    let buf = super::pool::copy(max_out as u32);
     if input.is_empty() {
         unsafe {
-            (*buf).length = 0;
+            super::store::set_length(buf as usize, 0);
         }
         return buf;
     }
     unsafe {
-        let dst = buffer_data_mut(buf);
+        super::store::set_length(buf as usize, max_out as u32);
+    }
+    super::bytes::no_gc(|scope| unsafe {
+        let dst = super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+            .unwrap()
+            .as_mut_ptr();
         let mut written = 0usize;
 
         // Fast path: 4-byte chunks while all four bytes decode cleanly.
@@ -197,8 +207,8 @@ pub fn base64_decode_into_buffer(input: &[u8]) -> *mut BufferHeader {
                 accum &= (1 << bits) - 1;
             }
         }
-        (*buf).length = written as u32;
-    }
+        super::store::set_length(buf as usize, written as u32);
+    });
     buf
 }
 
@@ -304,10 +314,11 @@ pub fn base64url_encode_into_string(input: &[u8]) -> *mut StringHeader {
 // `*_into_buffer` / `*_into_string` variants above.
 pub fn decode_hex(input: &[u8]) -> Vec<u8> {
     let buf = hex_decode_into_buffer(input);
-    unsafe {
-        let n = (*buf).length as usize;
-        std::slice::from_raw_parts(buffer_data(buf), n).to_vec()
-    }
+    super::bytes::no_gc(|scope| {
+        super::bytes::bytes(crate::value::js_nanbox_pointer(buf as i64), scope)
+            .unwrap()
+            .to_vec()
+    })
 }
 
 #[cfg(test)]
@@ -323,10 +334,11 @@ pub fn encode_hex(input: &[u8]) -> Vec<u8> {
 
 pub fn decode_base64(input: &[u8]) -> Vec<u8> {
     let buf = base64_decode_into_buffer(input);
-    unsafe {
-        let n = (*buf).length as usize;
-        std::slice::from_raw_parts(buffer_data(buf), n).to_vec()
-    }
+    super::bytes::no_gc(|scope| {
+        super::bytes::bytes(crate::value::js_nanbox_pointer(buf as i64), scope)
+            .unwrap()
+            .to_vec()
+    })
 }
 
 #[cfg(test)]

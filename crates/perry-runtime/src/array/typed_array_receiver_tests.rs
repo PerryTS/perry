@@ -413,27 +413,19 @@ fn uint8_buffer(values: &[f64]) -> *mut ArrayHeader {
 }
 
 #[test]
-fn a_new_uint8array_is_a_buffer_not_a_registry_typed_array() {
+fn a_new_uint8array_has_the_common_byte_cell_header() {
     let _serialized = crate::array::test_serialize();
     let buf = uint8_buffer(&[1.0, 2.0, 3.0, 4.0]);
     let addr = buf as usize;
 
-    // This is the precondition the Buffer arm exists for. If it ever flips —
-    // `new Uint8Array` starting to produce a registry typed array — the arm
-    // becomes redundant and `typed_array_receiver` covers this shape, so this
-    // failing is a signal to re-read the constructor, not to delete the test.
-    assert!(
-        crate::buffer::is_registered_buffer(addr),
-        "new Uint8Array([…]) must be a registered buffer"
+    assert!(crate::buffer::is_registered_buffer(addr));
+    assert_eq!(
+        crate::typedarray::lookup_typed_array_kind(addr),
+        Some(crate::typedarray::KIND_UINT8)
     );
     assert!(
-        crate::typedarray::lookup_typed_array_kind(addr).is_none(),
-        "…and NOT in the typed-array registry, which is why \
-         typed_array_receiver cannot answer for it"
-    );
-    assert!(
-        crate::array::header::typed_array_receiver(buf).is_none(),
-        "typed_array_receiver is registry-backed, so it must answer None here"
+        crate::array::header::typed_array_receiver(buf).is_some(),
+        "the common header admits Uint8Array without a registry"
     );
     // …and the shared funnel still rejects it, so a post-clean branch would be
     // just as unreachable as it is for a real GC_TYPE_TYPED_ARRAY.
@@ -1315,7 +1307,7 @@ fn the_buffer_search_arm_declines_array_buffer_and_data_view_receivers() {
     let ab = crate::buffer::buffer_alloc(4);
     unsafe {
         (*ab).length = 4;
-        *crate::buffer::buffer_data_mut(ab) = 44;
+        crate::buffer::js_buffer_set(ab, 0, 44);
     }
     crate::buffer::mark_as_array_buffer(ab as usize);
     assert!(

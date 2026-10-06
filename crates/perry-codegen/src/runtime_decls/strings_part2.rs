@@ -118,7 +118,6 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // #9342: priming slow arm of the inline Uint8Array byte read
     // (expr/u8_buffer_read.rs); delegates to js_uint8array_index_get_value.
     module.declare_function("js_u8_buffer_read_f64", DOUBLE, &[I64, I32]);
-    module.declare_function("js_u8_resolve_read_data", I64, &[DOUBLE]);
     module.declare_function("js_ta_read_receiver_is_kind", I32, &[DOUBLE, I32]);
     // #2063: string / dynamic-key `ta[key]` [[Get]] dispatcher (canonical
     // numeric index → element, else ordinary named-property [[Get]]).

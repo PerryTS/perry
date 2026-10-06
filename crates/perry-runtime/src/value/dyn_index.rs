@@ -148,7 +148,7 @@ unsafe fn canonical_buffer_index(key_ptr: *const crate::StringHeader) -> Option<
 #[inline(never)]
 fn cached_u8_index_get(addr: usize, index: f64) -> Option<f64> {
     let idx = finite_nonnegative_i32_index(index)?;
-    crate::buffer::cached_u8_read(addr, idx).map(f64::from)
+    crate::buffer::admitted_u8_read(addr, idx).map(f64::from)
 }
 
 /// #10515: the cache-hit store arm of `js_dyn_index_set_strict`. Only a
@@ -163,7 +163,7 @@ fn cached_u8_index_set(addr: usize, index: f64, value: f64) -> bool {
     let Some(idx) = finite_nonnegative_i32_index(index) else {
         return false;
     };
-    crate::buffer::cached_u8_write(addr, idx, crate::typedarray::jsvalue_to_uint8(value))
+    crate::buffer::admitted_u8_write(addr, idx, crate::typedarray::jsvalue_to_uint8(value))
 }
 
 /// Tag-aware dynamic index dispatch for `obj[key]` where `obj` has unknown
@@ -308,10 +308,8 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // canonical in-bounds index answers from the inline-access cache instead
     // of the buffer-registry probes below. Placed where buffers are handled so
     // no other receiver pays for it.
-    if crate::buffer::u8_inline_cache_hit(raw_ptr) {
-        if let Some(byte) = cached_u8_index_get(raw_ptr, index) {
-            return byte;
-        }
+    if let Some(byte) = cached_u8_index_get(raw_ptr, index) {
+        return byte;
     }
     // #8149: an `ArrayBuffer` / `SharedArrayBuffer` / `DataView` is a registered
     // buffer too, but it is NOT an integer-indexed exotic object — node answers
@@ -745,7 +743,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     // the buffer-registry probes below. Only a Number: any other value's
     // ToNumber may run user code, which the full path orders against the
     // bounds check.
-    if crate::buffer::u8_inline_cache_hit(raw_ptr) && cached_u8_index_set(raw_ptr, index, value) {
+    if cached_u8_index_set(raw_ptr, index, value) {
         return value;
     }
     // #8149: an index STORE on an `ArrayBuffer` / `SharedArrayBuffer` /

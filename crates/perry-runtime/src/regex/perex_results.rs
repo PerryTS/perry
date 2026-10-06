@@ -37,11 +37,11 @@ pub(super) fn materialize(
     };
     #[cfg(test)]
     super::perex_api::before_result_alloc();
-    let result =
+    let array =
         crate::array::js_array_alloc_named_props_reserved(captures.len() as u32, result_keys);
-    let result = scope.root_raw_mut_ptr(result);
-    result.with_mut_ptr::<ArrayHeader, _>(|result| unsafe {
-        (*result).length = captures.len() as u32;
+    let array = scope.root_raw_mut_ptr(array);
+    array.with_mut_ptr::<ArrayHeader, _>(|array| unsafe {
+        (*array).length = captures.len() as u32;
     });
     for (index, capture) in captures.iter().enumerate() {
         let value = if let Some(span) = capture {
@@ -51,8 +51,8 @@ pub(super) fn materialize(
             crate::value::TAG_UNDEFINED
         };
         // Re-read after `copy_span`, which allocates; the store itself does not.
-        result.with_mut_ptr::<ArrayHeader, _>(|result| unsafe {
-            crate::array::store_array_slot(result, index, value);
+        array.with_mut_ptr::<ArrayHeader, _>(|array| unsafe {
+            crate::array::store_array_slot(array, index, value);
         });
     }
     let indices = if has_indices {
@@ -120,7 +120,7 @@ pub(super) fn materialize(
         let key = copy_name(program, name, budget, OUTPUT_BYTES, QUANTUM, poll)?;
         let key = scope.root_string_ptr(key);
         for (owner, array) in [
-            (groups.as_ref(), Some(&result)),
+            (groups.as_ref(), Some(&array)),
             (index_groups.as_ref(), indices.as_ref()),
         ] {
             if let (Some(owner), Some(array)) = (owner, array) {
@@ -161,8 +161,8 @@ pub(super) fn materialize(
         });
     }
     let value_count = result_keys.keys().len();
-    result.with_mut_ptr::<ArrayHeader, _>(|result| unsafe {
-        crate::array::array_named_props_install_inline(result, &values[..value_count]);
+    array.with_mut_ptr::<ArrayHeader, _>(|array| unsafe {
+        crate::array::array_named_props_install_inline(array, &values[..value_count]);
     });
     if let Some(indices) = indices.as_ref() {
         let groups_value = index_groups.as_ref().map_or(
@@ -176,8 +176,5 @@ pub(super) fn materialize(
     let groups = groups.as_ref().map_or(std::ptr::null_mut(), |g| {
         crate::value::js_nanbox_get_pointer(g.get_nanbox_f64()) as *mut ObjectHeader
     });
-    Ok((
-        result.with_mut_ptr::<ArrayHeader, _>(|result| result),
-        groups,
-    ))
+    Ok((array.with_mut_ptr::<ArrayHeader, _>(|array| array), groups))
 }

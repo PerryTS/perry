@@ -20,11 +20,11 @@ pub extern "C" fn js_typed_array_join(
         return js_string_from_bytes(b"".as_ptr(), 0);
     }
     unsafe {
-        let len = (*ta).length as usize;
+        let len = crate::typedarray::element_length(ta) as usize;
         if len == 0 {
             return js_string_from_bytes(ptr::null(), 0);
         }
-        let kind = (*ta).kind;
+        let kind = crate::typedarray::element_kind(ta);
         let sep_str = if separator.is_null() {
             ","
         } else {
@@ -83,8 +83,8 @@ pub extern "C" fn js_typed_array_slice(
         return typed_array_alloc(KIND_FLOAT64, 0);
     }
     unsafe {
-        let kind = (*ta).kind;
-        let len = (*ta).length as i32;
+        let kind = crate::typedarray::element_kind(ta);
+        let len = crate::typedarray::element_length(ta) as i32;
         let start_idx = if start < 0 {
             (len + start).max(0) as u32
         } else {
@@ -127,7 +127,7 @@ pub extern "C" fn js_typed_array_reverse(ta: *mut TypedArrayHeader) -> *mut Type
         return ta;
     }
     unsafe {
-        let len = (*ta).length as usize;
+        let len = crate::typedarray::element_length(ta) as usize;
         if len <= 1 {
             return ta;
         }
@@ -162,10 +162,10 @@ pub extern "C" fn js_typed_array_fill(
         return ta;
     }
     unsafe {
-        let len = (*ta).length as isize;
+        let len = crate::typedarray::element_length(ta) as isize;
         // Spec order: convert `value` first (its `valueOf`/`ToBigInt` runs before
         // the index args are coerced), then `ToIntegerOrInfinity` each index.
-        let v = bigint::coerce_for_kind((*ta).kind, value);
+        let v = bigint::coerce_for_kind(crate::typedarray::element_kind(ta), value);
         // `ToIntegerOrInfinity` + RelativeIndex clamp. `jsvalue_to_f64` performs
         // `ToNumber` (so `null` → 0, `true` → 1, an object → its `valueOf`, a
         // numeric string → its value); `NaN`/`undefined` → 0, ±Infinity saturate
@@ -225,8 +225,8 @@ pub extern "C" fn js_typed_array_subarray(
         return typed_array_alloc(KIND_FLOAT64, 0);
     }
     unsafe {
-        let kind = (*ta).kind;
-        let len = (*ta).length as i32;
+        let kind = crate::typedarray::element_kind(ta);
+        let len = crate::typedarray::element_length(ta) as i32;
         // `ToIntegerOrInfinity` + RelativeIndex clamp. `js_number_coerce`
         // performs `ToNumber` (running a `valueOf`/`Symbol.toPrimitive`, which
         // may throw) — done BEFORE the species lookup, per spec order.

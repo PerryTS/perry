@@ -132,10 +132,11 @@ unsafe fn append_one_blob_part(part: f64, out: &mut Vec<u8>) {
         }
         // BufferHeader (Buffer / Uint8Array / ArrayBuffer)?
         if perry_runtime::buffer::is_registered_buffer(addr) {
-            let buf = addr as *const perry_runtime::buffer::BufferHeader;
-            let len = (*buf).length as usize;
-            let data = perry_runtime::buffer::buffer_data(buf);
-            out.extend_from_slice(std::slice::from_raw_parts(data, len));
+            perry_runtime::buffer::bytes::no_gc(|scope| {
+                if let Ok(bytes) = perry_runtime::buffer::bytes::bytes(part, scope) {
+                    out.extend_from_slice(bytes);
+                }
+            });
             return;
         }
     }

@@ -4,65 +4,74 @@ use super::*;
 // Numeric read/write helpers
 // ---------------------------------------------------------------------
 
-#[inline]
-fn buffer_slice_at<'a>(buf: *const BufferHeader, offset: i32, n: usize) -> Option<&'a [u8]> {
-    if buf.is_null() || offset < 0 {
-        return None;
-    }
-    unsafe {
-        let len = (*buf).length as usize;
-        let off = offset as usize;
-        if off.checked_add(n)? > len {
-            return None;
-        }
-        Some(std::slice::from_raw_parts(buffer_data(buf).add(off), n))
+struct NumericBytes {
+    data: [u8; 8],
+    len: usize,
+}
+impl std::ops::Deref for NumericBytes {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        &self.data[..self.len]
     }
 }
 
 #[inline]
-fn buffer_slice_at_or_throw<'a>(buf: *const BufferHeader, offset: i32, n: usize) -> &'a [u8] {
+fn buffer_slice_at(buf: *const BufferHeader, offset: i32, n: usize) -> Option<NumericBytes> {
+    if buf.is_null() || offset < 0 || n > 8 {
+        return None;
+    }
+    super::bytes::no_gc(|scope| {
+        let value = crate::value::js_nanbox_pointer(buf as i64);
+        let source = super::bytes::bytes(value, scope).ok()?;
+        let off = offset as usize;
+        let source = source.get(off..off.checked_add(n)?)?;
+        let mut result = NumericBytes {
+            data: [0; 8],
+            len: n,
+        };
+        result.data[..n].copy_from_slice(source);
+        Some(result)
+    })
+}
+
+#[inline]
+fn buffer_slice_at_or_throw(buf: *const BufferHeader, offset: i32, n: usize) -> NumericBytes {
     buffer_slice_at(buf, offset, n).unwrap_or_else(|| throw_out_of_range())
 }
 
 #[inline]
-fn buffer_slice_at_or_throw_bounds<'a>(
+fn buffer_slice_at_or_throw_bounds(
     buf: *const BufferHeader,
     offset: i32,
     n: usize,
-) -> &'a [u8] {
+) -> NumericBytes {
     buffer_slice_at(buf, offset, n).unwrap_or_else(|| throw_buffer_out_of_bounds())
 }
 
 #[inline]
-fn buffer_slice_at_mut<'a>(buf: *mut BufferHeader, offset: i32, n: usize) -> Option<&'a mut [u8]> {
-    if buf.is_null() || offset < 0 {
-        return None;
-    }
-    unsafe {
-        let len = (*buf).length as usize;
-        let off = offset as usize;
-        if off.checked_add(n)? > len {
-            return None;
-        }
-        Some(std::slice::from_raw_parts_mut(
-            buffer_data_mut(buf).add(off),
-            n,
-        ))
-    }
-}
-
-#[inline]
-fn buffer_slice_at_mut_or_throw<'a>(buf: *mut BufferHeader, offset: i32, n: usize) -> &'a mut [u8] {
-    buffer_slice_at_mut(buf, offset, n).unwrap_or_else(|| throw_out_of_range())
-}
-
-#[inline]
-fn buffer_slice_at_mut_or_throw_bounds<'a>(
+fn buffer_write_at(
     buf: *mut BufferHeader,
     offset: i32,
     n: usize,
-) -> &'a mut [u8] {
-    buffer_slice_at_mut(buf, offset, n).unwrap_or_else(|| throw_buffer_out_of_bounds())
+    bounds_error: bool,
+    f: impl FnOnce(&mut [u8]),
+) {
+    let result = super::bytes::no_gc(|scope| unsafe {
+        if buf.is_null() || offset < 0 {
+            return None;
+        }
+        let value = crate::value::js_nanbox_pointer(buf as i64);
+        let bytes = super::bytes::bytes_mut(value, scope).ok()?;
+        let off = offset as usize;
+        f(bytes.get_mut(off..off.checked_add(n)?)?);
+        Some(())
+    });
+    if result.is_none() {
+        if bounds_error {
+            throw_buffer_out_of_bounds();
+        }
+        throw_out_of_range();
+    }
 }
 
 fn throw_range_error_code(code: &[u8], message: &[u8]) -> ! {
@@ -247,116 +256,130 @@ pub extern "C" fn js_buffer_read_double_le(buf_ptr: f64, offset: i32) -> f64 {
 pub extern "C" fn js_buffer_write_uint8(buf_ptr: f64, value: f64, offset: i32) {
     let value = checked_uint_write_value(value, 8);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, 1);
-    s[0] = value as u8;
+    buffer_write_at(buf, offset, 1, false, |s| {
+        s[0] = value as u8;
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_int8(buf_ptr: f64, value: f64, offset: i32) {
     let value = checked_int_write_value(value, 8);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, 1);
-    s[0] = value as i8 as u8;
+    buffer_write_at(buf, offset, 1, false, |s| {
+        s[0] = value as i8 as u8;
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_uint16_be(buf_ptr: f64, value: f64, offset: i32) {
     let value = checked_uint_write_value(value, 16);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, 2);
-    let bytes = (value as u16).to_be_bytes();
-    s[0] = bytes[0];
-    s[1] = bytes[1];
+    buffer_write_at(buf, offset, 2, false, |s| {
+        let bytes = (value as u16).to_be_bytes();
+        s[0] = bytes[0];
+        s[1] = bytes[1];
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_uint16_le(buf_ptr: f64, value: f64, offset: i32) {
     let value = checked_uint_write_value(value, 16);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, 2);
-    let bytes = (value as u16).to_le_bytes();
-    s[0] = bytes[0];
-    s[1] = bytes[1];
+    buffer_write_at(buf, offset, 2, false, |s| {
+        let bytes = (value as u16).to_le_bytes();
+        s[0] = bytes[0];
+        s[1] = bytes[1];
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_int16_be(buf_ptr: f64, value: f64, offset: i32) {
     let value = checked_int_write_value(value, 16);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, 2);
-    s.copy_from_slice(&(value as i16).to_be_bytes());
+    buffer_write_at(buf, offset, 2, false, |s| {
+        s.copy_from_slice(&(value as i16).to_be_bytes());
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_int16_le(buf_ptr: f64, value: f64, offset: i32) {
     let value = checked_int_write_value(value, 16);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, 2);
-    s.copy_from_slice(&(value as i16).to_le_bytes());
+    buffer_write_at(buf, offset, 2, false, |s| {
+        s.copy_from_slice(&(value as i16).to_le_bytes());
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_uint32_be(buf_ptr: f64, value: f64, offset: i32) {
     let value = checked_uint_write_value(value, 32);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, 4);
-    let bytes = (value as u32).to_be_bytes();
-    s[..4].copy_from_slice(&bytes);
+    buffer_write_at(buf, offset, 4, false, |s| {
+        let bytes = (value as u32).to_be_bytes();
+        s[..4].copy_from_slice(&bytes);
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_uint32_le(buf_ptr: f64, value: f64, offset: i32) {
     let value = checked_uint_write_value(value, 32);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, 4);
-    let bytes = (value as u32).to_le_bytes();
-    s[..4].copy_from_slice(&bytes);
+    buffer_write_at(buf, offset, 4, false, |s| {
+        let bytes = (value as u32).to_le_bytes();
+        s[..4].copy_from_slice(&bytes);
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_int32_be(buf_ptr: f64, value: f64, offset: i32) {
     let value = checked_int_write_value(value, 32);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, 4);
-    s[..4].copy_from_slice(&(value as i32).to_be_bytes());
+    buffer_write_at(buf, offset, 4, false, |s| {
+        s[..4].copy_from_slice(&(value as i32).to_be_bytes());
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_int32_le(buf_ptr: f64, value: f64, offset: i32) {
     let value = checked_int_write_value(value, 32);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, 4);
-    s[..4].copy_from_slice(&(value as i32).to_le_bytes());
+    buffer_write_at(buf, offset, 4, false, |s| {
+        s[..4].copy_from_slice(&(value as i32).to_le_bytes());
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_float_be(buf_ptr: f64, value: f64, offset: i32) {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, 4);
-    let bytes = (value as f32).to_be_bytes();
-    s[..4].copy_from_slice(&bytes);
+    buffer_write_at(buf, offset, 4, false, |s| {
+        let bytes = (value as f32).to_be_bytes();
+        s[..4].copy_from_slice(&bytes);
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_float_le(buf_ptr: f64, value: f64, offset: i32) {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, 4);
-    let bytes = (value as f32).to_le_bytes();
-    s[..4].copy_from_slice(&bytes);
+    buffer_write_at(buf, offset, 4, false, |s| {
+        let bytes = (value as f32).to_le_bytes();
+        s[..4].copy_from_slice(&bytes);
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_double_be(buf_ptr: f64, value: f64, offset: i32) {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw_bounds(buf, offset, 8);
-    s[..8].copy_from_slice(&value.to_be_bytes());
+    buffer_write_at(buf, offset, 8, true, |s| {
+        s[..8].copy_from_slice(&value.to_be_bytes());
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_double_le(buf_ptr: f64, value: f64, offset: i32) {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    let s = buffer_slice_at_mut_or_throw_bounds(buf, offset, 8);
-    s[..8].copy_from_slice(&value.to_le_bytes());
+    buffer_write_at(buf, offset, 8, true, |s| {
+        s[..8].copy_from_slice(&value.to_le_bytes());
+    });
 }
 
 // ---- Variable byteLength read/write (1..=6) ----
@@ -451,10 +474,11 @@ pub extern "C" fn js_buffer_write_uint_be(buf_ptr: f64, value: f64, offset: i32,
     let v = checked_uint_write_value(value, (byte_length as u32) * 8);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     let n = byte_length as usize;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, n);
-    for i in 0..n {
-        s[n - 1 - i] = ((v >> (i * 8)) & 0xFF) as u8;
-    }
+    buffer_write_at(buf, offset, n, false, |s| {
+        for i in 0..n {
+            s[n - 1 - i] = ((v >> (i * 8)) & 0xFF) as u8;
+        }
+    });
 }
 
 #[no_mangle]
@@ -465,10 +489,11 @@ pub extern "C" fn js_buffer_write_uint_le(buf_ptr: f64, value: f64, offset: i32,
     let v = checked_uint_write_value(value, (byte_length as u32) * 8);
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     let n = byte_length as usize;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, n);
-    for i in 0..n {
-        s[i] = ((v >> (i * 8)) & 0xFF) as u8;
-    }
+    buffer_write_at(buf, offset, n, false, |s| {
+        for i in 0..n {
+            s[i] = ((v >> (i * 8)) & 0xFF) as u8;
+        }
+    });
 }
 
 #[no_mangle]
@@ -479,10 +504,11 @@ pub extern "C" fn js_buffer_write_int_be(buf_ptr: f64, value: f64, offset: i32, 
     let v = checked_int_write_value(value, (byte_length as u32) * 8) as u64;
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     let n = byte_length as usize;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, n);
-    for i in 0..n {
-        s[n - 1 - i] = ((v >> (i * 8)) & 0xFF) as u8;
-    }
+    buffer_write_at(buf, offset, n, false, |s| {
+        for i in 0..n {
+            s[n - 1 - i] = ((v >> (i * 8)) & 0xFF) as u8;
+        }
+    });
 }
 
 #[no_mangle]
@@ -493,10 +519,11 @@ pub extern "C" fn js_buffer_write_int_le(buf_ptr: f64, value: f64, offset: i32, 
     let v = checked_int_write_value(value, (byte_length as u32) * 8) as u64;
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     let n = byte_length as usize;
-    let s = buffer_slice_at_mut_or_throw(buf, offset, n);
-    for i in 0..n {
-        s[i] = ((v >> (i * 8)) & 0xFF) as u8;
-    }
+    buffer_write_at(buf, offset, n, false, |s| {
+        for i in 0..n {
+            s[i] = ((v >> (i * 8)) & 0xFF) as u8;
+        }
+    });
 }
 
 // ---- BigInt 64-bit read/write ----
@@ -541,16 +568,18 @@ pub extern "C" fn js_buffer_read_biguint64_le(buf_ptr: f64, offset: i32) -> f64 
 pub extern "C" fn js_buffer_write_bigint64_be(buf_ptr: f64, value: f64, offset: i32) {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     let val = bigint_value_to_i64(value);
-    let s = buffer_slice_at_mut_or_throw_bounds(buf, offset, 8);
-    s[..8].copy_from_slice(&val.to_be_bytes());
+    buffer_write_at(buf, offset, 8, true, |s| {
+        s[..8].copy_from_slice(&val.to_be_bytes());
+    });
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_write_bigint64_le(buf_ptr: f64, value: f64, offset: i32) {
     let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
     let val = bigint_value_to_i64(value);
-    let s = buffer_slice_at_mut_or_throw_bounds(buf, offset, 8);
-    s[..8].copy_from_slice(&val.to_le_bytes());
+    buffer_write_at(buf, offset, 8, true, |s| {
+        s[..8].copy_from_slice(&val.to_le_bytes());
+    });
 }
 
 #[no_mangle]

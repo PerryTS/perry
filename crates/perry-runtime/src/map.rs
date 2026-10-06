@@ -2733,23 +2733,23 @@ pub extern "C" fn js_map_keys(map: *const MapHeader) -> *mut crate::array::Array
     unsafe {
         let map = map_handle.get_raw_const_ptr::<MapHeader>();
         let size = (*map).size as usize;
-        let result = crate::array::js_array_alloc(size as u32);
-        let result_handle = scope.root_raw_mut_ptr(result);
+        let array = crate::array::js_array_alloc(size as u32);
+        let result_handle = scope.root_raw_mut_ptr(array);
         maybe_force_helper_gc_for_test();
 
         for i in 0..size {
             let map = map_handle.get_raw_const_ptr::<MapHeader>();
             let entries = entries_ptr(map);
             let key = ptr::read(entries.add(i * 2));
-            let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            let array = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
             // GC_STORE_AUDIT(BARRIERED): map keys array slot uses the shared array slot-store helper.
-            crate::array::store_array_slot(result, i, key.to_bits());
-            (*result).length = (i + 1) as u32;
+            crate::array::store_array_slot(array, i, key.to_bits());
+            (*array).length = (i + 1) as u32;
         }
 
-        let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-        mark_map_iterator_array(result);
-        result
+        let array = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        mark_map_iterator_array(array);
+        array
     }
 }
 
@@ -2766,23 +2766,23 @@ pub extern "C" fn js_map_values(map: *const MapHeader) -> *mut crate::array::Arr
     unsafe {
         let map = map_handle.get_raw_const_ptr::<MapHeader>();
         let size = (*map).size as usize;
-        let result = crate::array::js_array_alloc(size as u32);
-        let result_handle = scope.root_raw_mut_ptr(result);
+        let array = crate::array::js_array_alloc(size as u32);
+        let result_handle = scope.root_raw_mut_ptr(array);
         maybe_force_helper_gc_for_test();
 
         for i in 0..size {
             let map = map_handle.get_raw_const_ptr::<MapHeader>();
             let entries = entries_ptr(map);
             let value = ptr::read(entries.add(i * 2 + 1));
-            let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+            let array = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
             // GC_STORE_AUDIT(BARRIERED): map values array slot uses the shared array slot-store helper.
-            crate::array::store_array_slot(result, i, value.to_bits());
-            (*result).length = (i + 1) as u32;
+            crate::array::store_array_slot(array, i, value.to_bits());
+            (*array).length = (i + 1) as u32;
         }
 
-        let result = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-        mark_map_iterator_array(result);
-        result
+        let array = result_handle.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+        mark_map_iterator_array(array);
+        array
     }
 }
 

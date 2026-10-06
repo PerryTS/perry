@@ -407,24 +407,12 @@ pub(crate) fn emit_typed_f64_region_guard(
         let blk = ctx.block();
         let handle = blk.add(I64, &band_offset, "1048576");
         let word = emit_array_guard_word(blk, &handle);
-        // obj_type GC_TYPE_TYPED_ARRAY (11), not forwarded (0x80 in byte 1).
-        let masked = blk.and(I32, &word, "33023"); // 0x80FF
-        let is_ta = blk.icmp_eq(I32, &masked, "11");
-        let kind_addr = blk.add(I64, &handle, "8");
-        let kind_ptr = blk.inttoptr(I64, &kind_addr);
-        let kind = blk.load(I8, &kind_ptr);
-        let is_f64 = blk.icmp_eq(I8, &kind, "7"); // KIND_FLOAT64
-
-        // #10516: the receiver's own storage byte (header byte 10,
-        // `TA_STORAGE_INLINE` = 0) licenses `data == header + 16`. The
-        // process-wide `PERRY_TA_VIEW_GUARD` this used to read no longer
-        // exists, so referencing it left the symbol undefined.
-        let storage_addr = blk.add(I64, &handle, "10");
-        let storage_ptr = blk.inttoptr(I64, &storage_addr);
-        let storage = blk.load(I8, &storage_ptr);
-        let inline_storage = blk.icmp_eq(I8, &storage, "0");
-        let ok = blk.and(I1, &is_ta, &inline_storage);
-        let ok = blk.and(I1, &ok, &is_f64);
+        let masked = blk.and(I32, &word, &(0xffu32 | (1 << 15) | (1 << 23)).to_string());
+        let ok = blk.icmp_eq(
+            I32,
+            &masked,
+            &crate::expr::byte_cell::brand_for_kind(7).to_string(),
+        );
         blk.cond_br(&ok, &len_label, &join_label);
         handle
     };
@@ -439,7 +427,7 @@ pub(crate) fn emit_typed_f64_region_guard(
             let within = blk.fcmp("ole", bound, &len_f);
             fits = blk.and(I1, &fits, &within);
         }
-        let base = blk.add(I64, &handle, "16");
+        let base = blk.add(I64, &handle, &crate::runtime_abi::BYTES_STORE.to_string());
         blk.br(&join_label);
         (fits, base)
     };
