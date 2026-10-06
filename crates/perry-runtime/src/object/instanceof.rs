@@ -700,8 +700,10 @@ pub(crate) fn class_chain_reaches(start: u32, want: u32) -> bool {
 /// declared walk answers: the receiver's shape names its class's prototype
 /// and no declaration prototype was ever relinked (one latch load), or
 /// `want` is reached first.
-/// `want` is a compiled class, or `Object` (its reserved id), whose
-/// constructor is the global one.
+/// The live walk needs `want`'s constructor value: a compiled class's
+/// function object, or the global `Object` for its reserved id. Any other
+/// builtin or synthetic `want` has no class function object, so the declared
+/// walk answers for it.
 #[inline(always)]
 pub(crate) fn relinked_instance_chain_answer(value: f64, start: u32, want: u32) -> Option<bool> {
     let obj = value_addr(value) as *const ObjectHeader;
@@ -748,7 +750,9 @@ pub(crate) fn relinked_object_chain_answer(
 #[inline(never)]
 fn live_chain_answer(value: f64, want: u32) -> Option<bool> {
     const CLASS_ID_OBJECT: u32 = 0xFFFF0050;
-    if want == 0 || (want != CLASS_ID_OBJECT && !super::is_class_id_registered(want)) {
+    let compiled_class = crate::object::class_value::is_compiled_class_id(want)
+        && super::is_class_id_registered(want);
+    if want != CLASS_ID_OBJECT && !compiled_class {
         return None;
     }
     let constructor = if want == CLASS_ID_OBJECT {

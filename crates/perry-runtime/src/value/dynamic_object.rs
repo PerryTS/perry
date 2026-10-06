@@ -938,10 +938,17 @@ mod length_handle_band_tests {
                 37.0,
                 "POINTER_TAG length dispatch must accept a live low macOS mapping"
             );
+            // The raw-bitcast path shares the range gate, but a raw word is
+            // also a subnormal number, so it reads a header only once the
+            // allocator owns it. This private mapping is in range yet unowned.
+            assert!(
+                is_length_heap_addr(addr),
+                "raw-bitcast length dispatch must accept the same address range"
+            );
             assert_eq!(
                 js_value_length_f64(f64::from_bits(addr as u64)),
-                37.0,
-                "raw-bitcast length dispatch must accept the same mapping"
+                0.0,
+                "raw-bitcast length dispatch must not read a header the allocator does not own"
             );
         }
     }

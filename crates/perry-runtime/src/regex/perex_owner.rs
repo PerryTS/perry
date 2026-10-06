@@ -232,8 +232,17 @@ unsafe fn init_program_cell(cell: *mut ProgramCell, words: usize) {
         // GC_STORE_AUDIT(POINTER_FREE): the program cell is a leaf of u32 words; its prefix is a count.
         cell.cast::<u8>().write_bytes(0, payload);
         std::ptr::addr_of_mut!((*cell).word_count).write(words);
-        std::ptr::addr_of_mut!((*cell).witness).write(None);
-        std::ptr::addr_of_mut!((*cell).registers).write(None);
+        // Both options wrap plain integers, so the cleared bytes are a valid
+        // value of each, and rustc tags `None` 0: the clear already wrote
+        // `None`. A typed `write(None)` would copy the whole temporary,
+        // including its uninitialised payload, and an unoptimised build fills
+        // that from the stack, putting residue back into the cell.
+        if (*cell).witness.is_some() {
+            std::ptr::addr_of_mut!((*cell).witness).write(None);
+        }
+        if (*cell).registers.is_some() {
+            std::ptr::addr_of_mut!((*cell).registers).write(None);
+        }
     }
 }
 
