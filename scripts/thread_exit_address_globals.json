@@ -1428,15 +1428,6 @@
    "hook": "invalidate_caches_in_range"
   },
   {
-   "file": "crates/perry-runtime/src/typedarray/mod.rs",
-   "names": [
-    "INLINE_OWNING_U32_CACHE"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Process-global cache of owning-Uint32Array addresses admitted by the codegen inline path; cleared for freed blocks by the same Arena::drop call (#11467).",
-   "hook": "invalidate_caches_in_range"
-  },
-  {
    "file": "crates/perry-runtime/src/dgram_reactor.rs",
    "names": [
     "LIVE"

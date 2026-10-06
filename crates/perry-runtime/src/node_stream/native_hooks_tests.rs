@@ -730,13 +730,19 @@ fn trace_way(way: u8, chunks: &[Vec<u8>]) -> (Vec<u8>, Vec<String>) {
         // pipeline(source, rot)
         _ => {
             let src = scope.root_nanbox_f64(new_source());
-            let mut args = crate::array::js_array_alloc(2);
-            args = crate::array::js_array_push_f64(args, src.get_nanbox_f64());
-            args = crate::array::js_array_push_f64(args, rot.get_nanbox_f64());
-            let done = closure0(crate::fn_info!(on_named, 0), &[name("pipeline-done")]);
-            args = crate::array::js_array_push_f64(args, done);
-            let args = scope.root_raw_mut_ptr(args);
-            js_node_stream_pipeline(args.get_raw_mut_ptr::<crate::array::ArrayHeader>());
+            // `closure0` allocates, so the argument array is rooted before it.
+            let args = scope.root_raw_mut_ptr(crate::array::js_array_alloc(2));
+            let push = |value: f64| {
+                let grown = args.with_mut_ptr(|args| crate::array::js_array_push_f64(args, value));
+                args.set_raw_mut_ptr(grown);
+            };
+            push(src.get_nanbox_f64());
+            push(rot.get_nanbox_f64());
+            push(closure0(
+                crate::fn_info!(on_named, 0),
+                &[name("pipeline-done")],
+            ));
+            args.with_const_ptr(|args| js_node_stream_pipeline(args));
             for c in chunks {
                 js_node_stream_method_push(
                     handle(src.get_nanbox_f64()),

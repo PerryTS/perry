@@ -349,12 +349,6 @@
       "why": "Key includes the runtime SymbolHeader.id: a re-evaluated class expression with computed [Symbol()] members adds entries each time"
     },
     {
-      "file": "crates/perry-runtime/src/object/class_registry/verdict_classes.rs",
-      "name": "VERDICT_CLASSES",
-      "verdict": "open_leak",
-      "why": "Receiver class ids from packed_add store verdicts, including synthetic ids minted per closure; never pruned (small u32s)"
-    },
-    {
       "file": "crates/perry-runtime/src/object/descriptor_state.rs",
       "name": "DECLARED_FIELD_NAME_HASHES",
       "verdict": "bounded_by_program",

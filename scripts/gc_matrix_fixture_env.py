@@ -51,7 +51,7 @@ def parse(text: str) -> str:
         elif key == "PERRY_GC_SCHEDULE_RATE":
             valid = bool(re.fullmatch(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)", value))
             valid = valid and Decimal(0) <= Decimal(value) <= Decimal(1)
-        elif key == "PERRY_GC_PROTECT_FROMSPACE":
+        elif key in ("PERRY_GC_PROTECT_FROMSPACE", "PERRY_GC_PROTECT_OLD_SWEEP"):
             valid = value in ("1", "poison")
         else:
             raise ValueError(f"unsupported GC witness setting {key!r}")
@@ -80,6 +80,8 @@ def self_test() -> None:
         assert fixture_env(arm, "// parity-env: PATH=/tmp/evil") == ""
     budgeted = "PERRY_GC_BUDGETED_OLD_RECLAIM=1 PERRY_GC_MAJOR_PACING_FLOOR_MB=1 PERRY_GC_MAJOR_PACING_GROWTH=1"
     assert parse("// parity-env: " + budgeted + "\n") == budgeted
+    protected = "PERRY_GC_SCHEDULE_SEED=7 PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_PROTECT_OLD_SWEEP=poison"
+    assert parse("// parity-env: " + protected + "\n") == protected
     assert parse("// no metadata\n") == ""
     assert parse("  // parity-env: PERRY_GC_MOVING_LOOP_POLLS=1\n") == "PERRY_GC_MOVING_LOOP_POLLS=1"
     invalid = (
@@ -90,7 +92,8 @@ def self_test() -> None:
         "PERRY_GC_SCHEDULE_SEED=18446744073709551616", "PERRY_GC_SCHEDULE_SEED=-1",
         "PERRY_GC_SCHEDULE_RATE=1", "PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=NaN",
         "PERRY_GC_SCHEDULE_SEED=1 PERRY_GC_SCHEDULE_RATE=1.01", "PERRY_GC_PROTECT_FROMSPACE_DEPTH=0",
-        "PERRY_GC_PROTECT_FROMSPACE_DEPTH=4", "PERRY_GC_BUDGETED_OLD_RECLAIM=0",
+        "PERRY_GC_PROTECT_FROMSPACE_DEPTH=4", "PERRY_GC_PROTECT_OLD_SWEEP=0",
+        "PERRY_GC_PROTECT_OLD_SWEEP=yes", "PERRY_GC_BUDGETED_OLD_RECLAIM=0",
         "PERRY_GC_MAJOR_PACING_GROWTH=0", "PERRY_GC_MAJOR_PACING_FLOOR_MB=1.5",
         "", "PERRY_GC_FORCE_EVACUATE=1\n// parity-env: PERRY_GC_VERIFY_EVACUATION=1",
     )

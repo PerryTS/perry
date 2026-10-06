@@ -19,6 +19,9 @@ extern "C" fn probe_thunk(
 }
 
 const PROP: &str = "__perry_11319_thread_exit_probe";
+/// Deleting a key removes its own value, so the deleted-key record needs a
+/// key of its own for both entries to be live at once.
+const DELETED_PROP: &str = "__perry_11319_thread_exit_deleted_probe";
 
 #[test]
 fn thread_exit_releases_the_threads_closure_side_table_entries() {
@@ -34,7 +37,7 @@ fn thread_exit_releases_the_threads_closure_side_table_entries() {
         // closure, and the side tables follow a moved owner to its new key.
         let owner = || closure.get_raw_mut_ptr::<perry_runtime::ClosureHeader>() as usize;
         c::closure_set_dynamic_prop(owner(), PROP, 7.0);
-        c::closure_mark_key_deleted(owner(), PROP);
+        c::closure_mark_key_deleted(owner(), DELETED_PROP);
         let proto_bits = perry_runtime::JSValue::pointer(
             proto.get_raw_mut_ptr::<perry_runtime::ArrayHeader>() as *const u8,
         )
@@ -43,7 +46,7 @@ fn thread_exit_releases_the_threads_closure_side_table_entries() {
         // The subject must be live before the thread exits, or the absence
         // asserted below proves nothing.
         let set_while_alive = c::closure_has_own_dynamic_prop(owner(), PROP)
-            && c::closure_is_key_deleted(owner(), PROP)
+            && c::closure_is_key_deleted(owner(), DELETED_PROP)
             && c::closure_static_prototype(owner()).is_some();
         (owner(), set_while_alive)
     })
@@ -59,7 +62,7 @@ fn thread_exit_releases_the_threads_closure_side_table_entries() {
         "a dead thread's closure props outlived its heap"
     );
     assert!(
-        !perry_runtime::closure::closure_is_key_deleted(owner, PROP),
+        !perry_runtime::closure::closure_is_key_deleted(owner, DELETED_PROP),
         "a dead thread's deleted-key entry outlived its heap"
     );
     assert!(

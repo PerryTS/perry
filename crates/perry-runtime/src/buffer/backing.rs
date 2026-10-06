@@ -199,7 +199,7 @@ mod tests {
             .join()
             .unwrap();
         }
-        assert_eq!(source_root.get_raw_mut_ptr::<BufferHeader>(), source);
+        source_root.with_mut_ptr(|current: *mut BufferHeader| assert_eq!(current, source));
         assert_eq!(count(), before, "worker exit must release received backing");
     }
 
@@ -321,7 +321,7 @@ mod tests {
         }
         .is_err());
         assert!(!crate::buffer::is_detached_buffer(source as usize));
-        assert_eq!(buffer_data(root.get_raw_mut_ptr::<BufferHeader>()), data);
+        root.with_mut_ptr(|current: *mut BufferHeader| assert_eq!(buffer_data(current), data));
         assert_eq!(unsafe { *data }, 123);
         crate::buffer::detach_array_buffer(source as usize);
         assert_eq!(count(), before);

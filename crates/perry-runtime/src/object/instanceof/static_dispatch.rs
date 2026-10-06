@@ -339,8 +339,12 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
     // Native/exotic subclass instances (typed arrays, ArrayBuffers, boxed
     // primitives, Dates, …) do not carry a Perry `ObjectHeader.class_id`.
     // Their constructor records the distinct newTarget prototype in the
-    // prototype side table instead. Honor that chain for user class ids.
-    if is_class_id_registered(class_id) {
+    // prototype side table instead. Honor that chain for user class ids. A
+    // builtin or synthetic id has no class function object to walk against,
+    // so its own arms below answer.
+    if crate::object::class_value::is_compiled_class_id(class_id)
+        && is_class_id_registered(class_id)
+    {
         let addr = value_addr(value);
         if addr != 0 && super::prototype_chain::object_static_prototype(addr).is_some() {
             let constructor = super::class_constructor_ref_value(class_id);

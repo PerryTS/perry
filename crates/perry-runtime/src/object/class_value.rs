@@ -261,11 +261,19 @@ pub(crate) fn class_value_is_first_evaluation(class_id: u32) -> bool {
 ///
 /// Never collects: callers hold raw receiver pointers across the lookup, so
 /// the old-arena allocation runs under a [`crate::gc::GcSuppressScope`].
+/// Is `class_id` a compiled class's id, the only kind that has a class
+/// function object? Codegen ids start at 1; from `0x7FFF_FF00` up sit the
+/// builtin and synthetic bands, which are registered class ids too.
+#[inline]
+pub(crate) fn is_compiled_class_id(class_id: u32) -> bool {
+    class_id != 0 && class_id < 0x7FFF_FF00
+}
+
 #[cold]
 #[inline(never)]
 fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
     debug_assert!(
-        class_id != 0 && class_id < 0x7FFF_FF00,
+        is_compiled_class_id(class_id),
         "a class function object belongs to a compiled class id, never a builtin or synthetic band: {class_id:#x}"
     );
     let _no_collect = crate::gc::GcSuppressScope::new();

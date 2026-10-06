@@ -532,11 +532,13 @@ mod tests {
             b"defaultMaxListeners".as_ptr(),
             19,
         ));
-        crate::object::js_object_set_field_by_name(
-            crate::value::js_nanbox_get_pointer(child.get_nanbox_f64()) as *mut ObjectHeader,
-            key.get_raw_mut_ptr(),
-            23.0,
-        );
+        key.with_const_ptr(|key| {
+            crate::object::js_object_set_field_by_name(
+                crate::value::js_nanbox_get_pointer(child.get_nanbox_f64()) as *mut ObjectHeader,
+                key,
+                23.0,
+            )
+        });
         assert_eq!(
             crate::closure::closure_get_dynamic_prop(
                 crate::value::js_nanbox_get_pointer(ee.get_nanbox_f64()) as usize,
@@ -548,11 +550,13 @@ mod tests {
             crate::value::js_nanbox_get_pointer(child.get_nanbox_f64()) as usize,
             "defaultMaxListeners"
         ));
-        crate::object::js_object_set_field_by_name(
-            crate::value::js_nanbox_get_pointer(ee.get_nanbox_f64()) as *mut ObjectHeader,
-            key.get_raw_mut_ptr(),
-            before,
-        );
+        key.with_const_ptr(|key| {
+            crate::object::js_object_set_field_by_name(
+                crate::value::js_nanbox_get_pointer(ee.get_nanbox_f64()) as *mut ObjectHeader,
+                key,
+                before,
+            )
+        });
         assert_eq!(
             crate::closure::closure_get_dynamic_prop(
                 crate::value::js_nanbox_get_pointer(ee.get_nanbox_f64()) as usize,
