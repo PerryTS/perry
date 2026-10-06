@@ -2734,6 +2734,15 @@ js_perry_agent_current	i64
 js_perry_agent_post	i32s	ptr,ptr
 js_perry_agent_post_available	i32s	
 js_perry_agent_post_dispatched	i64	
+js_perry_bytes_abi_layout	i64	
+js_perry_bytes_adopt	f64	i32u,ptr,usize,usize,ptr
+js_perry_bytes_borrow	i32s	f64,ptr
+js_perry_bytes_copy	f64	i32u,ptr,usize
+js_perry_bytes_new	f64	i32u,usize,i32u,ptr
+js_perry_bytes_pin	i32s	f64,ptr
+js_perry_bytes_scope_enter	void	
+js_perry_bytes_scope_leave	void	
+js_perry_bytes_unpin	void	i64
 js_perry_embedded_files	ptr	
 js_perry_native_f32	f64	f64
 js_perry_native_f64	f64	f64
@@ -2774,6 +2783,7 @@ js_perry_net_timer_cancel	i32s	i64,ptr
 js_perry_net_timer_park	i32s	i64,ptr
 js_perry_net_transfer	i32s	i64,i32s,ptr
 js_perry_net_write	i32s	i64,ptr,usize,i64,ptr,ptr
+js_perry_payload_abi_layout	i64	
 js_perry_read_embedded	ptr	f64
 js_perry_smtp_add_recipient	void	i64,ptr,usize
 js_perry_smtp_available	i32s	
@@ -2785,6 +2795,11 @@ js_perry_smtp_set_from	void	i64,ptr,usize
 js_perry_smtp_set_message	void	i64,ptr,usize,ptr,usize
 js_perry_smtp_set_server	void	i64,ptr,usize,i16u,i32s,i32s
 js_perry_smtp_submit	i32s	i64,i32s,usize,ptr
+js_perry_stream_abi_layout	i64	
+js_perry_stream_flush	i32s	f64,i32s,f64
+js_perry_stream_init_transform	i32s	f64,f64
+js_perry_stream_init_writable	i32s	f64,f64
+js_perry_stream_queue_immediate	i32s	f64
 js_perry_tui_animated_spinner	i64	f64,i64
 js_perry_tui_app_exit	f64	i64
 js_perry_tui_app_wait_until_exit	f64	i64
@@ -3143,8 +3158,8 @@ js_regexp_exec_get_groups	i64
 js_regexp_exec_get_index	f64	
 js_regexp_get_flags	ptr	ptr
 js_regexp_get_source	ptr	ptr
-js_regexp_new	ptr	ptr,ptr
 js_regexp_literal	ptr	ptr,ptr,i64
+js_regexp_new	ptr	ptr,ptr
 js_regexp_test	i32s	ptr,ptr
 js_regexp_to_string	ptr	ptr
 js_region_guard_pack	i64	i32u,i32u,i64,i64,i64,i64,i64
