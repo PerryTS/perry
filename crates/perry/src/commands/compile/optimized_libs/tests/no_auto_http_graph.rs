@@ -105,14 +105,25 @@ crate-type = ["staticlib"]
     );
     let old_root = std::env::var_os("PERRY_WORKSPACE_ROOT");
     std::env::set_var("PERRY_WORKSPACE_ROOT", workspace.path());
-    let built =
-        super::super::no_auto::build_http_client_pump_stdlib(&[], None, OutputFormat::Json, 0);
+    let built = super::super::no_auto::build_coherent_stdlib(
+        workspace.path().to_path_buf(),
+        &[(
+            "perry-ext-http".to_string(),
+            crate::commands::compile::well_known::ext_staticlib_filename("perry_ext_http", None),
+        )],
+        None,
+        OutputFormat::Json,
+        0,
+        &["external-http-client-pump"],
+        &[],
+    );
     match old_root {
         Some(root) => std::env::set_var("PERRY_WORKSPACE_ROOT", root),
         None => std::env::remove_var("PERRY_WORKSPACE_ROOT"),
     }
     let built = built.expect("HTTP rebuild must preserve runtime default features");
     assert!(built.stdlib.is_file() && built.runtime.is_file());
+    assert_eq!(built.ext_libs.len(), 1);
     assert!(built.ext_libs.iter().all(|p| p.is_file()));
 }
 
