@@ -2,7 +2,7 @@
 
 The owner authorized shipment and accepted the previously measured tsc cycle increase as a stack-home/L1 traffic trade, with a fix-forward follow-up. The requested final pre-PR checks pass.
 
-Source identities: main `4b6f9f75f62314d5b0acb0d37735498f0db6fe42` versus measured implementation `8a2c7041a4d74fd41e2c693e82e52b469577466a`. The branch is rebased onto this freshly fetched main, including RegExp S4.
+Source identities: main `4b6f9f75f62314d5b0acb0d37735498f0db6fe42` versus measured implementation `8a2c7041a4d74fd41e2c693e82e52b469577466a`. These are the source identities for the recorded correctness and measurement runs, including RegExp S4. The final branch is subsequently rebased onto main `81e65f33ebdc72d75431b03427dcbfb2f153d7b1`; the documentation-only correction below does not change rooting semantics.
 
 ## Growing catch snapshots
 
@@ -38,10 +38,25 @@ Five interleaved pairs per workload per THP mode, core 59, ASLR disabled, inside
 
 Tsc has three copying minors and zero full collections on both arms in both modes. Cycles and L1 misses are retained in the raw spot-check data; this short run does not replace the previously accepted cycle comparison.
 
-## Scope and additional lint finding
+## Scope and documentation correction
 
-Version metadata, translation catalogs and `docs/engine-plan.md` match main exactly. Workflow switch removals and all statepoint audit files remain.
+Version metadata matches current main exactly. Workflow switch removals and all statepoint audit files remain. The coordinator corrected the earlier instruction to strip the documentation changes: those files must stop advertising the removed switches.
 
-Restoring the catalogs and engine plan exposes stale historical switch references to `scripts/check_gc_env_knobs.py`; that additional documentation check fails. The checker was neither weakened nor silenced. This finding was raised with the owner while the requested checks continued; a coordinator decision on the documentation scope remains pending.
+The two historical benchmark labels in `docs/engine-plan.md` were updated from current main, preserving the measurements without advertising a deleted switch. Catalogs were also restored from current main, then regenerated from the current English sources with `docs/i18n.sh extract` and `sync`, using the repository's pinned mdbook 0.5.4, i18n helpers 0.4.0 and gettext 0.21. Main's catalogs were stale relative to its newer sources, so regeneration includes those source updates rather than reverting them.
+
+Gettext retained obsolete entries and fuzzy translations containing the removed switch names. Gettext's `msggrep` removes only entries containing those names; a subsequent repository sync restores current source entries with English fallback where their translations require an update. Unrelated obsolete entries and translations are retained. No old branch catalog was copied, and the env-knob checker remains unchanged.
+
+| Documentation correction check | Result |
+|---|---|
+| Env-knob drift gate and self-test | pass |
+| Ten catalog format checks | pass |
+| Repeat extract/sync freshness | identical catalog hashes |
+| English and ten translated documentation builds | pass |
+| Documentation links and checker self-test | pass |
+| I18n toolchain tests | four pass |
+| fmt | pass |
+| Release build sanity: compiler and static runtime/stdlib wrappers | `cargo check` passes with eight jobs on CPUs 0–55 |
+
+Only documentation and generated catalogs changed in this correction, so the previously recorded runtime, GC, dominance and witness results were not rerun. Rooting semantics remain unchanged. Scripts and receipts for this correction are in `/root/claude-lanes/sp-work/docs-fix`.
 
 Raw scripts, measurements, diagnostics and the verified binary archive are preserved in `/root/claude-lanes/sp-work/final-pr`. Owned build targets were removed. No push or PR was performed.

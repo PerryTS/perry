@@ -151,9 +151,9 @@
   },
   "additional_documentation_lint": {
     "gate": "scripts/check_gc_env_knobs.py",
-    "exit": 1,
-    "cause": "Main translation catalogs and engine-plan retain references to switches deleted by this lane. These files are restored exactly as requested; the checker remains unchanged.",
-    "status": "Reported, not waived; coordinator scope decision pending."
+    "exit": 0,
+    "status": "Resolved by the coordinator-authorized documentation correction; checker unchanged.",
+    "cause": "Updated obsolete switch references from current main and regenerated catalogs with the pinned repository tooling."
   },
   "rooting_semantics_since_review": "unchanged; S4 growing storage and active-prefix scanning retained",
   "raw_results": "/root/claude-lanes/sp-work/final-pr",
@@ -194,5 +194,26 @@
       "q/q100/q.bin",
       "q/q200/q.bin"
     ]
+  },
+  "documentation_fix": {
+    "base": "81e65f33ebdc72d75431b03427dcbfb2f153d7b1",
+    "production_code_changed": false,
+    "version_metadata_matches_main": true,
+    "tools": {
+      "mdbook": "0.5.4",
+      "mdbook-i18n-helpers": "0.4.0",
+      "gettext": "0.21"
+    },
+    "catalog_count": 10,
+    "catalog_format": "pass",
+    "extract_sync_freshness": "identical sha256 hashes",
+    "language_builds": 11,
+    "docs_check": "pass",
+    "docs_self_test": "pass",
+    "knob_self_test": "pass",
+    "i18n_toolchain_tests": 4,
+    "fmt": "pass",
+    "build_sanity": "cargo check --release -j 8 -p perry -p perry-runtime-static -p perry-stdlib-static --features perry/target-wasi",
+    "raw_results": "/root/claude-lanes/sp-work/docs-fix"
   }
 }
