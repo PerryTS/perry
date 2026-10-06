@@ -912,6 +912,9 @@ mod tests {
             for depth in 0..MAX_TRY_DEPTH {
                 crate::object::js_new_target_set((depth + 1) as f64);
                 buffers.push(js_try_push());
+                with_exception_state(|state| unsafe {
+                    assert!((*state).savepoints.len() >= (*state).try_depth);
+                });
             }
             with_exception_state(|state| unsafe {
                 assert_eq!((*state).jump_buffers[0].as_mut_ptr(), buffers[0]);
@@ -941,6 +944,17 @@ mod tests {
             while current_try_depth() > 0 {
                 js_try_end();
             }
+            // Storage retains initialized but inactive snapshots after pop.
+            // They must neither retain nor rewrite roots at depth zero.
+            with_exception_state(|state| unsafe {
+                assert_eq!((*state).savepoints.len(), MAX_TRY_DEPTH);
+                assert_eq!((*state).try_depth, 0);
+            });
+            let mut roots = Vec::new();
+            let mut mark = |value: f64| roots.push(value);
+            let mut visitor = crate::gc::RuntimeRootVisitor::for_copy(&mut mark);
+            scan_exception_roots_mut(&mut visitor);
+            assert!(roots.is_empty(), "inactive snapshots must not be scanned");
             crate::object::js_new_target_set(previous);
         })
         .join()
