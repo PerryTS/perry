@@ -554,16 +554,14 @@ fn moving_collection_rewrites_live_method_cache_before_full_reclamation() {
         perry_runtime::gc::gc_init();
         let previous = perry_runtime::gc::js_gc_force_evacuation_test_override(1);
         perry_runtime::gc::js_gc_write_barriers_emitted(1);
-        let frame = perry_runtime::gc::js_shadow_frame_push(0);
-        struct Restore(u64, i32);
+        struct Restore(i32);
         impl Drop for Restore {
             fn drop(&mut self) {
-                perry_runtime::gc::js_shadow_frame_pop(self.0);
                 perry_runtime::gc::js_gc_write_barriers_emitted(0);
-                perry_runtime::gc::js_gc_force_evacuation_test_override(self.1);
+                perry_runtime::gc::js_gc_force_evacuation_test_override(self.0);
             }
         }
-        let _restore = Restore(frame, previous);
+        let _restore = Restore(previous);
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let headers = js_headers_new();
         let owner = scope.root_nanbox_f64(headers);
