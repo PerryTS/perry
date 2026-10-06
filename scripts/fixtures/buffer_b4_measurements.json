@@ -2176,34 +2176,191 @@
       "instruction_delta_pct": -6.349171223218875e-05
     }
   },
-  "thp_off_previous_cohort": {
+  "final_b1_base": "16b16c96f3cb1f4f81a4bee62dc78c94be59cf83",
+  "final_rebase_note": "Test-only and documentation additions since tested f3e5910; no production change.",
+  "thp_off": {
+    "tsc": {
+      "trials": {
+        "main": [
+          {
+            "instructions:u": 9969471147,
+            "cycles:u": 3825629541,
+            "rss_kb": 177448,
+            "fulls": 0,
+            "minors": 3,
+            "anon_huge_kb": 0,
+            "sampled_anon_rss_kb": 94808,
+            "sampled_file_rss_kb": 83496
+          },
+          {
+            "instructions:u": 9970286577,
+            "cycles:u": 3871347514,
+            "rss_kb": 177448,
+            "fulls": 0,
+            "minors": 3,
+            "anon_huge_kb": 0,
+            "sampled_anon_rss_kb": 94816,
+            "sampled_file_rss_kb": 83496
+          },
+          {
+            "instructions:u": 9969607696,
+            "cycles:u": 3801248496,
+            "rss_kb": 177448,
+            "fulls": 0,
+            "minors": 3,
+            "anon_huge_kb": 0,
+            "sampled_anon_rss_kb": 94796,
+            "sampled_file_rss_kb": 83496
+          },
+          {
+            "instructions:u": 9971488598,
+            "cycles:u": 3896720931,
+            "rss_kb": 177448,
+            "fulls": 0,
+            "minors": 3,
+            "anon_huge_kb": 0,
+            "sampled_anon_rss_kb": 94660,
+            "sampled_file_rss_kb": 83496
+          },
+          {
+            "instructions:u": 9969692668,
+            "cycles:u": 3853937794,
+            "rss_kb": 177448,
+            "fulls": 0,
+            "minors": 3,
+            "anon_huge_kb": 0,
+            "sampled_anon_rss_kb": 94812,
+            "sampled_file_rss_kb": 83496
+          }
+        ],
+        "head": [
+          {
+            "instructions:u": 9969602128,
+            "cycles:u": 3881941043,
+            "rss_kb": 177448,
+            "fulls": 0,
+            "minors": 3,
+            "anon_huge_kb": 0,
+            "sampled_anon_rss_kb": 94804,
+            "sampled_file_rss_kb": 83752
+          },
+          {
+            "instructions:u": 9969456732,
+            "cycles:u": 3873076699,
+            "rss_kb": 177448,
+            "fulls": 0,
+            "minors": 3,
+            "anon_huge_kb": 0,
+            "sampled_anon_rss_kb": 94684,
+            "sampled_file_rss_kb": 83752
+          },
+          {
+            "instructions:u": 9964853533,
+            "cycles:u": 3867497893,
+            "rss_kb": 177448,
+            "fulls": 0,
+            "minors": 3,
+            "anon_huge_kb": 0,
+            "sampled_anon_rss_kb": 94804,
+            "sampled_file_rss_kb": 83752
+          },
+          {
+            "instructions:u": 9971516147,
+            "cycles:u": 3859987721,
+            "rss_kb": 177448,
+            "fulls": 0,
+            "minors": 3,
+            "anon_huge_kb": 0,
+            "sampled_anon_rss_kb": 94824,
+            "sampled_file_rss_kb": 83752
+          },
+          {
+            "instructions:u": 9969826883,
+            "cycles:u": 3870053296,
+            "rss_kb": 177448,
+            "fulls": 0,
+            "minors": 3,
+            "anon_huge_kb": 0,
+            "sampled_anon_rss_kb": 94668,
+            "sampled_file_rss_kb": 83752
+          }
+        ],
+        "noise": [
+          {
+            "instructions:u": 9970311922,
+            "rss_kb": 177448
+          },
+          {
+            "instructions:u": 9969660170,
+            "rss_kb": 177448
+          },
+          {
+            "instructions:u": 9969393384,
+            "rss_kb": 177448
+          },
+          {
+            "instructions:u": 9970100778,
+            "rss_kb": 177448
+          },
+          {
+            "instructions:u": 9971314313,
+            "rss_kb": 177448
+          }
+        ]
+      },
+      "medians": {
+        "main": {
+          "instructions:u": 9969692668,
+          "cycles:u": 3853937794,
+          "rss_kb": 177448,
+          "fulls": 0,
+          "minors": 3,
+          "anon_huge_kb": 0,
+          "sampled_anon_rss_kb": 94808,
+          "sampled_file_rss_kb": 83496
+        },
+        "head": {
+          "instructions:u": 9969602128,
+          "cycles:u": 3870053296,
+          "rss_kb": 177448,
+          "fulls": 0,
+          "minors": 3,
+          "anon_huge_kb": 0,
+          "sampled_anon_rss_kb": 94804,
+          "sampled_file_rss_kb": 83752
+        }
+      },
+      "instruction_noise_floor_pct": 0.016265747139887488,
+      "rss_noise_floor_kb": 0,
+      "instruction_delta_pct": -0.0009081523675291692
+    },
     "qsstr": {
       "trials": {
         "main": [
           {
-            "instructions:u": 60415749357,
-            "cycles:u": 21306456166,
-            "rss_kb": 29504,
+            "instructions:u": 60416925255,
+            "cycles:u": 18053413481,
+            "rss_kb": 29440,
             "fulls": 0,
             "minors": 439,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 12656,
+            "sampled_anon_rss_kb": 12644,
             "sampled_file_rss_kb": 17408
           },
           {
-            "instructions:u": 60429278112,
-            "cycles:u": 27088523535,
-            "rss_kb": 29504,
+            "instructions:u": 60456271313,
+            "cycles:u": 18096212150,
+            "rss_kb": 29440,
             "fulls": 0,
             "minors": 439,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 12660,
+            "sampled_anon_rss_kb": 12528,
             "sampled_file_rss_kb": 17408
           },
           {
-            "instructions:u": 60445657331,
-            "cycles:u": 18225855794,
-            "rss_kb": 29504,
+            "instructions:u": 60418680200,
+            "cycles:u": 18122180363,
+            "rss_kb": 29440,
             "fulls": 0,
             "minors": 439,
             "anon_huge_kb": 0,
@@ -2211,283 +2368,281 @@
             "sampled_file_rss_kb": 17408
           },
           {
-            "instructions:u": 60412799163,
-            "cycles:u": 18900269086,
-            "rss_kb": 29504,
+            "instructions:u": 60450675309,
+            "cycles:u": 18281380753,
+            "rss_kb": 29440,
             "fulls": 0,
             "minors": 439,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 12536,
+            "sampled_anon_rss_kb": 12648,
             "sampled_file_rss_kb": 17408
           },
           {
-            "instructions:u": 60412374539,
-            "cycles:u": 18106438053,
-            "rss_kb": 29504,
+            "instructions:u": 60414361155,
+            "cycles:u": 18705012424,
+            "rss_kb": 29440,
             "fulls": 0,
             "minors": 439,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 12524,
+            "sampled_anon_rss_kb": 12644,
             "sampled_file_rss_kb": 17408
           }
         ],
         "head": [
           {
-            "instructions:u": 60457447000,
-            "cycles:u": 18199011813,
-            "rss_kb": 29520,
+            "instructions:u": 60418952862,
+            "cycles:u": 17912943325,
+            "rss_kb": 29456,
             "fulls": 0,
             "minors": 439,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 12536,
+            "sampled_anon_rss_kb": 12644,
             "sampled_file_rss_kb": 17488
           },
           {
-            "instructions:u": 60424879001,
-            "cycles:u": 19001122896,
-            "rss_kb": 29520,
+            "instructions:u": 60423675748,
+            "cycles:u": 18426311930,
+            "rss_kb": 29456,
             "fulls": 0,
             "minors": 439,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 12656,
+            "sampled_anon_rss_kb": 12644,
             "sampled_file_rss_kb": 17488
           },
           {
-            "instructions:u": 60439679053,
-            "cycles:u": 30261401276,
-            "rss_kb": 29520,
+            "instructions:u": 60433562728,
+            "cycles:u": 17895664846,
+            "rss_kb": 29456,
             "fulls": 0,
             "minors": 439,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 12532,
+            "sampled_anon_rss_kb": 12524,
             "sampled_file_rss_kb": 17488
           },
           {
-            "instructions:u": 60439861065,
-            "cycles:u": 18728221584,
-            "rss_kb": 29520,
+            "instructions:u": 60433717479,
+            "cycles:u": 17900879693,
+            "rss_kb": 29456,
             "fulls": 0,
             "minors": 439,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 12536,
+            "sampled_anon_rss_kb": 12516,
             "sampled_file_rss_kb": 17488
           },
           {
-            "instructions:u": 60428444760,
-            "cycles:u": 18191779175,
-            "rss_kb": 29520,
+            "instructions:u": 60426876184,
+            "cycles:u": 17816281605,
+            "rss_kb": 29456,
             "fulls": 0,
             "minors": 439,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 12528,
+            "sampled_anon_rss_kb": 12644,
             "sampled_file_rss_kb": 17488
           }
         ],
         "noise": [
           {
-            "instructions:u": 60433207618,
-            "rss_kb": 29504
+            "instructions:u": 60416913461,
+            "rss_kb": 29440
           },
           {
-            "instructions:u": 60414551666,
-            "rss_kb": 29504
+            "instructions:u": 60424273577,
+            "rss_kb": 29440
           },
           {
-            "instructions:u": 60422014226,
-            "rss_kb": 29504
+            "instructions:u": 60416870336,
+            "rss_kb": 29440
           },
           {
-            "instructions:u": 60431900005,
-            "rss_kb": 29504
+            "instructions:u": 60433636867,
+            "rss_kb": 29440
           },
           {
-            "instructions:u": 60416164273,
-            "rss_kb": 29504
+            "instructions:u": 60413001202,
+            "rss_kb": 29440
           }
         ]
       },
       "medians": {
         "main": {
-          "instructions:u": 60415749357,
-          "cycles:u": 18900269086,
-          "rss_kb": 29504,
+          "instructions:u": 60418680200,
+          "cycles:u": 18122180363,
+          "rss_kb": 29440,
           "fulls": 0,
           "minors": 439,
           "anon_huge_kb": 0,
-          "sampled_anon_rss_kb": 12648,
+          "sampled_anon_rss_kb": 12644,
           "sampled_file_rss_kb": 17408
         },
         "head": {
-          "instructions:u": 60439679053,
-          "cycles:u": 18728221584,
-          "rss_kb": 29520,
+          "instructions:u": 60426876184,
+          "cycles:u": 17900879693,
+          "rss_kb": 29456,
           "fulls": 0,
           "minors": 439,
           "anon_huge_kb": 0,
-          "sampled_anon_rss_kb": 12536,
+          "sampled_anon_rss_kb": 12644,
           "sampled_file_rss_kb": 17488
         }
       },
-      "instruction_noise_floor_pct": 0.039114646186289015,
+      "instruction_noise_floor_pct": 0.05292707490069937,
       "rss_noise_floor_kb": 0,
-      "instruction_delta_pct": 0.03960837406584705
+      "instruction_delta_pct": 0.013565314523367178
     },
     "effect": {
       "trials": {
         "main": [
           {
-            "instructions:u": 26176831062,
-            "cycles:u": 9515708062,
-            "rss_kb": 150592,
+            "instructions:u": 24973842754,
+            "cycles:u": 8722786256,
+            "rss_kb": 150608,
             "fulls": 2,
-            "minors": 16,
+            "minors": 17,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 116780,
-            "sampled_file_rss_kb": 31016
+            "sampled_anon_rss_kb": 117108,
+            "sampled_file_rss_kb": 30828
           },
           {
-            "instructions:u": 26155101442,
-            "cycles:u": 9410404095,
-            "rss_kb": 150284,
+            "instructions:u": 24918913029,
+            "cycles:u": 8835454862,
+            "rss_kb": 147724,
             "fulls": 2,
-            "minors": 16,
+            "minors": 17,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 119828,
-            "sampled_file_rss_kb": 31016
+            "sampled_anon_rss_kb": 117324,
+            "sampled_file_rss_kb": 30828
           },
           {
-            "instructions:u": 26155630694,
-            "cycles:u": 9472014242,
-            "rss_kb": 150616,
+            "instructions:u": 24915994755,
+            "cycles:u": 8809261781,
+            "rss_kb": 147224,
             "fulls": 2,
-            "minors": 16,
+            "minors": 17,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 116744,
-            "sampled_file_rss_kb": 31016
+            "sampled_anon_rss_kb": 116356,
+            "sampled_file_rss_kb": 30828
           },
           {
-            "instructions:u": 26169038047,
-            "cycles:u": 9380022368,
-            "rss_kb": 150960,
+            "instructions:u": 24916774855,
+            "cycles:u": 8751407018,
+            "rss_kb": 147196,
             "fulls": 2,
-            "minors": 16,
+            "minors": 17,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 117136,
-            "sampled_file_rss_kb": 31016
+            "sampled_anon_rss_kb": 117940,
+            "sampled_file_rss_kb": 30828
           },
           {
-            "instructions:u": 26135993634,
-            "cycles:u": 9401457335,
-            "rss_kb": 150284,
+            "instructions:u": 24902449398,
+            "cycles:u": 8785079308,
+            "rss_kb": 147724,
             "fulls": 2,
-            "minors": 16,
+            "minors": 17,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 117272,
-            "sampled_file_rss_kb": 31016
+            "sampled_anon_rss_kb": 117472,
+            "sampled_file_rss_kb": 30828
           }
         ],
         "head": [
           {
-            "instructions:u": 26134227911,
-            "cycles:u": 9309737582,
-            "rss_kb": 150736,
+            "instructions:u": 24889639078,
+            "cycles:u": 8595383366,
+            "rss_kb": 147512,
             "fulls": 2,
-            "minors": 16,
+            "minors": 17,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 117460,
-            "sampled_file_rss_kb": 30940
+            "sampled_anon_rss_kb": 117140,
+            "sampled_file_rss_kb": 30948
           },
           {
-            "instructions:u": 26135445433,
-            "cycles:u": 9246805707,
-            "rss_kb": 150200,
+            "instructions:u": 24905884012,
+            "cycles:u": 8682074171,
+            "rss_kb": 147532,
             "fulls": 2,
-            "minors": 16,
+            "minors": 17,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 115556,
-            "sampled_file_rss_kb": 30940
+            "sampled_anon_rss_kb": 116240,
+            "sampled_file_rss_kb": 30948
           },
           {
-            "instructions:u": 26149797595,
-            "cycles:u": 9291934734,
-            "rss_kb": 150872,
+            "instructions:u": 24921037821,
+            "cycles:u": 8714755469,
+            "rss_kb": 147540,
             "fulls": 2,
-            "minors": 16,
+            "minors": 17,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 117652,
-            "sampled_file_rss_kb": 30940
+            "sampled_anon_rss_kb": 116648,
+            "sampled_file_rss_kb": 30948
           },
           {
-            "instructions:u": 26145377573,
-            "cycles:u": 9334991411,
-            "rss_kb": 150380,
+            "instructions:u": 24945622187,
+            "cycles:u": 8715180771,
+            "rss_kb": 147520,
             "fulls": 2,
-            "minors": 16,
+            "minors": 17,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 117268,
-            "sampled_file_rss_kb": 30940
+            "sampled_anon_rss_kb": 116884,
+            "sampled_file_rss_kb": 30948
           },
           {
-            "instructions:u": 26150288113,
-            "cycles:u": 9238463234,
-            "rss_kb": 150736,
+            "instructions:u": 24942598141,
+            "cycles:u": 8599406481,
+            "rss_kb": 147372,
             "fulls": 2,
-            "minors": 16,
+            "minors": 17,
             "anon_huge_kb": 0,
-            "sampled_anon_rss_kb": 116500,
-            "sampled_file_rss_kb": 30940
+            "sampled_anon_rss_kb": 116604,
+            "sampled_file_rss_kb": 30948
           }
         ],
         "noise": [
           {
-            "instructions:u": 26150874727,
-            "rss_kb": 150804
+            "instructions:u": 24891500173,
+            "rss_kb": 147492
           },
           {
-            "instructions:u": 26144405132,
-            "rss_kb": 150548
+            "instructions:u": 24914784288,
+            "rss_kb": 147228
           },
           {
-            "instructions:u": 26135097235,
-            "rss_kb": 150496
+            "instructions:u": 24903839420,
+            "rss_kb": 147704
           },
           {
-            "instructions:u": 26127277863,
-            "rss_kb": 150952
+            "instructions:u": 24905768907,
+            "rss_kb": 147552
           },
           {
-            "instructions:u": 26146401894,
-            "rss_kb": 150952
+            "instructions:u": 24895406888,
+            "rss_kb": 147220
           }
         ]
       },
       "medians": {
         "main": {
-          "instructions:u": 26155630694,
-          "cycles:u": 9410404095,
-          "rss_kb": 150592,
+          "instructions:u": 24916774855,
+          "cycles:u": 8785079308,
+          "rss_kb": 147724,
           "fulls": 2,
-          "minors": 16,
+          "minors": 17,
           "anon_huge_kb": 0,
-          "sampled_anon_rss_kb": 117136,
-          "sampled_file_rss_kb": 31016
+          "sampled_anon_rss_kb": 117324,
+          "sampled_file_rss_kb": 30828
         },
         "head": {
-          "instructions:u": 26145377573,
-          "cycles:u": 9291934734,
-          "rss_kb": 150736,
+          "instructions:u": 24921037821,
+          "cycles:u": 8682074171,
+          "rss_kb": 147520,
           "fulls": 2,
-          "minors": 16,
+          "minors": 17,
           "anon_huge_kb": 0,
-          "sampled_anon_rss_kb": 117268,
-          "sampled_file_rss_kb": 30940
+          "sampled_anon_rss_kb": 116648,
+          "sampled_file_rss_kb": 30948
         }
       },
-      "instruction_noise_floor_pct": 0.15957859790259876,
-      "rss_noise_floor_kb": 668,
-      "instruction_delta_pct": -0.03920043496543624
+      "instruction_noise_floor_pct": 0.32971530177033914,
+      "rss_noise_floor_kb": 3116,
+      "instruction_delta_pct": 0.017108819358879757
     }
-  },
-  "final_b1_base": "16b16c96f3cb1f4f81a4bee62dc78c94be59cf83",
-  "final_rebase_note": "Test-only and documentation additions since tested f3e5910; no production change."
+  }
 }
