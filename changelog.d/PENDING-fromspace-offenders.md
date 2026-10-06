@@ -1,0 +1,1 @@
+- gc: the from-space verifier no longer reports stale words in bytes that are not part of an object's value: a string's append room past `byte_len`, a buffer past `capacity`, and the empty fields of a regex program cell. Program cells are now fully cleared when they are created. These words were never read, so this was not a live bug.
