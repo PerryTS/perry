@@ -325,20 +325,15 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
         & (crate::gc::GC_LAYOUT_STATE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS)
         == (crate::gc::GC_LAYOUT_SIDE_MASK | crate::gc::GC_LAYOUT_ALL_POINTERS);
     if length == 0 && was_all_pointer {
-        // The branch below re-arms the all-pointer claim, and
-        // `layout_init_all_pointer_slots` already does everything the
-        // zero-slot rebuild would have done first — clears the typed-intact
-        // bit and forgets both per-object record kinds
-        // (`layout_forget_object`) before setting the state — so the rebuild
-        // was a second pass over the same registries for every
-        // `pooled.length = 0`. Skip straight to the re-arm.
+        // The zero-slot rebuild and this re-arm both derive a header kind.
+        // Preserve the pool bucket's all-pointer history directly.
         crate::gc::layout_init_all_pointer_slots(arr as *mut u8);
         return;
     }
     if length != 0 {
         // Numeric canonicalization proves the complete payload pointer-free
-        // and installs that GC layout itself. Do it before allocating and
-        // building a pointer mask, and avoid replaying barriers for numbers.
+        // and installs that GC kind itself. Do it before the tag scan, and
+        // avoid replaying barriers for numbers.
         // This reads the actual slots; bulk stores may have invalidated the
         // array's previous representation or introduced a class-ref tag.
         super::header::refresh_array_numeric_layout_resolved(arr);
@@ -358,12 +353,8 @@ pub(crate) unsafe fn rebuild_array_layout(arr: *mut ArrayHeader) {
         crate::gc::layout_rebuild_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
     }
     if length == 0 {
-        // `layout_rebuild_from_slots` just left the head POINTER_FREE with its
-        // per-object records dropped and the typed-intact bit cleared, which
-        // is everything `refresh_array_numeric_layout` would redo for zero
-        // slots via `rebuild_array_numeric_raw_f64` -> `layout_init_pointer_free`
-        // (a second header resolution, a second forget probe). There are no
-        // slots for the old-gen barrier replay either.
+        // The bulk scan already declared the empty payload pointer-free.
+        // No further numeric scan or old-gen barrier replay is needed.
         //
         // An empty array holds BOTH vacuous claims, so keep the one its
         // history predicts. A pool bucket that held pointers and is emptied
@@ -490,7 +481,7 @@ pub(crate) unsafe fn rebuild_array_layout_exact(arr: *mut ArrayHeader) {
         crate::gc::layout_mark_unknown(arr as *mut u8);
         return;
     }
-    crate::gc::layout_rebuild_exact_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
+    crate::gc::layout_rebuild_from_slots(arr as *mut u8, array_elements_ptr(arr), length);
     refresh_array_numeric_layout(arr);
     if crate::arena::pointer_in_old_gen(arr as usize) {
         let slots = array_elements_ptr(arr);

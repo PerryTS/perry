@@ -30,7 +30,7 @@ fn test_layout_mask_overflow_fields_and_array_grow_transfer() {
     if crate::object::test_object_spill_enabled() {
         let spill = crate::object::test_spill_buffer_addr(obj as usize);
         assert_ne!(spill, 0, "overflow write must have created a spill buffer");
-        assert_eq!(test_layout_pointer_slot_count(spill, 9), Some(1));
+        assert_eq!(test_layout_pointer_slot_count(spill, 9), None);
     }
     let valid_ptrs = build_valid_pointer_set();
     let mut worklist = Vec::new();
@@ -59,14 +59,14 @@ fn test_layout_mask_overflow_fields_and_array_grow_transfer() {
         f64::from_bits(STRING_TAG | (child as u64 & POINTER_MASK)),
     );
     let grown = crate::array::js_array_grow(arr, 128);
-    assert_eq!(test_layout_pointer_slot_count(grown as usize, 4), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(grown as usize, 4), None);
 
     let moved = crate::array::js_array_alloc_with_length(4);
     unsafe {
         model_relocation_header_copy(grown as usize, moved as usize);
         layout_transfer(grown as *mut u8, moved as *mut u8);
     }
-    assert_eq!(test_layout_pointer_slot_count(moved as usize, 4), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(moved as usize, 4), None);
 
     clear_marks();
     clear_mark_seeds();
@@ -106,7 +106,7 @@ fn test_trace_array_uses_pointer_layout_mask() {
     );
     crate::array::js_array_set_f64(mixed, 2, 3.0);
     crate::array::js_array_set_f64(mixed, 3, 4.0);
-    assert_eq!(test_layout_pointer_slot_count(mixed as usize, 4), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(mixed as usize, 4), None);
 
     let valid_ptrs = build_valid_pointer_set();
     assert!(try_mark_value(
@@ -115,7 +115,7 @@ fn test_trace_array_uses_pointer_layout_mask() {
     ));
     test_reset_trace_slot_reads();
     trace_marked_objects(&valid_ptrs);
-    assert_eq!(test_trace_slot_reads(), 1);
+    assert_eq!(test_trace_slot_reads(), 4);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
     }
@@ -194,8 +194,8 @@ fn test_array_mixed_bulk_producers_preserve_pointer_layout() {
     crate::array::js_array_set_f64(src, 3, 3.0);
 
     let cloned = crate::array::js_array_clone(src);
-    assert_eq!(test_layout_pointer_slot_count(cloned as usize, 4), Some(1));
-    assert_array_root_trace_reads(cloned, 1);
+    assert_eq!(test_layout_pointer_slot_count(cloned as usize, 4), None);
+    assert_array_root_trace_reads(cloned, 4);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
     }
@@ -205,9 +205,9 @@ fn test_array_mixed_bulk_producers_preserve_pointer_layout() {
     let concatenated = crate::array::js_array_concat(crate::array::js_array_alloc(0), src);
     assert_eq!(
         test_layout_pointer_slot_count(concatenated as usize, 4),
-        Some(1)
+        None
     );
-    assert_array_root_trace_reads(concatenated, 1);
+    assert_array_root_trace_reads(concatenated, 4);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
     }
@@ -249,20 +249,19 @@ fn test_array_mixed_bulk_producers_preserve_pointer_layout() {
     clear_marks();
     clear_mark_seeds();
 
-    // Four slots, so this still goes through the mask: clearing the last
-    // pointer empties it and restores `GC_LAYOUT_POINTER_FREE`, which is the
-    // transition being asserted. A single-slot array never mints a mask now,
-    // and `GC_LAYOUT_UNKNOWN` is one-way — such an array keeps being scanned
-    // after the pointer is overwritten. That costs one tag check on one slot,
-    // which is the whole reason the mask was not worth minting for it.
+    // A mixed payload stays tag-scanned after its last pointer is overwritten.
     let overwritten = crate::array::js_array_alloc_with_length(4);
     crate::array::js_array_set_f64(overwritten, 0, child_box);
     assert_eq!(
         test_layout_pointer_slot_count(overwritten as usize, 4),
-        Some(1)
+        None
     );
     crate::array::js_array_set_f64(overwritten, 0, 99.0);
-    assert_numeric_array_trace_free(overwritten, 4);
+    assert_eq!(
+        test_layout_pointer_slot_count(overwritten as usize, 4),
+        None
+    );
+    assert_array_root_trace_reads(overwritten, 4);
 
     clear_marks();
     clear_mark_seeds();
@@ -359,7 +358,7 @@ fn test_numeric_array_push_heap_value_transitions_and_traces() {
     assert_eq!(pushed, arr, "fixture should exercise the no-grow push path");
     assert_eq!(
         test_layout_pointer_slot_count(pushed as usize, 4),
-        Some(1),
+        None,
         "heap writes into a numeric array must transition to a pointer-bearing layout"
     );
 
@@ -370,7 +369,7 @@ fn test_numeric_array_push_heap_value_transitions_and_traces() {
     ));
     test_reset_trace_slot_reads();
     trace_marked_objects(&valid_ptrs);
-    assert_eq!(test_trace_slot_reads(), 1);
+    assert_eq!(test_trace_slot_reads(), 4);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
     }
@@ -398,7 +397,7 @@ fn test_numeric_array_layout_metadata_matches_gc_scan_state() {
     arr = crate::array::js_array_push_f64(arr, child_box);
 
     assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 0);
-    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(arr as usize, 4), None);
 
     clear_marks();
     clear_mark_seeds();
@@ -409,7 +408,7 @@ fn test_numeric_array_layout_metadata_matches_gc_scan_state() {
     ));
     test_reset_trace_slot_reads();
     trace_marked_objects(&valid_ptrs);
-    assert_eq!(test_trace_slot_reads(), 1);
+    assert_eq!(test_trace_slot_reads(), 4);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
     }

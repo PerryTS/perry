@@ -408,7 +408,7 @@ fn force_materialize_lazy_array_cache_downgrades_for_pointer_values() {
     assert_eq!(crate::array::js_array_is_numeric_f64_layout(arr), 0);
     assert_eq!(
         crate::gc::test_layout_pointer_slot_count(arr as usize, 4),
-        Some(1)
+        None
     );
 }
 
