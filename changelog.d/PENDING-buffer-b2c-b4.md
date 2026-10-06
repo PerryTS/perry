@@ -4,6 +4,8 @@ Compatible B4 changes move detached state into the owner header (deleting `DETAC
 
 Boundary still pending: generated code directly links `PERRY_U8_INLINE_CACHE` and `PERRY_TA_KIND_CACHE`, and reads typed-array metadata at +8/+10. The proposed unified layout puts a data/owner pointer at +8. Removing those exported caches or replacing those fields requires the B4c codegen switch, explicitly excluded from this lane until #12023. The six-table deletion and unified 16-byte layout therefore cannot all be completed within that boundary. No placement policy, versions, fetch bodies, zlib implementation, or runtime node_stream files are changed.
 
+The remaining B2c work includes native-addon APIs that return raw pointers, private Array.sort byte access, and typed-array creation paths coupled to the old layout. Their pointer lifetimes or representation must be adapted before the source gate can become a zero-debt invariant. This delivery is the compatible conversion subset, not completion of all B2c/B4 requirements. Zlib retains B1's wrapper and output witness.
+
 The exact closed census rows are in `scripts/buffer_b4_census_closed.tsv`: 73 rows (42 runtime, 27 stdlib, 2 updater, 1 ext-http, 1 ext-net), comprising 35 creation, 28 size-assumption, 8 unscoped-borrow and 2 pointer-across-GC sites. Other ext producers already use B1's C ABI wrapper. The expanded source gate has 282 existing sites and zero additions; the same detector found 444 at the earlier B1 baseline, with 161 removed by this lane and one by upstream #12094. It is a ratchet, not the still-pending zero-debt layout invariant.
 
 | Machinery | Deleted | Still pending |
@@ -15,16 +17,26 @@ The exact closed census rows are in `scripts/buffer_b4_census_closed.tsv`: 73 ro
 | Contract | Witness and sabotage | Result |
 |---|---|---|
 | T1/T2: moving collection; borrow allocation forbidden | B1 byte tests; seven forced-GC byte tests | PASS; B1 child witnesses abort on violation |
-| T3: detach during operation | Deflate data listener transfers the input owner; native last-pin lifetime witness with B1 `detach_free` and B4 `detach_mark` sabotages | Node parity PASS on main; final head/ASan pending |
+| T3: detach during operation | Deflate data listener transfers the input owner; native last-pin lifetime witness with B1 `detach_free` and B4 `detach_mark` sabotages | Node parity PASS on main and head; final native ASan pending |
 | T4: worker transfer | 32 MiB transfer preserves backing pointer, sender length zero, receiver contents and backing count; `transfer_copy` | PASS / RED |
 | T5: large concat and nested views | 300 × 18,000 bytes; only the nested view roots its owner across minor and full GC; `view_edge` | PASS / RED; placement counter belongs to B3 |
 | T6: owner access checks | u8, i32 and DataView share writes; shrink/OOB/grow/detach; `owner_check` | PASS / RED |
 | T7: native outputs | Crypto sizes 0, 1, 255, 256, 257 and 1 MiB; random fill bounds; `crypto_output`, `crypto_borrow`, `random_fill_range`; B1 C ABI producer contracts | PASS / RED; production threshold policy is unchanged |
-| T8: Buffer parameter view | Main's `test_gap_12094_buffer_param_views` | Main PASS; final head pending |
+| T8: Buffer parameter view | Main's `test_gap_12094_buffer_param_views` | Main and head PASS |
 | T9: whole-module invariant | Source gate; owner-edge witness; header and root-holder gates | Ratchet PASS, nine source sabotages RED; address-table-free invariant pending B4c |
 | Symbol header and u32 admission | Three persistent-symbol factories; current-header u32 admission; `symbol_header`, `u32_admission` | PASS / RED |
 
-Verification baseline: origin/main `2fb54a09942bf26766095995f8a5dc74d10b18f6`; refreshed/rebased B1 `43cb95a83bec59c463461ff0d6d1ffca407c888a`. Production sources were unchanged by that B1 refresh. The newer main changes RegExp, exception snapshots and getter memos, so the final build/test/output/performance comparison is being rerun against that exact snapshot. Final verification after routing symbol pins through the shared setter is pending. The two stdlib thread-exit failures reproduce on both arms; no new failures were observed in the earlier complete 54-binary comparison. The full lint tier is not claimed: the file-size gate has three unchanged main violations (`dynamic_dispatch.rs`, `delete_rest.rs`, `method_site.rs`).
+Verification baseline: origin/main `2fb54a09942bf26766095995f8a5dc74d10b18f6`; refreshed/rebased B1 `43cb95a83bec59c463461ff0d6d1ffca407c888a`, fetched before final verification on 2026-10-06. Production sources were unchanged by that B1 refresh. The final release builds, all 54 crate-test binaries, gap comparison, output checks and measurements include main's newer RegExp, exception-snapshot and getter-memo changes. Final production sources are those of merge `4a7b96e3ee`; subsequent commits record harnesses and evidence.
+
+| Crate | Main passed / failed / ignored | Head passed / failed / ignored | New failures |
+|---|---|---|---|
+| runtime | 5,148 / 0 / 5 | 5,160 / 0 / 5 | 0 |
+| stdlib | 251 / 2 / 0 | 258 / 2 / 0 | 0 |
+| codegen | 2,562 / 0 / 1 | 2,562 / 0 / 1 | 0 |
+
+The identical stdlib failures are `runtime_thread_exit_tests::symbols_tests::thread_exit_releases_the_threads_symbol_side_table_entries` and `runtime_thread_exit_tests::thread_exit_releases_the_threads_closure_side_table_entries`. The requested gap union contains 173 cases: 157 pass and 16 existing parity failures in each arm, with zero case-by-case differences. Both #12094 and the new detach-during-zlib fixture pass. All 14 program/kernel output checks pass against Node. Forced-GC focused tests pass: five B4, seven B1 byte-access, one transfer and three crypto tests, with six B4, seven B1 and three crypto child sabotages red.
+
+Final source-layout, header-constant, root-holder and pin-custody checks pass, as do their applicable self-tests and the lint-runner inventory self-test. The full lint tier is not claimed: the file-size gate has three unchanged main violations (`dynamic_dispatch.rs`, `delete_rest.rs`, `method_site.rs`). Exact crate summaries, gap outcomes and output statuses are recorded in `scripts/fixtures/buffer_b4_verification.json`; interleaved trials and medians are in `scripts/fixtures/buffer_b4_measurements.json`.
 
 Measurements use qb6 CPUs 56–63 under the shared lock, ASLR disabled, separate targets, Node 26.5.1 output checks and n=5 interleaved trials with identical-main-binary controls. Both arms use the same full prebuilt archives and forced http/net/ws/zlib wrappers. GC counts come from separate `PERRY_GC_TRACE=1` runs; instruction/RSS runs have tracing disabled. Kernel elapsed-time fields and Effect's two elapsed-time fields are normalized; semantic output matches exactly.
 
