@@ -215,29 +215,25 @@ mod tests {
     static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     struct GcTestGuard {
-        frame: u64,
         previous_force_evacuation: i32,
         _lock: MutexGuard<'static, ()>,
     }
 
     impl GcTestGuard {
         fn new() -> Self {
-            Self::new_with_slots(0)
-        }
-
-        fn new_with_slots(slot_count: u32) -> Self {
             let lock = GC_TEST_LOCK
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
+            // Unit tests skip program startup, which registers the runtime-handle
+            // root scanner these tests root values through.
+            perry_runtime::gc::gc_init();
             // Rewriting is observable only when the collector moves the root.
             // Keep that test policy thread-local so unrelated test threads do
             // not observe a process-wide environment mutation.
             let previous_force_evacuation =
                 perry_runtime::gc::js_gc_force_evacuation_test_override(1);
             perry_runtime::gc::js_gc_write_barriers_emitted(1);
-            let frame = perry_runtime::gc::js_shadow_frame_push(slot_count);
             Self {
-                frame,
                 previous_force_evacuation,
                 _lock: lock,
             }
@@ -246,7 +242,6 @@ mod tests {
 
     impl Drop for GcTestGuard {
         fn drop(&mut self) {
-            perry_runtime::gc::js_shadow_frame_pop(self.frame);
             perry_runtime::gc::js_gc_write_barriers_emitted(0);
             perry_runtime::gc::js_gc_force_evacuation_test_override(self.previous_force_evacuation);
         }
@@ -398,16 +393,17 @@ mod tests {
 
     #[test]
     fn http_server_options_store_keep_alive_timeout_buffer() {
-        let _guard = GcTestGuard::new_with_slots(1);
+        let _guard = GcTestGuard::new();
         let options_json = perry_ffi::alloc_string(
             r#"{"headersTimeout":111,"keepAliveTimeout":222,"keepAliveTimeoutBuffer":321,"requestTimeout":444}"#,
         );
         let options_ptr = options_json.as_raw() as *const perry_runtime::StringHeader;
         let options = unsafe { perry_runtime::json::js_json_parse(options_ptr) };
-        perry_runtime::gc::js_shadow_slot_set(0, options.bits());
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let options = scope.root_nanbox_u64(options.bits());
 
         let mut server = HttpServer::with_handler(0);
-        crate::server::server::apply_server_options(&mut server, f64::from_bits(options.bits()));
+        crate::server::server::apply_server_options(&mut server, options.get_nanbox_f64());
 
         assert_eq!(server.headers_timeout, 111.0);
         assert_eq!(server.keep_alive_timeout, 222.0);
@@ -599,15 +595,16 @@ mod tests {
         drop_handle(handle);
 
         // Option path through `apply_server_options`.
-        let _guard = GcTestGuard::new_with_slots(1);
+        let _guard = GcTestGuard::new();
         let options_json =
             perry_ffi::alloc_string(r#"{"requestTimeout":1e300,"headersTimeout":222}"#);
         let options_ptr = options_json.as_raw() as *const perry_runtime::StringHeader;
         let options = unsafe { perry_runtime::json::js_json_parse(options_ptr) };
-        perry_runtime::gc::js_shadow_slot_set(0, options.bits());
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let options = scope.root_nanbox_u64(options.bits());
 
         let mut server = HttpServer::with_handler(0);
-        crate::server::server::apply_server_options(&mut server, f64::from_bits(options.bits()));
+        crate::server::server::apply_server_options(&mut server, options.get_nanbox_f64());
         // Oversized `requestTimeout` clamped; unrelated knob untouched.
         assert_eq!(server.request_timeout, 9_007_199_254_740_991.0);
         assert_eq!(server.headers_timeout, 222.0);

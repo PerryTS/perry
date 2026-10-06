@@ -7,7 +7,6 @@ use std::sync::{Mutex, MutexGuard};
 pub(crate) static GC_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 struct GcTestGuard {
-    frame: u64,
     previous_force_evacuation: i32,
     _lock: MutexGuard<'static, ()>,
 }
@@ -17,14 +16,15 @@ impl GcTestGuard {
         let lock = GC_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // Unit tests skip program startup, which registers the runtime-handle
+        // root scanner these tests root values through.
+        perry_runtime::gc::gc_init();
         // Rewriting is observable only when the collector moves the root.
         // Keep that test policy thread-local so unrelated test threads do not
         // observe a process-wide environment mutation.
         let previous_force_evacuation = perry_runtime::gc::js_gc_force_evacuation_test_override(1);
         perry_runtime::gc::js_gc_write_barriers_emitted(1);
-        let frame = perry_runtime::gc::js_shadow_frame_push(1);
         Self {
-            frame,
             previous_force_evacuation,
             _lock: lock,
         }
@@ -33,7 +33,6 @@ impl GcTestGuard {
 
 impl Drop for GcTestGuard {
     fn drop(&mut self) {
-        perry_runtime::gc::js_shadow_frame_pop(self.frame);
         perry_runtime::gc::js_gc_write_barriers_emitted(0);
         perry_runtime::gc::js_gc_force_evacuation_test_override(self.previous_force_evacuation);
     }
@@ -81,11 +80,12 @@ fn gc_mutable_scanner_rewrites_listener_roots() {
         crate::gc_roots::scan_net_roots,
     );
 
-    // Keep an ordinary shadow-stack root as the control. Its rewrite proves
+    // Keep an ordinary runtime-handle root as the control. Its rewrite proves
     // the collection copied live objects independently of scan_net_roots, so
     // a listener that stays at its old address is an actual scanner failure.
     let control = young_gc_root();
-    perry_runtime::gc::js_shadow_slot_set(0, control as u64);
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let control_root = scope.root_heap_word_u64(control as u64);
 
     let socket_id = -9_001;
     let _cleanup = NetHandleCleanup::new(vec![socket_id]);
@@ -112,7 +112,7 @@ fn gc_mutable_scanner_rewrites_listener_roots() {
         perry_runtime::gc::moved_objects_total() > moved_objects_before,
         "copying minor did not relocate an object, so the scanner was not exercised"
     );
-    assert_rewritten(control, perry_runtime::gc::js_shadow_slot_get(0) as i64);
+    assert_rewritten(control, control_root.get_heap_word_u64() as i64);
 
     let after = {
         let listeners = statics::listeners().lock().unwrap();
@@ -413,7 +413,8 @@ fn stored_socket_endpoints_reach_dynamic_dispatch() {
             );
             // Preserve an address/family string if the dispatch getter allocates
             // across a moving collection before the value comparison.
-            perry_runtime::gc::js_shadow_slot_set(0, expected.to_bits());
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let expected = scope.root_nanbox_f64(expected);
             let mut actual = dispatch::undefined();
             assert_eq!(
                 unsafe {
@@ -427,7 +428,7 @@ fn stored_socket_endpoints_reach_dynamic_dispatch() {
                 1,
                 "{name} is claimed for a socket"
             );
-            let expected = f64::from_bits(perry_runtime::gc::js_shadow_slot_get(0));
+            let expected = expected.get_nanbox_f64();
             assert_ne!(
                 perry_runtime::value::js_jsvalue_equals(expected, actual),
                 0,

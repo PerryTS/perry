@@ -865,6 +865,8 @@ pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHea
         (*ptr).header.length = length;
         (*ptr).header.capacity = length;
         (*ptr).data = data;
+        // GC_STORE_AUDIT(INIT): the native backing owner of the cell allocated
+        // above, before it is published.
         std::ptr::write(&mut (*ptr).owned, None);
         #[cfg(feature = "node-api-host")]
         {
