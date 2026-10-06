@@ -93,8 +93,6 @@ NON_HANDLE_TABLES = {
     ("crates/perry-ext-http/src/client_turnloop/tls.rs", "CONFIGS"),
     ("crates/perry-ext-http/src/tls_client.rs", "INTERNAL_HTTPS_SERVERS"),
     # Keyed by agent id: one state bundle per thread agent, not per resource.
-    ("crates/perry-ext-zlib/src/stream/agent_state.rs", "ALL"),
-    ("crates/perry-stdlib/src/zlib/tables.rs", "ALL_ZLIB_TABLES"),
 }
 
 # Numeric class registries are concentrated in these modules.  The one
@@ -118,8 +116,6 @@ EXTRA_TABLES: dict[tuple[str, str], int] = {
     ("crates/perry-runtime/src/tui/tree.rs", "REGISTRY"): 1,
     ("crates/perry-stdlib/src/common/handle_lifecycle.rs", "ORPHANS"): 1,
     ("crates/perry-stdlib/src/readline/mod.rs", "READLINE_INTERFACES"): 1,
-    # Statics::streams and ::listeners behind statics(); #12068 removed evicted_streams.
-    ("crates/perry-ext-zlib/src/stream.rs", "__STATICS_HANDLE_TABLES"): 2,
 }
 
 REGISTER_CALL = re.compile(
@@ -138,7 +134,6 @@ PRODUCER_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("crates/perry-stdlib/src/streams", re.compile(r"\bnext_stream_id\s*\(")),
     ("crates/perry-ext-streams/src/lib.rs", re.compile(r"\bnext_id\s*\(\s*&NEXT_")),
     ("crates/perry-stdlib/src/zlib.rs", re.compile(r"\bcreate_zlib_stream\s*\(")),
-    ("crates/perry-ext-zlib/src/stream.rs", re.compile(r"(?m)^\s*factory!\s*\(")),
     ("crates/perry-stdlib/src/tls", re.compile(r"\bnext_tls_handle_id\s*\(")),
     ("crates/perry-ext-net/src/", re.compile(r"\bnext_id_or_throw\s*\(")),
     # Background/adoption paths cannot throw, and use next_id directly.
@@ -242,14 +237,6 @@ def scan(root: Path = ROOT) -> tuple[dict[str, int], dict[str, int], set[tuple[s
                 tables[rel] += 1
             if (rel, name) in EXTRA_TABLES:
                 tables[rel] += EXTRA_TABLES[(rel, name)]
-        # Opaque struct-field bundle has no declaration named after its maps.
-        opaque = (rel, "__STATICS_HANDLE_TABLES")
-        if opaque in EXTRA_TABLES:
-            required = ("streams: HashMap<i64", "listeners: HashMap<i64")
-            if all(token in code for token in required):
-                tables[rel] += EXTRA_TABLES[opaque]
-                seen_decls.add(opaque)
-
         register_count = call_count(code, REGISTER_CALL) + call_count(code, RESERVE_CALL)
         if register_count:
             producers[rel] += register_count

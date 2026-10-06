@@ -345,10 +345,6 @@ pub(crate) fn readable_handle_async_iterator(value: f64) -> Option<f64> {
     is_readable_handle(value).then(|| build_readable_async_iterator(value, true))
 }
 
-pub(crate) fn readable_handle_iterator_with_options(stream: f64, opts: f64) -> f64 {
-    build_readable_async_iterator(stream, destroy_on_return_from_options(opts))
-}
-
 fn uses_method_listeners(stream: f64) -> bool {
     has_truthy_hidden(stream, hidden_key(METHOD_LISTENER_READABLE_KEY))
         || is_readable_handle(stream)

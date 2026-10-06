@@ -547,14 +547,6 @@ pub extern "C" fn js_stdlib_process_pending() -> i32 {
     // reader's queue and dispatches to question/line/close callbacks.
     count += crate::readline::js_readline_process_pending();
 
-    // Process pending zlib stream events (#1843) — `createGzip()` etc.
-    // buffer input across `.write()` and queue 'data'/'end' on `.end()`;
-    // drained + dispatched to listeners (and forwarded to `.pipe()` dests)
-    // here on the main thread. Bundled path (perry-stdlib's own zlib mod):
-    if let Some(pump) = PUMP_ZLIB.get() {
-        count += unsafe { pump() };
-    }
-
     count
 }
 
@@ -588,11 +580,9 @@ type PumpArm = unsafe fn() -> i32;
 type ActiveArm = fn() -> bool;
 
 static PUMP_TLS: Hook<PumpArm> = Hook::empty();
-static PUMP_ZLIB: Hook<PumpArm> = Hook::empty();
 static ACTIVE_TURNLOOP_HTTP: Hook<ActiveArm> = Hook::empty();
 static ACTIVE_TURNLOOP_SMTP: Hook<ActiveArm> = Hook::empty();
 static ACTIVE_TLS: Hook<ActiveArm> = Hook::empty();
-static ACTIVE_ZLIB: Hook<ActiveArm> = Hook::empty();
 
 #[cfg(all(
     feature = "tls-runtime",
@@ -608,18 +598,6 @@ pub(crate) fn install_tls_pump() {
     }
     PUMP_TLS.set(pump);
     ACTIVE_TLS.set(active);
-}
-
-#[cfg(feature = "compression-gzip")]
-pub(crate) fn install_zlib_pump() {
-    unsafe fn pump() -> i32 {
-        crate::zlib::js_zlib_process_pending()
-    }
-    fn active() -> bool {
-        crate::zlib::js_zlib_has_active_handles() != 0
-    }
-    PUMP_ZLIB.set(pump);
-    ACTIVE_ZLIB.set(active);
 }
 
 #[cfg(feature = "turnloop-http-client")]
@@ -690,13 +668,6 @@ pub extern "C" fn js_stdlib_has_active_handles() -> i32 {
         return 1;
     }
     if crate::worker_threads::js_worker_threads_has_pending() != 0 {
-        return 1;
-    }
-    // zlib streams (#1843) — keep the loop alive while `.end()`-queued
-    // 'data'/'end' events are still waiting to be drained, so a purely-
-    // synchronous `createGzip().write(x).end()` program doesn't exit before
-    // its listeners fire. Bundled path:
-    if ACTIVE_ZLIB.get().is_some_and(|active| active()) {
         return 1;
     }
     0

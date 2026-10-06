@@ -124,6 +124,7 @@ pub(crate) static ROT13_HOOKS: StreamHooks = StreamHooks {
     step: rot13_step,
     error: rot13_error,
     release: rot13_release,
+    after_step: None,
 };
 
 impl StreamPayload for Rot13 {
@@ -1131,3 +1132,109 @@ fn every_stream_sabotage_makes_its_witness_red() {
 }
 
 // ─── test seams for the gc witnesses ──────────────────────────────────────
+
+struct LazyCodec;
+unsafe extern "C" fn lazy_step(_: *mut std::ffi::c_void, input: &StepIn, output: &mut StepOut) {
+    output.consumed = input.len;
+    output.status = if input.op == StreamOp::FINAL {
+        StepStatus::ENDED
+    } else {
+        StepStatus::NEED_INPUT
+    };
+}
+unsafe extern "C" fn lazy_release(owner: f64) {
+    np::close_attached::<LazyCodec>(owner, &LAZY_FAMILY);
+}
+static LAZY_HOOKS: StreamHooks = StreamHooks {
+    kind: StreamKind::TRANSFORM,
+    timing: StepTiming::INLINE,
+    lazy: true,
+    step: lazy_step,
+    error: rot13_error,
+    release: lazy_release,
+    after_step: None,
+};
+impl StreamPayload for LazyCodec {
+    const HOOKS: &'static StreamHooks = &LAZY_HOOKS;
+}
+fn install_lazy(builder: &mut PayloadPrototype) {
+    builder.inherit(super::proto_methods::stream_prototype_value("Transform"));
+    builder.lazy_stream_state_getters();
+}
+static LAZY_FAMILY: NativePayloadFamily = NativePayloadFamily {
+    class_id: crate::native_class_ids::CRYPTO_HMAC,
+    links_owner: false,
+    name: "LazyCodec",
+    constructor_export: None,
+    constructor_length: 1,
+    install_prototype: install_lazy,
+};
+#[test]
+fn lazy_state_is_built_once_on_first_method_or_state_read() {
+    let _reset = FamilyReset::new();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    for use_getter in [false, true] {
+        let opts = scope.root_nanbox_f64(options_object(&Rot13Opts {
+            readable_hwm: Some(17.0),
+            writable_hwm: Some(19.0),
+            ..Default::default()
+        }));
+        let stream = scope.root_nanbox_f64(np::alloc_stream(&LAZY_FAMILY, LazyCodec, 0, &[]));
+        init_transform_in_place(stream.get_nanbox_f64(), opts.get_nanbox_f64());
+        let obj = object_ptr_from_value(stream.get_nanbox_f64()).unwrap();
+        assert!(
+            unsafe { own_field_by_key_bytes(obj, b"_readableState") }.is_none(),
+            "LazyTransform must stay uninitialized before first use"
+        );
+        if use_getter {
+            let state = js_object_get_field_by_name_f64(obj, hidden_key(b"_writableState"));
+            assert!(object_ptr_from_value(state).is_some());
+        } else {
+            let value = crate::closure::JsThis::from_f64(stream.get_nanbox_f64());
+            super::super::this_value(std::ptr::null(), value);
+        }
+        let state = scope.root_nanbox_f64(
+            get_hidden_value(stream.get_nanbox_f64(), hidden_key(b"_readableState")).unwrap(),
+        );
+        assert_eq!(
+            get_hidden_value(stream.get_nanbox_f64(), hidden_hwm_key()),
+            Some(17.0)
+        );
+        assert_eq!(
+            get_hidden_value(
+                stream.get_nanbox_f64(),
+                hidden_key(b"writableHighWaterMark")
+            ),
+            Some(19.0)
+        );
+        constructors::ensure_lazy_stream(stream.get_nanbox_f64());
+        assert_eq!(
+            get_hidden_value(stream.get_nanbox_f64(), hidden_key(b"_readableState"))
+                .unwrap()
+                .to_bits(),
+            state.get_nanbox_u64()
+        );
+        destroy_stream(stream.get_nanbox_f64(), f64::from_bits(TAG_UNDEFINED));
+    }
+}
+
+#[test]
+fn eager_lazy_initialization_sabotage_turns_witness_red() {
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "node_stream::native_hooks::tests::lazy_state_is_built_once_on_first_method_or_state_read", "--nocapture"])
+        .env("PERRY_TEST_STREAM_SABOTAGE", "eager_lazy_init").output().unwrap();
+    assert!(
+        !output.status.success(),
+        "eager initialization must turn lazy witness red"
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("running 1 test"));
+    let log = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        log.contains("LazyTransform must stay uninitialized"),
+        "{log}"
+    );
+}

@@ -148,8 +148,9 @@ LEDGER = Path("scripts/native_result_ledger.tsv")
 # deleted and the three call-form rows return NR_F64. The bun:sqlite rows that
 # reused node providers now name their own bun providers. 252 -> 236 rows,
 # 228 -> 215 providers, as the script reports on the resolved tree.
-EXPECTED_ROWS = 236
-EXPECTED_PROVIDERS = 215
+# B2b: 22 zlib rows now return plain NaN-boxed values through the binding.
+EXPECTED_ROWS = 214
+EXPECTED_PROVIDERS = 193
 KINDS = {
     "NR_GCPTR",
     "NR_NULLABLE_GCPTR",

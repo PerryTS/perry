@@ -662,7 +662,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // `zlib.createBrotliDecompress(options?)` — axios feature-check
     // shim. Returns a registered Buffer-shaped handle (NaN-boxed at
     // the call site).
-    module.declare_function("js_zlib_create_brotli_decompress", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_brotli_decompress", DOUBLE, &[DOUBLE]);
     // crypto.randomFillSync(buf, offset?, size?) → returns the same
     // NaN-boxed buffer with random bytes written in-place.
     module.declare_function(

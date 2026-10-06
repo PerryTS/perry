@@ -737,3 +737,5 @@ pub const CLOSURE_NO_THIS_REBIND_FLAG: u32 = 0x4000_0000;
 /// Numeric typed-array resolved ArrayBuffer storage contract.
 pub const TA_STORAGE_RESOLVED: u8 = 2;
 pub const TA_DATA_OFFSET: usize = 16;
+
+pub mod native_class_ids;

@@ -163,47 +163,59 @@ pub(crate) fn declare_third_party(module: &mut LlModule) {
     module.declare_function("js_suppressed_error_new", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE]);
 
     // ========== zlib ==========
+    module.declare_function("js_zlib_gzip_init", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_gunzip_init", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_deflate_init", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_inflate_init", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_deflate_raw_init", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_inflate_raw_init", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_unzip_init", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_brotli_compress_init", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_brotli_decompress_init", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_compress_init", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_decompress_init", DOUBLE, &[DOUBLE, DOUBLE]);
+
     // #2935: gzipSync/deflateSync take the data as raw NaN-box bits (I64) plus
     // an options object (DOUBLE) so the `{ level }` option can select the
     // compression level / throw RangeError. The codec unboxes the data itself.
-    module.declare_function("js_zlib_deflate_sync", I64, &[I64, DOUBLE]);
+    module.declare_function("js_zlib_deflate_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_deflate", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_gunzip_sync", I64, &[I64]);
+    module.declare_function("js_zlib_gunzip_sync", DOUBLE, &[I64]);
     module.declare_function("js_zlib_gunzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_gzip_sync", I64, &[I64, DOUBLE]);
+    module.declare_function("js_zlib_gzip_sync", DOUBLE, &[I64, DOUBLE]);
     module.declare_function("js_zlib_gzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_inflate_sync", I64, &[I64]);
+    module.declare_function("js_zlib_inflate_sync", DOUBLE, &[I64]);
     module.declare_function("js_zlib_inflate", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_deflate_raw_sync", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_deflate_raw_sync", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_deflate_raw", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_inflate_raw_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_inflate_raw_sync", DOUBLE, &[DOUBLE]);
     module.declare_function("js_zlib_inflate_raw", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_unzip_sync", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_unzip_sync", DOUBLE, &[DOUBLE]);
     module.declare_function("js_zlib_unzip", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_crc32", DOUBLE, &[DOUBLE, DOUBLE]);
     // Brotli sync one-shots take data as raw NaN-box bits for the same
     // shared validation path as gzipSync/deflateSync.
-    module.declare_function("js_zlib_brotli_compress_sync", I64, &[I64]);
-    module.declare_function("js_zlib_brotli_decompress_sync", I64, &[I64]);
+    module.declare_function("js_zlib_brotli_compress_sync", DOUBLE, &[I64]);
+    module.declare_function("js_zlib_brotli_decompress_sync", DOUBLE, &[I64]);
     module.declare_function("js_zlib_brotli_compress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_brotli_decompress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_zstd_compress_sync", I64, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_zlib_zstd_decompress_sync", I64, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_compress_sync", DOUBLE, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_zlib_zstd_decompress_sync", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_zstd_compress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_zlib_zstd_decompress", VOID, &[DOUBLE, DOUBLE, DOUBLE]);
-    // #1843 — Transform-stream factories: `_opts` (DOUBLE) in, i64 handle out.
+    // Runtime Transform factories: options in, ordinary object value out.
     // (`js_zlib_create_brotli_decompress` is declared alongside the other
     // crypto/zlib helpers in runtime_decls/strings.rs.)
-    module.declare_function("js_zlib_create_gzip", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_create_gunzip", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_create_deflate", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_create_inflate", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_create_deflate_raw", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_create_inflate_raw", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_create_unzip", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_create_brotli_compress", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_create_zstd_compress", I64, &[DOUBLE]);
-    module.declare_function("js_zlib_create_zstd_decompress", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_gzip", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_zlib_create_gunzip", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_zlib_create_deflate", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_zlib_create_inflate", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_zlib_create_deflate_raw", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_zlib_create_inflate_raw", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_zlib_create_unzip", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_zlib_create_brotli_compress", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_zlib_create_zstd_compress", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_zlib_create_zstd_decompress", DOUBLE, &[DOUBLE]);
 
     // ========== Buffer ==========
     module.declare_function("js_buffer_alloc_unsafe", I64, &[I32]);

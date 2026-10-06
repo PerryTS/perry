@@ -17,7 +17,7 @@ macro_rules! try_arm {
     };
 }
 
-mod fastify_net_zlib;
+mod fastify_net;
 mod init;
 mod method_dispatch;
 mod property_dispatch;
@@ -43,9 +43,7 @@ pub(crate) use sqlite::{dispatch_sqlite_db, dispatch_sqlite_stmt};
     not(target_os = "ios"),
     not(target_os = "android")
 ))]
-pub(crate) use fastify_net_zlib::dispatch_external_net_socket;
-#[cfg(feature = "compression-gzip")]
-pub(crate) use fastify_net_zlib::dispatch_zlib_stream;
+pub(crate) use fastify_net::dispatch_external_net_socket;
 
 // ---- per-feature installs (see `super::feature_hooks`) ----
 //
@@ -97,15 +95,11 @@ pub(crate) fn install_tls() {
 
 #[cfg(feature = "compression-gzip")]
 pub(crate) fn install_zlib() {
-    method_dispatch::install_zlib();
-    property_dispatch::install_zlib();
     unsafe { init::install_zlib_registrations() };
 }
 
 #[cfg(feature = "external-zlib-pump")]
 pub(crate) fn install_external_zlib() {
-    method_dispatch::install_external_zlib();
-    property_dispatch::install_external_zlib();
     unsafe { init::install_external_zlib_registrations() };
 }
 

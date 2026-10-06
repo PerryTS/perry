@@ -191,9 +191,7 @@ fn observe_pointer(addr: usize) {
     if crate::value::addr_class::is_fetch_handle_band(addr) {
         mark_old(ReceiverReprFamily::Fetch);
     }
-    if crate::value::addr_class::is_zlib_handle_band(addr) {
-        mark_old(ReceiverReprFamily::Zlib);
-    }
+
     if crate::value::addr_class::is_proxy_id_band(addr) {
         let boxed = f64::from_bits(POINTER_TAG | addr as u64);
         if crate::proxy::js_proxy_is_proxy(boxed) != 0 {

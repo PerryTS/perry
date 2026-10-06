@@ -234,10 +234,5 @@
   "crates/perry-stdlib/src/fetch/mod.rs|perry_runtime::buffer::buffer_data_mut(buf),": 2,
   "crates/perry-stdlib/src/fetch_blob.rs|let data = perry_runtime::buffer::buffer_data(buf);": 1,
   "crates/perry-stdlib/src/worker_threads/clone.rs|assert_eq!(perry_runtime::buffer::buffer_data(buffer), original);": 1,
-  "crates/perry-stdlib/src/worker_threads/clone.rs|let original = perry_runtime::buffer::buffer_data(source);": 1,
-  "crates/perry-stdlib/src/zlib.rs|(*buf).length = data.len() as u32;": 1,
-  "crates/perry-stdlib/src/zlib.rs|if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(ta) {": 1,
-  "crates/perry-stdlib/src/zlib.rs|let data = perry_runtime::buffer::buffer_data(": 1,
-  "crates/perry-stdlib/src/zlib.rs|let data_ptr = buffer_data(buf);": 1,
-  "crates/perry-stdlib/src/zlib.rs|std::ptr::copy_nonoverlapping(data.as_ptr(), buffer_data_mut(buf), data.len());": 1
+  "crates/perry-stdlib/src/worker_threads/clone.rs|let original = perry_runtime::buffer::buffer_data(source);": 1
 }

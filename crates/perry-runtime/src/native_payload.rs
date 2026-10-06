@@ -87,6 +87,10 @@ pub struct PayloadPrototype {
 }
 
 impl PayloadPrototype {
+    /// LazyTransform's inherited state getters (first state read initializes).
+    pub fn lazy_stream_state_getters(&mut self) {
+        crate::node_stream::native_hooks::install_lazy_state_getters(self.proto);
+    }
     /// Install a builtin method: writable, non-enumerable, configurable, with
     /// the given `.name` and `.length`. `info` comes from `perry_runtime::fn_info!`
     /// with `with_declared(arity)`; the body receives `this` and `arity`
@@ -192,14 +196,24 @@ pub fn adopt_prototype(
     family: &NativePayloadFamily,
     proto: *mut ObjectHeader,
 ) -> *mut ObjectHeader {
-    let index = slot_index(family.class_id);
+    adopt_prototype_with(family.class_id, proto, |proto| {
+        install_on_prototype(proto, family.install_prototype)
+    })
+}
+
+pub(crate) fn adopt_prototype_with(
+    class_id: u32,
+    proto: *mut ObjectHeader,
+    install: impl FnOnce(*mut ObjectHeader),
+) -> *mut ObjectHeader {
+    let index = slot_index(class_id);
     let existing = PAYLOAD_PROTOTYPES.with(|slots| slots[index].load(Ordering::Acquire));
     if existing != 0 {
         return existing as *mut ObjectHeader;
     }
     if !proto.is_null() {
         let _no_move = crate::gc::GcSuppressScope::new();
-        install_on_prototype(proto, family.install_prototype);
+        install(proto);
         PAYLOAD_PROTOTYPES.with(|slots| {
             crate::gc::runtime_store_root_atomic_raw_i64(
                 &slots[index],
@@ -232,7 +246,7 @@ crate::perry_thread_local! {
 }
 
 const _: () = assert!(
-    crate::native_class_ids::SQLITE_LIMITS - crate::native_class_ids::WEB_BUILTIN_BLOCK_START
+    crate::native_class_ids::ZLIB_BASE - crate::native_class_ids::WEB_BUILTIN_BLOCK_START
         < PROTOTYPE_SLOTS as u32,
     "a native-payload family id outgrew the prototype slot array"
 );
@@ -639,27 +653,38 @@ fn attach_rooted<T: 'static>(
     vtable: &'static PayloadVTable,
     external_bytes: usize,
 ) {
+    let resource = payload.map_or(std::ptr::null_mut(), |p| {
+        Box::into_raw(Box::new(p)) as *mut c_void
+    });
+    attach_external_rooted(
+        obj,
+        resource,
+        type_tag::<T>(family.class_id),
+        vtable,
+        family.name,
+        family.links_owner,
+        external_bytes,
+    );
+}
+
+/// Shared attachment for in-tree and C-ABI families; the caller owns the
+/// resource until this call transfers it to the object's traced cell.
+pub(crate) fn attach_external_rooted(
+    obj: &crate::gc::RuntimeHandle<'_>,
+    resource: *mut c_void,
+    type_id: u64,
+    vtable: &'static PayloadVTable,
+    name: &str,
+    links_owner: bool,
+    external_bytes: usize,
+) {
     let meta = obj
         .with_mut_ptr::<ObjectHeader, _>(|obj| unsafe { crate::object::object_meta_ensure(obj) });
     if meta.is_null() {
         return;
     }
-    // The cell allocation may collect; re-read meta through the rooted object.
-    let resource = payload.map_or(std::ptr::null_mut(), |p| {
-        Box::into_raw(Box::new(p)) as *mut c_void
-    });
     let cell = unsafe {
-        crate::native_handle::native_handle_new_rust_payload(
-            resource,
-            if resource.is_null() {
-                family.class_id as u64
-            } else {
-                type_tag::<T>(family.class_id)
-            },
-            vtable,
-            family.name,
-            family.links_owner,
-        )
+        crate::native_handle::native_handle_new_rust_payload(resource, type_id, vtable, name, links_owner)
     };
     let word = crate::value::JSValue::pointer(cell as *const u8).bits();
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
@@ -672,7 +697,7 @@ fn attach_rooted<T: 'static>(
             word,
         );
     });
-    if family.links_owner {
+    if links_owner {
         obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
             let owner = crate::value::js_nanbox_pointer(obj as i64).to_bits();
             // GC_STORE_AUDIT(BARRIERED): malloc cell -> nursery owner.
@@ -711,7 +736,11 @@ fn attach_rooted<T: 'static>(
 ///
 /// # Safety
 /// `proto` is the family's live prototype; it is rooted by its slot.
-unsafe fn born_instance(class_id: u32, proto: *mut ObjectHeader, slots: u32) -> *mut ObjectHeader {
+pub(crate) unsafe fn born_instance(
+    class_id: u32,
+    proto: *mut ObjectHeader,
+    slots: u32,
+) -> *mut ObjectHeader {
     let meta = (*proto).meta;
     if !meta.is_null() {
         let word = (*meta).instance_birth;
@@ -769,7 +798,7 @@ fn instance_of(value: f64, class_id: u32) -> Option<*mut ObjectHeader> {
 }
 
 #[inline]
-fn any_object(value: f64) -> Option<*mut ObjectHeader> {
+pub(crate) fn any_object(value: f64) -> Option<*mut ObjectHeader> {
     let bits = value.to_bits();
     if bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
         return None;
@@ -1900,7 +1929,7 @@ fn js_state_for_class(value: f64, class_id: u32, create: bool) -> f64 {
 
 /// `obj[key] = value` for a runtime-owned ASCII key, with the key rooted
 /// across the store (the store may allocate a shape transition).
-fn set_own(
+pub(crate) fn set_own(
     scope: &crate::gc::RuntimeHandleScope,
     obj: &crate::gc::RuntimeHandle<'_>,
     key: &[u8],
@@ -2067,6 +2096,18 @@ pub(crate) fn export_class_id(module: &str, export: &str) -> Option<u32> {
         ("sqlite", "DatabaseSync") => ids::SQLITE_DATABASE_SYNC,
         ("sqlite", "StatementSync") => ids::SQLITE_STATEMENT_SYNC,
         ("sqlite", "Session") => ids::SQLITE_SESSION,
+        ("zlib", "Gzip") => ids::GZIP,
+        ("zlib", "Gunzip") => ids::GUNZIP,
+        ("zlib", "Deflate") => ids::DEFLATE,
+        ("zlib", "Inflate") => ids::INFLATE,
+        ("zlib", "DeflateRaw") => ids::DEFLATE_RAW,
+        ("zlib", "InflateRaw") => ids::INFLATE_RAW,
+        ("zlib", "Unzip") => ids::UNZIP,
+        ("zlib", "BrotliCompress") => ids::BROTLI_COMPRESS,
+        ("zlib", "BrotliDecompress") => ids::BROTLI_DECOMPRESS,
+        ("zlib", "ZstdCompress") => ids::ZSTD_COMPRESS,
+        ("zlib", "ZstdDecompress") => ids::ZSTD_DECOMPRESS,
+
         _ => return None,
     })
 }

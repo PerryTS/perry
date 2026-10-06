@@ -318,17 +318,7 @@ fn read_stream_exact_bytes(stream: &RuntimeHandle<'_>, requested: usize) -> f64 
 }
 
 pub(super) fn buffer_value_from_bytes(bytes: &[u8]) -> f64 {
-    let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
-    if !bytes.is_empty() {
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                crate::buffer::buffer_data_mut(buf),
-                bytes.len(),
-            );
-        }
-    }
-    box_pointer(buf as *const u8)
+    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes)
 }
 
 pub(super) fn read_stream_object_mode_chunk(stream: f64) -> f64 {

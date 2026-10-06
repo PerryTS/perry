@@ -5222,7 +5222,9 @@ version = "0.5.1657"
 dependencies = [
  "brotli 9.0.0",
  "flate2",
+ "miniz_oxide 0.9.1",
  "perry-ffi",
+ "perry-runtime",
  "zstd",
 ]
 
@@ -5408,6 +5410,7 @@ dependencies = [
  "pbkdf2 0.13.0",
  "perry-base64",
  "perry-container-compose",
+ "perry-ext-zlib",
  "perry-ffi",
  "perry-hex",
  "perry-http-server",

@@ -178,6 +178,12 @@ unsafe fn attach(module: &str, name: &str, value: f64) -> f64 {
         }
         link_parent(ctor.get_nanbox_f64(), parent.get_nanbox_f64());
     }
+    if (module, name) == ("crypto", "#LazyTransform") {
+        let proto = prototype(ctor.get_nanbox_f64());
+        crate::node_stream::native_hooks::install_lazy_state_getters(
+            crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader,
+        );
+    }
     ctor.get_nanbox_f64()
 }
 

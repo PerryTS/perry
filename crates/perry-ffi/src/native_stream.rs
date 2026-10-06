@@ -27,7 +27,7 @@
 use std::ffi::c_void;
 
 /// Revision of the stream ABI this file is written against.
-const STREAM_ABI_VERSION: u8 = 1;
+const STREAM_ABI_VERSION: u8 = 2;
 
 /// Which stream the family is.
 #[repr(transparent)]
@@ -133,6 +133,8 @@ pub struct StreamHooks {
     pub error: unsafe extern "C" fn(owner: f64, code: u32) -> f64,
     /// Release the payload at `destroy()` (close it; zlib: `_handle = null`).
     pub release: unsafe extern "C" fn(owner: f64),
+    /// Update ordinary owner fields after the payload borrow has ended.
+    pub after_step: Option<unsafe extern "C" fn(owner: f64)>,
 }
 
 // SAFETY: immutable statics of function pointers and integers.
@@ -260,4 +262,13 @@ mod tests {
             2 * std::mem::size_of::<usize>()
         );
     }
+}
+
+extern "C" {
+    fn js_perry_stream_prototype_step(value: f64, chunk: f64, callback: f64, final_op: i32) -> i32;
+}
+/// _transform/_flush on a native base prototype, with a JS continuation.
+pub fn prototype_step(value: f64, chunk: f64, callback: f64, final_op: bool) -> bool {
+    abi_matches()
+        && unsafe { js_perry_stream_prototype_step(value, chunk, callback, final_op as i32) == 0 }
 }

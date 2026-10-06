@@ -1,183 +1,123 @@
 use super::*;
 
-fn state(codec: Codec, chunk_size: usize, hwm: usize) -> ZlibStreamState {
-    let driver = Driver::new(codec, chunk_size, hwm, 65536);
-    ZlibStreamState {
-        async_id: 0,
-        codec,
-        level: Compression::default(),
-        codec_state: if driver.is_decoder() {
-            None
-        } else {
-            make_codec_state(codec)
-        },
-        ended: false,
-        wrote_data: false,
-        bytes_written: 0,
-        pipes: Vec::new(),
-        driver,
-        destroyed: false,
-        readable_ended: false,
-        finished: false,
-        error: None,
-        end_callbacks: Vec::new(),
-    }
-}
-fn input(codec: Codec, bytes: &[u8]) -> Vec<u8> {
-    run_codec(codec, bytes).unwrap()
-}
-#[test]
-fn gzip_stream_and_one_shot_emit_identical_node_bytes() {
-    let bytes = b"hello hello hello hello hello world";
-    let expected = crate::gzip_bytes(bytes).unwrap();
-    assert_eq!(run_codec(Codec::Gzip, bytes).unwrap(), expected);
-    let mut encoder = make_codec_state(Codec::Gzip).unwrap();
-    encoder.write_chunk(bytes).unwrap();
-    let compressed = encoder.finish().unwrap();
-    assert_eq!(compressed, expected);
-    assert_eq!(crate::gunzip_bytes(&compressed).unwrap(), bytes);
-}
-
-#[test]
-fn decoder_suspends_at_hwm_and_resumes_without_losing_bytes() {
-    let expected = vec![65; 2_000_000];
-    let compressed = input(Codec::Gzip, &expected);
-    let mut s = state(Codec::Gunzip, 1024, 2048);
-    s.driver.work.push_back(Work::Write(compressed, 0, 0));
-    s.driver.work.push_back(Work::End);
-    for _ in 0..10 {
-        s.driver
-            .produce(&mut s.codec_state, 0, &mut s.bytes_written)
-            .unwrap();
-    }
-    assert_eq!(s.driver.output_bytes, 2048);
-    assert!(!s.driver.done, "finish must wait for consumer progress");
-    let mut out = Vec::new();
-    while !s.driver.done || !s.driver.output.is_empty() {
-        while let Some(chunk) = s.driver.output.pop_front() {
-            assert!(chunk.len() <= 1024);
-            s.driver.output_bytes -= chunk.len();
-            out.extend(chunk);
+fn run(codec: Codec, input: &[u8], chunk_size: usize, write_size: usize) -> Vec<u8> {
+    assert_eq!(
+        perry_runtime::native_payload_stream_abi::js_perry_stream_abi_layout(),
+        ns::layout_digest()
+    );
+    let mut payload = driver::Payload::new(codec, Compression::default(), chunk_size).unwrap();
+    let mut result = Vec::new();
+    for chunk in input.chunks(write_size) {
+        let mut offset = 0;
+        for _ in 0..1_000_000 {
+            let op = ns::StepIn {
+                op: ns::StreamOp::WRITE,
+                flush_kind: 0,
+                input: unsafe { chunk.as_ptr().add(offset) },
+                len: chunk.len() - offset,
+            };
+            let mut out = ns::StepOut {
+                consumed: 0,
+                out: std::ptr::null(),
+                out_len: 0,
+                status: ns::StepStatus::NEED_INPUT,
+                code: 0,
+                external_bytes: 0,
+            };
+            payload.step(&op, &mut out);
+            assert_ne!(out.status, ns::StepStatus::ERROR, "codec failed");
+            assert!(out.out_len <= chunk_size);
+            assert_eq!(out.external_bytes, payload.external_bytes());
+            if out.out_len > 0 {
+                result
+                    .extend_from_slice(unsafe { std::slice::from_raw_parts(out.out, out.out_len) });
+            }
+            offset += out.consumed;
+            if out.status == ns::StepStatus::NEED_INPUT {
+                break;
+            }
         }
-        s.driver
-            .produce(&mut s.codec_state, 0, &mut s.bytes_written)
-            .unwrap();
+        assert_eq!(offset, chunk.len());
     }
-    assert_eq!(out, expected);
-}
-#[test]
-fn gzip_members_and_byte_split_headers_survive_suspension() {
-    let mut compressed = input(Codec::Gzip, b"first");
-    compressed.extend(input(Codec::Gzip, b"second"));
-    let mut s = state(Codec::Gunzip, 64, 1);
-    for byte in compressed {
-        s.driver.work.push_back(Work::Write(vec![byte], 0, 0));
-    }
-    s.driver.work.push_back(Work::End);
-    let mut out = Vec::new();
-    for _ in 0..1000 {
-        s.driver
-            .produce(&mut s.codec_state, 0, &mut s.bytes_written)
-            .unwrap();
-        while let Some(chunk) = s.driver.output.pop_front() {
-            s.driver.output_bytes -= chunk.len();
-            out.extend(chunk);
+    for _ in 0..1_000_000 {
+        let op = ns::StepIn {
+            op: ns::StreamOp::FINAL,
+            flush_kind: 0,
+            input: std::ptr::null(),
+            len: 0,
+        };
+        let mut out = ns::StepOut {
+            consumed: 0,
+            out: std::ptr::null(),
+            out_len: 0,
+            status: ns::StepStatus::NEED_INPUT,
+            code: 0,
+            external_bytes: 0,
+        };
+        payload.step(&op, &mut out);
+        assert_ne!(out.status, ns::StepStatus::ERROR, "final failed");
+        if out.out_len > 0 {
+            result.extend_from_slice(unsafe { std::slice::from_raw_parts(out.out, out.out_len) });
         }
-        if s.driver.done {
-            break;
+        if out.status == ns::StepStatus::ENDED {
+            return result;
         }
     }
-    assert!(s.driver.done);
-    assert_eq!(out, b"firstsecond");
+    panic!("codec never finished");
 }
 #[test]
-fn all_decoders_roundtrip_with_bounded_output() {
-    let expected = vec![17; 100000];
-    for (encoder, decoder) in [
+fn all_codecs_roundtrip_with_one_bounded_output_per_step() {
+    let bytes: Vec<_> = (0..100000).map(|i| (i % 251) as u8).collect();
+    for (enc, dec) in [
+        (Codec::Gzip, Codec::Gunzip),
         (Codec::Deflate, Codec::Inflate),
         (Codec::DeflateRaw, Codec::InflateRaw),
         (Codec::Gzip, Codec::Unzip),
         (Codec::BrotliCompress, Codec::BrotliDecompress),
         (Codec::ZstdCompress, Codec::ZstdDecompress),
     ] {
-        let mut s = state(decoder, 64, 64);
-        s.driver
-            .work
-            .push_back(Work::Write(input(encoder, &expected), 0, 0));
-        s.driver.work.push_back(Work::End);
-        let mut out = Vec::new();
-        for _ in 0..10000 {
-            s.driver
-                .produce(&mut s.codec_state, 0, &mut s.bytes_written)
-                .unwrap();
-            while let Some(chunk) = s.driver.output.pop_front() {
-                assert!(chunk.len() <= 64);
-                s.driver.output_bytes -= chunk.len();
-                out.extend(chunk);
-            }
-            if s.driver.done {
-                break;
-            }
-        }
-        assert!(s.driver.done);
-        assert_eq!(out, expected);
+        let compressed = run(enc, &bytes, 64, 1024);
+        assert_eq!(run(dec, &compressed, 64, 7), bytes);
     }
 }
 #[test]
-fn writes_drain_native_output_before_their_callback_without_end() {
-    let expected = vec![42; 300000];
-    for (encoder, decoder) in [
-        (Codec::Gzip, Codec::Gunzip),
-        (Codec::Deflate, Codec::Inflate),
-        (Codec::DeflateRaw, Codec::InflateRaw),
-        (Codec::BrotliCompress, Codec::BrotliDecompress),
-        (Codec::ZstdCompress, Codec::ZstdDecompress),
-    ] {
-        let compressed = input(encoder, &expected);
-        let mut s = state(decoder, 64, 64);
-        s.driver.input_bytes = compressed.len();
-        s.driver.work.push_back(Work::Write(compressed, 0, 777));
-        let mut out = Vec::new();
-        let mut completed = false;
-        for _ in 0..10000 {
-            let events = s
-                .driver
-                .produce(&mut s.codec_state, 0, &mut s.bytes_written)
-                .unwrap();
-            completed |= events.iter().any(|e| matches!(e, ZlibEvent::Callback(777)));
-            while let Some(chunk) = s.driver.output.pop_front() {
-                s.driver.output_bytes -= chunk.len();
-                out.extend(chunk);
-            }
-            if completed {
-                break;
-            }
-        }
-        assert!(completed);
-        assert_eq!(out, expected);
-        assert_eq!(s.driver.input_bytes, 0);
-    }
+fn gzip_members_and_byte_split_headers_survive_steps() {
+    let mut compressed = crate::gzip_bytes(b"first").unwrap();
+    compressed.extend(crate::gzip_bytes(b"second").unwrap());
+    assert_eq!(run(Codec::Gunzip, &compressed, 64, 1), b"firstsecond");
+    assert_eq!(run(Codec::Unzip, &compressed, 64, 1), b"firstsecond");
 }
-
 #[test]
-fn short_output_does_not_retain_full_chunk_allocations() {
-    let mut s = state(Codec::Gunzip, 65536, 512);
-    for byte in input(Codec::Gzip, &vec![65; 100000]) {
-        s.driver.work.push_back(Work::Write(vec![byte], 0, 0));
-    }
-    s.driver.work.push_back(Work::End);
-    for _ in 0..10000 {
-        s.driver
-            .produce(&mut s.codec_state, 0, &mut s.bytes_written)
-            .unwrap();
-        if s.driver.output_bytes >= 512 {
-            break;
-        }
-    }
-    assert!(s.driver.output_bytes >= 512);
-    let retained: usize = s.driver.output.iter().map(Vec::capacity).sum();
+fn gzip_stream_and_one_shot_preserve_the_node_os_byte_and_payload() {
+    let input = b"hello hello hello hello hello world";
+    assert_eq!(
+        run(Codec::Gzip, input, 64, 1024),
+        crate::gzip_bytes(input).unwrap()
+    );
+}
+#[test]
+fn bomb_can_suspend_after_one_output_step() {
+    let compressed = crate::gzip_bytes(&vec![65; 100_000_000]).unwrap();
+    let mut p = driver::Payload::new(Codec::Gunzip, Compression::default(), 1024).unwrap();
+    let op = ns::StepIn {
+        op: ns::StreamOp::WRITE,
+        flush_kind: 0,
+        input: compressed.as_ptr(),
+        len: compressed.len(),
+    };
+    let mut out = ns::StepOut {
+        consumed: 0,
+        out: std::ptr::null(),
+        out_len: 0,
+        status: ns::StepStatus::NEED_INPUT,
+        code: 0,
+        external_bytes: 0,
+    };
+    p.step(&op, &mut out);
+    assert_eq!(out.out_len, 1024);
+    assert!(out.consumed < compressed.len());
     assert!(
-        retained <= 512 + 65536,
-        "pending output retained {retained} bytes"
+        out.external_bytes < 100000,
+        "no native input or output queue is retained"
     );
 }

@@ -1230,13 +1230,7 @@ js_ext_net_socket_write	f64	i64,i64
 js_ext_net_socket_write3	f64	i64,f64,f64,f64
 js_ext_tls_connect	i64	f64,f64,f64,f64
 js_ext_ws_handle_property_dispatch	i32s	i64,ptr,usize,ptr
-js_ext_zlib_dispatch_method	f64	i64,ptr,usize,ptr,usize
-js_ext_zlib_has_active_handles	i32s	
-js_ext_zlib_is_stream_handle	i32s	i64
 js_ext_zlib_native_dispatch	f64	ptr,usize,ptr,usize
-js_ext_zlib_process_pending	i32s	
-js_ext_zlib_stream_bytes_written	f64	i64
-js_ext_zlib_stream_property	f64	i64,i32s
 js_fetch_get	ptr	ptr
 js_fetch_get_with_auth	ptr	ptr,ptr
 js_fetch_handle_kind	i8u	usize
@@ -2734,6 +2728,15 @@ js_perry_agent_current	i64
 js_perry_agent_post	i32s	ptr,ptr
 js_perry_agent_post_available	i32s	
 js_perry_agent_post_dispatched	i64	
+js_perry_bytes_abi_layout	i64	
+js_perry_bytes_adopt	f64	i32u,ptr,usize,usize,ptr
+js_perry_bytes_borrow	i32s	f64,ptr
+js_perry_bytes_copy	f64	i32u,ptr,usize
+js_perry_bytes_new	f64	i32u,usize,i32u,ptr
+js_perry_bytes_pin	i32s	f64,ptr
+js_perry_bytes_scope_enter	void	
+js_perry_bytes_scope_leave	void	
+js_perry_bytes_unpin	void	i64
 js_perry_embedded_files	ptr	
 js_perry_native_f32	f64	f64
 js_perry_native_f64	f64	f64
@@ -2774,6 +2777,17 @@ js_perry_net_timer_cancel	i32s	i64,ptr
 js_perry_net_timer_park	i32s	i64,ptr
 js_perry_net_transfer	i32s	i64,i32s,ptr
 js_perry_net_write	i32s	i64,ptr,usize,i64,ptr,ptr
+js_perry_payload_abi_layout	i64	
+js_perry_payload_alloc	f64	ptr,ptr,f64,usize
+js_perry_payload_attach	i32s	f64,ptr,ptr,usize
+js_perry_payload_close	i32s	f64,ptr
+js_perry_payload_close_attached	i32s	f64,ptr
+js_perry_payload_external_bytes	void	f64,ptr,usize
+js_perry_payload_get	ptr	f64,ptr
+js_perry_payload_get_attached	ptr	f64,ptr
+js_perry_payload_own	void	f64,ptr,usize,f64
+js_perry_payload_proto_method	void	ptr,ptr,usize,ptr,i32u
+js_perry_payload_prototype	f64	ptr,ptr,usize
 js_perry_read_embedded	ptr	f64
 js_perry_smtp_add_recipient	void	i64,ptr,usize
 js_perry_smtp_available	i32s	
@@ -2785,6 +2799,12 @@ js_perry_smtp_set_from	void	i64,ptr,usize
 js_perry_smtp_set_message	void	i64,ptr,usize,ptr,usize
 js_perry_smtp_set_server	void	i64,ptr,usize,i16u,i32s,i32s
 js_perry_smtp_submit	i32s	i64,i32s,usize,ptr
+js_perry_stream_abi_layout	i64	
+js_perry_stream_flush	i32s	f64,i32s,f64
+js_perry_stream_init_transform	i32s	f64,f64
+js_perry_stream_init_writable	i32s	f64,f64
+js_perry_stream_prototype_step	i32s	f64,f64,f64,i32s
+js_perry_stream_queue_immediate	i32s	f64
 js_perry_tui_animated_spinner	i64	f64,i64
 js_perry_tui_app_exit	f64	i64
 js_perry_tui_app_wait_until_exit	f64	i64
@@ -3143,8 +3163,8 @@ js_regexp_exec_get_groups	i64
 js_regexp_exec_get_index	f64	
 js_regexp_get_flags	ptr	ptr
 js_regexp_get_source	ptr	ptr
-js_regexp_new	ptr	ptr,ptr
 js_regexp_literal	ptr	ptr,ptr,i64
+js_regexp_new	ptr	ptr,ptr
 js_regexp_test	i32s	ptr,ptr
 js_regexp_to_string	ptr	ptr
 js_region_guard_pack	i64	i32u,i32u,i64,i64,i64,i64,i64
@@ -4328,51 +4348,58 @@ js_yoga_set_measure_func	f64	f64,f64
 js_yoga_set_number	f64	f64,f64,f64,f64
 js_yoga_unset_measure_func	f64	f64
 js_zlib_brotli_compress	void	f64,f64,f64
-js_zlib_brotli_compress_sync	ptr	i64
+js_zlib_brotli_compress_init	f64	f64,f64
+js_zlib_brotli_compress_sync	f64	i64
 js_zlib_brotli_decompress	void	f64,f64,f64
-js_zlib_brotli_decompress_sync	ptr	i64
+js_zlib_brotli_decompress_init	f64	f64,f64
+js_zlib_brotli_decompress_sync	f64	i64
 js_zlib_crc32	f64	f64,f64
-js_zlib_create_brotli_compress	i64	f64
-js_zlib_create_brotli_decompress	i64	f64
-js_zlib_create_deflate	i64	f64
-js_zlib_create_deflate_raw	i64	f64
-js_zlib_create_gunzip	i64	f64
-js_zlib_create_gzip	i64	f64
-js_zlib_create_inflate	i64	f64
-js_zlib_create_inflate_raw	i64	f64
-js_zlib_create_unzip	i64	f64
-js_zlib_create_zstd_compress	i64	f64
-js_zlib_create_zstd_decompress	i64	f64
+js_zlib_create_brotli_compress	f64	f64
+js_zlib_create_brotli_decompress	f64	f64
+js_zlib_create_deflate	f64	f64
+js_zlib_create_deflate_raw	f64	f64
+js_zlib_create_gunzip	f64	f64
+js_zlib_create_gzip	f64	f64
+js_zlib_create_inflate	f64	f64
+js_zlib_create_inflate_raw	f64	f64
+js_zlib_create_unzip	f64	f64
+js_zlib_create_zstd_compress	f64	f64
+js_zlib_create_zstd_decompress	f64	f64
 js_zlib_deflate	void	f64,f64,f64
+js_zlib_deflate_init	f64	f64,f64
 js_zlib_deflate_raw	void	f64,f64,f64
-js_zlib_deflate_raw_sync	ptr	f64,f64
-js_zlib_deflate_sync	ptr	i64,f64
+js_zlib_deflate_raw_init	f64	f64,f64
+js_zlib_deflate_raw_sync	f64	f64,f64
+js_zlib_deflate_sync	f64	i64,f64
 js_zlib_gunzip	void	f64,f64,f64
-js_zlib_gunzip_sync	ptr	i64
+js_zlib_gunzip_init	f64	f64,f64
+js_zlib_gunzip_sync	f64	i64
 js_zlib_gzip	void	f64,f64,f64
-js_zlib_gzip_sync	ptr	i64,f64
+js_zlib_gzip_init	f64	f64,f64
+js_zlib_gzip_sync	f64	i64,f64
 js_zlib_inflate	void	f64,f64,f64
+js_zlib_inflate_init	f64	f64,f64
 js_zlib_inflate_raw	void	f64,f64,f64
-js_zlib_inflate_raw_sync	ptr	f64
-js_zlib_inflate_sync	ptr	i64
+js_zlib_inflate_raw_init	f64	f64,f64
+js_zlib_inflate_raw_sync	f64	f64
+js_zlib_inflate_sync	f64	i64
 js_zlib_is_callback	i32s	f64
-js_zlib_native_dispatch	f64	ptr,usize,ptr,usize
-js_zlib_pipe_drain_callback	i64	f64
-js_zlib_process_pending	i32s	
 js_zlib_resolve_level	i32s	f64
 js_zlib_stream_error	f64	ptr,usize,i32s
-js_zlib_stream_iterator	f64	f64,f64
 js_zlib_stream_option	usize	f64,i32s
 js_zlib_unzip	void	f64,f64,f64
-js_zlib_unzip_sync	ptr	f64
+js_zlib_unzip_init	f64	f64,f64
+js_zlib_unzip_sync	f64	f64
 js_zlib_validate_buffer_arg	void	i64
 js_zlib_validate_callback	i64	f64
 js_zlib_validate_options	void	f64,i32s
 js_zlib_validate_params	i32s	f64,f64
 js_zlib_zstd_compress	void	f64,f64,f64
-js_zlib_zstd_compress_sync	ptr	f64,f64
+js_zlib_zstd_compress_init	f64	f64,f64
+js_zlib_zstd_compress_sync	f64	f64,f64
 js_zlib_zstd_decompress	void	f64,f64,f64
-js_zlib_zstd_decompress_sync	ptr	f64,f64
+js_zlib_zstd_decompress_init	f64	f64,f64
+js_zlib_zstd_decompress_sync	f64	f64,f64
 main	i32s	
 napi_acquire_threadsafe_function	i32s	ptr
 napi_add_async_cleanup_hook	i32s	ptr,ptr,ptr,ptr
