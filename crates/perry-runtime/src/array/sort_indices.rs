@@ -31,31 +31,41 @@ pub(super) fn sort_indices(
         if end < len {
             let ascending = le(order[start], order[end]);
             end += 1;
-            while end < len && le(order[end - 1], order[end]) == ascending {
+            while end < len && le(unsafe { *order.get_unchecked(end - 1) }, order[end]) == ascending
+            {
                 end += 1;
             }
             if !ascending {
                 // Strictly descending only: reversing equal elements would
                 // break stability. NaN comparator results are equal upstream.
-                order[start..end].reverse();
+                // start < end <= len follows from the guarded run scan.
+                unsafe {
+                    std::slice::from_raw_parts_mut(order.as_mut_ptr().add(start), end - start)
+                        .reverse();
+                }
             }
         }
         let run_end = end.max(start.saturating_add(MIN_RUN).min(len));
         // Extend short runs with binary insertion. An index can stay in a
         // register across a callback; a copied heap value could not.
         for i in end..run_end {
-            let key = order[i];
+            // i < run_end <= len; binary search keeps start <= lo <= hi <= i.
+            let key = unsafe { *order.get_unchecked(i) };
             let (mut lo, mut hi) = (start, i);
             while lo < hi {
                 let mid = lo + (hi - lo) / 2;
-                if le(order[mid], key) {
+                if le(unsafe { *order.get_unchecked(mid) }, key) {
                     lo = mid + 1;
                 } else {
                     hi = mid;
                 }
             }
-            order.copy_within(lo..i, lo + 1);
-            order[lo] = key;
+            // The shifted range ends at i + 1 <= len and can overlap.
+            unsafe {
+                let order_ptr = order.as_mut_ptr();
+                std::ptr::copy(order_ptr.add(lo), order_ptr.add(lo + 1), i - lo);
+                *order_ptr.add(lo) = key;
+            }
         }
         runs[pending] = Run {
             start,
@@ -104,13 +114,24 @@ fn merge_at(
     runs[i].len += runs[i + 1].len;
     runs.copy_within(i + 2..*pending, i + 1);
     *pending -= 1;
-    if le(order[mid - 1], order[mid]) {
+    // Nonempty adjacent runs prove 0 < mid < end <= order.len().
+    if le(unsafe { *order.get_unchecked(mid - 1) }, unsafe {
+        *order.get_unchecked(mid)
+    }) {
         return;
     }
     // Only the left run needs a snapshot. While it has unconsumed values,
     // dest < right, so forward stores cannot overwrite the right run's next
     // unread index. Once the left run is empty, the right tail is in place.
-    scratch[start..mid].copy_from_slice(&order[start..mid]);
+    // The pending runs are adjacent nonempty partitions of the entry
+    // buffers. Their integer cursors cannot be mutated by the comparator.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            order.as_ptr().add(start),
+            scratch.as_mut_ptr().add(start),
+            mid - start,
+        );
+    }
     let (mut left, mut right, mut dest) = (start, mid, start);
     let (mut left_wins, mut right_wins) = (0, 0);
     // Adjacent runs partition [start, end), with end <= order.len() and
@@ -123,12 +144,12 @@ fn merge_at(
         if le(unsafe { *scratch.get_unchecked(left) }, unsafe {
             *order.get_unchecked(right)
         }) {
-            order[dest] = unsafe { *scratch.get_unchecked(left) };
+            unsafe { *order.get_unchecked_mut(dest) = *scratch.get_unchecked(left) };
             left += 1;
             left_wins += 1;
             right_wins = 0;
         } else {
-            order[dest] = unsafe { *order.get_unchecked(right) };
+            unsafe { *order.get_unchecked_mut(dest) = *order.get_unchecked(right) };
             right += 1;
             right_wins += 1;
             left_wins = 0;
@@ -138,19 +159,36 @@ fn merge_at(
         // then binary search. This helps clustered and duplicate-heavy data
         // without imposing a binary search on each random-data comparison.
         if left_wins >= 7 && left < mid && right < end {
-            let take = gallop_prefix(&scratch[left..mid], |item| {
+            let remaining =
+                unsafe { std::slice::from_raw_parts(scratch.as_ptr().add(left), mid - left) };
+            let take = gallop_prefix(remaining, |item| {
                 le(item, unsafe { *order.get_unchecked(right) })
             });
-            order[dest..dest + take].copy_from_slice(&scratch[left..left + take]);
+            // gallop_prefix returns at most remaining.len(); thus
+            // dest + take <= right and both copied ranges are in bounds.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    scratch.as_ptr().add(left),
+                    order.as_mut_ptr().add(dest),
+                    take,
+                );
+            }
             left += take;
             dest += take;
             left_wins = 0;
         } else if right_wins >= 7 && left < mid && right < end {
             // Strictly less on the right: ties must stay behind the left run.
-            let take = gallop_prefix(&order[right..end], |item| {
+            let remaining =
+                unsafe { std::slice::from_raw_parts(order.as_ptr().add(right), end - right) };
+            let take = gallop_prefix(remaining, |item| {
                 !le(unsafe { *scratch.get_unchecked(left) }, item)
             });
-            order.copy_within(right..right + take, dest);
+            // The right source and destination can overlap; copy preserves
+            // memmove semantics. take <= end - right and dest < right.
+            unsafe {
+                let order_ptr = order.as_mut_ptr();
+                std::ptr::copy(order_ptr.add(right), order_ptr.add(dest), take);
+            }
             right += take;
             dest += take;
             right_wins = 0;
@@ -178,7 +216,8 @@ fn gallop_prefix(values: &[u32], mut belongs: impl FnMut(u32) -> bool) -> usize 
     let mut hi = probe.min(values.len());
     while lo < hi {
         let mid = lo + (hi - lo) / 2;
-        if belongs(values[mid]) {
+        // lo < hi <= values.len() implies lo <= mid < values.len().
+        if belongs(unsafe { *values.get_unchecked(mid) }) {
             lo = mid + 1;
         } else {
             hi = mid;
