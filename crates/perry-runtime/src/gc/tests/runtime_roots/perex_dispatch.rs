@@ -576,3 +576,33 @@ fn perex_dispatch_skips_the_exec_lookup_only_when_nothing_can_observe_it() {
     assert!(!test(&fresh, &miss));
     assert_eq!(lookups(), before);
 }
+
+#[test]
+fn perex_boxed_heap_string_test_roots_input_across_collecting_exec_getter() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    super::perex_public::register_host_roots();
+    let scope = RuntimeHandleScope::new();
+    let receiver = object(&scope);
+    let input = text(&scope, b"\xed\xa0\x80-original");
+    let before = handle_address::<StringHeader>(&input);
+    let method = function(
+        &scope,
+        crate::fn_info!(collecting_getter, 0; with_declared(0)),
+    );
+    getter(&receiver, &method);
+    let roots = RuntimeHandleScope::active_len_for_tests();
+    assert!(api::finish(dispatch::test_value(
+        crate::closure::plain_call_receiver(),
+        receiver.get_nanbox_f64(),
+        handle_string_value(&input),
+    )));
+    assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
+    assert_ne!(handle_address::<StringHeader>(&input), before);
+    assert_eq!(
+        api::finish(dispatch::get(&receiver, b"seen")).to_bits(),
+        handle_string_value(&input).to_bits()
+    );
+}

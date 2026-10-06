@@ -27,3 +27,28 @@ row("flags_typed_getter", () => {
 row("lastIndex_typed_value", () => { const r: RegExp = /a/; const value = {}; r.lastIndex = value as any; return r.lastIndex === value; });
 row("lastIndex_typed_assignment_result", () => { const r: RegExp = /a/g; return [r.lastIndex = 3, r.lastIndex]; });
 row("lastIndex_typed_strict", () => { "use strict"; const r: RegExp = /a/g; Object.defineProperty(r, "lastIndex", {writable: false}); r.lastIndex = 1; return r.lastIndex; });
+// Fresh receivers and coercions cross collecting operand/callback windows.
+function churn(): number {
+  const keep: any[] = [];
+  for (let i = 0; i < 4096; i++) keep.push({i, text: "rooting-" + i});
+  return keep[keep.length - 1].i;
+}
+function coercingInput(): any {
+  churn();
+  return {toString() { churn(); return "a"; }};
+}
+row("test_typed_collecting_argument_and_coercion", () => {
+  const r: RegExp = /a/g;
+  return [r.test(coercingInput()), r.lastIndex];
+});
+row("exec_typed_collecting_argument_and_coercion", () => {
+  const r: RegExp = /a/g;
+  return [r.exec(coercingInput()), r.lastIndex];
+});
+row("test_literal_collecting_argument_and_coercion", () => /a/.test(coercingInput()));
+row("lastIndex_typed_collecting_rhs", () => {
+  const r: RegExp = /a/;
+  function rhs() { churn(); return {tag: "stored"}; }
+  const value = r.lastIndex = rhs() as any;
+  return [r.lastIndex === value, (r.lastIndex as any).tag];
+});
