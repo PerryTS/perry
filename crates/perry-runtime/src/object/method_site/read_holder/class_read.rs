@@ -22,7 +22,7 @@
 //! compared by ShapeId on every use; depth adds compares, never a different
 //! kind of fact.
 //!
-//! Once a site has replaced an absent way for another receiver shape,
+//! Once a site has replaced a live absent way for another receiver shape,
 //! absent ways can retain up to 128
 //! receiver shapes with one identical
 //! chain, terminal and receiver prototype identity. Shape membership proves
@@ -175,12 +175,33 @@ impl Entry {
             *self.receiver_bucket(self.token as u32) = self.token as u32;
             self.slot += 1;
         }
-        let bucket = self.receiver_bucket(shape);
+        let mut bucket = self.receiver_bucket(shape);
         if *bucket != 0 {
             return true;
         }
         if self.slot & !MULTI_ABSENT == ABSENT_RECEIVERS {
-            return false;
+            // ShapeIds are never reused. At capacity, discard expired facts
+            // through the shape table itself, then rehash: clearing individual
+            // buckets would break the probe chains of surviving receivers.
+            let tail = self.hops.add(self.depth as usize - 1).cast::<u32>();
+            let mut live = [0u32; ABSENT_RECEIVERS as usize];
+            let mut count = 0;
+            for i in 0..ABSENT_BUCKETS {
+                let id = *tail.add(i);
+                if id != 0 && crate::object::shapes::shape_record_by_id(id).is_some() {
+                    live[count] = id;
+                    count += 1;
+                }
+            }
+            if count == ABSENT_RECEIVERS as usize {
+                return false;
+            }
+            std::ptr::write_bytes(tail, 0, ABSENT_BUCKETS);
+            self.slot = MULTI_ABSENT | count as u32;
+            for &id in &live[..count] {
+                *self.receiver_bucket(id) = id;
+            }
+            bucket = self.receiver_bucket(shape);
         }
         *bucket = shape;
         self.slot += 1;
@@ -567,12 +588,12 @@ unsafe fn publication_way(entries: &[Entry], next: &mut usize, token: i64, class
             return i;
         }
     }
-    // Ordinary priming keeps main's rotating cursor. Only a site that has
-    // churned can have reclaimed ways; give those empties priority then.
-    if *next & ABSENT_CHURN != 0 {
-        if let Some(i) = entries.iter().position(|e| e.token == 0) {
-            return i;
-        }
+    // An expired receiver can never hit again. Reuse empty or expired ways
+    // before rotating over live facts, whether or not this site has churned.
+    if let Some(i) = entries.iter().position(|e| {
+        e.token == 0 || crate::object::shapes::shape_record_by_id(e.token as u32).is_none()
+    }) {
+        return i;
     }
     let i = *next & CURSOR_MASK;
     *next = (*next & !CURSOR_MASK) | ((i + 1) & CURSOR_MASK);
@@ -708,6 +729,7 @@ unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
         && old.absent
         && w.slot.is_none()
         && old.class_id == (*recv).class_id
+        && crate::object::shapes::shape_record_by_id(old.token as u32).is_some()
     {
         s.next |= ABSENT_CHURN;
     }
@@ -768,7 +790,7 @@ pub(super) fn scan_roots(c: &mut PicCache, visitor: &mut crate::gc::RuntimeRootV
 mod tests {
     use super::*;
 
-    fn pinned_shape(generation: u64) -> u32 {
+    pub(super) fn pinned_shape(generation: u64) -> u32 {
         crate::object::shapes::shape_descriptor_ensure_with_generation(
             std::ptr::null(),
             0,
@@ -781,7 +803,7 @@ mod tests {
         .expect("pinned hop shape")
     }
 
-    fn receiver_shape(class_id: u32, generation: u64) -> u32 {
+    pub(super) fn receiver_shape(class_id: u32, generation: u64) -> u32 {
         crate::object::shapes::shape_descriptor_ensure_with_generation(
             std::ptr::null(),
             0,
@@ -1309,7 +1331,7 @@ mod tests {
     }
 
     /// Fake objects whose only meaningful word is their ShapeId.
-    fn shaped(shape: u32) -> Box<ObjectHeader> {
+    pub(super) fn shaped(shape: u32) -> Box<ObjectHeader> {
         Box::new(ObjectHeader {
             class_id: 0,
             parent_class_id: shape,
@@ -1537,4 +1559,34 @@ mod tests {
         assert!(unsafe { try_hit(recv, &mut slot) }.is_none());
         unsafe { drop(Box::from_raw(record)) };
     }
+}
+
+#[cfg(test)]
+#[path = "class_read/retirement_tests.rs"]
+mod retirement_tests;
+
+/// Inspect the real site in the moving-GC witness; no production API.
+#[cfg(test)]
+pub(crate) unsafe fn test_retirement_snapshot(c: &PicCache) -> (usize, bool, u32) {
+    let s = site(c).expect("class site was primed");
+    (
+        s.entries.iter().filter(|e| e.token != 0).count(),
+        s.next & ABSENT_CHURN != 0,
+        s.entries
+            .iter()
+            .filter(|e| e.multi_absent())
+            .map(|e| e.slot & !MULTI_ABSENT)
+            .sum(),
+    )
+}
+
+#[cfg(test)]
+pub(crate) unsafe fn test_shared_primary(c: &PicCache) -> u32 {
+    site(c)
+        .unwrap()
+        .entries
+        .iter()
+        .find(|e| e.multi_absent())
+        .expect("shared way")
+        .token as u32
 }

@@ -69,7 +69,7 @@ use crate::object::shapes::{
 use crate::object::{ObjectHeader, PicCache, PicCacheSlot};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-mod class_read;
+pub(crate) mod class_read;
 #[cfg(any(test, feature = "regex-engine"))]
 pub(crate) mod probe;
 
