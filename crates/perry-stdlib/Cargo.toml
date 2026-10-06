@@ -411,7 +411,7 @@ ml-kem = { version = "0.3.2", features = ["pkcs8"], optional = true }
 # Compression
 flate2 = { version = "1.0", optional = true }
 # Brotli decompression — feature-checked by axios at module init.
-brotli = { version = "8.0.2", optional = true }
+brotli = { version = "9.0.0", optional = true }
 # Zstd codecs — exposed by modern Node alongside gzip/deflate/Brotli.
 zstd = { version = "0.13.3", optional = true }
 
