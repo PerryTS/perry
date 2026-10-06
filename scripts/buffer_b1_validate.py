@@ -3,7 +3,7 @@
 
 Builds are separate, external to this script. Compile under CPUs 0-55; invoke
 measure through the qb6 measurement lock on CPUs 56-63 with ASLR disabled.
-Every artifact is under --hostdir. GC diagnostics run separately so their JSON
+Every artifact is under --hostdir. GC diagnostics run separately so their diagnostic
 formatting is not included in program instruction counts.
 """
 import argparse
@@ -68,6 +68,17 @@ def normalize_kernel(data):
 def normalize_effect(data):
     return re.sub(rb'(construct2000|decode20000)=\d+ms', rb'\1=<time>ms', data)
 
+def gc_counts(stderr):
+    text = stderr.decode(errors='replace')
+    if '[gc-incremental]' not in text:
+        raise RuntimeError('GC diagnostics missing; refusing to report a guessed zero')
+    # diag_sites.rs emits one gc-full line at the synchronous chokepoint,
+    # and one budgeted done line for each completed incremental cycle.
+    synchronous = len(re.findall(r'(?m)^\[gc-full\] ', text))
+    budgeted = len(re.findall(r'(?m)^\[gc-budgeted\] done [^\n]*\bkind=full\b', text))
+    copying = sum(map(int, re.findall(r'(?m)^\[gc-incremental\] [^\n]*\bcopying_minors=(\d+)', text)))
+    return {'fulls': synchronous+budgeted, 'copying_minors': copying}
+
 def compile_arm(root, arm, names):
     source, target, env = environment(root, arm)
     path = root/'measure'/arm/'status.json'
@@ -130,15 +141,7 @@ def full_collections(root, arm, name, cmd, cwd, env, trial):
     Path(str(prefix)+'.err').write_bytes(stderr)
     if proc.returncode:
         raise RuntimeError(f'GC diagnostic run failed: {prefix}')
-    events = []
-    for line in stderr.decode(errors='replace').splitlines():
-        if line.startswith('{'):
-            try:
-                obj = json.loads(line)
-                if obj.get('event') == 'gc_cycle': events.append(obj)
-            except ValueError: pass
-    fulls = None if not events and b'diagnostics feature disabled' in stderr else sum(e['collection_kind'] == 'full' for e in events)
-    return {'fulls': fulls,
+    return {**gc_counts(stderr),
             'anon_huge_kb': max(s['AnonHugePages'] for s in samples) if samples else None,
             'diag_anon_kb': max(s['Anonymous'] for s in samples) if samples else None,
             'diag_file_rss_kb': max(s['Rss']-s['Anonymous'] for s in samples) if samples else None}
