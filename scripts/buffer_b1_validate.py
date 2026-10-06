@@ -60,7 +60,11 @@ def normalize_effect(data):
 
 def compile_arm(root, arm, names):
     source, target, env = environment(root, arm)
-    status = {}
+    path = root/'measure'/arm/'status.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    status = json.loads(path.read_text()) if path.exists() else {}
+    status.update({name: {'pending': True} for name in names})
+    path.write_text(json.dumps(status, indent=2)+'\n')
     for name in names:
         if name in KERNELS:
             relative, args, cwd = KERNELS[name], [], root/'realprog/kernels'
@@ -68,10 +72,17 @@ def compile_arm(root, arm, names):
             relative, args, package = PROGRAMS[name]
             cwd = root/'realprog'/('pk' if package else '')
         out = root/'measure'/arm
-        compiled = run([str(target/'release/perry'), 'compile', relative, '-o', str(out/name)],
-                       cwd, env, out/f'{name}.compile')
+        try:
+            compiled = run([str(target/'release/perry'), 'compile', relative, '-o', str(out/name)],
+                           cwd, env, out/f'{name}.compile', timeout=2700)
+        except subprocess.TimeoutExpired:
+            status[name] = {'compile_timeout': 2700}
+            path.write_text(json.dumps(status, indent=2)+'\n')
+            print(f'{arm}/{name}: compile timed out', flush=True)
+            continue
         if compiled.returncode:
             status[name] = {'compile': compiled.returncode}
+            path.write_text(json.dumps(status, indent=2)+'\n')
             print(f'{arm}/{name}: compile failed', flush=True)
             continue
         node = run([*NODE, relative, *args], cwd, env, out/f'{name}.node')
@@ -79,11 +90,8 @@ def compile_arm(root, arm, names):
         norm = normalize_kernel if name in KERNELS else normalize_effect if name == 'effect' else lambda b: b
         matches = node.returncode == 0 and perry.returncode == 0 and norm(node.stdout) == norm(perry.stdout)
         status[name] = {'node': node.returncode, 'perry': perry.returncode, 'output_equal': matches}
+        path.write_text(json.dumps(status, indent=2)+'\n')
         print(f'{arm}/{name}: {status[name]}', flush=True)
-    path = root/'measure'/arm/'status.json'
-    prior = json.loads(path.read_text()) if path.exists() else {}
-    prior.update(status)
-    path.write_text(json.dumps(prior, indent=2)+'\n')
 
 def full_collections(root, arm, name, cmd, cwd, env, trial):
     diag = dict(env, PERRY_GC_DIAG='1')
