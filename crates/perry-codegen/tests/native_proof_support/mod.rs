@@ -315,11 +315,12 @@ fn store_ptr_operands(line: &str) -> Option<(String, String)> {
 
 /// The allocas holding a Buffer view's DATA pointer in `fn_ir`.
 ///
-/// Two shapes, either of which identifies one, because
+/// Construction and header-read shapes identify one, because
 /// `emit_buffer_access_pointer` reads the length from a dedicated slot when the
 /// view has one and from the header otherwise:
 ///
-///  * the initialising store — the NaN-boxed Buffer value is unboxed
+///  * the common-cell resolver result stored into the slot; or
+///  * the legacy initialising store — the NaN-boxed Buffer value is unboxed
 ///    (`and i64 …, 0xFFFF_FFFF_FFFF` then `inttoptr`), advanced past its header
 ///    (`getelementptr i8, ptr %p, i32 <const>`) and stored into the slot; and
 ///  * the header length read — `load ptr` out of the slot, `getelementptr i8`
@@ -340,7 +341,10 @@ pub fn buffer_data_slots(fn_ir: &str) -> std::collections::BTreeSet<String> {
                 .and_then(|def| gep_i8_base(def))
                 .and_then(|base| defs.get(base.as_str()).copied())
                 .is_some_and(|base_def| base_def.starts_with("inttoptr i64 "));
-            if is_unboxed_data_pointer {
+            let is_resolved_data_pointer = defs
+                .get(value.as_str())
+                .is_some_and(|def| def.starts_with("call ptr @js_native_buffer_data_ptr(double "));
+            if is_unboxed_data_pointer || is_resolved_data_pointer {
                 slots.insert(slot);
             }
         }
@@ -468,9 +472,7 @@ const UNCHECKED_NATIVE_BUFFER_PROBE: &str = "\
 define double @perry_fn_m_ts__probe() {
 entry.0:
   %d = alloca ptr
-  %r10 = and i64 %r9, 281474976710655
-  %r11 = inttoptr i64 %r10 to ptr
-  %r12 = getelementptr i8, ptr %r11, i32 8
+  %r12 = call ptr @js_native_buffer_data_ptr(double %boxed)
   store ptr %r12, ptr %d
   %r40 = load ptr, ptr %d
   %r44 = getelementptr inbounds i8, ptr %r40, i32 %r39

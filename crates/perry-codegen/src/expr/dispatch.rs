@@ -22,7 +22,7 @@ use crate::types::DOUBLE;
 /// original arm bodies verbatim.
 pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let value = lower_expr_inner(ctx, expr)?;
-    if !ctx.receiver_descriptors.hoisted_byte_params().is_empty()
+    if ctx.receiver_descriptors.has_hoisted_byte_owners()
         && !ctx.block().is_terminated()
         && crate::collectors::expr_region_ender(expr, &|e| {
             crate::rooting::expr_is_inert_primitive(ctx, e)

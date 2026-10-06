@@ -14,3 +14,14 @@ function makeView(): Uint32Array {
   return view;
 }
 console.log(scan(makeView()));
+function scanLocal(): number {
+  const view = new Uint32Array(64);
+  for (let i = 0; i < 64; i++) view[i] = i + 1;
+  let sum = 0;
+  for (let i = 0; i < 64; i++) {
+    if ((i & 7) === 0) gc();
+    sum += view[i];
+  }
+  return sum;
+}
+console.log(scanLocal());

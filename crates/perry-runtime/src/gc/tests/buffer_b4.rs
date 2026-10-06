@@ -1,4 +1,4 @@
-//! Compatible B4 contracts while B4c still owns the emitted layout switch.
+//! Unified byte-cell ownership, lifetime and sabotage contracts.
 use super::super::*;
 use super::support::*;
 use crate::buffer::{

@@ -126,7 +126,9 @@ pub(crate) fn span(value: f64, writable: bool) -> Result<Span, NotBytes> {
         ptr
     };
     Ok(Span {
-        ptr: if len == 0 {
+        // Empty reserved owners still have a stable address for future growth.
+        // Only a truly null external zero-length store needs a slice sentinel.
+        ptr: if ptr.is_null() {
             NonNull::<u8>::dangling().as_ptr()
         } else {
             ptr
@@ -383,7 +385,7 @@ fn allocate(brand: Brand, len: usize, init: Init) -> f64 {
             (*ptr).length = len as u32;
         }
         ptr
-    } else if matches!(brand, Brand::ArrayBuffer) {
+    } else if matches!(brand, Brand::ArrayBuffer | Brand::DataView) {
         // ArrayBuffer already uses native storage on main. Keep that rule.
         super::js_array_buffer_new(len)
     } else {
@@ -396,7 +398,18 @@ fn allocate(brand: Brand, len: usize, init: Init) -> f64 {
         Brand::Buffer => (),
         Brand::Uint8Array => super::mark_as_uint8array(ptr as usize),
         Brand::ArrayBuffer => super::mark_as_array_buffer(ptr as usize),
-        Brand::DataView => super::mark_as_data_view(ptr as usize),
+        Brand::DataView => {
+            // DataView is always a view; the store itself is an ArrayBuffer.
+            super::mark_as_array_buffer(ptr as usize);
+            let view = super::store::new_view(
+                crate::gc::GC_TYPE_BUFFER_DATA_VIEW,
+                ptr as usize,
+                0,
+                len as u32,
+                false,
+            );
+            return crate::value::js_nanbox_pointer(view as i64);
+        }
     }
     f64::from_bits(JSValue::pointer(ptr.cast()).bits())
 }

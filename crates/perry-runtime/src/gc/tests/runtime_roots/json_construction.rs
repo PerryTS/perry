@@ -195,6 +195,10 @@ fn json_construction_growth_mixed_layouts_and_errors_leave_a_walkable_heap() {
     let _evacuation = ForcedEvacuationTestGuard::on();
     register_runtime_handle_root_scanner_for_tests();
     gc_register_mutable_root_scanner(json_parse_mutable_root_scanner);
+    // The isolation guard clears production's scanners. Live receivers rewrite
+    // a shared shape's keys edge, and the family index must follow that move
+    // before a later minor recycles the old keys address.
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     for item in [
         "17",
         "1e-310",

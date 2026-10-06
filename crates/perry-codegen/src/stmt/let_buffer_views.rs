@@ -108,6 +108,9 @@ pub(super) fn register_noalias_buffer_view(
             length_fixed: sealed && init.native_owner_local_id.is_none(),
         },
     );
+    if ctx.native_facts.interior_byte_locals().contains(&id) {
+        crate::expr::byte_cell::retain_fresh_local_owner(ctx, value);
+    }
     if !sealed && !late && init.native_owner_local_id.is_none() {
         // Exposed from elsewhere (a closure, another function): the view
         // never serves a native access.
