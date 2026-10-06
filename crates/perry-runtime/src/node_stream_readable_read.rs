@@ -43,6 +43,11 @@ pub(super) fn read_stream_default_size(stream: f64) -> f64 {
 
 /// The byte length of `value`'s chunk bytes.
 fn chunk_byte_len(value: f64) -> usize {
+    if let Ok(len) = crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(value, scope).map(|bytes| bytes.len())
+    }) {
+        return len;
+    }
     let mut bytes = Vec::new();
     append_chunk_bytes(value, &mut bytes, 0);
     bytes.len()

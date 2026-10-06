@@ -840,7 +840,9 @@ fn chunk_byte_len(chunk: f64) -> usize {
     }
     let raw = raw_ptr_from_value(chunk);
     if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
-        return unsafe { (*(raw as *const crate::buffer::BufferHeader)).length as usize };
+        return crate::buffer::bytes::no_gc(|scope| {
+            crate::buffer::bytes::bytes(chunk, scope).map_or(0, |bytes| bytes.len())
+        });
     }
     1
 }
