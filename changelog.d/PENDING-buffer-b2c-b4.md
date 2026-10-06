@@ -26,4 +26,34 @@ The exact closed census rows are in `scripts/buffer_b4_census_closed.tsv`: 73 ro
 
 Verification baseline: origin/main `2fb54a09942bf26766095995f8a5dc74d10b18f6`; refreshed/rebased B1 `43cb95a83bec59c463461ff0d6d1ffca407c888a`. Production sources were unchanged by that B1 refresh. The newer main changes RegExp, exception snapshots and getter memos, so the final build/test/output/performance comparison is being rerun against that exact snapshot. Final verification after routing symbol pins through the shared setter is pending. The two stdlib thread-exit failures reproduce on both arms; no new failures were observed in the earlier complete 54-binary comparison. The full lint tier is not claimed: the file-size gate has three unchanged main violations (`dynamic_dispatch.rs`, `delete_rest.rs`, `method_site.rs`).
 
-Final program/kernel measurements: pending. The additional eight bytes per small Buffer have not been introduced by this compatible subset; their RSS effect is unmeasured and belongs to the unified-layout change. Persistent symbols gained eight bytes each.
+Measurements use qb6 CPUs 56–63 under the shared lock, ASLR disabled, separate targets, Node 26.5.1 output checks and n=5 interleaved trials with identical-main-binary controls. Both arms use the same full prebuilt archives and forced http/net/ws/zlib wrappers. GC counts come from separate `PERRY_GC_TRACE=1` runs; instruction/RSS runs have tracing disabled. Kernel elapsed-time fields and Effect's two elapsed-time fields are normalized; semantic output matches exactly.
+
+| Program | Instructions main → head | Delta / instruction noise (%) | RSS KiB main → head | Fulls main → head | Minors main → head |
+|---|---|---|---|---|---|
+| tsc | 9,998,327,170 → 9,998,701,924 | +0.00375 / 0.04378 | 215,092 → 214,776 | 0 → 0 | 3 → 3 |
+| zod5k | 14,721,232,761 → 14,721,014,043 | -0.00149 / 0.02512 | 52,936 → 52,876 | 0 → 0 | 97 → 97 |
+| qsparse | 23,495,379,760 → 23,494,973,812 | -0.00173 / 0.00516 | 57,688 → 57,644 | 0 → 0 | 131 → 131 |
+| qsstr | 60,426,561,459 → 60,421,714,294 | -0.00802 / 0.04890 | 57,592 → 57,596 | 0 → 0 | 439 → 439 |
+| commander | 7,559,526,605 → 7,558,358,126 | -0.01546 / 0.03845 | 53,036 → 52,912 | 0 → 0 | 32 → 32 |
+| hello | 1,381,233 → 1,381,007 | -0.01636 / 0.00217 | 16,104 → 16,116 | 0 → 0 | 0 → 0 |
+| fastify | 6,635,416,740 → 6,642,640,383 | +0.10886 / 0.35682 | 133,408 → 133,296 | 0 → 0 | 2 → 2 |
+| effect | 26,133,495,624 → 26,133,378,778 | -0.00045 / 0.25415 | 194,420 → 194,952 | 2 → 2 | 16 → 16 |
+| buffer_heavy | 10,672,691,729 → 10,669,855,641 | -0.02657 / 0.00765 | 94,080 → 94,528 | 36 → 36 | 0 → 0 |
+| worker_heavy | 2,126,362,711 → 2,133,180,238 | +0.32062 / 1.44819 | 232,204 → 221,548 | 42 → 41 | 0 → 0 |
+| matmul | 1,735,700,878 → 1,735,699,437 | -0.00008 / 0.00002 | 20,756 → 20,696 | 0 → 0 | 0 → 0 |
+| prime_sieve | 25,192,350 → 25,191,608 | -0.00295 / 0.00018 | 18,172 → 18,176 | 0 → 0 | 0 → 0 |
+| bench_buffer_readwrite | 101,594,585 → 101,593,966 | -0.00061 / 0.00111 | 18,168 → 18,176 | 0 → 0 | 0 → 0 |
+| ecs_u32 | 681,969,502 → 681,968,930 | -0.00008 / 0.00006 | 18,144 → 17,700 | 0 → 0 | 0 → 0 |
+
+All real-program instruction changes are within their control noise floor except hello and buffer-heavy, which improve. Buffer-heavy uses uninitialized factories before copying native output, removing redundant zero writes; an AVX2 explanatory profile (Valgrind cannot decode the normal driver's AVX512 masked instruction) confirms fewer memset and finalizer instructions. The removed detached table no longer incurs a removal probe per finalized byte cell. Hello's final-binary teardown profile is pending. The kernel changes are tiny; no kernel loop code is changed by this lane.
+
+Worker full counts vary across runs: main 41–42, head 40–43; every event is `old_gen_bytes`. Concurrent transfer scheduling changes simultaneously live stores and pressure-triggered collection timing. Its RSS delta is inside the 15,540 KiB same-binary control variation, and its instruction delta is inside 1.44819% noise. Buffer-heavy retains exactly 36 full collections per arm. Other RSS changes require the final file/anonymous working-set audit below.
+
+THP-off companion results (`PR_SET_THP_DISABLE`, verified AnonHugePages=0):
+
+| Program | RSS KiB main → head | RSS control noise KiB | Instruction delta / noise (%) | Fulls / minors main → head |
+|---|---|---|---|---|
+| qsstr | 29,504 → 29,520 | 0 | +0.03961 / 0.03911 | 0/439 → 0/439 |
+| effect | 150,592 → 150,736 | 668 | -0.03920 / 0.15958 | 2/16 → 2/16 |
+
+The additional eight bytes per small Buffer have not been introduced by this compatible subset; their RSS effect is unmeasured and belongs to the unified-layout change. Persistent symbols gained eight bytes each.
