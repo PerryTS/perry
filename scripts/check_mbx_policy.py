@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check the repository-owned MBX linker policy and release build entry points."""
 import argparse
+import re
 from pathlib import Path
 import tomllib
 
@@ -22,7 +23,19 @@ def check(policy, scripts):
         if table != {target: "mold@2.42.0" for target in TARGETS}:
             errors.append(f"{profile}: pin mold 2.42.0 only for Linux GNU targets")
     for name, script in scripts.items():
-        if "cargo_build=(mbx build)" not in script or "cargo_build=(cargo build)" in script:
+        active_lines = [
+            line for line in script.splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        active_script = "\n".join(active_lines)
+        assignments = re.findall(r"^\s*cargo_build\s*=\s*\(([^)]*)\)", active_script, re.M)
+        if not any(re.fullmatch(r"\s*mbx\s+build\s*", command) for command in assignments):
+            errors.append(f"{name}: cargo_build must select mbx build")
+        if any(re.match(r"\s*cargo(?:\s|$)", command) for command in assignments):
+            errors.append(f"{name}: cargo_build must not select Cargo")
+        if re.search(r"(?m)^\s*cargo\s+build(?:\s|$)", active_script):
+            errors.append(f"{name}: direct cargo build bypasses MBX")
+        if not re.search(r"(?m)^\s*if\s+!\s+command\s+-v\s+mbx\s*>/dev/null", active_script):
             errors.append(f"{name}: builds must use MBX without a silent Cargo fallback")
     return errors
 
@@ -31,8 +44,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
-    policy = tomllib.loads((ROOT / ".mbx.toml").read_text())
-    scripts = {name: (ROOT / "scripts" / name).read_text() for name in SCRIPTS}
+    try:
+        policy = tomllib.loads((ROOT / ".mbx.toml").read_text())
+        scripts = {name: (ROOT / "scripts" / name).read_text() for name in SCRIPTS}
+    except (OSError, tomllib.TOMLDecodeError) as exc:
+        parser.exit(1, f"check_mbx_policy: could not load policy inputs: {exc}\n")
     if args.self_test:
         import copy
         assert not check(policy, scripts)
@@ -46,6 +62,16 @@ def main():
         for name in SCRIPTS:
             bad = dict(scripts)
             bad[name] += "\ncargo_build=(cargo build)\n"
+            assert check(policy, bad)
+            for fallback in ("cargo_build=(cargo build --locked)", "cargo build --release"):
+                bad = dict(scripts)
+                bad[name] += f"\n{fallback}\n"
+                assert check(policy, bad)
+            bad = dict(scripts)
+            bad[name] = bad[name].replace(
+                "command -v mbx >/dev/null 2>&1",
+                "# command -v mbx >/dev/null 2>&1",
+            )
             assert check(policy, bad)
         print("PASS: linker and uncached-fallback regressions rejected")
         return
