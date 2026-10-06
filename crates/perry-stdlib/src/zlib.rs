@@ -4,9 +4,9 @@
 //! Provides gzip, gunzip, deflate, and inflate functions.
 
 use flate2::read::{
-    DeflateDecoder, DeflateEncoder, GzDecoder, GzEncoder, MultiGzDecoder, ZlibDecoder, ZlibEncoder,
+    DeflateDecoder, DeflateEncoder, GzDecoder, MultiGzDecoder, ZlibDecoder, ZlibEncoder,
 };
-use flate2::Compression;
+use flate2::{Compression, GzBuilder};
 use perry_runtime::{
     buffer::{
         buffer_alloc, buffer_data, buffer_data_mut, is_registered_buffer, js_buffer_is_buffer,
@@ -142,6 +142,19 @@ unsafe fn crc32_bytes(value: f64) -> Vec<u8> {
     bytes_from_js_data(value, false, "data", "Buffer, TypedArray, or DataView")
 }
 
+// Match zlib's platform byte rather than flate2's default "unknown" (255).
+// All gzip entry points use this header; mtime stays deterministic at zero.
+fn gzip_header() -> GzBuilder {
+    let os = if cfg!(target_os = "macos") {
+        19
+    } else if cfg!(target_os = "windows") {
+        10
+    } else {
+        3
+    };
+    GzBuilder::new().mtime(0).operating_system(os)
+}
+
 /// Gzip compress data synchronously
 /// zlib.gzipSync(data, options?) -> Buffer
 ///
@@ -155,7 +168,7 @@ pub unsafe extern "C" fn js_zlib_gzip_sync(data_bits: i64, opts: f64) -> *mut Bu
     let level = Compression::new(perry_runtime::js_zlib_resolve_level(opts) as u32);
     let data = codec_bytes(f64::from_bits(data_bits as u64));
 
-    let mut encoder = GzEncoder::new(&data[..], level);
+    let mut encoder = gzip_header().read(&data[..], level);
     let mut compressed = Vec::new();
 
     match encoder.read_to_end(&mut compressed) {
@@ -389,7 +402,7 @@ fn run_one_shot_codec(codec: Codec, input: &[u8], level: Compression) -> std::io
     let mut out = Vec::new();
     match codec {
         Codec::Gzip => {
-            GzEncoder::new(input, level).read_to_end(&mut out)?;
+            gzip_header().read(input, level).read_to_end(&mut out)?;
         }
         Codec::Gunzip => {
             MultiGzDecoder::new(input).read_to_end(&mut out)?;
@@ -996,7 +1009,9 @@ fn run_codec(codec: Codec, input: &[u8]) -> std::io::Result<Vec<u8>> {
     let mut out = Vec::new();
     match codec {
         Codec::Gzip => {
-            GzEncoder::new(input, Compression::default()).read_to_end(&mut out)?;
+            gzip_header()
+                .read(input, Compression::default())
+                .read_to_end(&mut out)?;
         }
         Codec::Gunzip => {
             GzDecoder::new(input).read_to_end(&mut out)?;
@@ -1125,7 +1140,7 @@ impl CodecState {
 fn make_codec_state(codec: Codec, level: Compression) -> Option<CodecState> {
     use flate2::write;
     Some(match codec {
-        Codec::Gzip => CodecState::GzEnc(write::GzEncoder::new(Vec::new(), level)),
+        Codec::Gzip => CodecState::GzEnc(gzip_header().write(Vec::new(), level)),
         Codec::Gunzip => CodecState::GzDec(write::GzDecoder::new(Vec::new())),
         Codec::Deflate => CodecState::ZlibEnc(write::ZlibEncoder::new(Vec::new(), level)),
         Codec::Inflate => CodecState::ZlibDec(write::ZlibDecoder::new(Vec::new())),
@@ -1880,11 +1895,40 @@ mod stream_tests {
     #[test]
     fn gzip_stream_roundtrips() {
         let c = stream_compress(Codec::Gzip, &[b"hello ", b"streaming ", b"world"]);
-        assert_eq!(&c[..2], &[0x1f, 0x8b]);
+        let os = if cfg!(target_os = "macos") {
+            19
+        } else if cfg!(target_os = "windows") {
+            10
+        } else {
+            3
+        };
+        assert_eq!(&c[..10], &[0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, os]);
         assert_eq!(
             run_codec(Codec::Gunzip, &c).unwrap(),
             b"hello streaming world"
         );
+    }
+
+    #[test]
+    fn gzip_one_shot_matches_node_bytes() {
+        let input = b"hello hello hello hello hello world";
+        let mut expected = vec![
+            0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3, 0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0xc8, 0xc0,
+            0x41, 0x96, 0xe7, 0x17, 0xe5, 0xa4, 0, 0, 0x92, 0x80, 5, 0x89, 0x23, 0, 0, 0,
+        ];
+        if cfg!(target_os = "macos") {
+            expected[9] = 19;
+        }
+        if cfg!(target_os = "windows") {
+            expected[9] = 10;
+        }
+        for compressed in [
+            run_one_shot_codec(Codec::Gzip, input, Compression::default()).unwrap(),
+            run_codec(Codec::Gzip, input).unwrap(),
+        ] {
+            assert_eq!(compressed, expected);
+            assert_eq!(run_codec(Codec::Gunzip, &compressed).unwrap(), input);
+        }
     }
 
     #[test]
