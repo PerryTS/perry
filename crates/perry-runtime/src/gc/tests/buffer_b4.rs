@@ -351,6 +351,50 @@ fn views_observe_owner_resize_and_detach_after_a_live_collection() {
 }
 
 #[test]
+fn pinned_inline_detach_retains_pages_until_the_last_unpin() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    gc_register_named_mutable_root_scanner("pinned", crate::gc::pin::scan_pinned_object_roots_mut);
+    let handles = RuntimeHandleScope::new();
+    let owner = handles.root_raw_mut_ptr(buffer::buffer_alloc(64 * 1024));
+    let owner = owner.get_raw_mut_ptr::<buffer::BufferHeader>();
+    unsafe {
+        (*owner).length = 64 * 1024;
+    }
+    buffer::mark_as_array_buffer(owner as usize);
+    assert!(!buffer::is_foreign_backed_buffer(owner as usize));
+    let first = bytes::pin(bits(owner)).unwrap();
+    let second = bytes::pin(bits(owner)).unwrap();
+    unsafe {
+        std::ptr::write_bytes(first.as_mut_ptr(), 37, first.len());
+    }
+    buffer::detach_array_buffer(owner as usize);
+    assert!(buffer::is_detached_buffer(owner as usize));
+    let check = |pin: &bytes::Pinned| unsafe {
+        assert!(
+            std::slice::from_raw_parts(pin.as_ptr(), pin.len())
+                .iter()
+                .all(|byte| *byte == 37),
+            "detach decommitted pages while native code still holds a pin"
+        );
+    };
+    check(&first);
+    drop(first);
+    check(&second);
+    let data = second.as_ptr();
+    drop(second);
+    #[cfg(target_os = "linux")]
+    unsafe {
+        let page = libc::sysconf(libc::_SC_PAGESIZE) as usize;
+        let middle = (data as usize + page * 2) & !(page - 1);
+        assert_eq!(
+            *(middle as *const u8),
+            0,
+            "last unpin must release detached inline pages"
+        );
+    }
+}
+
+#[test]
 fn detached_bit_and_nested_pin_count_do_not_overlap() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let value = bytes::from_slice(Brand::ArrayBuffer, &[0x25; 1024]);
@@ -459,6 +503,7 @@ fn each_compatible_b4_sabotage_turns_its_witness_red() {
     for (fault, witness) in [
         ("attach_moves_bytes", "gc::tests::u8_inline_cache::thirty_one_pins_expando_and_buffer_keep_inline_bytes_in_place"),
         ("pin_overflow", "gc::tests::u8_inline_cache::thirty_second_pin_uses_a_hidden_property_and_unpins_cleanly"),
+        ("inline_detach_decommit", "gc::tests::buffer_b4::pinned_inline_detach_retains_pages_until_the_last_unpin"),
         (
             "pool_root",
             "gc::tests::buffer_b4::pool_identity_alignment_rollover_and_root_are_real_owner_edges",

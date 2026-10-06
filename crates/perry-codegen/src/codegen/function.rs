@@ -843,29 +843,23 @@ pub(super) fn compile_function(
                     let boxed = crate::expr::nanbox_pointer_inline(blk, &arg_name);
                     let slot = blk.alloca(DOUBLE);
                     blk.store(DOUBLE, &boxed, &slot);
-                    // No callee-side shadow binding. Both halves of that
-                    // argument are load-bearing, and the second one is NOT
-                    // "typed-array storage is non-movable" — the value passed
-                    // is the HEADER, and a header is an object (#6981):
-                    //
-                    //  1. Liveness — every route into this entry is a Tier-A
-                    //     call (`lower_call/func_ref.rs`) whose argument is a
-                    //     pre-pass-proven, never-reassigned, non-closure-
-                    //     referenced binding: a module-global root, or the
-                    //     caller's own shadow-bound frame slot. That root
-                    //     keeps the header live for the whole call.
-                    //  2. Address stability — the header does not MOVE,
-                    //     because `typed_array_alloc` puts the whole
-                    //     allocation (header + inline payload) in the OLD
-                    //     arena with `GC_FLAG_TENURED`. The nursery copying
-                    //     minor only relocates nursery objects, and old-page
-                    //     defrag is the one consumer of `gc_type_is_movable`,
-                    //     which is `false` for `GC_TYPE_TYPED_ARRAY`.
-                    //
-                    // Both together are what make the callee root redundant
-                    // TLS traffic. Neither generalizes: an ordinary
-                    // `GC_TYPE_OBJECT` IS movable and IS nursery-allocated,
-                    // so any new raw-pointer rep must argue (2) afresh.
+                    // Keep the exact owner in the callee even when its only
+                    // later use is the cached interior pointer. A caller's
+                    // binding may be dead after passing this argument.
+                    #[cfg(test)]
+                    let omit_owner =
+                        std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("spec_owner");
+                    #[cfg(not(test))]
+                    let omit_owner = false;
+                    if !omit_owner {
+                        if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
+                            bound_param_slots.insert(slot_idx);
+                            blk.call_void(
+                                "js_shadow_slot_bind",
+                                &[(I32, &slot_idx.to_string()), (PTR, &slot)],
+                            );
+                        }
+                    }
                     map.insert(p.id, slot);
                     continue;
                 }
@@ -1483,10 +1477,8 @@ pub(super) fn compile_function(
     // (`ta_int_elem_load_is_i32_provable`, `lower_typed_array_load`, the
     // proven-view checked tier) with bounds checks against the entry length —
     // and NEVER through the per-site guarded fast paths (`ta_param_f64_read`
-    // skips receivers with a registered view slot). GC note: the header stays
-    // live through the CALLER's proven never-reassigned rooted binding (a
-    // module-global root or the caller's own frame slot — the only routes into
-    // this entry are Tier-A calls whose args carry that proof); the hoisted
+    // skips receivers with a registered view slot). The callee binds the
+    // exact owner and keeps that binding live after its safepoints; the hoisted
     // data pointer stays valid because the HEADER itself never moves —
     // `typed_array_alloc` allocates header + inline payload in the OLD arena
     // (`arena_alloc_gc_old`, `GC_FLAG_TENURED`), which the nursery copying
@@ -1497,8 +1489,7 @@ pub(super) fn compile_function(
     // data pointer and length stay valid only because every call site passes
     // a SEALED binding and this param is itself sealed in the body
     // (`spec_abi_sites::buffer_exposed_bindings`): construction alone does
-    // not keep them, since observing `.buffer` rebinds the array to an
-    // external backing and `buffer.transfer()` then detaches it (length 0).
+    // not keep them, since `array.buffer.transfer()` detaches the store.
     if let Some(plan) = spec_entry {
         for (p, rep) in f.params.iter().zip(plan.reps.iter()) {
             let crate::collectors::SpecParamRep::TaPtr { kind, const_len } = rep else {
@@ -1510,6 +1501,12 @@ pub(super) fn compile_function(
             let Some(param_slot) = ctx.locals.get(&p.id).cloned() else {
                 continue;
             };
+            ctx.block().emit_raw(format!(
+                "; bytes.spec.owner.root owner={}",
+                param_slot.trim_start_matches('%')
+            ));
+            ctx.receiver_descriptors
+                .retain_byte_owner(param_slot.clone(), param_slot.clone());
             let blk = ctx.block();
             let arg_val = blk.load(DOUBLE, &param_slot);
             let handle = crate::expr::unbox_to_i64(blk, &arg_val);
