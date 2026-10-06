@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import statistics
 import subprocess
+import threading
 
 PROGRAMS = {
     'tsc': ('tscwork.ts', ['1'], False),
@@ -38,13 +39,14 @@ def environment(root, arm):
     env = dict(os.environ, CARGO_TARGET_DIR=str(target), PERRY_RUNTIME_DIR=str(target/'release'),
                PERRY_WORKSPACE_ROOT=str(source), RUST_TEST_THREADS='1', CARGO_BUILD_JOBS='8',
                PERRY_NO_AUTO_OPTIMIZE='1', PERRY_NO_CACHE='1', PERRY_SKIP_BUILD='1',
-               PERRY_ALLOW_PERRY_FEATURES='1', TMPDIR=str(root/'tmp'))
+               PERRY_ALLOW_PERRY_FEATURES='1', TMPDIR=str(root/'tmp'), RAYON_NUM_THREADS='8',
+               PERRY_FORCE_WELL_KNOWN='http,net,ws,zlib')
     env.pop('PERRY_GC_DIAG', None)
     return source, target, env
 
 def run(cmd, cwd, env, prefix, timeout=1800):
-    result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, timeout=timeout)
     prefix.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, timeout=timeout)
     Path(str(prefix)+'.out').write_bytes(result.stdout)
     Path(str(prefix)+'.err').write_bytes(result.stderr)
     return result
@@ -82,19 +84,37 @@ def compile_arm(root, arm, names):
 def full_collections(root, arm, name, cmd, cwd, env, trial):
     diag = dict(env, PERRY_GC_DIAG='1')
     prefix = root/'measure/trials'/f'{name}.{trial}.{arm}.gc'
-    result = run(cmd, cwd, diag, prefix)
-    if result.returncode:
+    huge = []
+    stop = threading.Event()
+    proc = subprocess.Popen(cmd, cwd=cwd, env=diag, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    def sample():
+        while not stop.is_set():
+            try:
+                data = Path(f'/proc/{proc.pid}/smaps_rollup').read_text()
+                match = re.search(r'(?m)^AnonHugePages:\s+(\d+)', data)
+                if match: huge.append(int(match[1]))
+            except (OSError, ProcessLookupError): pass
+            stop.wait(0.02)
+    sampler = threading.Thread(target=sample); sampler.start()
+    try:
+        stdout, stderr = proc.communicate(timeout=1800)
+    except subprocess.TimeoutExpired:
+        proc.kill(); proc.communicate(); raise
+    finally:
+        stop.set(); sampler.join()
+    Path(str(prefix)+'.out').write_bytes(stdout)
+    Path(str(prefix)+'.err').write_bytes(stderr)
+    if proc.returncode:
         raise RuntimeError(f'GC diagnostic run failed: {prefix}')
     events = []
-    for line in result.stderr.decode(errors='replace').splitlines():
+    for line in stderr.decode(errors='replace').splitlines():
         if line.startswith('{'):
             try:
                 obj = json.loads(line)
                 if obj.get('event') == 'gc_cycle': events.append(obj)
             except ValueError: pass
-    if not events and b'diagnostics feature disabled' in result.stderr:
-        return None
-    return sum(e['collection_kind'] == 'full' for e in events)
+    fulls = None if not events and b'diagnostics feature disabled' in stderr else sum(e['collection_kind'] == 'full' for e in events)
+    return {'fulls': fulls, 'anon_huge_kb': max(huge) if huge else None}
 
 def measure(root, names, thp_off):
     status = {a: json.loads((root/'measure'/a/'status.json').read_text()) for a in ['main', 'head']}
@@ -124,7 +144,7 @@ def measure(root, names, thp_off):
                     if len(c)>2 and c[2] in ['instructions:u', 'cycles:u']:
                         stats[c[2]] = int(c[0])
                 stats['rss_kb'] = int(rss.read_text().strip())
-                stats['fulls'] = full_collections(root, arm, name, cmd, cwd, env, trial)
+                stats.update(full_collections(root, arm, name, cmd, cwd, env, trial))
                 trials[arm].append(stats)
                 print(f'{name}/{trial}/{arm}: {stats}', flush=True)
                 if arm == 'main':
@@ -136,11 +156,17 @@ def measure(root, names, thp_off):
                     if control.returncode: raise RuntimeError(f'noise control failed: {prefix}')
                     instructions = next(int(l.split(';')[0]) for l in noise_counter.read_text().splitlines()
                                         if ';instructions:u;' in l)
-                    trials['noise'].append(instructions)
-        medians = {a: {k: statistics.median(t[k] for t in trials[a]) for k in trials[a][0]}
+                    trials['noise'].append({'instructions:u': instructions,
+                                            'rss_kb': int(Path(str(prefix)+'.rss').read_text().strip())})
+        def median_present(trials, key):
+            values = [t[key] for t in trials if t[key] is not None]
+            return statistics.median(values) if values else None
+        medians = {a: {k: median_present(trials[a], k) for k in trials[a][0]}
                    for a in ['main','head']}
-        noise = max(abs(v/t['instructions:u']-1) for v,t in zip(trials['noise'], trials['main']))*100
+        noise = max(abs(v['instructions:u']/t['instructions:u']-1) for v,t in zip(trials['noise'], trials['main']))*100
+        rss_noise = max(abs(v['rss_kb']-t['rss_kb']) for v,t in zip(trials['noise'], trials['main']))
         records[name] = {'trials': trials, 'medians': medians, 'instruction_noise_floor_pct': noise,
+                         'rss_noise_floor_kb': rss_noise,
                          'instruction_delta_pct': (medians['head']['instructions:u']/medians['main']['instructions:u']-1)*100}
     path = root/'measure'/('summary-thp-off.json' if thp_off else 'summary.json')
     prior = json.loads(path.read_text()) if path.exists() else {}
