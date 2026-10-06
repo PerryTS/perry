@@ -1,3 +1,5 @@
+Latest owner decision and rebased final checks: [final pre-PR verification](statepoints-only-12023-final.md). The performance-blocked assessment below is historical.
+
 # #12023 acceptance checks on main 77071e3d9
 
 Acceptance is still blocked by performance. No production code or rooting semantics changed during this acceptance pass. Measured source: main `77071e3d9f589605ce44511265366e2db9cbb68f` versus retained head `898a8d122c55d4447ec3e63d207f22650a9d3d3f`. Both arms were rebuilt with explicit compiler/runtime/workspace paths. Newer main worker-entry commits arrived after this snapshot; these receipts remain pinned to the explicitly requested base.
