@@ -1169,9 +1169,11 @@ pub fn run_with_parse_cache(
     // Conservative on purpose: any `new Worker(...)` site counts, resolved or
     // not, and so does a worker entry named only by a URL literal (a program
     // that starts its Workers through the namespace value has no `new Worker`
-    // site at all). A program with no Worker keeps process-wide globals and
-    // pays no TLS cost.
-    let program_has_worker = !ctx.worker_url_entries.is_empty()
+    // site at all). CommonJS and namespace constructors can lower to
+    // NewDynamic instead, so any worker_threads use must count too. Programs
+    // without worker_threads use keep process-wide globals.
+    let program_has_worker = ctx.uses_worker_threads
+        || !ctx.worker_url_entries.is_empty()
         || ctx.native_modules.values().any(|hir_module| {
             let mut found = false;
             perry_hir::for_each_worker_new(hir_module, &mut |_expr| {
@@ -3281,6 +3283,18 @@ pub fn run_with_parse_cache(
             worker_entries.insert((path.to_string_lossy().into_owned(), target_prefix.clone()));
         }
     }
+    // The program entry is already compiled. It is a valid worker entry even
+    // when a filename expression (e.g. __filename or fileURLToPath) is opaque
+    // to call-site discovery; register it through the existing entry table.
+    if program_has_worker {
+        if let Some(module) = ctx.native_modules.get(&entry_path) {
+            let prefix = sanitize_module_name(&module.name);
+            worker_entries.insert((entry_path.to_string_lossy().into_owned(), prefix.clone()));
+            if let Ok(lexical) = std::path::absolute(&args.input) {
+                worker_entries.insert((lexical.to_string_lossy().into_owned(), prefix));
+            }
+        }
+    }
     perry_codegen::set_worker_entries(worker_entries.into_iter().collect());
 
     let total_codegen_modules = ctx.native_modules.len();
@@ -3511,15 +3525,16 @@ pub fn run_with_parse_cache(
             Vec::new()
         };
         // Issue #753: prefixes of this module's static-import +
-        // re-export source modules (non-entry only — the entry's
-        // body is in `main`, not a `__init`). The wrapper at
+        // re-export source modules. Worker programs also give the entry a
+        // guarded initializer so it can evaluate this graph per thread. The
+        // wrapper at
         // `<prefix>__init` calls each dep's `__init` before
         // dispatching to `<prefix>__init_body`; this transitively
         // initializes any Deferred dep reached only through this
         // module's re-export chain. For Eager modules the calls
         // short-circuit on the idempotent guard's first-write
         // check (one load + cmp + cond_br each).
-        let module_init_deps: Vec<String> = if is_entry {
+        let module_init_deps: Vec<String> = if is_entry && !program_has_worker {
             Vec::new()
         } else {
             let mut deps: Vec<String> = Vec::new();
