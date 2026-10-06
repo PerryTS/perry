@@ -253,6 +253,22 @@
       "binary": "mbx",
       "repository": "github:jdx/mr-boxington",
       "notes": "Install with cargo install mbx@1.22.0 --locked. CI uses Perry's specialized local composite action, backed by the sparse-vendored upstream mr-boxington-action at a recorded immutable commit."
+    },
+    "tak": {
+      "description": "tak CLI used for Perry command instruction-count and wall-time history reports.",
+      "release": "cargo-install",
+      "crate": "tak-cli",
+      "version": "0.0.14",
+      "binary": "tak",
+      "repository": "github:jdx/tak",
+      "notes": "Install with cargo install tak-cli@0.0.14 --locked. Keep the version in tak.toml's runner class in sync so upgrades start a distinct measurement series."
+    },
+    "valgrind": {
+      "description": "Pinned Valgrind package used by tak's Cachegrind instruction counter.",
+      "release": "system-package",
+      "version": "1:3.22.0-0ubuntu3",
+      "repository": "ubuntu:noble/universe",
+      "notes": "Installed by tak-performance.yml as an exact Ubuntu 24.04 package version. Keep the Valgrind version in tak.toml's runner class in sync; Ubuntu's signed apt metadata authenticates the package."
     }
   }
 }
