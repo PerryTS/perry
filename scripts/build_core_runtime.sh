@@ -13,11 +13,11 @@ ordinary_target_dir="${CARGO_TARGET_DIR:-target}"
 core_target_dir="${PERRY_CORE_TARGET_DIR:-${ordinary_target_dir}-core}"
 profile_dir="$profile"
 [[ "$profile" == "dev" ]] && profile_dir=debug
-if command -v mbx >/dev/null 2>&1; then
-  cargo_build=(mbx build)
-else
-  cargo_build=(cargo build)
+if ! command -v mbx >/dev/null 2>&1; then
+  echo "Mr Boxington is required; install the pinned version with make mbx-deps" >&2
+  exit 1
 fi
+cargo_build=(mbx build)
 env CARGO_TARGET_DIR="$core_target_dir" "${cargo_build[@]}" --locked --profile "$profile" --target "$target" \
   -p perry-runtime-static --no-default-features --features perry-runtime/prebuilt-core
 mkdir -p "$ordinary_target_dir/$target/$profile_dir"

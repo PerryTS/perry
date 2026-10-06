@@ -1,0 +1,38 @@
+# Repository-owned linker policy. MBX preserves Cargo unwind/frame-pointer flags.
+# Darwin, Windows, Android and custom musl linkers retain their system selection.
+share_workspace_root = false
+
+[linker]
+default = "system"
+
+[linker.profiles.dev]
+x86_64-unknown-linux-gnu = "mold@2.42.0"
+aarch64-unknown-linux-gnu = "mold@2.42.0"
+
+[linker.profiles.perry-dev]
+x86_64-unknown-linux-gnu = "mold@2.42.0"
+aarch64-unknown-linux-gnu = "mold@2.42.0"
+
+[linker.profiles.release]
+x86_64-unknown-linux-gnu = "mold@2.42.0"
+aarch64-unknown-linux-gnu = "mold@2.42.0"
+
+[linker.profiles.dist]
+x86_64-unknown-linux-gnu = "mold@2.42.0"
+aarch64-unknown-linux-gnu = "mold@2.42.0"
+
+[linker.profiles.prod]
+x86_64-unknown-linux-gnu = "mold@2.42.0"
+aarch64-unknown-linux-gnu = "mold@2.42.0"
+
+[linker.profiles.test]
+x86_64-unknown-linux-gnu = "mold@2.42.0"
+aarch64-unknown-linux-gnu = "mold@2.42.0"
+
+[linker.profiles.bench]
+x86_64-unknown-linux-gnu = "mold@2.42.0"
+aarch64-unknown-linux-gnu = "mold@2.42.0"
+
+[linker.profiles.gcaudit]
+x86_64-unknown-linux-gnu = "mold@2.42.0"
+aarch64-unknown-linux-gnu = "mold@2.42.0"
