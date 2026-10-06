@@ -507,7 +507,7 @@ dialoguer = "0.12"
 
 # File system
 walkdir = "2.4"
-notify = "6.1"
+notify = "8.2"
 
 # HTTP. No tokio-ecosystem crate is declared here any more: `tokio`,
 # `tokio-tungstenite`, `tokio-rustls`, `reqwest`, `hyper` and `hyper-util` were
