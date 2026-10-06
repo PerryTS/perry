@@ -1067,7 +1067,6 @@ fn constfn_finalizer_refuses_equal_names_in_a_different_keys_array() {
     assert_eq!(control_after, requested, "control must finalize");
     // Same names, a different (non-canonical) keys array.
     let keys = unsafe {
-        let _immortal = crate::gc::ImmortalLayoutScope::new();
         let arr = crate::object::alloc::build_longlived_keys_array(
             std::ptr::null_mut(),
             0,

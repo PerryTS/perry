@@ -2330,14 +2330,6 @@
   {
    "file": "crates/perry-runtime/src/hot_diag.rs",
    "names": [
-    "LAYOUT_SINK"
-   ],
-   "verdict": "no_heap_address",
-   "why": "OnceLock of Option<Sink> (Sink::Stderr | Sink::File(String)) resolved once from an env var by the layout diagnostic sink getter; Rust-owned config, no addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/hot_diag.rs",
-   "names": [
     "ENUM_SINK"
    ],
    "verdict": "no_heap_address",
@@ -2514,22 +2506,6 @@
    "verdict": "thread_exit_invalidated",
    "why": "Shared list of raw stdin end closure pointers; freed ones are removed at thread exit.",
    "hook": "release_stdin_listeners_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/layout_tables.rs",
-   "names": [
-    "PERRY_LAYOUT_ADDR_FILTER"
-   ],
-   "verdict": "conservative_filter",
-   "why": "Monotone 4096-bit hashed sketch of user_ptr addresses that ever got a per-object layout record, OR'd by layout_addr_filter_note (layout_tables.rs:754) and tested inline by codegen; a stale bit only yields a 'maybe' that falls through to the authoritative thread-local LAYOUT_SLOT_MASKS / TYPED_LAYOUTS maps (layout_tables.rs:39-43)."
-  },
-  {
-   "file": "crates/perry-runtime/src/gc/layout_tables.rs",
-   "names": [
-    "N"
-   ],
-   "verdict": "no_heap_address",
-   "why": "(layout_tables.rs:964, layout_mask_min_slots) cached PERRY_LAYOUT_MASK_MIN_SLOTS env value (default 4); config."
   },
   {
    "file": "crates/perry-runtime/src/bun_ffi/dlopen.rs",

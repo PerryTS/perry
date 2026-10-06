@@ -16,7 +16,6 @@ crates/perry-runtime/src/error_stack_frames.rs::STATIC_SYMBOL_SPAWN_ATTEMPTS
 crates/perry-runtime/src/event_pump.rs::NOTIFIED
 crates/perry-runtime/src/fs/dir_glob_watch/watch_fsevents.rs::API
 crates/perry-runtime/src/fs/mod.rs::COUNTER
-crates/perry-runtime/src/gc/layout_tables.rs::N
 crates/perry-runtime/src/gc/poll_arm.rs::ARM_EVENTS
 crates/perry-runtime/src/gc/poll_arm.rs::FRESH
 crates/perry-runtime/src/gc/poll_arm.rs::PERRY_GC_POLL_ARMED

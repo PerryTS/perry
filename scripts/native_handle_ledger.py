@@ -76,7 +76,6 @@ NON_HANDLE_TABLES = {
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "CONS_PINNED"),
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "EVER_DIRTY_OLD_PAGES"),
     ("crates/perry-runtime/src/gc/fromspace_scan.rs", "SNAPSHOT_PAGES"),
-    ("crates/perry-runtime/src/gc/layout_tables.rs", "LAYOUT_SLOT_MASKS"),
     ("crates/perry-runtime/src/gc/diag_sites.rs", "CHARGES"),
     # Compiled code/literal/site metadata, not heap object identity.
     ("crates/perry-runtime/src/builtins/fn_metadata.rs", "REGISTRY"),

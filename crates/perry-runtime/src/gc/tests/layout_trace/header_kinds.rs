@@ -19,7 +19,6 @@ fn layout_birth_rebuild_and_store_never_mint_masks() {
         *captures.add(1) = string_bits(child as usize);
         assert!(layout_init_from_slots(closure.cast(), captures, 8));
     }
-    assert_eq!(crate::gc::per_object_layout_table_sizes(), 0);
 }
 
 #[test]

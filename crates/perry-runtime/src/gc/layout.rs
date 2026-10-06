@@ -1,11 +1,8 @@
 //! Array/closure pointer-slot states, store maintenance and child-slot
-//! enumeration. Object children are selected by ShapeId. Mask storage is in
+//! enumeration. Object children are selected by ShapeId. Shape selection is in
 //! `layout/slot_mask.rs`; the relocation funnel every moving-GC and growth
 //! path calls is in `layout/transfer.rs`.
 
-use super::layout_tables::{
-    layout_forget_object, per_object_slot_mask, slot_masks_remove, transfer_per_object_slot_mask,
-};
 use super::*;
 // Copied-nursery survival age in otherwise-unused low `_reserved` bits;
 // bits 0..2 remain object flags and bits 14..15 remain layout state.
@@ -249,7 +246,6 @@ pub(crate) unsafe fn layout_init_pointer_free(user_ptr: *mut u8) {
         return;
     }
     set_layout_state(header, GC_LAYOUT_POINTER_FREE);
-    layout_forget_object(user_ptr as usize);
 }
 
 /// Declare that every currently-live slot of a fresh array-like payload holds
@@ -261,7 +257,6 @@ pub(crate) unsafe fn layout_init_all_pointer_slots(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
     };
-    layout_forget_object(user_ptr as usize);
     set_layout_state(header, GC_LAYOUT_SIDE_MASK);
     (*header)._reserved |= GC_LAYOUT_ALL_POINTERS;
 }
@@ -274,12 +269,12 @@ pub(crate) unsafe fn layout_init_all_pointer_slots(user_ptr: *mut u8) {
 /// array outright, because the claim covers `0..length` and only an empty array
 /// makes it vacuously true. #8102 is what that cost: the declaration is emitted
 /// from the `Stmt::Let` tail, i.e. *after* a literal's element stores have
-/// installed a per-slot side mask, so for a non-empty literal it was a silent
+/// installed a mixed layout declaration, so for a non-empty literal it was a silent
 /// no-op and every later `push` lost #7469's elided store.
 ///
 /// This predicate discharges the claim instead of assuming it. Every slot must
 /// be pointer-bearing by [`layout_pointer_bearing_bits`] — the same test the
-/// mask builder and `GC_LAYOUT_UNKNOWN`'s per-slot re-validation apply — so the
+/// bulk classifier and `GC_LAYOUT_UNKNOWN`'s per-slot re-validation apply — so the
 /// declaration never has to trust a caller's static proof. `slot_count == 0` is
 /// the empty case and holds vacuously, which keeps the pre-#8102 path
 /// bit-identical.
@@ -301,10 +296,8 @@ pub(crate) unsafe fn layout_all_pointer_slots_would_hold(
 /// tag-checked scan understands (NaN-boxed values, raw heap pointers, 0) into
 /// `GC_LAYOUT_UNKNOWN` — the #7630 state for a payload a pointer mask cannot
 /// improve on. The caller has written the slots directly and owns the
-/// barrier (`runtime_write_barrier_newborn_slots`). Unlike
-/// [`layout_mark_unknown`] this touches no side table: a fresh birth whose
-/// state is still `GC_LAYOUT_POINTER_FREE` has no mask, no typed descriptor
-/// and no representation feedback to retire.
+/// barrier (`runtime_write_barrier_newborn_slots`). A fresh birth has no
+/// representation feedback to retire.
 pub(crate) unsafe fn layout_init_unknown_fresh(user_ptr: *mut u8) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
@@ -338,15 +331,9 @@ pub(crate) unsafe fn layout_mark_unknown(user_ptr: *mut u8) {
     }
     let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
     if state == GC_LAYOUT_UNKNOWN {
-        layout_forget_object(user_ptr as usize);
         return;
     }
     set_layout_state(header, GC_LAYOUT_UNKNOWN);
-    if state == GC_LAYOUT_POINTER_FREE {
-        crate::typed_feedback::invalidate_representation_change(user_ptr as usize);
-        return;
-    }
-    slot_masks_remove(user_ptr as usize);
     crate::typed_feedback::invalidate_representation_change(user_ptr as usize);
 }
 
@@ -358,7 +345,6 @@ pub(crate) fn layout_clear_for_ptr(user_ptr: usize) {
     // #7480: this runs on object death / address recycle, so drop the record
     // outright rather than only clearing the bit.
     crate::array::forget_element_shape(user_ptr);
-    layout_forget_object(user_ptr);
     if user_ptr >= GC_HEADER_SIZE + 0x1000 {
         unsafe {
             (*header_from_user_ptr(user_ptr as *const u8))._reserved &= !GC_LAYOUT_ALL_POINTERS;
@@ -497,21 +483,12 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
         }
         // Mixed payloads use the same tag test as the tracer. A store can
         // only weaken this declaration; explicit bulk scans may strengthen it.
-        debug_assert!(super::layout_tables::test_layout_table_empty_for_debug());
         layout_mark_unknown(parent_user as *mut u8);
     }
 }
 
-/// Existing-slot layout note with the value that was overwritten.
-/// The GC slot mask records whether a slot can carry a heap edge. Replacing one
-/// pointer-bearing value with another leaves that bit unchanged. Arrays also
-/// maintain a homogeneous element-shape record, so the pointer-over-pointer path
-/// runs that hook after validating/chasing the owner header and then stops
-/// before the typed-layout and per-slot-mask machinery. Object stores retire
-/// numeric proofs in their owner store funnel.
-/// Scalar-over-scalar keeps the historical fast return. A change in either
-/// direction uses the complete note so pointer masks and typed descriptors are
-/// updated exactly as before.
+/// Existing-slot note. Stable scalar or pointer classification needs no kind
+/// transition; pointer overwrites still maintain Array element-shape metadata.
 #[inline]
 pub(crate) fn layout_note_slot_aware(
     parent_user: usize,
@@ -558,18 +535,7 @@ pub extern "C" fn js_gc_note_slot_layout(parent: u64, slot_index: u32, value_bit
     layout_note_slot(parent_user, slot_index as usize, value_bits);
 }
 
-/// Value-aware variant of [`js_gc_note_slot_layout`]: `old_bits` is the value
-/// previously held in the slot. When old and new have the same heap-pointer
-/// classification, the per-slot GC layout mask needs no update. The
-/// pointer-over-pointer path still maintains Array element-shape metadata;
-/// classification changes retain the full typed-layout and mask pipeline.
-/// The mask invariant ("bit set ⟺ slot holds a pointer") is therefore
-/// preserved while avoiding the thread-local hashmap on stable overwrites. This is the
-/// dominant per-write cost on heterogeneous `any[]` numeric write loops
-/// (stubbing `layout_note_slot` makes `bench_numeric_array_downgrade` 11×
-/// faster). `layout_pointer_bearing_bits` is the same predicate the layout
-/// machinery uses internally, so raw-pointer array slots are classified
-/// correctly (not just NaN-boxed tags).
+/// Value-aware ABI used by generated stores until S3 simplifies the funnel.
 #[no_mangle]
 pub extern "C" fn js_gc_note_slot_layout_aware(
     parent: u64,
@@ -592,11 +558,9 @@ pub(crate) unsafe fn layout_rebuild_from_slots(
     if (*header).obj_type == GC_TYPE_OBJECT {
         return;
     }
-    // The rebuild reconstructs only the pointer mask (no raw-f64 layout), so the
-    // object no longer has a canonical typed descriptor: drop the intact bit.
+    // A bulk scan can strengthen the payload kind without changing numeric facts.
     if slots.is_null() || slot_count == 0 {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
-        slot_masks_remove(user_ptr as usize);
         return;
     }
 
@@ -609,15 +573,11 @@ pub(crate) unsafe fn layout_rebuild_from_slots(
             GC_LAYOUT_POINTER_FREE
         },
     );
-    slot_masks_remove(user_ptr as usize);
-    debug_assert!(super::layout_tables::test_layout_table_empty_for_debug());
 }
 
 /// Layout for a NEWBORN whose slots were just bulk-initialized: the same
-/// classification as [`layout_rebuild_from_slots`] (pointer-free / unknown /
-/// side mask), but with one `layout_forget_object` up front — a recycled
-/// address may carry stale entries — instead of per-table removes interleaved
-/// with the rebuild, and no per-slot `layout_note_slot` round trips (each of
+/// classification as [`layout_rebuild_from_slots`] (pointer-free / tag scan),
+/// with no address-keyed record and no per-slot layout notes (each of
 /// which re-resolved the header, re-checked forwarding and re-dispatched on the
 /// object kind). Callers must treat the object as fully initialized after
 /// this returns.
@@ -634,9 +594,6 @@ pub(crate) unsafe fn layout_init_from_slots(
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return true;
     };
-    if super::layout_tables::per_object_layouts_maybe_nonempty() {
-        layout_forget_object(user_ptr as usize);
-    }
     if slots.is_null() || slot_count == 0 {
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
         return false;
@@ -650,7 +607,6 @@ pub(crate) unsafe fn layout_init_from_slots(
             GC_LAYOUT_POINTER_FREE
         },
     );
-    debug_assert!(super::layout_tables::test_layout_table_empty_for_debug());
     any_pointer
 }
 
@@ -672,13 +628,9 @@ pub(super) fn layout_visit_pointer_slots<F: FnMut(usize)>(
                     }
                     return true;
                 }
-                let mask = per_object_slot_mask(user_ptr);
-                let Some(mask) = mask else {
-                    set_layout_state(header, GC_LAYOUT_UNKNOWN);
-                    return false;
-                };
-                mask.visit_slots(slot_count, &mut visit);
-                true
+                // Only the header ALL_POINTERS state is precise for arrays
+                // and closures; mixed payloads are scanned by tags.
+                false
             }
             _ => false,
         }
@@ -692,3 +644,7 @@ pub(crate) fn layout_visit_pointer_slots_for_user<F: FnMut(usize)>(
 ) -> bool {
     layout_visit_pointer_slots(user_ptr, slot_count, visit)
 }
+
+/// ABI compatibility until S3 removes the generated declaration.
+#[no_mangle]
+pub extern "C" fn js_gc_forget_object_layout(_obj: u64) {}

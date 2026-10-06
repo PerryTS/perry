@@ -23,8 +23,6 @@
 use super::barrier::{
     GC_BIRTH_EXTRA_FLAGS, INCREMENTAL_MARK_BARRIER_MINOR_ONLY, INCREMENTAL_MARK_BARRIER_VALID_PTRS,
 };
-use super::layout::LayoutSlotMask;
-use super::layout_tables::{PerObjectLayoutHint, LAYOUT_SLOT_MASKS, PER_OBJECT_LAYOUTS_NONEMPTY};
 use super::malloc::{ARENA_FREE_LIST, ARENA_FREE_LIST_NONEMPTY};
 use super::trace::ValidPointerSet;
 use std::cell::{Cell, RefCell};
@@ -67,36 +65,6 @@ pub(super) fn hot_incremental_mark_valid_ptrs() -> &'static Cell<*const ValidPoi
 pub(super) fn hot_incremental_mark_minor_only() -> &'static Cell<bool> {
     // SAFETY: paired with `incremental_mark_minor_only_hot_addr` above.
     unsafe { &*(crate::tls_hot::hot().incremental_mark_minor_only as *const Cell<bool>) }
-}
-
-// --- gc::layout -------------------------------------------------------------
-
-type SlotMaskMap = crate::fast_hash::PtrHashMap<usize, LayoutSlotMask>;
-
-/// Address of this thread's `LAYOUT_SLOT_MASKS`.
-pub(crate) fn layout_slot_masks_hot_addr() -> *mut u8 {
-    LAYOUT_SLOT_MASKS.with(|m| m as *const _ as *mut u8)
-}
-
-/// Address of this thread's `PER_OBJECT_LAYOUTS_NONEMPTY`.
-pub(crate) fn per_object_layouts_nonempty_hot_addr() -> *mut u8 {
-    PER_OBJECT_LAYOUTS_NONEMPTY.with(|c| c as *const _ as *mut u8)
-}
-
-/// `LAYOUT_SLOT_MASKS` without a TLS resolution.
-#[inline(always)]
-pub(super) fn hot_layout_slot_masks() -> &'static RefCell<SlotMaskMap> {
-    // SAFETY: paired with `layout_slot_masks_hot_addr` above.
-    unsafe { &*(crate::tls_hot::hot().layout_slot_masks as *const RefCell<SlotMaskMap>) }
-}
-
-/// `PER_OBJECT_LAYOUTS_NONEMPTY` without a TLS resolution — the "is there any
-/// per-object layout record at all" question the allocation, store, death and
-/// trace paths all ask (#7510).
-#[inline(always)]
-pub(super) fn hot_per_object_layout_hint() -> &'static PerObjectLayoutHint {
-    // SAFETY: paired with `per_object_layouts_nonempty_hot_addr` above.
-    unsafe { &*(crate::tls_hot::hot().per_object_layouts_nonempty as *const PerObjectLayoutHint) }
 }
 
 // --- gc::malloc -------------------------------------------------------------

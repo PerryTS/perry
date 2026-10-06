@@ -118,17 +118,8 @@ use layout_slot_visit::*;
 /// shared keys word. Its own file because both `barrier/mod.rs` (1995 lines)
 /// and `cycle.rs` (1991) are at the 2000-line cap.
 mod shape_keys_edge;
-use shape_keys_edge::slot_is_shared_shape_keys_word;
-/// #7510: the per-object slot-layout side tables and the emptiness flag that
-/// keeps them off the allocation, store, death and trace paths. Split out of
-/// `layout.rs` so it stays under the repo's 2000-line-per-file cap.
-mod layout_tables;
-// The immortal-object construction window and the table-occupancy readout, both
-// consumed from OUTSIDE `gc`: `object::global_this` opens the window around the
-// `globalThis` bootstrap and prints the residue under `PERRY_GC_DIAG`.
 pub use layout::*;
-pub(crate) use layout_tables::per_object_layout_table_sizes;
-pub use layout_tables::ImmortalLayoutScope;
+use shape_keys_edge::slot_is_shared_shape_keys_word;
 mod trace;
 pub(crate) use trace::*;
 mod barrier;

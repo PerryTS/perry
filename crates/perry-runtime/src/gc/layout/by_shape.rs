@@ -87,9 +87,6 @@ fn selection_visits(selection: &HeapPayloadSlotSelection, index: usize) -> bool 
         HeapPayloadSlotSelection::Masked { mask, .. } => match mask {
             LayoutSlotMask::AllPointers => true,
             LayoutSlotMask::Inline(bits) => index < 64 && bits & (1u64 << index) != 0,
-            LayoutSlotMask::Heap(words) => words
-                .get(index / 64)
-                .is_some_and(|word| word & (1u64 << (index % 64)) != 0),
         },
     }
 }
