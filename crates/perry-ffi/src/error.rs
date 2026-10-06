@@ -37,10 +37,6 @@ extern "C" {
         kind: i32,
     ) -> !;
 
-    /// Runtime entry: pointer to a Buffer/TypedArray value's bytes (with
-    /// length via `out_len`), or null for any other value.
-    fn js_value_buffer_or_typedarray_data(bits: f64, out_len: *mut u32) -> *const u8;
-
     /// Runtime entry: build a Node-style system Error with `.message`,
     /// `.code`, `.syscall` and `.errno`.
     fn js_node_system_error_value(
@@ -157,13 +153,6 @@ pub unsafe fn warn_stub(name: &'static CStr, reason: &'static CStr, issue: Optio
 /// `None` for any value that is neither (the caller should raise a
 /// `TypeError` in that case). The borrow is valid for the duration of the
 /// calling FFI invocation.
-pub fn value_byte_slice(value: JsValue) -> Option<&'static [u8]> {
-    let mut len: u32 = 0;
-    // SAFETY: `js_value_buffer_or_typedarray_data` returns either null or a
-    // pointer to `len` live bytes inside the runtime arena.
-    let ptr = unsafe { js_value_buffer_or_typedarray_data(f64::from_bits(value.bits()), &mut len) };
-    if ptr.is_null() {
-        return None;
-    }
-    Some(unsafe { std::slice::from_raw_parts(ptr, len as usize) })
+pub fn value_byte_slice<'s>(value: JsValue, scope: &'s crate::bytes::NoGc<'s>) -> Option<&'s [u8]> {
+    crate::bytes::borrow(value, scope)
 }

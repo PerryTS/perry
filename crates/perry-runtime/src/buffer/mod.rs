@@ -9,6 +9,9 @@ use crate::string::{
 
 mod access;
 mod backing;
+#[cfg(test)]
+pub(crate) use backing::LIVE_BACKINGS;
+pub mod bytes;
 pub use backing::TransferredBacking;
 pub(crate) use header::{buffer_adopt_backing, buffer_alloc_owned};
 mod cmp;
@@ -50,6 +53,7 @@ mod view_tests;
 pub(crate) use view::resolve_data_ptr as resolve_span_data_ptr;
 
 // ---- Re-exports: types & constants ----
+pub(crate) use header::buffer_payload_size;
 pub use header::{BufferHeader, BUFFER_TYPE_ID, NODE_BUFFER_CLASS_ID, SMALL_BUF_THRESHOLD};
 
 // ---- Re-exports: allocation / registry helpers ----

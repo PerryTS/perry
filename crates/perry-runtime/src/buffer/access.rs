@@ -291,7 +291,7 @@ pub(crate) fn cached_u8_write(addr: usize, index: i32, byte: u8) -> bool {
         if index < 0 || index as u32 >= len {
             return false;
         }
-        *((addr + std::mem::size_of::<BufferHeader>()) as *mut u8).add(index as usize) = byte;
+        super::bytes::write_admitted_inline_byte(addr, index as usize, byte);
     }
     true
 }

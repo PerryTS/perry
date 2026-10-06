@@ -154,60 +154,62 @@ pub extern "C" fn js_node_http2_get_packed_settings(settings_bits: i64) -> *mut 
 #[no_mangle]
 pub extern "C" fn js_node_http2_get_unpacked_settings(buf_bits: i64) -> *mut StringHeader {
     let value = JsValue::from_bits(buf_bits as u64);
-    let bytes = match value_byte_slice(value) {
-        Some(b) => b,
-        None => throw_not_buffer(value),
+    let len = perry_ffi::bytes::no_gc(|scope| value_byte_slice(value, scope).map(<[u8]>::len));
+    let Some(len) = len else {
+        throw_not_buffer(value)
     };
-    if bytes.len() % 6 != 0 {
+    if len % 6 != 0 {
         throw_with_code(
             "Packed settings length must be a multiple of six",
             "ERR_HTTP2_INVALID_PACKED_SETTINGS_LENGTH",
             ErrorKind::RangeError,
         );
     }
-
-    let mut parts: Vec<String> = Vec::new();
-    let mut custom_settings = BTreeMap::new();
-    let mut custom_position = None;
-    let mut i = 0;
-    while i + 6 <= bytes.len() {
-        let id = u16::from_be_bytes([bytes[i], bytes[i + 1]]);
-        let val = u32::from_be_bytes([bytes[i + 2], bytes[i + 3], bytes[i + 4], bytes[i + 5]]);
-        match id {
-            ID_HEADER_TABLE_SIZE => parts.push(format!("\"headerTableSize\":{val}")),
-            ID_ENABLE_PUSH => parts.push(format!("\"enablePush\":{}", val != 0)),
-            ID_MAX_CONCURRENT_STREAMS => parts.push(format!("\"maxConcurrentStreams\":{val}")),
-            ID_INITIAL_WINDOW_SIZE => parts.push(format!("\"initialWindowSize\":{val}")),
-            ID_MAX_FRAME_SIZE => parts.push(format!("\"maxFrameSize\":{val}")),
-            ID_MAX_HEADER_LIST_SIZE => {
-                // Node populates both aliases from identifier 6.
-                parts.push(format!("\"maxHeaderSize\":{val}"));
-                parts.push(format!("\"maxHeaderListSize\":{val}"));
-            }
-            ID_ENABLE_CONNECT_PROTOCOL => {
-                parts.push(format!("\"enableConnectProtocol\":{}", val != 0))
-            }
-            _ => {
-                // Node exposes unknown IDs, with the container inserted at
-                // the first unknown record and duplicate IDs last-wins.
-                if custom_position.is_none() {
-                    custom_position = Some(parts.len());
-                    parts.push(String::new());
+    let json = perry_ffi::bytes::no_gc(|scope| {
+        let bytes = value_byte_slice(value, scope).expect("validated byte value");
+        let mut parts: Vec<String> = Vec::new();
+        let mut custom_settings = BTreeMap::new();
+        let mut custom_position = None;
+        let mut i = 0;
+        while i + 6 <= bytes.len() {
+            let id = u16::from_be_bytes([bytes[i], bytes[i + 1]]);
+            let val = u32::from_be_bytes([bytes[i + 2], bytes[i + 3], bytes[i + 4], bytes[i + 5]]);
+            match id {
+                ID_HEADER_TABLE_SIZE => parts.push(format!("\"headerTableSize\":{val}")),
+                ID_ENABLE_PUSH => parts.push(format!("\"enablePush\":{}", val != 0)),
+                ID_MAX_CONCURRENT_STREAMS => parts.push(format!("\"maxConcurrentStreams\":{val}")),
+                ID_INITIAL_WINDOW_SIZE => parts.push(format!("\"initialWindowSize\":{val}")),
+                ID_MAX_FRAME_SIZE => parts.push(format!("\"maxFrameSize\":{val}")),
+                ID_MAX_HEADER_LIST_SIZE => {
+                    // Node populates both aliases from identifier 6.
+                    parts.push(format!("\"maxHeaderSize\":{val}"));
+                    parts.push(format!("\"maxHeaderListSize\":{val}"));
                 }
-                custom_settings.insert(id, val);
+                ID_ENABLE_CONNECT_PROTOCOL => {
+                    parts.push(format!("\"enableConnectProtocol\":{}", val != 0))
+                }
+                _ => {
+                    // Node exposes unknown IDs, with the container inserted at
+                    // the first unknown record and duplicate IDs last-wins.
+                    if custom_position.is_none() {
+                        custom_position = Some(parts.len());
+                        parts.push(String::new());
+                    }
+                    custom_settings.insert(id, val);
+                }
             }
+            i += 6;
         }
-        i += 6;
-    }
-    if let Some(position) = custom_position {
-        // All u16 IDs are JS array-index keys, so enumerate them numerically.
-        let custom_parts: Vec<String> = custom_settings
-            .iter()
-            .map(|(id, val)| format!("\"{id}\":{val}"))
-            .collect();
-        parts[position] = format!("\"customSettings\":{{{}}}", custom_parts.join(","));
-    }
-    let json = format!("{{{}}}", parts.join(","));
+        if let Some(position) = custom_position {
+            // All u16 IDs are JS array-index keys, so enumerate them numerically.
+            let custom_parts: Vec<String> = custom_settings
+                .iter()
+                .map(|(id, val)| format!("\"{id}\":{val}"))
+                .collect();
+            parts[position] = format!("\"customSettings\":{{{}}}", custom_parts.join(","));
+        }
+        format!("{{{}}}", parts.join(","))
+    });
     alloc_string(&json).as_raw()
 }
 
@@ -410,9 +412,11 @@ mod tests {
     fn pack_object(settings: JsValue) -> Result<Vec<u8>, f64> {
         perry_runtime::exception::catch_js_throw(|| {
             let buffer = js_node_http2_get_packed_settings(settings.bits() as i64);
-            value_byte_slice(JsValue::from_object_ptr(buffer))
-                .expect("packed settings must be a Buffer")
-                .to_vec()
+            perry_ffi::bytes::no_gc(|scope| {
+                value_byte_slice(JsValue::from_object_ptr(buffer), scope)
+                    .expect("packed settings must be a Buffer")
+                    .to_vec()
+            })
         })
     }
 

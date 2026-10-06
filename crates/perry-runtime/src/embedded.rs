@@ -468,15 +468,11 @@ pub extern "C" fn js_perry_read_embedded(path_value: f64) -> *mut crate::buffer:
             bytes.len()
         ));
     }
-    unsafe {
-        let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
-        if !buf.is_null() {
-            let buf_data = (buf as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf_data, bytes.len());
-            (*buf).length = bytes.len() as u32;
-        }
-        buf
-    }
+    crate::value::JSValue::from_bits(
+        crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes).to_bits(),
+    )
+    .as_pointer::<crate::buffer::BufferHeader>()
+    .cast_mut()
 }
 
 // Keep the FFI symbols external under the thin-LTO + `strip=true` release

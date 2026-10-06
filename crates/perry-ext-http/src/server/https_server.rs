@@ -227,22 +227,23 @@ pub struct HttpsServer {
 /// provider is shared by future per-connection configs, so rotation takes
 /// effect without replacing the accept loop or touching another server.
 pub(crate) fn set_ticket_keys(server_handle: i64, value: f64) {
-    let Some(bytes) = perry_ffi::value_byte_slice(JsValue::from_bits(value.to_bits())) else {
-        perry_ffi::throw_with_code(
+    let keys = perry_ffi::bytes::no_gc(|scope| {
+        perry_ffi::value_byte_slice(JsValue::from_bits(value.to_bits()), scope)
+            .map(|bytes| <[u8; 48]>::try_from(bytes))
+    });
+    let keys = match keys {
+        None => perry_ffi::throw_with_code(
             "The session ticket keys argument must be a Buffer or TypedArray",
             "ERR_INVALID_ARG_TYPE",
             perry_ffi::ErrorKind::TypeError,
-        );
-    };
-    if bytes.len() != 48 {
-        perry_ffi::throw_with_code(
+        ),
+        Some(Err(_)) => perry_ffi::throw_with_code(
             "Session ticket keys must be a 48-byte buffer",
             "ERR_INVALID_ARG_VALUE",
             perry_ffi::ErrorKind::TypeError,
-        );
-    }
-    let mut keys = [0_u8; 48];
-    keys.copy_from_slice(bytes);
+        ),
+        Some(Ok(keys)) => keys,
+    };
     let (ticket_key, port) = get_handle::<HttpsServer>(server_handle)
         .map(|server| (server.ticket_key.clone(), server.base.bound_port))
         .unwrap_or_else(|| {

@@ -247,11 +247,13 @@ unsafe fn raw_pfx_identity(options: f64) -> Option<String> {
             let raw = value.as_pointer::<u8>() as i64;
             if unsafe { is_buffer(raw) } != 0 {
                 2_u8.hash(hasher);
-                if let Some(bytes) =
-                    perry_ffi::read_buffer_bytes(raw as *const perry_ffi::BufferHeader)
-                {
-                    bytes.hash(hasher);
-                }
+                perry_ffi::bytes::no_gc(|scope| {
+                    if let Some(bytes) =
+                        perry_ffi::read_buffer_bytes(raw as *const perry_ffi::BufferHeader, scope)
+                    {
+                        bytes.hash(hasher);
+                    }
+                });
                 return;
             }
         }

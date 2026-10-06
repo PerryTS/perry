@@ -147,19 +147,7 @@ pub(crate) fn live_udp(socket: f64) -> Option<Arc<UdpSocket>> {
 
 /// Build a `Buffer` JS value from raw datagram bytes.
 pub(crate) fn make_buffer(data: &[u8]) -> f64 {
-    let buf = crate::buffer::js_buffer_alloc(data.len() as i32, 0);
-    unsafe {
-        if !buf.is_null() {
-            if !data.is_empty() {
-                let dst = (buf as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
-                // GC_STORE_AUDIT(POINTER_FREE): raw datagram bytes copied into a
-                // freshly-allocated Buffer payload — u8 data, never heap pointers.
-                std::ptr::copy_nonoverlapping(data.as_ptr(), dst, data.len());
-            }
-            (*buf).length = data.len() as u32;
-        }
-    }
-    boxed_pointer(buf as *const u8)
+    crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, data)
 }
 
 /// Deliver one received datagram to its socket as a `'message'` event. Called

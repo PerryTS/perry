@@ -509,8 +509,9 @@ mod tests {
         DISPATCH_CALLBACK_FIRED.with(|fired| fired.set(true));
         let err_is_null = err.to_bits() == JsValue::NULL.bits();
         let output = JsValue::from_bits(value.to_bits()).as_pointer::<BufferHeader>();
-        let output_is_gzip =
-            read_buffer_bytes(output).is_some_and(|bytes| bytes.starts_with(&[0x1f, 0x8b]));
+        let output_is_gzip = perry_ffi::bytes::no_gc(|scope| {
+            read_buffer_bytes(output, scope).is_some_and(|bytes| bytes.starts_with(&[0x1f, 0x8b]))
+        });
         DISPATCH_CALLBACK_OK.with(|ok| ok.set(err_is_null && output_is_gzip));
         f64::from_bits(JsValue::UNDEFINED.bits())
     }
@@ -631,10 +632,14 @@ mod tests {
             output: f64,
         ) -> f64 {
             assert_eq!(err.to_bits(), JsValue::NULL.bits());
-            let bytes = read_buffer_bytes(
-                JsValue::from_bits(output.to_bits()).as_pointer::<BufferHeader>(),
-            )
-            .unwrap();
+            let bytes = perry_ffi::bytes::no_gc(|scope| {
+                read_buffer_bytes(
+                    JsValue::from_bits(output.to_bits()).as_pointer::<BufferHeader>(),
+                    scope,
+                )
+                .unwrap()
+                .to_vec()
+            });
             // The repeated input compresses to far less than 4096 bytes at the
             // default level, so this fails if dispatch silently drops options.
             assert!(bytes.len() > 4096);

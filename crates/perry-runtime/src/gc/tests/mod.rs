@@ -129,3 +129,5 @@ mod external_buffer;
 
 #[cfg(target_os = "linux")]
 mod eden_entry_residency;
+
+mod buffer_bytes;

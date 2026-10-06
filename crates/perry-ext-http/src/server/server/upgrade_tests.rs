@@ -14,10 +14,14 @@ extern "C" fn observe(
         set_closure_capture_f64(closure as *mut _, 0, count + 1.0);
         set_closure_capture_f64(closure as *mut _, 1, req);
         set_closure_capture_f64(closure as *mut _, 2, socket);
-        let bytes = perry_ffi::read_buffer_bytes(
-            (head.to_bits() & PTR_MASK) as *const perry_ffi::BufferHeader,
-        )
-        .unwrap();
+        let bytes = perry_ffi::bytes::no_gc(|scope| {
+            perry_ffi::read_buffer_bytes(
+                (head.to_bits() & PTR_MASK) as *const perry_ffi::BufferHeader,
+                scope,
+            )
+            .unwrap()
+            .to_vec()
+        });
         assert_eq!(bytes, &[0xff, 0, 0x80]);
     }
     0.0

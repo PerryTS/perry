@@ -923,16 +923,13 @@ pub extern "C-unwind" fn js_fs_read_file_binary_options(
     }
 }
 
-/// A fresh Buffer holding `bytes`. A new allocation is never a view or
-/// foreign-backed, so its data sits directly after the header.
+/// A fresh Buffer holding `bytes`, independent of its storage placement.
 unsafe fn buffer_from_file_bytes(bytes: &[u8]) -> *mut crate::buffer::BufferHeader {
-    let buf = crate::buffer::js_buffer_alloc(bytes.len() as i32, 0);
-    if !buf.is_null() {
-        let buf_data = (buf as *mut u8).add(std::mem::size_of::<crate::buffer::BufferHeader>());
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buf_data, bytes.len());
-        (*buf).length = bytes.len() as u32;
-    }
-    buf
+    crate::value::JSValue::from_bits(
+        crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes).to_bits(),
+    )
+    .as_pointer::<crate::buffer::BufferHeader>()
+    .cast_mut()
 }
 
 /// Recursively remove a directory or file.

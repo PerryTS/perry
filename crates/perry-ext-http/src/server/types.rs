@@ -287,7 +287,9 @@ pub fn jsvalue_to_body_bytes(value: f64) -> Option<Vec<u8>> {
         if is_buffer {
             let buf = raw as *const BufferHeader;
             if !buf.is_null() {
-                return perry_ffi::read_buffer_bytes(buf).map(<[u8]>::to_vec);
+                return perry_ffi::bytes::no_gc(|scope| {
+                    perry_ffi::read_buffer_bytes(buf, scope).map(<[u8]>::to_vec)
+                });
             }
         }
         // Non-buffer pointer — try the string-shaped header (shared

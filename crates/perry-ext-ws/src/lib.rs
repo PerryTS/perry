@@ -723,8 +723,11 @@ pub(crate) fn outgoing_from_value(value: f64) -> Option<WsOutgoing> {
     // A Buffer / TypedArray / ArrayBuffer resolves to its backing bytes; a
     // string does not, which is how the two cases are told apart.
     if !value.is_any_string() {
-        if let Some(bytes) = perry_ffi::value_byte_slice(value) {
-            return Some(WsOutgoing::Binary(bytes.to_vec()));
+        if let Some(outgoing) = perry_ffi::bytes::no_gc(|scope| {
+            perry_ffi::value_byte_slice(value, scope)
+                .map(|bytes| WsOutgoing::Binary(bytes.to_vec()))
+        }) {
+            return Some(outgoing);
         }
     }
     js_string_of(value).map(WsOutgoing::Text)

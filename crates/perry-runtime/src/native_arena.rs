@@ -175,13 +175,6 @@ pub(crate) unsafe fn native_view_from_typed_array(
     ta as *const NativeTypedViewHeader
 }
 
-#[inline]
-pub(crate) unsafe fn native_view_from_typed_array_mut(
-    ta: *mut TypedArrayHeader,
-) -> *mut NativeTypedViewHeader {
-    ta as *mut NativeTypedViewHeader
-}
-
 unsafe fn clean_owner_ptr(raw: u64) -> *mut NativeArenaOwnerHeader {
     let addr = strip_nanbox(raw);
     if addr < 0x1000 {
@@ -233,24 +226,34 @@ pub(crate) unsafe fn native_view_data_ptr(ta: *const TypedArrayHeader) -> *const
     (*view).data as *const u8
 }
 
-#[inline]
-pub(crate) unsafe fn native_view_data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
-    let view = native_view_from_typed_array_mut(ta);
-    validate_view_alive(view);
-    (*view).data
-}
-
 unsafe fn dispose_owner(owner: *mut NativeArenaOwnerHeader) {
     if owner.is_null() || (*owner).disposed != 0 {
         return;
     }
+    let pinned = crate::buffer::bytes::has_pins(owner as usize);
+    #[cfg(test)]
+    let pinned = pinned && !crate::buffer::bytes::sabotage("arena_free");
+    if !pinned {
+        release_owner_bytes(owner);
+    }
+    (*owner).disposed = 1;
+    (*owner).generation = (*owner).generation.wrapping_add(1);
+}
+
+/// Release an explicitly disposed owner's allocation when native pins finish.
+/// # Safety
+/// owner is a live NativeArena owner on this thread.
+pub(crate) unsafe fn release_disposed_bytes(owner: *mut NativeArenaOwnerHeader) {
+    if (*owner).disposed != 0 && !crate::buffer::bytes::has_pins(owner as usize) {
+        release_owner_bytes(owner);
+    }
+}
+unsafe fn release_owner_bytes(owner: *mut NativeArenaOwnerHeader) {
     let data = (*owner).data;
     if !data.is_null() {
         dealloc(data, byte_layout((*owner).byte_length));
         (*owner).data = ptr::null_mut();
     }
-    (*owner).disposed = 1;
-    (*owner).generation = (*owner).generation.wrapping_add(1);
 }
 
 #[no_mangle]

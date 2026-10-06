@@ -700,19 +700,7 @@ pub(crate) fn inline_u32_addr(receiver: f64) -> usize {
 
 #[inline]
 pub(crate) fn data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
-    unsafe {
-        if (*ta).storage == TA_STORAGE_INLINE {
-            (ta as *mut u8).add(std::mem::size_of::<TypedArrayHeader>())
-        } else if (*ta).storage == TA_STORAGE_RESOLVED {
-            resolved_data(ta)
-        } else if crate::native_arena::is_native_typed_view(ta as *const TypedArrayHeader) {
-            crate::native_arena::native_view_data_ptr_mut(ta)
-        } else if let Some(p) = crate::typedarray_view::view_backing_data_ptr(ta as usize) {
-            p
-        } else {
-            (ta as *mut u8).add(std::mem::size_of::<TypedArrayHeader>())
-        }
-    }
+    data_ptr(ta) as *mut u8
 }
 
 /// Return the byte view for a registered typed array.
@@ -991,6 +979,7 @@ fn typed_array_payload_size(capacity: u32, elem_size: usize) -> usize {
 
 /// Allocate a zero-filled typed array of `length` elements.
 pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
+    crate::buffer::bytes::assert_allocation_allowed();
     let elem_size = elem_size_for_kind(kind);
     // RULE 3 (`object/shape_rule3.rs`): `capacity` occupies payload `+4`.
     // `typed_array_length_or_throw` already refuses an over-range length at

@@ -411,6 +411,8 @@ jobs:
       - name: File size limit
         if: ${{ !cancelled() }}
         run: ./scripts/check_file_size.sh
+      - name: Buffer layout ratchet
+        run: ./scripts/check_buffer_layout.sh --self-test && ./scripts/check_buffer_layout.sh
 
       # #7846: erased TypeScript annotations and initializer-refined local
       # types are hints, not runtime proofs. Every codegen read must choose the

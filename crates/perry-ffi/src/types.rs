@@ -110,13 +110,10 @@ pub struct ObjectHeader {
     pub meta: *mut core::ffi::c_void,
 }
 
-/// Header for a runtime-allocated Buffer or Uint8Array payload.
+/// Opaque runtime byte value. Resolve bytes through `bytes`, never pointer arithmetic.
 #[repr(C)]
 pub struct BufferHeader {
-    /// Length in bytes.
-    pub length: u32,
-    /// Allocated byte capacity.
-    pub capacity: u32,
+    _opaque: [u8; 0],
 }
 
 /// Header for a runtime-allocated BigInt.
@@ -281,19 +278,6 @@ mod layout_tests {
         assert_eq!(offset_of!(ObjectHeader, meta), 8);
         #[cfg(target_pointer_width = "32")]
         assert_eq!(offset_of!(ObjectHeader, meta), 12);
-    }
-
-    #[test]
-    fn buffer_header_matches_runtime() {
-        assert_layout!(BufferHeader, perry_runtime::BufferHeader);
-        assert_eq!(
-            offset_of!(BufferHeader, length),
-            offset_of!(perry_runtime::BufferHeader, length)
-        );
-        assert_eq!(
-            offset_of!(BufferHeader, capacity),
-            offset_of!(perry_runtime::BufferHeader, capacity)
-        );
     }
 
     #[test]
