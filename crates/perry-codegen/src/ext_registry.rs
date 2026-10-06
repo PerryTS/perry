@@ -117,6 +117,7 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // or bound export installs its provider's value-form dispatcher.
     ("js_ext_net_nm_install",                       OwnerKind::WellKnown("net")),
     ("js_ext_http_nm_install",                      OwnerKind::WellKnown("http")),
+    ("js_ext_zlib_nm_install",                      OwnerKind::WellKnown("zlib")),
     // ── #835: Web Streams ────────────────────────────────────────────
     // `perry-stdlib::streams` owns the canonical implementations.
     // `perry-ext-streams` re-implements a subset, but `js_stream_unwrap_handle`

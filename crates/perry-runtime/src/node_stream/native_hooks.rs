@@ -357,29 +357,18 @@ pub(super) fn begin_write(
 
 /// `_final` for a hooked Transform: the Final record runs once every buffered
 /// write is done (`end()` reaches this only when the writable side drained).
-/// Deferred families finish their writable side before their asynchronous
-/// flush completes; inline families finish after producing final output.
+/// The default Transform final waits for its output before writable finish.
+/// A binding's own `_final` and `_flush` retain their ordinary JS ordering.
 pub(super) fn begin_final(stream: f64, hooks: &'static StreamHooks, callback: Option<f64>) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let s = scope.root_nanbox_f64(stream);
     let cb = scope.root_nanbox_f64(callback.unwrap_or(f64::from_bits(TAG_UNDEFINED)));
-    let deferred = hooks.timing == StepTiming::DEFERRED;
-    if deferred {
-        schedule_writable_finish(
-            s.get_nanbox_f64(),
-            is_callable_value(cb.get_nanbox_f64()).then_some(cb.get_nanbox_f64()),
-        );
-    }
     install_record(
         s.get_nanbox_f64(),
         REC_FINAL,
         f64::from_bits(TAG_UNDEFINED),
         0.0,
-        if deferred {
-            f64::from_bits(TAG_UNDEFINED)
-        } else {
-            cb.get_nanbox_f64()
-        },
+        cb.get_nanbox_f64(),
         0.0,
     );
     drive(s.get_nanbox_f64(), hooks);

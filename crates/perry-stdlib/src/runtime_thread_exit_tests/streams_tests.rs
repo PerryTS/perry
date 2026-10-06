@@ -279,7 +279,8 @@ mod zlib_payloads {
             let obj = perry_runtime::JSValue::from_bits(owner.get_nanbox_u64())
                 .as_pointer::<perry_runtime::object::ObjectHeader>();
             let cell = perry_runtime::JSValue::from_bits((*(*obj).meta).native_state)
-                .as_pointer::<perry_runtime::native_handle::NativeHandleHeader>();
+                .as_pointer::<perry_runtime::native_handle::NativeHandleHeader>()
+                .cast_mut();
             assert!((*cell).external_bytes > 100000);
             let original =
                 &*((*cell).finalizer as *const perry_runtime::native_payload::PayloadVTable);

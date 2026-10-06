@@ -204,6 +204,43 @@ fn factory(name: &str, opts: f64) -> f64 {
     unsafe { crate::js_ext_zlib_native_dispatch(name.as_ptr(), name.len(), &opts, 1) }
 }
 #[test]
+fn a_fresh_factory_installs_its_inherited_methods_without_a_stream_import() {
+    if std::env::var("PERRY_TEST_ZLIB_FRESH_FACTORY").is_err() {
+        let result = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "stream::runtime_tests::a_fresh_factory_installs_its_inherited_methods_without_a_stream_import", "--nocapture"])
+            .env("PERRY_TEST_ZLIB_FRESH_FACTORY", "1")
+            .output().unwrap();
+        assert!(
+            result.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        return;
+    }
+    // Do not call clear(): it installs the module and would hide the bug.
+    perry_runtime::gc::gc_init();
+    let roots = TransientRootScope::enter();
+    let opts = roots.root_nanbox(options());
+    let owner = roots.root_nanbox(factory("Gzip", opts.get()));
+    for name in ["on", "end", "destroy", "pipe"] {
+        assert!(
+            unsafe { js_zlib_is_callback(field(owner.get(), name)) } != 0,
+            "inherited {name}"
+        );
+    }
+    listen(owner.get(), 0.0);
+    let input = roots.root_nanbox(value_bytes(b"fresh binding factory"));
+    unsafe { method(owner.get(), "end", &[input.get()]) };
+    pump();
+    let output = OUTPUT.with(|bytes| bytes.borrow().clone());
+    assert_eq!(
+        crate::gunzip_bytes(&output).unwrap(),
+        b"fresh binding factory"
+    );
+    assert_eq!(native_bytes(owner.get()), 0);
+}
+#[test]
 fn constructor_fields_survive_collection_before_the_last_write_state() {
     if std::env::var("PERRY_TEST_ZLIB_CONSTRUCTOR_GC").is_err() {
         let result = std::process::Command::new(std::env::current_exe().unwrap())
@@ -305,11 +342,10 @@ fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
     clear();
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(options());
-    let input = vec![65; 100_000_000];
-    let mut expected = flate2::Crc::new();
-    expected.update(&input);
-    let compressed = crate::gzip_bytes(&input).unwrap();
-    drop(input);
+    // Generated in a separate Node process. A 100 MB producer allocation
+    // retained by the allocator would mask the decompressor's RSS growth.
+    let compressed = include_bytes!("../../../../test-files/fixtures/zlib-bomb-100mb.gz");
+    let expected = 2229916188;
     let owner = roots.root_nanbox(factory("Gunzip", opts.get()));
     listen(owner.get(), 3.0);
     let chunk = roots.root_nanbox(value_bytes(&compressed));
@@ -335,7 +371,7 @@ fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
     let (count, valid, peak) = BOMB.with(std::cell::Cell::get);
     assert_eq!(count, 100_000_000);
     assert!(valid);
-    assert_eq!(BOMB_CRC.with(|crc| crc.borrow().sum()), expected.sum());
+    assert_eq!(BOMB_CRC.with(|crc| crc.borrow().sum()), expected);
     assert!(
         peak.saturating_sub(baseline) < 32 << 20,
         "bomb RSS delta: {}",
@@ -398,6 +434,10 @@ fn codec_sabotages_turn_their_runtime_witnesses_red() {
         return;
     }
     for (fault, witness) in [
+        (
+            "skip_registry_bootstrap",
+            "a_fresh_factory_installs_its_inherited_methods_without_a_stream_import",
+        ),
         (
             "release_in_finalizer_only",
             "fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss",

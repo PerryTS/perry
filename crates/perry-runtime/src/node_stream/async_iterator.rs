@@ -827,7 +827,9 @@ extern "C" fn ns_readable_iterator_return(
         iterator.get_nanbox_f64(),
         hidden_key(READABLE_ITERATOR_STREAM_KEY),
     );
-    if stream.is_some_and(is_readable_handle) && iterator_has_pending(iterator.get_nanbox_f64()) {
+    if stream.is_some_and(uses_async_generator_ordering)
+        && iterator_has_pending(iterator.get_nanbox_f64())
+    {
         let queue = get_hidden_value(
             iterator.get_nanbox_f64(),
             hidden_key(READABLE_ITERATOR_PENDING_KEY),
@@ -866,7 +868,7 @@ extern "C" fn ns_readable_iterator_return(
         ) {
             let stream = scope.root_nanbox_f64(stream);
             call_source_iterator_return(stream.get_nanbox_f64());
-            let reason = if is_readable_handle(stream.get_nanbox_f64()) {
+            let reason = if uses_async_generator_ordering(stream.get_nanbox_f64()) {
                 let msg =
                     crate::string::js_string_from_bytes(b"The operation was aborted".as_ptr(), 25);
                 crate::node_submodules::register_error_code_pub(msg, "ABORT_ERR");
@@ -882,6 +884,10 @@ extern "C" fn ns_readable_iterator_return(
         }
     }
     readable_iterator_done()
+}
+
+fn uses_async_generator_ordering(stream: f64) -> bool {
+    is_readable_handle(stream) || super::native_hooks::hooks_of(stream).is_some()
 }
 
 extern "C" fn ns_readable_iterator_return_after_pull(

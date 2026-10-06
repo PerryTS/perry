@@ -459,19 +459,21 @@ fn entry_prologue_calls_native_provider_installs_before_module_init() {
         opts.app_metadata.native_provider_installs = vec![
             "js_ext_http_nm_install".to_string(),
             "js_ext_net_nm_install".to_string(),
+            "js_ext_zlib_nm_install".to_string(),
         ];
         let ir = String::from_utf8(compile_module(&empty_module(), opts).unwrap()).unwrap();
         let http = ir.find("call void @js_ext_http_nm_install()");
         let net = ir.find("call void @js_ext_net_nm_install()");
+        let zlib = ir.find("call void @js_ext_zlib_nm_install()");
         let init = ir
             .find("call void @lib_cjs__init()")
             .unwrap_or_else(|| panic!("{output_type}: module init not called\n{ir}"));
         assert!(
-            http.is_some() && net.is_some(),
+            http.is_some() && net.is_some() && zlib.is_some(),
             "{output_type}: missing installs\n{ir}"
         );
         assert!(
-            net.unwrap() < init,
+            net.unwrap() < init && zlib.unwrap() < init,
             "{output_type}: install after module init\n{ir}"
         );
     }
