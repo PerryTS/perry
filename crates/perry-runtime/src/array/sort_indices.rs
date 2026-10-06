@@ -113,15 +113,22 @@ fn merge_at(
     scratch[start..mid].copy_from_slice(&order[start..mid]);
     let (mut left, mut right, mut dest) = (start, mid, start);
     let (mut left_wins, mut right_wins) = (0, 0);
+    // Adjacent runs partition [start, end), with end <= order.len() and
+    // mid <= scratch.len(). Each iteration has left < mid and right < end;
+    // dest = start + (left - start) + (right - mid) < right. The comparator
+    // receives only copied integer indices and cannot change these cursors or
+    // the privately borrowed permutation buffers.
     while left < mid && right < end {
         // Left wins ties, preserving the order of equivalent source values.
-        if le(scratch[left], order[right]) {
-            order[dest] = scratch[left];
+        if le(unsafe { *scratch.get_unchecked(left) }, unsafe {
+            *order.get_unchecked(right)
+        }) {
+            order[dest] = unsafe { *scratch.get_unchecked(left) };
             left += 1;
             left_wins += 1;
             right_wins = 0;
         } else {
-            order[dest] = order[right];
+            order[dest] = unsafe { *order.get_unchecked(right) };
             right += 1;
             right_wins += 1;
             left_wins = 0;
@@ -131,21 +138,35 @@ fn merge_at(
         // then binary search. This helps clustered and duplicate-heavy data
         // without imposing a binary search on each random-data comparison.
         if left_wins >= 7 && left < mid && right < end {
-            let take = gallop_prefix(&scratch[left..mid], |item| le(item, order[right]));
+            let take = gallop_prefix(&scratch[left..mid], |item| {
+                le(item, unsafe { *order.get_unchecked(right) })
+            });
             order[dest..dest + take].copy_from_slice(&scratch[left..left + take]);
             left += take;
             dest += take;
             left_wins = 0;
         } else if right_wins >= 7 && left < mid && right < end {
             // Strictly less on the right: ties must stay behind the left run.
-            let take = gallop_prefix(&order[right..end], |item| !le(scratch[left], item));
+            let take = gallop_prefix(&order[right..end], |item| {
+                !le(unsafe { *scratch.get_unchecked(left) }, item)
+            });
             order.copy_within(right..right + take, dest);
             right += take;
             dest += take;
             right_wins = 0;
         }
     }
-    order[dest..dest + mid - left].copy_from_slice(&scratch[left..mid]);
+    // If left == mid this copies zero words. Otherwise right == end and
+    // dest + (mid - left) == end. Both ranges stay within the entry buffers;
+    // separate mutable slice arguments establish that the buffers do not
+    // overlap. The integer scratch allocation never moves during JS calls.
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            scratch.as_ptr().add(left),
+            order.as_mut_ptr().add(dest),
+            mid - left,
+        );
+    }
 }
 
 fn gallop_prefix(values: &[u32], mut belongs: impl FnMut(u32) -> bool) -> usize {
@@ -272,6 +293,40 @@ mod tests {
         assert!(check(&values) < values.len() + 100);
         let duplicates: Vec<i32> = values.iter().map(|x| x / 100).collect();
         assert!(check(&duplicates) < duplicates.len() + 100);
+    }
+
+    #[test]
+    fn merges_leave_both_slice_guards_untouched() {
+        const GUARD: u32 = 0xfedc_ba98;
+        for n in [0, 1, 31, 32, 33, 65, 129, 1024] {
+            for mode in 0..4 {
+                let mut order = vec![GUARD; n + 34];
+                let mut scratch = vec![GUARD; n + 34];
+                for (i, word) in order[17..17 + n].iter_mut().enumerate() {
+                    *word = i as u32;
+                }
+                let mut calls = 0;
+                sort_indices(&mut order[17..17 + n], &mut scratch[17..17 + n], |a, b| {
+                    calls += 1;
+                    match mode {
+                        0 => a >= b,
+                        1 => true,
+                        2 => false,
+                        _ => calls % 2 == 0,
+                    }
+                });
+                assert!(order[..17]
+                    .iter()
+                    .chain(&order[17 + n..])
+                    .all(|x| *x == GUARD));
+                assert!(scratch[..17]
+                    .iter()
+                    .chain(&scratch[17 + n..])
+                    .all(|x| *x == GUARD));
+                order[17..17 + n].sort_unstable();
+                assert_eq!(order[17..17 + n], (0..n as u32).collect::<Vec<_>>());
+            }
+        }
     }
 
     #[test]
