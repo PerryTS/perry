@@ -403,14 +403,36 @@ pub fn from_slice(brand: Brand, input: &[u8]) -> f64 {
 /// Copy a byte value into a new store. Root the input before allocating;
 /// resolve its span after allocation so no derived pointer crosses GC.
 pub fn copy_value(brand: Brand, input: f64) -> Result<f64, NotBytes> {
+    copy_value_inner(brand, input, |_| {})
+}
+
+fn copy_value_inner(
+    brand: Brand,
+    input: f64,
+    after_allocation: impl FnOnce(f64),
+) -> Result<f64, NotBytes> {
     let handles = crate::gc::RuntimeHandleScope::new();
-    let input = handles.root_nanbox_f64(input);
-    let len = no_gc(|scope| bytes(input.get_nanbox_f64(), scope).map(<[u8]>::len))?;
+    #[cfg(test)]
+    let root = (!b4_sabotage("copy_root")).then(|| handles.root_nanbox_f64(input));
+    #[cfg(not(test))]
+    let root = Some(handles.root_nanbox_f64(input));
+    let current = || root.as_ref().map_or(input, |root| root.get_nanbox_f64());
+    let len = no_gc(|scope| bytes(current(), scope).map(<[u8]>::len))?;
     let (output, pin) = new_bytes(brand, len, Init::Uninit);
+    after_allocation(current());
     no_gc(|scope| {
-        let source = bytes(input.get_nanbox_f64(), scope)?;
+        let source = bytes(current(), scope)?;
         unsafe { std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()) }
             .copy_from_slice(source);
         Ok(output)
     })
+}
+
+#[cfg(test)]
+pub(crate) fn copy_with_collection(
+    brand: Brand,
+    input: f64,
+    collect: impl FnOnce(f64),
+) -> Result<f64, NotBytes> {
+    copy_value_inner(brand, input, collect)
 }

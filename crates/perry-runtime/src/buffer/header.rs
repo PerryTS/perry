@@ -60,15 +60,6 @@ pub(crate) fn buffer_family_type(addr: usize) -> Option<u8> {
     if !is_buffer_family_type(obj_type) {
         return None;
     }
-    // The one POINTER-tagged value with no `GcHeader` is a `Box`-leaked symbol
-    // (`Symbol.for`, the well-knowns): its `addr - 8` is foreign allocator
-    // bytes that can equal any type byte. Every symbol carries `SYMBOL_MAGIC`
-    // in its first word, so a header that claims a buffer is believed unless
-    // that word matches (the #7850 screen); a buffer whose `length` happens to
-    // equal the magic pays one ownership check instead.
-    if unsafe { crate::symbol::may_be_symbol_header(addr as *const u8) } && !header_is_owned(addr) {
-        return None;
-    }
     Some(obj_type)
 }
 

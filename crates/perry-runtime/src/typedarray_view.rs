@@ -72,6 +72,9 @@ pub extern "C" fn js_typed_array_view(
     if !crate::buffer::is_registered_buffer(addr) || !crate::buffer::is_any_array_buffer(addr) {
         return js_typed_array_new(kind as i32, source);
     }
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let source = handles.root_nanbox_f64(source);
+    let length_value = handles.root_nanbox_f64(length_value);
     let bpe = elem_size_for_kind(kind) as i64;
 
     // ES ordering (InitializeTypedArrayFromArrayBuffer): ToIndex(byteOffset)
@@ -89,12 +92,14 @@ pub extern "C" fn js_typed_array_view(
             .as_bytes(),
         );
     }
-    let length_jv = crate::value::JSValue::from_bits(length_value.to_bits());
+    let length_jv = crate::value::JSValue::from_bits(length_value.get_nanbox_f64().to_bits());
     let requested = if length_jv.is_undefined() {
         None
     } else {
-        Some(typed_array_view_to_index(length_value))
+        Some(typed_array_view_to_index(length_value.get_nanbox_f64()))
     };
+    let addr = crate::value::JSValue::from_bits(source.get_nanbox_f64().to_bits())
+        .as_pointer::<crate::buffer::BufferHeader>() as usize;
     if crate::buffer::is_detached_buffer(addr) {
         crate::typedarray::throw_type_error(b"Cannot perform Construct on a detached ArrayBuffer");
     }
@@ -134,6 +139,9 @@ pub extern "C" fn js_typed_array_view(
 
     let count = elem_count.max(0) as u32;
     let ta = typed_array_alloc(kind, count);
+    let src = crate::value::JSValue::from_bits(source.get_nanbox_f64().to_bits())
+        .as_pointer::<crate::buffer::BufferHeader>();
+    let addr = src as usize;
     if crate::buffer::is_shared_array_buffer(addr) {
         crate::typedarray::mark_typed_array_shared_backing(ta);
     }
@@ -314,8 +322,13 @@ pub(crate) fn register_view_meta(ta: *const TypedArrayHeader, backing: usize, by
     // every inline element path checks that byte (or the kind-cache tag
     // derived from it) instead of a process-wide count of live views.
     crate::typedarray::note_external_storage(ta as *mut TypedArrayHeader);
-    // Foreign wrappers can rebind; they keep metadata resolution per access.
-    if !crate::buffer::is_foreign_backed_buffer(backing) {
+    // Borrowed foreign wrappers can rebind. Owned native stores have a stable
+    // address and use the same resolved path as inline ArrayBuffer storage.
+    let stable = !crate::buffer::is_foreign_backed_buffer(backing)
+        || crate::buffer::has_owned_backing(backing);
+    #[cfg(test)]
+    let stable = stable && !crate::buffer::bytes::b4_sabotage("native_resolution");
+    if stable {
         unsafe {
             let data = crate::buffer::buffer_data_mut(backing as *mut crate::buffer::BufferHeader)
                 .add(byte_offset as usize);
@@ -444,13 +457,15 @@ pub fn js_typed_array_backing_buffer(
     if let Some(meta) = view_meta_of(addr) {
         return meta.backing as *mut crate::buffer::BufferHeader;
     }
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let owner = handles.root_raw_const_ptr(clean);
     // Materialize a stable backing ArrayBuffer over the current bytes, then
     // rebind the typed array to alias it (so `data_ptr` resolves into the
     // buffer from now on and writes are shared in both directions).
-    let buf = typed_array_to_array_buffer(clean);
+    let buf = typed_array_to_array_buffer(owner.get_raw_const_ptr());
     if buf.is_null() {
         return std::ptr::null_mut();
     }
-    register_view_meta(clean, buf as usize, 0);
+    register_view_meta(owner.get_raw_const_ptr(), buf as usize, 0);
     buf
 }
