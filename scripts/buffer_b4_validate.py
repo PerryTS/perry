@@ -57,6 +57,7 @@ def environment(root, arm):
                PERRY_FORCE_WELL_KNOWN='http,net,ws,zlib',
                PERF_BUILDID_DIR=str(root/'perf-buildid'), XDG_CACHE_HOME=str(root/'cache'))
     env.pop('PERRY_GC_DIAG', None)
+    env.pop('PERRY_GC_TRACE', None)
     return source, target, env
 
 def run(cmd, cwd, env, prefix, timeout=1800):
@@ -107,7 +108,7 @@ def compile_arm(root, arm, names):
     path.write_text(json.dumps(prior, indent=2)+'\n')
 
 def full_collections(root, arm, name, cmd, cwd, env, trial):
-    diag = dict(env, PERRY_GC_DIAG='1')
+    diag = dict(env, PERRY_GC_TRACE='1')
     trials_dir = 'trials-thp-off' if env.get('MIMALLOC_ALLOW_THP') == '0' else 'trials'
     prefix = root/'measure'/trials_dir/f'{name}.{trial}.{arm}.gc'
     huge = []
@@ -144,8 +145,13 @@ def full_collections(root, arm, name, cmd, cwd, env, trial):
                 obj = json.loads(line)
                 if obj.get('event') == 'gc_cycle': events.append(obj)
             except ValueError: pass
-    fulls = None if not events and b'diagnostics feature disabled' in stderr else sum(e['collection_kind'] == 'full' for e in events)
-    return {'fulls': fulls, 'anon_huge_kb': max(huge) if huge else None,
+    if b'diagnostics feature disabled' in stderr:
+        raise RuntimeError(f'GC trace feature is disabled: {prefix}')
+    if any(e['collection_kind'] not in ['full', 'minor'] for e in events):
+        raise RuntimeError(f'Unrecognized GC collection kind: {prefix}')
+    fulls = sum(e['collection_kind'] == 'full' for e in events)
+    minors = sum(e['collection_kind'] == 'minor' for e in events)
+    return {'fulls': fulls, 'minors': minors, 'anon_huge_kb': max(huge) if huge else None,
             'sampled_anon_rss_kb': peak.get('Anonymous'),
             'sampled_file_rss_kb': peak['Rss'] - peak['Anonymous'] if 'Anonymous' in peak else None}
 
