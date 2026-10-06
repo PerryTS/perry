@@ -995,3 +995,10 @@ test_gap_gc_generated_root_final_remark
 # #11929/#11960: root-heavy stable homes during budgeted marking and copying GC.
 test_gap_gc_11929_stable_home_marking
 test_gap_gc_11929_inline_births
+
+# Seeded moving minors with from-space and old-sweep protection over a
+# streamed fetch body, a worker ArrayBuffer ownership transfer, and idle-Eden
+# reclaim under every-poll collection.
+test_gap_gc_fetch_streaming_chunks
+test_gap_gc_worker_transfer_ownership
+test_gap_gc_protected_poll_reclaim

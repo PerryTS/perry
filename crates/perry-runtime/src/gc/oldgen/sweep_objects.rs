@@ -670,7 +670,7 @@ impl ArenaSweepObjectsState {
         } else {
             crate::arena::RetiredKind::Nursery
         };
-        crate::arena::retire_swept_object(header as usize, total_size, kind);
+        crate::arena::retire_swept_object(header, total_size, kind);
         if let Some(slot) = self.block_has_live.get_mut(block_idx) {
             *slot = true;
         }

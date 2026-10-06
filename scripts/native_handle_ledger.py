@@ -118,8 +118,8 @@ EXTRA_TABLES: dict[tuple[str, str], int] = {
     ("crates/perry-runtime/src/tui/tree.rs", "REGISTRY"): 1,
     ("crates/perry-stdlib/src/common/handle_lifecycle.rs", "ORPHANS"): 1,
     ("crates/perry-stdlib/src/readline/mod.rs", "READLINE_INTERFACES"): 1,
-    # Statics::streams, ::listeners and ::evicted_streams behind statics().
-    ("crates/perry-ext-zlib/src/stream.rs", "__STATICS_HANDLE_TABLES"): 3,
+    # Statics::streams and ::listeners behind statics().
+    ("crates/perry-ext-zlib/src/stream.rs", "__STATICS_HANDLE_TABLES"): 2,
 }
 
 REGISTER_CALL = re.compile(
@@ -245,7 +245,7 @@ def scan(root: Path = ROOT) -> tuple[dict[str, int], dict[str, int], set[tuple[s
         # Opaque struct-field bundle has no declaration named after its maps.
         opaque = (rel, "__STATICS_HANDLE_TABLES")
         if opaque in EXTRA_TABLES:
-            required = ("streams: HashMap<i64", "listeners: HashMap<i64", "evicted_streams: HashSet<i64")
+            required = ("streams: HashMap<i64", "listeners: HashMap<i64")
             if all(token in code for token in required):
                 tables[rel] += EXTRA_TABLES[opaque]
                 seen_decls.add(opaque)
