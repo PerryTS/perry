@@ -6,7 +6,7 @@ Boundary still pending: generated code directly links `PERRY_U8_INLINE_CACHE` an
 
 The remaining B2c work includes native-addon APIs that return raw pointers, private Array.sort byte access, and typed-array creation paths coupled to the old layout. Their pointer lifetimes or representation must be adapted before the source gate can become a zero-debt invariant. This delivery is the compatible conversion subset, not completion of all B2c/B4 requirements. Zlib retains B1's wrapper and output witness.
 
-The exact closed census rows are in `scripts/buffer_b4_census_closed.tsv`: 73 rows (42 runtime, 27 stdlib, 2 updater, 1 ext-http, 1 ext-net), comprising 35 creation, 28 size-assumption, 8 unscoped-borrow and 2 pointer-across-GC sites. Other ext producers already use B1's C ABI wrapper. The expanded source gate has 284 existing sites and zero additions; the same detector found 444 at the earlier B1 baseline, with 161 removed by this lane, one by upstream #12094, and three subsequent upstream verifier/test reads added. It is a ratchet, not the still-pending zero-debt layout invariant.
+The exact closed census rows are in `scripts/buffer_b4_census_closed.tsv`: 73 rows (42 runtime, 27 stdlib, 2 updater, 1 ext-http, 1 ext-net), comprising 35 creation, 28 size-assumption, 8 unscoped-borrow and 2 pointer-across-GC sites. Other ext producers already use B1's C ABI wrapper. The expanded source gate has 284 existing sites and zero additions; the same detector found 444 at the earlier B1 baseline, with 161 removed by this lane, one by upstream #12094, and two subsequent upstream verifier/test reads added. It is a ratchet, not the still-pending zero-debt layout invariant.
 
 | Machinery | Deleted | Still pending |
 |---|---|---|
