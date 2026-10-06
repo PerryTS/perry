@@ -457,12 +457,11 @@ unsafe fn chunk_bytes(chunk: f64) -> (*const u8, usize) {
         }
         return (crate::string::string_data(ptr), (*ptr).byte_len as usize);
     }
-    let raw = raw_ptr_from_value(chunk);
-    if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
-        let buf = raw as *const crate::buffer::BufferHeader;
-        return (crate::buffer::buffer_data(buf), (*buf).length as usize);
-    }
-    (std::ptr::null(), 0)
+    crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(chunk, scope)
+            .map(|b| (b.as_ptr(), b.len()))
+            .unwrap_or((std::ptr::null(), 0))
+    })
 }
 
 /// The one step loop for every hooked stream (see the module docs).
