@@ -332,7 +332,7 @@ pub unsafe extern "C" fn js_keccak256_native_bytes(
     #[cfg(test)]
     crate::buffer_b1_test_support::sabotage_output(
         "ethers",
-        f64::from_bits(JSValue::pointer(result.cast()).bits()),
+        f64::from_bits(perry_runtime::JSValue::pointer(result.cast()).bits()),
     );
     result
 }

@@ -230,7 +230,10 @@ unsafe fn dispose_owner(owner: *mut NativeArenaOwnerHeader) {
     if owner.is_null() || (*owner).disposed != 0 {
         return;
     }
-    if !crate::buffer::bytes::has_pins(owner as usize) {
+    let pinned = crate::buffer::bytes::has_pins(owner as usize);
+    #[cfg(test)]
+    let pinned = pinned && !crate::buffer::bytes::sabotage("arena_free");
+    if !pinned {
         release_owner_bytes(owner);
     }
     (*owner).disposed = 1;

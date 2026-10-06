@@ -10,7 +10,7 @@ fn stream_chunk_conversion_and_sync_roundtrip() {
         let compressed = unsafe {
             js_zlib_gzip_sync(
                 chunk.to_bits() as i64,
-                f64::from_bits(perry_runtime::value::TAG_UNDEFINED),
+                f64::from_bits(perry_runtime::JSValue::undefined().bits()),
             )
         };
         let compressed_bits = perry_runtime::JSValue::pointer(compressed.cast()).bits();

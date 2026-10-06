@@ -10,6 +10,8 @@ import collections
 import json
 from pathlib import Path
 import re
+import subprocess
+import sys
 ROOT = Path(__file__).resolve().parent.parent
 BASE = ROOT / 'scripts/buffer_layout_baseline.json'
 PATTERNS = [
@@ -38,12 +40,21 @@ def main():
     ap.add_argument('--self-test', action='store_true')
     args = ap.parse_args()
     if args.self_test:
-        for planted in ['let dst = (buf as *mut u8).add(8);', '(*buffer).length = 8;',
-                        'std::mem::size_of::<crate::buffer::BufferHeader>()',
-                        'let data = blk.add(I64, &raw, "8");',
-                        'let data = blk.gep(I8, &header, &[(I32, "16")]);']:
-            assert any(p.search(planted) for p in PATTERNS), planted
-        print('buffer-layout planted writers: RED')
+        planted = ROOT/'crates/perry-runtime/src/buffer/b1_layout_gate_sabotage.rs'
+        assert not planted.exists()
+        try:
+            planted.write_text('\n'.join([
+                'let dst = (buf as *mut u8).add(8);', '(*buffer).length = 8;',
+                'std::mem::size_of::<crate::buffer::BufferHeader>()',
+                'let data = blk.add(I64, &raw, "8");',
+                'let data = blk.gep(I8, &header, &[(I32, "16")]);'])+'\n')
+            result = subprocess.run([sys.executable, __file__], capture_output=True, text=True)
+            assert result.returncode == 1, result.stdout + result.stderr
+            assert result.stdout.count('new:') == 5, result.stdout
+            assert 'b1_layout_gate_sabotage.rs' in result.stdout
+        finally:
+            planted.unlink(missing_ok=True)
+        print('buffer-layout planted writers: RED (actual gate exited 1)')
         return
     current = inventory()
     if args.update:

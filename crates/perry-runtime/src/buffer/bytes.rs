@@ -133,6 +133,12 @@ pub(crate) fn span(value: f64, writable: bool) -> Result<Span, NotBytes> {
             return Err(NotBytes::Frozen);
         }
     }
+    #[cfg(test)]
+    let ptr = if sabotage("view_window") && owner != addr && super::is_registered_buffer(owner) {
+        super::buffer_data(owner as *const super::BufferHeader) as *mut u8
+    } else {
+        ptr
+    };
     Ok(Span {
         ptr: if len == 0 {
             NonNull::<u8>::dangling().as_ptr()
@@ -340,10 +346,15 @@ pub fn from_slice(brand: Brand, input: &[u8]) -> f64 {
         }
         return value;
     }
-    no_gc(|scope| unsafe {
-        bytes_mut(value, scope)
-            .expect("fresh byte span")
-            .copy_from_slice(input)
+    no_gc(|_| unsafe {
+        // The factory proved the brand and created an owning Buffer-shaped
+        // cell. No JS or safepoint intervenes here, so generic view/detach
+        // admission would repeat checks whose result is already known. The
+        // canonical resolver still selects inline versus native storage.
+        let cell = JSValue::from_bits(value.to_bits())
+            .as_pointer::<super::BufferHeader>()
+            .cast_mut();
+        std::ptr::copy_nonoverlapping(input.as_ptr(), super::buffer_data_mut(cell), input.len());
     });
     value
 }

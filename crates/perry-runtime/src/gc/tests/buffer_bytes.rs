@@ -199,6 +199,11 @@ fn each_b1_sabotage_turns_its_live_witness_red() {
             "native_backed_alloc_buffer_consumer_preserves_the_pointer_word",
         ),
         ("no_gc_assert", "no_gc_byte_allocation_is_rejected"),
+        ("arena_free", "native_arena_dispose_defers_free_until_unpin"),
+        (
+            "view_window",
+            "every_current_byte_placement_and_view_resolves_the_canonical_window",
+        ),
         (
             "tls_output",
             "tls::b1_output_tests::certificate_raw_output_preserves_der",
