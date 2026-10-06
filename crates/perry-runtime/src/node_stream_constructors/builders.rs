@@ -563,16 +563,35 @@ fn init_transform_kind(this: f64, opts: f64, how: StreamInit, passthrough: bool)
     } else if let Some(flush) = &subclass_flush {
         set_hidden_value(t(), hidden_transform_flush_key(), flush.get_nanbox_f64());
     }
-    if transform_hidden_flush(t()).is_none()
-        && crate::node_stream::native_hooks::hooks_of(t())
-            .is_some_and(|h| h.timing == crate::node_stream::native_hooks::StepTiming::DEFERRED)
+    if crate::node_stream::native_hooks::hooks_of(t())
+        .is_some_and(|h| h.timing == crate::node_stream::native_hooks::StepTiming::DEFERRED)
     {
-        let flush = js_object_get_field_by_name_f64(
-            object_ptr_from_value(t()).unwrap(),
-            hidden_key(b"_flush"),
-        );
-        if is_callable_value(flush) {
-            set_hidden_value(t(), hidden_transform_flush_key(), flush);
+        // A binding's inherited final/flush bodies participate in the same
+        // lifecycle as user hooks. In particular a no-op _final completes
+        // writable finish before the deferred _flush output is consumed.
+        for (name, slot) in [
+            (
+                b"_flush".as_slice(),
+                hidden_transform_flush_key as fn() -> *mut crate::StringHeader,
+            ),
+            (
+                b"_final".as_slice(),
+                hidden_writable_final_key as fn() -> *mut crate::StringHeader,
+            ),
+        ] {
+            let slot = scope.root_string_ptr(slot());
+            if slot
+                .with_mut_ptr(|slot| get_hidden_value(t(), slot))
+                .is_none()
+            {
+                let hook = scope.root_nanbox_f64(js_object_get_field_by_name_f64(
+                    object_ptr_from_value(t()).unwrap(),
+                    hidden_key(name),
+                ));
+                if is_callable_value(hook.get_nanbox_f64()) {
+                    slot.with_mut_ptr(|slot| set_hidden_value(t(), slot, hook.get_nanbox_f64()));
+                }
+            }
         }
     }
     mark_transform_stream(t());

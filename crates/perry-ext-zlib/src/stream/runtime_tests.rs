@@ -272,9 +272,8 @@ fn constructor_fields_survive_collection_before_the_last_write_state() {
 // constructor oracle. Inherited methods never become instance properties.
 fn own_names(owner: f64) -> Vec<String> {
     let roots = TransientRootScope::enter();
-    let names = roots.root_nanbox(perry_runtime::object::js_object_get_own_property_names(
-        owner,
-    ));
+    let names = perry_runtime::object::js_object_keys_value(owner);
+    let names = roots.root_nanbox(f64::from_bits(JsValue::from_object_ptr(names).bits()));
     let ptr = || {
         JsValue::from_bits(names.get().to_bits()).as_pointer::<perry_runtime::array::ArrayHeader>()
     };
