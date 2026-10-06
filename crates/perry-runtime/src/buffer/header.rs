@@ -906,8 +906,10 @@ pub(crate) fn buffer_adopt_backing(
     // Pressure accounting may collect: publish a consistent cell and root it.
     let scope = crate::gc::RuntimeHandleScope::new();
     let root = scope.root_raw_mut_ptr(ptr);
-    crate::gc::gc_note_external_side_alloc(capacity as usize);
-    root.get_raw_mut_ptr()
+    let ((), ptr) = root.across_mut::<BufferHeader, _>(|| {
+        crate::gc::gc_note_external_side_alloc(capacity as usize)
+    });
+    ptr
 }
 
 /// Whether this foreign-shaped cell owns bytes whose release Perry controls.

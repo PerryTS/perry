@@ -34,7 +34,7 @@
   "crates/perry-runtime/src/buffer/backing.rs|*crate::buffer::buffer_data_mut(ap) = 55;": 1,
   "crates/perry-runtime/src/buffer/backing.rs|assert_eq!(*buffer_data(received), 37);": 1,
   "crates/perry-runtime/src/buffer/backing.rs|assert_eq!(buffer_data(received) as usize, original);": 1,
-  "crates/perry-runtime/src/buffer/backing.rs|assert_eq!(buffer_data(root.get_raw_mut_ptr::<BufferHeader>()), data);": 1,
+  "crates/perry-runtime/src/buffer/backing.rs|root.with_mut_ptr(|current: *mut BufferHeader| assert_eq!(buffer_data(current), data));": 1,
   "crates/perry-runtime/src/buffer/backing.rs|assert_eq!(unsafe { *buffer_data(bp) }, 0);": 1,
   "crates/perry-runtime/src/buffer/backing.rs|assert_eq!(unsafe { *buffer_data(received) }, 81);": 1,
   "crates/perry-runtime/src/buffer/backing.rs|assert_ne!(buffer_data(ap), buffer_data(bp));": 1,

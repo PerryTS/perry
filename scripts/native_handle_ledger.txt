@@ -47,13 +47,12 @@
 0 2 crates/perry-ext-ws/src/server.rs
 1 1 crates/perry-ext-ws/src/turnloop_io.rs
 1 0 crates/perry-ext-ws/src/turnloop_link.rs
-0 11 crates/perry-ext-zlib/src/stream.rs
+2 11 crates/perry-ext-zlib/src/stream.rs
 2 1 crates/perry-ffi/src/handle.rs
 1 0 crates/perry-runtime/src/array/element_shape.rs
 2 0 crates/perry-runtime/src/array/header.rs
 1 0 crates/perry-runtime/src/array/named_props.rs
 3 0 crates/perry-runtime/src/async_hooks.rs
-1 0 crates/perry-runtime/src/buffer/detach.rs
 6 0 crates/perry-runtime/src/buffer/header.rs
 2 0 crates/perry-runtime/src/buffer/view.rs
 1 0 crates/perry-runtime/src/builtins/console.rs
