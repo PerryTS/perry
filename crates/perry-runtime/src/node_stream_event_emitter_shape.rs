@@ -117,7 +117,7 @@ pub(super) fn own_key(target: f64, key_bits: u64, bytes: &[u8]) -> OwnKey {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// The method resolver's site memo. Each way also validates the pooled
     /// method id; two names on identical receiver/holder words cannot alias.
     static EMIT_METHOD: crate::object::method_site::own_slot_memo::ProtoSlotMemo =
@@ -161,7 +161,7 @@ pub(super) fn own_get(target: f64, key_bits: u64, bytes: &[u8]) -> Option<f64> {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// The emitter state keys' site memos (`object::own_slot_memo`): the
     /// receiver words on which each is an own plain data slot.
     pub(super) static EVENTS_SLOT: crate::object::method_site::own_slot_memo::OwnSlotMemo =
@@ -173,7 +173,7 @@ thread_local! {
 }
 
 pub(super) type StateMemo =
-    std::thread::LocalKey<crate::object::method_site::own_slot_memo::OwnSlotMemo>;
+    crate::tls_hot::HotKey<crate::object::method_site::own_slot_memo::OwnSlotMemo>;
 
 /// The inline slot of the state key `memo` remembers on `target`, priming
 /// the memo from the shape's own key list on a miss. `None` when `target`'s
@@ -341,7 +341,7 @@ fn emitter_view(target: f64, meta: &[u8]) -> Option<EmitterView> {
     })
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// The `_events` words with no `newListener` / `removeListener` key.
     static NO_NEW_LISTENER: crate::object::method_site::own_slot_memo::AbsentKeyMemo =
         const { crate::object::method_site::own_slot_memo::AbsentKeyMemo::new() };
