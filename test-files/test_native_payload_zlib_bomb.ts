@@ -1,17 +1,13 @@
 // Full Z2: run separately from the ordinary gap suite (about five minutes).
-// Node needs --expose-gc to establish the same post-fixture RSS baseline.
-import { gzipSync, createGunzip, crc32 } from 'node:zlib';
+// The committed 97,222-byte Node fixture expands to 100 MB of byte 65.
+// Generate it outside this process so its source cannot hide stream RSS growth.
+import { createGunzip, crc32 } from 'node:zlib';
+import { readFileSync } from 'node:fs';
 import { Writable, pipeline } from 'node:stream';
 
 const size = 100_000_000;
-declare function gc(): void;
-function fixture() {
-  const input = Buffer.alloc(size, 65);
-  return { expected: crc32(input), compressed: gzipSync(input) };
-}
-const { expected, compressed } = fixture();
-await new Promise<void>(resolve => setImmediate(resolve));
-gc();
+const expected = 2229916188;
+const compressed = readFileSync(process.argv[2] ?? 'test-files/fixtures/zlib-bomb-100mb.gz');
 const codec = createGunzip({ chunkSize: 16384, readableHighWaterMark: 16384 });
 let received = 0, checksum = 0, maximumReadable = 0;
 let baseline = process.memoryUsage().rss, peak = baseline;

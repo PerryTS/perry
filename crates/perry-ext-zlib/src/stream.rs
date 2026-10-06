@@ -9,6 +9,7 @@ use std::ffi::c_void;
 use std::io::Read;
 const UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 extern "C" {
+    fn js_nm_install_zlib();
     fn js_object_set_property_key(owner: f64, key: f64, value: f64) -> f64;
     fn js_zlib_stream_error(message: *const u8, len: usize, truncated: i32) -> f64;
     fn js_zlib_is_callback(value: f64) -> i32;
@@ -503,12 +504,28 @@ unsafe fn method(owner: f64, name: &str, args: &[f64]) -> f64 {
     let args: Vec<_> = args.iter().map(|a| a.get()).collect();
     perry_ffi::call_value(method.get(), JsThis::from_f64(owner.get()), &args)
 }
+/// Provider imports install constructor metadata before module initialization,
+/// including prototype reads that precede the first factory call.
+#[no_mangle]
+pub unsafe extern "C" fn js_ext_zlib_nm_install() {
+    js_nm_install_zlib();
+}
+
 unsafe fn create_stream(
     codec: Codec,
     family: &'static np::PayloadFamily,
     opts: f64,
     existing: Option<f64>,
 ) -> f64 {
+    // Direct codegen calls can bypass namespace imports. Install the existing
+    // metadata hooks before materializing the constructor's prototype chain.
+    #[cfg(test)]
+    let install = !sabotage("skip_registry_bootstrap");
+    #[cfg(not(test))]
+    let install = true;
+    if install {
+        js_nm_install_zlib();
+    }
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(opts);
     let existing = existing.map(|o| roots.root_nanbox(o));
