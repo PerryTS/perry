@@ -119,8 +119,11 @@ on the stable malloc cell. Both marking and relocation visit it. The owner store
 `runtime_write_barrier_external_slot`, the exact-slot barrier that recognizes
 malloc parents (`runtime_write_barrier_slot` only remembers old arena parents). The cell also has a traced `callbacks` slot, mirroring the runtime-owned
 JS-state callbacks array. Both edges use the exact malloc-parent barrier and
-are visited for marking and relocation. The cell is 144 bytes on 64-bit
-targets; families without callbacks keep both slots zero.
+are visited for marking and relocation. Callback families allocate a traced
+16-byte extension after the unchanged 136-byte header (on 64-bit targets):
+one traced array word and one native catch-token pointer. The token contains
+no JS values and is installed only for the duration of `NativeCallGuard::call`.
+Legacy and N cells keep their layout and size; the owner stays zero for N.
 
 | Class | Native callback lifetime | Examples | Owner edge |
 |---|---|---|---|
@@ -163,6 +166,15 @@ S checklist:
 5. A loop may obtain `owner_link` once while its owner stays rooted, then
    use `enter_link` per C call. This checks OPEN and creator-thread affinity
    on every entry without validating the moving JS receiver again.
+   `NativeCallGuard::owner_link` exposes the link already validated at entry.
+   Prefer unsafe `guard.call(|| native_call())`: it finishes immediately and
+   shares a lazily captured catch savepoint across the call's callbacks.
+   Each callback still arms its own C trampoline, so a throw never jumps
+   across the native library. Between callbacks the trap is inactive; the
+   cached new.target remains traced and rewritten. Root depths are refreshed
+   per callback, including argument-conversion scopes. Native helpers within
+   this span may not change other managed stacks. `enter`/`finish` remains
+   available with ordinary per-callback capture for existing callers.
    Finish immediately when C returns, before result conversion or anything
    that can throw. `CallEnd::Threw(value)` throws that exact value outside C;
    `CallEnd::Closed` throws the family's closed error without converting or

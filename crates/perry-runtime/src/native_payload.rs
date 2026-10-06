@@ -54,6 +54,7 @@ use crate::object::ObjectHeader;
 #[path = "native_payload_slots.rs"]
 mod callback_slots;
 pub use callback_slots::{callback_at, callback_from_link};
+pub(crate) use callback_slots::{callback_slot_address, NativeCallbackCell};
 use callback_slots::{store_callbacks, sync_callbacks};
 
 /// A family: one class id, one payload type, one prototype per realm.
@@ -675,6 +676,7 @@ fn attach_rooted<T: 'static>(
             },
             vtable,
             family.name,
+            family.links_owner,
         )
     };
     let word = crate::value::JSValue::pointer(cell as *const u8).bits();
@@ -908,6 +910,7 @@ pub(crate) const CLOSING: u8 = 2;
 pub(crate) const VTABLE_WORD: u8 = 4;
 /// The owner's JS state already holds the `pendingException` slot.
 pub(crate) const PENDING_SLOT: u8 = 8;
+pub(crate) const CALLBACK_STORAGE: u8 = 16;
 
 /// The non-finalized cell states. Finalized cells answer PayloadMiss::Closed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1196,6 +1199,43 @@ pub enum CallEnd {
 }
 
 impl NativeCallGuard {
+    /// The validated link, usable while the rooted receiver keeps its cell alive.
+    #[inline]
+    pub fn owner_link(&self) -> OwnerLink {
+        self.link
+    }
+
+    /// Run one native call and finish before its result can be converted.
+    ///
+    /// # Safety
+    /// `f` may run only native code and non-throwing native data helpers.
+    /// It may call JS only through the native callback protocol. No payload
+    /// borrow or lock may span it. Keep the receiver rooted throughout.
+    /// Between callbacks, `f` must not change managed stack state other than
+    /// GC root scopes; callback argument conversion may add those scopes.
+    #[inline]
+    pub unsafe fn call<R>(self, f: impl FnOnce() -> R) -> (R, Result<(), CallEnd>) {
+        let cell = self.link.0 as *mut NativeHandleHeader;
+        let mut catch = crate::exception::NativeCatch::new();
+        if (*cell).flags & CALLBACK_STORAGE == 0 {
+            let value = f();
+            return (value, self.finish());
+        }
+        let extended = cell as *mut NativeCallbackCell;
+        let previous = (*extended).catch;
+        (*extended).catch = &mut catch;
+        let value = f();
+        catch.finish();
+        #[cfg(test)]
+        let previous = if callback_sabotage("catch_reentry") {
+            std::ptr::null_mut()
+        } else {
+            previous
+        };
+        (*extended).catch = previous;
+        (value, self.finish())
+    }
+
     /// Decrement busy, take the first pending exception, then complete a
     /// deferred close at zero. Return the exception to throw outside C frames.
     pub fn finish(self) -> Result<(), CallEnd> {
@@ -1322,11 +1362,11 @@ state_key_memo!(static PENDING_MEMO);
 /// A state field past the inline slots lives in the object's overflow
 /// storage (a state grows by definition, one key at a time).
 unsafe fn state_slot_get(obj: *mut ObjectHeader, i: usize) -> f64 {
-    if i < state_inline_limit(obj) {
-        f64::from_bits(crate::object::js_object_get_field(obj, i as u32).bits())
-    } else {
-        crate::object::overflow_get(obj as usize, i).map_or_else(undefined, f64::from_bits)
-    }
+    // This is a live runtime-owned object, and the key lookup already proved
+    // the slot index. Resolve its inline bound once; the shared helper also
+    // handles overflow and the invalid null-pointer sentinel.
+    let live = crate::object::object_live_slot_count(obj);
+    f64::from_bits(crate::object::object_field_at_with_live(obj, i as u32, live).bits())
 }
 
 unsafe fn state_slot_set(obj: *mut ObjectHeader, i: usize, value: f64) {
@@ -1514,14 +1554,12 @@ pub unsafe fn call_from_native(
             args.len(),
         ));
     }
-    match crate::exception::catch_js_throw(|| {
-        crate::closure::native_call_value_this(
-            callee.get_nanbox_f64(),
-            crate::closure::JsThis::from_f64(this.get_nanbox_f64()),
-            args.as_ptr(),
-            args.len(),
-        )
-    }) {
+    match crate::exception::catch_native_callback(
+        callback_slots::catch_from_cell(cell),
+        callee.get_nanbox_f64(),
+        this.get_nanbox_f64(),
+        &args,
+    ) {
         Ok(value) => Ok(value),
         Err(err) => {
             // JS may have moved the owner. Re-read it through its handle;
@@ -1587,14 +1625,12 @@ pub unsafe fn call_from_link(link: OwnerLink, callee: f64, args: &[f64]) -> Resu
             args.len(),
         ));
     }
-    match crate::exception::catch_js_throw(|| {
-        crate::closure::native_call_value_this(
-            callee,
-            crate::closure::JsThis::from_f64(this),
-            args.as_ptr(),
-            args.len(),
-        )
-    }) {
+    match crate::exception::catch_native_callback(
+        callback_slots::catch_from_cell(cell),
+        callee,
+        this,
+        args,
+    ) {
         Ok(value) => Ok(value),
         Err(err) => {
             let _ = set_pending_exception(f64::from_bits((*cell).owner), err);

@@ -234,8 +234,7 @@ pub(crate) unsafe fn guarded<R>(db: f64, f: impl FnOnce() -> R) -> (R, Result<()
         Err(PayloadMiss::Closed) => throw_invalid_state("database is not open"),
         Err(PayloadMiss::Foreign) => throw_illegal_invocation(),
     };
-    let value = f();
-    (value, guard.finish())
+    guard.call(f)
 }
 
 /// Throw what a guarded call ended with, outside every SQLite frame.
@@ -841,7 +840,21 @@ pub(crate) unsafe fn prepare_guarded(
     raw: *mut ffi::sqlite3,
     sql: &CStr,
 ) -> *mut ffi::sqlite3_stmt {
-    let ((stmt, error), end) = guarded(db.get_nanbox_f64(), || {
+    prepare_guarded_with_link(db, raw, sql).0
+}
+
+pub(crate) unsafe fn prepare_guarded_with_link(
+    db: &RuntimeHandle<'_>,
+    raw: *mut ffi::sqlite3,
+    sql: &CStr,
+) -> (*mut ffi::sqlite3_stmt, native_payload::OwnerLink) {
+    let guard = match native_payload::enter(db.get_nanbox_f64(), &DB_FAMILY) {
+        Ok(guard) => guard,
+        Err(PayloadMiss::Closed) => throw_invalid_state("database is not open"),
+        Err(PayloadMiss::Foreign) => throw_illegal_invocation(),
+    };
+    let link = guard.owner_link();
+    let ((stmt, error), end) = guard.call(|| {
         let mut stmt = std::ptr::null_mut();
         let rc = ffi::sqlite3_prepare_v2(raw, sql.as_ptr(), -1, &mut stmt, std::ptr::null_mut());
         let error = (rc != ffi::SQLITE_OK).then(|| capture_error(raw));
@@ -861,7 +874,7 @@ pub(crate) unsafe fn prepare_guarded(
         }
         throw_captured(error);
     }
-    stmt
+    (stmt, link)
 }
 
 extern "C" fn db_serialize_thunk(_c: *const ClosureHeader, this: JsThis, schema: f64) -> f64 {

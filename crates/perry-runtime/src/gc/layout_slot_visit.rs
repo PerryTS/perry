@@ -560,7 +560,9 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
                 if crate::native_payload::callback_sabotage("callback_trace") {
                     return;
                 }
-                visit(fixed_slot(&mut (*cell).callbacks as *mut u64));
+                if let Some(slot) = crate::native_payload::callback_slot_address(cell) {
+                    visit(fixed_slot(slot));
+                }
             }
         }
         GcRewriteDescriptorKind::Leaf => {}

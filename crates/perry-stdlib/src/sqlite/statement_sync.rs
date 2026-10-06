@@ -173,7 +173,7 @@ impl<'a, 's> Stepper<'a, 's> {
         bind: impl FnOnce(*mut ffi::sqlite3, *mut ffi::sqlite3_stmt) -> Result<(), BindError>,
     ) -> Self {
         let raw_db = db_payload(db.get_nanbox_f64()).raw;
-        let stmt = prepare_guarded(db, raw_db, sql);
+        let (stmt, link) = prepare_guarded_with_link(db, raw_db, sql);
         if !stmt.is_null() {
             let bound = if bind_runs_js {
                 match perry_runtime::exception::catch_js_throw(|| bind(raw_db, stmt)) {
@@ -194,7 +194,6 @@ impl<'a, 's> Stepper<'a, 's> {
                 error.throw();
             }
         }
-        let link = native_payload::owner_link(db.get_nanbox_f64(), &DB_FAMILY).unwrap();
         Stepper {
             db,
             raw_db,
@@ -217,7 +216,7 @@ impl<'a, 's> Stepper<'a, 's> {
         let (stmt, raw_db) = (self.stmt, self.raw_db);
         let guard = native_payload::enter_link(self.link)
             .unwrap_or_else(|_| throw_invalid_state("database is not open"));
-        let (rc, error) = {
+        let ((rc, error), end) = guard.call(|| {
             let rc = ffi::sqlite3_step(stmt);
             let error =
                 (rc != ffi::SQLITE_ROW && rc != ffi::SQLITE_DONE).then(|| capture_error(raw_db));
@@ -227,8 +226,7 @@ impl<'a, 's> Stepper<'a, 's> {
                 ffi::sqlite3_reset(stmt);
             }
             (rc, error)
-        };
-        let end = guard.finish();
+        });
         if let Err(end) = end {
             self.forget_or_finalize();
             throw_call_end(end);
