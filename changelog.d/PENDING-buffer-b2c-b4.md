@@ -26,7 +26,7 @@ The exact closed census rows are in `scripts/buffer_b4_census_closed.tsv`: 73 ro
 | T9: whole-module invariant | Source gate; owner-edge witness; header and root-holder gates | Ratchet PASS, nine source sabotages RED; address-table-free invariant pending B4c |
 | Symbol header and u32 admission | Three persistent-symbol factories; current-header u32 admission; `symbol_header`, `u32_admission` | PASS / RED |
 
-Verification baseline: origin/main `81e65f33ebdc72d75431b03427dcbfb2f153d7b1`; refreshed/rebased B1 `f3e59107868b737b3b5646a7d0b19dc4f9193f8f`, fetched before final verification on 2026-10-06. The final release builds, all 54 crate-test binaries, gap comparison, output checks and measurements include current main's iterator-close and from-space verifier changes, plus B1's process-shared pin fix. Production sources are those of `48205175a7`; later commits change harnesses and evidence.
+Verification baseline: origin/main `81e65f33ebdc72d75431b03427dcbfb2f153d7b1`; tested B1 `f3e59107868b737b3b5646a7d0b19dc4f9193f8f`. The final required refresh rebases onto B1 `16b16c96f3cb1f4f81a4bee62dc78c94be59cf83`; its additions are documentation and cfg(test) only, with no production change. The seven FFI buffer tests, including the added native-input consumer and its RED sabotage, pass with `runtime-link`. The final release builds, all 54 crate-test binaries, gap comparison, output checks and measurements include current main's iterator-close and from-space verifier changes, plus B1's process-shared pin fix. Measured production sources are those of `48205175a7`; later changes are harnesses, evidence and cfg(test) witnesses.
 
 | Crate | Main passed / failed / ignored | Head passed / failed / ignored | New failures |
 |---|---|---|---|
