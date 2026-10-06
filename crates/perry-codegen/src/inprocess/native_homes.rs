@@ -53,9 +53,10 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
             }
         }
         let mut retained = std::collections::HashSet::new();
-        let collecting_loops = collecting_loop_blocks(function);
+        let (collecting_loops, cyclic_blocks, block_ranks) = collecting_loop_blocks(function);
         let mut store_blocks = std::collections::HashMap::new();
         let mut ordinal = 0usize;
+        let mut last_access = std::collections::HashMap::new();
         for bb in function.get_basic_blocks() {
             let mut next = bb.get_first_instruction();
             while let Some(inst) = next {
@@ -64,6 +65,14 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
                     match inst.get_opcode() {
                         inkwell::values::InstructionOpcode::Store => {
                             let slot = LLVMGetOperand(inst.as_value_ref(), 1);
+                            if slots.contains_key(&slot) {
+                                record_home_access(
+                                    slot,
+                                    inst.as_value_ref(),
+                                    &mut last_access,
+                                    &block_ranks,
+                                );
+                            }
                             if let Some(last) = slots.get_mut(&slot) {
                                 *last = ordinal;
                                 store_blocks
@@ -73,6 +82,12 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
                         inkwell::values::InstructionOpcode::Load => {
                             let slot = LLVMGetOperand(inst.as_value_ref(), 0);
                             if slots.contains_key(&slot) {
+                                record_home_access(
+                                    slot,
+                                    inst.as_value_ref(),
+                                    &mut last_access,
+                                    &block_ranks,
+                                );
                                 let block = LLVMGetInstructionParent(inst.as_value_ref());
                                 if collecting_loops.contains(&block)
                                     && store_blocks
@@ -105,6 +120,27 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
                     LLVMGetMDKindIDInContext(context, b"perry.native.home".as_ptr().cast(), 17);
                 let node = LLVMMDNodeInContext2(context, std::ptr::null_mut(), 0);
                 LLVMSetMetadata(slot, kind, LLVMMetadataAsValue(context, node));
+                // The greatest CFG component rank containing an access has
+                // no path back to another accessing component. If its block
+                // is acyclic, its last access releases the memory root.
+                // Loaded SSA results remain rooted normally by RS4GC.
+                let last = last_access[&slot];
+                let already_cleared = LLVMGetInstructionOpcode(last) == LLVMOpcode::LLVMStore
+                    && !LLVMIsAConstantPointerNull(LLVMGetOperand(last, 0)).is_null();
+                if !already_cleared
+                    && home_address_is_private(slot)
+                    && !cyclic_blocks.contains(&LLVMGetInstructionParent(last))
+                {
+                    let builder = LLVMCreateBuilderInContext(context);
+                    LLVMPositionBuilderBefore(builder, LLVMGetNextInstruction(last));
+                    let clear = LLVMBuildStore(
+                        builder,
+                        LLVMConstNull(LLVMPointerTypeInContext(context, 1)),
+                        slot,
+                    );
+                    LLVMSetVolatile(clear, 1);
+                    LLVMDisposeBuilder(builder);
+                }
                 let mut use_ = LLVMGetFirstUse(slot);
                 while !use_.is_null() {
                     let user = LLVMGetUser(use_);
@@ -117,6 +153,43 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
             }
         }
         merge_before_optimization(module, function);
+    }
+}
+
+unsafe fn record_home_access(
+    slot: LLVMValueRef,
+    access: LLVMValueRef,
+    last: &mut std::collections::HashMap<LLVMValueRef, LLVMValueRef>,
+    ranks: &std::collections::HashMap<LLVMBasicBlockRef, usize>,
+) {
+    unsafe {
+        let block = LLVMGetInstructionParent(access);
+        if last
+            .get(&slot)
+            .is_none_or(|previous| ranks[&LLVMGetInstructionParent(*previous)] <= ranks[&block])
+        {
+            last.insert(slot, access);
+        }
+    }
+}
+
+unsafe fn home_address_is_private(slot: LLVMValueRef) -> bool {
+    unsafe {
+        let mut use_ = LLVMGetFirstUse(slot);
+        while !use_.is_null() {
+            let user = LLVMGetUser(use_);
+            if LLVMIsAInstruction(user).is_null() {
+                return false;
+            }
+            match LLVMGetInstructionOpcode(user) {
+                LLVMOpcode::LLVMLoad if LLVMGetOperand(user, 0) == slot => {}
+                LLVMOpcode::LLVMStore
+                    if LLVMGetOperand(user, 1) == slot && LLVMGetOperand(user, 0) != slot => {}
+                _ => return false,
+            }
+            use_ = LLVMGetNextUse(use_);
+        }
+        true
     }
 }
 
@@ -217,7 +290,11 @@ fn merge_before_optimization(
 // iteration even when source order places the load before either call.
 fn collecting_loop_blocks(
     function: inkwell::values::FunctionValue<'_>,
-) -> std::collections::HashSet<LLVMBasicBlockRef> {
+) -> (
+    std::collections::HashSet<LLVMBasicBlockRef>,
+    std::collections::HashSet<LLVMBasicBlockRef>,
+    std::collections::HashMap<LLVMBasicBlockRef, usize>,
+) {
     let blocks = function.get_basic_blocks();
     let indices: std::collections::HashMap<_, _> = blocks
         .iter()
@@ -269,6 +346,8 @@ fn collecting_loop_blocks(
     }
     seen.fill(false);
     let mut retained = std::collections::HashSet::new();
+    let mut cyclic_blocks = std::collections::HashSet::new();
+    let mut block_ranks = std::collections::HashMap::new();
     for start in order.into_iter().rev() {
         if seen[start] {
             continue;
@@ -287,12 +366,21 @@ fn collecting_loop_blocks(
                 }
             }
         }
+        // Kosaraju discovers the component DAG in topological order.
+        // Every edge between components increases this rank.
+        let rank = block_ranks.len();
+        for &block in &component {
+            block_ranks.insert(blocks[block].as_mut_ptr(), rank);
+        }
         let cyclic = component.len() > 1 || edges[start].contains(&start);
+        if cyclic {
+            cyclic_blocks.extend(component.iter().map(|&i| blocks[i].as_mut_ptr()));
+        }
         if cyclic && sites >= HOME_CALL_SPAN {
             retained.extend(component.into_iter().map(|i| blocks[i].as_mut_ptr()));
         }
     }
-    retained
+    (retained, cyclic_blocks, block_ranks)
 }
 
 /// Publish a single native range on every statepoint. Combining storage late

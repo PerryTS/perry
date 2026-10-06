@@ -1,0 +1,1 @@
+Release private native statepoint home values after their final acyclic CFG use. Loaded values remain rooted through ordinary SSA statepoints. This prevents dead local values from being retained and promoted by later collections, while keeping the home analysis and lowering linear. Existing explicit null releases keep a single volatile store.
