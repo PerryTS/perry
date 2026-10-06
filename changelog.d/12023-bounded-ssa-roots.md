@@ -1,0 +1,1 @@
+Keep up to eight long-lived roots on ordinary LLVM SSA statepoints when a function has a small root set, avoiding permanent volatile frame homes in hot recursive code while preserving linear relocation growth. Larger root sets retain native statepoint ranges; no shadow-frame fallback is introduced.

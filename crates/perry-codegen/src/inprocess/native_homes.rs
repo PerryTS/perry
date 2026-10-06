@@ -19,6 +19,11 @@ use crate::gc_map::HOME_RANGE_ID;
 // This selects a location within statepoints, never another rooting backend.
 pub(super) const HOME_CALL_SPAN: usize = 64;
 
+// A fixed number of long-lived SSA roots has linear relocation cost too:
+// at most this many roots per collecting call. Let LLVM keep small root sets
+// in registers rather than giving each one a permanent volatile frame home.
+pub(super) const SMALL_HOME_SET: usize = 8;
+
 pub(super) fn retain(module: &inkwell::module::Module<'_>) {
     for function in module.get_functions() {
         let (_, sites) = rs4gc_preflight_factors(function);
@@ -89,6 +94,9 @@ pub(super) fn retain(module: &inkwell::module::Module<'_>) {
                 }
                 ordinal += usize::from(rs4gc_call_may_collect(inst));
             }
+        }
+        if retained.len() <= SMALL_HOME_SET {
+            continue;
         }
         for slot in retained {
             unsafe {

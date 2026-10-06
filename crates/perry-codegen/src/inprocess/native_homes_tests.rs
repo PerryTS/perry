@@ -60,7 +60,10 @@ fn merging_first_entry_alloca_keeps_the_builder_position_valid() {
     let context = Context::create();
     let module = parse_ir_text(
         &context,
-        &fixture(2, native_homes::HOME_CALL_SPAN + 1),
+        &fixture(
+            native_homes::SMALL_HOME_SET + 1,
+            native_homes::HOME_CALL_SPAN + 1,
+        ),
         "entry_home_test",
     )
     .unwrap();
@@ -87,7 +90,7 @@ fn merging_first_entry_alloca_keeps_the_builder_position_valid() {
     publish(&module).expect("first managed alloca can be erased safely");
     module.verify().expect("merged homes verify");
     let text = module.print_to_string().to_string();
-    assert_eq!(text.matches("alloca [2 x ptr addrspace(1)]").count(), 1);
+    assert_eq!(text.matches("alloca [9 x ptr addrspace(1)]").count(), 1);
     assert_eq!(
         text.matches("\"gc-live\"(ptr %gc.homes)").count(),
         native_homes::HOME_CALL_SPAN + 1
@@ -171,6 +174,14 @@ body:
 exit:
   ret void
 }"#;
+    let extra_slots = (0..native_homes::SMALL_HOME_SET).map(|i| format!("  %extra{i} = alloca ptr addrspace(1)\n  store ptr addrspace(1) %arg, ptr %extra{i}\n")).collect::<String>();
+    let extra_loads = (0..native_homes::SMALL_HOME_SET)
+        .map(|i| format!("  %extra_loaded{i} = load ptr addrspace(1), ptr %extra{i}\n"))
+        .collect::<String>();
+    let ir = ir.replace(
+        "  br label %header\nheader:",
+        &format!("{extra_slots}  br label %header\nheader:\n{extra_loads}"),
+    );
     let ir = ir.replace(
         "body:\n",
         &format!(
@@ -217,4 +228,27 @@ fn hundreds_of_long_lived_homes_are_one_alloca_before_optimization() {
     assert_eq!(text.matches(" = alloca ").count(), 1);
     assert!(text.contains("alloca [200 x ptr addrspace(1)]"));
     assert!(!text.contains("disable-tail-calls"));
+}
+
+#[test]
+fn bounded_long_lived_root_sets_use_ordinary_ssa_statepoints() {
+    let context = Context::create();
+    let module = parse_ir_text(
+        &context,
+        &fixture(native_homes::SMALL_HOME_SET, 200),
+        "bounded_ssa",
+    )
+    .unwrap();
+    retain(&module);
+    module.verify().unwrap();
+    assert!(!module.print_to_string().to_string().contains("volatile"));
+    let module = parse_ir_text(
+        &context,
+        &fixture(native_homes::SMALL_HOME_SET + 1, 200),
+        "large_homes",
+    )
+    .unwrap();
+    retain(&module);
+    module.verify().unwrap();
+    assert!(module.print_to_string().to_string().contains("volatile"));
 }
