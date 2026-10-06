@@ -4332,10 +4332,6 @@
       "name": "WORKER_GC_REGISTERED"
     },
     {
-      "file": "crates/perry-stdlib/src/zlib.rs",
-      "name": "ZLIB_GC_REGISTERED"
-    },
-    {
       "file": "crates/perry-runtime/src/box/activation.rs",
       "name": "ASYNC_BOX_ACTIVATION_FREE_HEAD"
     },

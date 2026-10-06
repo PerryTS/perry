@@ -178,10 +178,10 @@ fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f6
         // captures a real object pointer, so existing instance-bound closures
         // never hit this branch.
         if bits != crate::value::TAG_UNDEFINED {
-            return f64::from_bits(bits);
+            return constructors::ensure_lazy_stream(f64::from_bits(bits));
         }
     }
-    this.as_f64()
+    constructors::ensure_lazy_stream(this.as_f64())
 }
 
 extern "C" fn ns_chain1(

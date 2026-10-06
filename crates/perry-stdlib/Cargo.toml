@@ -230,10 +230,9 @@ bundled-ethers = []
 # stream/one-shot events are queued through `common::async_bridge`'s
 # pump, which only compiles under `async-bridge`. Historically the
 # auto-optimize path always enabled it transitively (the force-added
-# `crypto` feature implied it), so `--features compression` never
-# compiled standalone — now it does. It was `async-runtime` (tokio)
-# until turnloop P8 lane L split the pump from the runtime.
-compression-gzip = ["dep:flate2", "async-bridge"]
+# The binding is the sole zlib provider for default and optimized builds;
+# its deferred jobs use the runtime queue rather than a stdlib pump.
+compression-gzip = ["dep:perry-ext-zlib"]
 compression-brotli = ["compression-gzip", "dep:brotli"]
 compression-zstd = ["compression-gzip", "dep:zstd"]
 compression = ["compression-gzip", "compression-brotli", "compression-zstd"]
@@ -301,6 +300,7 @@ async-bridge = []
 container = ["dep:perry-container-compose", "async-bridge"]
 
 [dependencies]
+perry-ext-zlib = { workspace = true, optional = true }
 perry-ffi.workspace = true
 perry-runtime = { workspace = true, features = ["stdlib"] }
 # Re-bundle updater symbols into libperry_stdlib.a so user binaries that

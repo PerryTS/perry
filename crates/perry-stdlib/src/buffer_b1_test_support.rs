@@ -1,21 +1,18 @@
 //! Output witnesses sabotage the producing conversion, before any read.
 pub(crate) unsafe fn sabotage_output(family: &str, value: f64) {
     if std::env::var("PERRY_B1_OUTPUT_SABOTAGE").ok().as_deref() == Some(family) {
-        let ptr = perry_runtime::JSValue::from_bits(value.to_bits())
-            .as_pointer::<perry_runtime::buffer::BufferHeader>()
-            .cast_mut();
-        *perry_runtime::buffer::buffer_data_mut(ptr) ^= 1;
+        perry_runtime::buffer::bytes::no_gc(|scope| {
+            let bytes = perry_runtime::buffer::bytes::bytes_mut(value, scope).unwrap();
+            bytes[0] ^= 1;
+        });
     }
 }
-
 pub(crate) unsafe fn read(value: f64) -> Vec<u8> {
-    let ptr = perry_runtime::JSValue::from_bits(value.to_bits())
-        .as_pointer::<perry_runtime::buffer::BufferHeader>();
-    std::slice::from_raw_parts(
-        perry_runtime::buffer::buffer_data(ptr),
-        (*ptr).length as usize,
-    )
-    .to_vec()
+    perry_runtime::buffer::bytes::no_gc(|scope| {
+        perry_runtime::buffer::bytes::bytes(value, scope)
+            .unwrap()
+            .to_vec()
+    })
 }
 
 #[cfg(all(
@@ -36,7 +33,7 @@ fn producer_sabotages_turn_output_witnesses_red() {
         ),
         (
             "zlib",
-            "zlib::b1_output_tests::stream_chunk_conversion_and_sync_roundtrip",
+            "buffer_b1_zlib_tests::stream_chunk_conversion_and_sync_roundtrip",
         ),
     ] {
         let output = std::process::Command::new(std::env::current_exe().unwrap())

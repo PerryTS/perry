@@ -59,12 +59,6 @@ pub const COMMON_HANDLE_BAND_END: usize = 0x40000;
 pub const FETCH_HANDLE_BAND_START: usize = 0x40000;
 pub const FETCH_HANDLE_BAND_END: usize = 0xE0000;
 
-/// zlib stream handle band `[ZLIB_HANDLE_BAND_START, ZLIB_HANDLE_BAND_END)`,
-/// owned by perry-stdlib `zlib.rs` (#1843 established that these ids must not
-/// be dereferenced as heap objects).
-pub const ZLIB_HANDLE_BAND_START: usize = 0xE0000;
-pub const ZLIB_HANDLE_BAND_END: usize = 0xF0000;
-
 /// Revocable Proxy id band `[PROXY_ID_BAND_START, HANDLE_BAND_MAX)`, owned by
 /// perry-runtime `proxy.rs` (`PROXY_TAG_BASE`). Kept at the top of the handle
 /// band so fetch ids below never collide with a proxy id (#2846).
@@ -101,11 +95,6 @@ pub fn is_common_handle_band(addr: usize) -> bool {
 #[inline(always)]
 pub fn is_fetch_handle_band(addr: usize) -> bool {
     (FETCH_HANDLE_BAND_START..FETCH_HANDLE_BAND_END).contains(&addr)
-}
-
-#[inline(always)]
-pub fn is_zlib_handle_band(addr: usize) -> bool {
-    (ZLIB_HANDLE_BAND_START..ZLIB_HANDLE_BAND_END).contains(&addr)
 }
 
 /// Complement of [`is_handle_band`]: the payload is above the handle band and
@@ -438,8 +427,7 @@ mod tests {
     fn band_layout_is_contiguous_and_contained() {
         assert!(COMMON_HANDLE_BAND_END <= FETCH_HANDLE_BAND_START);
         assert!(FETCH_HANDLE_BAND_START < FETCH_HANDLE_BAND_END);
-        assert!(FETCH_HANDLE_BAND_END <= ZLIB_HANDLE_BAND_START);
-        assert!(ZLIB_HANDLE_BAND_END <= PROXY_ID_BAND_START);
+        assert!(FETCH_HANDLE_BAND_END <= PROXY_ID_BAND_START);
         assert!(PROXY_ID_BAND_START < HANDLE_BAND_MAX);
         assert!(STREAM_ID_BAND_START >= HANDLE_BAND_MAX);
     }

@@ -306,9 +306,7 @@ pub use crypto_e2e::*;
 // codecs: `compression-brotli` / `compression-zstd` imply
 // `compression-gzip`, and `compression` is the union of all three.
 #[cfg(feature = "compression-gzip")]
-pub mod zlib;
-#[cfg(feature = "compression-gzip")]
-pub use zlib::*;
+pub use perry_ext_zlib::*;
 
 // === Email ===
 #[cfg(feature = "bundled-nodemailer")]
@@ -362,3 +360,6 @@ pub use container::*;
 
 #[cfg(test)]
 mod buffer_b1_test_support;
+
+#[cfg(all(test, feature = "compression-gzip"))]
+mod buffer_b1_zlib_tests;

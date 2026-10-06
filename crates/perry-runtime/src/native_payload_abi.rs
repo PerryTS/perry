@@ -83,6 +83,155 @@ pub(crate) const fn payload_abi_layout() -> u64 {
         | PERRY_PAYLOAD_ABI_VERSION as u64
 }
 
+unsafe fn checked_family<'a>(family: *const PerryPayloadFamily) -> Option<&'a PerryPayloadFamily> {
+    if family.is_null() || (*family).abi != payload_abi_layout() {
+        return None;
+    }
+    let family = &*family;
+    (!family.vtable.is_null() && !family.name.is_null()).then_some(family)
+}
+
+fn family_type_id(family: &PerryPayloadFamily) -> u64 {
+    family.class_id as u64
+        | ((family.payload_size as u64 & 0xFF_FFFF) << 32)
+        | ((family.payload_align as u64 & 0xFF) << 56)
+}
+
+unsafe fn family_cell(
+    value: f64,
+    family: &PerryPayloadFamily,
+) -> Option<*mut crate::native_handle::NativeHandleHeader> {
+    let obj = crate::native_payload::any_object(value)?;
+    let meta = (*obj).meta;
+    if meta.is_null() || !crate::native_payload::is_payload_state_word((*meta).native_state) {
+        return None;
+    }
+    let cell = ((*meta).native_state & crate::value::POINTER_MASK)
+        as *mut crate::native_handle::NativeHandleHeader;
+    // The attached cell brands subclasses as well as direct instances.
+    ((*cell).type_id == family_type_id(family)
+        && crate::native_handle::cell_vtable(cell)? as *const _ == family.vtable)
+        .then_some(cell)
+}
+
+/// Allocate on the binding's canonical constructor prototype, using the same
+/// birth shape and traced cell as an in-tree family. On failure ownership of
+/// resource stays with the caller.
+/// # Safety
+/// family and its vtable live forever; resource is a boxed payload of its type.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_payload_alloc(
+    family: *const PerryPayloadFamily,
+    resource: *mut c_void,
+    proto: f64,
+    bytes: usize,
+) -> f64 {
+    let Some(family) = checked_family(family) else {
+        return bytes_undefined();
+    };
+    let Some(proto) = crate::native_payload::any_object(proto) else {
+        return bytes_undefined();
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_raw_mut_ptr(proto);
+    let obj =
+        proto.with_mut_ptr(|proto| crate::native_payload::born_instance(family.class_id, proto, 0));
+    let obj = scope.root_raw_mut_ptr(obj);
+    let name = std::str::from_utf8(std::slice::from_raw_parts(family.name, family.name_len))
+        .unwrap_or("NativePayload");
+    crate::native_payload::attach_external_rooted(
+        &obj,
+        resource,
+        family_type_id(family),
+        &*family.vtable,
+        name,
+        family.links_owner != 0,
+        bytes,
+    );
+    obj.with_mut_ptr(|obj: *mut crate::object::ObjectHeader| {
+        crate::value::js_nanbox_pointer(obj as i64)
+    })
+}
+
+/// Attach for a source subclass's super() constructor. Never overwrites an
+/// existing cell (in particular, a closed stream cannot reopen).
+/// # Safety
+/// As js_perry_payload_alloc.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_payload_attach(
+    value: f64,
+    family: *const PerryPayloadFamily,
+    resource: *mut c_void,
+    bytes: usize,
+) -> i32 {
+    let Some(family) = checked_family(family) else {
+        return -1;
+    };
+    let Some(obj) = crate::native_payload::any_object(value) else {
+        return -1;
+    };
+    if !(*obj).meta.is_null()
+        && crate::native_payload::is_payload_state_word((*(*obj).meta).native_state)
+    {
+        return -1;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let name = std::str::from_utf8(std::slice::from_raw_parts(family.name, family.name_len))
+        .unwrap_or("NativePayload");
+    crate::native_payload::attach_external_rooted(
+        &obj,
+        resource,
+        family_type_id(family),
+        &*family.vtable,
+        name,
+        family.links_owner != 0,
+        bytes,
+    );
+    0
+}
+
+/// # Safety
+/// family is a static descriptor; the pointer is borrowed only until JS or GC.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_payload_get(
+    value: f64,
+    family: *const PerryPayloadFamily,
+) -> *mut c_void {
+    let Some(family) = checked_family(family) else {
+        return std::ptr::null_mut();
+    };
+    let Some(cell) = family_cell(value, family) else {
+        return std::ptr::null_mut();
+    };
+    crate::native_handle::native_handle_rust_payload_ptr(cell, family_type_id(family))
+}
+
+/// # Safety
+/// family is a static descriptor. Close preserves the cell and its vtable.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_payload_close(
+    value: f64,
+    family: *const PerryPayloadFamily,
+) -> i32 {
+    let Some(family) = checked_family(family) else {
+        return -1;
+    };
+    let Some(cell) = family_cell(value, family) else {
+        return -1;
+    };
+    if crate::native_handle::native_handle_rust_payload_ptr(cell, family_type_id(family)).is_null()
+    {
+        return 0;
+    }
+    if (*cell).busy != 0 {
+        (*cell).flags |= crate::native_payload::CLOSING;
+    } else {
+        crate::native_handle::native_handle_release_rust_payload(cell);
+    }
+    0
+}
+
 // B1 adds a byte-span ABI beside P0's payload ABI, without changing P0's
 // descriptor digest. Bindings check BOTH digests in abi_matches().
 #[repr(C)]
@@ -276,4 +425,253 @@ mod byte_keepalive {
     static BYTES_DIGEST: extern "C" fn() -> u64 = js_perry_bytes_abi_layout;
     #[used(compiler)]
     static PAYLOAD_DIGEST: extern "C" fn() -> u64 = js_perry_payload_abi_layout;
+    #[used(compiler)]
+    static PAYLOAD_ALLOC: unsafe extern "C" fn(
+        *const PerryPayloadFamily,
+        *mut c_void,
+        f64,
+        usize,
+    ) -> f64 = js_perry_payload_alloc;
+    #[used(compiler)]
+    static PAYLOAD_ATTACH: unsafe extern "C" fn(
+        f64,
+        *const PerryPayloadFamily,
+        *mut c_void,
+        usize,
+    ) -> i32 = js_perry_payload_attach;
+    #[used(compiler)]
+    static PAYLOAD_GET: unsafe extern "C" fn(f64, *const PerryPayloadFamily) -> *mut c_void =
+        js_perry_payload_get;
+    #[used(compiler)]
+    static PAYLOAD_CLOSE: unsafe extern "C" fn(f64, *const PerryPayloadFamily) -> i32 =
+        js_perry_payload_close;
+    #[used(compiler)]
+    static PAYLOAD_PROTOTYPE: unsafe extern "C" fn(
+        *const PerryPayloadFamily,
+        *const u8,
+        usize,
+    ) -> f64 = js_perry_payload_prototype;
+    #[used(compiler)]
+    static PAYLOAD_PROTO_METHOD: unsafe extern "C" fn(
+        *mut c_void,
+        *const u8,
+        usize,
+        *const crate::closure::JsFunctionInfo,
+        u32,
+    ) = js_perry_payload_proto_method;
+    #[used(compiler)]
+    static PAYLOAD_OWN: unsafe extern "C" fn(f64, *const u8, usize, f64) = js_perry_payload_own;
+    #[used(compiler)]
+    static PAYLOAD_GET_ATTACHED: unsafe extern "C" fn(
+        f64,
+        *const crate::native_payload::PayloadVTable,
+    ) -> *mut c_void = js_perry_payload_get_attached;
+    #[used(compiler)]
+    static PAYLOAD_CLOSE_ATTACHED: unsafe extern "C" fn(
+        f64,
+        *const crate::native_payload::PayloadVTable,
+    ) -> i32 = js_perry_payload_close_attached;
+    #[used(compiler)]
+    static PAYLOAD_EXTERNAL_BYTES: unsafe extern "C" fn(
+        f64,
+        *const crate::native_payload::PayloadVTable,
+        usize,
+    ) = js_perry_payload_external_bytes;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    per_test_global! { static DROPS: AtomicUsize = AtomicUsize::new(0); }
+    unsafe extern "C" fn drop_bytes(resource: *mut c_void, _: *mut c_void) {
+        drop(Box::from_raw(resource as *mut Vec<u8>));
+        DROPS.fetch_add(1, Ordering::SeqCst);
+    }
+    static VTABLE: crate::native_payload::PayloadVTable = crate::native_payload::PayloadVTable {
+        drop: drop_bytes,
+        stream: None,
+    };
+    #[test]
+    fn external_family_uses_the_shared_cell_and_close_never_reopens() {
+        DROPS.store(0, Ordering::SeqCst);
+        let family = PerryPayloadFamily {
+            abi: payload_abi_layout(),
+            class_id: crate::native_class_ids::CRYPTO_HASH,
+            links_owner: 0,
+            constructor_length: 1,
+            _reserved: 0,
+            name: b"Bytes".as_ptr(),
+            name_len: 5,
+            install_prototype: None,
+            vtable: &VTABLE,
+            payload_size: std::mem::size_of::<Vec<u8>>(),
+            payload_align: std::mem::align_of::<Vec<u8>>(),
+        };
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let proto = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 0) as i64,
+        ));
+        let data = Box::into_raw(Box::new(vec![19u8; 8192]));
+        let obj = scope.root_nanbox_f64(unsafe {
+            js_perry_payload_alloc(&family, data.cast(), proto.get_nanbox_f64(), 8192)
+        });
+        unsafe {
+            let cell = family_cell(obj.get_nanbox_f64(), &family).unwrap();
+            assert_eq!((*cell).external_bytes, 8192);
+            assert_eq!(
+                (*cell).owner,
+                0,
+                "links_owner:false must leave no owner edge"
+            );
+            assert_eq!(
+                js_perry_payload_get(obj.get_nanbox_f64(), &family),
+                data.cast()
+            );
+            assert_eq!(js_perry_payload_close(obj.get_nanbox_f64(), &family), 0);
+            assert_eq!((*cell).external_bytes, 0, "close releases bytes before GC");
+            assert_eq!(DROPS.load(Ordering::SeqCst), 1);
+            assert!(js_perry_payload_get(obj.get_nanbox_f64(), &family).is_null());
+            assert_eq!(js_perry_payload_close(obj.get_nanbox_f64(), &family), 0);
+            assert_eq!(
+                js_perry_payload_attach(obj.get_nanbox_f64(), &family, std::ptr::null_mut(), 0),
+                -1
+            );
+        }
+        assert_eq!(DROPS.load(Ordering::SeqCst), 1);
+    }
+}
+
+/// Canonical constructor prototype, adopting it into the existing per-realm
+/// payload prototype slots. The installer runs once, preserving user changes.
+/// # Safety
+/// descriptor and byte strings are valid; descriptor and installer are static.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_payload_prototype(
+    family: *const PerryPayloadFamily,
+    module: *const u8,
+    module_len: usize,
+) -> f64 {
+    let Some(family) = checked_family(family) else {
+        return bytes_undefined();
+    };
+    let Ok(module) = std::str::from_utf8(std::slice::from_raw_parts(module, module_len)) else {
+        return bytes_undefined();
+    };
+    let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(family.name, family.name_len))
+    else {
+        return bytes_undefined();
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let ctor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+        module, name,
+    ));
+    let proto = scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(
+        ctor.get_nanbox_f64(),
+    ));
+    let Some(ptr) = crate::native_payload::any_object(proto.get_nanbox_f64()) else {
+        return bytes_undefined();
+    };
+    let ptr = crate::native_payload::adopt_prototype_with(family.class_id, ptr, |proto| {
+        if let Some(install) = family.install_prototype {
+            install(proto.cast());
+        }
+    });
+    crate::value::js_nanbox_pointer(ptr as i64)
+}
+
+/// # Safety
+/// byte name is valid; info is a static, ABI-compatible function descriptor.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_payload_proto_method(
+    proto: *mut c_void,
+    name: *const u8,
+    name_len: usize,
+    info: *const crate::closure::JsFunctionInfo,
+    arity: u32,
+) {
+    let name = std::str::from_utf8(std::slice::from_raw_parts(name, name_len)).unwrap();
+    crate::object::install_proto_method(proto.cast(), name, info, arity);
+}
+
+/// Write a normal enumerable own field in constructor order.
+/// # Safety
+/// key is a valid UTF-8 span; owner is an ordinary object.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_payload_own(
+    owner: f64,
+    key: *const u8,
+    key_len: usize,
+    value: f64,
+) {
+    let Some(obj) = crate::native_payload::any_object(owner) else {
+        return;
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    crate::native_payload::set_own(
+        &scope,
+        &obj,
+        std::slice::from_raw_parts(key, key_len),
+        value,
+    );
+}
+
+unsafe fn attached_cell(
+    value: f64,
+    vtable: *const crate::native_payload::PayloadVTable,
+) -> Option<*mut crate::native_handle::NativeHandleHeader> {
+    let obj = crate::native_payload::any_object(value)?;
+    let meta = (*obj).meta;
+    if meta.is_null() || !crate::native_payload::is_payload_state_word((*meta).native_state) {
+        return None;
+    }
+    let cell = ((*meta).native_state & crate::value::POINTER_MASK)
+        as *mut crate::native_handle::NativeHandleHeader;
+    (crate::native_handle::cell_vtable(cell)? as *const _ == vtable).then_some(cell)
+}
+/// # Safety
+/// vtable describes the payload's Rust type and lives forever.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_payload_get_attached(
+    value: f64,
+    vtable: *const crate::native_payload::PayloadVTable,
+) -> *mut c_void {
+    let Some(cell) = attached_cell(value, vtable) else {
+        return std::ptr::null_mut();
+    };
+    crate::native_handle::native_handle_rust_payload_ptr(cell, (*cell).type_id)
+}
+/// # Safety
+/// As js_perry_payload_get_attached. Close never changes the vtable or reopens.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_payload_close_attached(
+    value: f64,
+    vtable: *const crate::native_payload::PayloadVTable,
+) -> i32 {
+    let Some(cell) = attached_cell(value, vtable) else {
+        return -1;
+    };
+    if crate::native_handle::native_handle_rust_payload_ptr(cell, (*cell).type_id).is_null() {
+        return 0;
+    }
+    if (*cell).busy != 0 {
+        (*cell).flags |= crate::native_payload::CLOSING;
+    } else {
+        crate::native_handle::native_handle_release_rust_payload(cell);
+    }
+    0
+}
+
+/// # Safety
+/// vtable is the static payload type; owner is rooted by the caller.
+#[no_mangle]
+pub unsafe extern "C" fn js_perry_payload_external_bytes(
+    value: f64,
+    vtable: *const crate::native_payload::PayloadVTable,
+    bytes: usize,
+) {
+    if let Some(cell) = attached_cell(value, vtable) {
+        crate::native_handle::native_handle_set_external_bytes(cell, bytes);
+    }
 }

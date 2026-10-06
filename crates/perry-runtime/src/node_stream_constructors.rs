@@ -330,6 +330,7 @@ mod pipeline;
 #[path = "node_stream_constructors/web_adapter.rs"]
 mod web_adapter;
 
+pub(crate) use builders::ensure_lazy_stream;
 pub use builders::{
     init_transform_in_place, init_writable_payload_in_place, js_array_subclass_init,
     js_event_emitter_async_resource_subclass_init, js_event_emitter_subclass_init,
