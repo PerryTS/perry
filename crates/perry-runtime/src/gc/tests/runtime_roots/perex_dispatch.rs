@@ -606,3 +606,34 @@ fn perex_boxed_heap_string_test_roots_input_across_collecting_exec_getter() {
         handle_string_value(&input).to_bits()
     );
 }
+
+#[test]
+fn perex_boxed_short_string_test_roots_materialization_across_collecting_exec_getter() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _scan = ConservativeScanDisabledGuard::new();
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _force = ForcedEvacuationTestGuard::on();
+    super::perex_public::register_host_roots();
+    let scope = RuntimeHandleScope::new();
+    let receiver = object(&scope);
+    let method = function(
+        &scope,
+        crate::fn_info!(collecting_getter, 0; with_declared(0)),
+    );
+    getter(&receiver, &method);
+    let roots = RuntimeHandleScope::active_len_for_tests();
+    let short = crate::value::JSValue::short_string_unchecked(b"x\0y");
+    assert!(api::finish(dispatch::test_value(
+        crate::closure::plain_call_receiver(),
+        receiver.get_nanbox_f64(),
+        f64::from_bits(short.bits()),
+    )));
+    assert_eq!(RuntimeHandleScope::active_len_for_tests(), roots);
+    let seen = scope.root_nanbox_f64(api::finish(dispatch::get(&receiver, b"seen")));
+    let value = crate::value::JSValue::from_bits(seen.get_nanbox_f64().to_bits());
+    assert!(value.is_string());
+    assert_eq!(
+        crate::regex::string_as_bytes(value.as_string_ptr()),
+        b"x\0y"
+    );
+}
