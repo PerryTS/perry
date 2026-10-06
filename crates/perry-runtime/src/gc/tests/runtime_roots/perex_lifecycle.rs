@@ -350,5 +350,12 @@ fn regexp_literal_site_is_the_only_root_and_rewrites_after_moving_gc() {
         unsafe { (*site & crate::value::POINTER_MASK) as usize }
     );
     gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
-    assert!(matches(&re, "site-only-root"));
+    // The previous match advanced this instance's own global lastIndex.
+    assert!(!matches(&re, "site-only-root"));
+    let fresh = scope.root_raw_mut_ptr(crate::regex::js_regexp_literal(
+        std::ptr::null(),
+        std::ptr::null(),
+        site as i64,
+    ));
+    assert!(matches(&fresh, "site-only-root"));
 }
