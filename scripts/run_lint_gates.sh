@@ -112,6 +112,15 @@ if [[ "${1:-}" == "--self-test" ]]; then
         exit 1
     fi
 
+    if _self_checkout="$(RUN_LINT_GATES_FIXTURE=checkout-grew-a-gate bash "$0" --list 2>&1)"; then
+        echo "run_lint_gates self-test FAILED: checkout setup hid an added gate" >&2
+        exit 1
+    fi
+    if [[ "$_self_checkout" != *"now yields gate command(s)"* ]]; then
+        echo "run_lint_gates self-test FAILED: checkout growth omitted its gate diagnostic" >&2
+        exit 1
+    fi
+
     if ! _self_extra="$(RUN_LINT_GATES_FIXTURE=warnings-extra-command bash "$0" --list 2>&1)"; then
         echo "run_lint_gates self-test FAILED: extra warnings command was rejected" >&2
         printf '%s\n' "$_self_extra" >&2
@@ -185,6 +194,12 @@ elif fixture == "setup-only-grew-a-gate":
         if step.get("name") == "Install cargo-xwin for Windows type-check":
             step["run"] += "\npython3 scripts/check_file_size.sh\n"
             break
+elif fixture == "checkout-grew-a-gate":
+    for job_name in ("lint", "warnings", "check"):
+        for step in workflow["jobs"][job_name]["steps"]:
+            if step.get("name") == "Checkout repository (inline git)":
+                step["run"] += "\npython3 scripts/check_buffer_layout.py\n"
+                break
 elif fixture:
     sys.stderr.write(f"run_lint_gates: unknown self-test fixture: {fixture}\n")
     sys.exit(3)
@@ -214,6 +229,9 @@ ci_only = {
 # stops matching (step renamed, or it grows a real gate command) FAILS, so this
 # list cannot rot into a way of hiding a gate.
 setup_only = {
+    "Checkout repository (inline git)": (
+        "CI checks out the repository with git; local gates already run in that checkout"
+    ),
     "Install cargo-xwin for Windows type-check": (
         "downloads a pinned, sha256-verified release asset and extends PATH; "
         "installs the tool the Windows type-check gate then runs"
@@ -334,6 +352,17 @@ for job_name in ("warnings", "check"):
             continue
         step_name = step.get("name") or f"<unnamed run step {index}>"
         joined = re.sub(r"\\\n[ \t]*", " ", run)
+
+        if step_name == "Checkout repository (inline git)":
+            if any(is_gate_command(line.strip()) for line in joined.split("\n")):
+                errors.append(
+                    f"compile setup step '{job_name} / {step_name}' now yields gate command(s)"
+                )
+            elif "git init" not in joined or "git checkout --force --detach" not in joined:
+                errors.append(
+                    f"compile setup step '{job_name} / {step_name}' no longer checks out the repository"
+                )
+            continue
 
         # Toolchain installation is job setup, not one of the gates the local
         # compile tier replays. Keep this skip exact and loud if the step grows.
