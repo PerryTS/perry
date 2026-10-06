@@ -111,6 +111,7 @@ def full_collections(root, arm, name, cmd, cwd, env, trial):
     trials_dir = 'trials-thp-off' if env.get('MIMALLOC_ALLOW_THP') == '0' else 'trials'
     prefix = root/'measure'/trials_dir/f'{name}.{trial}.{arm}.gc'
     huge = []
+    peak = {}
     stop = threading.Event()
     proc = subprocess.Popen(cmd, cwd=cwd, env=diag, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                             preexec_fn=disable_thp if env.get('MIMALLOC_ALLOW_THP') == '0' else None)
@@ -120,6 +121,9 @@ def full_collections(root, arm, name, cmd, cwd, env, trial):
                 data = Path(f'/proc/{proc.pid}/smaps_rollup').read_text()
                 match = re.search(r'(?m)^AnonHugePages:\s+(\d+)', data)
                 if match: huge.append(int(match[1]))
+                fields = {k: int(v) for k, v in re.findall(r'(?m)^(Rss|Anonymous):\s+(\d+)', data)}
+                if fields.get('Rss', 0) > peak.get('Rss', 0):
+                    peak.update(fields)
             except (OSError, ProcessLookupError): pass
             stop.wait(0.02)
     sampler = threading.Thread(target=sample); sampler.start()
@@ -141,7 +145,9 @@ def full_collections(root, arm, name, cmd, cwd, env, trial):
                 if obj.get('event') == 'gc_cycle': events.append(obj)
             except ValueError: pass
     fulls = None if not events and b'diagnostics feature disabled' in stderr else sum(e['collection_kind'] == 'full' for e in events)
-    return {'fulls': fulls, 'anon_huge_kb': max(huge) if huge else None}
+    return {'fulls': fulls, 'anon_huge_kb': max(huge) if huge else None,
+            'sampled_anon_rss_kb': peak.get('Anonymous'),
+            'sampled_file_rss_kb': peak['Rss'] - peak['Anonymous'] if 'Anonymous' in peak else None}
 
 def measure(root, names, thp_off):
     trials_dir = 'trials-thp-off' if thp_off else 'trials'
