@@ -36,7 +36,7 @@ use std::cell::{Cell, RefCell};
 /// the stream JSON hook serializes a view as Node's state shape instead of
 /// following it.
 pub(super) const STREAM_STATE_OWNER_KEY: &[u8] = b"__perry_stream_state_owner";
-const STREAM_CLOSE_EMITTED_KEY: &[u8] = b"__perryStreamCloseEmitted";
+pub(super) const STREAM_CLOSE_EMITTED_KEY: &[u8] = b"__perryStreamCloseEmitted";
 
 const READABLE_KIND: usize = 0;
 const WRITABLE_KIND: usize = 1;
@@ -356,7 +356,8 @@ fn install_state_view(stream: f64, kind: usize, property: &'static [u8]) {
         proto.get_nanbox_f64().to_bits(),
     );
     let property_key = hidden_key(property);
-    set_hidden_value(stream.get_nanbox_f64(), property_key, view.get_nanbox_f64());
+    // node's own enumerable `_readableState` / `_writableState`.
+    set_visible_own_value(stream.get_nanbox_f64(), property_key, view.get_nanbox_f64());
 }
 
 pub(super) fn install_readable_state_view(stream: f64) {

@@ -6,63 +6,98 @@ use crate::closure::ClosureHeader;
 use crate::object::{js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader};
 use crate::value::JSValue;
 
-#[no_mangle]
-pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
-    let methods = readable_methods();
-    let obj = build_object(&methods, READABLE_SHAPE_ID + methods.len() as u32);
-    let readable = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
-    if let Some(read) = read_callback_from_options(opts) {
-        js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, readable));
-    } else {
+/// G1: an instance owns only its state; the methods are inherited from the
+/// stream prototypes (`proto_methods.rs`). Who constructs it decides only
+/// where a user hook may come from: a direct `new X(opts)` reads the options,
+/// a subclass `super(opts)` (or `X.call(this, opts)`) also reads the class's
+/// own `_read`/`_write`/... overrides on its prototype chain.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StreamInit {
+    Direct,
+    Subclass,
+}
+
+/// A user-supplied stream hook: callable, and not a runtime builtin (a
+/// payload family's prototype carries builtin `_transform`/`_flush` for
+/// `super._transform(...)` parity; those are the hooks themselves, not an
+/// override of them).
+fn user_hook(value: f64) -> Option<f64> {
+    if !is_callable_value(value) {
+        return None;
+    }
+    let raw = raw_ptr_from_value(value);
+    if raw >= 0x10000 && crate::closure::is_closure_ptr(raw) {
+        let info = unsafe { (*(raw as *const ClosureHeader)).info };
+        if !info.is_null() && unsafe { (*info).flags } & crate::closure::FN_BUILTIN != 0 {
+            return None;
+        }
+    }
+    Some(value)
+}
+
+/// The value of `name` on the receiver's chain, when it is a user hook.
+fn subclass_hook(this: f64, name: &'static [u8]) -> Option<f64> {
+    let obj = object_ptr_from_value(this)?;
+    user_hook(js_object_get_field_by_name_f64(
+        obj as *const ObjectHeader,
+        hidden_key(name),
+    ))
+}
+
+/// node's `Readable` constructor body on an allocated object.
+pub(crate) fn init_readable_in_place(this: f64, opts: f64, how: StreamInit) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let opts = scope.root_nanbox_f64(opts);
+    let t = || this.get_nanbox_f64();
+    let o = || opts.get_nanbox_f64();
+    install_stream_state_layout(t());
+    let subclass_read = match how {
+        StreamInit::Subclass => subclass_hook(t(), b"_read"),
+        StreamInit::Direct => None,
+    }
+    .map(|read| scope.root_nanbox_f64(read));
+    if let Some(read) = read_callback_from_options(o()) {
+        let bound = rebind_callback_this(read, t());
+        set_hidden_value(t(), hidden_read_key(), bound);
+    } else if let Some(read) = &subclass_read {
+        set_hidden_value(t(), hidden_read_key(), read.get_nanbox_f64());
+    } else if how == StreamInit::Direct {
         set_hidden_value(
-            readable,
+            t(),
             hidden_default_read_error_key(),
             f64::from_bits(TAG_TRUE),
         );
     }
-    init_lifecycle_state(readable, opts);
-    init_constructor(readable, "Readable");
-    init_readable_state(readable, opts);
-    install_common_lifecycle_callbacks(readable, opts);
-    init_abort_signal_state(readable, opts);
-    async_iterator::install_readable_async_iterator_symbol(readable);
-    install_stream_async_dispose_symbol(readable);
-    invoke_construct_callback(readable, opts);
-    readable
+    init_lifecycle_state(t(), o());
+    init_readable_state(t(), o());
+    install_common_lifecycle_callbacks(t(), o());
+    init_abort_signal_state(t(), o());
+    invoke_construct_callback(t(), o());
+}
+
+#[no_mangle]
+pub extern "C" fn js_node_stream_readable_new(opts: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let readable = scope.root_nanbox_f64(proto_methods::alloc_stream_instance("Readable"));
+    init_readable_in_place(
+        readable.get_nanbox_f64(),
+        opts.get_nanbox_f64(),
+        StreamInit::Direct,
+    );
+    readable.get_nanbox_f64()
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_readable_subclass_init(this: f64, opts: f64) -> f64 {
-    let raw = raw_ptr_from_value(this);
-    if raw == 0 {
+    if object_ptr_from_value(this).is_none() {
         return this;
     }
-    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
-        return this;
-    }
-
-    let obj = raw as *mut ObjectHeader;
-    let subclass_read =
-        js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(b"_read"));
-
-    let methods = readable_methods();
-    install_methods_on_existing_object(obj, this, &methods, &[]);
-
-    if let Some(read) = read_callback_from_options(opts) {
-        js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, this));
-    } else if is_callable_value(subclass_read) {
-        js_object_set_field_by_name(obj, hidden_read_key(), subclass_read);
-    }
-
-    init_lifecycle_state(this, opts);
-    init_constructor(this, "Readable");
-    init_readable_state(this, opts);
-    install_common_lifecycle_callbacks(this, opts);
-    init_abort_signal_state(this, opts);
-    async_iterator::install_readable_async_iterator_symbol(this);
-    install_stream_async_dispose_symbol(this);
-    invoke_construct_callback(this, opts);
-    this
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    init_readable_in_place(this.get_nanbox_f64(), opts, StreamInit::Subclass);
+    this.get_nanbox_f64()
 }
 
 /// #5137: `super()` for a source-compiled `class X extends EventEmitter`
@@ -316,274 +351,262 @@ pub(super) extern "C" fn ns_array_fill(
     )
 }
 
+/// node's `Writable` constructor body on an allocated object.
+pub(crate) fn init_writable_in_place(this: f64, opts: f64, how: StreamInit) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let opts = scope.root_nanbox_f64(opts);
+    let t = || this.get_nanbox_f64();
+    let o = || opts.get_nanbox_f64();
+    install_stream_state_layout(t());
+    let (subclass_write, subclass_writev) = match how {
+        StreamInit::Subclass => (
+            subclass_hook(t(), b"_write").map(|v| scope.root_nanbox_f64(v)),
+            subclass_hook(t(), b"_writev").map(|v| scope.root_nanbox_f64(v)),
+        ),
+        StreamInit::Direct => (None, None),
+    };
+    if let Some(write) = write_callback_from_options(o()) {
+        let bound = rebind_callback_this(write, t());
+        set_hidden_value(t(), hidden_write_key(), bound);
+    } else if let Some(write) = &subclass_write {
+        set_hidden_value(t(), hidden_write_key(), write.get_nanbox_f64());
+    }
+    if let Some(writev) = writev_callback_from_options(o()) {
+        let bound = rebind_callback_this(writev, t());
+        set_hidden_value(t(), hidden_writev_key(), bound);
+    } else if let Some(writev) = &subclass_writev {
+        set_hidden_value(t(), hidden_writev_key(), writev.get_nanbox_f64());
+    }
+    init_lifecycle_state(t(), o());
+    init_writable_state(t(), o());
+    install_common_lifecycle_callbacks(t(), o());
+    install_writable_lifecycle_callbacks(t(), o());
+    init_abort_signal_state(t(), o());
+    invoke_construct_callback(t(), o());
+}
+
 #[no_mangle]
 pub extern "C" fn js_node_stream_writable_new(opts: f64) -> f64 {
-    let methods = writable_methods();
-    let obj = build_object(&methods, WRITABLE_SHAPE_ID + methods.len() as u32);
-    let writable = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
-    if let Some(write) = write_callback_from_options(opts) {
-        js_object_set_field_by_name(
-            obj,
-            hidden_write_key(),
-            rebind_callback_this(write, writable),
-        );
-    }
-    if let Some(writev) = writev_callback_from_options(opts) {
-        js_object_set_field_by_name(
-            obj,
-            hidden_writev_key(),
-            rebind_callback_this(writev, writable),
-        );
-    }
-    init_lifecycle_state(writable, opts);
-    init_constructor(writable, "Writable");
-    init_writable_state(writable, opts);
-    install_common_lifecycle_callbacks(writable, opts);
-    install_writable_lifecycle_callbacks(writable, opts);
-    init_abort_signal_state(writable, opts);
-    install_stream_async_dispose_symbol(writable);
-    invoke_construct_callback(writable, opts);
-    writable
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let writable = scope.root_nanbox_f64(proto_methods::alloc_stream_instance("Writable"));
+    init_writable_in_place(
+        writable.get_nanbox_f64(),
+        opts.get_nanbox_f64(),
+        StreamInit::Direct,
+    );
+    writable.get_nanbox_f64()
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_writable_subclass_init(this: f64, opts: f64) -> f64 {
-    let obj = {
-        let bits = this.to_bits();
-        let top16 = bits >> 48;
-        let raw = if top16 >= 0x7FF8 {
-            if top16 == 0x7FFC {
-                return f64::from_bits(TAG_UNDEFINED);
-            }
-            (bits & crate::value::POINTER_MASK) as usize
-        } else {
-            bits as usize
-        };
-        if raw < crate::gc::GC_HEADER_SIZE + 0x1000 {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-        raw as *mut ObjectHeader
-    };
-    let this = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
-    unsafe {
-        if gc_type_for_ptr(obj as usize) != Some(crate::gc::GC_TYPE_OBJECT) {
-            return f64::from_bits(TAG_UNDEFINED);
-        }
-    }
-    if obj.is_null() {
+    if object_ptr_from_value(this).is_none() {
         return f64::from_bits(TAG_UNDEFINED);
     }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    init_writable_in_place(this.get_nanbox_f64(), opts, StreamInit::Subclass);
+    this.get_nanbox_f64()
+}
 
-    let subclass_write = js_object_get_field_by_name_f64(obj, hidden_key(b"_write"));
-    let subclass_writev = js_object_get_field_by_name_f64(obj, hidden_key(b"_writev"));
-    let methods = writable_methods();
-    install_methods_on_existing_object(obj, this, &methods, &["_write"]);
-
-    if let Some(write) = write_callback_from_options(opts) {
-        js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, this));
-    } else if is_callable_value(subclass_write) {
-        js_object_set_field_by_name(obj, hidden_write_key(), subclass_write);
+/// node's `Duplex` constructor body on an allocated object.
+pub(crate) fn init_duplex_in_place(this: f64, opts: f64, how: StreamInit) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let opts = scope.root_nanbox_f64(opts);
+    let t = || this.get_nanbox_f64();
+    let o = || opts.get_nanbox_f64();
+    install_stream_state_layout(t());
+    let hook = |name: &'static [u8]| match how {
+        StreamInit::Subclass => subclass_hook(t(), name).map(|v| scope.root_nanbox_f64(v)),
+        StreamInit::Direct => None,
+    };
+    let subclass_read = hook(b"_read");
+    let subclass_write = hook(b"_write");
+    let subclass_writev = hook(b"_writev");
+    let custom_sink = || {
+        set_hidden_value(
+            t(),
+            hidden_key(b"writableCustomSink"),
+            f64::from_bits(TAG_TRUE),
+        )
+    };
+    if let Some(read) = read_callback_from_options(o()) {
+        let bound = rebind_callback_this(read, t());
+        set_hidden_value(t(), hidden_read_key(), bound);
+    } else if let Some(read) = &subclass_read {
+        set_hidden_value(t(), hidden_read_key(), read.get_nanbox_f64());
     }
-    if let Some(writev) = writev_callback_from_options(opts) {
-        js_object_set_field_by_name(obj, hidden_writev_key(), rebind_callback_this(writev, this));
-    } else if is_callable_value(subclass_writev) {
-        js_object_set_field_by_name(obj, hidden_writev_key(), subclass_writev);
+    if let Some(write) = write_callback_from_options(o()) {
+        let bound = rebind_callback_this(write, t());
+        set_hidden_value(t(), hidden_write_key(), bound);
+        custom_sink();
+    } else if let Some(write) = &subclass_write {
+        set_hidden_value(t(), hidden_write_key(), write.get_nanbox_f64());
+        custom_sink();
     }
-
-    init_lifecycle_state(this, opts);
-    init_constructor(this, "Writable");
-    init_writable_state(this, opts);
-    install_common_lifecycle_callbacks(this, opts);
-    install_writable_lifecycle_callbacks(this, opts);
-    init_abort_signal_state(this, opts);
-    install_stream_async_dispose_symbol(this);
-    invoke_construct_callback(this, opts);
-    this
+    if let Some(writev) = writev_callback_from_options(o()) {
+        let bound = rebind_callback_this(writev, t());
+        set_hidden_value(t(), hidden_writev_key(), bound);
+        custom_sink();
+    } else if let Some(writev) = &subclass_writev {
+        set_hidden_value(t(), hidden_writev_key(), writev.get_nanbox_f64());
+        custom_sink();
+    }
+    #[cfg(test)]
+    if crate::node_stream::native_hooks::stream_sabotage("own_methods") {
+        // The pre-G1 shape: every method an own property of the instance.
+        if let Some(obj) = object_ptr_from_value(t()) {
+            let methods: Vec<(&'static str, StubFn)> = readable_methods()
+                .iter()
+                .chain(writable_methods().iter())
+                .copied()
+                .collect();
+            install_methods_on_existing_object(obj, t(), &methods, &["_write"]);
+        }
+    }
+    init_lifecycle_state(t(), o());
+    init_readable_state(t(), o());
+    init_writable_state(t(), o());
+    init_duplex_state(t(), o());
+    install_common_lifecycle_callbacks(t(), o());
+    install_writable_lifecycle_callbacks(t(), o());
+    init_abort_signal_state(t(), o());
+    invoke_construct_callback(t(), o());
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_duplex_new(opts: f64) -> f64 {
-    let methods = duplex_methods();
-    let obj = build_object(&methods, DUPLEX_SHAPE_ID + methods.len() as u32);
-    let duplex = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
-    if let Some(read) = read_callback_from_options(opts) {
-        js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, duplex));
-    }
-    if let Some(write) = write_callback_from_options(opts) {
-        js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, duplex));
-        set_hidden_value(
-            duplex,
-            hidden_key(b"writableCustomSink"),
-            f64::from_bits(TAG_TRUE),
-        );
-    }
-    if let Some(writev) = writev_callback_from_options(opts) {
-        js_object_set_field_by_name(
-            obj,
-            hidden_writev_key(),
-            rebind_callback_this(writev, duplex),
-        );
-        set_hidden_value(
-            duplex,
-            hidden_key(b"writableCustomSink"),
-            f64::from_bits(TAG_TRUE),
-        );
-    }
-    init_lifecycle_state(duplex, opts);
-    init_constructor(duplex, "Duplex");
-    init_readable_state(duplex, opts);
-    init_writable_state(duplex, opts);
-    init_duplex_state(duplex, opts);
-    install_common_lifecycle_callbacks(duplex, opts);
-    install_writable_lifecycle_callbacks(duplex, opts);
-    init_abort_signal_state(duplex, opts);
-    async_iterator::install_readable_async_iterator_symbol(duplex);
-    install_stream_async_dispose_symbol(duplex);
-    invoke_construct_callback(duplex, opts);
-    duplex
+    new_duplex_kind("Duplex", opts, DuplexKind::Duplex)
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_duplex_subclass_init(this: f64, opts: f64) -> f64 {
-    let raw = raw_ptr_from_value(this);
-    if raw == 0 {
+    if object_ptr_from_value(this).is_none() {
         return this;
     }
-    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
-        return this;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    init_duplex_in_place(this.get_nanbox_f64(), opts, StreamInit::Subclass);
+    this.get_nanbox_f64()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DuplexKind {
+    Duplex,
+    Transform,
+    PassThrough,
+}
+
+fn new_duplex_kind(name: &str, opts: f64, kind: DuplexKind) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let stream = scope.root_nanbox_f64(proto_methods::alloc_stream_instance(name));
+    match kind {
+        DuplexKind::Duplex => init_duplex_in_place(
+            stream.get_nanbox_f64(),
+            opts.get_nanbox_f64(),
+            StreamInit::Direct,
+        ),
+        DuplexKind::Transform => init_transform_kind(
+            stream.get_nanbox_f64(),
+            opts.get_nanbox_f64(),
+            StreamInit::Direct,
+            false,
+        ),
+        DuplexKind::PassThrough => init_transform_kind(
+            stream.get_nanbox_f64(),
+            opts.get_nanbox_f64(),
+            StreamInit::Direct,
+            true,
+        ),
     }
+    stream.get_nanbox_f64()
+}
 
-    let obj = raw as *mut ObjectHeader;
-    let subclass_read =
-        js_object_get_field_by_name_f64(obj as *const ObjectHeader, hidden_key(b"_read"));
-    let subclass_write = js_object_get_field_by_name_f64(obj, hidden_key(b"_write"));
-    let subclass_writev = js_object_get_field_by_name_f64(obj, hidden_key(b"_writev"));
-
-    let methods = duplex_methods();
-    install_methods_on_existing_object(obj, this, &methods, &[]);
-
-    if let Some(read) = read_callback_from_options(opts) {
-        js_object_set_field_by_name(obj, hidden_read_key(), rebind_callback_this(read, this));
-    } else if is_callable_value(subclass_read) {
-        js_object_set_field_by_name(obj, hidden_read_key(), subclass_read);
+/// node's `Transform` constructor body on an allocated object: the Duplex
+/// state, then the transform hooks (an option, or a subclass override found
+/// on the chain). `passthrough` is `PassThrough`'s identity transform when no
+/// hook is given.
+fn init_transform_kind(this: f64, opts: f64, how: StreamInit, passthrough: bool) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    let opts = scope.root_nanbox_f64(opts);
+    let t = || this.get_nanbox_f64();
+    let o = || opts.get_nanbox_f64();
+    init_duplex_in_place(t(), o(), how);
+    if crate::node_stream::native_hooks::hooks_of(t()).is_some() {
+        crate::node_stream::native_hooks::init_runner_slots(t());
     }
-    if let Some(write) = write_callback_from_options(opts) {
-        js_object_set_field_by_name(obj, hidden_write_key(), rebind_callback_this(write, this));
+    let subclass_transform = match how {
+        StreamInit::Subclass => subclass_hook(t(), b"_transform").map(|v| scope.root_nanbox_f64(v)),
+        StreamInit::Direct => None,
+    };
+    let subclass_flush = match how {
+        StreamInit::Subclass => subclass_hook(t(), b"_flush").map(|v| scope.root_nanbox_f64(v)),
+        StreamInit::Direct => None,
+    };
+    if let Some(callback) = transform_callback_from_options(o()) {
+        let bound = rebind_callback_this(callback, t());
+        set_hidden_value(t(), hidden_transform_callback_key(), bound);
+    } else if let Some(callback) = &subclass_transform {
         set_hidden_value(
-            this,
-            hidden_key(b"writableCustomSink"),
+            t(),
+            hidden_transform_callback_key(),
+            callback.get_nanbox_f64(),
+        );
+    }
+    if let Some(flush) = transform_flush_from_options(o()) {
+        let bound = rebind_callback_this(flush, t());
+        set_hidden_value(t(), hidden_transform_flush_key(), bound);
+    } else if let Some(flush) = &subclass_flush {
+        set_hidden_value(t(), hidden_transform_flush_key(), flush.get_nanbox_f64());
+    }
+    mark_transform_stream(t());
+    if passthrough && transform_hidden_callback(t()).is_none() {
+        set_hidden_value(
+            t(),
+            hidden_transform_passthrough_key(),
             f64::from_bits(TAG_TRUE),
         );
-    } else if is_callable_value(subclass_write) {
-        js_object_set_field_by_name(obj, hidden_write_key(), subclass_write);
-        set_hidden_value(
-            this,
-            hidden_key(b"writableCustomSink"),
-            f64::from_bits(TAG_TRUE),
-        );
     }
-    if let Some(writev) = writev_callback_from_options(opts) {
-        js_object_set_field_by_name(obj, hidden_writev_key(), rebind_callback_this(writev, this));
-        set_hidden_value(
-            this,
-            hidden_key(b"writableCustomSink"),
-            f64::from_bits(TAG_TRUE),
-        );
-    } else if is_callable_value(subclass_writev) {
-        js_object_set_field_by_name(obj, hidden_writev_key(), subclass_writev);
-        set_hidden_value(
-            this,
-            hidden_key(b"writableCustomSink"),
-            f64::from_bits(TAG_TRUE),
-        );
-    }
+}
 
-    init_lifecycle_state(this, opts);
-    init_constructor(this, "Duplex");
-    init_readable_state(this, opts);
-    init_writable_state(this, opts);
-    init_duplex_state(this, opts);
-    install_common_lifecycle_callbacks(this, opts);
-    install_writable_lifecycle_callbacks(this, opts);
-    init_abort_signal_state(this, opts);
-    async_iterator::install_readable_async_iterator_symbol(this);
-    install_stream_async_dispose_symbol(this);
-    invoke_construct_callback(this, opts);
-    this
+/// `Transform`'s constructor body for a native-payload stream family (zlib,
+/// crypto, the test rot13 family), on an object its family allocated with its
+/// own prototype (`native_payload::alloc_stream`). The codec is reached through
+/// the payload's hooks; a JS `_transform`/`_flush` override on a subclass is
+/// still captured here and takes precedence (`native_hooks`).
+pub fn init_transform_in_place(stream: f64, opts: f64) {
+    init_transform_kind(stream, opts, StreamInit::Subclass, false);
+}
+
+/// `Writable`'s constructor body for a native-payload Writable family
+/// (`Sign`/`Verify`).
+pub fn init_writable_payload_in_place(stream: f64, opts: f64) {
+    init_writable_in_place(stream, opts, StreamInit::Subclass);
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_transform_new(opts: f64) -> f64 {
-    let transform = js_node_stream_duplex_new(opts);
-    if let Some(callback) = transform_callback_from_options(opts) {
-        set_hidden_value(
-            transform,
-            hidden_transform_callback_key(),
-            rebind_callback_this(callback, transform),
-        );
-    }
-    if let Some(flush) = transform_flush_from_options(opts) {
-        set_hidden_value(
-            transform,
-            hidden_transform_flush_key(),
-            rebind_callback_this(flush, transform),
-        );
-    }
-    init_constructor(transform, "Transform");
-    transform
+    new_duplex_kind("Transform", opts, DuplexKind::Transform)
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_transform_subclass_init(this: f64, opts: f64) -> f64 {
-    let transform = js_node_stream_duplex_subclass_init(this, opts);
-    let raw = raw_ptr_from_value(transform);
-    if raw == 0 {
-        return transform;
+    if object_ptr_from_value(this).is_none() {
+        return this;
     }
-    if unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_OBJECT) {
-        return transform;
-    }
-
-    let obj = raw as *mut ObjectHeader;
-    let subclass_transform = js_object_get_field_by_name_f64(obj, hidden_key(b"_transform"));
-    let subclass_flush = js_object_get_field_by_name_f64(obj, hidden_key(b"_flush"));
-
-    if let Some(callback) = transform_callback_from_options(opts) {
-        set_hidden_value(
-            transform,
-            hidden_transform_callback_key(),
-            rebind_callback_this(callback, transform),
-        );
-    } else if is_callable_value(subclass_transform) {
-        set_hidden_value(
-            transform,
-            hidden_transform_callback_key(),
-            subclass_transform,
-        );
-    }
-    if let Some(flush) = transform_flush_from_options(opts) {
-        set_hidden_value(
-            transform,
-            hidden_transform_flush_key(),
-            rebind_callback_this(flush, transform),
-        );
-    } else if is_callable_value(subclass_flush) {
-        set_hidden_value(transform, hidden_transform_flush_key(), subclass_flush);
-    }
-    init_constructor(transform, "Transform");
-    transform
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    init_transform_kind(this.get_nanbox_f64(), opts, StreamInit::Subclass, false);
+    this.get_nanbox_f64()
 }
 
 #[no_mangle]
 pub extern "C" fn js_node_stream_passthrough_new(opts: f64) -> f64 {
-    let passthrough = js_node_stream_duplex_new(opts);
-    set_hidden_value(
-        passthrough,
-        hidden_transform_passthrough_key(),
-        f64::from_bits(TAG_TRUE),
-    );
-    init_constructor(passthrough, "PassThrough");
-    passthrough
+    new_duplex_kind("PassThrough", opts, DuplexKind::PassThrough)
 }
 
 /// Initialize `class X extends PassThrough` without replacing the derived
@@ -592,16 +615,13 @@ pub extern "C" fn js_node_stream_passthrough_new(opts: f64) -> f64 {
 /// missing-method error.
 #[no_mangle]
 pub extern "C" fn js_node_stream_passthrough_subclass_init(this: f64, opts: f64) -> f64 {
-    let passthrough = js_node_stream_transform_subclass_init(this, opts);
-    if transform_hidden_callback(passthrough).is_none() {
-        set_hidden_value(
-            passthrough,
-            hidden_transform_passthrough_key(),
-            f64::from_bits(TAG_TRUE),
-        );
+    if object_ptr_from_value(this).is_none() {
+        return this;
     }
-    init_constructor(passthrough, "PassThrough");
-    passthrough
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(this);
+    init_transform_kind(this.get_nanbox_f64(), opts, StreamInit::Subclass, true);
+    this.get_nanbox_f64()
 }
 
 /// `Readable.from(iterable)` — Node's static factory. Returns a

@@ -326,7 +326,11 @@ pub(super) unsafe fn dispatch_common(
             // `Cannot read properties of <undefined|null> (reading 'toString')`.
         }
 
-        // Array methods - delegate to array runtime
+        // Array methods - delegate to array runtime. An ordinary object that
+        // is not an Array (nor an object-backed Array subclass) is not one:
+        // its `push`/`pop` is whatever its prototype chain holds (a stream's
+        // `Readable.prototype.push`), found by the object arm below.
+        "push" | "pop" | "length" if jsval.is_pointer() && is_plain_non_array_object(object) => {}
         "push" if jsval.is_pointer() => {
             let arr_ptr =
                 jsval.as_pointer::<crate::array::ArrayHeader>() as *mut crate::array::ArrayHeader;
@@ -690,4 +694,16 @@ pub(crate) unsafe fn dispatch_function_proto_method(
         _ => {}
     }
     None
+}
+
+/// An ordinary object (GC_TYPE_OBJECT) that is not an Array subclass
+/// instance: it has no Array storage for the array arms to act on.
+fn is_plain_non_array_object(object: f64) -> bool {
+    let addr = (object.to_bits() & crate::value::POINTER_MASK) as usize;
+    // SAFETY: the reader validates the address before reading.
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_OBJECT
+        && !crate::array::is_array_subclass_instance(object)
 }
