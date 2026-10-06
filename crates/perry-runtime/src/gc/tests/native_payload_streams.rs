@@ -44,14 +44,29 @@ fn buffer(bytes: &[u8]) -> f64 {
     crate::node_stream::test_buffer_value_from_bytes(bytes)
 }
 
-fn rss_bytes() -> usize {
-    let statm = std::fs::read_to_string("/proc/self/statm").unwrap_or_default();
-    statm
-        .split_whitespace()
-        .nth(1)
-        .and_then(|p| p.parse::<usize>().ok())
-        .unwrap_or(0)
-        * 4096
+/// Anonymous resident bytes: heap growth, not code-page residency. Total RSS
+/// also counts file-backed text pages, which fault in with whatever code
+/// first runs and differ between binaries by hundreds of KB with no heap
+/// meaning. `smaps_rollup` "Anonymous:" is the heap; where it is missing, Rss
+/// minus RssFile from `/proc/self/status`.
+fn anon_rss_bytes() -> usize {
+    fn kb(text: &str, key: &str) -> Option<usize> {
+        text.lines()
+            .find_map(|l| l.strip_prefix(key))
+            .and_then(|r| r.split_whitespace().next())
+            .and_then(|n| n.parse::<usize>().ok())
+            .map(|k| k * 1024)
+    }
+    if let Ok(t) = std::fs::read_to_string("/proc/self/smaps_rollup") {
+        if let Some(b) = kb(&t, "Anonymous:") {
+            return b;
+        }
+    }
+    let t = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
+    match (kb(&t, "VmRSS:"), kb(&t, "RssFile:")) {
+        (Some(rss), Some(file)) => rss.saturating_sub(file),
+        _ => 0,
+    }
 }
 
 /// Z8: churn. Every stream that completes releases its codec at autoDestroy
@@ -86,8 +101,8 @@ fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
         // Measure what survives a full collection, not the garbage a run of
         // minors has not reclaimed yet.
         crate::gc::js_gc_collect();
-        rss.push(rss_bytes());
-        eprintln!("z8 batch {batch}: rss={}", rss[rss.len() - 1]);
+        rss.push(anon_rss_bytes());
+        eprintln!("z8 batch {batch}: anon_rss={}", rss[rss.len() - 1]);
     }
     assert_eq!(CREATED.load(Ordering::SeqCst), N);
     assert_eq!(
@@ -110,12 +125,13 @@ fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
     crate::gc::js_gc_collect();
     let cells = finalized() - before_cells;
     eprintln!(
-        "z8: created={} released={} dropped={} cells finalized={cells} rss warm={} peak={}",
+        "z8: created={} released={} dropped={} cells finalized={cells} anon rss warm={} peak={} growth={}",
         CREATED.load(Ordering::SeqCst),
         RELEASED.load(Ordering::SeqCst),
         DROPPED.load(Ordering::SeqCst),
         rss[2],
-        rss[2..].iter().max().unwrap()
+        rss[2..].iter().max().unwrap(),
+        rss[2..].iter().max().unwrap() - rss[2..].iter().min().unwrap()
     );
     assert!(
         cells >= 2 * N - 16,
@@ -126,7 +142,7 @@ fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
     let peak = *rss[2..].iter().max().unwrap();
     assert!(
         peak - warm < 4 << 20,
-        "RSS flat after warmup: {}",
+        "anonymous RSS flat after warmup: {}",
         peak - warm
     );
 }
