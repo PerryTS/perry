@@ -24,6 +24,7 @@
   "crates/perry-runtime/src/array/tests.rs|crate::buffer::buffer_data_mut(buf),": 1,
   "crates/perry-runtime/src/array/typed_array_receiver_tests.rs|*crate::buffer::buffer_data_mut(ab) = 44;": 1,
   "crates/perry-runtime/src/buffer/access.rs|(*result).length = length;": 1,
+  "crates/perry-runtime/src/buffer/access.rs|.then(|| crate::typedarray::data_ptr(ptr))": 1,
   "crates/perry-runtime/src/buffer/access.rs|Some(*((addr + std::mem::size_of::<BufferHeader>()) as *const u8).add(index as usize))": 1,
   "crates/perry-runtime/src/buffer/access.rs|buffer_data(buf).add(start as usize),": 1,
   "crates/perry-runtime/src/buffer/access.rs|buffer_data(buf_ptr) as *mut u8": 1,
@@ -38,6 +39,7 @@
   "crates/perry-runtime/src/buffer/backing.rs|assert_eq!(unsafe { *buffer_data(received) }, 81);": 1,
   "crates/perry-runtime/src/buffer/backing.rs|assert_ne!(buffer_data(ap), buffer_data(bp));": 1,
   "crates/perry-runtime/src/buffer/backing.rs|buffer_data(received) as usize,": 1,
+  "crates/perry-runtime/src/buffer/backing.rs|crate::typedarray::data_ptr(source as *const crate::typedarray::TypedArrayHeader)": 1,
   "crates/perry-runtime/src/buffer/backing.rs|let data = buffer_data(source);": 1,
   "crates/perry-runtime/src/buffer/backing.rs|let original = buffer_data(source) as usize;": 2,
   "crates/perry-runtime/src/buffer/backing.rs|super::buffer_data(source as *const super::BufferHeader)": 1,
@@ -163,6 +165,8 @@
   "crates/perry-runtime/src/gc/tests/fromspace_scan.rs|let header_bytes = std::mem::size_of::<crate::buffer::BufferHeader>();": 1,
   "crates/perry-runtime/src/gc/tests/oldgen.rs|let buffer_data = buffer + std::mem::size_of::<crate::buffer::BufferHeader>();": 1,
   "crates/perry-runtime/src/gc/tests/oldgen.rs|let typed_array_data = typed_array + std::mem::size_of::<crate::typedarray::TypedArrayHeader>();": 1,
+  "crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs|let base = crate::typedarray::data_ptr_mut(sorted) as *const i64;": 1,
+  "crates/perry-runtime/src/gc/tests/runtime_roots/callback_scanners.rs|let base = crate::typedarray::data_ptr_mut(ta) as *mut i64;": 1,
   "crates/perry-runtime/src/gc/tests/u8_inline_cache.rs|(*buf).length = 16;": 1,
   "crates/perry-runtime/src/gc/tests/u8_inline_cache.rs|(view as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>())": 1,
   "crates/perry-runtime/src/gc/tests/u8_inline_cache.rs|*crate::buffer::buffer_data_mut(backing).add(1) = 0xAB;": 1,
@@ -182,6 +186,7 @@
   "crates/perry-runtime/src/native_abi.rs|crate::buffer::buffer_data(view)": 1,
   "crates/perry-runtime/src/native_arena.rs|(*view).capacity = length as u32;": 1,
   "crates/perry-runtime/src/native_arena.rs|(*view).length = length as u32;": 1,
+  "crates/perry-runtime/src/node_api_host/buffers.rs|crate::typedarray::data_ptr_mut(refreshed).cast::<c_void>(),": 1,
   "crates/perry-runtime/src/node_stream_constructors/introspection.rs|crate::typedarray::typed_array_bytes(ta)": 1,
   "crates/perry-runtime/src/node_stream_constructors/introspection.rs|let data = crate::buffer::js_native_buffer_data_ptr(value);": 1,
   "crates/perry-runtime/src/node_stream_readable_read.rs|crate::buffer::buffer_data_mut(buf),": 1,
@@ -236,7 +241,5 @@
   "crates/perry-stdlib/src/zlib.rs|if let Some(bytes) = perry_runtime::typedarray::typed_array_bytes(ta) {": 1,
   "crates/perry-stdlib/src/zlib.rs|let data = perry_runtime::buffer::buffer_data(": 1,
   "crates/perry-stdlib/src/zlib.rs|let data_ptr = buffer_data(buf);": 1,
-  "crates/perry-stdlib/src/zlib.rs|std::ptr::copy_nonoverlapping(data.as_ptr(), buffer_data_mut(buf), data.len());": 1,
-  "crates/perry-updater/src/core.rs|let dst = perry_runtime::buffer::buffer_data_mut(out);": 1,
-  "crates/perry-updater/src/core.rs|perry_runtime::buffer::buffer_data(buf as *const perry_runtime::buffer::BufferHeader);": 1
+  "crates/perry-stdlib/src/zlib.rs|std::ptr::copy_nonoverlapping(data.as_ptr(), buffer_data_mut(buf), data.len());": 1
 }

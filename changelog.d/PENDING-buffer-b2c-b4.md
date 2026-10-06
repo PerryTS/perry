@@ -6,7 +6,7 @@ Boundary still pending: generated code directly links `PERRY_U8_INLINE_CACHE` an
 
 The remaining B2c work includes native-addon APIs that return raw pointers, private Array.sort byte access, and typed-array creation paths coupled to the old layout. Their pointer lifetimes or representation must be adapted before the source gate can become a zero-debt invariant. This delivery is the compatible conversion subset, not completion of all B2c/B4 requirements. Zlib retains B1's wrapper and output witness.
 
-The exact closed census rows are in `scripts/buffer_b4_census_closed.tsv`: 73 rows (42 runtime, 27 stdlib, 2 updater, 1 ext-http, 1 ext-net), comprising 35 creation, 28 size-assumption, 8 unscoped-borrow and 2 pointer-across-GC sites. Other ext producers already use B1's C ABI wrapper. The expanded source gate has 282 existing sites and zero additions; the same detector found 444 at the earlier B1 baseline, with 161 removed by this lane and one by upstream #12094. It is a ratchet, not the still-pending zero-debt layout invariant.
+The exact closed census rows are in `scripts/buffer_b4_census_closed.tsv`: 73 rows (42 runtime, 27 stdlib, 2 updater, 1 ext-http, 1 ext-net), comprising 35 creation, 28 size-assumption, 8 unscoped-borrow and 2 pointer-across-GC sites. Other ext producers already use B1's C ABI wrapper. The expanded source gate has 284 existing sites and zero additions; the same detector found 444 at the earlier B1 baseline, with 161 removed by this lane, one by upstream #12094, and three subsequent upstream verifier/test reads added. It is a ratchet, not the still-pending zero-debt layout invariant.
 
 | Machinery | Deleted | Still pending |
 |---|---|---|
@@ -26,7 +26,7 @@ The exact closed census rows are in `scripts/buffer_b4_census_closed.tsv`: 73 ro
 | T9: whole-module invariant | Source gate; owner-edge witness; header and root-holder gates | Ratchet PASS, nine source sabotages RED; address-table-free invariant pending B4c |
 | Symbol header and u32 admission | Three persistent-symbol factories; current-header u32 admission; `symbol_header`, `u32_admission` | PASS / RED |
 
-Verification baseline: origin/main `2fb54a09942bf26766095995f8a5dc74d10b18f6`; refreshed/rebased B1 `43cb95a83bec59c463461ff0d6d1ffca407c888a`, fetched before final verification on 2026-10-06. Production sources were unchanged by that B1 refresh. The final release builds, all 54 crate-test binaries, gap comparison, output checks and measurements include main's newer RegExp, exception-snapshot and getter-memo changes. Final production sources are those of merge `4a7b96e3ee`; subsequent commits record harnesses and evidence.
+Completed comparison cohort: origin/main `2fb54a09942bf26766095995f8a5dc74d10b18f6`; B1 `43cb95a83bec59c463461ff0d6d1ffca407c888a`. A further required refresh found B1 `f3e59107868b737b3b5646a7d0b19dc4f9193f8f`, which includes main `81e65f33ebdc72d75431b03427dcbfb2f153d7b1` and a process-shared byte-pin fix. This tree is rebased onto it; the final comparison is being refreshed. The tables below describe the completed 2fb54a cohort until replaced. Production sources were unchanged by that B1 refresh. The final release builds, all 54 crate-test binaries, gap comparison, output checks and measurements include main's newer RegExp, exception-snapshot and getter-memo changes. Final production sources are those of merge `4a7b96e3ee`; subsequent commits record harnesses and evidence.
 
 | Crate | Main passed / failed / ignored | Head passed / failed / ignored | New failures |
 |---|---|---|---|

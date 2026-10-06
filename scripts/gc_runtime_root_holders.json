@@ -2910,6 +2910,12 @@
       "verdict": "covered_elsewhere",
       "scanner": "perry-runtime's read-holder scanner (object::method_site::read_holder::scan_read_holder_roots_mut), via HOLDER_SITES",
       "why": "A RuntimeReadSite pair containing a scalar ShapeId/slot word and a never-freed native PIC-arena pointer. Managed holder and accessor-pair edges reside only in those PICs. read_holder::publish, used by both normal reads and non-observable probes, registers every populated PIC in HOLDER_SITES. scan_read_holder_roots_mut traces and rewrites those edges. Worker admission is gated before accessing holder entries, as on emitted read sites. No separate RegExp heap-pointer cache exists."
+    },
+    {
+      "file": "crates/perry-runtime/src/array/iterator_close.rs",
+      "name": "CALLS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only AtomicUsize invocation counter. Its only writes store zero or fetch_add(1); reads compare the numeric callback count. No address or tagged value is ever stored."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
