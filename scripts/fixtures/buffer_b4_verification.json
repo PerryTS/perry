@@ -1,13 +1,13 @@
 {
-  "main_sha": "2fb54a09942bf26766095995f8a5dc74d10b18f6",
-  "b1_sha": "43cb95a83bec59c463461ff0d6d1ffca407c888a",
-  "production_head_sha": "4a7b96e3ee",
+  "main_sha": "81e65f33ebdc72d75431b03427dcbfb2f153d7b1",
+  "b1_sha": "f3e59107868b737b3b5646a7d0b19dc4f9193f8f",
+  "production_head_sha": "48205175a7163f0a2f5b129e5ef37b9c4e8a5960",
   "crate_tests": {
     "main": {
       "perry_codegen-c94dd17e69627274": {
         "label": "unittests src/lib.rs",
         "status": 0,
-        "summary": "test result: ok. 2046 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 12.13s"
+        "summary": "test result: ok. 2048 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 11.89s"
       },
       "app_window_config_options-05f98175cfec6237": {
         "label": "tests/app_window_config_options.rs",
@@ -22,7 +22,7 @@
       "class_field_store_pointer_test-edcc861a03aa88ec": {
         "label": "tests/class_field_store_pointer_test.rs",
         "status": 0,
-        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
       },
       "class_keys_gc_root-118736334d3153dc": {
         "label": "tests/class_keys_gc_root.rs",
@@ -77,7 +77,7 @@
       "large_object_barriers-210694df18f719e4": {
         "label": "tests/large_object_barriers.rs",
         "status": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.88s"
       },
       "loop_safepoint_purity-0f4e87372d35090e": {
         "label": "tests/loop_safepoint_purity.rs",
@@ -102,12 +102,12 @@
       "native_proof_buffer_views-bd88acc5aaef6e6f": {
         "label": "tests/native_proof_buffer_views.rs",
         "status": 0,
-        "summary": "test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.13s"
+        "summary": "test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s"
       },
       "native_proof_regressions-b686140e8146b3d4": {
         "label": "tests/native_proof_regressions.rs",
         "status": 0,
-        "summary": "test result: ok. 292 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.23s"
+        "summary": "test result: ok. 292 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.20s"
       },
       "node_test_mock_property_presence-67d83caaef19300c": {
         "label": "tests/node_test_mock_property_presence.rs",
@@ -172,7 +172,7 @@
       "temp_root_operand_temporaries-3f3f906266bc47ef": {
         "label": "tests/temp_root_operand_temporaries.rs",
         "status": 0,
-        "summary": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s"
+        "summary": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s"
       },
       "thread_agent_strings-cac345d201c61e82": {
         "label": "tests/thread_agent_strings.rs",
@@ -182,7 +182,7 @@
       "thread_immutable_globals-bdae12f87c9ae42e": {
         "label": "tests/thread_immutable_globals.rs",
         "status": 0,
-        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+        "summary": "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
       },
       "typed_array_rmw_8692-7ca06bdc5e8ef133": {
         "label": "tests/typed_array_rmw_8692.rs",
@@ -227,7 +227,7 @@
       "perry_runtime-cf583210c4de02a0": {
         "label": "unittests src/lib.rs",
         "status": 0,
-        "summary": "test result: ok. 5147 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 16.72s"
+        "summary": "test result: ok. 5155 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 17.06s"
       },
       "android_tls_pool-b7ff72bbb0b43602": {
         "label": "tests/android_tls_pool.rs",
@@ -237,7 +237,7 @@
       "perry_stdlib-e923086162fefa1c": {
         "label": "unittests src/lib.rs",
         "status": 101,
-        "summary": "test result: FAILED. 251 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.93s"
+        "summary": "test result: FAILED. 251 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.11s"
       },
       "container_backend_selection-c379875825346956": {
         "label": "tests/container_backend_selection.rs",
@@ -279,7 +279,7 @@
       "perry_codegen-c94dd17e69627274": {
         "label": "unittests src/lib.rs",
         "status": 0,
-        "summary": "test result: ok. 2046 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 12.22s"
+        "summary": "test result: ok. 2048 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 12.50s"
       },
       "app_window_config_options-05f98175cfec6237": {
         "label": "tests/app_window_config_options.rs",
@@ -294,7 +294,7 @@
       "class_field_store_pointer_test-edcc861a03aa88ec": {
         "label": "tests/class_field_store_pointer_test.rs",
         "status": 0,
-        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+        "summary": "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s"
       },
       "class_keys_gc_root-118736334d3153dc": {
         "label": "tests/class_keys_gc_root.rs",
@@ -379,7 +379,7 @@
       "native_proof_regressions-b686140e8146b3d4": {
         "label": "tests/native_proof_regressions.rs",
         "status": 0,
-        "summary": "test result: ok. 292 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.17s"
+        "summary": "test result: ok. 292 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.19s"
       },
       "node_test_mock_property_presence-67d83caaef19300c": {
         "label": "tests/node_test_mock_property_presence.rs",
@@ -444,7 +444,7 @@
       "temp_root_operand_temporaries-3f3f906266bc47ef": {
         "label": "tests/temp_root_operand_temporaries.rs",
         "status": 0,
-        "summary": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s"
+        "summary": "test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s"
       },
       "thread_agent_strings-cac345d201c61e82": {
         "label": "tests/thread_agent_strings.rs",
@@ -499,7 +499,7 @@
       "perry_runtime-cf583210c4de02a0": {
         "label": "unittests src/lib.rs",
         "status": 0,
-        "summary": "test result: ok. 5159 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 16.93s"
+        "summary": "test result: ok. 5168 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 17.19s"
       },
       "android_tls_pool-b7ff72bbb0b43602": {
         "label": "tests/android_tls_pool.rs",
@@ -509,7 +509,7 @@
       "perry_stdlib-e923086162fefa1c": {
         "label": "unittests src/lib.rs",
         "status": 101,
-        "summary": "test result: FAILED. 258 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.16s"
+        "summary": "test result: FAILED. 258 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.20s"
       },
       "container_backend_selection-c379875825346956": {
         "label": "tests/container_backend_selection.rs",
@@ -548,6 +548,48 @@
       }
     }
   },
+  "crate_totals": {
+    "main": {
+      "runtime": {
+        "passed": 5156,
+        "failed": 0,
+        "ignored": 5,
+        "binaries": 2
+      },
+      "stdlib": {
+        "passed": 251,
+        "failed": 2,
+        "ignored": 0,
+        "binaries": 8
+      },
+      "codegen": {
+        "passed": 2564,
+        "failed": 0,
+        "ignored": 1,
+        "binaries": 44
+      }
+    },
+    "head": {
+      "runtime": {
+        "passed": 5169,
+        "failed": 0,
+        "ignored": 5,
+        "binaries": 2
+      },
+      "stdlib": {
+        "passed": 258,
+        "failed": 2,
+        "ignored": 0,
+        "binaries": 8
+      },
+      "codegen": {
+        "passed": 2564,
+        "failed": 0,
+        "ignored": 1,
+        "binaries": 44
+      }
+    }
+  },
   "gap": {
     "main": {
       "test_gap_10089_dataview_setter_fast_path": "pass",
@@ -571,7 +613,7 @@
       "test_gap_11239_buffer_view_predicates": "pass",
       "test_gap_11291_buffer_write_args": "pass",
       "test_gap_11300_typed_emitter_param_dispatch": "pass",
-      "test_gap_11340_worker_net_events": "parity_fail",
+      "test_gap_11340_worker_net_events": "pass",
       "test_gap_11430_buffer_write_short_string": "pass",
       "test_gap_11430_crypto_short_string_args": "pass",
       "test_gap_11447_crypto_sign_dispatch": "pass",
@@ -746,7 +788,7 @@
       "test_gap_11239_buffer_view_predicates": "pass",
       "test_gap_11291_buffer_write_args": "pass",
       "test_gap_11300_typed_emitter_param_dispatch": "pass",
-      "test_gap_11340_worker_net_events": "parity_fail",
+      "test_gap_11340_worker_net_events": "pass",
       "test_gap_11430_buffer_write_short_string": "pass",
       "test_gap_11430_crypto_short_string_args": "pass",
       "test_gap_11447_crypto_sign_dispatch": "pass",
@@ -883,7 +925,7 @@
       "test_gap_typedarray_tostringtag": "pass",
       "test_gap_untyped_param_masked_window": "pass",
       "test_gap_untyped_string_accumulator": "pass",
-      "test_gap_webcrypto_async_threadpool": "pass",
+      "test_gap_webcrypto_async_threadpool": "parity_fail",
       "test_gap_windows_child_argv0": "pass",
       "test_gap_windows_executable_lookup": "pass",
       "test_gap_windows_named_pipe_backlog": "pass",
@@ -1051,5 +1093,447 @@
         "output_equal": true
       }
     }
-  }
+  },
+  "known_stdlib_failures": [
+    "runtime_thread_exit_tests::symbols_tests::thread_exit_releases_the_threads_symbol_side_table_entries",
+    "runtime_thread_exit_tests::thread_exit_releases_the_threads_closure_side_table_entries"
+  ],
+  "gap_raw_differences": {
+    "test_gap_webcrypto_async_threadpool": [
+      "pass",
+      "parity_fail"
+    ]
+  },
+  "gap_isolated_recheck": [
+    {
+      "trial": 0,
+      "arm": "main",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 0,
+      "arm": "head",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 1,
+      "arm": "head",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 1,
+      "arm": "main",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 2,
+      "arm": "main",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 2,
+      "arm": "head",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 3,
+      "arm": "head",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 3,
+      "arm": "main",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 4,
+      "arm": "main",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    },
+    {
+      "trial": 4,
+      "arm": "head",
+      "node_status": 0,
+      "perry_status": 0,
+      "equal": true,
+      "node_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n",
+      "perry_output": "subtle.digest crosses macrotask: true\nrandomBytes(cb) crosses macrotask: true\ncreateHash sync crosses macrotask: false\nsha256(hello): 2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824\nrandomBytes length: 8\n"
+    }
+  ],
+  "gap_variation": "Original head Node oracle printed subtle.digest crosses macrotask: false; Perry printed true. All ten isolated interleaved Node comparisons passed, five per arm.",
+  "asan": {
+    "witnesses": {
+      "gc::tests::buffer_bytes": "0",
+      "gc::tests::buffer_b4": "0",
+      "buffer::backing::tests::transfer_receiver_uses_original_pointer_after_sender_gc": "0"
+    },
+    "summaries": [
+      "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 5164 filtered out; finished in 0.20s",
+      "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 5167 filtered out; finished in 0.18s",
+      "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 5171 filtered out; finished in 0.01s"
+    ],
+    "scope": "Instrumented runtime, system allocator, forced GC; native pin/detach, view and transfer tests. TS zlib stream not executed under ASan."
+  },
+  "hello_profile_changes": [
+    {
+      "function": "???:0x000000000564e5f0 [???]",
+      "main": 542,
+      "head": 0,
+      "delta": -542
+    },
+    {
+      "function": "???:0x00000000056505f0 [???]",
+      "main": 0,
+      "head": 542,
+      "delta": 542
+    },
+    {
+      "function": "<perry_runtime::arena::block::Arena as core::ops::drop::Drop>::drop",
+      "main": 1031,
+      "head": 611,
+      "delta": -420
+    },
+    {
+      "function": "PROGRAM TOTALS",
+      "main": 1470003,
+      "head": 1469784,
+      "delta": -219
+    },
+    {
+      "function": "???:0x000000000564e4f0 [???]",
+      "main": 142,
+      "head": 0,
+      "delta": -142
+    },
+    {
+      "function": "???:0x00000000056504f0 [???]",
+      "main": 0,
+      "head": 142,
+      "delta": 142
+    },
+    {
+      "function": "???:0x000000000564e6a0 [???]",
+      "main": 120,
+      "head": 0,
+      "delta": -120
+    },
+    {
+      "function": "???:0x00000000056506a0 [???]",
+      "main": 0,
+      "head": 120,
+      "delta": 120
+    },
+    {
+      "function": "???:0x000000000564e470 [???]",
+      "main": 114,
+      "head": 0,
+      "delta": -114
+    },
+    {
+      "function": "???:0x0000000005650470 [???]",
+      "main": 0,
+      "head": 114,
+      "delta": 114
+    },
+    {
+      "function": "./elf/./elf/dl-reloc.c:_dl_relocate_object_no_relro [/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2]",
+      "main": 528938,
+      "head": 529043,
+      "delta": 105
+    },
+    {
+      "function": "./stdlib/../stdlib/strtol_l.c:____strtoul_l_internal [/usr/lib/x86_64-linux-gnu/libc.so.6]",
+      "main": 26902,
+      "head": 26998,
+      "delta": 96
+    },
+    {
+      "function": "???:0x000000000564e3d0 [???]",
+      "main": 62,
+      "head": 0,
+      "delta": -62
+    },
+    {
+      "function": "???:0x00000000056503d0 [???]",
+      "main": 0,
+      "head": 62,
+      "delta": 62
+    },
+    {
+      "function": "???:0x000000000564e440 [???]",
+      "main": 54,
+      "head": 0,
+      "delta": -54
+    },
+    {
+      "function": "???:0x0000000005650440 [???]",
+      "main": 0,
+      "head": 54,
+      "delta": 54
+    },
+    {
+      "function": "???:0x000000000564e4d0 [???]",
+      "main": 52,
+      "head": 0,
+      "delta": -52
+    },
+    {
+      "function": "???:0x00000000056504d0 [???]",
+      "main": 0,
+      "head": 52,
+      "delta": 52
+    },
+    {
+      "function": "???:0x000000000564e710 [???]",
+      "main": 28,
+      "head": 0,
+      "delta": -28
+    },
+    {
+      "function": "???:0x0000000005650710 [???]",
+      "main": 0,
+      "head": 28,
+      "delta": 28
+    },
+    {
+      "function": "???:0x000000000564e3e0 [???]",
+      "main": 12,
+      "head": 0,
+      "delta": -12
+    },
+    {
+      "function": "???:0x00000000056503e0 [???]",
+      "main": 0,
+      "head": 12,
+      "delta": 12
+    },
+    {
+      "function": "???:0x000000000561a000 [???]",
+      "main": 7,
+      "head": 0,
+      "delta": -7
+    },
+    {
+      "function": "???:0x0000000005859000 [???]",
+      "main": 7,
+      "head": 0,
+      "delta": -7
+    },
+    {
+      "function": "???:0x0000000005971000 [???]",
+      "main": 7,
+      "head": 0,
+      "delta": -7
+    },
+    {
+      "function": "???:0x000000000561c000 [???]",
+      "main": 0,
+      "head": 7,
+      "delta": 7
+    },
+    {
+      "function": "???:0x000000000585b000 [???]",
+      "main": 0,
+      "head": 7,
+      "delta": 7
+    },
+    {
+      "function": "???:0x0000000005973000 [???]",
+      "main": 0,
+      "head": 7,
+      "delta": 7
+    },
+    {
+      "function": "???:0x000000000564e400 [???]",
+      "main": 6,
+      "head": 0,
+      "delta": -6
+    },
+    {
+      "function": "???:0x000000000564e730 [???]",
+      "main": 6,
+      "head": 0,
+      "delta": -6
+    },
+    {
+      "function": "???:0x0000000005650400 [???]",
+      "main": 0,
+      "head": 6,
+      "delta": 6
+    },
+    {
+      "function": "???:0x0000000005650730 [???]",
+      "main": 0,
+      "head": 6,
+      "delta": 6
+    },
+    {
+      "function": "???:0x00000000049f4494 [???]",
+      "main": 4,
+      "head": 0,
+      "delta": -4
+    },
+    {
+      "function": "???:0x000000000561a294 [???]",
+      "main": 4,
+      "head": 0,
+      "delta": -4
+    },
+    {
+      "function": "???:0x000000000564e670 [???]",
+      "main": 4,
+      "head": 0,
+      "delta": -4
+    },
+    {
+      "function": "???:0x00000000058f8384 [???]",
+      "main": 4,
+      "head": 0,
+      "delta": -4
+    },
+    {
+      "function": "???:0x0000000005994438 [???]",
+      "main": 4,
+      "head": 0,
+      "delta": -4
+    },
+    {
+      "function": "???:0x00000000049f6ad4 [???]",
+      "main": 0,
+      "head": 4,
+      "delta": 4
+    },
+    {
+      "function": "???:0x000000000561c294 [???]",
+      "main": 0,
+      "head": 4,
+      "delta": 4
+    },
+    {
+      "function": "???:0x0000000005650670 [???]",
+      "main": 0,
+      "head": 4,
+      "delta": 4
+    },
+    {
+      "function": "???:0x00000000058fa384 [???]",
+      "main": 0,
+      "head": 4,
+      "delta": 4
+    },
+    {
+      "function": "???:0x0000000005996438 [???]",
+      "main": 0,
+      "head": 4,
+      "delta": 4
+    },
+    {
+      "function": "???:0x000000000561a030 [???]",
+      "main": 2,
+      "head": 0,
+      "delta": -2
+    },
+    {
+      "function": "???:0x000000000564e420 [???]",
+      "main": 2,
+      "head": 0,
+      "delta": -2
+    },
+    {
+      "function": "???:0x000000000564e650 [???]",
+      "main": 2,
+      "head": 0,
+      "delta": -2
+    },
+    {
+      "function": "???:0x000000000564e790 [???]",
+      "main": 2,
+      "head": 0,
+      "delta": -2
+    },
+    {
+      "function": "???:0x0000000005859310 [???]",
+      "main": 2,
+      "head": 0,
+      "delta": -2
+    },
+    {
+      "function": "???:0x00000000059713c0 [???]",
+      "main": 2,
+      "head": 0,
+      "delta": -2
+    },
+    {
+      "function": "???:0x000000000561c030 [???]",
+      "main": 0,
+      "head": 2,
+      "delta": 2
+    },
+    {
+      "function": "???:0x0000000005650420 [???]",
+      "main": 0,
+      "head": 2,
+      "delta": 2
+    },
+    {
+      "function": "???:0x0000000005650650 [???]",
+      "main": 0,
+      "head": 2,
+      "delta": 2
+    },
+    {
+      "function": "???:0x0000000005650790 [???]",
+      "main": 0,
+      "head": 2,
+      "delta": 2
+    },
+    {
+      "function": "???:0x000000000585b310 [???]",
+      "main": 0,
+      "head": 2,
+      "delta": 2
+    },
+    {
+      "function": "???:0x00000000059733c0 [???]",
+      "main": 0,
+      "head": 2,
+      "delta": 2
+    }
+  ]
 }
