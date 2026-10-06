@@ -1680,7 +1680,7 @@ pub(crate) const GC_ARRAY_RAW_F64_HOLES: u16 = 0x1000;
 /// copies verbatim, so the invariant survives a move without a side-table
 /// walk. The *shape id* itself cannot fit here, so it lives in the
 /// address-keyed record `array::element_shape` maintains, moved on
-/// relocation by `layout_transfer` exactly like `TYPED_LAYOUTS`. The bit is
+/// relocation by `layout_transfer`. The bit is
 /// the authority: a fresh allocation's `_reserved` is zero, so a stale
 /// record left behind at a recycled address is never consulted.
 ///

@@ -291,7 +291,7 @@ pub(in crate::gc) unsafe fn heap_payload_slot_selection(
     header: *mut GcHeader,
     payload: HeapSlotRange,
 ) -> HeapPayloadSlotSelection {
-    heap_payload_slot_selection_impl(header, payload, |_, _| None)
+    heap_payload_slot_selection_impl(header, payload)
 }
 
 /// [`heap_payload_slot_selection`] for an ObjectFields receiver whose shape
@@ -318,12 +318,10 @@ pub(in crate::gc) unsafe fn heap_payload_slot_selection_from(
 unsafe fn heap_payload_slot_selection_impl(
     header: *mut GcHeader,
     payload: HeapSlotRange,
-    shared_mask: impl FnOnce(usize, *const GcHeader) -> Option<LayoutSlotMask>,
 ) -> HeapPayloadSlotSelection {
     if header.is_null() || payload.is_empty() {
         return HeapPayloadSlotSelection::Empty;
     }
-    let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
     // Objects are selected by shape (`heap_payload_slot_selection_from`), which
     // reports their skipped F64 lanes itself; nothing here is an object.
     let raw_numeric_object_slots = 0;
@@ -343,19 +341,7 @@ unsafe fn heap_payload_slot_selection_impl(
                     raw_numeric_recorded: false,
                 };
             }
-            let mask = per_object_slot_mask(user_ptr).or_else(|| shared_mask(user_ptr, header));
-            match mask {
-                Some(mask) => HeapPayloadSlotSelection::Masked {
-                    mask,
-                    cursor: 0,
-                    raw_numeric_object_slots,
-                    raw_numeric_recorded: false,
-                },
-                None => {
-                    set_layout_state(header, GC_LAYOUT_UNKNOWN);
-                    HeapPayloadSlotSelection::All { cursor: 0 }
-                }
-            }
+            HeapPayloadSlotSelection::All { cursor: 0 }
         }
         _ => HeapPayloadSlotSelection::All { cursor: 0 },
     }

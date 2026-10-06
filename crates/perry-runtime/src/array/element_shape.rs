@@ -695,7 +695,7 @@ pub(crate) fn transfer_element_shape(old_user: usize, new_user: usize) {
         // #9792: neither address advertises a proof, so there is nothing to
         // move and nothing to fail closed about — the `clear_bit` below would
         // clear a bit that is already clear. Skipping is what the siblings in
-        // `gc::layout_tables` do with their emptiness flag, decided here from
+        // the residual prototype registry does with its emptiness flag, decided here from
         // the header words this function has already read rather than from a
         // side-table probe.
         //

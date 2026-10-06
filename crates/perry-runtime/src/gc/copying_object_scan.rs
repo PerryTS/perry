@@ -49,12 +49,6 @@ enum PayloadWalk {
     Word(u64),
     /// Every slot `next..count` (`AllPointers` / `All`: a `Range`).
     Range { next: usize, count: usize },
-    /// A mask wider than one word (the iterator's `Masked` arm).
-    Mask {
-        mask: LayoutSlotMask,
-        cursor: usize,
-        count: usize,
-    },
 }
 
 impl PlainObjectPlan {
@@ -82,15 +76,6 @@ impl PlainObjectPlan {
                 }
                 *next += 1;
                 *next - 1
-            }
-            PayloadWalk::Mask {
-                mask,
-                cursor,
-                count,
-            } => {
-                let index = mask.next_slot_at_or_after(*cursor, *count)?;
-                *cursor = index + 1;
-                index
             }
         };
         Some(self.payload.slot(index))
@@ -163,11 +148,6 @@ unsafe fn plain_object_plan(header: *mut GcHeader) -> PlainObjectPlan {
             ..
         }
         | HeapPayloadSlotSelection::All { .. } => PayloadWalk::Range { next: 0, count },
-        HeapPayloadSlotSelection::Masked { mask, .. } => PayloadWalk::Mask {
-            mask,
-            cursor: 0,
-            count,
-        },
     };
     #[cfg(test)]
     let walk = sabotage::perturb(walk);

@@ -31,7 +31,6 @@
     "crates/perry-runtime/src/gc/barrier_arming.rs": 3,
     "crates/perry-runtime/src/gc/cycle_malloc_trim.rs": 1,
     "crates/perry-runtime/src/gc/fromspace_scan.rs": 1,
-    "crates/perry-runtime/src/gc/layout_tables.rs": 2,
     "crates/perry-runtime/src/gc/malloc.rs": 2,
     "crates/perry-runtime/src/gc/mod.rs": 3,
     "crates/perry-runtime/src/gc/promote_in_place.rs": 11,

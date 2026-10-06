@@ -3,10 +3,13 @@ use super::support::*;
 mod array_layout;
 mod element_shape;
 mod header_kinds;
+mod kind_transitions;
 mod large_array_slots;
+mod moving_kinds;
 mod object_closure_slots;
 mod object_layout_invalidation;
 mod typed_shape;
+mod whole_heap_kinds;
 
 #[test]
 fn test_trace_array_marks_child() {
