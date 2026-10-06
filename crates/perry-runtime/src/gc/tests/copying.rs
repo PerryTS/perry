@@ -513,7 +513,7 @@ fn test_copying_minor_rewrites_exact_closure_pointer_capture_only() {
     crate::closure::js_closure_set_capture_f64(closure, 0, 10.0);
     crate::closure::js_closure_set_capture_f64(closure, 1, f64::from_bits(ptr_bits(child)));
     crate::closure::js_closure_set_capture_f64(closure, 2, 30.0);
-    assert_eq!(test_layout_pointer_slot_count(closure as usize, 8), Some(1));
+    assert_eq!(test_layout_pointer_slot_count(closure as usize, 8), None);
     js_shadow_slot_set(0, ptr_bits(closure as usize));
 
     let trace = collect_minor_trace(GcTriggerKind::Direct);
@@ -533,13 +533,10 @@ fn test_copying_minor_rewrites_exact_closure_pointer_capture_only() {
     assert_eq!(third, 30.0);
     assert!(crate::arena::pointer_in_nursery(closure_after));
     assert!(crate::arena::pointer_in_nursery(child_after));
-    // ONE read, not two: #7645 removed the eligibility preflight's traversal
-    // of the same graph, so the pointer slot is now visited only by the copy
-    // phase. This assertion is the unit-level witness of that counter drop —
-    // it must go back to 2 if the preflight walk ever returns.
-    assert_eq!(trace.layout_scans.masked_pointer_slots_read, 1);
+    // Mixed captures tag-test the whole live prefix once during copying.
+    assert_eq!(trace.layout_scans.masked_pointer_slots_read, 0);
     assert!(trace.copying_nursery.preflight_skipped);
-    assert_eq!(trace.layout_scans.unknown_layout_slots_read, 0);
+    assert_eq!(trace.layout_scans.unknown_layout_slots_read, 8);
 }
 
 #[test]

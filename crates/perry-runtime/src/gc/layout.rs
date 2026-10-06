@@ -3,11 +3,8 @@
 //! `layout/slot_mask.rs`; the relocation funnel every moving-GC and growth
 //! path calls is in `layout/transfer.rs`.
 
-use super::hot_tls::hot_layout_slot_masks;
 use super::layout_tables::{
-    layout_forget_object, layout_note_store_mask_insert, mark_per_object_layouts_nonempty,
-    per_object_slot_mask, refresh_per_object_layouts_flag, slot_masks_insert_birth,
-    slot_masks_insert_rebuild, slot_masks_remove, transfer_per_object_slot_mask,
+    layout_forget_object, per_object_slot_mask, slot_masks_remove, transfer_per_object_slot_mask,
 };
 use super::*;
 // Copied-nursery survival age in otherwise-unused low `_reserved` bits;
@@ -525,90 +522,18 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
                 layout_init_all_pointer_slots(parent_user as *mut u8);
                 return;
             }
+            // Generated layout notes also reach this funnel directly. A
+            // pointer invalidates both numeric sub-flags before publication,
+            // even when no array store helper has cleared them yet.
+            crate::array::clear_array_numeric_layout_ptr(parent_user);
         }
         if !pointer && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
             return;
         }
-        // The insert branch below breaks the emptiness the flag asserts, so it
-        // arms the flag inline; the removal branch re-tests it afterwards,
-        // outside the borrow `refresh_per_object_layouts_flag` would re-enter.
-        let mut emptied = false;
-        {
-            let mut masks = hot_layout_slot_masks().borrow_mut();
-            if pointer {
-                if let Some(mask) = masks.get_mut(&parent_user) {
-                    mask.set_slot(slot_index);
-                    // A non-empty pointer mask MUST be reflected by SIDE_MASK
-                    // state: `heap_payload_slot_selection` treats POINTER_FREE
-                    // as "no pointers" and skips the WHOLE payload without ever
-                    // consulting the mask. If a stale POINTER_FREE lingers here
-                    // (an array truncated to a numeric/empty prefix flips to
-                    // POINTER_FREE while its element mask is retained), recording
-                    // a pointer would leave every masked element untraced — the
-                    // evacuating minor then reclaims/relocates the child out from
-                    // under the live slot, later read+called as a garbage pointer
-                    // ("value is not a function"). Recording a pointer proves the
-                    // object is not pointer-free, so restore SIDE_MASK.
-                    if (*header)._reserved & GC_LAYOUT_STATE_MASK != GC_LAYOUT_SIDE_MASK {
-                        set_layout_state(header, GC_LAYOUT_SIDE_MASK);
-                    }
-                } else if (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE {
-                    if super::layout_tables::immortal_layout_scope_active()
-                        || super::layout_tables::layout_prefers_scan_over_mask(
-                            header,
-                            parent_user,
-                            slot_index,
-                        )
-                    {
-                        // Two reasons to decline the mask, one fallback. An
-                        // object built inside an `ImmortalLayoutScope` is
-                        // rooted for the life of the process, so the entry it
-                        // would mint here is never removed — and one such
-                        // entry disables `PER_OBJECT_LAYOUTS_NONEMPTY` for
-                        // every allocation the program will ever make (see
-                        // `ImmortalLayoutScope`). And a payload too small for
-                        // the mask to earn its side-table entry
-                        // (`layout_prefers_scan_over_mask`) skips nothing the
-                        // tag-checked scan would not check anyway. Both take
-                        // the same `GC_LAYOUT_UNKNOWN` fallback the `else`
-                        // arm below uses for this exact situation.
-                        set_layout_state(header, GC_LAYOUT_UNKNOWN);
-                    } else {
-                        let mut mask = LayoutSlotMask::Inline(0);
-                        mask.set_slot(slot_index);
-                        // The one insert site that holds its own `borrow_mut`,
-                        // so it maintains the address filter, the young log
-                        // and the young-record count inline too. The log lives
-                        // in the hint, not in this map, so arming it here
-                        // takes no second borrow — and it goes BEFORE the
-                        // insert (`gc/young_log.rs` rule 1). Before #9841 this
-                        // site published a young record without counting it;
-                        // on cc it is the DOMINANT insert path (`TYPED_LAYOUTS`
-                        // is empty there), so it is where a missing arm would
-                        // do the most damage.
-                        let young = super::layout_tables::arm_young_layout_key(parent_user);
-                        masks.insert(parent_user, mask);
-                        layout_note_store_mask_insert();
-                        mark_per_object_layouts_nonempty();
-                        super::layout_tables::layout_addr_filter_note(parent_user);
-                        if young {
-                            super::layout_tables::count_new_young_layout_record();
-                        }
-                        set_layout_state(header, GC_LAYOUT_SIDE_MASK);
-                    }
-                } else {
-                    set_layout_state(header, GC_LAYOUT_UNKNOWN);
-                }
-            } else if let Some(mask) = masks.get_mut(&parent_user) {
-                mask.clear_slot(slot_index);
-                if mask.is_empty() {
-                    masks.remove(&parent_user);
-                    set_layout_state(header, GC_LAYOUT_POINTER_FREE);
-                    emptied = true;
-                }
-            }
-        }
-        refresh_per_object_layouts_flag(emptied);
+        // Mixed payloads use the same tag test as the tracer. A store can
+        // only weaken this declaration; explicit bulk scans may strengthen it.
+        debug_assert!(super::layout_tables::test_layout_table_empty_for_debug());
+        layout_mark_unknown(parent_user as *mut u8);
     }
 }
 
@@ -691,11 +616,10 @@ pub extern "C" fn js_gc_note_slot_layout_aware(
     layout_note_slot_aware(parent_user, slot_index as usize, value_bits, old_bits);
 }
 
-pub(super) unsafe fn layout_rebuild_from_slots_with_policy(
+pub(crate) unsafe fn layout_rebuild_from_slots(
     user_ptr: *mut u8,
     slots: *const u64,
     slot_count: usize,
-    _exact_small_mixed: bool,
 ) {
     let Some(header) = layout_header_for_user(user_ptr as usize) else {
         return;
@@ -712,40 +636,17 @@ pub(super) unsafe fn layout_rebuild_from_slots_with_policy(
         return;
     }
 
-    let mut mask = if slot_count <= 64 {
-        LayoutSlotMask::Inline(0)
-    } else {
-        LayoutSlotMask::Heap(vec![0; slot_count.div_ceil(64)])
-    };
-    for i in 0..slot_count {
-        if layout_pointer_bearing_bits(*slots.add(i)) {
-            mask.set_slot(i);
-        }
-    }
-
-    if mask.is_empty() {
-        set_layout_state(header, GC_LAYOUT_POINTER_FREE);
-        slot_masks_remove(user_ptr as usize);
-    } else if super::layout_tables::immortal_layout_scope_active()
-        || slot_count < super::layout_tables::layout_mask_min_slots()
-    {
-        // Same two reasons as the `layout_note_slot` branch, same fallback. An
-        // object built inside an `ImmortalLayoutScope` never dies, so the mask
-        // it would install here is a permanent tenant of a side table whose
-        // emptiness is a process-wide fast path; and too few slots means the
-        // mask cannot earn its side-table entry — the tag-checked scan is
-        // exact and costs the program nothing globally. Falling back is sound
-        // *for this rebuild specifically* because the mask above is itself
-        // derived from `layout_pointer_bearing_bits` — exactly the test
-        // `GC_LAYOUT_UNKNOWN` re-runs per slot. (This is why the scope may not
-        // be applied to a TYPED descriptor, whose raw-f64 slots the tag test
-        // would misread; see `ImmortalLayoutScope`.)
-        set_layout_state(header, GC_LAYOUT_UNKNOWN);
-        slot_masks_remove(user_ptr as usize);
-    } else {
-        set_layout_state(header, GC_LAYOUT_SIDE_MASK);
-        slot_masks_insert_rebuild(user_ptr as usize, mask);
-    }
+    let any_pointer = (0..slot_count).any(|i| layout_pointer_bearing_bits(*slots.add(i)));
+    set_layout_state(
+        header,
+        if any_pointer {
+            GC_LAYOUT_UNKNOWN
+        } else {
+            GC_LAYOUT_POINTER_FREE
+        },
+    );
+    slot_masks_remove(user_ptr as usize);
+    debug_assert!(super::layout_tables::test_layout_table_empty_for_debug());
 }
 
 /// Layout for a NEWBORN whose slots were just bulk-initialized: the same
@@ -777,66 +678,17 @@ pub(crate) unsafe fn layout_init_from_slots(
         set_layout_state(header, GC_LAYOUT_POINTER_FREE);
         return false;
     }
-    // Small births (the common case: a handful of captures) classify with a
-    // register-resident mask and no heap `Vec`; the min-slots threshold is
-    // read once here, not per slot.
-    let mut any_pointer = false;
-    if slot_count <= 64 {
-        let mut bits: u64 = 0;
-        for i in 0..slot_count {
-            if layout_pointer_bearing_bits(*slots.add(i)) {
-                bits |= 1u64 << i;
-            }
-        }
-        if bits == 0 {
-            set_layout_state(header, GC_LAYOUT_POINTER_FREE);
-            return false;
-        }
-        any_pointer = true;
-        if super::layout_tables::immortal_layout_scope_active()
-            || slot_count < super::layout_tables::layout_mask_min_slots()
-        {
-            set_layout_state(header, GC_LAYOUT_UNKNOWN);
+    let any_pointer = (0..slot_count).any(|i| layout_pointer_bearing_bits(*slots.add(i)));
+    set_layout_state(
+        header,
+        if any_pointer {
+            GC_LAYOUT_UNKNOWN
         } else {
-            set_layout_state(header, GC_LAYOUT_SIDE_MASK);
-            slot_masks_insert_birth(user_ptr as usize, LayoutSlotMask::Inline(bits));
-        }
-        return any_pointer;
-    }
-    let mut mask = LayoutSlotMask::Heap(vec![0; slot_count.div_ceil(64)]);
-    for i in 0..slot_count {
-        if layout_pointer_bearing_bits(*slots.add(i)) {
-            mask.set_slot(i);
-            any_pointer = true;
-        }
-    }
-    if !any_pointer {
-        set_layout_state(header, GC_LAYOUT_POINTER_FREE);
-    } else if super::layout_tables::immortal_layout_scope_active()
-        || slot_count < super::layout_tables::layout_mask_min_slots()
-    {
-        set_layout_state(header, GC_LAYOUT_UNKNOWN);
-    } else {
-        set_layout_state(header, GC_LAYOUT_SIDE_MASK);
-        slot_masks_insert_birth(user_ptr as usize, mask);
-    }
+            GC_LAYOUT_POINTER_FREE
+        },
+    );
+    debug_assert!(super::layout_tables::test_layout_table_empty_for_debug());
     any_pointer
-}
-
-pub(crate) unsafe fn layout_rebuild_from_slots(
-    user_ptr: *mut u8,
-    slots: *const u64,
-    slot_count: usize,
-) {
-    layout_rebuild_from_slots_with_policy(user_ptr, slots, slot_count, false);
-}
-
-pub(crate) unsafe fn layout_rebuild_exact_from_slots(
-    user_ptr: *mut u8,
-    slots: *const u64,
-    slot_count: usize,
-) {
-    layout_rebuild_from_slots_with_policy(user_ptr, slots, slot_count, true);
 }
 
 pub(super) fn layout_visit_pointer_slots<F: FnMut(usize)>(

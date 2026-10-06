@@ -9,15 +9,8 @@ use crate::gc::verify::{
     ArraySlotEnumerationStats,
 };
 
-/// Build a mask-described array: one numeric element, then one pointer.
-///
-/// The numeric element first is load-bearing. An EMPTY array's first pointer
-/// append publishes `GC_LAYOUT_ALL_POINTERS` ("its sole element is the pointer
-/// we just classified"), and under that state every element is enumerated by
-/// construction — the omission this file is about cannot be expressed. With a
-/// numeric prefix the append takes the per-object mask instead, which is the
-/// state that can under-report.
-fn mask_described_array() -> *mut crate::array::ArrayHeader {
+/// Build a mixed array with a numeric prefix and a pointer element.
+fn mixed_described_array() -> *mut crate::array::ArrayHeader {
     let arr = crate::array::js_array_alloc(8);
     let arr = crate::array::js_array_push_f64(arr, 1.0);
     let child = young_leaf();
@@ -25,9 +18,8 @@ fn mask_described_array() -> *mut crate::array::ArrayHeader {
     let header = unsafe { header_from_user_ptr(arr as *const u8) };
     assert_eq!(
         unsafe { (*header)._reserved } & crate::gc::GC_LAYOUT_STATE_MASK,
-        crate::gc::GC_LAYOUT_SIDE_MASK,
-        "fixture must be described by a per-object pointer mask, or the \
-         sabotage below is not expressible and every verdict here is vacuous"
+        crate::gc::GC_LAYOUT_UNKNOWN,
+        "fixture must take the mixed tag scan"
     );
     arr
 }
@@ -48,7 +40,7 @@ fn array_slot_enumeration_reports_a_pointer_element_the_layout_omits() {
     let _isolation = copying_nursery_isolation_lock();
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
-    let arr = mask_described_array();
+    let arr = mixed_described_array();
 
     // The fixture itself must be clean, and must have LOOKED at something.
     let clean = unsafe { stats_for(arr) };
@@ -62,6 +54,13 @@ fn array_slot_enumeration_reports_a_pointer_element_the_layout_omits() {
         "no pointer element was examined, so the clean verdict above is vacuous"
     );
 
+    // Restore a true NUMBERS declaration, then bypass the transition on the
+    // next pointer store. An UNKNOWN parent would correctly enumerate an
+    // unnoted append, so retaining that parent would make sabotage vacuous.
+    crate::array::js_array_set_f64(arr, 1, 2.0);
+    unsafe {
+        set_layout_state(header_from_user_ptr(arr.cast()), GC_LAYOUT_POINTER_FREE);
+    }
     let planted = young_leaf();
     let index = unsafe { (*arr).length } as usize;
     unsafe {
@@ -94,7 +93,7 @@ fn array_slot_enumeration_walks_the_heap() {
     let _isolation = copying_nursery_isolation_lock();
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
 
-    let arr = mask_described_array();
+    let arr = mixed_described_array();
     // The walk skips unmarked nursery objects (they are this cycle's garbage,
     // and their elements are the previous tenant's bytes). Nothing has marked
     // anything here, so pin the fixture to make it a live subject.
@@ -231,8 +230,8 @@ fn interrupted_species_copy_describes_late_pointer(splice: bool) {
     let header = unsafe { header_from_user_ptr(destination as *const u8) };
     assert_eq!(
         unsafe { (*header)._reserved } & GC_LAYOUT_STATE_MASK,
-        GC_LAYOUT_SIDE_MASK,
-        "the original destination must have a per-object pointer mask"
+        GC_LAYOUT_UNKNOWN,
+        "the original destination must take the mixed tag scan"
     );
     let before = unsafe { stats_for(destination) };
     assert_eq!(before.checked_arrays, 1);

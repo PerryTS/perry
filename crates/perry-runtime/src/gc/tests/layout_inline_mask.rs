@@ -151,7 +151,7 @@ fn a_sabotaged_walk_is_caught_by_the_property() {
 }
 
 /// The walk is the arm a real collection takes: a young string reachable only
-/// through the HIGHEST masked slot of a rooted young array must survive a
+/// through the HIGHEST shape-selected slot of a rooted young object must survive a
 /// copying minor, and must not when that slot is dropped.
 fn top_masked_slot_child_survives(sabotaged: bool) -> bool {
     std::thread::spawn(move || {
@@ -161,22 +161,37 @@ fn top_masked_slot_child_survives(sabotaged: bool) -> bool {
         let _roots = ShadowAndGlobalRootResetGuard;
         const LEN: usize = 6;
         let top = LEN - 1;
-        let arr = crate::array::js_array_alloc_with_length(LEN as u32);
+        let obj = crate::object::js_object_alloc(0, LEN as u32);
         let child = young_leaf();
         // Numbers everywhere else, so the mask holds exactly the top slot: a
         // walk that loses its top bit loses this child and nothing else.
         for index in 0..top {
-            crate::array::js_array_set_f64(arr, index as u32, index as f64);
+            crate::object::js_object_set_field(
+                obj,
+                index as u32,
+                crate::value::JSValue::number(index as f64),
+            );
         }
-        crate::array::js_array_set_f64(arr, top as u32, f64::from_bits(string_bits(child)));
-        js_shadow_slot_set(0, ptr_bits(arr as usize));
+        crate::object::js_object_set_field(
+            obj,
+            top as u32,
+            crate::value::JSValue::from_bits(string_bits(child)),
+        );
+        unsafe {
+            restamp_with_rep(obj, f64_lanes(0..top as u32));
+        }
+        js_shadow_slot_set(0, ptr_bits(obj as usize));
 
-        // Premise: this array's payload really is an inline-masked selection
+        // Premise: this object's shape really produces an inline selection
         // whose only bit is the top slot. Without it the collection below takes
         // the general arm and proves nothing about the walk.
         let word = unsafe {
-            let header = header_from_user_ptr(arr as *const u8) as *mut GcHeader;
-            crate::gc::layout::gc_child_slots(header).take_inline_mask_word()
+            let header = header_from_user_ptr(obj as *const u8) as *mut GcHeader;
+            let mut slots = crate::gc::layout::gc_child_slots(header);
+            slots.take_prefix_child_slot();
+            slots.take_meta_child_slot();
+            slots.take_meta_child_slot2();
+            slots.take_inline_mask_word()
         };
         assert_eq!(
             word,
@@ -185,15 +200,20 @@ fn top_masked_slot_child_survives(sabotaged: bool) -> bool {
         );
 
         {
+            // Layout tracing selects the generic walk rather than the plain
+            // object plan, whose independent consistency check rejects this
+            // sabotage before it can strand the child.
+            begin_layout_scan_trace();
             let _sabotage =
                 sabotaged.then(|| inline_mask_sabotage::Guard::arm(inline_mask_sabotage::DROP_TOP));
             let _ = gc_collect_minor();
+            finish_layout_scan_trace();
         }
-        let arr_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-        assert_ne!(arr_after, arr as usize, "premise: the rooted array moved");
+        let obj_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+        assert_ne!(obj_after, obj as usize, "premise: the rooted object moved");
         let slot = unsafe {
-            *crate::array::gc_element_slot_range(arr_after as *mut crate::array::ArrayHeader)
-                .expect("the array must still enumerate its elements")
+            *crate::object::gc_field_slot_range(obj_after as *mut crate::object::ObjectHeader, None)
+                .expect("the object must still enumerate its fields")
                 .slot(top)
         };
         (slot & POINTER_MASK) as usize != child

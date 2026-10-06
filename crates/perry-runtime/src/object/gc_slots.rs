@@ -101,7 +101,7 @@ pub(crate) unsafe fn rebuild_array_layout_from_slots(arr: *mut ArrayHeader) {
     let len = (*arr).length as usize;
     let slots = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut u64;
     crate::gc::layout_rebuild_from_slots(arr as *mut u8, slots, len);
-    // The GC pointer bitmap is not the only per-array fact a direct slot write
+    // The GC payload kind is not the only per-array fact a direct slot write
     // invalidates. Every caller here reached this function because it set
     // `length` and `std::ptr::write`-d the element words itself, bypassing the
     // noting store helpers — and `js_array_alloc` births the array carrying

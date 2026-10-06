@@ -1101,47 +1101,6 @@ pub(in crate::gc) fn refresh_per_object_layouts_flag(touched_map_emptied: bool) 
 
 /// The one way to add a per-object pointer mask.
 #[inline]
-pub(in crate::gc) fn slot_masks_insert(user_ptr: usize, mask: LayoutSlotMask) -> bool {
-    mark_per_object_layouts_nonempty();
-    layout_addr_filter_add(user_ptr);
-    // Armed BEFORE the insert makes the entry findable (young-log rule 1).
-    let young = arm_young_layout_key(user_ptr);
-    let fresh = hot_layout_slot_masks()
-        .borrow_mut()
-        .insert(user_ptr, mask)
-        .is_none();
-    if fresh && young {
-        count_new_young_layout_record();
-    }
-    fresh
-}
-
-/// Insert-site wrappers for the diagnostic counter. Keeping them here avoids
-/// carrying provenance in `LayoutSlotMask`, whose size and hot-path shape must
-/// not change for an optional instrument.
-#[inline]
-pub(in crate::gc) fn slot_masks_insert_birth(user_ptr: usize, mask: LayoutSlotMask) {
-    if slot_masks_insert(user_ptr, mask) && crate::hot_diag::layout_on() {
-        crate::hot_diag::layout_note_mask_insert(crate::hot_diag::LayoutMaskInsertSite::Birth);
-    }
-}
-
-#[inline]
-pub(in crate::gc) fn slot_masks_insert_rebuild(user_ptr: usize, mask: LayoutSlotMask) {
-    if slot_masks_insert(user_ptr, mask) && crate::hot_diag::layout_on() {
-        crate::hot_diag::layout_note_mask_insert(crate::hot_diag::LayoutMaskInsertSite::Rebuild);
-    }
-}
-
-#[inline]
-pub(in crate::gc) fn layout_note_store_mask_insert() {
-    if crate::hot_diag::layout_on() {
-        crate::hot_diag::layout_note_mask_insert(crate::hot_diag::LayoutMaskInsertSite::Store);
-    }
-}
-
-/// Drop `user_ptr`'s per-object pointer mask (only).
-#[inline]
 pub(in crate::gc) fn slot_masks_remove(user_ptr: usize) {
     if !per_object_layouts_maybe_nonempty() || !layout_addr_filter_may_hold(user_ptr) {
         return;
@@ -1312,14 +1271,8 @@ pub(in crate::gc) unsafe fn layout_payload_slot_count(
     }
 }
 
-/// True when `user_ptr` is small enough that a tag-checked scan of every slot
-/// beats a per-object pointer mask. See [`layout_mask_min_slots`].
+/// S1 invariant: production paths never insert an address-keyed mask.
 #[inline]
-pub(in crate::gc) unsafe fn layout_prefers_scan_over_mask(
-    header: *const GcHeader,
-    user_ptr: usize,
-    slot_index: usize,
-) -> bool {
-    let min_slots = layout_mask_min_slots();
-    layout_payload_slot_count(header, user_ptr, slot_index) < min_slots
+pub(in crate::gc) fn test_layout_table_empty_for_debug() -> bool {
+    hot_layout_slot_masks().borrow().is_empty()
 }

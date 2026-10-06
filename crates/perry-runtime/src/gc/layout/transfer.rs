@@ -47,7 +47,7 @@
 use super::*;
 use crate::gc::layout_tables::per_object_layouts_may_hold_either;
 
-/// Move the address-keyed layout records of a relocated object.
+/// Rekey residual prototypes and element-shape proofs after relocation.
 ///
 /// # Safety
 ///

@@ -786,7 +786,7 @@ mod tests {
         let spill = crate::object::test_spill_buffer_addr(owner as usize);
         assert_eq!(
             crate::gc::test_layout_pointer_slot_count(spill, slot + 1),
-            Some(1)
+            None
         );
 
         let child_b = js_object_alloc(0x6B45_5A15, 0);
@@ -797,11 +797,11 @@ mod tests {
         assert_eq!(
             TEST_LAYOUT_NOTE_SLOT_CALLS.with(Cell::get),
             0,
-            "a pointer overwrite must preserve the existing mask bit"
+            "a pointer overwrite must preserve the mixed kind"
         );
         assert_eq!(
             crate::gc::test_layout_pointer_slot_count(spill, slot + 1),
-            Some(1)
+            None
         );
 
         TEST_LAYOUT_NOTE_SLOT_CALLS.with(|calls| calls.set(0));
@@ -809,11 +809,11 @@ mod tests {
         assert_eq!(
             TEST_LAYOUT_NOTE_SLOT_CALLS.with(Cell::get),
             1,
-            "a pointer-to-scalar transition must clear the slot layout"
+            "a pointer-to-scalar transition must enter the layout hook"
         );
         assert_eq!(
             crate::gc::test_layout_pointer_slot_count(spill, slot + 1),
-            Some(0)
+            None
         );
     }
 
