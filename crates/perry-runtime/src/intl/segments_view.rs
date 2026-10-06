@@ -113,7 +113,7 @@ fn counters() -> [u64; 4] {
         OPENS.load(Ordering::Relaxed),
         DECLINE_NOT_STRING.load(Ordering::Relaxed),
         NEXTS.load(Ordering::Relaxed),
-        crate::object::regex_proto_thunks::REGEXP_PROTOTYPE_TEST_WALKS.load(Ordering::Relaxed),
+        crate::object::method_site::read_holder::read_holder_stats().0,
     ]
 }
 
@@ -889,11 +889,17 @@ mod view_mode_tests {
     #[cfg(feature = "regex-engine")]
     #[test]
     fn canonicality_proof_walks_once_per_realm_not_once_per_call() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+        "intl::segments_view::view_mode_tests::canonicality_proof_walks_once_per_realm_not_once_per_call",
+    ) {
+        return;
+    }
         let cursor = js_segments_view_open(grapheme_segmenter(), js_string("abcdef"));
         assert!(cursor != 0.0);
         let re = crate::regex::js_regexp_construct(js_string("[a-z]"), js_string(""));
         let re_v = f64::from_bits(JSValue::pointer(re as *const u8).bits());
         assert_eq!(js_segments_view_next(cursor), 1.0);
+        assert!(!is_undefined(js_segments_view_regexp_test(cursor, re_v)));
         let before = counters()[3];
         for _ in 0..50 {
             let v = js_segments_view_regexp_test(cursor, re_v);
@@ -928,6 +934,11 @@ mod view_mode_tests {
     #[cfg(feature = "regex-engine")]
     #[test]
     fn a_patched_prototype_test_declines_on_the_next_call() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+        "intl::segments_view::view_mode_tests::a_patched_prototype_test_declines_on_the_next_call",
+    ) {
+        return;
+    }
         let cursor = js_segments_view_open(grapheme_segmenter(), js_string("ab"));
         assert_eq!(js_segments_view_next(cursor), 1.0);
         let re = crate::regex::js_regexp_construct(js_string("[a-z]"), js_string(""));
@@ -938,7 +949,8 @@ mod view_mode_tests {
         );
 
         // Replace `RegExp.prototype.test` the way a program would.
-        let proto_ptr = crate::object::regex_proto_thunks::test_recorded_regexp_prototype();
+        let proto_ptr =
+            crate::value::js_nanbox_get_pointer(crate::object::builtin_prototype_value("RegExp"));
         assert!(proto_ptr != 0, "the site must have been recorded");
         let proto = proto_ptr as *mut ObjectHeader;
         let key = crate::string::js_string_from_bytes(b"test".as_ptr(), 4);
@@ -973,6 +985,11 @@ mod view_mode_tests {
     #[cfg(feature = "regex-engine")]
     #[test]
     fn an_accessor_installed_after_recording_makes_the_next_call_decline() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+        "intl::segments_view::view_mode_tests::an_accessor_installed_after_recording_makes_the_next_call_decline",
+    ) {
+        return;
+    }
         let cursor = js_segments_view_open(grapheme_segmenter(), js_string("ab"));
         assert_eq!(js_segments_view_next(cursor), 1.0);
         let re = crate::regex::js_regexp_construct(js_string("[a-z]"), js_string(""));
@@ -982,7 +999,8 @@ mod view_mode_tests {
             "premise: the recorded data property is initially canonical"
         );
 
-        let proto_ptr = crate::object::regex_proto_thunks::test_recorded_regexp_prototype();
+        let proto_ptr =
+            crate::value::js_nanbox_get_pointer(crate::object::builtin_prototype_value("RegExp"));
         assert!(proto_ptr != 0, "the canonical site must have been recorded");
         let proto = proto_ptr as *mut ObjectHeader;
         let before = crate::object::js_object_get_field_by_name(
@@ -1027,6 +1045,11 @@ mod view_mode_tests {
     #[cfg(feature = "regex-engine")]
     #[test]
     fn regexp_test_matches_the_materialised_call_and_declines_when_stateful() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+        "intl::segments_view::view_mode_tests::regexp_test_matches_the_materialised_call_and_declines_when_stateful",
+    ) {
+        return;
+    }
         let cursor = js_segments_view_open(grapheme_segmenter(), js_string("a1"));
         assert_eq!(js_segments_view_next(cursor), 1.0);
 
@@ -1058,6 +1081,11 @@ mod view_mode_tests {
     #[cfg(feature = "regex-engine")]
     #[test]
     fn bounded_regex_test_does_not_repeat_entry_pointer_validation() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+        "intl::segments_view::view_mode_tests::bounded_regex_test_does_not_repeat_entry_pointer_validation",
+    ) {
+        return;
+    }
         let cursor = js_segments_view_open(grapheme_segmenter(), js_string("a"));
         assert_eq!(js_segments_view_next(cursor), 1.0);
         let re = crate::regex::js_regexp_construct(js_string("a"), js_string(""));
@@ -1082,6 +1110,11 @@ mod view_mode_tests {
     #[cfg(feature = "regex-engine")]
     #[test]
     fn regexp_test_anchors_are_segment_local() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "intl::segments_view::view_mode_tests::regexp_test_anchors_are_segment_local",
+        ) {
+            return;
+        }
         let cursor = js_segments_view_open(grapheme_segmenter(), js_string("ab"));
         let anchored = crate::regex::js_regexp_construct(js_string("^b$"), js_string(""));
         let v = f64::from_bits(JSValue::pointer(anchored as *const u8).bits());
@@ -1103,6 +1136,11 @@ mod view_mode_tests {
     #[cfg(feature = "regex-engine")]
     #[test]
     fn regexp_view_lookbehind_and_output_are_segment_local() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+        "intl::segments_view::view_mode_tests::regexp_view_lookbehind_and_output_are_segment_local",
+    ) {
+        return;
+    }
         let scope = crate::gc::RuntimeHandleScope::new();
         let cursor =
             scope.root_nanbox_f64(js_segments_view_open(grapheme_segmenter(), js_string("ab")));
@@ -1138,6 +1176,11 @@ mod view_mode_tests {
     #[cfg(feature = "regex-engine")]
     #[test]
     fn regexp_view_declines_own_exec_and_observable_last_index() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+        "intl::segments_view::view_mode_tests::regexp_view_declines_own_exec_and_observable_last_index",
+    ) {
+        return;
+    }
         let scope = crate::gc::RuntimeHandleScope::new();
         let cursor =
             scope.root_nanbox_f64(js_segments_view_open(grapheme_segmenter(), js_string("ab")));

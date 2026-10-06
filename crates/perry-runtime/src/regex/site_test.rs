@@ -164,9 +164,8 @@ fn canonical_rooted_header(header: *mut RegExpHeader) -> Option<*mut RegExpHeade
     let scope = crate::gc::RuntimeHandleScope::new();
     let rooted = scope.root_raw_mut_ptr(header);
     let value = f64::from_bits(crate::value::JSValue::pointer(header.cast::<u8>()).bits());
-    let (canonical, header) = rooted.across_mut::<RegExpHeader, _>(|| {
-        crate::object::regex_proto_thunks::regexp_prototype_test_is_canonical(value)
-    });
+    let (canonical, header) =
+        rooted.across_mut::<RegExpHeader, _>(|| crate::object::regex_read_sites::test(value));
     if !canonical {
         return None;
     }
@@ -583,6 +582,11 @@ mod tests {
 
     #[test]
     fn direct_global_site_allocates_one_header_and_resets_last_index() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+        "regex::site_test::tests::direct_global_site_allocates_one_header_and_resets_last_index",
+    ) {
+        return;
+    }
         let _lock = crate::gc::global_side_table_test_lock();
         test_reset();
         ensure_regexp_builtins();
@@ -609,6 +613,11 @@ mod tests {
 
     #[test]
     fn direct_sticky_site_starts_each_evaluation_at_zero() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "regex::site_test::tests::direct_sticky_site_starts_each_evaluation_at_zero",
+        ) {
+            return;
+        }
         let _lock = crate::gc::global_side_table_test_lock();
         test_reset();
         ensure_regexp_builtins();
@@ -700,6 +709,11 @@ mod tests {
 
     #[test]
     fn direct_factory_site_reuses_only_the_recorded_callee() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "regex::site_test::tests::direct_factory_site_reuses_only_the_recorded_callee",
+        ) {
+            return;
+        }
         let _lock = crate::gc::global_side_table_test_lock();
         test_reset();
         ensure_regexp_builtins();
@@ -771,6 +785,11 @@ mod tests {
 
     #[test]
     fn namespace_member_factory_site_is_covered() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "regex::site_test::tests::namespace_member_factory_site_is_covered",
+        ) {
+            return;
+        }
         let _lock = crate::gc::global_side_table_test_lock();
         test_reset();
         ensure_regexp_builtins();
@@ -822,6 +841,11 @@ mod tests {
 
     #[test]
     fn patched_regexp_prototype_test_declines_on_the_next_call() {
+        if !crate::object::method_site::run_with_fresh_worker_gate(
+            "regex::site_test::tests::patched_regexp_prototype_test_declines_on_the_next_call",
+        ) {
+            return;
+        }
         let _lock = crate::gc::global_side_table_test_lock();
         test_reset();
         ensure_regexp_builtins();

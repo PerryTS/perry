@@ -109,6 +109,11 @@ fn js_replacement_expands_special_patterns() {
 /// case returns `<a,undefined><a,b><a,b>` instead of the correct answer.
 #[test]
 fn direct_replace_callback_does_not_carry_a_capture_between_matches() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "regex::tests::direct_replace_callback_does_not_carry_a_capture_between_matches",
+    ) {
+        return;
+    }
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
     let pattern = scope.root_string_ptr(make_string("(a)|(b)"));

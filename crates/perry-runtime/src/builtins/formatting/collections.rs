@@ -192,7 +192,7 @@ unsafe fn read_string_header(s: *const StringHeader) -> String {
 /// `crate::regex::is_registered_regex`).
 pub(super) unsafe fn format_regexp(re: *const crate::regex::RegExpHeader) -> String {
     let source = read_string_header(crate::regex::js_regexp_get_source(re));
-    let flags = read_string_header(crate::regex::js_regexp_get_flags(re));
+    let flags = read_string_header(crate::regex::original_flags(re));
     let source = if source.is_empty() {
         "(?:)".to_string()
     } else {

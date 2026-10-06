@@ -315,7 +315,7 @@ pub(crate) use has_property::{
 };
 pub use has_property::{js_in_operator, js_object_has_property};
 pub use has_property_ic::js_in_operator_presence_ic;
-#[cfg(all(test, feature = "regex-engine"))]
+#[cfg(feature = "regex-engine")]
 pub(crate) use ic_miss::intrinsic_private_add;
 #[cfg(feature = "regex-engine")]
 pub(crate) use ic_miss::intrinsic_private_set;

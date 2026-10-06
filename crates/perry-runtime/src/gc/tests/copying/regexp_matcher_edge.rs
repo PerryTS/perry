@@ -85,7 +85,7 @@ fn matcher_edge_moves_with(spilled: bool) {
         let source = crate::regex::js_regexp_get_source(addr as *const _);
         assert_eq!(crate::regex::string_as_str(source), r"edge\/source");
         let addr = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-        let flags = crate::regex::js_regexp_get_flags(addr as *const _);
+        let flags = crate::regex::original_flags(addr as *const _);
         assert_eq!(crate::regex::string_as_str(flags), "gy");
     };
     check(moved);

@@ -122,7 +122,8 @@ unsafe fn try_data_lookup_key(
     // Descriptor summaries use the same byte hash. Invalid UTF-8 stays on
     // the WTF-8-aware slow path; no String is allocated for ordinary keys.
     std::str::from_utf8(key).ok()?;
-    let accessor_bit = 1u64 << (super::key_bytes_hash(key.as_ptr(), key.len()) & 63);
+    let key_hash = super::key_bytes_hash(key.as_ptr(), key.len());
+    let accessor_bit = 1u64 << (key_hash & 63);
     let mut object = receiver.as_pointer::<ObjectHeader>();
     let mut inherited = false;
     for _ in 0..32 {
@@ -205,9 +206,13 @@ unsafe fn try_data_lookup_key(
                 // These facts come from the live owner proof without another
                 // shape lookup or allocation.
                 let slot = if summary & super::key_attrs::SUMMARY_PRIVATE == 0 {
-                    super::keys_find_slot_by_bytes_resolved(keys, key_count, key)
+                    super::keys_lookup::keys_find_slot_by_bytes_resolved_hashed(
+                        keys, key_count, key, key_hash,
+                    )
                 } else {
-                    super::keys_find_property_slot_by_bytes_resolved(keys, key_count, key)
+                    super::keys_lookup::keys_find_property_slot_by_bytes_resolved_hashed(
+                        keys, key_count, key, key_hash,
+                    )
                 };
                 if let Some(slot) = slot {
                     let value = super::field_get_set::object_field_at_with_live(object, slot, live);

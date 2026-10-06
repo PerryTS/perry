@@ -171,6 +171,36 @@ pub(crate) unsafe fn keys_find_slot_by_bytes_resolved(
         // unresolved entry so its behaviour is bit-for-bit what it was.
         return keys_find_slot_by_bytes(keys, key_count, key_bytes);
     }
+    keys_find_slot_by_bytes_dense_resolved(keys, key_count, key_bytes)
+}
+
+/// The same descriptor-owned lookup when its caller has already computed
+/// the byte hash (for example, for an accessor Bloom check).
+///
+/// # Safety
+/// As keys_array_dense_slots_resolved; hash is key_bytes_hash(key_bytes).
+pub(crate) unsafe fn keys_find_slot_by_bytes_resolved_hashed(
+    keys: *const crate::array::ArrayHeader,
+    key_count: u32,
+    key_bytes: &[u8],
+    hash: u64,
+) -> Option<u32> {
+    if key_count >= KEYS_INDEX_THRESHOLD {
+        match shapes::shape_slot_lookup_verdict(keys, key_bytes, hash, key_count, false) {
+            shapes::KeysIndexVerdict::Found(slot) => return Some(slot),
+            shapes::KeysIndexVerdict::Absent => return None,
+            shapes::KeysIndexVerdict::Unindexed => {}
+        }
+    }
+    keys_find_slot_by_bytes_dense_resolved(keys, key_count, key_bytes)
+}
+
+#[inline]
+unsafe fn keys_find_slot_by_bytes_dense_resolved(
+    keys: *const crate::array::ArrayHeader,
+    key_count: u32,
+    key_bytes: &[u8],
+) -> Option<u32> {
     let (slots, slot_len) = keys_array_dense_slots_resolved(keys);
     if slots.is_null() {
         return None;
@@ -437,13 +467,18 @@ pub(crate) unsafe fn keys_find_property_slot_by_key_ptr(
     )
 }
 
-#[inline]
-pub(crate) unsafe fn keys_find_property_slot_by_bytes_resolved(
+// A caller already hashing for an accessor Bloom check need not hash again
+// for the same shape's wide key index. Namespace filtering still inspects
+// the selected live key entry, including same-spelling private/public keys.
+/// # Safety
+/// As keys_array_dense_slots_resolved; hash is key_bytes_hash(bytes).
+pub(crate) unsafe fn keys_find_property_slot_by_bytes_resolved_hashed(
     keys: *const crate::array::ArrayHeader,
     count: u32,
     bytes: &[u8],
+    hash: u64,
 ) -> Option<u32> {
-    let slot = keys_find_slot_by_bytes_resolved(keys, count, bytes)?;
+    let slot = keys_find_slot_by_bytes_resolved_hashed(keys, count, bytes, hash)?;
     if !super::key_attrs::entry_is_private(super::key_attrs::keys_entry(keys, slot)) {
         return Some(slot);
     }

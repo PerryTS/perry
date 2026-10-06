@@ -320,3 +320,38 @@ fn class_statics_buffers_and_mapped_arguments_use_the_slow_path() {
         differential(boxed(arguments), "0", 79.0);
     }
 }
+
+#[test]
+fn wide_private_shape_keeps_public_and_private_names_separate() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let object = object("visible", 7.0);
+    for i in 0..crate::object::KEYS_INDEX_THRESHOLD {
+        js_object_set_field_by_name(object, key(&format!("field{i}")), i as f64);
+    }
+    unsafe {
+        crate::object::key_attrs::apply_edits(
+            object,
+            &[crate::object::key_attrs::AttrsEdit::Private(b"hidden")],
+        );
+        let keys = crate::object::object_keys(object);
+        // Exercise both the unindexed fallback and the complete shape index.
+        for build in [false, true] {
+            if build {
+                let hash = super::super::key_bytes_hash(b"visible".as_ptr(), 7);
+                let _ = shapes::shape_slot_lookup_verdict(
+                    keys.arr(),
+                    b"visible",
+                    hash,
+                    keys.count(),
+                    true,
+                );
+            }
+            differential(boxed(object), "visible", 7.0);
+            differential(
+                boxed(object),
+                "hidden",
+                f64::from_bits(crate::value::TAG_UNDEFINED),
+            );
+        }
+    }
+}

@@ -277,9 +277,8 @@ pub struct RegexDiag {
     pub site_test_declined_patched_prototype: u64,
     pub site_test_declined_callee_mismatch: u64,
     pub site_test_declined_non_literal: u64,
-    /// `regex_canonical` shape proof (`exec`, then `method`/`split` on top of
-    /// it): admitted vs declined, and how often the proof was recomputed
-    /// because `RegExp.prototype`'s shape stamp moved.
+    /// Runtime read-site admission for exec, symbol methods and species.
+    /// The legacy refresh field stays zero; there is no aggregate proof.
     pub proof_exec_hit: u64,
     pub proof_exec_miss: u64,
     pub proof_exec_refresh: u64,
@@ -287,12 +286,11 @@ pub struct RegexDiag {
     pub proof_method_miss: u64,
     pub proof_split_hit: u64,
     pub proof_split_miss: u64,
-    /// `regexp_prototype_test_is_canonical` (the recorded
-    /// `REGEXP_PROTOTYPE_TEST_SITE` slot compare): admitted vs declined.
+    /// Runtime test read-site admission.
     pub proto_test_hit: u64,
     pub proto_test_miss: u64,
-    /// `flag_accessors_canonical`: answered from the epoch-keyed cache, or
-    /// recomputed (nine descriptor lookups), and the verdicts of both.
+    /// Runtime flag-getter lane checks. Legacy cache/recompute fields stay
+    /// zero; each admission reads all current lanes through the sites.
     pub flag_accessors_cached: u64,
     pub flag_accessors_recomputed: u64,
     pub flag_accessors_canonical_true: u64,

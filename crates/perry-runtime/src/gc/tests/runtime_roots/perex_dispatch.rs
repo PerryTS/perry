@@ -504,6 +504,11 @@ fn perex_dispatch_proxy_apply_getter_and_nested_trap_survive_movement() {
 
 #[test]
 fn perex_dispatch_skips_the_exec_lookup_only_when_nothing_can_observe_it() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "gc::tests::runtime_roots::perex_dispatch::perex_dispatch_skips_the_exec_lookup_only_when_nothing_can_observe_it",
+    ) {
+        return;
+    }
     // The guard holds the global side-table lock, which the prototype edits
     // below need; taking it again here would deadlock.
     let _guard = CopyingNurseryTestGuard::new(0);

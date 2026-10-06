@@ -1271,6 +1271,11 @@ fn forward_splits() -> usize {
 
 #[test]
 fn perex_split_short_ascii_captures_are_inline_and_survive_collection() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "gc::tests::runtime_roots::perex_split::perex_split_short_ascii_captures_are_inline_and_survive_collection",
+    ) {
+        return;
+    }
     let _guard = CopyingNurseryTestGuard::new(0);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -1311,6 +1316,11 @@ fn perex_split_short_ascii_captures_are_inline_and_survive_collection() {
 /// the sticky algorithm by hand, not by observing either implementation.
 #[test]
 fn perex_split_forward_search_matches_the_sticky_specification() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "gc::tests::runtime_roots::perex_split::perex_split_forward_search_matches_the_sticky_specification",
+    ) {
+        return;
+    }
     let _guard = CopyingNurseryTestGuard::new(0);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -1487,6 +1497,11 @@ fn forward_split_work(repeats: usize) -> usize {
 /// the forward split's work proportional to the input.
 #[test]
 fn perex_split_forward_search_resumes_each_search_on_non_ascii_input() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "gc::tests::runtime_roots::perex_split::perex_split_forward_search_resumes_each_search_on_non_ascii_input",
+    ) {
+        return;
+    }
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::perex_public::register_host_roots();

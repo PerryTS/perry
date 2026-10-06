@@ -53,6 +53,9 @@ pub(super) fn is_regexp(value: &RuntimeHandle<'_>) -> Result<bool, EngineError> 
 }
 
 pub(crate) fn get(owner: &RuntimeHandle<'_>, name: &[u8]) -> Result<f64, EngineError> {
+    if let Some(result) = crate::object::regex_read_sites::read_named(owner, name) {
+        return result;
+    }
     api::caught(|| {
         let key = crate::string::canonical_key(name);
         let value = owner.get_nanbox_f64();
@@ -99,36 +102,6 @@ thread_local! {
     pub(crate) static EXEC_LOOKUPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-crate::perry_thread_local! {
-    static EXEC_READ: crate::object::field_get_set::runtime_read_site::RuntimeReadSite =
-        const { crate::object::field_get_set::runtime_read_site::RuntimeReadSite::new() };
-}
-
-/// A non-observable hit of the generic read site. Accessor entries decline
-/// the leaf front, so a miss cannot run a getter before the actual Get.
-/// Only a receiver admitted by exec_proof primes this site: a hit on its
-/// immutable shape also proves that the private matcher entry still exists.
-fn cached_builtin_exec(receiver: f64) -> bool {
-    let Some(object) = crate::object::field_get_set::runtime_read_site::object_receiver(receiver)
-    else {
-        return false;
-    };
-    EXEC_READ
-        .with(|site| unsafe { site.read_leaf(object) })
-        .is_some_and(crate::object::regex_proto_thunks::is_builtin_regexp_exec)
-}
-
-/// Prime at the actual RegExpExec Get point after the retained proof has
-/// established a builtin data property. Roots belong to the operation; a
-/// first atom/cache allocation may collect. S3 removes the cold proof.
-fn prime_builtin_exec(receiver: &RuntimeHandle<'_>) -> Result<(), EngineError> {
-    api::caught(|| {
-        let object =
-            crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut RegExpHeader;
-        EXEC_READ.with(|site| unsafe { site.read(object, b"exec") });
-    })
-}
-
 /// RegExpExec with operation-owned limits. Lookup happens on every iteration;
 /// a callback may replace exec or recompile the receiver before the next one.
 /// Only the known builtin may omit materialization for a boolean test.
@@ -144,41 +117,17 @@ pub(crate) fn execute(
     reuse: Option<&api::Reuse<'_, '_>>,
 ) -> Result<Option<ExecResult>, EngineError> {
     host::charge(budget, 1)?;
-    if cached_builtin_exec(receiver.get_nanbox_f64()) {
-        if crate::hot_diag::regex_on() {
-            crate::hot_diag::regex_counters(|d| d.perex_canonical_execs += 1);
-        }
-        return builtin(receiver, input, materialize, budget, memory, poll, reuse);
-    }
-    if crate::object::regex_canonical::exec(receiver.get_nanbox_f64()) {
-        prime_builtin_exec(receiver)?;
-        if crate::hot_diag::regex_on() {
-            crate::hot_diag::regex_counters(|d| d.perex_canonical_execs += 1);
-        }
+    if crate::object::regex_read_sites::exec_is_builtin(receiver.get_nanbox_f64()) {
         return builtin(receiver, input, materialize, budget, memory, poll, reuse);
     }
     require_object(receiver.get_nanbox_f64())?;
     input.with_mut_ptr::<StringHeader, _>(|input| crate::string::js_string_addref(input));
     let scope = RuntimeHandleScope::new();
-    // A RegExp whose own properties, prototype and `exec` are the untouched
-    // builtins reaches the builtin exec without running any code, so the Get
-    // is unobservable and is skipped. Through the generic property path it was
-    // about half of every `test` call (#10166). Anything else takes the Get.
-    let receiver_ptr =
-        crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut RegExpHeader;
-    let known_builtin =
-        crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((receiver_ptr) as i64))
-            .is_some()
-            && crate::object::regex_proto_thunks::regexp_view_uses_builtin(
-                receiver.get_nanbox_f64(),
-            );
-    if !known_builtin {
-        #[cfg(test)]
-        EXEC_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
-        let method = scope.root_nanbox_f64(get(receiver, b"exec")?);
-        if let Some(result) = execute_override(&scope, &method, receiver, input)? {
-            return Ok(result);
-        }
+    #[cfg(test)]
+    EXEC_LOOKUPS.with(|lookups| lookups.set(lookups.get() + 1));
+    let method = scope.root_nanbox_f64(get(receiver, b"exec")?);
+    if let Some(result) = execute_override(&scope, &method, receiver, input)? {
+        return Ok(result);
     }
     let re = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *mut RegExpHeader;
     if !crate::regex::regexp_data_of(crate::value::js_nanbox_pointer((re) as i64)).is_some() {
@@ -259,6 +208,9 @@ pub(crate) fn to_string(value: &RuntimeHandle<'_>) -> Result<*mut StringHeader, 
 }
 
 pub(crate) fn get_symbol(owner: &RuntimeHandle<'_>, name: &str) -> Result<f64, EngineError> {
+    if let Some(result) = crate::object::regex_read_sites::read_symbol_data(owner, name) {
+        return Ok(result);
+    }
     api::caught(|| {
         let key = crate::symbol::well_known_symbol(name);
         let value = owner.get_nanbox_f64();

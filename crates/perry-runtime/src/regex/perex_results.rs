@@ -35,6 +35,8 @@ pub(super) fn materialize(
     } else {
         crate::array::InlineKeySet::ExecResult
     };
+    #[cfg(test)]
+    super::perex_api::before_result_alloc();
     let result =
         crate::array::js_array_alloc_named_props_reserved(captures.len() as u32, result_keys);
     let result = scope.root_raw_mut_ptr(result);

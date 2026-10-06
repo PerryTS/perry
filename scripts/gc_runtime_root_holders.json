@@ -1014,18 +1014,6 @@
       "why": "Megamorphic property-read stub cache, the read twin of WRITE_STUB: 2-way ways of (shape_token, key_bits, slot) plain u64s. The token is a shape id and the slot an index; key_bits are content-derived by construction, because read_stub_key_bits returns short_ascii_sso_bits(key) \u2014 the key's characters packed inline \u2014 and yields None for any key that would otherwise be stored under a pointer. No way holds a heap address, so nothing here keeps an object alive, and a stale entry cannot hit: receiver_shape_token returns None for a receiver with no live shape, and the token identifies the exact key set and order, so a shape change yields a different token."
     },
     {
-      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
-      "name": "FLAG_ACCESSORS_CANONICAL",
-      "verdict": "not_a_gc_pointer",
-      "why": "Cell<(u64, bool)> memo for #10518: the prop_plan semantic epoch at which RegExp.prototype's nine flag accessors were last checked, and whether all nine were still the builtins. An epoch counter and a boolean, never an address; recomputed when the epoch moves."
-    },
-    {
-      "file": "crates/perry-runtime/src/object/regex_proto_thunks.rs",
-      "name": "REGEXP_PROTOTYPE_TEST_WALKS",
-      "verdict": "not_a_gc_pointer",
-      "why": "View-mode diagnostic tally of install-time RegExp.prototype.test walks. A plain AtomicU64 incremented once by record_canonical_test_site and read as a count by tests; it never stores an address or NaN-boxed value. The actual prototype and closure roots live together in REGEXP_PROTOTYPE_TEST_SITE and are visited by scan_canonical_test_site_roots_mut."
-    },
-    {
       "file": "crates/perry-runtime/src/object/shapes.rs",
       "name": "SHAPE_YOUNG_LOG_SUPPRESSED",
       "verdict": "not_a_gc_pointer",
@@ -2915,6 +2903,18 @@
       "why": "Test-only AtomicUsize counting getter invocations in the companion buffer metadata change. It stores an integer count and no heap address."
     },
     {
+      "file": "crates/perry-runtime/src/regex/perex_api.rs",
+      "name": "BEFORE_RESULT_ALLOC",
+      "verdict": "not_a_gc_pointer",
+      "why": "Test-only Cell<Option<fn()>> containing a native function pointer with no closure environment. The one-shot allocation-point witness takes it before invocation, and its test guard restores the prior callback on unwind. It holds no managed value or address; production builds contain neither the holder nor the hook."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/instance.rs",
+      "name": "PROTOTYPE_READ",
+      "verdict": "not_a_gc_pointer",
+      "why": "IntrinsicPrivateReadSite stores a Rust-static key spelling and RuntimeReadSite's scalar ShapeId/slot word. Its private read only uses read_own_inline and the namespace-aware private miss; it never primes a holder PIC. The actual intrinsic prototype is an ordinary private field of the realm global and is traced and relocated with that object. This site retains no managed pointer."
+    },
+    {
       "file": "crates/perry-runtime/src/regex.rs",
       "name": "LAST_INDEX_READ",
       "verdict": "covered_elsewhere",
@@ -2922,11 +2922,18 @@
       "why": "A RuntimeReadSite is two atomics: the compact MRU word (ShapeId low, slot index high, no heap address) and a pointer to a PIC-arena PicCache that is never freed. The only GC pointers a site can come to hold are the holder entry words inside that PicCache; read_holder::prime_read_holder registers the cache in HOLDER_SITES and scan_read_holder_roots_mut visits each entry as a strong, rewritable root (primary agent only, until a worker starts, after which entry_answer declines before touching an entry word). See runtime_read_site.rs module docs."
     },
     {
-      "file": "crates/perry-runtime/src/regex/perex_dispatch.rs",
+      "file": "crates/perry-runtime/src/object/regex_read_sites.rs",
+      "name": "SYMBOL_READS",
+      "verdict": "covered_elsewhere",
+      "scanner": "perry-runtime's read-holder scanner (object::method_site::read_holder::scan_read_holder_roots_mut), via HOLDER_SITES",
+      "why": "An array of RuntimeReadSite pairs, each containing a scalar ShapeId/slot word and a never-freed native PIC-arena pointer. Managed holder and accessor-pair edges reside only in those PICs. read_holder::publish, used by both normal reads and non-observable probes, registers every populated PIC in HOLDER_SITES. scan_read_holder_roots_mut traces and rewrites those edges. Worker admission is gated before accessing holder entries, as on emitted read sites. No separate RegExp heap-pointer cache exists."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/regex_read_sites.rs",
       "name": "EXEC_READ",
       "verdict": "covered_elsewhere",
       "scanner": "perry-runtime's read-holder scanner (object::method_site::read_holder::scan_read_holder_roots_mut), via HOLDER_SITES",
-      "why": "A RuntimeReadSite is two atomics: the compact MRU word (ShapeId low, slot index high, no heap address) and a pointer to a PIC-arena PicCache that is never freed. The only GC pointers a site can come to hold are the holder entry words inside that PicCache; read_holder::prime_read_holder registers the cache in HOLDER_SITES and scan_read_holder_roots_mut visits each entry as a strong, rewritable root (primary agent only, until a worker starts, after which entry_answer declines before touching an entry word). See runtime_read_site.rs module docs."
+      "why": "A RuntimeReadSite pair containing a scalar ShapeId/slot word and a never-freed native PIC-arena pointer. Managed holder and accessor-pair edges reside only in those PICs. read_holder::publish, used by both normal reads and non-observable probes, registers every populated PIC in HOLDER_SITES. scan_read_holder_roots_mut traces and rewrites those edges. Worker admission is gated before accessing holder entries, as on emitted read sites. No separate RegExp heap-pointer cache exists."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

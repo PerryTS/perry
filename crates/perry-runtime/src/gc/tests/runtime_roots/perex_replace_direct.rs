@@ -78,6 +78,11 @@ type Case = (
 
 #[test]
 fn direct_templates_match_the_ordinary_loop() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "gc::tests::runtime_roots::perex_replace_direct::direct_templates_match_the_ordinary_loop",
+    ) {
+        return;
+    }
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::perex_public::register_host_roots();
@@ -150,6 +155,11 @@ extern "C" fn describe(
 /// `Pieces::new_native` unconditionally fails the second with 1.
 #[test]
 fn a_template_replacement_keeps_its_pieces_native() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "gc::tests::runtime_roots::perex_replace_direct::a_template_replacement_keeps_its_pieces_native",
+    ) {
+        return;
+    }
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::perex_public::register_host_roots();
@@ -183,6 +193,11 @@ fn a_template_replacement_keeps_its_pieces_native() {
 
 #[test]
 fn direct_callbacks_receive_the_ordinary_arguments() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "gc::tests::runtime_roots::perex_replace_direct::direct_callbacks_receive_the_ordinary_arguments",
+    ) {
+        return;
+    }
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::perex_public::register_host_roots();
@@ -224,6 +239,11 @@ extern "C" fn never_exec(
 
 #[test]
 fn a_replacer_cannot_change_which_matches_are_replaced() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "gc::tests::runtime_roots::perex_replace_direct::a_replacer_cannot_change_which_matches_are_replaced",
+    ) {
+        return;
+    }
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::perex_public::register_host_roots();
@@ -277,6 +297,11 @@ fn an_own_exec_or_named_groups_keep_the_ordinary_loop() {
 
 #[test]
 fn direct_match_spans_are_not_capped_by_the_scratch_limit() {
+    if !crate::object::method_site::run_with_fresh_worker_gate(
+        "gc::tests::runtime_roots::perex_replace_direct::direct_match_spans_are_not_capped_by_the_scratch_limit",
+    ) {
+        return;
+    }
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     super::perex_public::register_host_roots();
     // 63 groups: each match stores 64 span pairs, 128 entries. One match more

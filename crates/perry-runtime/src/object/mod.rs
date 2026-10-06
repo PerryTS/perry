@@ -253,9 +253,9 @@ mod reserved_floor;
 pub(crate) use reserved_floor::{
     ensure_reserved_floor_keys, reserved_slot_floor_for_class_id, reserved_slot_floor_for_object,
 };
-#[cfg(feature = "regex-engine")]
-pub(crate) mod regex_canonical;
 pub(crate) mod regex_proto_thunks;
+#[cfg(feature = "regex-engine")]
+pub(crate) mod regex_read_sites;
 // #6812 object-owned overflow storage + the legacy thread-local side table.
 // Split out of this file to stay under the 2000-line CI cap; the sibling
 // `object::*` modules reach these through `use super::*`, so re-export the
@@ -1597,8 +1597,6 @@ pub fn scan_object_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'
     // holding it is a real GC root that a moving collection must rewrite.
     null_stub::scan_null_stub_roots_mut(visitor);
     crate::closure::shape::scan_function_prototype_roots_mut(visitor);
-    #[cfg(feature = "regex-engine")]
-    regex_proto_thunks::scan_canonical_test_site_roots_mut(visitor);
 }
 
 /// Drive the PRODUCTION shape-cache writer from a test. Deliberately nothing

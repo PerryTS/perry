@@ -743,7 +743,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         (prepare, r"MATCHER_READ\.with\(\|site\|\s*site\.birth_key\(\)\)", "qualified intrinsic matcher key"),
         (prepare, r"extend_key_with_entry\s*\(\s*&proof,\s*CanonicalKeys::EMPTY,\s*private_key,\s*PRIVATE_FIELD_ENTRY", "intrinsic private matcher entry"),
         (prepare, r"stamp_linked_final_shape\s*\([\s\S]*?proto_id", "ordinary prototype link"),
-        (prepare, r"recorded_regexp_prototype\s*\(", "real RegExp prototype"),
+        (prepare, r"intrinsic_prototype\s*\(", "real RegExp prototype"),
     ):
         require_code(body, pattern, "RegExp " + label)
     require_code(
