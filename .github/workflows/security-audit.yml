@@ -5,7 +5,7 @@ on:
   # touches a lockfile / manifest / policy file (scripts/ci_plan.py DEPS_GLOBS),
   # and unconditionally in the post-merge sweep and the full tier. That is why
   # there is no `pull_request` / `push` trigger here any more -- running these
-  # five jobs on every PR push was ~5 of the 48 runner slots each push burned
+  # five checks on every PR push was ~5 of the 48 runner slots each push burned
   # on a 20-slot org (see the header of test.yml).
   workflow_call:
   # Weekly on its own: the advisory database moves without any commit.
@@ -130,6 +130,11 @@ jobs:
             --ignore RUSTSEC-2026-0187 \
             --ignore RUSTSEC-2026-0235
 
+      - name: Install cargo-deny
+        run: which cargo-deny || cargo install cargo-deny --locked
+      - name: Run cargo deny
+        run: cargo deny check licenses bans sources
+
   # Soak parity gate + external-tool pin gate. Always-run (deliberately not
   # path-filtered — nub hid this gate in a path-gated job and it silently
   # skipped Rust-only PRs). The scripts are dep-free erasable-TS .mts run
@@ -178,13 +183,13 @@ jobs:
         # despite the step name claiming it ran test:scripts.
         run: node --test scripts/soak/*.test.mts scripts/publish/*.test.mts
 
-  # AgentShield — audits the operator-side Claude config (.claude/: hooks,
-  # permissions, MCP servers, agents) for prompt injection, leaked secrets,
-  # over-permissive tool grants. Installed from the SRI-pinned registry
-  # tarball in external-tools.json (never `npm install -g`).
-  agent-scan:
+  # AgentShield audits the operator-side Claude config (.claude/: hooks,
+  # permissions, MCP servers, agents). SkillSpector audits skill content.
+  # Both scans share a checkout and run concurrently after their tools are
+  # installed, while retaining separate logs and exit status.
+  config-scans:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -211,6 +216,13 @@ jobs:
       - uses: ./.github/actions/perry/actions/setup-node # v7.0.0
         with:
           node-version-file: .node-version
+      - uses: ./.github/actions/perry/astral-sh/setup-uv # v10.2.0
+        with:
+          version: "0.12.23"
+          add-problem-matchers: false
+          cache-dependency-glob: |
+            external-tools.json
+            scripts/soak/constants.mts
       - name: Install pinned agentshield
         env:
           # download() attaches this to github.com fetches only (release
@@ -218,97 +230,47 @@ jobs:
           # unauthenticated rate limits.
           GITHUB_TOKEN: ${{ github.token }}
         run: node scripts/soak/external-tools.mts --install agentshield
-      - name: Scan .claude/ config
+      - name: Run security scans concurrently
         run: |
+          set -euo pipefail
           BIN_DIR="$(node scripts/soak/external-tools.mts --print-bin)"
           export PATH="$BIN_DIR:$PATH"
-          agentshield scan
-
-  # SkillSpector (NVIDIA) — audits the repo's Claude skills (.claude/skills/)
-  # before they run on anyone's machine: YARA + AST static analysis (the
-  # --no-llm path; no API key needed in CI). Pinned to the same git SHA as
-  # external-tools.json tools.skillspector; python pinned because
-  # yara-python ships no cp314 wheels yet.
-  skills-scan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Checkout repository (inline git)
-        shell: bash
-        env:
-          CHECKOUT_REF: ${{ github.sha }}
-          CHECKOUT_DEPTH: "1"
-          CHECKOUT_TOKEN: ${{ github.token }}
-          CHECKOUT_PERSIST_CREDENTIALS: "false"
-        run: |
-          set -euo pipefail
-          git init
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
-            git checkout --force --detach "$CHECKOUT_REF"
-          else
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
-            git checkout --force --detach FETCH_HEAD
-          fi
-          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
-            git config http.https://github.com/.extraheader "$auth_header"
-          fi
-      - uses: ./.github/actions/perry/astral-sh/setup-uv # v10.2.0
-      - name: Scan each skill
-        run: |
-          set -euo pipefail
           skillspector_ref="$(jq -er '.tools.skillspector.version' external-tools.json)"
           soak_days="$(sed -nE 's/^export const SOAK_DAYS = ([0-9]+)$/\1/p' scripts/soak/constants.mts)"
-          test -n "$soak_days"
+          [[ -n "$soak_days" ]] || { echo "::error::SOAK_DAYS is missing"; exit 1; }
           exclude_newer="$(date -u -d "${soak_days} days ago" '+%Y-%m-%dT%H:%M:%SZ')"
-          for skill in .claude/skills/*/; do
-            echo "::group::skillspector ${skill}"
-            uv tool run --python 3.12 \
-              --exclude-newer "$exclude_newer" \
-              --from "git+https://github.com/NVIDIA/skillspector@${skillspector_ref}" \
-              skillspector scan "${skill}" --no-llm
-            echo "::endgroup::"
-          done
+          agent_log="$RUNNER_TEMP/agentshield.log"
+          skills_log="$RUNNER_TEMP/skillspector.log"
+          (
+            agentshield scan
+          ) >"$agent_log" 2>&1 &
+          agent_pid=$!
+          (
+            set -euo pipefail
+            for skill in .claude/skills/*/; do
+              echo "::group::skillspector ${skill}"
+              uv tool run --python 3.12 \
+                --exclude-newer "$exclude_newer" \
+                --from "git+https://github.com/NVIDIA/skillspector@${skillspector_ref}" \
+                skillspector scan "${skill}" --no-llm
+              echo "::endgroup::"
+            done
+          ) >"$skills_log" 2>&1 &
+          skills_pid=$!
 
-  # License policy + duplicate-version tracking (deny.toml at repo root).
-  # Advisories stay with cargo-audit above — deny.toml doesn't duplicate them.
-  # Pure metadata check: no compilation, runs in ~1 min once cargo-deny is
-  # cached in ~/.cargo/bin by rust-cache.
-  cargo-deny:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout repository (inline git)
-        shell: bash
-        env:
-          CHECKOUT_REF: ${{ github.sha }}
-          CHECKOUT_DEPTH: "1"
-          CHECKOUT_TOKEN: ${{ github.token }}
-          CHECKOUT_PERSIST_CREDENTIALS: "false"
-        run: |
-          set -euo pipefail
-          git init
-          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
-          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
-          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
-            git checkout --force --detach "$CHECKOUT_REF"
-          else
-            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
-            git checkout --force --detach FETCH_HEAD
+          agent_status=0
+          if wait "$agent_pid"; then :; else agent_status=$?; fi
+          skills_status=0
+          if wait "$skills_pid"; then :; else skills_status=$?; fi
+
+          echo '::group::AgentShield output'
+          cat "$agent_log"
+          echo '::endgroup::'
+          echo '::group::SkillSpector output'
+          cat "$skills_log"
+          echo '::endgroup::'
+
+          if [[ "$agent_status" -ne 0 || "$skills_status" -ne 0 ]]; then
+            echo "::error::security scan failures (AgentShield=$agent_status, SkillSpector=$skills_status)"
+            exit 1
           fi
-          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
-            git config http.https://github.com/.extraheader "$auth_header"
-          fi
-      - name: Install Rust toolchain
-        run: rustup toolchain install nightly-2026-10-04 --profile minimal
-      - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        with:
-          shared-key: security-audit
-      - name: Install cargo-deny
-        run: which cargo-deny || cargo install cargo-deny --locked
-      - name: Run cargo deny
-        run: cargo deny check licenses bans sources
