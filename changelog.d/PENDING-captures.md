@@ -1,0 +1,3 @@
+Fresh closures with mutable boxed captures now initialize their capture slots in bulk. The newborn closure keeps its body Shape, capture flags and independent function identity; captured boxes retain their shared identities. The bulk installer records pointer-bearing capture layout in the header and applies the newborn barrier once, avoiding per-capture layout mask updates.
+
+Both bulk allocation helpers root captured words before a collecting allocation and refresh their addresses afterwards. Regression coverage exercises shared mutation, TDZ and recursive bindings, loop captures, lexical receivers, async/generator captures, relocation during allocation, old-generation births and incremental shading.
