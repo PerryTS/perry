@@ -274,6 +274,18 @@ pub(crate) fn store_and_prime(
     cache_slot: *mut PackedSetWaysSlot,
     packed: *const AtomicU64,
 ) -> (f64, *const crate::StringHeader) {
+    // An existing writable own slot needs no full [[Set]] even on the
+    // first visit. Use the same shape admission and leaf store as a warm
+    // generated site; accessors, additions and refused layouts still miss.
+    let key_ptr = key.with_const_ptr::<crate::StringHeader, _>(|key| key);
+    unsafe {
+        prime_packed_set(target.get_nanbox_f64(), key_ptr, cache_slot, packed);
+    }
+    let result =
+        js_put_value_set_packed_fast(target.get_nanbox_f64(), value.get_nanbox_f64(), cache_slot);
+    if result.to_bits() != crate::value::TAG_HOLE {
+        return (result, key_ptr);
+    }
     let key_value = key.with_const_ptr::<crate::StringHeader, _>(|key| {
         if key.is_null() {
             f64::from_bits(crate::value::TAG_UNDEFINED)
@@ -484,9 +496,24 @@ unsafe fn prime_packed_set(
             own_idx = Some(i);
         }
     }
-    let Some(idx) = own_idx else {
+    let Some(mut idx) = own_idx else {
         return;
     };
+    // The layout memo can name a private entry with the same spelling.
+    // A public store must use the property namespace, including on a first
+    // visit before full [[Set]] has created any public property of that name.
+    if shape.summary & crate::object::key_attrs::SUMMARY_PRIVATE != 0
+        && crate::object::key_attrs::entry_is_private(crate::object::key_attrs::keys_entry(
+            keys, idx,
+        ))
+    {
+        let Some(property) =
+            crate::object::keys_find_property_slot_by_key_ptr(keys, key_count, key)
+        else {
+            return;
+        };
+        idx = property;
+    }
     let inline = idx < shape.live_inline_slot_count;
     // The emitted hit stores raw bits, so a ConstFn slot is published only
     // flagged: the hit then admits only a closure of the site's one body,

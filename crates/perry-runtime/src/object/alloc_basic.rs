@@ -179,14 +179,29 @@ pub(crate) fn object_alloc_born(
     object_alloc_born_impl(class_id, field_count, shape_id, false)
 }
 
-/// A plain ordinary receiver born on a previously validated ordinary shape.
+/// A plain ordinary receiver on a cached shape, or its keyless birth shape
+/// when the memo is absent or collection pruned it. Validate AFTER allocating:
+/// a scalar ShapeId memo does not retain the descriptor or its keys.
 #[cfg(feature = "regex-engine")]
 pub(crate) fn object_alloc_plain_born(field_count: u32, shape_id: u32) -> *mut ObjectHeader {
-    debug_assert_eq!(
-        crate::object::shapes::shape_object_kind_by_id(shape_id),
-        Some(crate::object::shapes::ShapeObjectKind::Ordinary)
-    );
-    object_alloc_born_impl(0, field_count, shape_id, true)
+    let object = object_alloc_unpublished(0, field_count);
+    unsafe {
+        crate::object::shapes::store_kind::premark_plain_ordinary(object);
+        if crate::object::shapes::shape_descriptor_by_id(shape_id).is_some_and(|shape| {
+            shape.object_kind == crate::object::shapes::ShapeObjectKind::Ordinary
+                && shape.live_inline_slot_count == field_count
+        }) {
+            if crate::arena::pointer_in_nursery(object as usize) {
+                // GC_STORE_AUDIT(POINTER_FREE): fresh nursery receiver's scalar ShapeId.
+                (*object).parent_class_id = shape_id;
+            } else {
+                crate::object::shapes::stamp_object_shape_id_with_carrier_note(object, shape_id);
+            }
+        } else {
+            crate::object::shapes::birth_publish_object_shape(object, field_count);
+        }
+    }
+    object
 }
 
 fn object_alloc_born_impl(

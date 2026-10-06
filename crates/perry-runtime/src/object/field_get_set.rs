@@ -327,7 +327,9 @@ pub(crate) use ic_miss::{
     IntrinsicPrivateReadSite, PrivateHintBrandScope,
 };
 #[cfg(feature = "regex-engine")]
-pub(crate) use ic_miss::{intrinsic_private_add, intrinsic_private_set};
+pub(crate) use ic_miss::intrinsic_private_set;
+#[cfg(all(test, feature = "regex-engine"))]
+pub(crate) use ic_miss::intrinsic_private_add;
 pub use ic_miss::{
     js_class_field_add, js_object_get_field_by_name_f64, js_object_get_field_by_property_id_f64,
     js_object_get_field_ic, js_object_get_field_ic_miss, js_object_get_field_ic_miss_packed,

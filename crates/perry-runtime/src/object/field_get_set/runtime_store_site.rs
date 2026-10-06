@@ -69,6 +69,36 @@ impl RuntimeStoreSite {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "regex-engine")]
+    #[test]
+    fn first_store_never_overwrites_a_private_entry_of_the_same_spelling() {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let object = scope.root_raw_mut_ptr(crate::object::object_alloc_plain(2));
+        let receiver = || {
+            object.with_const_ptr::<crate::object::ObjectHeader, _>(|p| {
+                crate::value::js_nanbox_pointer(p as i64)
+            })
+        };
+        crate::object::intrinsic_private_add(receiver(), "coldStore", 11.0);
+        let private = crate::object::IntrinsicPrivateReadSite::new("coldStore");
+        assert_eq!(private.read(receiver()), Some(11.0));
+        static SITE: RuntimeStoreSite = RuntimeStoreSite::new();
+        const KEY: &[u8] = b"#<perry:private-value:0:@0:coldStore>";
+        SITE.store(receiver(), KEY, 22.0);
+        assert_eq!(private.read(receiver()), Some(11.0));
+        let key = scope.root_string_ptr(crate::string::intern_ascii_literal(KEY));
+        object.with_mut_ptr::<crate::object::ObjectHeader, _>(|o| {
+            key.with_const_ptr(|key| {
+                assert_eq!(
+                    crate::object::js_object_get_field_by_name(o, key).as_number(),
+                    22.0
+                );
+            })
+        });
+        SITE.store(receiver(), KEY, 33.0);
+        assert_eq!(private.read(receiver()), Some(11.0));
+    }
+
     #[test]
     fn warmed_store_site_observes_a_nonwritable_descriptor_transition() {
         let scope = crate::gc::RuntimeHandleScope::new();

@@ -150,6 +150,17 @@ fn new_data<'s>(
     if let Some(data) = super::perex_cache::data(&scope, &source, canonical) {
         return Ok(data);
     }
+    new_data_miss(scope, source, flags, canonical)
+}
+
+#[cold]
+#[inline(never)]
+fn new_data_miss<'s>(
+    scope: &'s RuntimeHandleScope,
+    source: RuntimeHandle<'s>,
+    flags: RuntimeHandle<'s>,
+    canonical: CanonicalFlags,
+) -> Result<RuntimeHandle<'s>, EngineError> {
     let program = compile(&scope, source, canonical)?;
     let re = crate::arena::arena_alloc_gc(
         std::mem::size_of::<RegExpData>(),
