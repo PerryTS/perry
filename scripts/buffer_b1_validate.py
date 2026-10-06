@@ -7,6 +7,7 @@ Every artifact is under --hostdir. GC diagnostics run separately so their JSON
 formatting is not included in program instruction counts.
 """
 import argparse
+import ctypes
 import json
 import os
 from pathlib import Path
@@ -34,6 +35,12 @@ KERNELS = {
 }
 NODE = ['node', '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON', '--experimental-strip-types']
 
+def disable_thp():
+    # PR_SET_THP_DISABLE applies to every mapping, including arena mmap.
+    # The mimalloc option alone does not cover those mappings.
+    if ctypes.CDLL(None, use_errno=True).prctl(41, 1, 0, 0, 0) != 0:
+        raise OSError(ctypes.get_errno(), 'PR_SET_THP_DISABLE failed')
+
 def environment(root, arm):
     source = root / ('base/src' if arm == 'main' else 'src')
     target = root / ('base/target' if arm == 'main' else 'target')
@@ -41,7 +48,8 @@ def environment(root, arm):
                PERRY_WORKSPACE_ROOT=str(source), RUST_TEST_THREADS='1', CARGO_BUILD_JOBS='8',
                PERRY_NO_AUTO_OPTIMIZE='1', PERRY_NO_CACHE='1', PERRY_SKIP_BUILD='1',
                PERRY_ALLOW_PERRY_FEATURES='1', TMPDIR=str(root/'tmp'), RAYON_NUM_THREADS='8',
-               PERRY_FORCE_WELL_KNOWN='http,net,ws,zlib')
+               PERRY_FORCE_WELL_KNOWN='http,net,ws,zlib',
+               PERF_BUILDID_DIR=str(root/'perf-buildid'), XDG_CACHE_HOME=str(root/'cache'))
     env.pop('PERRY_GC_DIAG', None)
     return source, target, env
 
@@ -49,7 +57,8 @@ def run(cmd, cwd, env, prefix, timeout=1800):
     prefix.parent.mkdir(parents=True, exist_ok=True)
     stdout_path, stderr_path = Path(str(prefix)+'.out'), Path(str(prefix)+'.err')
     with stdout_path.open('wb') as stdout, stderr_path.open('wb') as stderr:
-        result = subprocess.run(cmd, cwd=cwd, env=env, stdout=stdout, stderr=stderr, timeout=timeout)
+        result = subprocess.run(cmd, cwd=cwd, env=env, stdout=stdout, stderr=stderr, timeout=timeout,
+                                preexec_fn=disable_thp if env.get('MIMALLOC_ALLOW_THP') == '0' else None)
     return subprocess.CompletedProcess(cmd, result.returncode, stdout_path.read_bytes(), stderr_path.read_bytes())
 
 def normalize_kernel(data):
@@ -99,7 +108,8 @@ def full_collections(root, arm, name, cmd, cwd, env, trial):
     prefix = root/'measure'/trials_dir/f'{name}.{trial}.{arm}.gc'
     huge = []
     stop = threading.Event()
-    proc = subprocess.Popen(cmd, cwd=cwd, env=diag, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    proc = subprocess.Popen(cmd, cwd=cwd, env=diag, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            preexec_fn=disable_thp if env.get('MIMALLOC_ALLOW_THP') == '0' else None)
     def sample():
         while not stop.is_set():
             try:
