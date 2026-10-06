@@ -325,16 +325,23 @@ fn a_closure_captures_a_group_through_one_slot() {
     let ir = compile_ir(&module);
     let fn_ir =
         crate::testing::root_slots::function_slice(&ir, "perry_fn_scope_env_probe_ts__probe1");
-    // One capture slot: `js_closure_alloc*` with capture count 1.
+    let births: Vec<_> = fn_ir
+        .lines()
+        .filter(|line| line.contains("@js_closure_alloc_init_boxed"))
+        .collect();
+    assert_eq!(
+        births.len(),
+        1,
+        "one bulk capture birth for the group:\n{fn_ir}"
+    );
     assert!(
-        fn_ir.contains("i32 1)") || fn_ir.contains("i32 1, ptr"),
+        births[0].contains("i32 1, ptr"),
         "the closure's capture count must be 1:\n{fn_ir}"
     );
-    assert_eq!(
-        fn_ir.matches("@js_closure_set_box_capture_ptr(").count()
-            + fn_ir.matches("@js_closure_set_capture_bits(").count(),
-        1,
-        "exactly one capture store for eight grouped bindings:\n{fn_ir}"
+    assert!(
+        !fn_ir.contains("@js_closure_set_box_capture_ptr")
+            && !fn_ir.contains("@js_closure_set_capture_bits"),
+        "the single grouped capture is installed at birth:\n{fn_ir}"
     );
 }
 

@@ -190,6 +190,19 @@ fn emit(direct_literal: bool) -> String {
     emit_with_tdz(direct_literal, false)
 }
 
+#[test]
+fn escaped_boxed_closure_birth_uses_rooted_bulk_initializer() {
+    for tdz in [false, true] {
+        let ir = emit_with_tdz(false, tdz);
+        let outer = function_body(&ir, "perry_fn_trusted_box_callback_ts__outer");
+        assert!(outer.contains("@js_closure_alloc_init_boxed"), "{outer}");
+        assert!(
+            !outer.contains("@js_closure_set_box_capture_ptr"),
+            "{outer}"
+        );
+    }
+}
+
 fn emit_with_tdz(direct_literal: bool, tdz: bool) -> String {
     let mut module = Module::new("trusted_box_callback.ts");
     module.init_kind = ModuleInitKind::Eager;

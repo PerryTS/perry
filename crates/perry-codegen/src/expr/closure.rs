@@ -367,15 +367,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 None
             };
 
-            // Bulk-init admission: a fresh closure whose captures are all plain
-            // bits. Box-cell captures keep the per-slot setter path — their
-            // `set_closure_box_capture` bookkeeping has no bulk twin.
+            // Fresh closures can install boxed and ordinary captures in bulk.
+            // The runtime roots and refreshes every word on its collecting arm.
             let bulk_fresh_init = !no_capture_singleton
                 && !captured_singleton
                 && total_caps > 0
-                && !captured_value_bits.is_empty()
-                && auto_captures.iter().all(|cap_id| {
-                    !ctx.boxed_vars.contains(cap_id) || uncounted_box_capture(cap_id)
+                && !captured_value_bits.is_empty();
+            let bulk_boxed_init = bulk_fresh_init
+                && auto_captures.iter().any(|cap_id| {
+                    ctx.boxed_vars.contains(cap_id) && !uncounted_box_capture(cap_id)
                 });
             // An `async function(){}` *expression* closure (one with no
             // `await` — bodies that await are rewritten to a state machine
@@ -423,7 +423,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     &[(PTR, &info_ref), (I32, &cap_count), (PTR, &buf)],
                 )
             } else if bulk_fresh_init {
-                // Fresh (identity-carrying) closure with plain-bits captures:
+                // Fresh (identity-carrying) closure with bulk captures:
                 // ONE runtime call does allocation + slots + layout instead of
                 // `js_closure_alloc` plus a `js_closure_set_capture_bits` per
                 // capture (each re-resolving the header, forwarding, kind
@@ -445,7 +445,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let blk = ctx.block();
                 blk.call(
                     I64,
-                    "js_closure_alloc_init",
+                    if bulk_boxed_init {
+                        "js_closure_alloc_init_boxed"
+                    } else {
+                        "js_closure_alloc_init"
+                    },
                     &[(PTR, &info_ref), (I32, &cap_count), (PTR, &buf)],
                 )
             } else {
@@ -476,7 +480,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             for (idx, val_bits) in captured_value_bits.iter().enumerate() {
                 let track_box_capture = tracked_box_capture_slots[idx];
                 if bulk_fresh_init {
-                    // Every slot was written by `js_closure_alloc_init`.
+                    // Every slot was written by the bulk birth helper.
                     continue;
                 }
                 if !captured_singleton || track_box_capture {

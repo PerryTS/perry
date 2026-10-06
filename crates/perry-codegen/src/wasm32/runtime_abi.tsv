@@ -625,6 +625,7 @@ js_clear_interval_value	void	f64
 js_clear_timeout_value	void	f64
 js_closure_alloc	ptr	ptr,i32u
 js_closure_alloc_init	ptr	ptr,i32u,ptr
+js_closure_alloc_init_boxed	ptr	ptr,i32u,ptr
 js_closure_alloc_singleton	ptr	ptr
 js_closure_alloc_with_captures_singleton	ptr	ptr,i32u,ptr
 js_closure_call0	f64	ptr,i64

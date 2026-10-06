@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn heap_word_iterator_reads_refreshed_slots_after_stack_growth() {
+    let scope = RuntimeHandleScope::new();
+    let _unrelated = scope.root_nanbox_f64(19.0);
+    let start = RuntimeHandleScope::active_len_for_tests();
+    let input = [11.0f64.to_bits(), 12.0f64.to_bits()];
+    let rooted = scope.root_heap_word_u64_slice_iter(&input);
+    assert_eq!(rooted.len(), 2);
+    assert_eq!(RuntimeHandleScope::active_len_for_tests(), start + 2);
+    let capacity = RuntimeHandleScope::capacity_for_tests();
+    {
+        let nested = RuntimeHandleScope::new();
+        for i in 0..=capacity {
+            nested.root_nanbox_f64(i as f64);
+        }
+        assert!(RuntimeHandleScope::capacity_for_tests() > capacity);
+        for (offset, value) in [21.0f64, 22.0].into_iter().enumerate() {
+            RuntimeHandle {
+                index: start + offset,
+                stack: scope.stack,
+                _scope: PhantomData,
+            }
+            .set_heap_word_u64(value.to_bits());
+        }
+    }
+    assert_eq!(
+        rooted.collect::<Vec<_>>(),
+        vec![21.0f64.to_bits(), 22.0f64.to_bits()]
+    );
+    assert_eq!(scope.root_heap_word_u64_slice_iter(&[]).len(), 0);
+}
+
+#[test]
 fn copy_visitor_can_read_update_and_grow_the_handle_stack() {
     let scope = RuntimeHandleScope::new();
     let first = scope.root_nanbox_f64(11.0);

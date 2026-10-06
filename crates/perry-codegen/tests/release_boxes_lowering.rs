@@ -283,11 +283,15 @@ fn escaped_user_closure_inside_step_keeps_its_box_capture_edge() {
     let ir = ir_for_fn_body("release_nested_user_capture", body);
     let tracked_edges = ir
         .lines()
-        .filter(|line| line.contains("call void @js_closure_set_box_capture_ptr("))
+        .filter(|line| line.contains("call i64 @js_closure_alloc_init_boxed("))
         .count();
     assert_eq!(
         tracked_edges, 1,
         "only the nested user closure should retain the released box cell:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call void @js_closure_set_box_capture_ptr("),
+        "the nested user capture is installed at birth:\n{ir}"
     );
 }
 

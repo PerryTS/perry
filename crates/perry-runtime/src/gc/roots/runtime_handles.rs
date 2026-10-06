@@ -167,6 +167,27 @@ impl RuntimeHandleScope {
             .collect()
     }
 
+    /// Root every word immediately, then read its current value when the
+    /// iterator is consumed. Stable stack indices survive handle-stack growth
+    /// and moving collection without allocating temporary handle/value vectors.
+    pub fn root_heap_word_u64_slice_iter<'scope>(
+        &'scope self,
+        values: &[u64],
+    ) -> impl ExactSizeIterator<Item = u64> + 'scope {
+        let start = self.stack.len();
+        for &bits in values {
+            self.root_heap_word_u64(bits);
+        }
+        (start..start + values.len()).map(move |index| {
+            RuntimeHandle {
+                index,
+                stack: self.stack,
+                _scope: PhantomData,
+            }
+            .get_heap_word_u64()
+        })
+    }
+
     pub fn refreshed_nanbox_f64_slice(handles: &[RuntimeHandle<'_>]) -> Vec<f64> {
         handles.iter().map(RuntimeHandle::get_nanbox_f64).collect()
     }

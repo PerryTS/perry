@@ -7931,8 +7931,8 @@ fn boxed_local_slot_uses_i64_js_value_bits_until_helper_edges() {
     );
     assert!(
         ir.contains("call i64 @js_closure_get_capture_bits")
-            && ir.contains("call void @js_closure_set_box_capture_ptr"),
-        "generated boxed capture traffic should declare exact i64 box capture slots:\n{ir}"
+            && ir.contains("call i64 @js_closure_alloc_init_boxed"),
+        "generated boxed capture traffic should bulk initialize exact i64 box capture slots:\n{ir}"
     );
     for old_helper in [
         "call void @js_closure_set_capture_f64",
