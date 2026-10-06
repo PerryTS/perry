@@ -27,7 +27,8 @@ def main():
     args = parser.parse_args()
     source, target, env = environment(args.hostdir, args.arm)
     env.update(PERRY_BIN=str(target/'release/perry'), PERRY_FORCE_WELL_KNOWN='http,net,ws,zlib',
-               PERRY_RUN_TIMEOUT='30', RAYON_NUM_THREADS='8')
+               PERRY_RUN_TIMEOUT='30',
+               RAYON_NUM_THREADS=os.environ.get('PERRY_VERIFY_RAYON_THREADS', '8'))
     original = (source/'run_parity_tests.sh').read_text()
     switch = 'elif [[ -n "${PERRY_NO_AUTO_OPTIMIZE:-}" && "$TEST_SUITE" == "all" ]] &&'
     assert original.count(switch) == 1
