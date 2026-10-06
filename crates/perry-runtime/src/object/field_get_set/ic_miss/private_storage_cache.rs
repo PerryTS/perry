@@ -193,11 +193,7 @@ fn private_storage_key_by_id(
                 return entry.key.clone();
             }
         }
-        let spelling = if evaluation_id == PRIVATE_TEMPLATE_EVALUATION_ID {
-            format!("#<perry:private-value:{class_id}:{name}>")
-        } else {
-            format!("#<perry:private-value:{class_id}:@{evaluation_id}:{name}>")
-        };
+        let spelling = private_storage_spelling(class_id, evaluation_id, name);
         let key = std::rc::Rc::new(PrivateStorageKey {
             spelling,
             slot: std::cell::Cell::new(None),
@@ -210,6 +206,14 @@ fn private_storage_key_by_id(
         });
         key
     })
+}
+
+fn private_storage_spelling(class_id: u32, evaluation_id: u64, name: &str) -> String {
+    if evaluation_id == PRIVATE_TEMPLATE_EVALUATION_ID {
+        format!("#<perry:private-value:{class_id}:{name}>")
+    } else {
+        format!("#<perry:private-value:{class_id}:@{evaluation_id}:{name}>")
+    }
 }
 
 #[cfg(test)]
@@ -425,6 +429,13 @@ impl IntrinsicPrivateReadSite {
         Self { name, site: super::runtime_read_site::RuntimeReadSite::new() }
     }
 
+    /// The same evaluation-qualified spelling used by class private slots.
+    /// Birth builders attach PRIVATE_FIELD_ENTRY to this canonical atom.
+    #[cfg(feature = "regex-engine")]
+    pub(crate) fn birth_key(&self) -> *const crate::StringHeader {
+        crate::string::intern_ascii_literal(private_storage_spelling(0, 0, self.name).as_bytes())
+    }
+
     #[inline]
     pub(crate) fn read(&self, receiver: f64) -> Option<f64> {
         let bits = receiver.to_bits();
@@ -454,8 +465,15 @@ impl IntrinsicPrivateReadSite {
         {
             return None;
         }
-        let key = private_storage_key_by_id(0, 0, self.name);
-        let (object, index, live) = key.locate(receiver)?;
+        // This site already owns the shape/slot memo. A second private-name
+        // cache would duplicate it and activate the class namespace cache for
+        // every intrinsic-only program.
+        let spelling = private_storage_spelling(0, 0, self.name);
+        let keys = unsafe { crate::object::object_keys(object) };
+        let index = unsafe {
+            crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), spelling.as_bytes())
+        }?;
+        let live = unsafe { crate::object::object_live_slot_count(object) };
         let shape = unsafe { crate::object::shapes::object_shape_stamp(object) };
         self.site.prime_own_inline(shape, index, live);
         Some(f64::from_bits(unsafe {
@@ -489,7 +507,7 @@ pub(crate) fn intrinsic_private_set(receiver: f64, name: &'static str, value: f6
 
 /// Install the private entry before the intrinsic publishes its receiver.
 /// A property with the qualified spelling is never a private field.
-#[cfg(feature = "regex-engine")]
+#[cfg(all(test, feature = "regex-engine"))]
 pub(crate) fn intrinsic_private_add(receiver: f64, name: &'static str, value: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_raw_mut_ptr(

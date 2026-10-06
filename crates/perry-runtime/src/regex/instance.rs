@@ -1,9 +1,7 @@
-//! Ordinary RegExp births. This factory memo retains only a ShapeId; the
-//! shape is the authority for keys, attributes and prototype and carries all
-//! collector edges. No instance or data cell is retained by the memo.
-use super::{RegExpData, RegExpHeader, REGEXP_MATCHER};
+//! Ordinary RegExp births. The memo holds only a validated ShapeId; the
+//! shape carries the private matcher, lastIndex attributes and prototype.
+use super::{RegExpData, RegExpHeader};
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
-use crate::object::key_attrs::AttrsEdit;
 use crate::value::js_nanbox_pointer;
 use std::cell::Cell;
 
@@ -13,59 +11,72 @@ crate::perry_thread_local! {
 
 pub(super) fn new(scope: &RuntimeHandleScope, data: &RuntimeHandle<'_>) -> *mut RegExpHeader {
     let shape = BIRTH_SHAPE.with(Cell::get);
-    // ShapeIds are agent-local and never reused. Its prototype edge is
-    // maintained by the shape collector; no receiver address is memoized.
+    let receiver = scope.root_raw_mut_ptr(crate::object::object_alloc_plain_born(2, shape));
     let prototype = crate::object::regex_proto_thunks::recorded_regexp_prototype();
     let cached = !prototype.is_null()
-        && crate::object::shapes::shape_descriptor_by_id(shape).is_some()
+        && receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
+            crate::object::shapes::object_shape_stamp(r) == shape
+        })
         && crate::object::shapes::shape_prototype_word(shape)
             == js_nanbox_pointer(prototype as i64).to_bits();
-    let receiver = scope.root_raw_mut_ptr(if cached {
-        crate::object::object_alloc_plain_born(2, shape)
-    } else {
-        crate::object::object_alloc_plain(2)
-    });
     if !cached {
-        let intrinsic = crate::object::regex_proto_thunks::recorded_regexp_prototype();
-        let prototype = scope.root_nanbox_f64(if intrinsic.is_null() {
-            crate::object::builtin_prototype_value("RegExp")
-        } else {
-            js_nanbox_pointer(intrinsic as i64)
-        });
-        crate::object::intrinsic_private_add(
-            receiver.with_const_ptr::<RegExpHeader, _>(|r| js_nanbox_pointer(r as i64)),
-            REGEXP_MATCHER,
-            data.with_const_ptr::<RegExpData, _>(|d| js_nanbox_pointer(d as i64)),
-        );
-        receiver.with_mut_ptr::<RegExpHeader, _>(|r| unsafe {
-            // RegExpInitialize defines its own data slot; it must never
-            // invoke a setter inherited from Object.prototype.
-            crate::object::key_attrs::apply_edits(r, &[AttrsEdit::Data(b"lastIndex", 1)]);
-            crate::object::store_object_field_slot(r, 1, 0.0f64.to_bits());
-        });
-        receiver.with_mut_ptr::<RegExpHeader, _>(|r| {
-            crate::object::prototype_chain::object_link_created_prototype(
-                r as usize,
-                prototype.get_nanbox_f64().to_bits(),
-            );
-        });
-        BIRTH_SHAPE.with(|memo| {
-            memo.set(receiver.with_const_ptr::<RegExpHeader, _>(|r| unsafe {
-                crate::object::shapes::object_shape_stamp(r)
-            }))
-        });
-    } else {
-        // Fresh ordinary birth: the existing newborn funnel checks the shape
-        // representation and publishes barriers, without retiring an Array
-        // subclass proof that this receiver has never carried.
-        receiver.with_mut_ptr::<RegExpHeader, _>(|r| unsafe {
-            crate::object::store_object_field_slot_layout_deferred(
-                r,
-                0,
-                data.with_const_ptr::<RegExpData, _>(|d| js_nanbox_pointer(d as i64).to_bits()),
-            );
-            crate::object::store_object_field_slot_layout_deferred(r, 1, 0.0f64.to_bits());
-        });
+        prepare_shape(scope, &receiver);
     }
+    receiver.with_mut_ptr::<RegExpHeader, _>(|r| unsafe {
+        crate::object::store_object_field_slot_layout_deferred(
+            r,
+            0,
+            data.with_const_ptr::<RegExpData, _>(|d| js_nanbox_pointer(d as i64).to_bits()),
+        );
+        crate::object::store_object_field_slot_layout_deferred(r, 1, 0.0f64.to_bits());
+    });
     receiver.with_mut_ptr::<RegExpHeader, _>(|r| r)
+}
+
+#[cold]
+#[inline(never)]
+fn prepare_shape(scope: &RuntimeHandleScope, receiver: &RuntimeHandle<'_>) {
+    use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};
+    use crate::object::key_attrs::{attr_bits_to_entry, PRIVATE_FIELD_ENTRY};
+    let prototype = scope.root_raw_mut_ptr(crate::value::js_nanbox_get_pointer(
+        crate::object::builtin_prototype_value("RegExp"),
+    ) as *mut RegExpHeader);
+    let proto_id = prototype
+        .with_mut_ptr::<RegExpHeader, _>(|p| unsafe {
+            crate::object::proto_validity::mark_object_as_prototype(p as usize)
+        })
+        .expect("intrinsic prototype has a stable identity");
+    let private_key = super::MATCHER_READ.with(|site| site.birth_key());
+    let proof = SharedLayout::shape_cache_entry();
+    let keys = unsafe {
+        crate::object::canonical_keys::extend_key_with_entry(
+            &proof,
+            CanonicalKeys::EMPTY,
+            private_key,
+            PRIVATE_FIELD_ENTRY,
+        )
+    };
+    let keys = scope.root_raw_mut_ptr(keys.as_ptr());
+    let index_key = crate::string::intern_ascii_literal(b"lastIndex");
+    let final_keys = keys.with_mut_ptr::<crate::array::ArrayHeader, _>(|keys| unsafe {
+        crate::object::canonical_keys::extend_key_with_entry(
+            &proof,
+            CanonicalKeys::from_rooted(keys, 1),
+            index_key,
+            attr_bits_to_entry(1),
+        )
+    });
+    // No collecting operation between the final canonical keys and their
+    // publication into the rooted receiver's shape.
+    receiver.with_mut_ptr::<RegExpHeader, _>(|r| unsafe {
+        assert!(crate::object::shapes::stamp_linked_final_shape(
+            r,
+            final_keys.as_ptr(),
+            2,
+            proto_id,
+            prototype.with_const_ptr::<RegExpHeader, _>(|p| js_nanbox_pointer(p as i64).to_bits()),
+            |_| false,
+        ));
+        BIRTH_SHAPE.with(|memo| memo.set(crate::object::shapes::object_shape_stamp(r)));
+    });
 }
