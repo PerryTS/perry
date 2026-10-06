@@ -128,8 +128,8 @@ fn read_option_field(ptr: *const crate::object::ObjectHeader, name: &[u8]) -> f6
         name.as_ptr(),
         name.len() as u32,
     ));
-    key.with_const_ptr(|key| {
-        crate::object::js_object_get_field_by_name_f64(ptr.get_raw_const_ptr(), key)
+    ptr.with_const_ptr(|ptr| {
+        key.with_const_ptr(|key| crate::object::js_object_get_field_by_name_f64(ptr, key))
     })
 }
 

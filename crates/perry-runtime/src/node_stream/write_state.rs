@@ -320,17 +320,13 @@ fn requeue_front(stream: f64, records: *const crate::array::ArrayHeader, from: u
         buffered_writable_writes(s.get_nanbox_f64())
             .unwrap_or_else(|| box_pointer(crate::array::js_array_alloc(0) as *const u8)),
     );
-    let mut merged = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len - from));
+    let merged = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len - from));
+    let push = |value: f64| {
+        let grown = merged.with_mut_ptr(|merged| crate::array::js_array_push_f64(merged, value));
+        merged.set_raw_mut_ptr(grown);
+    };
     for i in from..len {
-        let value = crate::array::js_array_get_f64(
-            records.get_raw_const_ptr::<crate::array::ArrayHeader>(),
-            i,
-        );
-        let grown = crate::array::js_array_push_f64(
-            merged.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
-            value,
-        );
-        merged = scope.root_raw_mut_ptr(grown);
+        push(records.with_const_ptr(|records| crate::array::js_array_get_f64(records, i)));
     }
     let later_raw = raw_ptr_from_value(later.get_nanbox_f64());
     if later_raw >= 0x10000 {
@@ -340,18 +336,16 @@ fn requeue_front(stream: f64, records: *const crate::array::ArrayHeader, from: u
                 raw_ptr_from_value(later.get_nanbox_f64()) as *const crate::array::ArrayHeader,
                 i,
             );
-            let grown = crate::array::js_array_push_f64(
-                merged.get_raw_mut_ptr::<crate::array::ArrayHeader>(),
-                value,
-            );
-            merged = scope.root_raw_mut_ptr(grown);
+            push(value);
         }
     }
-    set_hidden_value(
-        s.get_nanbox_f64(),
-        hidden_writable_buffered_key(),
-        box_pointer(merged.get_raw_const_ptr::<crate::array::ArrayHeader>() as *const u8),
-    );
+    merged.with_const_ptr(|merged: *const crate::array::ArrayHeader| {
+        set_hidden_value(
+            s.get_nanbox_f64(),
+            hidden_writable_buffered_key(),
+            box_pointer(merged as *const u8),
+        )
+    });
 }
 
 /// `uncork()` / `end()`'s full uncork: run the buffer once the stream is no
