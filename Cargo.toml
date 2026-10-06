@@ -370,7 +370,7 @@ perry-uuid = { path = "crates/perry-uuid", default-features = false }
 swc_ecma_parser = "32.0"
 swc_ecma_ast = "29.0"
 swc_ecma_visit = "19.0"
-swc_common = "18.0"
+swc_common = "26.0"
 swc_ecma_codegen = "32.0"
 swc_bundler = "56.0"
 swc_ecma_loader = "27.0"
