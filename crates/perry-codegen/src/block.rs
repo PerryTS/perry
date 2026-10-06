@@ -66,6 +66,9 @@ pub(crate) const DEFAULT_NULL_GUARD_GLOBAL: &str = "perry_null_guard_zero";
 #[derive(Default)]
 pub struct RegCounter {
     value: Cell<u32>,
+    /// Exact byte-owner root slots retained on the returning edge of actual
+    /// calls. This is compiler state: numeric loads emit no lifetime work.
+    byte_owner_root_slots: RefCell<Vec<String>>,
     /// Invoke-EH (#7302): stack of landing-pad labels for the active
     /// handler scopes, innermost last. While non-empty, every emitted call
     /// that can reach `js_throw` becomes an `invoke` unwinding to the top
@@ -129,6 +132,7 @@ impl RegCounter {
     pub fn new() -> Self {
         Self {
             value: Cell::new(0),
+            byte_owner_root_slots: RefCell::new(Vec::new()),
             eh_unwind_labels: RefCell::new(Vec::new()),
             shadow_slot_allocas: RefCell::new(HashSet::new()),
             preserve_none_fns: RefCell::new(None),
@@ -288,6 +292,46 @@ pub struct LlBlock {
 }
 
 impl LlBlock {
+    pub(crate) fn retain_byte_owner_root_slot(&mut self, slot: &str) {
+        let mut slots = self.counter.byte_owner_root_slots.borrow_mut();
+        if !slots.iter().any(|existing| existing == slot) {
+            slots.push(slot.to_owned());
+        }
+    }
+
+    fn keep_byte_owners_after_call(&mut self, callee: Option<&str>) {
+        #[cfg(test)]
+        if std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("owner_call_edge") {
+            return;
+        }
+        if callee.is_some_and(|name| {
+            name.starts_with("llvm.")
+                || name.starts_with("js_shadow_")
+                || name.starts_with("js_write_barrier")
+        }) {
+            return;
+        }
+        let slots = self.counter.byte_owner_root_slots.borrow().clone();
+        if slots.is_empty() {
+            return;
+        }
+        // Bound register operands even in a function with many byte locals.
+        // These markers are on call edges, never on a bare element access.
+        for group in slots.chunks(4) {
+            let mut args = Vec::new();
+            for slot in group {
+                let value = self.load(crate::types::DOUBLE, slot);
+                let bits = self.bitcast_double_to_i64(&value);
+                args.push(format!("i64 {bits}"));
+            }
+            let constraints = vec!["r"; args.len()].join(",");
+            self.emit_raw(format!(
+                "call void asm sideeffect \"\", \"{constraints}\"({}) readnone \"gc-leaf-function\"",
+                args.join(", ")
+            ));
+        }
+    }
+
     pub fn new(label: impl Into<String>, counter: Rc<RegCounter>) -> Self {
         Self::new_with_fp_flags(label, counter, FpFlags::default())
     }
@@ -1501,6 +1545,7 @@ impl LlBlock {
                 gc_leaf,
             });
         }
+        self.keep_byte_owners_after_call(Some(func_name));
         r
     }
 
@@ -1532,6 +1577,7 @@ impl LlBlock {
                 gc_leaf: false,
             });
         }
+        self.keep_byte_owners_after_call(Some(func_name));
     }
 
     /// Empty inline-asm barrier (`call void asm sideeffect "", ""()`).
@@ -1595,6 +1641,7 @@ impl LlBlock {
                 gc_leaf,
             });
         }
+        self.keep_byte_owners_after_call(None);
         r
     }
 
@@ -1713,6 +1760,56 @@ fn format_args(args: &[(LlvmType, &str)]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn byte_owner_lifetime_uses_follow_only_actual_calls() {
+        use crate::types::{DOUBLE, I32, PTR};
+        let counter = std::rc::Rc::new(super::RegCounter::new());
+        let mut block = super::LlBlock::new("entry", counter.clone());
+        block.retain_byte_owner_root_slot("%owner");
+        block.retain_byte_owner_root_slot("%owner");
+        block.add(I32, "1", "2");
+        block.call_void("js_shadow_slot_set", &[]);
+        assert!(!block
+            .insts()
+            .iter()
+            .any(|i| i.scan_str().contains("asm sideeffect")));
+        block.call(DOUBLE, "collecting_callee", &[]);
+        block.call_void("collecting_void_callee", &[]);
+        let mut continuation = super::LlBlock::new("next", counter);
+        continuation.call_indirect(DOUBLE, "%callback", &[(PTR, "null")]);
+        let uses = block
+            .insts()
+            .iter()
+            .chain(continuation.insts())
+            .filter_map(|i| {
+                let line = i.scan_str();
+                line.contains("asm sideeffect").then_some(line)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(uses.len(), 3);
+        for line in uses {
+            assert!(line.contains("\"r\""), "one exact root operand: {line}");
+            assert!(
+                line.contains("readnone"),
+                "a lifetime use does not clobber memory"
+            );
+        }
+    }
+
+    #[test]
+    fn dropping_byte_owner_call_edge_turns_the_invariant_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "block::tests::byte_owner_lifetime_uses_follow_only_actual_calls",
+                "--nocapture",
+            ])
+            .env("PERRY_B4_SABOTAGE", "owner_call_edge")
+            .output()
+            .unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(!child.status.success());
+    }
     use super::*;
     use crate::types::{DOUBLE, I32, I64, PTR};
     use std::thread;

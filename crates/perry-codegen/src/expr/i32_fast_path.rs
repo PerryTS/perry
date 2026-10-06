@@ -657,6 +657,12 @@ fn lower_checked_typed_array_i32_load(
 ) -> Result<String> {
     let obj_box = lower_expr(ctx, object)?;
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
+    // Admission can branch to the runtime before producing an Access. Keep
+    // the receiver's raw handle in the dominating block for that fallback.
+    let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+    let raw = ctx
+        .block()
+        .and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
 
     let chk_idx = ctx.new_block("cta.get.chk");
     let load_idx = ctx.new_block("cta.get.load");
@@ -676,7 +682,6 @@ fn lower_checked_typed_array_i32_load(
         &[super::byte_cell::brand_for_kind(kind)],
         &slow_label,
     );
-    let raw = access.raw;
     ctx.block().br(&chk_label);
 
     // ---- chk: bounds check against header length (u32 at offset 0) ----

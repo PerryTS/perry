@@ -301,7 +301,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // conservative cross-closure proof that such a definition may
             // have happened; retain the zero-overhead load for the common
             // barrier-free module and use full property semantics otherwise.
-            if ctx.module_has_shape_barrier_sites {
+            let native_length_is_fixed = match object.as_ref() {
+                Expr::LocalGet(id) => ctx
+                    .receiver_descriptors
+                    .buffer_view(*id)
+                    .is_some_and(|view| view.length_fixed && view.pointer_state.is_stable()),
+                _ => false,
+            };
+            if ctx.module_has_shape_barrier_sites || !native_length_is_fixed {
                 let recv = lower_expr(ctx, object)?;
                 let key_idx = ctx.strings.intern("length");
                 let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);

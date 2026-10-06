@@ -1507,6 +1507,7 @@ pub(super) fn compile_function(
             ));
             ctx.receiver_descriptors
                 .retain_byte_owner(param_slot.clone(), param_slot.clone());
+            ctx.block().retain_byte_owner_root_slot(&param_slot);
             let blk = ctx.block();
             let arg_val = blk.load(DOUBLE, &param_slot);
             let handle = crate::expr::unbox_to_i64(blk, &arg_val);
