@@ -174,13 +174,13 @@ fn a_handle_band_id_is_rejected_without_dereferencing_it() {
     // band. Dereferencing `id - 8` as a GcHeader is a SIGSEGV (#7526), so the
     // rejection has to come from the band test, not from reading the header.
     use crate::value::addr_class::{
-        COMMON_HANDLE_BAND_END, FETCH_HANDLE_BAND_START, HANDLE_BAND_MAX, ZLIB_HANDLE_BAND_START,
+        COMMON_HANDLE_BAND_END, FETCH_HANDLE_BAND_END, FETCH_HANDLE_BAND_START, HANDLE_BAND_MAX,
     };
     let ids = [
         1usize,
         COMMON_HANDLE_BAND_END,
         FETCH_HANDLE_BAND_START,
-        ZLIB_HANDLE_BAND_START,
+        FETCH_HANDLE_BAND_END,
         HANDLE_BAND_MAX - 1,
     ];
     for id in ids {

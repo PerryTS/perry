@@ -660,13 +660,19 @@ fn attach_rooted<T: 'static>(
     vtable: &'static PayloadVTable,
     external_bytes: usize,
 ) {
+    // A closed cell has no Rust layout yet. Its first attach establishes T.
+    let type_id = if payload.is_some() {
+        type_tag::<T>(family.class_id)
+    } else {
+        family.class_id as u64
+    };
     let resource = payload.map_or(std::ptr::null_mut(), |p| {
         Box::into_raw(Box::new(p)) as *mut c_void
     });
     attach_external_rooted(
         obj,
         resource,
-        type_tag::<T>(family.class_id),
+        type_id,
         vtable,
         family.name,
         family.links_owner,

@@ -53,11 +53,13 @@ pub(in crate::node_stream) fn schedule_writable_finish(stream: f64, callback: Op
             .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
             .to_bits() as i64,
     );
-    if crate::node_stream::native_hooks::hooks_of(stream)
-        .is_some_and(|h| h.timing == crate::node_stream::native_hooks::StepTiming::DEFERRED)
+    if has_truthy_hidden(stream, hidden_writable_final_invoked_key())
+        && crate::node_stream::native_hooks::hooks_of(stream)
+            .is_some_and(|h| h.timing == crate::node_stream::native_hooks::StepTiming::DEFERRED)
     {
-        // Native work completes in a macrotask. Writable finish is a nextTick,
-        // so it precedes async-iterator Promise continuations from that task.
+        // A deferred binding whose _final has completed queues writable
+        // finish before Promise continuations from that task. The default
+        // Transform final queues readable end first through the normal queue.
         crate::builtins::js_queue_next_tick(closure as i64);
     } else {
         crate::builtins::js_queue_microtask(closure as i64);

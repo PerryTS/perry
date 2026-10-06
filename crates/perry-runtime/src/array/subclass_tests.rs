@@ -163,7 +163,7 @@ fn array_object_receiver_is_safe_for_non_pointers_and_handle_band_ids() {
         1,
         addr_class::COMMON_HANDLE_BAND_END,
         addr_class::FETCH_HANDLE_BAND_START,
-        addr_class::ZLIB_HANDLE_BAND_START,
+        addr_class::FETCH_HANDLE_BAND_END,
         addr_class::PROXY_ID_BAND_START,
         addr_class::HANDLE_BAND_MAX - 1,
     ] {

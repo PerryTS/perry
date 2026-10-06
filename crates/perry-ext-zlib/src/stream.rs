@@ -135,9 +135,7 @@ fn throw_zstd_error(err: &std::io::Error) -> ! {
 pub unsafe extern "C" fn js_zlib_zstd_compress_sync(data_value: f64, _opts: f64) -> f64 {
     let data_bits = data_value.to_bits() as i64;
     js_zlib_validate_buffer_arg(data_bits);
-    match read_input_from_bits(data_bits)
-        .map(|d| zstd::stream::encode_all(d.as_slice(), ZSTD_DEFAULT_LEVEL))
-    {
+    match read_input_from_bits(data_bits).map(|d| zstd::bulk::compress(&d, ZSTD_DEFAULT_LEVEL)) {
         Some(Ok(out)) => value_bytes(&out),
         Some(Err(e)) => throw_zstd_error(&e),
         None => f64::from_bits(UNDEFINED),
@@ -630,6 +628,10 @@ unsafe fn create_stream(
         );
     }
     if zstd {
+        #[cfg(test)]
+        if std::env::var("PERRY_TEST_ZLIB_CONSTRUCTOR_GC").is_ok() {
+            perry_runtime::gc::js_gc_collect();
+        }
         own_new!(
             "_writeState",
             f64::from_bits(JsValue::from_object_ptr(js_typed_array_new_empty(5, 2)).bits())
