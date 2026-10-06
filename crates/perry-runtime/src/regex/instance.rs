@@ -38,9 +38,13 @@ pub(super) fn new(scope: &RuntimeHandleScope, data: &RuntimeHandle<'_>) -> *mut 
 fn prepare_shape(scope: &RuntimeHandleScope, receiver: &RuntimeHandle<'_>) {
     use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};
     use crate::object::key_attrs::{attr_bits_to_entry, PRIVATE_FIELD_ENTRY};
-    let prototype = scope.root_raw_mut_ptr(crate::value::js_nanbox_get_pointer(
-        crate::object::builtin_prototype_value("RegExp"),
-    ) as *mut RegExpHeader);
+    let intrinsic = crate::object::regex_proto_thunks::recorded_regexp_prototype();
+    let prototype = scope.root_raw_mut_ptr(if intrinsic.is_null() {
+        crate::value::js_nanbox_get_pointer(crate::object::builtin_prototype_value("RegExp"))
+            as *mut RegExpHeader
+    } else {
+        intrinsic
+    });
     let proto_id = prototype
         .with_mut_ptr::<RegExpHeader, _>(|p| unsafe {
             crate::object::proto_validity::mark_object_as_prototype(p as usize)
@@ -77,6 +81,12 @@ fn prepare_shape(scope: &RuntimeHandleScope, receiver: &RuntimeHandle<'_>) {
             prototype.with_const_ptr::<RegExpHeader, _>(|p| js_nanbox_pointer(p as i64).to_bits()),
             |_| false,
         ));
-        BIRTH_SHAPE.with(|memo| memo.set(crate::object::shapes::object_shape_stamp(r)));
+        let shape = crate::object::shapes::object_shape_stamp(r);
+        BIRTH_SHAPE.with(|memo| memo.set(shape));
+        // The canonical keys above prove both namespaces and positions.
+        // Prime the existing generic read sites from those birth facts so the
+        // first access does not rediscover the layout we just constructed.
+        super::MATCHER_READ.with(|site| site.prime_birth(shape, 0, 2));
+        super::LAST_INDEX_READ.with(|site| site.prime_own_inline(shape, 1, 2));
     });
 }

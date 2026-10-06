@@ -728,24 +728,27 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     require_code(regexp_alloc, r"new_data\s*\(", "RegExp construction roots immutable data")
     require_code(regexp_alloc, r"super::instance::new\s*\(", "RegExp ordinary receiver birth")
     require_code(
-        function_body(regex_construct, "new_data"),
+        function_body(regex_construct, "new_data_miss"),
         r"arena_alloc_gc\s*\(\s*std::mem::size_of::<RegExpData>\(\),\s*"
         r"std::mem::align_of::<RegExpData>\(\),\s*crate::gc::GC_TYPE_REGEXP",
         "RegExpData dedicated traced GC birth kind",
     )
+    require_code(function_body(regex_construct, "new_data"), r"new_data_miss\s*\(", "RegExpData cache miss delegates to traced birth")
     instance_path = "crates/perry-runtime/src/regex/instance.rs"
     instance = function_body(clean[instance_path], "new")
-    for pattern, label in (
-        (r"object_alloc_plain_born\s*\(\s*2\s*,\s*shape\s*\)", "cached ordinary birth"),
-        (r"object_alloc_plain\s*\(\s*2\s*\)", "cold ordinary birth"),
-        (r"intrinsic_private_add\s*\([\s\S]*?REGEXP_MATCHER", "intrinsic matcher entry"),
-        (r"object_link_created_prototype\s*\(", "ordinary prototype link"),
-        (r"recorded_regexp_prototype\s*\(", "real RegExp prototype"),
+    prepare = function_body(clean[instance_path], "prepare_shape")
+    for body, pattern, label in (
+        (instance, r"object_alloc_plain_born\s*\(\s*2\s*,\s*shape\s*\)", "single ordinary birth"),
+        (instance, r"prepare_shape\s*\(\s*scope\s*,\s*&receiver\s*\)", "canonical birth on miss"),
+        (prepare, r"MATCHER_READ\.with\(\|site\|\s*site\.birth_key\(\)\)", "qualified intrinsic matcher key"),
+        (prepare, r"extend_key_with_entry\s*\(\s*&proof,\s*CanonicalKeys::EMPTY,\s*private_key,\s*PRIVATE_FIELD_ENTRY", "intrinsic private matcher entry"),
+        (prepare, r"stamp_linked_final_shape\s*\([\s\S]*?proto_id", "ordinary prototype link"),
+        (prepare, r"recorded_regexp_prototype\s*\(", "real RegExp prototype"),
     ):
-        require_code(instance, pattern, "RegExp " + label)
+        require_code(body, pattern, "RegExp " + label)
     require_code(
-        function_body(sources[instance_path], "new"),
-        r'AttrsEdit::Data\(b"lastIndex",\s*1\)',
+        function_body(sources[instance_path], "prepare_shape"),
+        r'intern_ascii_literal\(b"lastIndex"\)[\s\S]*?index_key,\s*attr_bits_to_entry\(1\)',
         "RegExp own writable-only lastIndex descriptor",
     )
     require_code(
@@ -756,10 +759,10 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     alloc_basic = clean["crates/perry-runtime/src/object/alloc_basic.rs"]
     for name, pattern in (
         ("object_alloc_plain", r"object_alloc_with_parent_impl::<true,\s*false>\(0,\s*0,\s*field_count\)"),
-        ("object_alloc_plain_born", r"object_alloc_born_impl\(0,\s*field_count,\s*shape_id,\s*true\)"),
+        ("object_alloc_plain_born", r"object_alloc_unpublished\(0,\s*field_count\)"),
     ):
         require_code(function_body(alloc_basic, name), pattern, "base RegExp has no special class id")
-    for name in ("object_alloc_with_parent_impl", "object_alloc_born_impl"):
+    for name in ("object_alloc_with_parent_impl", "object_alloc_born_impl", "object_alloc_unpublished"):
         require_code(function_body(alloc_basic, name), r"arena_alloc_gc\([^;]*GC_TYPE_OBJECT", "ordinary receiver GC birth")
     require_code(
         function_body(exotic_expando, "exotic_expando_kind"),
@@ -771,7 +774,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         r"\bget_field_by_name_object_tail_with_kind\s*\(",
         "get_field_by_name_object_tail delegates to its _with_kind body",
     )
-    for body in (instance, regexp_alloc, exotic_expando, get_field_tail):
+    for body in (instance, prepare, regexp_alloc, exotic_expando, get_field_tail):
         if re.search(r"GC_TYPE_REGEXP|ExoticKind::RegExp|regex_header_has_magic|is_regex_pointer", body):
             raise CensusError("RegExp receiver reintroduced an exotic/magic property path")
 
@@ -1111,11 +1114,11 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     # These source-only mutations must fail the new representation contract;
     # replacing the retired exotic checks must not erase the authority gate.
     for path, before, after, label in (
-        ("crates/perry-runtime/src/regex/instance.rs", "object_alloc_plain(2)", "object_alloc_plain(3)", "ordinary RegExp birth removed"),
-        ("crates/perry-runtime/src/regex/instance.rs", "intrinsic_private_add(", "intrinsic_private_set(", "matcher entry not defined"),
-        ("crates/perry-runtime/src/regex/instance.rs", 'AttrsEdit::Data(b"lastIndex", 1)', 'AttrsEdit::Data(b"lastIndex", 7)', "lastIndex attributes widened"),
+        ("crates/perry-runtime/src/regex/instance.rs", "object_alloc_plain_born(2, shape)", "object_alloc_plain_born(3, shape)", "ordinary RegExp birth removed"),
+        ("crates/perry-runtime/src/regex/instance.rs", "private_key,\n            PRIVATE_FIELD_ENTRY,", "private_key,\n            0,", "matcher entry not defined"),
+        ("crates/perry-runtime/src/regex/instance.rs", 'attr_bits_to_entry(1)', 'attr_bits_to_entry(7)', "lastIndex attributes widened"),
         ("crates/perry-runtime/src/regex.rs", "MATCHER_READ.with(|site| site.read(value))", "Some(value)", "RegExp brand accepts every value"),
-        ("crates/perry-runtime/src/object/alloc_basic.rs", "object_alloc_born_impl(0, field_count, shape_id, true)", "object_alloc_born_impl(0xFFFF0021, field_count, shape_id, true)", "special RegExp class id restored"),
+        ("crates/perry-runtime/src/object/alloc_basic.rs", "object_alloc_unpublished(0, field_count)", "object_alloc_unpublished(0xFFFF0021, field_count)", "special RegExp class id restored"),
     ):
         broken = dict(sources)
         if broken[path].count(before) != 1:
@@ -1124,7 +1127,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
         expect_rejected(label, lambda: assert_authority_surfaces(broken))
     path = "crates/perry-runtime/src/regex/perex_construct.rs"
     broken = dict(sources)
-    body = function_body(broken[path], "new_data")
+    body = function_body(broken[path], "new_data_miss")
     broken[path] = broken[path].replace(body, body.replace("crate::gc::GC_TYPE_REGEXP", "crate::gc::GC_TYPE_OBJECT"), 1)
     expect_rejected("data born as a receiver", lambda: assert_authority_surfaces(broken))
     path = "crates/perry-runtime/src/object/exotic_expando.rs"

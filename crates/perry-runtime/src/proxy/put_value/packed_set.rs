@@ -274,17 +274,26 @@ pub(crate) fn store_and_prime(
     cache_slot: *mut PackedSetWaysSlot,
     packed: *const AtomicU64,
 ) -> (f64, *const crate::StringHeader) {
-    // An existing writable own slot needs no full [[Set]] even on the
-    // first visit. Use the same shape admission and leaf store as a warm
-    // generated site; accessors, additions and refused layouts still miss.
-    let key_ptr = key.with_const_ptr::<crate::StringHeader, _>(|key| key);
-    unsafe {
-        prime_packed_set(target.get_nanbox_f64(), key_ptr, cache_slot, packed);
-    }
-    let result =
-        js_put_value_set_packed_fast(target.get_nanbox_f64(), value.get_nanbox_f64(), cache_slot);
-    if result.to_bits() != crate::value::TAG_HOLE {
-        return (result, key_ptr);
+    // The first visit can publish an existing writable own slot before
+    // paying for full [[Set]]. Once a site has a cache, its ways have already
+    // declined this receiver/value: re-priming here repeated the same key
+    // lookup on every warm miss, almost always followed by the full Set and
+    // another prime. The existing cache state needs no extra memo or root.
+    if unsafe { crate::object::pic_slot_peek(cache_slot).is_null() } {
+        let admitted = key.with_const_ptr::<crate::StringHeader, _>(|key_ptr| {
+            unsafe {
+                prime_packed_set(target.get_nanbox_f64(), key_ptr, cache_slot, packed);
+            }
+            let result = js_put_value_set_packed_fast(
+                target.get_nanbox_f64(),
+                value.get_nanbox_f64(),
+                cache_slot,
+            );
+            (result.to_bits() != crate::value::TAG_HOLE).then_some((result, key_ptr))
+        });
+        if let Some(answer) = admitted {
+            return answer;
+        }
     }
     let key_value = key.with_const_ptr::<crate::StringHeader, _>(|key| {
         if key.is_null() {

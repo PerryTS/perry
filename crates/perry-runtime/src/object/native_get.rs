@@ -127,7 +127,9 @@ unsafe fn try_data_lookup_key(
     let mut inherited = false;
     for _ in 0..32 {
         let addr = object as usize;
-        let (header, keys, key_count, live, summary, dictionary) = if let Some(shape) = first_shape.take() {
+        let (header, keys, key_count, live, summary, dictionary) = if let Some(shape) =
+            first_shape.take()
+        {
             // The receiver's live ordinary shape already proved ObjectHeader
             // layout. Reuse it on wide, semantic and absent-key reads too;
             // these facts are consumed without allocation or user code.
