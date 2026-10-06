@@ -23,6 +23,7 @@ PROGRAMS = {
     'commander': ('commander/parse_argv.ts', ['5000', '200'], True),
     'hello': ('hello.ts', [], False),
     'fastify': ('fastify/inject.ts', ['500', '30'], True),
+    'effect': ('effectwork.ts', [], False),
     'buffer_heavy': ('buffer_heavy.ts', [], False),
     'worker_heavy': ('worker_heavy.ts', [], False),
 }
@@ -37,8 +38,15 @@ NODE = ['node', '--disable-warning=MODULE_TYPELESS_PACKAGE_JSON', '--experimenta
 def environment(root, arm):
     source = root / ('main-src' if arm == 'main' else 'src')
     target = root / ('main-target' if arm == 'main' else 'target')
+    # The no-auto HTTP path rebuilds whenever it finds crate source, even
+    # when the requested pump features are already in the prebuilt archives.
+    # Use a source-free workspace marker for compiler invocations so both
+    # arms consume exactly the coherent archives built outside this script.
+    prebuilt = root / ('prebuilt-' + arm)
+    for crate in ['perry-runtime', 'perry-ui-geisterhand']:
+        (prebuilt / 'crates' / crate).mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, CARGO_TARGET_DIR=str(target), PERRY_RUNTIME_DIR=str(target/'release'),
-               PERRY_WORKSPACE_ROOT=str(source), RUST_TEST_THREADS='1', CARGO_BUILD_JOBS='8',
+               PERRY_WORKSPACE_ROOT=str(prebuilt), RUST_TEST_THREADS='1', CARGO_BUILD_JOBS='8',
                PERRY_NO_AUTO_OPTIMIZE='1', PERRY_NO_CACHE='1', PERRY_SKIP_BUILD='1',
                PERRY_ALLOW_PERRY_FEATURES='1', TMPDIR=str(root/'tmp'), RAYON_NUM_THREADS='8',
                PERRY_FORCE_WELL_KNOWN='http,net,ws,zlib')
@@ -58,6 +66,9 @@ def run(cmd, cwd, env, prefix, timeout=1800):
 def normalize_kernel(data):
     return re.sub(rb'(?m)^(matrix_multiply|matmul|prime_sieve|buffer_readwrite):\d+', rb'\1:<time>', data)
 
+def normalize_effect(data):
+    return re.sub(rb'(construct2000|decode20000)=\d+ms', rb'\1=<time>ms', data)
+
 def compile_arm(root, arm, names):
     source, target, env = environment(root, arm)
     status = {}
@@ -76,7 +87,7 @@ def compile_arm(root, arm, names):
             continue
         node = run([*NODE, relative, *args], cwd, env, out/f'{name}.node', timeout=60)
         perry = run([str(out/name), *args], cwd, env, out/f'{name}.perry', timeout=60)
-        norm = normalize_kernel if name in KERNELS else lambda b: b
+        norm = normalize_kernel if name in KERNELS else normalize_effect if name == 'effect' else lambda b: b
         matches = node.returncode == 0 and perry.returncode == 0 and norm(node.stdout) == norm(perry.stdout)
         status[name] = {'node': node.returncode, 'perry': perry.returncode, 'output_equal': matches}
         print(f'{arm}/{name}: {status[name]}', flush=True)

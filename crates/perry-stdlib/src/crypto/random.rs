@@ -613,6 +613,12 @@ pub extern "C" fn js_crypto_random_fill_sync(
     perry_runtime::buffer::bytes::no_gc(|scope| unsafe {
         let data = perry_runtime::buffer::bytes::bytes_mut(value, scope)?;
         rand::rng().fill_bytes(&mut data[start..start + count]);
+        #[cfg(test)]
+        if b2c_sabotage("random_fill_range") && count > 0 {
+            // Make the wrong-window witness deterministic rather than depend
+            // on the RNG changing the sentinel byte by chance.
+            data[start] = 0xff;
+        }
         Ok::<_, perry_runtime::buffer::bytes::NotBytes>(())
     })
     .unwrap_or_else(|_| throw_invalid_random_fill_buffer(buf_bits));
