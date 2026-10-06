@@ -720,10 +720,16 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         if re.search(r"regex_header_has_magic|object_type", body):
             raise CensusError(f"{name} reintroduced an old payload discriminator")
     require_code(
-        function_body(regex_runtime, "js_regexp_new_impl"),
+        function_body(regex_runtime, "js_regexp_new"),
         r"perex_construct::new\s*\(",
         "RegExp construction delegates to its single birth site",
     )
+    # S4 literals and dynamic construction share the same ordinary birth.
+    literal_runtime = (ROOT / "crates/perry-runtime/src/regex/literal.rs").read_text()
+    require_code(function_body(literal_runtime, "js_regexp_literal"),
+                 r"super::instance::new\s*\(", "literal ordinary receiver birth")
+    require_code(function_body(literal_runtime, "literal_miss"),
+                 r"perex_construct::new_data\s*\(", "literal immutable data construction")
     regexp_alloc = function_body(regex_construct, "new")
     require_code(regexp_alloc, r"new_data\s*\(", "RegExp construction roots immutable data")
     require_code(regexp_alloc, r"super::instance::new\s*\(", "RegExp ordinary receiver birth")

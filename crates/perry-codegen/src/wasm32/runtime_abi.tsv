@@ -3179,13 +3179,7 @@ js_regexp_exec_get_index	f64
 js_regexp_get_flags	ptr	ptr
 js_regexp_get_source	ptr	ptr
 js_regexp_new	ptr	ptr,ptr
-js_regexp_new_factory_site	ptr	ptr,ptr,i64,i64
-js_regexp_new_site	ptr	ptr,ptr,i64
-js_regexp_site_factory_call_method	f64	i64,f64,f64
-js_regexp_site_factory_call_value	f64	i64,f64
-js_regexp_site_test_dispatch	f64	i64,f64,f64,f64
-js_regexp_site_test_get_method	f64	i64,f64
-js_regexp_site_test_new	ptr	ptr,ptr,i64
+js_regexp_literal	ptr	ptr,ptr,i64
 js_regexp_test	i32s	ptr,ptr
 js_regexp_to_string	ptr	ptr
 js_region_guard_pack	i64	i32u,i32u,i64,i64,i64,i64,i64

@@ -48,7 +48,6 @@ crates/perry-runtime/src/object/spill.rs::ON
 crates/perry-runtime/src/promise/microtasks/empty.rs::CALLED
 crates/perry-runtime/src/promise/native_async.rs::CLEANUP_FINALIZER_CALLS
 crates/perry-runtime/src/promise/then_probe.rs::ON
-crates/perry-runtime/src/regex/site_test.rs::NESTED_WRAPPER_CALLS
 crates/perry-runtime/src/registry_latch.rs::LATCH
 crates/perry-runtime/src/symbol.rs::PERRY_SYMBOL_PROPERTY_IC_EPOCH
 crates/perry-runtime/src/symbol.rs::SYMBOL_EVER_REGISTERED

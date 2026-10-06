@@ -132,7 +132,7 @@ unsafe fn publish(
     program.install(receiver);
 }
 
-fn new_data<'s>(
+pub(super) fn new_data<'s>(
     scope: &'s RuntimeHandleScope,
     source: *const StringHeader,
     flags: *const StringHeader,
