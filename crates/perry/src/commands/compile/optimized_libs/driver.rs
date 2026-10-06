@@ -429,12 +429,13 @@ pub(crate) fn build_optimized_libs(
                 // `js_tls_client_preflight` undefined at link time.
                 features.insert("external-tls-server");
             }
-            // Issue #769 — when `node:http` / `node:https` routes to
-            // perry-ext-http, retain its client dispatch adapters and shared
-            // runtime. The client queue and in-flight predicate self-register.
-            if matches!(module_normalized, "http" | "https") {
-                features.insert("external-http-client-pump");
-            }
+            features.extend(
+                crate::commands::stdlib_features::routed_stream_dispatch_features(
+                    module_normalized,
+                )
+                .iter()
+                .copied(),
+            );
         }
     }
 

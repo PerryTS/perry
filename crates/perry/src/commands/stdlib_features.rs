@@ -11,6 +11,15 @@
 
 use std::collections::BTreeSet;
 
+/// Dynamic stream dispatch must use the same provider as the routed wrapper.
+/// Shared by automatic specialization and the coherent no-auto build.
+pub fn routed_stream_dispatch_features(module: &str) -> &'static [&'static str] {
+    match module.strip_prefix("node:").unwrap_or(module) {
+        "http" | "https" => &["external-http-client-pump"],
+        _ => &[],
+    }
+}
+
 /// Look up the perry-stdlib feature(s) required to support a single
 /// imported native module. Returns an empty slice for modules that need
 /// no optional stdlib feature (covered by always-on dependencies like
