@@ -2916,6 +2916,30 @@
       "name": "CALLS",
       "verdict": "not_a_gc_pointer",
       "why": "Test-only AtomicUsize invocation counter. Its only writes store zero or fetch_add(1); reads compare the numeric callback count. No address or tagged value is ever stored."
+    },
+    {
+      "file": "crates/perry-runtime/src/alloc_census.rs",
+      "name": "IN_SAMPLER",
+      "verdict": "not_a_gc_pointer",
+      "why": "Re-entrancy guard for the native-heap allocation sampler: a const-initialised Cell<bool> that is set while the sampler records a backtrace so its own allocations are not sampled. A flag, never an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/trace.rs",
+      "name": "BLOCK_PERSIST_FORCE_MARKS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Running Cell<u64> count of objects that block persistence force-marked on this thread, added once per pass by note_block_persist_force_marks and read by tests. A counter, never an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/json_tape_store.rs",
+      "name": "TAPE_REGISTRY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Weak side table from a LazyArrayHeader address (identity key, never dereferenced or marked) to its Rust-allocated, pointer-free TapeEntry buffer. GcMoveHookKind::LazyArrayTape rekeys an entry when its owner moves (owner_moved), and dead owners are released by the sweep-entry collect_owners pass, the copying-minor from-space pass and thread teardown, so the table keeps no object alive and never holds a stale key across a collection."
+    },
+    {
+      "file": "crates/perry-runtime/src/json_tape_store.rs",
+      "name": "TAPE_REGISTRY_NONEMPTY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<bool> fast gate that records whether TAPE_REGISTRY holds any entry, so collector passes skip the registry on threads that never built a tape. A flag, never an address."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, \u201cThe identity-pinned frontier\u201d). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",

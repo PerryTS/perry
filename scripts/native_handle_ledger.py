@@ -296,6 +296,24 @@ def totals(rows: dict[str, tuple[int, int]]) -> tuple[int, int]:
     return sum(v[0] for v in rows.values()), sum(v[1] for v in rows.values())
 
 
+# The census floor guards against a scan that silently stops matching, not
+# against conversions: #11919 removes tables and producers on purpose, so the
+# floor follows the reviewed ledger rather than a fixed count. A fall of more
+# than a tenth below the recorded totals needs a reviewed --update first. The
+# absolute minimum stops an --update run by a broken scan from lowering the
+# ledger, and with it the relative floor, to nothing.
+CENSUS_LEDGER_FRACTION = (9, 10)
+CENSUS_MINIMUM = (150, 150)
+
+
+def census_too_small(census: tuple[int, int], recorded: tuple[int, int]) -> bool:
+    num, den = CENSUS_LEDGER_FRACTION
+    return any(
+        actual < minimum or actual * den < ledger * num
+        for actual, ledger, minimum in zip(census, recorded, CENSUS_MINIMUM)
+    )
+
+
 def compare_ceiling(
     actual: dict[str, tuple[int, int]],
     ceiling: dict[str, tuple[int, int]],
@@ -403,8 +421,20 @@ fn test_only() { register_handle(2_u8); }
     if missing:
         print(f"native_handle_ledger self-test FAILED: stale classification entries: {missing}")
         return 1
-    if sum(tables.values()) < 200 or sum(producers.values()) < 150:
-        print("native_handle_ledger self-test FAILED: implausibly small real-tree census")
+    census = (sum(tables.values()), sum(producers.values()))
+    recorded = totals(parse_ledger(LEDGER.read_text(encoding="utf-8")))
+    if census_too_small(census, recorded):
+        print(
+            "native_handle_ledger self-test FAILED: implausibly small real-tree census "
+            f"({census[0]} tables, {census[1]} producers; ledger records "
+            f"{recorded[0]}, {recorded[1]}). If the conversions are real, lower the "
+            "ledger with --update; otherwise the scan has stopped matching."
+        )
+        return 1
+    if not census_too_small((0, 0), recorded) or not census_too_small(
+        (recorded[0] * 8 // 10, recorded[1]), recorded
+    ):
+        print("native_handle_ledger self-test FAILED: planted census collapse did not fire")
         return 1
     print(
         f"native_handle_ledger self-test: OK ({sum(tables.values())} tables, "
