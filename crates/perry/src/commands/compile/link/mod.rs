@@ -134,11 +134,6 @@ pub(super) const PLUGIN_HOST_SYMBOLS: &[&str] = &[
     "perry_plugin_set_config",
     "perry_plugin_discover",
     "perry_plugin_init",
-    // Process-wide class-field inline guard (perry-runtime/src/object/mod.rs).
-    // A `#[no_mangle] pub static`; not picked up by `llvm-nm` filter heuristics
-    // for every codebase, so list it explicitly so the plugin DLL can find it
-    // at LoadLibrary time.
-    "PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED",
 ];
 
 /// Checked-in Node v26.5.1 / N-API v8 export inventory. The runtime build
