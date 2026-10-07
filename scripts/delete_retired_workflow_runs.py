@@ -117,12 +117,18 @@ def main() -> int:
         return 0
     if remaining < 10 and reset_at:
         delay = max(1, reset_at - int(time.time()) + 5)
-        if time.monotonic() + delay < deadline:
-            print(f"Waiting {delay}s for API quota reset")
-            time.sleep(delay)
+        if time.monotonic() + delay >= deadline:
+            print("Not enough job time remains for the API quota reset", file=sys.stderr)
+            return 1
+        print(f"Waiting {delay}s for API quota reset")
+        time.sleep(delay)
     if remaining < 2:
-        print("Insufficient API quota to safely queue continuation", file=sys.stderr)
-        return 1
+        if not reset_at:
+            print("Cannot queue continuation without a known API quota reset", file=sys.stderr)
+            return 1
+        # The cached counter describes the quota before sleeping. The reset
+        # has elapsed, so allow the dispatch request to verify fresh capacity.
+        print("API quota reset elapsed; attempting continuation dispatch")
     status, _, payload = api.request("POST", "/actions/workflows/maintenance.yml/dispatches", {
         "ref": "main",
         "inputs": {"suite": "delete-retired-runs", "confirm_delete_retired_runs": "true"},
