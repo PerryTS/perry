@@ -91,7 +91,7 @@ pub(crate) use gc_roots::{
     test_clear_symbol_side_table_roots, test_seed_class_static_symbol_root,
     test_seed_symbol_pointer_root, test_seed_symbol_property_root,
     test_symbol_pointer_root_contains, test_symbol_property_owner_exists,
-    test_symbol_property_root_bits, test_symbol_property_roots,
+    test_symbol_property_root_bits,
 };
 
 use crate::fast_hash::{
