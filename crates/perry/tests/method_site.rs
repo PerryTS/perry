@@ -41,19 +41,31 @@ fn stat(stderr: &str, name: &str) -> u64 {
 }
 
 fn compile_and_run(source: &str, envs: &[(&str, &str)]) -> (String, String) {
+    compile_and_run_with(source, &[], envs)
+}
+
+/// [`compile_and_run`] with `compile_envs` set for the compiler only.
+fn compile_and_run_with(
+    source: &str,
+    compile_envs: &[(&str, &str)],
+    envs: &[(&str, &str)],
+) -> (String, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let entry = dir.path().join("main.ts");
     let output = dir.path().join("main_bin");
     std::fs::write(&entry, source).expect("write entry");
-    let compile = Command::new(perry_bin())
+    let mut compile = Command::new(perry_bin());
+    compile
         .current_dir(dir.path())
         .arg("compile")
         .arg(&entry)
         .arg("-o")
         .arg(&output)
-        .env("PERRY_NO_CACHE", "1")
-        .output()
-        .expect("run perry compile");
+        .env("PERRY_NO_CACHE", "1");
+    for &(key, value) in compile_envs {
+        compile.env(key, value);
+    }
+    let compile = compile.output().expect("run perry compile");
     assert!(
         compile.status.success(),
         "perry compile failed\nstdout:\n{}\nstderr:\n{}",
@@ -690,4 +702,84 @@ null-own:a,null-ts,5,TypeError,TypeError,null-own:a,null-ts,5,TypeError,TypeErro
         "builtin methods must be served by the inherited entry \
          (own={own} inherited={inherited} misses={misses})"
     );
+}
+
+/// Sabotage: the full-outline collapse sends every receiver of a name some
+/// class declares to by-name dispatch (`js_native_call_method`), or a tower
+/// wider than the shape probe's arms sends a non-instance receiver to its
+/// default arm -> no entry is primed for the RegExp, the namespace object or
+/// the plain object.
+#[test]
+fn a_class_method_of_the_same_name_does_not_demote_other_receivers() {
+    let source = r#"// Nine classes declare `test` and `default` (a tower wider than the shape
+// probe's arms). The untyped sites below also see a RegExp, an esbuild-style
+// namespace object and a plain object; none of them may be demoted to by-name
+// dispatch because a class declares the same name.
+class C0 { test(x: any): any { return "c0:" + x; } default(): any { return "d0"; } }
+class C1 extends C0 { test(x: any): any { return "c1:" + x; } }
+class C2 { test(x: any): any { return "c2"; } default(): any { return "d2"; } }
+class C3 { test(x: any): any { return "c3"; } default(): any { return "d3"; } }
+class C4 { test(x: any): any { return "c4"; } default(): any { return "d4"; } }
+class C5 { test(x: any): any { return "c5"; } default(): any { return "d5"; } }
+class C6 { test(x: any): any { return "c6"; } default(): any { return "d6"; } }
+class C7 { test(x: any): any { return "c7"; } default(): any { return "d7"; } }
+class C8 { test(x: any): any { return "c8"; } default(): any { return "d8"; } }
+function toESM(q: any): any {
+  const t: any = Object.create(Object.getPrototypeOf(q));
+  Object.defineProperty(t, "default", { value: q, enumerable: true });
+  return t;
+}
+const N = process.argv.length > 99 ? 1 : 6000;
+var re: any, ns: any, plain: any, c0: any, c1: any;
+function init(): string {
+  re = /^[ab]$/; ns = toESM(() => "ns"); plain = { test: (x: any) => "plain:" + x };
+  c0 = new C0(); c1 = new C1();
+  const all: any[] = [new C2(), new C3(), new C4(), new C5(), new C6(), new C7(), new C8()];
+  let s = ""; for (const c of all) s += c.test(1) + c.default(); return s;
+}
+const head = init();
+const chars = ["a", "x", "b", "y"];
+function hotRe(): number { let t = 0; for (let i = 0; i < N; i++) { const c = chars[i & 3]; if (re.test(c)) t++; } return t; }
+function hotNs(): string { let s = ""; for (let i = 0; i < N; i++) { if (i === 3000) ns = toESM(() => "ns2"); const v = ns.default(); if (i % 1000 === 0) s += v + ","; } return s; }
+function hotPair(): string {
+  let s = "";
+  for (let i = 0; i < N; i++) {
+    if (i === 2000) (C0.prototype as any).test = function (x: any) { return "patched:" + x; };
+    if (i === 4000) c0.test = (x: any) => "own:" + x;
+    const o = i & 1 ? c0 : plain;
+    const k = i & 7;
+    const v = o.test(k);
+    if (i % 997 < 2) s += v + ",";
+  }
+  return s;
+}
+function hotSub(): string { let s = ""; for (let i = 0; i < N; i++) { const k = i & 3; const v = c1.test(k); if (i % 1500 === 0) s += v + ","; } return s; }
+console.log(head);
+console.log(hotRe());
+console.log(hotNs());
+console.log(hotPair());
+console.log(hotSub());
+"#;
+    let expected = "c2d2c3d3c4d4c5d5c6d6c7d7c8d8\n3000\nns,ns,ns,ns2,ns2,ns2,\n\
+plain:0,c0:1,c0:5,plain:6,plain:2,c0:3,patched:7,plain:0,plain:4,patched:5,own:1,plain:2,plain:6,own:7,\n\
+c1:0,c1:0,c1:0,c1:0,";
+    // Both lowerings of a name nine classes declare: the inline class-id
+    // tower (too wide for the shape probe's arms) and the oversized-module
+    // outline (no tower at all).
+    for full_outline in ["0", "1"] {
+        let (stdout, stderr) =
+            compile_and_run_with(source, &[("PERRY_FULL_OUTLINE_IC", full_outline)], &[]);
+        assert_eq!(stdout, expected, "PERRY_FULL_OUTLINE_IC={full_outline}");
+        let own = stat(&stderr, "primes_own");
+        let builtin = stat(&stderr, "primes_builtin");
+        let misses = stat(&stderr, "misses");
+        // Own entries: the namespace object (twice: it is re-created
+        // mid-loop) and the plain object; a builtin entry: RegExp#test. The
+        // hot calls (4 x 6000) are served inline.
+        assert!(
+            own >= 3 && builtin >= 1 && misses <= 80,
+            "receivers no class implements must be served by the method site \
+             (PERRY_FULL_OUTLINE_IC={full_outline}: own={own} builtin={builtin} misses={misses})"
+        );
+    }
 }
