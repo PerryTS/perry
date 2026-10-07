@@ -28,6 +28,10 @@
 //! Only `this` and plain local receivers take this path: the receiver is
 //! evaluated once, before a write's right-hand side, and the brand check runs
 //! after it, as `PrivateSet` does.
+//!
+//! Static fields use explicit PrivateGet/PrivateSet runtime entries instead:
+//! the constructor identity must be checked on every access, and its private
+//! slot may live in a function's own-property bag.
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -52,10 +56,11 @@ const POINTER_BAND_SPAN: &str = "281474975662080";
 
 /// The parts of an instance private FIELD access this module compiles.
 pub(crate) struct PrivateFieldSite<'e> {
-    receiver: &'e Expr,
+    pub(super) receiver: &'e Expr,
     class_id: u32,
     field_name: &'e str,
     receiver_is_brand_owner: bool,
+    pub(super) is_static: bool,
     static_final: Option<StaticFinal>,
 }
 
@@ -91,14 +96,28 @@ pub(crate) fn private_field_site<'e>(
     else {
         return None;
     };
-    if *kind != 0 || *guard_op != op {
+    if *kind != 0 || (*guard_op != op && *guard_op != op + 2) {
         return None;
     }
+    let is_static = *guard_op >= 2;
+    // Updates wrap the read guard inside the write guard. The explicit
+    // static get/set calls perform those checks around ToNumeric themselves.
+    let receiver = match receiver.as_ref() {
+        Expr::PrivateGuard {
+            class_id: read_class_id,
+            field_name: read_name,
+            kind: 0,
+            op: 2,
+            object,
+            ..
+        } if is_static && read_class_id == class_id && read_name == field_name => object.as_ref(),
+        other => other,
+    };
     // A scalar-replaced constructor has no heap `this`.
-    if !ctx.scalar_ctor_target.is_empty() {
+    if !is_static && !ctx.scalar_ctor_target.is_empty() {
         return None;
     }
-    if !matches!(receiver.as_ref(), Expr::This | Expr::LocalGet(_)) {
+    if !is_static && !matches!(receiver, Expr::This | Expr::LocalGet(_)) {
         return None;
     }
     let class_id = if *class_id != 0 {
@@ -109,14 +128,18 @@ pub(crate) fn private_field_site<'e>(
     if class_id == 0 {
         return None;
     }
-    let static_final =
+    let static_final = if is_static {
+        None
+    } else {
         crate::codegen::static_private_class::static_private_field_slot(ctx, class_name, property)
-            .map(|(id, slot, f64)| StaticFinal { id, slot, f64 });
+            .map(|(id, slot, f64)| StaticFinal { id, slot, f64 })
+    };
     Some(PrivateFieldSite {
         receiver,
         class_id,
         field_name,
         receiver_is_brand_owner: *receiver_is_brand_owner,
+        is_static,
         static_final,
     })
 }
@@ -228,12 +251,39 @@ fn storage_key_box(ctx: &mut FnCtx<'_>, property: &str) -> String {
     ctx.block().load(DOUBLE, &key_global)
 }
 
+pub(super) fn lower_static_get_operands(
+    ctx: &mut FnCtx<'_>,
+    site: &PrivateFieldSite<'_>,
+    obj: &str,
+) -> Result<String> {
+    let brand_owner = lower_brand_owner(ctx, site, obj)?;
+    let name_label = emit_string_literal_global(ctx, site.field_name);
+    Ok(ctx.block().call(
+        DOUBLE,
+        "js_private_static_field_get",
+        &[
+            (DOUBLE, obj),
+            (DOUBLE, &brand_owner),
+            (I32, &site.class_id.to_string()),
+            (PTR, &name_label),
+            (I32, &site.field_name.len().to_string()),
+        ],
+    ))
+}
+
 /// `recv.#x`.
 pub(crate) fn lower_get(
     ctx: &mut FnCtx<'_>,
     site: PrivateFieldSite<'_>,
     property: &str,
 ) -> Result<String> {
+    if site.is_static {
+        let (vals, group) = crate::lower_call::lower_operand_list_rooted(ctx, &[site.receiver])?;
+        let obj = &vals[0];
+        let result = lower_static_get_operands(ctx, &site, obj)?;
+        group.release(ctx);
+        return Ok(result);
+    }
     let obj = lower_expr(ctx, site.receiver)?;
     let brand_owner = lower_brand_owner(ctx, &site, &obj)?;
     let name_label = emit_string_literal_global(ctx, site.field_name);
@@ -359,7 +409,7 @@ fn emit_boxed_store(
     end
 }
 
-fn lower_set_operands(
+pub(super) fn lower_set_operands(
     ctx: &mut FnCtx<'_>,
     site: &PrivateFieldSite<'_>,
     property: &str,
@@ -369,6 +419,20 @@ fn lower_set_operands(
 ) -> Result<String> {
     let brand_owner = lower_brand_owner(ctx, site, obj)?;
     let name_label = emit_string_literal_global(ctx, site.field_name);
+    if site.is_static {
+        return Ok(ctx.block().call(
+            DOUBLE,
+            "js_private_static_field_set",
+            &[
+                (DOUBLE, obj),
+                (DOUBLE, &brand_owner),
+                (I32, &site.class_id.to_string()),
+                (PTR, &name_label),
+                (I32, &site.field_name.len().to_string()),
+                (DOUBLE, val),
+            ],
+        ));
+    }
     let cache = emit_private_site_cache(ctx, 1);
     let barrier_needed = !super::expr_produces_non_pointer_bits_by_construction(ctx, value);
     let addref_needed = super::class_field_store_needs_string_addref(ctx, value);

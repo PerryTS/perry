@@ -398,6 +398,16 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     );
     // #11791: a class's completed private shape, minted at module init.
     module.declare_function(
+        "js_private_static_field_get",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, PTR, I32],
+    );
+    module.declare_function(
+        "js_private_static_field_set",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32, PTR, I32, DOUBLE],
+    );
+    module.declare_function(
         "js_object_final_shape_id_for_class_keys_static_private",
         I32,
         &[I64, I32, I32, I32, I32, I64, PTR, I32, PTR, I32],

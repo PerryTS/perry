@@ -1774,8 +1774,9 @@ include!("ic_miss/private_member_access.rs");
 include!("ic_miss/private_guard_fast.rs");
 
 /// The object that holds `value`'s private elements (#11791): `value`
-/// itself when it is a shaped object. A Proxy holds none of its target's
-/// private elements, and a primitive holds none at all.
+/// itself when it is a shaped object, or its own bag when it is a function.
+/// A Proxy holds none of its target's private elements, and a primitive holds
+/// none at all.
 ///
 /// # Safety
 /// Reads only headers; `value` may be any NaN-boxed value.
@@ -1785,9 +1786,20 @@ unsafe fn private_element_holder(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let object = value.as_pointer::<ObjectHeader>() as *mut ObjectHeader;
+    let header = crate::value::addr_class::try_read_gc_header(object as usize)?;
+    if header.obj_type == crate::gc::GC_TYPE_CLOSURE {
+        let bag = crate::closure::props::bag_of(object as usize);
+        return (!bag.is_null()).then_some(bag);
+    }
     (crate::value::addr_class::is_plausible_heap_addr(object as usize)
         && crate::object::object_is_shaped(object))
     .then_some(object)
+}
+
+// Instance evaluation brands never grant access to static private elements.
+fn private_static_receiver_is_constructor(value: f64) -> bool {
+    super::super::class_value::class_value_id(value).is_some()
+        || super::super::class_registry::is_class_object_value(value)
 }
 
 /// The private brand of class `class_id` in evaluation `evaluation_id`
@@ -2106,7 +2118,10 @@ fn private_guard_checked(
     let obj_root = scope.root_nanbox_f64(obj);
     let brand_owner_root = scope.root_nanbox_f64(brand_owner);
     let field_name = interned.unwrap_or("");
-    if is_static && crate::proxy::js_proxy_is_proxy(obj) != 0 {
+    if is_static
+        && (crate::proxy::js_proxy_is_proxy(obj) != 0
+            || !private_static_receiver_is_constructor(obj))
+    {
         throw_private_brand_mismatch(
             obj,
             declaring_class_id,
@@ -2141,6 +2156,20 @@ fn private_guard_checked(
             field_name,
             kind,
             is_static,
+            is_write,
+        );
+    }
+    if is_static
+        && kind == 0
+        && !static_private_field_key(declaring_class_id, field_name)
+            .is_present(obj_root.get_nanbox_f64())
+    {
+        throw_private_brand_mismatch(
+            obj_root.get_nanbox_f64(),
+            declaring_class_id,
+            field_name,
+            kind,
+            true,
             is_write,
         );
     }

@@ -180,7 +180,7 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
         if d.object_kind.is_ordinary_layout() && d.keys != 0 {
             let keys = d.keys as usize as *const crate::array::ArrayHeader;
             let slot =
-                crate::object::keys_find_slot_by_bytes_resolved(keys, d.logical_key_count, key)?;
+                crate::object::keys_find_property_slot_by_bytes(keys, d.logical_key_count, key)?;
             // An accessor key's slot holds its getter/setter pair, never a
             // data value.
             if d.summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0
@@ -201,7 +201,7 @@ unsafe fn object_own_get(obj: *const ObjectHeader, key: &[u8]) -> Option<f64> {
     if arr.is_null() {
         return None;
     }
-    let slot = crate::object::keys_find_slot_by_bytes_resolved(arr, keys.count(), key)?;
+    let slot = crate::object::keys_find_property_slot_by_bytes(arr, keys.count(), key)?;
     if crate::object::key_attrs::key_is_accessor_at(arr, slot as u32) {
         return None;
     }
@@ -227,29 +227,10 @@ pub(crate) unsafe fn bag_get(ptr: usize, key: &[u8]) -> Option<f64> {
 
 unsafe fn object_own_set(obj: *mut ObjectHeader, key: &str, value: f64) {
     let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    crate::object::js_object_set_field_by_name(obj, key, value);
-}
-
-/// Make the function's own `key` a private element: an `ENTRY_PRIVATE` entry
-/// of its bag, which reflection skips by attribute (#11791). The compiler
-/// calls this where it creates a static private element; nothing infers it
-/// from the key's spelling.
-///
-/// # Safety
-/// `ptr` is a proven, live closure cell.
-pub(crate) unsafe fn bag_claim_private(ptr: usize, key: &[u8]) {
-    let _no_move = crate::gc::GcSuppressScope::new();
-    let bag = bag_of(ptr);
-    if bag.is_null()
-        || !bag_has_own(ptr, key)
-        || crate::object::key_attrs::object_key_is_private(bag, key)
-    {
-        return;
-    }
-    crate::object::key_attrs::apply_edits(
-        bag,
-        &[crate::object::key_attrs::AttrsEdit::Private(key)],
-    );
+    // These are ordinary properties of the bag, even when their spelling
+    // matches an internal private storage key. Do not reinterpret the string
+    // as a compiled PrivateReference.
+    crate::object::set_field_by_name_object_tail(obj, key, value);
 }
 
 /// Define/overwrite the function's own data property `key` (plain `[[Set]]`
@@ -387,7 +368,7 @@ pub(crate) unsafe fn bag_has_own(ptr: usize, key: &[u8]) -> bool {
     if arr.is_null() {
         return false;
     }
-    let Some(slot) = crate::object::keys_find_slot_by_bytes_resolved(arr, keys.count(), key) else {
+    let Some(slot) = crate::object::keys_find_property_slot_by_bytes(arr, keys.count(), key) else {
         return false;
     };
     crate::object::key_attrs::key_is_accessor_at(arr, slot as u32)

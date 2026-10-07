@@ -166,6 +166,26 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             class_name,
             field_name,
         } => {
+            if field_name.starts_with('#') {
+                let class_id = ctx.class_ids.get(class_name).copied().unwrap_or(0);
+                let object = Expr::PrivateGuard {
+                    class_name: class_name.clone(),
+                    class_id,
+                    field_name: field_name.clone(),
+                    kind: 0,
+                    op: 2,
+                    receiver_is_brand_owner: false,
+                    object: Box::new(Expr::ClassRef(class_name.clone())),
+                };
+                return lower_expr(
+                    ctx,
+                    &Expr::PropertyGet {
+                        object: Box::new(object),
+                        property: private_static_storage_name(class_id, field_name),
+                        byte_offset: 0,
+                    },
+                );
+            }
             let key = (class_name.clone(), field_name.clone());
             if let Some(global_name) = ctx.static_field_globals.get(&key).cloned() {
                 let g_ref = format!("@{}", global_name);
@@ -196,7 +216,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 ),
                 _ => None,
             };
-            if let Some(global_name) = global_name.as_ref() {
+            if let Some(global_name) = global_name
+                .as_ref()
+                .filter(|_| !field_name.starts_with('#'))
+            {
                 let g_ref = format!("@{}", global_name);
                 // GC_STORE_AUDIT(ROOT): static field global slot is registered as a mutable GC root
                 // (register_module_globals_as_gc_roots walks ctx.static_field_globals since the
@@ -221,9 +244,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let cid_str = class_id.to_string();
                 let global_slot = global_name
                     .as_ref()
+                    .filter(|_| !field_name.starts_with('#'))
                     .map(|name| format!("@{name}"))
                     .unwrap_or_else(|| "null".to_string());
-                // A static private element is claimed as one at its source
+                // A static private element is defined as one at its source
                 // (an `ENTRY_PRIVATE` key of the class function, #11791).
                 let register = if field_name.starts_with('#') {
                     "js_class_register_static_private_field"
