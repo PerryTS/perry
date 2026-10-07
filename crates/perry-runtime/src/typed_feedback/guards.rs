@@ -863,10 +863,8 @@ pub const CLASS_FIELD_SET_FAST_NOT_ATTEMPTED: i32 = 2;
 /// `js_object_set_field`.
 pub const CLASS_FIELD_SET_FAST_STORE_SLOW: i32 = 3;
 
-/// Whether the class-field guards run their side-effect-free, descriptor-free
-/// contract — the only case the `_fast` entries serve. Both inputs are
-/// set-only latches, so a decline observed by the fast entry is still a
-/// decline when the continuation re-reads them.
+/// The leaf contract serves ordinary own slots while tracing is disabled.
+/// Accessor eligibility belongs to the receiver's holder shape.
 #[inline(always)]
 fn class_field_fast_entries_serve() -> bool {
     !typed_feedback_enabled()

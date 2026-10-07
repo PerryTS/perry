@@ -61,7 +61,7 @@ pub fn handle_expando_clear(handle: i64) {
         cell.borrow_mut().remove(&handle);
     });
     // Removing the bag edge releases its attributes and accessor values too.
-    super::descriptor_state::clear_object_descriptors(handle as usize);
+    // Native addresses never need to be interpreted as cell headers here.
 }
 
 /// Read back an own property previously stored via `handle_expando_set`.
@@ -361,6 +361,18 @@ mod tests {
         assert!(!handle_expando_has(h, "eventEmitter"));
         assert!(handle_expando_attrs(h, "eventEmitter").enumerable());
         assert!(handle_expando_own_keys(h, true).is_empty());
+        let original = *words;
+        handle_expando_set(h, "eventEmitter", 42.0);
+        assert_eq!(handle_expando_get(h, "eventEmitter"), Some(42.0));
+        handle_expando_clear(h);
+        assert!(
+            handle_property_bag(h).is_null(),
+            "recycle must drop the holder edge"
+        );
+        assert_eq!(
+            *words, original,
+            "recycle must never interpret native bytes as a cell"
+        );
         drop(words);
     }
 }

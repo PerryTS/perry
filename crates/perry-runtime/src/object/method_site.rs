@@ -1130,9 +1130,7 @@ pub unsafe extern "C-unwind" fn js_method_site_call_value_apply(
 
 /// Can reading `name` off `recv` run code or throw? A nullish receiver throws,
 /// a Proxy anywhere on the chain traps, and an accessor anywhere on the chain
-/// runs its getter. Accessors are looked for only once a program has defined
-/// one (`accessors_in_use`); a primitive's chain (its builtin prototypes) is
-/// walked only then.
+/// runs its getter. Each holder shape answers whether the key is an accessor.
 unsafe fn lookup_is_observable(recv: f64, name: &[u8]) -> bool {
     let bits = recv.to_bits();
     if bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL {
@@ -1151,7 +1149,7 @@ unsafe fn lookup_is_observable(recv: f64, name: &[u8]) -> bool {
             }
             // Every cell kind answers: an ordinary object from its shape's
             // summary and keys, any other cell (an array exotic prototype, a
-            // collection) from its descriptor meta or tables.
+            // collection) from its own property holder's shape.
             if crate::value::addr_class::is_above_handle_band(addr) {
                 match name_str {
                     Some(n) => {
