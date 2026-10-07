@@ -49,6 +49,15 @@ pub(super) fn old_page_defrag_skipped_for_pin(meta: crate::arena::OldPageMeta) -
 /// what the next one takes. Lowering the fixed cost is separate work.
 pub(super) const IDLE_COMPACT_MOVE_BUDGET_BYTES: usize = 1024 * 1024;
 
+/// Use the arena's allocation class, shared by both selection policies.
+fn movable_old_ranges() -> Vec<(usize, usize, usize, usize)> {
+    #[cfg(test)]
+    if extent_selection_sabotage::enabled() {
+        return crate::arena::old_arena_block_ranges();
+    }
+    crate::arena::old_arena_movable_block_ranges()
+}
+
 pub(super) fn select_old_page_defrag_pages_from_snapshot(
     snapshot: &[crate::arena::OldPageMeta],
     force: bool,
@@ -66,8 +75,12 @@ pub(super) fn select_old_page_defrag_pages_from_snapshot(
     if idle_compact_armed() && idle_compact_block_selection_enabled() {
         return select_whole_blocks(snapshot, selection);
     }
+    let ranges = movable_old_ranges();
     let mut candidates = Vec::new();
     for &meta in snapshot {
+        if crate::arena::old_arena_block_range_index(&ranges, meta.page_base).is_none() {
+            continue;
+        }
         if old_page_defrag_skipped_for_pin(meta) {
             selection.skipped_pinned_pages = selection.skipped_pinned_pages.saturating_add(1);
             continue;
@@ -388,7 +401,7 @@ fn select_whole_blocks(
     snapshot: &[crate::arena::OldPageMeta],
     mut selection: OldPageDefragSelection,
 ) -> OldPageDefragSelection {
-    let ranges = crate::arena::old_arena_block_ranges();
+    let ranges = movable_old_ranges();
     if ranges.is_empty() {
         return selection;
     }
@@ -490,5 +503,31 @@ mod longlived_never_selected_tests {
         );
         let selection = super::select_old_page_defrag_pages_from_snapshot(&snapshot, true);
         assert!(!selection.pages.contains(&page));
+    }
+}
+
+#[cfg(test)]
+#[path = "large_extent_selection_tests.rs"]
+mod large_extent_selection_tests;
+
+#[cfg(test)]
+mod extent_selection_sabotage {
+    thread_local! {
+        static ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    }
+    pub(super) fn enabled() -> bool {
+        ENABLED.with(std::cell::Cell::get)
+    }
+    pub(super) struct Guard;
+    impl Guard {
+        pub(super) fn arm() -> Self {
+            ENABLED.with(|v| v.set(true));
+            Self
+        }
+    }
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            ENABLED.with(|v| v.set(false));
+        }
     }
 }

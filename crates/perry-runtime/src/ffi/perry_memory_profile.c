@@ -21,7 +21,9 @@ static void perry_apply_small_process_default(void) {
     /* Preserve an inherited strict operator disable (also the all-THP-off
      * measurement control). Never relax a parent's explicit process policy. */
     if (prctl(PR_GET_THP_DISABLE, 0UL, 0UL, 0UL, 0UL) != 1) {
-        (void)prctl(PR_SET_THP_DISABLE, 1UL, PR_THP_DISABLE_EXCEPT_ADVISED, 0UL, 0UL);
+        if (prctl(PR_SET_THP_DISABLE, 1UL, PR_THP_DISABLE_EXCEPT_ADVISED, 0UL, 0UL) != 0) {
+            (void)prctl(PR_SET_THP_DISABLE, 1UL, 0UL, 0UL, 0UL);
+        }
     }
 }
 

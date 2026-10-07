@@ -580,6 +580,7 @@ pub(crate) fn copying_quarantine_from_spaces_and_flip() -> ArenaResetStats {
         for block in recycled {
             reusable_bytes = reusable_bytes.saturating_add(block.used);
             arena.install_reserved_block(ArenaBlock {
+                extent_kind: super::region::Kind::NurseryBlock,
                 data: block.data,
                 size: block.size,
                 offset: 0,
@@ -1141,6 +1142,7 @@ mod tombstone_tests {
 
     fn tombstone() -> ArenaBlock {
         ArenaBlock {
+            extent_kind: super::region::Kind::NurseryBlock,
             data: std::ptr::null_mut(),
             size: 0,
             offset: 0,
@@ -1179,6 +1181,7 @@ mod tombstone_tests {
 
         let mut arena = Arena {
             blocks: vec![ArenaBlock {
+                extent_kind: super::region::Kind::NurseryBlock,
                 data: backing,
                 size: SIZE,
                 offset: 0,

@@ -133,3 +133,5 @@ mod eden_entry_residency;
 mod buffer_bytes;
 
 mod buffer_b4;
+
+mod census_two_mib;

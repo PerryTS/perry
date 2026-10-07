@@ -109,7 +109,7 @@ fn assert_panics_with(expected: &str, f: impl FnOnce()) {
 }
 
 pub(super) fn force_next_general_arena_alloc_slow() {
-    const TEST_BLOCK_SIZE: usize = 1024 * 1024;
+    const TEST_BLOCK_SIZE: usize = crate::arena::BLOCK_SIZE;
     let _ = crate::arena::arena_alloc(TEST_BLOCK_SIZE, 8);
 }
 
