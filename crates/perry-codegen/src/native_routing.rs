@@ -23,9 +23,22 @@ pub enum NativeProvider {
     /// The well-known wrapper crate whose staticlib stem is this
     /// (`perry_ext_http`).
     Wrapper(String),
-    /// The bundled runtime / stdlib, although a wrapper exists for the module
-    /// (`PERRY_DISABLE_WELL_KNOWN=1`).
-    Bundled,
+    /// The bundled runtime / stdlib, although the wrapper crate whose
+    /// staticlib stem is this exists for the module
+    /// (`PERRY_DISABLE_WELL_KNOWN=1`). A module whose wrapper defines symbols
+    /// the bundled libraries lack has no provider at all
+    /// ([`NativeRouting::unprovided`]), and a program importing it does not
+    /// compile.
+    Bundled(String),
+}
+
+impl NativeProvider {
+    /// The wrapper crate's staticlib stem, whether or not it is linked.
+    fn wrapper_lib(&self) -> &str {
+        match self {
+            NativeProvider::Wrapper(lib) | NativeProvider::Bundled(lib) => lib,
+        }
+    }
 }
 
 /// The routing decision for every well-known native module, keyed by the bare
@@ -103,13 +116,29 @@ impl NativeRouting {
         hooks
     }
 
+    /// Is `module` left without a provider? True when this build serves it
+    /// from the bundled libraries although the FFI registry names symbols
+    /// that only its wrapper crate defines: the bundled runtime / stdlib does
+    /// not implement those, and the wrapper archive is not linked. The
+    /// registry files a crate's symbols under one of the modules it serves
+    /// (perry-ext-http's under `http`, also for `https` and `http2`), so the
+    /// question is asked of every module served by the same crate. The
+    /// compile driver refuses a program that imports such a module.
+    pub fn unprovided(&self, module: &str) -> bool {
+        let Some(NativeProvider::Bundled(lib)) = self.providers.get(bare(module)) else {
+            return false;
+        };
+        self.providers.iter().any(|(other, provider)| {
+            provider.wrapper_lib() == lib && crate::ext_registry::wrapper_owns_symbols(other)
+        })
+    }
+
     /// May codegen emit a call to `symbol`? Not when the symbol is a wrapper's
-    /// and this build serves that wrapper's module from the bundled libraries:
-    /// the archive defining it is not linked. Such a call takes the runtime's
-    /// by-name dispatch instead.
+    /// and this build leaves that wrapper's module without a provider
+    /// ([`Self::unprovided`]): the archive defining it is not linked.
     pub fn serves(&self, symbol: &str) -> bool {
         match crate::ext_registry::well_known_owner_for_symbol(symbol) {
-            Some(owner) => self.providers.get(owner) != Some(&NativeProvider::Bundled),
+            Some(owner) => !self.unprovided(owner),
             None => true,
         }
     }
@@ -120,7 +149,7 @@ impl NativeRouting {
             .iter()
             .map(|(module, provider)| match provider {
                 NativeProvider::Wrapper(lib) => format!("{module}={lib}"),
-                NativeProvider::Bundled => format!("{module}=-"),
+                NativeProvider::Bundled(_) => format!("{module}=-"),
             })
             .collect::<Vec<_>>()
             .join("|")
@@ -177,10 +206,14 @@ mod tests {
         ])
     }
 
+    fn bundled(lib: &str) -> NativeProvider {
+        NativeProvider::Bundled(lib.into())
+    }
+
     fn flip_off() -> NativeRouting {
         NativeRouting::new([
-            ("http".into(), NativeProvider::Bundled),
-            ("https".into(), NativeProvider::Bundled),
+            ("http".into(), bundled("perry_ext_http")),
+            ("https".into(), bundled("perry_ext_http")),
             (
                 "net".into(),
                 NativeProvider::Wrapper("perry_ext_net".into()),
@@ -212,7 +245,7 @@ mod tests {
             flip_off().install_symbol("node:zlib"),
             Some("js_ext_zlib_nm_install")
         );
-        let bundled_zlib = NativeRouting::new([("zlib".into(), NativeProvider::Bundled)]);
+        let bundled_zlib = NativeRouting::new([("zlib".into(), bundled("perry_ext_zlib"))]);
         assert_eq!(
             bundled_zlib.install_symbol("zlib"),
             Some("js_nm_install_zlib")
@@ -227,6 +260,24 @@ mod tests {
         assert!(!flip_off().serves("js_ext_http_nm_install"));
         assert!(flip_off().serves("js_ext_net_nm_install"));
         assert!(flip_off().serves("js_array_push_f64"));
+    }
+
+    #[test]
+    fn a_bundled_module_whose_wrapper_owns_symbols_has_no_provider() {
+        assert!(flip_off().unprovided("node:http"));
+        assert!(flip_off().unprovided("https"));
+        assert!(!flip_on().unprovided("node:http"));
+        assert!(!flip_off().unprovided("net"));
+        // Not part of the decision: the bundled runtime serves it.
+        assert!(!flip_off().unprovided("fs"));
+        // Bundled, and the registry names no symbol only the wrapper defines:
+        // the stdlib's own implementation serves it.
+        let bundled_bcrypt = NativeRouting::new([("bcrypt".into(), bundled("perry_ext_bcrypt"))]);
+        assert!(!bundled_bcrypt.unprovided("bcrypt"));
+        // Prefix-registry owners count too.
+        let bundled_ts =
+            NativeRouting::new([("typescript".into(), bundled("perry_ext_typescript"))]);
+        assert!(bundled_ts.unprovided("typescript"));
     }
 
     #[test]

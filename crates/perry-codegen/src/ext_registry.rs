@@ -630,6 +630,19 @@ pub fn well_known_owner_for_symbol(symbol: &str) -> Option<&'static str> {
         .map(|(_, binding)| *binding)
 }
 
+/// Does this registry name any symbol that only `module`'s wrapper crate
+/// defines (the same attribution [`well_known_owner_for_symbol`] makes)?
+/// Symbols the stdlib also implements are `OwnerKind::Stdlib`, not listed
+/// under the wrapper.
+pub fn wrapper_owns_symbols(module: &str) -> bool {
+    FFI_REGISTRY
+        .iter()
+        .any(|(_, owner)| matches!(owner, OwnerKind::WellKnown(key) if *key == module))
+        || EXT_PREFIX_REGISTRY
+            .iter()
+            .any(|(_, binding)| *binding == module)
+}
+
 /// The namespace install hook a wrapper crate defines, by its staticlib stem
 /// (`perry_ext_http` → `js_ext_http_nm_install`), when this registry lists one.
 /// A hook registers the wrapper's value-form export dispatcher and then chains
@@ -1079,7 +1092,10 @@ mod tests {
         }
         // A module the bundled libraries serve installs the runtime bucket,
         // which asks the linker for no wrapper.
-        let bundled = NativeRouting::new([("http".to_string(), NativeProvider::Bundled)]);
+        let bundled = NativeRouting::new([(
+            "http".to_string(),
+            NativeProvider::Bundled("perry_ext_http".to_string()),
+        )]);
         let symbol = bundled.install_symbol("http").expect("http bucket");
         let _ = take_used_providers();
         record_ffi_call(symbol);
