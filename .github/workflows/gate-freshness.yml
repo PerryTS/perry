@@ -22,19 +22,7 @@ name: Gate Freshness
 # about.
 
 on:
-  schedule:
-    # Every two hours, off the top of the hour (GitHub's scheduler is most contended
-    # at :00 and most likely to delay a run there). The tightest budget in
-    # scripts/gate_freshness.json is 12h, so this samples ~6x per budget window.
-    - cron: "5 */2 * * *"
-  # Validate the checker itself when it changes. Self-test only -- see the step
-  # guards below; a PR must not go red merely because `main`'s gates are behind.
-  pull_request:
-    paths:
-      - scripts/check_gate_freshness.py
-      - scripts/gate_freshness.json
-      - .github/workflows/gate-freshness.yml
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

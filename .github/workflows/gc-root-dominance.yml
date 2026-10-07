@@ -60,27 +60,7 @@ name: GC Root Dominance
 # deleted rather than left to widen coverage later.
 
 on:
-  pull_request:
-    # PR arm is OPT-IN via the `run-extended-tests` label (see the header of
-    # test.yml and docs/src/testing/ci-tiers.md): an unlabelled PR still gets
-    # a run, but every job in it is skipped, which costs no runner slot. The
-    # main-line arm (schedule / tags) is unchanged. `labeled` re-fires the run
-    # when the label lands.
-    types: [opened, synchronize, reopened, labeled]
-  # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
-  # `push: branches: [main]` starved this gate and nine others for two days
-  # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
-  # concurrency ceiling. The pull-request arm is unchanged -- every PR is still
-  # measured. Note this workflow runs `macos-14`, not `ubuntu-latest`; #7856's
-  # claim that it was unaffected was reading its PR arm, which drains because PR
-  # runs supersede each other, while its `main` arm queued like all the rest.
-  # ***DO NOT RESTORE `push: branches: [main]`.***
-  # Rationale, measurement and cost: docs/src/testing/ci-gate-scheduling.md
-  schedule:
-    - cron: "17 */6 * * *"
-  push:
-    tags: ["v*"]
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

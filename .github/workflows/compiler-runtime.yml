@@ -1,0 +1,107 @@
+name: Compiler and Runtime
+run-name: ${{ format('Compiler and Runtime / {0} / {1}', inputs.suite || 'scheduled',
+  github.ref_name) }}
+on:
+  pull_request:
+    types:
+    - labeled
+    - opened
+    - reopened
+    - synchronize
+  push:
+    tags:
+    - v*
+  schedule:
+  - cron: 32 */6 * * *
+  - cron: 42 */6 * * *
+  - cron: 52 4 * * *
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Compiler/runtime suite or all suites.
+        type: choice
+        options:
+        - all
+        - llvm-inprocess
+        - cc-parity
+        - eh-transport
+        - ext-link
+        default: all
+permissions: {}
+concurrency:
+  group: compiler-runtime-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      plan: ${{ steps.route.outputs.plan }}
+      selection: ${{ steps.route.outputs.selection }}
+      module_inputs: ${{ steps.route.outputs.module_inputs }}
+    steps:
+    - uses: ./.github/actions/perry/actions/checkout
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: '1'
+        persist-credentials: 'false'
+    - name: Route suites
+      id: route
+      env:
+        SUITE: ${{ inputs.suite }}
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_PATH: ${{ github.event_path }}
+        REF: ${{ github.ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=(--category compiler-runtime --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+        if [[ "$EVENT_NAME" == "pull_request" ]]; then
+          python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+          args+=(--changed-files changed-files.txt)
+        fi
+        args+=(--suite "${SUITE:-}")
+        python3 scripts/actions_plan.py "${args[@]}"
+        pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
+        \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
+        \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
+        \ \"${args[@]}\"\n"
+  llvm-inprocess:
+    name: llvm-inprocess
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['llvm-inprocess']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/llvm-inprocess.yml
+  cc-parity:
+    name: cc-parity
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['cc-parity']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/cc-parity.yml
+  eh-transport:
+    name: eh-transport
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['eh-transport']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/eh-transport.yml
+  ext-link:
+    name: ext-link
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['ext-link']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/ext-link.yml

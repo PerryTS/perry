@@ -1,17 +1,12 @@
 name: Regression Check
 
 on:
-  push:
-    tags: ['v*']
-  release:
-    types: [published]
-  workflow_dispatch:
-  schedule:
-    # Nightly at 03:00 UTC catches drift between releases — this is the
-    # main-branch signal now that direct pushes don't trigger benchmarks.
-    - cron: '0 3 * * *'
+  workflow_call:
+    secrets:
+      GITHUB_TOKEN:
+        description: "Repository token for release baseline artifacts."
+        required: true
 
-# Don't cancel in-progress benchmark runs — we want complete samples
 concurrency:
   # #7966: keyed per RUN for non-PR events. A group that is constant across
   # scheduled runs lets only the first one execute -- GitHub keeps at most one

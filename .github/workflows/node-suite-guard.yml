@@ -11,13 +11,7 @@ name: Node Suite Regression Guard
 # maintainer turns the merge queue on in branch protection — at which point this
 # guard automatically gates every merge with no further workflow change.
 on:
-  workflow_dispatch:
-  schedule:
-    # Nightly, offset from the Node Core Subset Radar (17 3) to avoid overlap.
-    - cron: "37 4 * * *"
-  # Inert until the merge queue is enabled in branch protection; then this guard
-  # runs once per merge against the actual merged tree.
-  merge_group:
+  workflow_call:
 
 permissions:
   contents: read

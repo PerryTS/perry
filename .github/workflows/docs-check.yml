@@ -1,26 +1,7 @@
 name: Docs checks
 
 on:
-  pull_request:
-    paths:
-      - "README.md"
-      - "docs/**"
-      - "scripts/check_docs.py"
-      - "crates/perry-doc-tests/**"
-      - ".github/workflows/docs-check.yml"
-      - ".github/workflows/docs.yml"
-  push:
-    branches: [main]
-    paths:
-      - "README.md"
-      - "docs/**"
-      - "scripts/check_docs.py"
-      - "crates/perry-doc-tests/**"
-      - ".github/workflows/docs-check.yml"
-      - ".github/workflows/docs.yml"
-  schedule:
-    - cron: "23 5 * * 1"
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

@@ -46,6 +46,7 @@ import argparse
 import re
 import sys
 from pathlib import Path
+import json
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -622,7 +623,44 @@ def main() -> int:
         return 0
 
     problems: list[str] = []
+    try:
+        catalog = json.loads((REPO_ROOT / "scripts/actions_catalog.json").read_text())
+        gc = catalog["categories"]["gc"]
+        source_to_parent = {m["file"]: gc["entrypoint"] for m in gc["modules"]}
+    except (OSError, KeyError, json.JSONDecodeError) as exc:
+        print(f"cannot load GC route catalog: {exc}", file=sys.stderr)
+        return 1
     for wf, job, _ in GATES:
+        basename = Path(wf).name
+        if basename in source_to_parent:
+            wf = str(Path(".github/workflows") / source_to_parent[basename])
+            parent_text = (REPO_ROOT / wf).read_text(encoding="utf-8")
+            if job == "gc-ratchet":
+                job = "gc-ratchet"
+            elif job == "gc-root-dominance-statepoints":
+                job = "gc-root-dominance"
+            elif job == "gc-native-roots-complete":
+                job = "gc-native-roots"
+            elif job == "gc-stress" or job == "gc-stress-shard":
+                continue  # Existing CI core gate, not a child in the GC parent.
+            else:
+                job = basename.removesuffix(".yml")
+            if not re.search(rf"^  {re.escape(job)}:\s*$", parent_text, re.M):
+                problems.append(f"{wf}: GC caller `{job}` is missing")
+                continue
+            if not any(c.get("file") == basename for c in gc["modules"]):
+                problems.append(f"{wf}: catalog does not route {basename}")
+                continue
+            # Child jobs are reusable now; their schedule lives on the parent.
+            # Verify that a main-line cron selects exactly this suite.
+            from actions_plan import select
+            crons = [t["cron"] for m in gc["modules"] for t in m.get("original_events", {}).get("schedule", [])]
+            if crons and not all(
+                select("gc", "schedule", {"schedule": cron}, catalog=catalog)["plan"]
+                for cron in crons
+            ):
+                problems.append("gc.yml: invalid GC cron route")
+            continue
         path = REPO_ROOT / wf
         if not path.exists():
             problems.append(f"{wf}: missing — a GC gate workflow was deleted")

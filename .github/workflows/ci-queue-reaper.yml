@@ -28,19 +28,13 @@ name: CI Queue Reaper
 # keeps the queue clear.
 
 on:
-  schedule:
-    # Every 30 minutes, off the hour and half-hour -- :00 and :30 are the most
-    # contended slots on GitHub's cron scheduler and the most likely to be
-    # dropped or delayed.
-    - cron: "13,43 * * * *"
-  workflow_dispatch:
+  workflow_call:
     inputs:
       apply:
         description: "Actually cancel (unchecked = dry run)"
         type: boolean
+        required: false
         default: false
-
-permissions: {}
 
 concurrency:
   # #7966: keyed per RUN. A constant group across scheduled runs lets only the

@@ -163,11 +163,18 @@ def newest_post_merge_result(
         if run.get("status") != "completed":
             continue
         if gate.job_names:
-            jobs = fetch(f"repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100").get(
-                "jobs", []
-            )
-            by_name = {job.get("name"): job for job in jobs}
-            selected = [by_name.get(name) for name in gate.job_names]
+            jobs = []
+            page = 1
+            while True:
+                batch = fetch(f"repos/{repo}/actions/runs/{run['id']}/jobs?per_page=100&page={page}").get("jobs", [])
+                jobs.extend(batch)
+                if len(batch) < 100:
+                    break
+                page += 1
+            selected = [
+                next((job for job in jobs if job.get("name") == name), None)
+                for name in gate.job_names
+            ]
             if any(job is None for job in selected):
                 continue
             if any(
@@ -187,6 +194,8 @@ def newest_post_merge_result(
                 if all(job.get("conclusion") == "success" for job in selected if job is not None)
                 else "failure"
             )
+            # A green category parent can contain skipped siblings. This gate
+            # measures only the configured logical subject jobs above.
         else:
             if run.get("conclusion") in NON_RESULTS:
                 continue
@@ -418,6 +427,7 @@ def self_test() -> int:
                 "id": 103,
             },
         ],
+        "paged.yml": [{**run("push", "completed", "failure", 3, 1, "iii"), "id": 104}],
     }
 
     job_fixtures = {
@@ -432,11 +442,17 @@ def self_test() -> int:
             {"name": "audit / first", "status": "completed", "conclusion": "success", "completed_at": stamp(72.5)},
             {"name": "audit / second", "status": "completed", "conclusion": "failure", "completed_at": stamp(72)},
         ],
+        104: ([{"name": f"noise {i}", "status": "completed", "conclusion": "success", "completed_at": stamp(2)} for i in range(100)]
+              + [{"name": "audit / required", "status": "completed", "conclusion": "failure", "completed_at": stamp(1)}]),
     }
 
     def fake_fetch(path: str) -> dict:
         if "/actions/runs/" in path:
             run_id = int(path.split("/actions/runs/")[1].split("/jobs")[0])
+            if "page=" in path:
+                page = int(path.split("page=")[2])
+                rows = job_fixtures[run_id]
+                return {"jobs": rows[(page - 1) * 100 : page * 100]}
             return {"jobs": job_fixtures[run_id]}
         wf = path.split("/actions/workflows/")[1].split("/runs")[0]
         return {"workflow_runs": fixtures[wf]}
@@ -458,6 +474,7 @@ def self_test() -> int:
             source_workflow="partial.yml",
             job_names=("audit / first", "audit / second"),
         ),
+        Gate("paged-subject.yml", 12, "self-test", source_workflow="paged.yml", job_names=("audit / required",)),
     ]
     verdicts = {v.gate.workflow: v for v in evaluate(gates, "o/r", "main", now, fetch=fake_fetch)}
 
@@ -481,6 +498,7 @@ def self_test() -> int:
     expect("boundary.yml", False, "exactly at budget is not yet stale")
     expect("nested.yml", False, "all reusable-workflow jobs form a fresh result")
     expect("nested-partial.yml", True, "a partial reusable-workflow job group is not fresh")
+    expect("paged-subject.yml", False, "a required job on page two is found")
 
     # The renderer must actually say STALE, or a red verdict could print as green.
     table = render(verdicts.values())

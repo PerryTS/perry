@@ -197,6 +197,12 @@ NON_CORE_GLOBS = (
 CORE_OVERRIDES = (
     ".github/workflows/test.yml",
     ".github/workflows/security-audit.yml",
+    "scripts/actions_catalog.json",
+    "scripts/actions_plan.py",
+    "scripts/check_actions_topology.py",
+    "scripts/test_actions_plan.py",
+    "scripts/release_gate_runs.py",
+    "scripts/test_release_gate_runs.py",
     ".github/actions/**",
     "docs/api/**",  # generated API docs are checked for drift by `check`
     "docs/src/api/**",
@@ -439,6 +445,9 @@ def _self_test() -> int:
     # The gate's own wiring and the shared actions are core even though the
     # rest of .github/ is not.
     check("test.yml change is core", is_core(".github/workflows/test.yml"))
+    check("Actions routing catalog is core", is_core("scripts/actions_catalog.json"))
+    check("Actions router is core", is_core("scripts/actions_plan.py"))
+    check("Actions topology audit is core", is_core("scripts/check_actions_topology.py"))
     check("shared action change is core", is_core(".github/actions/setup-llvm22/action.yml"))
     check("other workflow change is not core", not is_core(".github/workflows/benchmark.yml"))
     check("nested .md is not core", not is_core("crates/perry/README.md"))

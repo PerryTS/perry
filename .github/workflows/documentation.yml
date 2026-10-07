@@ -1,0 +1,102 @@
+name: Documentation
+run-name: ${{ format('Documentation / {0} / {1}', inputs.suite || 'scheduled', github.ref_name) }}
+on:
+  pull_request:
+    types:
+    - opened
+    - reopened
+    - synchronize
+    paths:
+    - .github/workflows/docs-check.yml
+    - .github/workflows/docs.yml
+    - .github/workflows/documentation.yml
+    - README.md
+    - crates/perry-doc-tests/**
+    - docs/**
+    - scripts/actions_catalog.json
+    - scripts/actions_plan.py
+    - scripts/check_docs.py
+  push:
+    branches:
+    - main
+    tags:
+    - v*
+  schedule:
+  - cron: 23 5 * * 1
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Validation, deploy, or all.
+        type: choice
+        options:
+        - docs-check
+        - docs
+        - all
+        default: docs-check
+permissions: {}
+concurrency:
+  group: documentation-${{ github.event_name == 'pull_request' && github.ref || github.run_id
+    }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      plan: ${{ steps.route.outputs.plan }}
+      selection: ${{ steps.route.outputs.selection }}
+      module_inputs: ${{ steps.route.outputs.module_inputs }}
+    steps:
+    - uses: ./.github/actions/perry/actions/checkout
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: '1'
+        persist-credentials: 'false'
+    - name: Route suites
+      id: route
+      env:
+        SUITE: ${{ inputs.suite }}
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_PATH: ${{ github.event_path }}
+        REF: ${{ github.ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=(--category documentation --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+        if [[ "$EVENT_NAME" == "pull_request" ]]; then
+          python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+          args+=(--changed-files changed-files.txt)
+        fi
+        args+=(--suite "${SUITE:-}")
+        python3 scripts/actions_plan.py "${args[@]}"
+        pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
+        \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
+        \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
+        \ \"${args[@]}\"\n"
+  docs-check:
+    name: docs-check
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['docs-check']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/docs-check.yml
+  docs:
+    name: docs
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['docs']
+    permissions:
+      contents: read
+      pull-requests: read
+      pages: write
+      id-token: write
+    secrets:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    uses: ./.github/workflows/docs.yml

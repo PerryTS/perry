@@ -1,22 +1,22 @@
 name: NPM Package Sweep
 
 on:
-  schedule:
-    # Nightly advisory signal for package drift. It does not run on PRs.
-    - cron: '25 5 * * *'
-  workflow_dispatch:
+  workflow_call:
     inputs:
       packages:
-        description: 'Optional comma-separated package specs. Empty uses packages.json.'
+        description: "Optional comma-separated package specs. Empty uses packages.json."
         type: string
-        default: ''
+        required: false
+        default: ""
       limit:
-        description: 'Maximum packages to sweep. Use 0 for all selected packages.'
+        description: "Maximum packages to sweep. Use 0 for all selected packages."
         type: number
+        required: false
         default: 6
       strict:
-        description: 'Fail the workflow if any package fails.'
+        description: "Fail the workflow if any package fails."
         type: boolean
+        required: false
         default: false
 
 permissions:
@@ -83,9 +83,9 @@ jobs:
 
       - name: Run npm package sweep
         env:
-          SWEEP_PACKAGES: ${{ github.event.inputs.packages }}
-          SWEEP_LIMIT: ${{ github.event.inputs.limit }}
-          SWEEP_STRICT: ${{ github.event.inputs.strict }}
+          SWEEP_PACKAGES: ${{ inputs.packages }}
+          SWEEP_LIMIT: ${{ inputs.limit }}
+          SWEEP_STRICT: ${{ inputs.strict }}
         run: |
           set -euo pipefail
           mkdir -p .npm-sweep-results

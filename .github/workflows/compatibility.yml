@@ -1,0 +1,191 @@
+name: Compatibility
+run-name: ${{ format('Compatibility / {0} / {1}', inputs.suite || 'scheduled', github.ref_name) }}
+on:
+  pull_request:
+    types:
+    - labeled
+    - opened
+    - reopened
+    - synchronize
+    paths:
+    - .cargo/**
+    - .github/actions/setup-llvm22/**
+    - .github/workflows/compatibility.yml
+    - .github/workflows/feature-matrix.yml
+    - .github/workflows/node-compat-matrix.yml
+    - .github/workflows/node-core-subset.yml
+    - .github/workflows/node-suite-guard.yml
+    - .github/workflows/npm-package-sweep.yml
+    - .github/workflows/wasi-check.yml
+    - Cargo.lock
+    - Cargo.toml
+    - crates/perry-codegen/Cargo.toml
+    - crates/perry-codegen/src/**
+    - crates/perry-dispatch/**
+    - crates/perry-ext-*/**
+    - crates/perry-runtime/**
+    - crates/perry-stdlib/**
+    - crates/perry/**
+    - crates/perry/src/commands/compile/**
+    - rust-toolchain.toml
+    - scripts/actions_catalog.json
+    - scripts/actions_plan.py
+    - scripts/runtime_abi_check.py
+    - scripts/wasi_build_runtime.sh
+    - scripts/wasi_check.sh
+    - scripts/wasi_ir_check.sh
+    - scripts/wasi_smoke.sh
+    - scripts/wasi_smoke/**
+    - scripts/wasi_toolchain.sh
+    - test-files/test_gap_*.ts
+  merge_group:
+    types:
+    - checks_requested
+  schedule:
+  - cron: 17 3 * * *
+  - cron: 25 5 * * *
+  - cron: 37 4 * * *
+  - cron: 41 2 * * *
+  - cron: 43 4 * * *
+  - cron: 57 4 * * *
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Compatibility suite or all suites.
+        type: choice
+        options:
+        - all
+        - node-compat-matrix
+        - node-suite-guard
+        - node-core-subset
+        - feature-matrix
+        - wasi-check
+        - npm-package-sweep
+        default: all
+      apis:
+        description: Optional Node core API list.
+        type: string
+        default: ''
+      max_per_api:
+        description: Node core test limit per API; 0 means unlimited.
+        type: string
+        default: 25
+      packages:
+        description: Optional comma-separated package specs.
+        type: string
+        default: ''
+      limit:
+        description: Package sweep limit; 0 means all selected packages.
+        type: number
+        default: 6
+      strict:
+        description: Fail on any package sweep failure.
+        type: boolean
+        default: false
+permissions: {}
+concurrency:
+  group: compatibility-${{ github.event_name == 'pull_request' && github.ref || github.run_id
+    }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      plan: ${{ steps.route.outputs.plan }}
+      selection: ${{ steps.route.outputs.selection }}
+      module_inputs: ${{ steps.route.outputs.module_inputs }}
+    steps:
+    - uses: ./.github/actions/perry/actions/checkout
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: '1'
+        persist-credentials: 'false'
+    - name: Route suites
+      id: route
+      env:
+        SUITE: ${{ inputs.suite }}
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_PATH: ${{ github.event_path }}
+        REF: ${{ github.ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=(--category compatibility --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+        if [[ "$EVENT_NAME" == "pull_request" ]]; then
+          python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+          args+=(--changed-files changed-files.txt)
+        fi
+        args+=(--suite "${SUITE:-}")
+        python3 scripts/actions_plan.py "${args[@]}"
+        pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
+        \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
+        \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
+        \ \"${args[@]}\"\n"
+  node-compat-matrix:
+    name: node-compat-matrix
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['node-compat-matrix']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/node-compat-matrix.yml
+  node-suite-guard:
+    name: node-suite-guard
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['node-suite-guard']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/node-suite-guard.yml
+  node-core-subset:
+    name: node-core-subset
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['node-core-subset']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/node-core-subset.yml
+    with:
+      apis: ${{ fromJSON(needs.route.outputs.module_inputs)['node-core-subset'].apis
+        }}
+      max_per_api: ${{ fromJSON(needs.route.outputs.module_inputs)['node-core-subset'].max_per_api
+        }}
+  feature-matrix:
+    name: feature-matrix
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['feature-matrix']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/feature-matrix.yml
+  wasi-check:
+    name: wasi-check
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['wasi-check']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/wasi-check.yml
+  npm-package-sweep:
+    name: npm-package-sweep
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-package-sweep']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/npm-package-sweep.yml
+    with:
+      packages: ${{ fromJSON(needs.route.outputs.module_inputs)['npm-package-sweep'].packages
+        }}
+      limit: ${{ fromJSON(needs.route.outputs.module_inputs)['npm-package-sweep'].limit
+        }}
+      strict: ${{ fromJSON(needs.route.outputs.module_inputs)['npm-package-sweep'].strict
+        }}
