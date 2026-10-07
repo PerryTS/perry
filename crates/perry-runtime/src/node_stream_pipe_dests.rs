@@ -76,12 +76,28 @@ pub(in crate::node_stream) fn write_chunk_to_pipe_destinations(stream: f64, chun
         }
         let dest_scope = RuntimeHandleScope::new();
         let dest = dest_scope.root_nanbox_f64(dest);
-        let ret = write_writable_chunk(
+        let write = crate::object::js_object_get_own_field_or_undef(
             dest.get_nanbox_f64(),
-            chunk.get_nanbox_f64(),
-            f64::from_bits(TAG_UNDEFINED),
-            f64::from_bits(TAG_UNDEFINED),
+            b"write".as_ptr(),
+            5,
         );
+        let ret = if is_callable_value(write) {
+            unsafe {
+                crate::closure::native_call_value_this(
+                    write,
+                    crate::closure::JsThis::from_f64(dest.get_nanbox_f64()),
+                    [chunk.get_nanbox_f64()].as_ptr(),
+                    1,
+                )
+            }
+        } else {
+            write_writable_chunk(
+                dest.get_nanbox_f64(),
+                chunk.get_nanbox_f64(),
+                f64::from_bits(TAG_UNDEFINED),
+                f64::from_bits(TAG_UNDEFINED),
+            )
+        };
         if ret.to_bits() == TAG_FALSE {
             let _ = pause_readable_stream(stream.get_nanbox_f64());
             if writable_length(dest.get_nanbox_f64()) == 0.0 {

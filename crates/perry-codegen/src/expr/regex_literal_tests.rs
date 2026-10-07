@@ -80,13 +80,16 @@ fn direct_literal_test_constructs_data_site_and_uses_generic_method_call() {
         1,
         "direct",
         vec![param(10, "s")],
-        vec![Stmt::Return(Some(Expr::RegExpTest {
-            regex: Box::new(Expr::RegExp {
-                pattern: "x".into(),
-                flags: "g".into(),
-            }),
-            string: Box::new(Expr::LocalGet(10)),
-        }))],
+        vec![Stmt::Return(Some(call(
+            property(
+                Expr::RegExp {
+                    pattern: "x".into(),
+                    flags: "g".into(),
+                },
+                "test",
+            ),
+            vec![Expr::LocalGet(10)],
+        )))],
         Type::Boolean,
     )]);
     assert!(ir.contains("call i64 @js_regexp_literal("), "{ir}");
@@ -137,4 +140,22 @@ fn ordinary_factory_test_uses_generic_method_call() {
         Type::Any,
     )]);
     assert_generic(&ir);
+}
+
+#[test]
+fn typed_local_test_uses_generic_method_call() {
+    let mut receiver = param(10, "re");
+    receiver.ty = Type::Named("RegExp".into());
+    let ir = compile(vec![function(
+        1,
+        "typed",
+        vec![receiver, param(11, "s")],
+        vec![Stmt::Return(Some(call(
+            property(Expr::LocalGet(10), "test"),
+            vec![Expr::LocalGet(11)],
+        )))],
+        Type::Boolean,
+    )]);
+    assert_generic(&ir);
+    assert!(!ir.contains("call i32 @js_regexp_test("), "{ir}");
 }

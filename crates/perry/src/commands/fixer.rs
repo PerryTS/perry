@@ -300,8 +300,8 @@ impl Fixer {
 
     fn find_issues_in_function(&mut self, func: &Function) {
         // Check parameters
-        for param in &func.params {
-            if let Pat::Ident(ident) = &param.pat {
+        for param in perry_parser::function_parameter_patterns(func) {
+            if let Pat::Ident(ident) = param.as_ref() {
                 if let Some(type_ann) = &ident.type_ann {
                     self.find_any_in_type_ann(type_ann, Some(ident.sym.to_string()));
                 }
@@ -524,12 +524,12 @@ impl Fixer {
                 }
                 // Check body
                 match arrow.body.as_ref() {
-                    BlockStmtOrExpr::BlockStmt(block) => {
+                    ArrowFunctionBody::FunctionBody(block) => {
                         for stmt in &block.stmts {
                             self.find_issues_in_stmt(stmt);
                         }
                     }
-                    BlockStmtOrExpr::Expr(expr) => {
+                    ArrowFunctionBody::Expr(expr) => {
                         self.find_issues_in_expr(expr);
                     }
                 }
@@ -662,6 +662,14 @@ mod tests {
     #[test]
     fn test_any_type_detection() {
         let issues = analyze_code("let x: any = 5;");
+        assert_eq!(issues.len(), 1);
+        assert!(matches!(issues[0].kind, FixableKind::AnyType { .. }));
+        assert_eq!(issues[0].replacement, "unknown");
+    }
+
+    #[test]
+    fn test_any_type_in_this_parameter() {
+        let issues = analyze_code("function callback(this: any, value: number) { return value; }");
         assert_eq!(issues.len(), 1);
         assert!(matches!(issues[0].kind, FixableKind::AnyType { .. }));
         assert_eq!(issues[0].replacement, "unknown");

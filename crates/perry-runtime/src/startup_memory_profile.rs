@@ -1,9 +1,6 @@
-//! Opt-in policy for small Linux processes. Configure the allocator before
-//! Rust startup can allocate; setting this from `js_gc_init` is too late.
-//!
-//! `mi_option_set_default` leaves mimalloc's own environment parsing intact,
-//! including its lowercase option spelling. No Rust allocation, environment
-//! mutation, or lock belongs on this constructor path.
+//! Native mimalloc THP is disabled before Rust startup. Linux advised-only
+//! process mode permits Perry's region advice on supporting kernels; older
+//! kernels safely retain full THP disable. The constructor never allocates.
 
 #[cfg(all(
     target_os = "linux",
@@ -23,6 +20,15 @@ mod linux {
         // with multiple codegen units. This function does not apply a policy
         // late; its constructor must already have run before Rust startup.
         unsafe { perry_retain_memory_profile_init() };
+        if crate::gc::gc_diag_enabled() {
+            let mode = unsafe { libc::prctl(libc::PR_GET_THP_DISABLE, 0, 0, 0, 0) };
+            let name = match mode {
+                3 => "except-advised",
+                1 => "base-pages",
+                _ => "unexpected",
+            };
+            eprintln!("[gc-region-thp] mode={name} prctl={mode}");
+        }
     }
 
     #[cfg(test)]
@@ -32,16 +38,7 @@ mod linux {
             // The runner launches this test in a fresh process for each
             // profile/override. Rust's test harness has already allocated;
             // js_gc_init is deliberately never called here.
-            let profile = std::env::var("PERRY_MEMORY_PROFILE").ok();
-            let explicit = std::env::var("MIMALLOC_ALLOW_THP")
-                .or_else(|_| std::env::var("mimalloc_allow_thp"))
-                .ok();
-            let expected = match explicit.as_deref() {
-                Some("0") => 0,
-                Some("1") => 1,
-                None => i64::from(profile.as_deref() != Some("small")),
-                value => panic!("probe expects an absent, 0, or 1 override: {value:?}"),
-            };
+            let expected = 0;
             let actual = unsafe { super::perry_memory_profile_allow_thp() };
             assert_eq!(actual as i64, expected);
             // On Linux this is the process-wide effect of allow_thp=0. The
@@ -50,9 +47,9 @@ mod linux {
             let disabled = unsafe { libc::prctl(libc::PR_GET_THP_DISABLE, 0, 0, 0, 0) };
             assert!(disabled >= 0, "PR_GET_THP_DISABLE must be available");
             if expected == 0 {
-                assert_eq!(
-                    disabled, 1,
-                    "THP policy must already be applied before gc_init"
+                assert!(
+                    disabled == 3 || disabled == 1,
+                    "THP policy must be advised-only or the old-kernel disabled fallback: {disabled}"
                 );
             }
         }

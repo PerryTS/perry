@@ -168,9 +168,6 @@ where
         | Expr::SymbolDescription(v)
         | Expr::RegExpEscape(v)
         | Expr::SymbolToString(v)
-        | Expr::RegExpSource(v)
-        | Expr::RegExpFlags(v)
-        | Expr::RegExpLastIndex(v)
         | Expr::JsonParse(v)
         | Expr::JsonStringify(v)
         | Expr::JsonRawJson(v)
@@ -1135,10 +1132,7 @@ where
         }
 
         // ─── RegExp ──────────────────────────────────────────────────────
-        Expr::RegExpExec { regex, string }
-        | Expr::RegExpTest { regex, string }
-        | Expr::StringMatch { string, regex }
-        | Expr::StringMatchAll { string, regex } => {
+        Expr::StringMatch { string, regex } | Expr::StringMatchAll { string, regex } => {
             f(regex);
             f(string);
         }
@@ -1152,10 +1146,6 @@ where
                 f(flags_box);
             }
         }
-        Expr::RegExpSetLastIndex { regex, value } => {
-            f(regex);
-            f(value);
-        }
         Expr::UrlSetPathname { url, value }
         | Expr::UrlSetSearch { url, value }
         | Expr::UrlSetHash { url, value }
@@ -1167,15 +1157,6 @@ where
         | Expr::UrlSetHref { url, value } => {
             f(url);
             f(value);
-        }
-        Expr::RegExpReplaceFn {
-            string,
-            regex,
-            callback,
-        } => {
-            f(string);
-            f(regex);
-            f(callback);
         }
         Expr::StringReplace {
             string,

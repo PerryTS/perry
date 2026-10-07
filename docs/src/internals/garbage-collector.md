@@ -24,8 +24,10 @@ trees; code generation's root lowering lives in
 
 ## Collection paths
 
-New GC-managed allocations normally enter 1 MiB nursery blocks
-<!-- gc-fact: BLOCK_SIZE = 1024 * 1024 in crates/perry-runtime/src/arena/block.rs -->.
+New GC-managed allocations normally enter nursery blocks of one aligned OS
+region each on Linux, 2 MiB
+<!-- gc-fact: ALIGN = 2 * 1024 * 1024 in crates/perry-runtime/src/arena/region.rs -->,
+and of 1 MiB on other targets until their OS reservation is validated.
 A collection can take one of three paths:
 
 1. **Copying minor.** At a precise safepoint, live young objects are copied,
@@ -272,7 +274,7 @@ Platform hosts call `js_gc_memory_pressure(level)`:
 - if collection is unsafe, the request is made sticky and drains at the next
   precise safepoint/allocation check.
 
-Released 1 MiB blocks first enter a **per-thread LIFO reuse pool under a
+Released blocks first enter a **per-thread LIFO reuse pool under a
 process-wide byte cap**. The reuse order is thread-local; the budget is not — a
 single global reservation is what bounds N live agents to one allowance instead
 of N of them. The cap is derived by `gc_block_pool_cap_with_budget` in

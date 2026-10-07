@@ -1308,8 +1308,8 @@ fn emergency_block_reclaim_runs_with_no_live_arena_borrow() {
 /// high-water instead of cumulative promotion volume.
 #[test]
 fn recycled_block_pool_reuses_released_blocks() {
-    let layout = std::alloc::Layout::from_size_align(BLOCK_SIZE, 16).unwrap();
-    let raw = unsafe { std::alloc::alloc(layout) };
+    let raw =
+        unsafe { crate::arena::region::map(crate::arena::region::Kind::NurseryBlock, BLOCK_SIZE) };
     assert!(!raw.is_null());
     let before = block_pool_bytes_for_test();
     assert!(
@@ -1329,7 +1329,7 @@ fn recycled_block_pool_reuses_released_blocks() {
     assert_eq!(block.offset, 0);
     assert_eq!(block_pool_bytes_for_test(), before);
     // Hand it back to the allocator so the test doesn't leak the mapping.
-    unsafe { std::alloc::dealloc(block.data, layout) };
+    unsafe { crate::arena::region::unmap(block.data, block.size) };
 }
 
 /// A thread exiting with a non-empty pool must run the pool's own `Drop`
@@ -1350,8 +1350,9 @@ fn block_pool_is_per_thread_and_drops_with_its_thread() {
     let handle = std::thread::spawn(|| {
         // Fresh thread => fresh pool.
         assert_eq!(block_pool_bytes_for_test(), 0);
-        let layout = std::alloc::Layout::from_size_align(BLOCK_SIZE, 16).unwrap();
-        let raw = unsafe { std::alloc::alloc(layout) };
+        let raw = unsafe {
+            crate::arena::region::map(crate::arena::region::Kind::NurseryBlock, BLOCK_SIZE)
+        };
         assert!(!raw.is_null());
         assert!(
             block_pool_put(raw, BLOCK_SIZE),
@@ -1420,8 +1421,8 @@ fn block_pool_cap_is_process_wide_across_live_threads() {
 
 #[test]
 fn allocation_failure_recovery_drains_mismatched_pooled_blocks() {
-    let layout = std::alloc::Layout::from_size_align(BLOCK_SIZE, 16).unwrap();
-    let raw = unsafe { std::alloc::alloc(layout) };
+    let raw =
+        unsafe { crate::arena::region::map(crate::arena::region::Kind::NurseryBlock, BLOCK_SIZE) };
     assert!(!raw.is_null());
     assert!(block_pool_put(raw, BLOCK_SIZE));
 
@@ -1433,8 +1434,7 @@ fn allocation_failure_recovery_drains_mismatched_pooled_blocks() {
         "emergency full collection must drain blocks unusable for the failed size"
     );
 
-    let returned_layout = std::alloc::Layout::from_size_align(block.size, 16).unwrap();
-    unsafe { std::alloc::dealloc(block.data, returned_layout) };
+    unsafe { crate::arena::region::unmap(block.data, block.size) };
 }
 
 // ---------------------------------------------------------------------------

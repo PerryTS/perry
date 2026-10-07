@@ -76,7 +76,7 @@ pub(crate) fn nm_install_symbol(name: &str) -> Option<&'static str> {
         | "v8.DefaultDeserializer" => Some("js_nm_install_v8"),
         "vm" => Some("js_nm_install_vm"),
         "wasi" => Some("js_nm_install_wasi"),
-        "zlib" => Some("js_nm_install_zlib"),
+        "zlib" => Some("js_ext_zlib_nm_install"),
         "worker_threads" => Some("js_nm_install_worker_threads"),
         _ => None,
     }
@@ -145,7 +145,7 @@ pub(crate) const NM_INSTALL_SYMBOLS: &[&str] = &[
     "js_nm_install_v8",
     "js_nm_install_vm",
     "js_nm_install_wasi",
-    "js_nm_install_zlib",
+    "js_ext_zlib_nm_install",
     "js_nm_install_worker_threads",
     "js_nm_install_all",
 ];
@@ -220,8 +220,21 @@ mod tests {
     #[test]
     fn provider_installs_cover_net_and_the_http_family_once() {
         assert_eq!(
-            native_provider_install_symbols(["fs", "net", "node:http", "https", "http2", "bun"]),
-            vec!["js_ext_http_nm_install", "js_ext_net_nm_install"]
+            native_provider_install_symbols([
+                "fs",
+                "net",
+                "node:http",
+                "https",
+                "http2",
+                "bun",
+                "node:zlib",
+                "zlib"
+            ]),
+            vec![
+                "js_ext_http_nm_install",
+                "js_ext_net_nm_install",
+                "js_ext_zlib_nm_install"
+            ]
         );
         assert!(native_provider_install_symbols(["fs", "path", "events"]).is_empty());
     }

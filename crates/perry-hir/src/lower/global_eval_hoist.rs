@@ -278,8 +278,8 @@ fn synth_materialize_existing_script_var_stmt(name: &str) -> Option<ast::Stmt> {
 /// nested reference to the *outer* block function is rare and, left unrenamed,
 /// degrades to the published global value — the pre-existing behavior). Forms
 /// not walked are likewise left unchanged (never worse than not renaming).
-fn rename_ident_in_block(block: &mut ast::BlockStmt, from: &str, to: &str) {
-    for stmt in &mut block.stmts {
+fn rename_ident_in_stmts(stmts: &mut [ast::Stmt], from: &str, to: &str) {
+    for stmt in stmts {
         rename_ident_in_stmt(stmt, from, to);
     }
 }
@@ -294,7 +294,7 @@ fn rename_ident_in_stmt(stmt: &mut ast::Stmt, from: &str, to: &str) {
             }
         }
         Stmt::Throw(t) => rename_ident_in_expr(&mut t.arg, from, to),
-        Stmt::Block(b) => rename_ident_in_block(b, from, to),
+        Stmt::Block(b) => rename_ident_in_stmts(&mut b.stmts, from, to),
         Stmt::If(i) => {
             rename_ident_in_expr(&mut i.test, from, to);
             rename_ident_in_stmt(&mut i.cons, from, to);
@@ -330,7 +330,7 @@ fn rename_ident_in_stmt(stmt: &mut ast::Stmt, from: &str, to: &str) {
         }
         Stmt::Labeled(l) => rename_ident_in_stmt(&mut l.body, from, to),
         Stmt::Try(t) => {
-            rename_ident_in_block(&mut t.block, from, to);
+            rename_ident_in_stmts(&mut t.block.stmts, from, to);
             if let Some(h) = t.handler.as_mut() {
                 // A `catch (from)` parameter shadows the function name in the
                 // handler — its references are the catch binding, not ours.
@@ -339,11 +339,11 @@ fn rename_ident_in_stmt(stmt: &mut ast::Stmt, from: &str, to: &str) {
                     collect_pattern_names(param, &mut p);
                 }
                 if !p.contains(from) {
-                    rename_ident_in_block(&mut h.body, from, to);
+                    rename_ident_in_stmts(&mut h.body.stmts, from, to);
                 }
             }
             if let Some(f) = t.finalizer.as_mut() {
-                rename_ident_in_block(f, from, to);
+                rename_ident_in_stmts(&mut f.stmts, from, to);
             }
         }
         Stmt::For(s) => {
@@ -805,7 +805,7 @@ impl GlobalEvalHoist {
                     fn_decl.ident.sym = hidden.as_str().into();
                     if !body_shadows {
                         if let Some(body) = fn_decl.function.body.as_mut() {
-                            rename_ident_in_block(body, &orig, &hidden);
+                            rename_ident_in_stmts(&mut body.stmts, &orig, &hidden);
                         }
                     }
                     let Some(assign) = synth_ident_assign_stmt(&orig, &hidden) else {

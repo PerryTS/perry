@@ -770,8 +770,6 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         | Expr::StringFromCharCodeSpread(_)
         | Expr::StringRaw { .. }
         | Expr::StringAt { .. }
-        | Expr::RegExpSource(_)
-        | Expr::RegExpFlags(_)
         // Date.prototype.to*String() → string
         | Expr::DateToString(_)
         | Expr::DateToDateString(_)

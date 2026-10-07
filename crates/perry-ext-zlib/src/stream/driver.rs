@@ -3,27 +3,76 @@
 use super::*;
 use std::io::{self, BufRead, ErrorKind};
 
-#[derive(Default)]
+/// A step-local borrow, cleared before the step returns. Only the two sniff
+/// bytes may be retained. There is no native input queue or callback address.
 struct Input {
-    bytes: VecDeque<Vec<u8>>,
+    ptr: *const u8,
+    len: usize,
     offset: usize,
+    prefix: Vec<u8>,
+    prefix_offset: usize,
     ended: bool,
     consumed: usize,
 }
+impl Default for Input {
+    fn default() -> Self {
+        Self {
+            ptr: std::ptr::null(),
+            len: 0,
+            offset: 0,
+            prefix: Vec::new(),
+            prefix_offset: 0,
+            ended: false,
+            consumed: 0,
+        }
+    }
+}
+impl Input {
+    fn borrow(&mut self, bytes: &[u8], ended: bool) {
+        assert!(self.ptr.is_null());
+        self.ptr = bytes.as_ptr();
+        self.len = bytes.len();
+        self.offset = 0;
+        self.consumed = 0;
+        self.ended = ended;
+    }
+    fn clear_borrow(&mut self) -> usize {
+        let n = self.consumed;
+        self.ptr = std::ptr::null();
+        self.len = 0;
+        self.offset = 0;
+        self.consumed = 0;
+        n
+    }
+}
 impl BufRead for Input {
     fn fill_buf(&mut self) -> io::Result<&[u8]> {
-        match self.bytes.front() {
-            Some(bytes) => Ok(&bytes[self.offset..]),
-            None if self.ended => Ok(&[]),
-            None => Err(ErrorKind::WouldBlock.into()),
+        if self.prefix_offset < self.prefix.len() {
+            return Ok(&self.prefix[self.prefix_offset..]);
+        }
+        if self.offset < self.len {
+            // SAFETY: only used inside step; no allocation on the JS heap,
+            // safepoint or callback runs until clear_borrow resets this pointer.
+            return Ok(unsafe {
+                std::slice::from_raw_parts(self.ptr.add(self.offset), self.len - self.offset)
+            });
+        }
+        if self.ended {
+            Ok(&[])
+        } else {
+            Err(ErrorKind::WouldBlock.into())
         }
     }
     fn consume(&mut self, n: usize) {
-        self.offset += n;
-        self.consumed += n;
-        if self.bytes.front().is_some_and(|b| self.offset == b.len()) {
-            self.bytes.pop_front(); // release each consumed compressed write
-            self.offset = 0;
+        if self.prefix_offset < self.prefix.len() {
+            self.prefix_offset += n;
+            if self.prefix_offset == self.prefix.len() {
+                self.prefix.clear();
+                self.prefix_offset = 0;
+            }
+        } else {
+            self.offset += n;
+            self.consumed += n;
         }
     }
 }
@@ -42,15 +91,21 @@ impl Read for Input {
 // WouldBlock would settle a write before all its output had been drained.
 struct Inflate {
     input: Input,
-    engine: flate2::Decompress,
+    engine: Box<miniz_oxide::inflate::stream::InflateState>,
     finished: bool,
+    zlib_header: bool,
 }
 impl Inflate {
     fn new(input: Input, zlib_header: bool) -> Self {
         Self {
             input,
-            engine: flate2::Decompress::new(zlib_header),
+            engine: miniz_oxide::inflate::stream::InflateState::new_boxed(if zlib_header {
+                miniz_oxide::DataFormat::Zlib
+            } else {
+                miniz_oxide::DataFormat::Raw
+            }),
             finished: false,
+            zlib_header,
         }
     }
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
@@ -58,21 +113,37 @@ impl Inflate {
             return Ok(0);
         }
         loop {
-            let before_in = self.engine.total_in();
-            let before_out = self.engine.total_out();
             let input = match self.input.fill_buf() {
                 Ok(input) => input,
                 Err(e) if e.kind() == ErrorKind::WouldBlock => &[],
                 Err(e) => return Err(e),
             };
-            let status = self
-                .engine
-                .decompress(input, out, flate2::FlushDecompress::None)
-                .map_err(|e| io::Error::new(ErrorKind::InvalidData, e))?;
-            let consumed = (self.engine.total_in() - before_in) as usize;
-            let written = (self.engine.total_out() - before_out) as usize;
+            let result = miniz_oxide::inflate::stream::inflate(
+                &mut self.engine,
+                input,
+                out,
+                miniz_oxide::MZFlush::None,
+            );
+            let consumed = result.bytes_consumed;
+            let written = result.bytes_written;
+            let status = match result.status {
+                Ok(s) => Some(s),
+                Err(miniz_oxide::MZError::Buf) => None,
+                Err(_) => {
+                    let message = if self.engine.last_status()
+                        == miniz_oxide::inflate::TINFLStatus::Adler32Mismatch
+                    {
+                        "incorrect data check"
+                    } else if !self.zlib_header {
+                        "invalid block type"
+                    } else {
+                        "incorrect header check"
+                    };
+                    return Err(io::Error::new(ErrorKind::InvalidData, message));
+                }
+            };
             self.input.consume(consumed);
-            self.finished = status == flate2::Status::StreamEnd;
+            self.finished = status == Some(miniz_oxide::MZStatus::StreamEnd);
             if written > 0 || self.finished {
                 return Ok(written);
             }
@@ -88,8 +159,139 @@ impl Inflate {
     }
 }
 
+/// Parse optional gzip headers without retaining filename/comment/extra data.
+/// The header CRC is incremental; every header field can split across writes.
+struct Header {
+    fixed: [u8; 10],
+    pos: usize,
+    stage: u8,
+    flags: u8,
+    extra: usize,
+    crc: flate2::Crc,
+    check: [u8; 2],
+}
+impl Default for Header {
+    fn default() -> Self {
+        Self {
+            fixed: [0; 10],
+            pos: 0,
+            stage: 0,
+            flags: 0,
+            extra: 0,
+            crc: flate2::Crc::new(),
+            check: [0; 2],
+        }
+    }
+}
+impl Header {
+    fn read(&mut self, input: &mut Input) -> io::Result<()> {
+        loop {
+            match self.stage {
+                0 => {
+                    while self.pos < 10 {
+                        let b = input.fill_buf()?;
+                        if b.is_empty() {
+                            return Err(ErrorKind::UnexpectedEof.into());
+                        }
+                        let byte = b[0];
+                        input.consume(1);
+                        self.fixed[self.pos] = byte;
+                        self.pos += 1;
+                        self.crc.update(&[byte]);
+                    }
+                    if self.fixed[..3] != [31, 139, 8] || self.fixed[3] & 0xe0 != 0 {
+                        return Err(io::Error::new(
+                            ErrorKind::InvalidData,
+                            "incorrect header check",
+                        ));
+                    }
+                    self.flags = self.fixed[3];
+                    self.pos = 0;
+                    self.stage = 1;
+                }
+                1 => {
+                    if self.flags & 4 == 0 {
+                        self.stage = 3;
+                        continue;
+                    }
+                    while self.pos < 2 {
+                        let b = input.fill_buf()?;
+                        if b.is_empty() {
+                            return Err(ErrorKind::UnexpectedEof.into());
+                        }
+                        let byte = b[0];
+                        input.consume(1);
+                        self.check[self.pos] = byte;
+                        self.pos += 1;
+                        self.crc.update(&[byte]);
+                    }
+                    self.extra = u16::from_le_bytes(self.check) as usize;
+                    self.pos = 0;
+                    self.stage = 2;
+                }
+                2 => {
+                    while self.extra > 0 {
+                        let b = input.fill_buf()?;
+                        if b.is_empty() {
+                            return Err(ErrorKind::UnexpectedEof.into());
+                        }
+                        let n = b.len().min(self.extra);
+                        self.crc.update(&b[..n]);
+                        input.consume(n);
+                        self.extra -= n;
+                    }
+                    self.stage = 3;
+                }
+                3 | 4 => {
+                    let flag = if self.stage == 3 { 8 } else { 16 };
+                    if self.flags & flag == 0 {
+                        self.stage += 1;
+                        continue;
+                    }
+                    loop {
+                        let b = input.fill_buf()?;
+                        if b.is_empty() {
+                            return Err(ErrorKind::UnexpectedEof.into());
+                        }
+                        let byte = b[0];
+                        input.consume(1);
+                        self.crc.update(&[byte]);
+                        if byte == 0 {
+                            break;
+                        }
+                    }
+                    self.stage += 1;
+                }
+                5 => {
+                    if self.flags & 2 == 0 {
+                        return Ok(());
+                    }
+                    while self.pos < 2 {
+                        let b = input.fill_buf()?;
+                        if b.is_empty() {
+                            return Err(ErrorKind::UnexpectedEof.into());
+                        }
+                        let byte = b[0];
+                        input.consume(1);
+                        self.check[self.pos] = byte;
+                        self.pos += 1;
+                    }
+                    if u16::from_le_bytes(self.check) != self.crc.sum() as u16 {
+                        return Err(io::Error::new(
+                            ErrorKind::InvalidData,
+                            "header crc mismatch",
+                        ));
+                    }
+                    self.stage = 6;
+                }
+                _ => return Ok(()),
+            }
+        }
+    }
+}
+
 enum GzipStage {
-    Header(flate2::bufread::GzDecoder<Input>),
+    Header(Header, Input),
     Body(Inflate),
     Trailer(Input, [u8; 8], usize),
     Next(Input),
@@ -102,13 +304,13 @@ struct Gzip {
 impl Gzip {
     fn new(input: Input) -> Self {
         Self {
-            stage: GzipStage::Header(flate2::bufread::GzDecoder::new(input)),
+            stage: GzipStage::Header(Header::default(), input),
             crc: flate2::Crc::new(),
         }
     }
     fn input(&mut self) -> &mut Input {
         match &mut self.stage {
-            GzipStage::Header(d) => d.get_mut(),
+            GzipStage::Header(_, input) => input,
             GzipStage::Body(d) => &mut d.input,
             GzipStage::Trailer(input, _, _) | GzipStage::Next(input) | GzipStage::Done(input) => {
                 input
@@ -118,19 +320,11 @@ impl Gzip {
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         loop {
             match &mut self.stage {
-                GzipStage::Header(header) => {
-                    // flate2 parses the optional fields/header CRC without
-                    // decoding a body when the output slice is empty.
-                    let consumed = header.read(&mut [])?;
-                    if consumed != 0 {
-                        return Err(io::Error::new(
-                            ErrorKind::InvalidData,
-                            "gzip header decoder wrote bytes to an empty buffer",
-                        ));
-                    }
+                GzipStage::Header(header, input) => {
+                    header.read(input)?;
                     let old = std::mem::replace(&mut self.stage, GzipStage::Done(Input::default()));
-                    if let GzipStage::Header(header) = old {
-                        self.stage = GzipStage::Body(Inflate::new(header.into_inner(), false));
+                    if let GzipStage::Header(_, input) = old {
+                        self.stage = GzipStage::Body(Inflate::new(input, false));
                     }
                 }
                 GzipStage::Body(body) => {
@@ -177,9 +371,7 @@ impl Gzip {
                         // Node permits zero padding after the last member.
                         self.stage = GzipStage::Done(std::mem::take(input));
                     } else {
-                        self.stage = GzipStage::Header(flate2::bufread::GzDecoder::new(
-                            std::mem::take(input),
-                        ));
+                        self.stage = GzipStage::Header(Header::default(), std::mem::take(input));
                     }
                 }
                 GzipStage::Done(_) => return Ok(0),
@@ -189,25 +381,28 @@ impl Gzip {
 }
 
 type BrotliState = brotli::BrotliState<
-    brotli::enc::StandardAlloc,
-    brotli::enc::StandardAlloc,
-    brotli::enc::StandardAlloc,
+    allocation::CountingAlloc,
+    allocation::CountingAlloc,
+    allocation::CountingAlloc,
 >;
 struct Brotli {
     input: Input,
     state: Box<BrotliState>,
     total_out: usize,
+    allocated: allocation::CountingAlloc,
     finished: bool,
 }
 impl Brotli {
     fn new(input: Input) -> Self {
+        let allocated = allocation::CountingAlloc::default();
         Self {
             input,
             state: Box::new(BrotliState::new(
-                Default::default(),
-                Default::default(),
-                Default::default(),
+                allocated.clone(),
+                allocated.clone(),
+                allocated.clone(),
             )),
+            allocated,
             total_out: 0,
             finished: false,
         }
@@ -260,19 +455,24 @@ impl Brotli {
 }
 struct Zstd {
     input: Input,
-    engine: zstd::stream::raw::Decoder<'static>,
+    engine: zstd::zstd_safe::DCtx<'static>,
     boundary: bool,
+    last_error: usize,
 }
 impl Zstd {
     fn new(input: Input) -> io::Result<Self> {
         Ok(Self {
             input,
-            engine: zstd::stream::raw::Decoder::new()?,
+            engine: {
+                let mut ctx = zstd::zstd_safe::DCtx::create();
+                ctx.init().map_err(zstd_error)?;
+                ctx
+            },
             boundary: false,
+            last_error: 0,
         })
     }
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
-        use zstd::stream::raw::Operation;
         loop {
             let bytes = match self.input.fill_buf() {
                 Ok(bytes) => bytes,
@@ -286,16 +486,26 @@ impl Zstd {
                     Err(ErrorKind::WouldBlock.into())
                 };
             }
-            let step = self.engine.run_on_buffers(bytes, out)?;
-            self.input.consume(step.bytes_read);
-            self.boundary = step.remaining == 0;
-            if step.bytes_written > 0 {
-                return Ok(step.bytes_written);
+            let mut input = zstd::zstd_safe::InBuffer { src: bytes, pos: 0 };
+            let mut output = zstd::zstd_safe::OutBuffer::around(out);
+            let remaining = match self.engine.decompress_stream(&mut output, &mut input) {
+                Ok(n) => n,
+                Err(code) => {
+                    self.last_error = code;
+                    return Err(zstd_error(code));
+                }
+            };
+            let consumed = input.pos;
+            let written = output.pos();
+            self.input.consume(consumed);
+            self.boundary = remaining == 0;
+            if written > 0 {
+                return Ok(written);
             }
             if self.boundary {
                 continue;
             }
-            if step.bytes_read == 0 {
+            if consumed == 0 {
                 return Err(if self.input.ended {
                     ErrorKind::UnexpectedEof
                 } else {
@@ -338,20 +548,52 @@ impl Decoder {
             Self::Sniff(input) => input,
         }
     }
+    fn native_bytes(&self) -> usize {
+        let prefix = match self {
+            Self::Gzip(g) => match &g.stage {
+                GzipStage::Header(_, i)
+                | GzipStage::Trailer(i, _, _)
+                | GzipStage::Next(i)
+                | GzipStage::Done(i) => i.prefix.capacity(),
+                GzipStage::Body(i) => i.input.prefix.capacity(),
+            },
+            Self::Zlib(i) | Self::Raw(i) => i.input.prefix.capacity(),
+            Self::Brotli(i) => i.input.prefix.capacity(),
+            Self::Zstd(i) => i.input.prefix.capacity(),
+            Self::Sniff(i) => i.prefix.capacity(),
+        };
+        prefix
+            + match self {
+                Self::Gzip(g) => {
+                    if matches!(g.stage, GzipStage::Body(_)) {
+                        allocation::inflate_bytes()
+                    } else {
+                        0
+                    }
+                }
+                Self::Zlib(_) | Self::Raw(_) => allocation::inflate_bytes(),
+                Self::Brotli(b) => {
+                    std::mem::size_of::<BrotliState>()
+                        + b.allocated.0.get()
+                        + 3 * std::mem::size_of::<usize>()
+                }
+                Self::Zstd(z) => z.engine.sizeof(),
+                Self::Sniff(_) => 0,
+            }
+    }
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         if let Self::Sniff(input) = self {
-            let prefix: Vec<u8> = input
-                .bytes
-                .iter()
-                .flat_map(|b| b.iter())
-                .take(2)
-                .copied()
-                .collect();
-            if prefix.len() < 2 && !input.ended {
+            while input.prefix.len() < 2 && input.offset < input.len {
+                input.prefix.push(unsafe { *input.ptr.add(input.offset) });
+                input.offset += 1;
+                input.consumed += 1;
+            }
+            if input.prefix.len() < 2 && !input.ended {
                 return Err(ErrorKind::WouldBlock.into());
             }
+            let gzip = input.prefix == [0x1f, 0x8b];
             let input = std::mem::take(input);
-            *self = if prefix == [0x1f, 0x8b] {
+            *self = if gzip {
                 Self::Gzip(Gzip::new(input))
             } else {
                 Self::Zlib(Inflate::new(input, true))
@@ -368,263 +610,313 @@ impl Decoder {
     }
 }
 
-pub(super) enum Work {
-    Write(Vec<u8>, usize, i64),
-    Flush(i64),
-    End,
+fn zstd_error(code: usize) -> io::Error {
+    io::Error::new(
+        ErrorKind::InvalidData,
+        zstd::zstd_safe::get_error_name(code),
+    )
 }
 
-pub(super) struct Driver {
-    decoder: Option<Decoder>,
-    pub(super) work: VecDeque<Work>,
-    pub(super) output: VecDeque<Vec<u8>>,
-    pub(super) output_bytes: usize,
-    pub(super) input_bytes: usize,
-    pub(super) chunk_size: usize,
-    pub(super) readable_hwm: usize,
-    pub(super) writable_hwm: usize,
-    pub(super) flowing: bool,
-    pub(super) paused: bool,
-    pub(super) scheduled: bool,
-    pub(super) done: bool,
-    pub(super) need_drain: bool,
-    pub(super) pipe_waiters: usize,
-    active_write: Option<i64>,
-    encoded: Vec<u8>,
-    encoded_offset: usize,
-    finishing: bool,
+enum Encoder {
+    Flate(super::zlib_encoder::Encoder),
+    Brotli(
+        Box<brotli::enc::encode::BrotliEncoderStateStruct<allocation::CountingAlloc>>,
+        allocation::CountingAlloc,
+    ),
+    Zstd(zstd::zstd_safe::CCtx<'static>),
 }
-impl Driver {
-    pub(super) fn new(
-        codec: Codec,
-        chunk_size: usize,
-        readable_hwm: usize,
-        writable_hwm: usize,
-    ) -> Self {
-        Self {
-            decoder: Decoder::new(codec),
-            work: VecDeque::new(),
-            output: VecDeque::new(),
-            output_bytes: 0,
-            input_bytes: 0,
-            chunk_size,
-            readable_hwm,
-            writable_hwm,
-            flowing: false,
-            paused: false,
-            scheduled: false,
-            done: false,
-            need_drain: false,
-            pipe_waiters: 0,
-            active_write: None,
-            encoded: Vec::new(),
-            encoded_offset: 0,
-            finishing: false,
-        }
-    }
-    pub(super) fn is_decoder(&self) -> bool {
-        self.decoder.is_some()
-    }
-    pub(super) fn scan(&mut self, visitor: &mut GcRootVisitor<'_>) {
-        if let Some(cb) = &mut self.active_write {
-            visitor.visit_i64_slot(cb);
-        }
-        for work in &mut self.work {
-            match work {
-                Work::Write(_, _, cb) | Work::Flush(cb) => {
-                    visitor.visit_i64_slot(cb);
-                }
-                Work::End => {}
+impl Encoder {
+    fn new(codec: Codec, level: Compression) -> io::Result<Self> {
+        Ok(match codec {
+            Codec::Gzip | Codec::Deflate | Codec::DeflateRaw => {
+                Self::Flate(super::zlib_encoder::Encoder::new(codec, level)?)
             }
-        }
-    }
-    fn emit_encoded(&mut self) {
-        let end = (self.encoded_offset + self.chunk_size).min(self.encoded.len());
-        let chunk = self.encoded[self.encoded_offset..end].to_vec();
-        self.output_bytes += chunk.len();
-        self.output.push_back(chunk);
-        self.encoded_offset = end;
-        if end == self.encoded.len() {
-            self.encoded = Vec::new();
-            self.encoded_offset = 0;
-        }
-    }
-    fn queue_output(&mut self, bytes: Vec<u8>) {
-        if bytes.is_empty() {
-            return;
-        }
-        self.encoded = bytes;
-        self.encoded_offset = 0;
-        self.emit_encoded();
-    }
-    pub(super) fn cancel_callbacks(&mut self) -> Vec<i64> {
-        let mut callbacks = Vec::new();
-        if let Some(cb) = self.active_write.take() {
-            if cb != 0 {
-                callbacks.push(cb);
+            Codec::BrotliCompress => {
+                let alloc = allocation::CountingAlloc::default();
+                let mut state = Box::new(brotli::enc::encode::BrotliEncoderStateStruct::new(
+                    alloc.clone(),
+                ));
+                state.params.quality = 11;
+                state.params.lgwin = 22;
+                Self::Brotli(state, alloc)
             }
-        }
-        for work in &self.work {
-            if let Work::Write(_, _, cb) | Work::Flush(cb) = work {
-                if *cb != 0 {
-                    callbacks.push(*cb);
-                }
+            Codec::ZstdCompress => {
+                let mut ctx = zstd::zstd_safe::CCtx::create();
+                ctx.init(ZSTD_DEFAULT_LEVEL).map_err(zstd_error)?;
+                Self::Zstd(ctx)
             }
-        }
-        callbacks
+            _ => {
+                return Err(io::Error::new(
+                    ErrorKind::InvalidInput,
+                    "decoder used as encoder",
+                ))
+            }
+        })
     }
-    fn complete_write(&mut self, handle: i64, events: &mut Vec<ZlibEvent>) {
-        if let Some(cb) = self.active_write.take() {
-            if cb != 0 {
-                events.push(ZlibEvent::Callback(cb));
+    fn native_bytes(&self) -> usize {
+        match self {
+            Self::Flate(f) => f.native_bytes(),
+            Self::Brotli(state, alloc) => {
+                std::mem::size_of_val(&**state) + alloc.0.get() + 3 * std::mem::size_of::<usize>()
             }
-            if self.input_bytes == 0 && self.need_drain {
-                self.need_drain = false;
-                events.push(ZlibEvent::Drain(handle));
-            }
+            Self::Zstd(ctx) => ctx.sizeof(),
         }
     }
-    /// Do at most one output allocation. Never run the codec with a full
-    /// readable queue, including when a consumer pauses from a data callback.
-    pub(super) fn produce(
+    fn step(
         &mut self,
-        s: &mut Option<CodecState>,
-        handle: i64,
-        bytes_written: &mut usize,
-    ) -> Result<Vec<ZlibEvent>, String> {
-        let mut events = Vec::new();
-        if self.output_bytes >= self.readable_hwm.max(1) {
-            return Ok(events);
-        }
-        if !self.encoded.is_empty() {
-            self.emit_encoded();
-            return Ok(events);
-        }
-        if self.done {
-            return Ok(events);
-        }
-        if self.finishing && self.decoder.is_none() {
-            self.done = true;
-            events.push(ZlibEvent::Finish(handle));
-            return Ok(events);
-        }
-        loop {
-            if self.decoder.is_none() {
-                self.complete_write(handle, &mut events);
+        op: &perry_ffi::native_stream::StepIn,
+        bytes: &[u8],
+        output: &mut [u8],
+    ) -> io::Result<(usize, usize, perry_ffi::native_stream::StepStatus)> {
+        use perry_ffi::native_stream::{StepStatus, StreamOp};
+        let final_op = op.op == StreamOp::FINAL;
+        match self {
+            Self::Flate(f) => f.step(op, bytes, output),
+            Self::Brotli(state, _) => {
+                use brotli::enc::encode::BrotliEncoderOperation;
+                let operation = if final_op {
+                    BrotliEncoderOperation::BROTLI_OPERATION_FINISH
+                } else if op.op == StreamOp::FLUSH {
+                    BrotliEncoderOperation::BROTLI_OPERATION_FLUSH
+                } else {
+                    BrotliEncoderOperation::BROTLI_OPERATION_PROCESS
+                };
+                let mut available_in = bytes.len();
+                let mut input_offset = 0;
+                let mut available_out = output.len();
+                let mut output_offset = 0;
+                let ok = state.compress_stream(
+                    operation,
+                    &mut available_in,
+                    bytes,
+                    &mut input_offset,
+                    &mut available_out,
+                    output,
+                    &mut output_offset,
+                    &mut None,
+                    &mut |_, _, _, _| {},
+                );
+                if !ok {
+                    return Err(io::Error::new(ErrorKind::InvalidData, "Compression failed"));
+                }
+                let status = if final_op && state.is_finished() {
+                    StepStatus::ENDED
+                } else if available_in > 0
+                    || state.has_more_output()
+                    || (final_op && !state.is_finished())
+                {
+                    StepStatus::MORE
+                } else {
+                    StepStatus::NEED_INPUT
+                };
+                Ok((input_offset, output_offset, status))
             }
-            if let Some(decoder) = &mut self.decoder {
-                let mut out = vec![0; self.chunk_size];
-                let before = decoder.input().consumed;
-                let result = decoder.read(&mut out);
-                let consumed = decoder.input().consumed - before;
-                self.input_bytes = self.input_bytes.saturating_sub(consumed);
-                *bytes_written += consumed;
-                if matches!(result, Ok(0)) {
-                    let input = decoder.input();
-                    let unused: usize = input
-                        .bytes
-                        .iter()
-                        .map(Vec::len)
-                        .sum::<usize>()
-                        .saturating_sub(input.offset);
-                    input.bytes.clear();
-                    input.offset = 0;
-                    self.input_bytes = self.input_bytes.saturating_sub(unused);
-                }
-                match result {
-                    Ok(n) if n > 0 => {
-                        out.truncate(n);
-                        // Small compressed writes can produce tiny outputs.
-                        // Their pending storage must not retain chunkSize bytes
-                        // each while accounting only for the delivered length.
-                        out.shrink_to_fit();
-                        self.output_bytes += n;
-                        self.output.push_back(out);
-                        return Ok(events);
-                    }
-                    Ok(_) if self.finishing => {
-                        self.decoder = None; // release codec workspace at completion
-                        self.done = true;
-                        self.complete_write(handle, &mut events);
-                        events.push(ZlibEvent::Finish(handle));
-                        return Ok(events);
-                    }
-                    Ok(_) => {} // complete frame; writes/End still settle in order
-                    Err(e) if e.kind() == ErrorKind::WouldBlock => {}
-                    Err(e) => {
-                        return Err(if e.kind() == ErrorKind::UnexpectedEof {
-                            "unexpected end of file".to_string()
-                        } else {
-                            e.to_string()
-                        })
-                    }
-                }
-                self.complete_write(handle, &mut events);
-            }
-            match self.work.pop_front() {
-                Some(Work::Write(bytes, offset, cb)) => {
-                    if let Some(decoder) = &mut self.decoder {
-                        if !bytes.is_empty() {
-                            decoder.input().bytes.push_back(bytes);
-                        }
-                        self.active_write = Some(cb);
-                    } else {
-                        // Feeding bounded input also prevents an encoder's Vec
-                        // from growing to the size of a single huge write.
-                        let end = (offset + self.chunk_size).min(bytes.len());
-                        let cs = s.as_mut().ok_or("codec closed")?;
-                        cs.write_chunk(&bytes[offset..end])
-                            .map_err(|e| e.to_string())?;
-                        self.input_bytes -= end - offset;
-                        *bytes_written += end - offset;
-                        let out = cs.drain();
-                        if end < bytes.len() {
-                            self.work.push_front(Work::Write(bytes, end, cb));
-                        } else {
-                            self.active_write = Some(cb);
-                        }
-                        if !out.is_empty() {
-                            self.queue_output(out);
-                            return Ok(events);
-                        }
-                    }
-                }
-                Some(Work::Flush(cb)) => {
-                    if let Some(cs) = s.as_mut() {
-                        cs.flush_codec().map_err(|e| e.to_string())?;
-                        self.queue_output(cs.drain());
-                    }
-                    if cb != 0 {
-                        events.push(ZlibEvent::Callback(cb));
-                    }
-                    return Ok(events);
-                }
-                Some(Work::End) => {
-                    self.finishing = true;
-                    if let Some(decoder) = &mut self.decoder {
-                        decoder.input().ended = true;
-                    } else {
-                        self.queue_output(
-                            s.take()
-                                .ok_or("codec closed")?
-                                .finish()
-                                .map_err(|e| e.to_string())?,
-                        );
-                        return Ok(events);
-                    }
-                }
-                None => return Ok(events),
+            Self::Zstd(ctx) => {
+                use zstd::zstd_safe::{zstd_sys::ZSTD_EndDirective, InBuffer, OutBuffer};
+                let directive = if final_op {
+                    ZSTD_EndDirective::ZSTD_e_end
+                } else if op.op == StreamOp::FLUSH {
+                    ZSTD_EndDirective::ZSTD_e_flush
+                } else {
+                    ZSTD_EndDirective::ZSTD_e_continue
+                };
+                let mut input = InBuffer { src: bytes, pos: 0 };
+                let mut out = OutBuffer::around(output);
+                let remaining = ctx
+                    .compress_stream2(&mut out, &mut input, directive)
+                    .map_err(zstd_error)?;
+                let status = if final_op && remaining == 0 {
+                    StepStatus::ENDED
+                } else if input.pos < bytes.len()
+                    || out.pos() == out.capacity()
+                    || (op.op != StreamOp::WRITE && remaining > 0)
+                {
+                    StepStatus::MORE
+                } else {
+                    StepStatus::NEED_INPUT
+                };
+                Ok((input.pos, out.pos(), status))
             }
         }
     }
-    pub(super) fn can_progress(&self) -> bool {
-        (self.flowing && self.pipe_waiters == 0 && !self.output.is_empty())
-            || (!self.done
-                && self.output_bytes < self.readable_hwm.max(1)
-                && (self.active_write.is_some()
-                    || self.finishing
-                    || !self.work.is_empty()
-                    || !self.encoded.is_empty()))
-            || (self.done && self.output.is_empty() && self.flowing)
+}
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static PAYLOAD_COUNTS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
+}
+#[cfg(test)]
+impl Drop for Payload {
+    fn drop(&mut self) {
+        PAYLOAD_COUNTS.with(|n| {
+            let (created, dropped) = n.get();
+            n.set((created, dropped + 1));
+        });
+    }
+}
+/// Only codec state and scratch: the runtime owns all records and queues.
+pub(super) struct Payload {
+    codec: Codec,
+    level: Compression,
+    decoder: Option<Decoder>,
+    encoder: Option<Encoder>,
+    scratch: Vec<u8>,
+    output_offset: usize,
+    bytes_written: usize,
+    error: Option<String>,
+}
+impl Payload {
+    pub(super) fn new(codec: Codec, level: Compression, chunk_size: usize) -> io::Result<Self> {
+        #[cfg(test)]
+        let chunk_size = if sabotage("unbounded_output") {
+            chunk_size * 16384
+        } else {
+            chunk_size
+        };
+        let decoder = Decoder::new(codec);
+        let encoder = if decoder.is_none() {
+            Some(Encoder::new(codec, level)?)
+        } else {
+            None
+        };
+        #[cfg(test)]
+        PAYLOAD_COUNTS.with(|n| {
+            let (created, dropped) = n.get();
+            n.set((created + 1, dropped));
+        });
+        Ok(Self {
+            codec,
+            level,
+            decoder,
+            encoder,
+            scratch: vec![0; chunk_size],
+            output_offset: 0,
+            bytes_written: 0,
+            error: None,
+        })
+    }
+    pub(super) fn external_bytes(&self) -> usize {
+        std::mem::size_of::<Self>()
+            + self.scratch.capacity()
+            + self.decoder.as_ref().map_or(0, Decoder::native_bytes)
+            + self.encoder.as_ref().map_or(0, Encoder::native_bytes)
+            + self.error.as_ref().map_or(0, String::capacity)
+    }
+    pub(super) fn step(
+        &mut self,
+        op: &perry_ffi::native_stream::StepIn,
+        out: &mut perry_ffi::native_stream::StepOut,
+    ) {
+        use perry_ffi::native_stream::{StepStatus, StreamOp};
+        let bytes = if op.len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(op.input, op.len) }
+        };
+        let start = self.output_offset;
+        let result = if let Some(decoder) = &mut self.decoder {
+            decoder.input().borrow(bytes, op.op == StreamOp::FINAL);
+            let result = decoder.read(&mut self.scratch[start..]);
+            let consumed = decoder.input().clear_borrow();
+            match result {
+                Ok(n) => Ok((
+                    consumed,
+                    n,
+                    if n > 0 {
+                        StepStatus::MORE
+                    } else if op.op == StreamOp::FINAL {
+                        StepStatus::ENDED
+                    } else {
+                        StepStatus::NEED_INPUT
+                    },
+                )),
+                Err(e) if e.kind() == ErrorKind::WouldBlock => {
+                    Ok((consumed, 0, StepStatus::NEED_INPUT))
+                }
+                Err(e) => Err(e),
+            }
+        } else {
+            self.encoder
+                .as_mut()
+                .unwrap()
+                .step(op, bytes, &mut self.scratch[start..])
+        };
+        match result {
+            Ok((consumed, written, status)) => {
+                out.consumed = consumed;
+                out.out = unsafe { self.scratch.as_ptr().add(start) };
+                self.output_offset = (start + written) % self.scratch.len();
+                out.out_len = written;
+                out.status = status;
+                self.bytes_written += consumed;
+            }
+            Err(e) => {
+                out.code = if e.kind() == ErrorKind::UnexpectedEof {
+                    5
+                } else {
+                    3
+                };
+                out.status = StepStatus::ERROR;
+                self.error = Some(e.to_string());
+            }
+        }
+        #[cfg(test)]
+        if sabotage("corrupt_output") && out.out_len > 0 {
+            self.scratch[start] ^= 1;
+        }
+        out.external_bytes = self.external_bytes();
+    }
+    pub(super) fn bytes_written(&self) -> usize {
+        self.bytes_written
+    }
+    pub(super) fn error_details(&self, code: u32) -> (String, String, i32) {
+        let message = self
+            .error
+            .clone()
+            .unwrap_or_else(|| "Decompression failed".into());
+        if let Some(Decoder::Brotli(b)) = &self.decoder {
+            if (b.state.error_code as i32) < 0 {
+                let name = format!("{:?}", b.state.error_code);
+                return (
+                    message,
+                    format!("ERR__{}", name.strip_prefix("BROTLI_DECODER_").unwrap()),
+                    b.state.error_code as i32,
+                );
+            }
+        }
+        if let Some(Decoder::Zstd(z)) = &self.decoder {
+            if z.last_error != 0 {
+                let code = unsafe { zstd::zstd_safe::zstd_sys::ZSTD_getErrorCode(z.last_error) };
+                return (message, format!("{code:?}"), code as i32);
+            }
+        }
+        (
+            message,
+            if code == 5 {
+                "Z_BUF_ERROR"
+            } else {
+                "Z_DATA_ERROR"
+            }
+            .into(),
+            -(code as i32),
+        )
+    }
+    pub(super) fn params(&mut self, level: Compression, strategy: i32) {
+        self.level = level;
+        if let Some(Encoder::Flate(f)) = &mut self.encoder {
+            f.params(level, strategy);
+        }
+    }
+    pub(super) fn reset(&mut self) -> io::Result<()> {
+        *self = Self::new(self.codec, self.level, self.scratch.len())?;
+        Ok(())
+    }
+}
+
+impl Drop for Encoder {
+    fn drop(&mut self) {
+        if let Self::Brotli(state, _) = self {
+            brotli::enc::encode::BrotliEncoderDestroyInstance(state);
+        }
     }
 }

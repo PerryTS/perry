@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-const FAMILY_COUNT: usize = 14;
+const FAMILY_COUNT: usize = 13;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -24,7 +24,6 @@ const SNAPSHOT_EVERY: u64 = 4096;
 pub enum ReceiverReprFamily {
     Common,
     Fetch,
-    Zlib,
     Proxy,
     Timer,
     Text,
@@ -42,7 +41,6 @@ impl ReceiverReprFamily {
     const ALL: [Self; FAMILY_COUNT] = [
         Self::Common,
         Self::Fetch,
-        Self::Zlib,
         Self::Proxy,
         Self::Timer,
         Self::Text,
@@ -59,7 +57,7 @@ impl ReceiverReprFamily {
     /// The family's report name. One string, see
     /// [`crate::hot_diag::report_name`].
     fn name(self) -> &'static str {
-        const NAMES: &str = "common fetch zlib proxy timer text tui async_hook async_resource symbol_global external_buffer sab event_target null_stub";
+        const NAMES: &str = "common fetch proxy timer text tui async_hook async_resource symbol_global external_buffer sab event_target null_stub";
         super::report_name(NAMES, self.index())
     }
 
@@ -191,9 +189,7 @@ fn observe_pointer(addr: usize) {
     if crate::value::addr_class::is_fetch_handle_band(addr) {
         mark_old(ReceiverReprFamily::Fetch);
     }
-    if crate::value::addr_class::is_zlib_handle_band(addr) {
-        mark_old(ReceiverReprFamily::Zlib);
-    }
+
     if crate::value::addr_class::is_proxy_id_band(addr) {
         let boxed = f64::from_bits(POINTER_TAG | addr as u64);
         if crate::proxy::js_proxy_is_proxy(boxed) != 0 {
@@ -424,7 +420,7 @@ mod tests {
 
     #[test]
     fn receiver_repr_family_fixtures_move_constructed_and_observed_old() {
-        // These three producers live in perry-stdlib, below perry-runtime in
+        // These two producers live in perry-stdlib, below perry-runtime in
         // the dependency graph. Their exact producer calls are pinned by the
         // source-witness test below; the fixtures exercise their audited bands.
         assert_fixture(ReceiverReprFamily::Common, || {
@@ -434,10 +430,6 @@ mod tests {
         assert_fixture(ReceiverReprFamily::Fetch, || {
             receiver_repr_note_constructed(ReceiverReprFamily::Fetch);
             (crate::value::addr_class::FETCH_HANDLE_BAND_START, false)
-        });
-        assert_fixture(ReceiverReprFamily::Zlib, || {
-            receiver_repr_note_constructed(ReceiverReprFamily::Zlib);
-            (crate::value::addr_class::ZLIB_HANDLE_BAND_START, false)
         });
         assert_fixture(ReceiverReprFamily::Proxy, || {
             let object = || {
@@ -533,7 +525,6 @@ mod tests {
             // payload publisher and therefore share one diagnostic bump.
             ("crates/perry-stdlib/src/common/handle.rs", "Common", 1),
             ("crates/perry-stdlib/src/fetch/mod.rs", "Fetch", 1),
-            ("crates/perry-stdlib/src/zlib.rs", "Zlib", 1),
             ("crates/perry-runtime/src/proxy.rs", "Proxy", 1),
             ("crates/perry-runtime/src/timer.rs", "Timer", 1),
             ("crates/perry-runtime/src/text.rs", "Text", 2),

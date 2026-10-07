@@ -1170,10 +1170,6 @@ pub fn transform_expr(
             transform_expr(e, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         // RegExp methods
-        Expr::RegExpTest { regex, string } => {
-            transform_expr(regex, js_imports, extern_func_to_js, local_name_to_js, tracker);
-            transform_expr(string, js_imports, extern_func_to_js, local_name_to_js, tracker);
-        }
         Expr::StringMatch { string, regex } => {
             transform_expr(string, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(regex, js_imports, extern_func_to_js, local_name_to_js, tracker);

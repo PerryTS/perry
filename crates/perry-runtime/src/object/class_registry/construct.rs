@@ -265,18 +265,28 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
         if let Some(worker) = worker_threads_construct(&module, &method, args_ptr, args_len) {
             return worker;
         }
-        if module == "zlib" && matches!(method.as_str(), "ZstdCompress" | "ZstdDecompress") {
+        if module == "zlib"
+            && matches!(
+                method.as_str(),
+                "Gzip"
+                    | "Gunzip"
+                    | "Deflate"
+                    | "Inflate"
+                    | "DeflateRaw"
+                    | "InflateRaw"
+                    | "Unzip"
+                    | "BrotliCompress"
+                    | "BrotliDecompress"
+                    | "ZstdCompress"
+                    | "ZstdDecompress"
+            )
+        {
             let ptr =
                 crate::value::JS_NATIVE_ZLIB_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
             if !ptr.is_null() {
                 let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
                     std::mem::transmute(ptr);
-                let factory = if method == "ZstdCompress" {
-                    "createZstdCompress"
-                } else {
-                    "createZstdDecompress"
-                };
-                return dispatch(factory.as_ptr(), factory.len(), args_ptr, args_len);
+                return dispatch(method.as_ptr(), method.len(), args_ptr, args_len);
             }
         }
     }

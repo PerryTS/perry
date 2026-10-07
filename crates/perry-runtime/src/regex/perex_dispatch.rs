@@ -316,13 +316,15 @@ pub(crate) fn same_value(
     )
 }
 
-pub(crate) fn test_string(receiver: f64, input: *const StringHeader) -> Result<bool, EngineError> {
-    let scope = RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(receiver);
-    let input = scope.root_string_ptr(input);
+/// Shared test execution over roots owned by the public entry. Both boxed
+/// calls and the raw-string entry reach the same RegExpExec/Perex engine.
+fn test_rooted(
+    receiver: &RuntimeHandle<'_>,
+    input: &RuntimeHandle<'_>,
+) -> Result<bool, EngineError> {
     execute(
-        &receiver,
-        &input,
+        receiver,
+        input,
         false,
         &mut Budget::new(api::WORK),
         &MemoryBudget::new(api::SCRATCH_BYTES),
@@ -332,16 +334,43 @@ pub(crate) fn test_string(receiver: f64, input: *const StringHeader) -> Result<b
     .map(|result| result.is_some())
 }
 
+pub(crate) fn test_string(receiver: f64, input: *const StringHeader) -> Result<bool, EngineError> {
+    let scope = RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let input = scope.root_string_ptr(input);
+    test_rooted(&receiver, &input)
+}
+
 pub(crate) fn test_value(
     _this: crate::closure::JsThis,
     receiver: f64,
     argument: f64,
 ) -> Result<bool, EngineError> {
+    // ToString of a heap string is the identity: it cannot throw, allocate
+    // or run user code. Reuse the raw-string entry and its two roots rather
+    // than opening a coercion trap and a second scope. RegExpExec still
+    // validates the receiver and observes exec before entering the engine.
+    // SSO strings can allocate when materialized and retain the caught path.
+    let value = crate::value::JSValue::from_bits(argument.to_bits());
+    if value.is_string() {
+        return test_string(receiver, value.as_string_ptr());
+    }
+    // A non-string coercion can have effects: reject a primitive receiver
+    // first, and keep both receiver and argument rooted while it runs.
     require_object(receiver)?;
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let argument = scope.root_nanbox_f64(argument);
-    let input =
-        api::caught(|| crate::value::js_jsvalue_to_string_coerce(argument.get_nanbox_f64()));
-    test_string(receiver.get_nanbox_f64(), input?)
+    let input = api::caught(|| {
+        let value = argument.get_nanbox_f64();
+        if crate::value::JSValue::from_bits(value.to_bits()).is_short_string() {
+            // Inline strings have no StringHeader. Materialization may
+            // collect, so it stays inside the caught, rooted window.
+            crate::string::js_string_materialize_to_heap(value)
+        } else {
+            crate::value::js_jsvalue_to_string_coerce(value)
+        }
+    })?;
+    let input = scope.root_string_ptr(input);
+    test_rooted(&receiver, &input)
 }

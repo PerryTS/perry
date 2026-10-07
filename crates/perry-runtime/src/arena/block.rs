@@ -1,45 +1,11 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Size of each arena block (1 MB — issue #179 tier 1 #1).
-///
-/// Formerly 8 MB. The recent-5-blocks safety window (where LLVM caller-
-/// saved registers might still hold uncaptured handles; see
-/// `BLOCK_PERSIST_WINDOW` in gc.rs and `keep_low` in
-/// `arena_reset_empty_blocks`) now reserves 5 × 1 MB = 5 MB of
-/// non-reclaimable headroom instead of 5 × 8 MB = 40 MB. Combined with
-/// the age-restricted block-persist from v0.5.193 this closes the
-/// remaining `bench_json_roundtrip` RSS gap to within 5% of Node's
-/// numbers without a speed regression.
-///
-/// Measured on `bench_json_roundtrip` (best-of-5, macOS ARM64):
-///   8 MB blocks (v0.5.193): 384 ms / 213 MB
-///   2 MB blocks:            325 ms / 208 MB
-///   1 MB blocks:            320 ms / 199 MB
-///   512 KB blocks:          318 ms / 200 MB  (diminishing returns)
-///
-/// Picked 1 MB: RSS essentially tied with 512 KB, block-count overhead
-/// 2× smaller, `bench_gc_pressure` / `object_create` unchanged.
-///
-/// Trade-offs:
-/// - More blocks in the arena for the same total bytes → walker loops
-///   pay more per-block overhead. Measured: negligible — the walker is
-///   O(objects), not O(blocks), once inside a block.
-/// - More frequent "block full, advance to next" transitions in the
-///   inline bump allocator's slow path. The slow path is a function
-///   call; on `object_create` the cost is amortized across hundreds of
-///   thousands of allocs per block before GC resets it. Measured:
-///   `07_object_create` 0-1 ms unchanged.
-/// - Large single allocations (Buffer.alloc(3 MB), big arena strings)
-///   get a custom-sized block via `alloc_block(min_size)` that rounds
-///   up to a BLOCK_SIZE multiple — unchanged mechanics, just rounds to
-///   1 MB granularity now.
-/// - The GC's adaptive step (gc.rs `GC_THRESHOLD_INITIAL_BYTES = 128
-///   MB`) is unchanged; the workload still needs 128 MB of total arena
-///   to trigger the first GC. With 1 MB blocks that's 128 blocks, and
-///   `bench_json_roundtrip` hits that point at roughly the same
-///   iteration as it did with 16 × 8 MB blocks — the adaptive step
-///   shrinks appropriately on the first productive collection.
+/// One usable block per aligned Linux region. Other backends keep their
+/// existing geometry until their OS reservation implementation is validated.
+#[cfg(target_os = "linux")]
+pub(crate) const BLOCK_SIZE: usize = super::region::ALIGN;
+#[cfg(not(target_os = "linux"))]
 pub(crate) const BLOCK_SIZE: usize = 1024 * 1024;
 pub(crate) const FRESH_GENERAL_BLOCK_MIN_USED_BYTES: usize = 256 * 1024;
 
@@ -116,7 +82,7 @@ impl Drop for BlockPool {
         let bytes = self
             .blocks
             .iter()
-            .map(|block| block.size)
+            .map(|block| super::region::backing_len(block.size))
             .fold(0usize, usize::saturating_add);
         block_pool_process_bytes_sub(bytes);
         for block in &self.blocks {
@@ -124,13 +90,12 @@ impl Drop for BlockPool {
             if data.is_null() || size == 0 {
                 continue;
             }
-            let layout = Layout::from_size_align(size, 16).unwrap();
             unsafe {
                 // #4665, mirroring `Arena::drop`: test builds keep freed blocks
                 // mapped so unit tests holding raw GC pointers across a
                 // collection read stale bytes instead of faulting.
                 if !cfg!(test) {
-                    std::alloc::dealloc(data, layout);
+                    super::region::unmap(data, size);
                 }
             }
         }
@@ -238,8 +203,9 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
         return false;
     }
     let cap = block_pool_cap_bytes();
-    if BLOCK_POOL_BYTES.with(Cell::get).saturating_add(size) > cap
-        || !block_pool_process_try_reserve(size)
+    let charge = super::region::backing_len(size);
+    if BLOCK_POOL_BYTES.with(Cell::get).saturating_add(charge) > cap
+        || !block_pool_process_try_reserve(charge)
     {
         return false;
     }
@@ -250,7 +216,7 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
             reuse_window: 2,
         });
     });
-    BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_add(size)));
+    BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_add(charge)));
     true
 }
 
@@ -260,8 +226,9 @@ fn block_pool_take(size: usize) -> Option<*mut u8> {
         let idx = pool.blocks.iter().rposition(|block| block.size == size)?;
         Some(pool.blocks.swap_remove(idx).data)
     })?;
-    BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_sub(size)));
-    block_pool_process_bytes_sub(size);
+    let charge = super::region::backing_len(size);
+    BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_sub(charge)));
+    block_pool_process_bytes_sub(charge);
     Some(taken)
 }
 
@@ -299,13 +266,12 @@ pub(crate) fn release_arena_block(data: *mut u8, size: usize) -> ArenaBlockRelea
         return ArenaBlockRelease::Pooled;
     }
     if !data.is_null() && size != 0 {
-        let layout = Layout::from_size_align(size, 16).unwrap();
         unsafe {
             // #4665: test builds retain otherwise-freed mappings so stale raw
             // GC pointers remain readable. The production disposition is still
             // Deallocated; focused pool tests observe the explicit drain census.
             if !cfg!(test) {
-                std::alloc::dealloc(data, layout);
+                super::region::unmap(data, size);
             }
         }
     }
@@ -319,7 +285,7 @@ pub(crate) fn drain_block_pool() -> BlockPoolDrainStats {
     let entries = BLOCK_POOL.with(|pool| std::mem::take(&mut pool.borrow_mut().blocks));
     let bytes = entries
         .iter()
-        .map(|block| block.size)
+        .map(|block| super::region::backing_len(block.size))
         .fold(0usize, usize::saturating_add);
     let tracked = BLOCK_POOL_BYTES.with(|cell| cell.replace(0));
     debug_assert_eq!(tracked, bytes, "thread block-pool byte accounting drifted");
@@ -330,10 +296,9 @@ pub(crate) fn drain_block_pool() -> BlockPoolDrainStats {
         if data.is_null() || size == 0 {
             continue;
         }
-        let layout = Layout::from_size_align(size, 16).unwrap();
         unsafe {
             if !cfg!(test) {
-                std::alloc::dealloc(data, layout);
+                super::region::unmap(data, size);
             }
         }
     }
@@ -373,17 +338,23 @@ pub(crate) fn block_pool_explicit_drained_bytes_for_test() -> usize {
     BLOCK_POOL_EXPLICIT_DRAINED_BYTES.load(Ordering::Relaxed)
 }
 
-fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
+fn try_alloc_block(
+    min_size: usize,
+    injectable: bool,
+    generation: HeapGeneration,
+) -> Option<ArenaBlock> {
     let size = block_size_for(min_size);
-    let layout = Layout::from_size_align(size, 16).unwrap();
     #[cfg(test)]
     if injectable && FORCE_BLOCK_ALLOC_FAILURE.with(|f| f.replace(false)) {
         return None;
     }
     #[cfg(not(test))]
     let _ = injectable;
+    let kind = super::region::kind_for(generation, size);
     if let Some(data) = block_pool_take(size) {
+        unsafe { super::region::advise(data, size, kind) };
         return Some(ArenaBlock {
+            extent_kind: kind,
             data,
             size,
             offset: 0,
@@ -394,11 +365,12 @@ fn try_alloc_block(min_size: usize, injectable: bool) -> Option<ArenaBlock> {
             idle_pages_discarded: false,
         });
     }
-    let data = unsafe { alloc(layout) };
+    let data = unsafe { super::region::map(kind, size) };
     if data.is_null() {
         return None;
     }
     Some(ArenaBlock {
+        extent_kind: kind,
         data,
         size,
         offset: 0,
@@ -430,13 +402,18 @@ pub(crate) fn new_object_start_bitmap(size: usize) -> Box<[u64]> {
 /// violation [`arena_cell_alloc`] exists to avoid, on the out-of-memory path.
 /// `arena_cell_alloc` is the only caller; every `&mut self` path uses
 /// [`alloc_block_no_gc`].
+#[cfg(test)]
 pub(crate) fn reserve_arena_block(min_size: usize) -> ArenaBlock {
-    if let Some(block) = try_alloc_block(min_size, true) {
+    reserve_arena_block_for(min_size, HeapGeneration::Nursery)
+}
+
+fn reserve_arena_block_for(min_size: usize, generation: HeapGeneration) -> ArenaBlock {
+    if let Some(block) = try_alloc_block(min_size, true, generation) {
         return block;
     }
     note_gc_trigger_arena_borrow_depth();
     crate::gc::gc_try_emergency_reclaim();
-    if let Some(block) = try_alloc_block(min_size, false) {
+    if let Some(block) = try_alloc_block(min_size, false, generation) {
         return block;
     }
     panic!(
@@ -452,8 +429,8 @@ pub(crate) fn reserve_arena_block(min_size: usize) -> ArenaBlock {
 /// where starting another one is precisely what must not happen. The mutator
 /// allocation path — the one where heap exhaustion actually surfaces — keeps the
 /// reclaim via [`reserve_arena_block`].
-fn alloc_block_no_gc(min_size: usize) -> ArenaBlock {
-    try_alloc_block(min_size, false).unwrap_or_else(|| {
+fn alloc_block_no_gc(min_size: usize, generation: HeapGeneration) -> ArenaBlock {
+    try_alloc_block(min_size, false, generation).unwrap_or_else(|| {
         panic!(
             "Failed to allocate arena block of {} bytes (heap exhausted)",
             block_size_for(min_size)
@@ -463,6 +440,8 @@ fn alloc_block_no_gc(min_size: usize) -> ArenaBlock {
 
 /// A single arena block
 pub(crate) struct ArenaBlock {
+    /// Allocation class of this backing, preserved when blocks change generation.
+    pub(crate) extent_kind: super::region::Kind,
     pub(crate) data: *mut u8,
     pub(crate) size: usize,
     pub(crate) offset: usize,
@@ -501,8 +480,8 @@ pub(crate) struct ArenaBlock {
 impl ArenaBlock {
     /// The initial block of a thread's arena, built during `Arena::new` — i.e.
     /// while the arena does not exist yet, so nothing may collect here.
-    fn new() -> Self {
-        alloc_block_no_gc(BLOCK_SIZE)
+    fn new(generation: HeapGeneration) -> Self {
+        alloc_block_no_gc(BLOCK_SIZE, generation)
     }
 
     #[inline]
@@ -644,13 +623,12 @@ impl Drop for Arena {
                 block.data as usize,
                 block.data as usize + block.size,
             );
-            let layout = std::alloc::Layout::from_size_align(block.size, 16).unwrap();
             unsafe {
                 // #4665: in test builds keep freed blocks mapped (no munmap) so
                 // unit tests holding raw GC pointers across a collection read stale
                 // bytes instead of SIGSEGV-ing on an unmapped page.
                 if !cfg!(test) {
-                    std::alloc::dealloc(block.data, layout);
+                    super::region::unmap(block.data, block.size);
                 }
             }
         }
@@ -669,7 +647,7 @@ impl Arena {
     }
 
     fn new(generation: HeapGeneration, space: HeapSpace) -> Self {
-        let initial = ArenaBlock::new();
+        let initial = ArenaBlock::new(generation);
         register_block_space_with_object_starts(
             initial.data as usize,
             initial.size,
@@ -722,6 +700,7 @@ impl Arena {
     fn new_lazy(generation: HeapGeneration, space: HeapSpace) -> Self {
         Arena {
             blocks: vec![ArenaBlock {
+                extent_kind: super::region::Kind::NurseryBlock,
                 data: std::ptr::null_mut(),
                 size: 0,
                 offset: 0,
@@ -804,7 +783,7 @@ impl Arena {
     /// Reserve **and** install a block. Never collects — see
     /// [`alloc_block_no_gc`] for why.
     pub(crate) fn install_fresh_block(&mut self, size: usize) {
-        self.install_reserved_block(alloc_block_no_gc(size));
+        self.install_reserved_block(alloc_block_no_gc(size, self.generation));
     }
 
     /// Install a block that was reserved with no arena borrow live (#7022).
@@ -1050,7 +1029,7 @@ pub(crate) unsafe fn arena_cell_alloc(arena: *mut Arena, size: usize, align: usi
     // NO ARENA BORROW IS LIVE HERE either. (CodeRabbit caught this second path
     // on the first cut of #7022, where the reservation still happened inside
     // `alloc_fresh_block` under the borrow.)
-    let fresh = reserve_arena_block(size);
+    let fresh = reserve_arena_block_for(size, (*arena).generation);
 
     let _borrow = ArenaBorrowGuard::new();
     (*arena).install_reserved_block(fresh);

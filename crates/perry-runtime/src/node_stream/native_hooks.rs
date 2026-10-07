@@ -39,6 +39,78 @@
 use super::*;
 use std::ffi::c_void;
 
+/// LazyTransform's state accessors, installed once on its prototype. Ordinary
+/// stream methods initialize through this_value; these cover direct state reads.
+pub(crate) fn install_lazy_state_getters(proto: *mut crate::object::ObjectHeader) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    for (name, which) in [("_readableState", 0.0), ("_writableState", 1.0)] {
+        let getter = crate::closure::js_closure_alloc(
+            crate::fn_info!(lazy_state_get, 0; with_declared(0)),
+            1,
+        );
+        crate::closure::js_closure_set_capture_f64(getter, 0, which);
+        let setter = crate::closure::js_closure_alloc(
+            crate::fn_info!(lazy_state_set, 1; with_declared(1)),
+            1,
+        );
+        crate::closure::js_closure_set_capture_f64(setter, 0, which);
+        crate::object::install_fresh_accessor_property(
+            proto as usize,
+            name.to_string(),
+            crate::object::AccessorDescriptor {
+                get: crate::value::js_nanbox_pointer(getter as i64).to_bits(),
+                set: crate::value::js_nanbox_pointer(setter as i64).to_bits(),
+            },
+            crate::object::PropertyAttrs::new(true, false, true),
+        );
+    }
+}
+
+extern "C" fn lazy_state_set(
+    c: *const ClosureHeader,
+    this: crate::closure::JsThis,
+    value: f64,
+) -> f64 {
+    let which = js_closure_get_capture_f64(c, 0);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(this.as_f64());
+    let value = scope.root_nanbox_f64(value);
+    let name = if which == 0.0 {
+        "_readableState"
+    } else {
+        "_writableState"
+    };
+    if let Some(obj) = object_ptr_from_value(stream.get_nanbox_f64()) {
+        crate::object::define_builtin_data_property(
+            obj,
+            hidden_key(name.as_bytes()),
+            value.get_nanbox_f64(),
+            name.to_string(),
+            crate::object::PropertyAttrs::new(true, true, true),
+        );
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn lazy_state_get(c: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    let which = js_closure_get_capture_f64(c, 0);
+    let stream = constructors::ensure_lazy_stream(this.as_f64());
+    let Some(obj) = object_ptr_from_value(stream) else {
+        return f64::from_bits(TAG_UNDEFINED);
+    };
+    unsafe {
+        own_field_by_key_bytes(
+            obj,
+            if which == 0.0 {
+                b"_readableState"
+            } else {
+                b"_writableState"
+            },
+        )
+    }
+    .unwrap_or(f64::from_bits(TAG_UNDEFINED))
+}
+
 /// Which stream the family is: a Transform (readable output) or a Writable
 /// (`Sign`/`Verify`: no readable side).
 #[repr(transparent)]
@@ -148,6 +220,8 @@ pub struct StreamHooks {
     /// Release the payload at `destroy()` (`native_payload::close`, plus any
     /// node-visible field such as zlib's `_handle = null`).
     pub release: unsafe extern "C" fn(owner: f64),
+    /// Update ordinary owner fields after the payload borrow has ended.
+    pub after_step: Option<unsafe extern "C" fn(owner: f64)>,
 }
 
 // SAFETY: hooks are immutable statics of function pointers and integers.
@@ -173,6 +247,32 @@ const REC_NONE: f64 = 0.0;
 const REC_WRITE: f64 = 1.0;
 const REC_FLUSH: f64 = 2.0;
 const REC_FINAL: f64 = 3.0;
+// A super._transform/_flush continuation completes the user's callback;
+// its caller owns onwrite/finish, so it must not complete those twice.
+const CALLBACK_ONLY: f64 = 4.0;
+fn operation(record: f64) -> f64 {
+    if record > CALLBACK_ONLY {
+        record - CALLBACK_ONLY
+    } else {
+        record
+    }
+}
+
+pub(crate) fn begin_prototype_step(stream: f64, chunk: f64, callback: f64, final_op: bool) -> bool {
+    let Some(hooks) = hooks_of(stream) else {
+        return false;
+    };
+    install_record(
+        stream,
+        CALLBACK_ONLY + if final_op { REC_FINAL } else { REC_WRITE },
+        chunk,
+        0.0,
+        callback,
+        0.0,
+    );
+    drive(stream, hooks);
+    true
+}
 
 #[inline]
 fn number_slot(stream: f64, key: &'static [u8]) -> f64 {
@@ -257,8 +357,8 @@ pub(super) fn begin_write(
 
 /// `_final` for a hooked Transform: the Final record runs once every buffered
 /// write is done (`end()` reaches this only when the writable side drained).
-/// `callback` is `end()`'s callback, called after `finish` as for a JS
-/// Transform's flush.
+/// The default Transform final waits for its output before writable finish.
+/// A binding's own `_final` and `_flush` retain their ordinary JS ordering.
 pub(super) fn begin_final(stream: f64, hooks: &'static StreamHooks, callback: Option<f64>) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let s = scope.root_nanbox_f64(stream);
@@ -464,21 +564,6 @@ fn readable_full(stream: f64) -> bool {
 /// string's UTF-8 bytes. Borrowed for one step: the pointer is re-derived from
 /// the rooted chunk before every step, because a collection run by listeners
 /// may move the chunk.
-unsafe fn chunk_bytes(chunk: f64) -> (*const u8, usize) {
-    let jsval = JSValue::from_bits(chunk.to_bits());
-    if jsval.is_any_string() {
-        let ptr = crate::value::js_get_string_pointer_unified(chunk) as *const crate::StringHeader;
-        if ptr.is_null() {
-            return (std::ptr::null(), 0);
-        }
-        return (crate::string::string_data(ptr), (*ptr).byte_len as usize);
-    }
-    crate::buffer::bytes::no_gc(|scope| {
-        crate::buffer::bytes::bytes(chunk, scope)
-            .map(|b| (b.as_ptr(), b.len()))
-            .unwrap_or((std::ptr::null(), 0))
-    })
-}
 
 /// The one step loop for every hooked stream (see the module docs).
 pub(crate) fn run_native_steps(stream: f64) {
@@ -498,7 +583,7 @@ pub(crate) fn run_native_steps(stream: f64) {
         if stream_destroyed(st()) || flag(st(), NATIVE_PARKED_KEY) {
             break;
         }
-        let op = number_slot(st(), NATIVE_OP_KEY);
+        let op = operation(number_slot(st(), NATIVE_OP_KEY));
         if op == REC_NONE {
             break;
         }
@@ -507,6 +592,9 @@ pub(crate) fn run_native_steps(stream: f64) {
             // side draining (`resume_parked`) completes it.
             break;
         }
+        // The native loop is an allocating loop too. There is no borrowed
+        // input or output here; the owner and its current record are traced.
+        crate::gc::js_gc_loop_safepoint();
         let Some((_, cell)) = crate::native_payload::stream_hooks_of(st()) else {
             break;
         };
@@ -519,55 +607,86 @@ pub(crate) fn run_native_steps(stream: f64) {
         let consumed = number_slot(st(), NATIVE_CONSUMED_KEY) as usize;
         let chunk = get_hidden_value(st(), hidden_key(NATIVE_CHUNK_KEY))
             .unwrap_or(f64::from_bits(TAG_UNDEFINED));
-        let (base, total) = if op == REC_WRITE {
-            // SAFETY: the chunk is rooted in the stream's own slot; nothing
-            // runs between this read and the step.
-            unsafe { chunk_bytes(chunk) }
+        // Strings may need materialization, which precedes the no_gc borrow.
+        let string = if op == REC_WRITE && JSValue::from_bits(chunk.to_bits()).is_any_string() {
+            let mut bytes = Vec::new();
+            append_chunk_bytes(chunk, &mut bytes, 0);
+            Some(bytes)
         } else {
-            (std::ptr::null(), 0)
+            None
         };
-        #[cfg(test)]
-        let (base, total) = if stream_sabotage("hold_slice_across_push") && op == REC_WRITE {
-            *held_input.get_or_insert((base, total))
-        } else {
-            (base, total)
-        };
-        let start = consumed.min(total);
-        let step_in = StepIn {
-            op: if op == REC_WRITE {
-                StreamOp::WRITE
-            } else if op == REC_FLUSH {
-                StreamOp::FLUSH
+        let (total, start, out) = crate::buffer::bytes::no_gc(|scope| {
+            let bytes = if op != REC_WRITE {
+                &[][..]
+            } else if let Some(bytes) = &string {
+                bytes.as_slice()
             } else {
-                StreamOp::FINAL
-            },
-            flush_kind: number_slot(st(), NATIVE_FLUSH_KIND_KEY) as i32,
-            input: if base.is_null() {
-                std::ptr::null()
+                crate::buffer::bytes::bytes(chunk, scope).unwrap_or(&[])
+            };
+            let (base, total) = (bytes.as_ptr(), bytes.len());
+            #[cfg(test)]
+            let (base, total) = if stream_sabotage("hold_slice_across_push") && op == REC_WRITE {
+                // Deliberately violate the borrow boundary. Heap strings move,
+                // unlike the owned UTF-8 scratch above: keeping their interior
+                // address makes this fault deterministic after a listener GC.
+                *held_input.get_or_insert_with(|| {
+                    if JSValue::from_bits(chunk.to_bits()).is_string() {
+                        crate::string::with_string_value_bytes(chunk, |bytes| {
+                            (bytes.as_ptr(), bytes.len())
+                        })
+                        .unwrap()
+                    } else {
+                        (base, total)
+                    }
+                })
             } else {
-                // SAFETY: `start <= total`, the chunk's byte length.
-                unsafe { base.add(start) }
-            },
-            len: total - start,
-        };
-        let mut out = StepOut::empty();
-        // SAFETY: the payload is the family's live `T`; the step calls no JS
-        // and keeps nothing from `step_in.input`.
-        unsafe { (hooks.step)(payload, &step_in, &mut out) };
+                (base, total)
+            };
+            let start = consumed.min(total);
+            let step_in = StepIn {
+                op: if op == REC_WRITE {
+                    StreamOp::WRITE
+                } else if op == REC_FLUSH {
+                    StreamOp::FLUSH
+                } else {
+                    StreamOp::FINAL
+                },
+                flush_kind: number_slot(st(), NATIVE_FLUSH_KIND_KEY) as i32,
+                input: unsafe { base.add(start) },
+                len: total - start,
+            };
+            let mut out = StepOut::empty();
+            // No JS or GC while the input borrow is held. Each iteration
+            // re-borrows from the traced chunk after listeners may move it.
+            unsafe { (hooks.step)(payload, &step_in, &mut out) };
+            (total, start, out)
+        });
         super::set_internal_value(
             st(),
             NATIVE_CONSUMED_KEY,
             (start + out.consumed.min(total - start)) as f64,
         );
+        // Each output root lasts one step. Rooting in the outer runner scope
+        // would keep the entire decompressed output alive until EOF.
+        let step_scope = crate::gc::RuntimeHandleScope::new();
+        let cell = step_scope.root_raw_mut_ptr(cell);
         // Copy the output out of the payload's scratch before anything that
         // can allocate or run JS.
         let output = (out.out_len > 0 && !out.out.is_null()).then(|| {
             // SAFETY: the step returned `out_len` readable bytes at `out`.
             let bytes = unsafe { std::slice::from_raw_parts(out.out, out.out_len) };
-            scope.root_nanbox_f64(buffer_value_from_bytes(bytes))
+            step_scope.root_nanbox_f64(buffer_value_from_bytes(bytes))
         });
         // SAFETY: the cell is alive (its owner is rooted above).
-        unsafe { crate::native_handle::native_handle_set_external_bytes(cell, out.external_bytes) };
+        cell.with_mut_ptr(|cell| unsafe {
+            crate::native_handle::native_handle_set_external_bytes(cell, out.external_bytes)
+        });
+        if let Some(after_step) = hooks.after_step {
+            unsafe { after_step(st()) };
+            if stream_destroyed(st()) {
+                break;
+            }
+        }
         let status = error_as_end(out.status);
         if status == StepStatus::ERROR {
             if let Some(buf) = &output {
@@ -644,12 +763,19 @@ fn exhaust_before_park() -> bool {
 fn complete_record(stream: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let s = scope.root_nanbox_f64(stream);
+    let callback_only = number_slot(s.get_nanbox_f64(), NATIVE_OP_KEY) > CALLBACK_ONLY;
     let len = number_slot(s.get_nanbox_f64(), NATIVE_LEN_KEY);
     let cb = scope.root_nanbox_f64(
         get_hidden_value(s.get_nanbox_f64(), hidden_key(NATIVE_CB_KEY))
             .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
     );
     clear_record(s.get_nanbox_f64());
+    if callback_only {
+        if is_callable_value(cb.get_nanbox_f64()) {
+            call_listener_args(s.get_nanbox_f64(), cb.get_nanbox_f64(), &[]);
+        }
+        return;
+    }
     complete_writable_write(
         s.get_nanbox_f64(),
         len,
@@ -667,7 +793,14 @@ fn finish_final(stream: f64) {
         get_hidden_value(s.get_nanbox_f64(), hidden_key(NATIVE_CB_KEY))
             .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
     );
+    let callback_only = number_slot(s.get_nanbox_f64(), NATIVE_OP_KEY) > CALLBACK_ONLY;
     clear_record(s.get_nanbox_f64());
+    if callback_only {
+        if is_callable_value(cb.get_nanbox_f64()) {
+            call_listener_args(s.get_nanbox_f64(), cb.get_nanbox_f64(), &[]);
+        }
+        return;
+    }
     set_hidden_value(
         s.get_nanbox_f64(),
         hidden_transform_finishing_key(),
@@ -687,13 +820,31 @@ fn fail_record(stream: f64, hooks: &'static StreamHooks, code: u32) {
     let s = scope.root_nanbox_f64(stream);
     // SAFETY: the family's error builder; the step has returned.
     let err = scope.root_nanbox_f64(unsafe { (hooks.error)(s.get_nanbox_f64(), code) });
-    let op = number_slot(s.get_nanbox_f64(), NATIVE_OP_KEY);
+    // A binding may terminate its owner from its native error notification,
+    // as Node's zlib onerror does. Such a notification never completes the
+    // pending transform callback; the normal destroy path owns teardown.
+    if stream_destroyed(s.get_nanbox_f64()) {
+        clear_record(s.get_nanbox_f64());
+        return;
+    }
+    let callback_only = number_slot(s.get_nanbox_f64(), NATIVE_OP_KEY) > CALLBACK_ONLY;
+    let op = operation(number_slot(s.get_nanbox_f64(), NATIVE_OP_KEY));
     let len = number_slot(s.get_nanbox_f64(), NATIVE_LEN_KEY);
     let cb = scope.root_nanbox_f64(
         get_hidden_value(s.get_nanbox_f64(), hidden_key(NATIVE_CB_KEY))
             .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
     );
     clear_record(s.get_nanbox_f64());
+    if callback_only {
+        if is_callable_value(cb.get_nanbox_f64()) {
+            call_listener_args(
+                s.get_nanbox_f64(),
+                cb.get_nanbox_f64(),
+                &[err.get_nanbox_f64()],
+            );
+        }
+        return;
+    }
     if op == REC_FINAL {
         set_hidden_value(
             s.get_nanbox_f64(),

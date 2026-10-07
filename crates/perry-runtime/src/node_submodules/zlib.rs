@@ -128,8 +128,8 @@ fn read_option_field(ptr: *const crate::object::ObjectHeader, name: &[u8]) -> f6
         name.as_ptr(),
         name.len() as u32,
     ));
-    ptr.with_const_ptr(|ptr| {
-        key.with_const_ptr(|key| crate::object::js_object_get_field_by_name_f64(ptr, key))
+    key.with_const_ptr(|key| {
+        ptr.with_const_ptr(|ptr| crate::object::js_object_get_field_by_name_f64(ptr, key))
     })
 }
 
@@ -367,36 +367,9 @@ pub extern "C" fn js_zlib_stream_option(opts: f64, which: i32) -> usize {
     n as usize
 }
 
-extern "C" fn zlib_pipe_drain(
-    closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    let stream = crate::closure::js_closure_get_capture_f64(closure, 0);
-    unsafe {
-        crate::object::js_native_call_method(
-            stream,
-            b"_perryDrain".as_ptr() as *const i8,
-            11,
-            std::ptr::null(),
-            0,
-        )
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn js_zlib_pipe_drain_callback(stream: f64) -> i64 {
-    let cb =
-        crate::closure::js_closure_alloc(crate::fn_info!(zlib_pipe_drain, 0; with_declared(0)), 1);
-    crate::closure::js_closure_set_capture_f64(cb, 0, stream);
-    cb as i64
-}
-
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_ZLIB_STREAM_OPTION: extern "C" fn(f64, i32) -> usize = js_zlib_stream_option;
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_ZLIB_PIPE_DRAIN_CALLBACK: extern "C" fn(f64) -> i64 = js_zlib_pipe_drain_callback;
 
 #[no_mangle]
 pub unsafe extern "C" fn js_zlib_stream_error(
@@ -427,13 +400,6 @@ pub extern "C" fn js_zlib_is_callback(value: f64) -> i32 {
         && !crate::closure::get_valid_func_ptr(addr as *const crate::closure::ClosureHeader)
             .is_null()) as i32
 }
-#[no_mangle]
-pub extern "C" fn js_zlib_stream_iterator(stream: f64, options: f64) -> f64 {
-    crate::node_stream::async_iterator::readable_handle_iterator_with_options(stream, options)
-}
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_ZLIB_IS_CALLBACK: extern "C" fn(f64) -> i32 = js_zlib_is_callback;
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_ZLIB_STREAM_ITERATOR: extern "C" fn(f64, f64) -> f64 = js_zlib_stream_iterator;

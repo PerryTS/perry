@@ -897,10 +897,6 @@ pub fn check_escapes_in_expr(
             check_escapes_in_expr(replacer, candidates, classes, escaped);
             check_escapes_in_expr(indent, candidates, classes, escaped);
         }
-        Expr::RegExpTest { regex, string } | Expr::RegExpExec { regex, string } => {
-            check_escapes_in_expr(regex, candidates, classes, escaped);
-            check_escapes_in_expr(string, candidates, classes, escaped);
-        }
         Expr::In { property, object } => {
             check_escapes_in_expr(property, candidates, classes, escaped);
             check_escapes_in_expr(object, candidates, classes, escaped);

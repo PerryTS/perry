@@ -153,9 +153,31 @@ pub(super) fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     Some(raw as *mut ObjectHeader)
 }
 
+/// The runtime's private stream state (`__perry…` keys) is written only on
+/// the object it describes, never on a prototype, so it is read as an own
+/// property: a missing private key must not walk the stream's prototype
+/// chain. Public names (`destroyed`, `autoDestroy`, …) keep ordinary [[Get]],
+/// since a subclass or an options object may supply them by inheritance.
+fn is_private_key(key: *const crate::string::StringHeader) -> bool {
+    const PRIVATE: &[u8] = b"__perry";
+    if key.is_null() {
+        return false;
+    }
+    unsafe {
+        let len = (*key).byte_len as usize;
+        len >= PRIVATE.len()
+            && std::slice::from_raw_parts(crate::string::string_data(key), PRIVATE.len()) == PRIVATE
+    }
+}
+
 pub(super) fn get_hidden_value(value: f64, key: *mut crate::string::StringHeader) -> Option<f64> {
     let obj = object_ptr_from_value(value)?;
-    let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, key);
+    let value = if is_private_key(key) {
+        let own = unsafe { crate::object::own_data_field_by_name(obj, key) }?;
+        f64::from_bits(own.bits())
+    } else {
+        js_object_get_field_by_name_f64(obj as *const ObjectHeader, key)
+    };
     if value.to_bits() == TAG_UNDEFINED {
         None
     } else {
@@ -855,125 +877,6 @@ pub(super) fn schedule_readable_end(stream: f64) {
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
-pub(super) fn schedule_writable_finish(stream: f64, callback: Option<f64>) {
-    if has_truthy_hidden(stream, hidden_finish_emitted_key())
-        || has_truthy_hidden(stream, hidden_finish_scheduled_key())
-        || has_truthy_hidden(stream, hidden_writable_final_pending_key())
-    {
-        return;
-    }
-    if let Some(final_callback) = writable_hidden_final(stream) {
-        if !has_truthy_hidden(stream, hidden_writable_final_invoked_key()) {
-            set_hidden_value(
-                stream,
-                hidden_writable_final_invoked_key(),
-                f64::from_bits(TAG_TRUE),
-            );
-            set_hidden_value(
-                stream,
-                hidden_writable_final_pending_key(),
-                f64::from_bits(TAG_TRUE),
-            );
-            let cb = js_closure_alloc(crate::fn_info!(ns_writable_final_callback_done, 1), 2);
-            js_closure_set_capture_f64(cb, 0, stream);
-            js_closure_set_capture_f64(
-                cb,
-                1,
-                callback.unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED)),
-            );
-            let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
-            unsafe {
-                let _ = crate::closure::native_call_value_this(
-                    final_callback,
-                    crate::closure::JsThis::from_f64(stream),
-                    [cb_value].as_ptr(),
-                    1,
-                );
-            }
-            return;
-        }
-    }
-    set_hidden_value(
-        stream,
-        hidden_finish_scheduled_key(),
-        f64::from_bits(TAG_TRUE),
-    );
-    let closure = js_closure_alloc(crate::fn_info!(ns_writable_finish_microtask, 0), 2);
-    js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
-    js_closure_set_capture_ptr(
-        closure,
-        1,
-        callback
-            .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED))
-            .to_bits() as i64,
-    );
-    crate::builtins::js_queue_microtask(closure as i64);
-}
-
-pub(super) fn schedule_writable_finish_then_transform_end(stream: f64, callback: Option<f64>) {
-    // node's Transform `final` pushes `null` (queueing the readable `end`)
-    // before its callback lets `finish` go, so `end` is queued first when no
-    // user `_final` stands in between.
-    if is_transform_stream(stream)
-        && !has_truthy_hidden(stream, hidden_writable_final_pending_key())
-        && (writable_hidden_final(stream).is_none()
-            || has_truthy_hidden(stream, hidden_writable_final_invoked_key()))
-    {
-        schedule_readable_end(stream);
-    }
-    schedule_writable_finish(stream, callback);
-    let finish_ready = has_truthy_hidden(stream, hidden_finish_scheduled_key())
-        || has_truthy_hidden(stream, hidden_finish_emitted_key());
-    let final_pending = has_truthy_hidden(stream, hidden_writable_final_pending_key());
-    if is_transform_stream(stream) && finish_ready && !final_pending {
-        schedule_readable_end(stream);
-    }
-}
-
-pub(super) fn set_pending_writable_finish_callback(stream: f64, callback: Option<f64>) {
-    let value = callback.unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
-    set_hidden_value(stream, hidden_writable_pending_finish_callback_key(), value);
-}
-
-pub(super) fn take_pending_writable_finish_callback(stream: f64) -> Option<f64> {
-    let value = get_hidden_value(stream, hidden_writable_pending_finish_callback_key());
-    set_hidden_value(
-        stream,
-        hidden_writable_pending_finish_callback_key(),
-        f64::from_bits(TAG_UNDEFINED),
-    );
-    value.filter(|v| is_callable_value(*v))
-}
-
-pub(super) fn schedule_pending_writable_finish_if_ready(stream: f64) {
-    if has_truthy_hidden(stream, hidden_transform_end_pending_key())
-        && writable_length(stream) == 0.0
-        && !super::write_state::writable_writing(stream)
-    {
-        // The transform's deferred `end()`: every write completed, so its
-        // flush (or a native stream's Final step) runs now.
-        set_hidden_value(
-            stream,
-            hidden_transform_end_pending_key(),
-            f64::from_bits(TAG_FALSE),
-        );
-        let callback = take_pending_writable_finish_callback(stream);
-        if !finish_transform_stream(stream, callback) {
-            finish_stream(stream, callback);
-        }
-        return;
-    }
-    if !stream_hidden_ended(stream)
-        || writable_length(stream) > 0.0
-        || has_truthy_hidden(stream, hidden_finish_emitted_key())
-        || has_truthy_hidden(stream, hidden_finish_scheduled_key())
-    {
-        return;
-    }
-    let callback = take_pending_writable_finish_callback(stream);
-    schedule_writable_finish_then_transform_end(stream, callback);
-}
-
 pub(super) fn emit_readable_end_once(stream: f64) {
     // `end` listeners can collect before the pipes are ended (#11828).
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -987,7 +890,7 @@ pub(super) fn emit_readable_end_once(stream: f64) {
             if pending_readable_chunk_count(s()) > 0 || readable_is_paused(s()) {
                 return;
             }
-        } else if readable_is_paused(s()) {
+        } else if readable_is_paused(s()) && !has_truthy_hidden(s(), hidden_disturbed_key()) {
             return;
         }
         set_hidden_value(s(), hidden_end_emitted_key(), f64::from_bits(TAG_TRUE));
@@ -1247,7 +1150,7 @@ pub(super) fn mark_transform_stream(stream: f64) {
 
 pub(super) fn finish_transform_stream(stream: f64, callback: Option<f64>) -> bool {
     if transform_hidden_flush(stream).is_none() {
-        if let Some(hooks) = super::native_hooks::native_write_target(stream) {
+        if let Some(hooks) = super::native_hooks::hooks_of(stream) {
             if has_truthy_hidden(stream, hidden_transform_finishing_key()) {
                 return true;
             }
@@ -1275,18 +1178,36 @@ pub(super) fn finish_transform_stream(stream: f64, callback: Option<f64>) -> boo
         hidden_transform_finishing_key(),
         f64::from_bits(TAG_TRUE),
     );
+    let deferred = super::native_hooks::hooks_of(stream)
+        .is_some_and(|h| h.timing == super::native_hooks::StepTiming::DEFERRED);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let flush = scope.root_nanbox_f64(flush);
+    let callback = scope.root_nanbox_f64(callback.unwrap_or(f64::from_bits(TAG_UNDEFINED)));
+    if deferred {
+        set_visible_writable_ended(stream.get_nanbox_f64(), true);
+        set_visible_writable(stream.get_nanbox_f64(), false);
+        schedule_writable_finish(
+            stream.get_nanbox_f64(),
+            is_callable_value(callback.get_nanbox_f64()).then_some(callback.get_nanbox_f64()),
+        );
+    }
     let cb = js_closure_alloc(crate::fn_info!(transform_flush_callback, 2), 2);
-    js_closure_set_capture_f64(cb, 0, stream);
+    js_closure_set_capture_f64(cb, 0, stream.get_nanbox_f64());
     js_closure_set_capture_f64(
         cb,
         1,
-        callback.unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED)),
+        if deferred {
+            f64::from_bits(TAG_UNDEFINED)
+        } else {
+            callback.get_nanbox_f64()
+        },
     );
     let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
     unsafe {
         let _ = crate::closure::native_call_value_this(
-            flush,
-            crate::closure::JsThis::from_f64(stream),
+            flush.get_nanbox_f64(),
+            crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
             [cb_value].as_ptr(),
             1,
         );
@@ -1617,36 +1538,28 @@ pub(super) fn is_invalid_readable_from_input(value: f64) -> bool {
 }
 
 pub(super) fn uint8array_byte_chunks(raw: usize) -> f64 {
-    let arr = crate::array::js_array_alloc(0);
-    if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
-        return box_pointer(arr as *const u8);
+    // Resolve the B1 view before any JS allocation. This legacy conversion
+    // produces scalar byte chunks, so its source copy cannot borrow across
+    // allocation of those array entries.
+    let bytes = crate::buffer::bytes::no_gc(|scope| {
+        crate::buffer::bytes::bytes(box_pointer(raw as *const u8), scope)
+            .map(|bytes| bytes.to_vec())
+            .unwrap_or_default()
+    });
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(bytes.len() as u32));
+    for byte in bytes {
+        let grown = out.with_mut_ptr(|arr| crate::array::js_array_push_f64(arr, byte as f64));
+        out.set_raw_mut_ptr(grown);
     }
-    unsafe {
-        let buf = raw as *const crate::buffer::BufferHeader;
-        let len = (*buf).length as usize;
-        let data = crate::buffer::buffer_data(buf);
-        let mut out = arr;
-        for i in 0..len {
-            out = crate::array::js_array_push_f64(out, *data.add(i) as f64);
-        }
-        box_pointer(out as *const u8)
-    }
+    out.with_const_ptr(|arr: *const u8| box_pointer(arr))
 }
 
-pub(super) fn typed_uint8array_byte_chunks(raw: usize) -> Option<f64> {
+fn typed_uint8array_byte_chunks(raw: usize) -> Option<f64> {
     if crate::typedarray::lookup_typed_array_kind(raw) != Some(crate::typedarray::KIND_UINT8) {
         return None;
     }
-    let ta = raw as *const crate::typedarray::TypedArrayHeader;
-    let len = crate::typedarray::js_typed_array_length(ta).max(0) as u32;
-    let mut out = crate::array::js_array_alloc(len);
-    for i in 0..len {
-        out = crate::array::js_array_push_f64(
-            out,
-            crate::typedarray::js_typed_array_get(ta, i as i32),
-        );
-    }
-    Some(box_pointer(out as *const u8))
+    Some(uint8array_byte_chunks(raw))
 }
 
 pub(super) fn collection_iterable_chunks(raw: usize) -> Option<f64> {
@@ -1677,10 +1590,13 @@ fn normalized_readable_chunks(chunks: f64) -> NormalizedReadableInput {
 }
 
 pub(super) fn normalize_readable_from_input(iterable: f64) -> NormalizedReadableInput {
-    if let Some(chunks) = readable_hidden_chunks(iterable) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iterable = scope.root_nanbox_f64(iterable);
+    let value = || iterable.get_nanbox_f64();
+    if let Some(chunks) = readable_hidden_chunks(value()) {
         return normalized_readable_chunks(chunks);
     }
-    let raw = raw_ptr_from_value(iterable);
+    let raw = raw_ptr_from_value(value());
     if raw >= 0x10000
         && crate::buffer::is_registered_buffer(raw)
         && crate::buffer::is_uint8array_buffer(raw)
@@ -1701,39 +1617,53 @@ pub(super) fn normalize_readable_from_input(iterable: f64) -> NormalizedReadable
             return normalized_readable_chunks(box_pointer(chunks as *const u8));
         }
     }
-    if is_array_like_value(iterable) {
+    if is_array_like_value(value()) {
         // #11827: the stream shifts chunks off its queue as they are read;
         // Node only iterates the caller's array, so queue a copy of it.
         let copy =
             crate::array::js_array_slice(raw as *const crate::array::ArrayHeader, 0, i32::MAX);
         return normalized_readable_chunks(box_pointer(copy as *const u8));
     }
-    if is_single_chunk_value(iterable) {
+    if is_single_chunk_value(value()) {
         let arr = crate::array::js_array_alloc(1);
-        let arr = crate::array::js_array_push_f64(arr, iterable);
+        let arr = crate::array::js_array_push_f64(arr, value());
         return normalized_readable_chunks(box_pointer(arr as *const u8));
     }
-    if let Some(source_iterator) = crate::array::call_symbol_async_iterator(iterable) {
-        return NormalizedReadableInput {
-            chunks: box_pointer(crate::array::js_array_alloc(0) as *const u8),
-            source_iterator: Some(source_iterator),
-        };
+    if let Some(source_iterator) = crate::array::call_symbol_async_iterator(value()) {
+        return normalized_live_iterator(source_iterator);
     }
-    if let Some((chunks, source_iterator)) = flatten_async_iterable_with_source(iterable) {
-        return NormalizedReadableInput {
-            chunks: box_pointer(chunks as *const u8),
-            source_iterator,
-        };
+    #[cfg(test)]
+    if super::native_hooks::stream_sabotage("eager_iterator_from") {
+        if let Some((chunks, source_iterator)) = flatten_async_iterable_with_source(value()) {
+            return NormalizedReadableInput {
+                chunks: box_pointer(chunks.cast()),
+                source_iterator,
+            };
+        }
     }
-    if let Some((chunks, source_iterator)) = flatten_sync_iterable_value(iterable) {
-        return NormalizedReadableInput {
-            chunks: box_pointer(chunks as *const u8),
-            source_iterator,
-        };
+    // A Readable drives next() only as its readable credit permits. Draining
+    // generators into an array here bypasses backpressure and leaves their
+    // results in the eager iterator helper across moving collections.
+    if crate::array::has_iterator_next(value()) {
+        return normalized_live_iterator(value());
+    }
+    let source_iterator = scope.root_nanbox_f64(crate::symbol::js_get_iterator(value()));
+    if crate::array::has_iterator_next(source_iterator.get_nanbox_f64()) {
+        return normalized_live_iterator(source_iterator.get_nanbox_f64());
     }
 
     let arr = crate::array::js_array_alloc(1);
     normalized_readable_chunks(box_pointer(arr as *const u8))
+}
+
+fn normalized_live_iterator(source_iterator: f64) -> NormalizedReadableInput {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source_iterator = scope.root_nanbox_f64(source_iterator);
+    let chunks = box_pointer(crate::array::js_array_alloc(0) as *const u8);
+    NormalizedReadableInput {
+        chunks,
+        source_iterator: Some(source_iterator.get_nanbox_f64()),
+    }
 }
 
 pub(super) fn initialize_readable_from_buffered_length(readable: f64, chunks: f64) {
@@ -1752,34 +1682,6 @@ pub(super) fn initialize_readable_from_buffered_length(readable: f64, chunks: f6
     set_hidden_value(readable, hidden_key(b"readableLength"), length);
 }
 
-fn flatten_sync_iterable_value(
-    value: f64,
-) -> Option<(*mut crate::array::ArrayHeader, Option<f64>)> {
-    if has_symbol_async_iterator(value) {
-        return None;
-    }
-    if crate::object::js_util_types_is_generator_object(value).to_bits() == TAG_TRUE {
-        return crate::array::sync_iterator_to_array_if_not_async(value)
-            .map(|chunks| (chunks, Some(value)));
-    }
-    let iter = crate::symbol::js_get_iterator(value);
-    if iter.to_bits() != value.to_bits() {
-        return crate::array::sync_iterator_to_array_if_not_async(iter)
-            .map(|chunks| (chunks, Some(iter)));
-    }
-    None
-}
-
-fn has_symbol_async_iterator(value: f64) -> bool {
-    let sym = crate::symbol::well_known_symbol("asyncIterator");
-    if sym.is_null() {
-        return false;
-    }
-    let sym_value = f64::from_bits(JSValue::pointer(sym as *const u8).bits());
-    let method = unsafe { crate::symbol::js_object_get_symbol_property(value, sym_value) };
-    is_callable_value(method)
-}
-
 pub(super) fn readable_from_options(opts: f64) -> f64 {
     let merged = crate::object::js_object_alloc(0, 2);
     let object_mode =
@@ -1796,6 +1698,162 @@ pub(super) fn readable_from_options(opts: f64) -> f64 {
         hwm,
     );
     box_pointer(merged as *const u8)
+}
+
+pub(super) fn append_string_bytes(value: f64, out: &mut Vec<u8>) {
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
+    append_string_ptr_bytes(ptr, out);
+}
+
+pub(super) fn append_string_ptr_bytes(ptr: *const crate::StringHeader, out: &mut Vec<u8>) {
+    if ptr.is_null() || (ptr as usize) < 0x10000 {
+        return;
+    }
+    unsafe {
+        let len = (*ptr).byte_len as usize;
+        let data = (ptr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+        out.extend_from_slice(std::slice::from_raw_parts(data, len));
+    }
+}
+
+pub(super) fn append_buffer_bytes(raw: usize, out: &mut Vec<u8>) {
+    if raw < 0x10000 || !crate::buffer::is_registered_buffer(raw) {
+        return;
+    }
+    crate::buffer::bytes::no_gc(|scope| {
+        let value = box_pointer(raw as *const u8);
+        if let Ok(bytes) = crate::buffer::bytes::bytes(value, scope) {
+            out.extend_from_slice(bytes);
+        }
+    });
+}
+
+pub(super) fn append_array_chunks(raw: usize, out: &mut Vec<u8>, depth: u8) {
+    if raw < 0x10000 {
+        return;
+    }
+    let arr = raw as *const crate::array::ArrayHeader;
+    let len = crate::array::js_array_length(arr);
+    for i in 0..len {
+        let chunk = crate::array::js_array_get_f64(arr, i);
+        append_chunk_bytes(chunk, out, depth + 1);
+    }
+}
+
+pub(super) fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
+    if depth > 8 {
+        return;
+    }
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_any_string() {
+        append_string_bytes(value, out);
+        return;
+    }
+    if jsval.is_int32() {
+        out.extend_from_slice(jsval.as_int32().to_string().as_bytes());
+        return;
+    }
+    if jsval.is_number() && value.is_finite() {
+        let text = if value.fract() == 0.0 {
+            (value as i64).to_string()
+        } else {
+            value.to_string()
+        };
+        out.extend_from_slice(text.as_bytes());
+        return;
+    }
+
+    let raw = raw_ptr_from_value(value);
+    if raw < 0x10000 {
+        return;
+    }
+    if crate::buffer::is_registered_buffer(raw) {
+        append_buffer_bytes(raw, out);
+        return;
+    }
+
+    unsafe {
+        match gc_type_for_ptr(raw) {
+            Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY) => {
+                append_array_chunks(raw, out, depth);
+            }
+            Some(crate::gc::GC_TYPE_OBJECT) => {
+                if let Some(chunks) = readable_hidden_chunks(value) {
+                    append_chunk_bytes(chunks, out, depth + 1);
+                }
+            }
+            Some(crate::gc::GC_TYPE_STRING) => {
+                append_string_ptr_bytes(raw as *const crate::StringHeader, out);
+            }
+            _ => {}
+        }
+    }
+}
+
+pub(super) fn push_chunk_values(value: f64, out: &mut Vec<f64>, depth: u8) {
+    if depth > 8 {
+        return;
+    }
+    if let Some(chunks) = readable_hidden_chunks(value) {
+        push_chunk_values(chunks, out, depth + 1);
+        return;
+    }
+    if is_array_like_value(value) {
+        let raw = raw_ptr_from_value(value);
+        if raw < 0x10000 {
+            return;
+        }
+        let arr = raw as *const crate::array::ArrayHeader;
+        let len = crate::array::js_array_length(arr);
+        for i in 0..len {
+            out.push(crate::array::js_array_get_f64(arr, i));
+        }
+        return;
+    }
+    if is_single_chunk_value(value) {
+        out.push(value);
+    }
+}
+
+/// Drain the chunk storage Perry attaches in `Readable.from(iterable)`.
+pub fn js_node_stream_collect_bytes(stream: f64) -> Vec<u8> {
+    js_node_stream_collect_bytes_result(stream).unwrap_or_default()
+}
+
+pub fn js_node_stream_collect_chunks_result(stream: f64) -> Option<Result<f64, f64>> {
+    invoke_read_once(stream);
+    if let Some(err) = readable_hidden_error(stream) {
+        return Some(Err(err));
+    }
+    if let Some(chunks) = readable_hidden_chunks(stream) {
+        return Some(Ok(chunks));
+    }
+    if is_array_like_value(stream) {
+        return Some(Ok(stream));
+    }
+    if is_single_chunk_value(stream) {
+        let mut arr = crate::array::js_array_alloc(1);
+        arr = crate::array::js_array_push_f64(arr, stream);
+        return Some(Ok(box_pointer(arr as *const u8)));
+    }
+    if get_hidden_value(stream, hidden_read_key()).is_some() {
+        let arr = crate::array::js_array_alloc(0);
+        return Some(Ok(box_pointer(arr as *const u8)));
+    }
+    None
+}
+
+pub fn js_node_stream_collect_bytes_result(stream: f64) -> Result<Vec<u8>, f64> {
+    invoke_read_once(stream);
+    if let Some(err) = readable_hidden_error(stream) {
+        return Err(err);
+    }
+    let mut out = Vec::new();
+    append_chunk_bytes(stream, &mut out, 0);
+    if let Some(err) = readable_hidden_error(stream) {
+        return Err(err);
+    }
+    Ok(out)
 }
 
 pub(crate) fn js_node_stream_hidden_error_after_read(stream: f64) -> Option<f64> {
@@ -1842,14 +1900,67 @@ pub(crate) fn test_set_hidden_error(stream: f64, err: f64) {
     set_hidden_value(stream, hidden_error_key(), err);
 }
 
-#[path = "node_stream_chunk_collect.rs"]
-mod chunk_collect;
-pub(crate) use chunk_collect::js_node_stream_readable_chunks_result;
-pub(super) use chunk_collect::{append_buffer_bytes, append_chunk_bytes, push_chunk_values};
-pub use chunk_collect::{
-    js_node_stream_collect_bytes, js_node_stream_collect_bytes_result,
-    js_node_stream_collect_chunks_result,
-};
+/// The chunks a pipeline source holds, copied into one fresh GC array rooted
+/// in `scope`, or `None` when it holds none.
+///
+/// `_read` and the hidden-property reads (generic lookups, so a getter may
+/// run) can collect, so the stream is reread from its handle after each and
+/// the chunks go straight into a GC array the collector rewrites.
+pub(crate) fn js_node_stream_readable_chunks_result<'s>(
+    scope: &'s crate::gc::RuntimeHandleScope,
+    stream: &crate::gc::RuntimeHandle<'_>,
+) -> Result<Option<crate::gc::RuntimeHandle<'s>>, f64> {
+    invoke_read_once(stream.get_nanbox_f64());
+    if let Some(err) = readable_hidden_error(stream.get_nanbox_f64()) {
+        return Err(err);
+    }
+    let Some(chunks) = readable_hidden_chunks(stream.get_nanbox_f64()) else {
+        return Ok(None);
+    };
+    let chunks = scope.root_nanbox_f64(chunks);
+    let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
+    append_chunk_values(&chunks, &out, 0);
+    if let Some(err) = readable_hidden_error(stream.get_nanbox_f64()) {
+        return Err(err);
+    }
+    Ok(Some(out))
+}
+
+/// [`push_chunk_values`] into a rooted GC array: `value` is reread from its
+/// handle after every step that can collect.
+fn append_chunk_values(
+    value: &crate::gc::RuntimeHandle<'_>,
+    out: &crate::gc::RuntimeHandle<'_>,
+    depth: u8,
+) {
+    if depth > 8 {
+        return;
+    }
+    // `js_array_push_f64` roots its receiver and the value before it can grow.
+    let push = |chunk: f64| {
+        out.set_raw_mut_ptr(out.with_mut_ptr(|arr: *mut crate::array::ArrayHeader| {
+            crate::array::js_array_push_f64(arr, chunk)
+        }));
+    };
+    if let Some(chunks) = readable_hidden_chunks(value.get_nanbox_f64()) {
+        let scope = crate::gc::RuntimeHandleScope::new();
+        append_chunk_values(&scope.root_nanbox_f64(chunks), out, depth + 1);
+        return;
+    }
+    // `is_array_like_value` has already rejected the handle band.
+    if is_array_like_value(value.get_nanbox_f64()) {
+        let arr = || raw_ptr_from_value(value.get_nanbox_f64()) as *const crate::array::ArrayHeader;
+        let mut i = 0;
+        while i < crate::array::js_array_length(arr()) {
+            push(crate::array::js_array_get_f64(arr(), i));
+            i += 1;
+        }
+        return;
+    }
+    if is_single_chunk_value(value.get_nanbox_f64()) {
+        push(value.get_nanbox_f64());
+    }
+}
 
 #[path = "node_stream_pipe_dests.rs"]
 mod pipe_dests;
@@ -1864,3 +1975,10 @@ mod pipe_dests_gc_tests;
 #[path = "node_stream_readwrite_tables.rs"]
 mod tables;
 pub(super) use tables::{emitter_methods, readable_methods, writable_methods};
+
+#[path = "node_stream_finish.rs"]
+mod finish;
+pub(super) use finish::{
+    schedule_pending_writable_finish_if_ready, schedule_writable_finish,
+    schedule_writable_finish_then_transform_end, set_pending_writable_finish_callback,
+};

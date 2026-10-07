@@ -719,7 +719,7 @@ mod heap_snapshot_options_tests {
         let probes = [
             addr_class::COMMON_HANDLE_BAND_END,
             addr_class::FETCH_HANDLE_BAND_START,
-            addr_class::ZLIB_HANDLE_BAND_START,
+            addr_class::FETCH_HANDLE_BAND_END,
             addr_class::PROXY_ID_BAND_START,
             addr_class::HANDLE_BAND_MAX - 1,
         ];

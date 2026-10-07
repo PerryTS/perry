@@ -54,7 +54,7 @@ t("structuredClone", () => { const r = structuredClone(/a/gi); return [r instanc
 t("in_operator", () => ["lastIndex" in /a/, "global" in /a/, Object.hasOwn(/a/, "global")]);
 
 // S2: ordinary RegExp slots and prototype behavior.
-t("proto_test_patched_local", () => { const r: any = /a/; const o = RegExp.prototype.test; RegExp.prototype.test = function () { return "patched"; }; try { return r.test("a"); } finally { RegExp.prototype.test = o; } });
+t("proto_test_patched_local", () => { const r: RegExp = /a/; const o = RegExp.prototype.test; RegExp.prototype.test = function () { return "patched"; }; try { return r.test("a"); } finally { RegExp.prototype.test = o; } });
 t("subclass_exec", () => { class R extends RegExp { exec(s: any) { return null; } } const r = new R("a"); return [r.test("a"), r instanceof RegExp, r instanceof R, Object.prototype.toString.call(r)]; });
 t("expando", () => { const r: any = /a/; r.foo = 1; return [r.foo, Object.keys(r), JSON.stringify(r)]; });
 t("setPrototypeOf", () => { const r: any = mk(); Object.setPrototypeOf(r, { test() { return "p"; } }); return r.test("a"); });

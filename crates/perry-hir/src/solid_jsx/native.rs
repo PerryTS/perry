@@ -28,7 +28,9 @@ fn field(object: &ast::Ident, key: &str) -> ast::Expr {
 
 fn text_child(child: &ast::JSXElementChild) -> Option<String> {
     match child {
-        ast::JSXElementChild::JSXText(text) => Some(crate::jsx::normalize_jsx_text(&text.value)),
+        ast::JSXElementChild::JSXText(text) => Some(crate::jsx::normalize_jsx_text(
+            &text.value.to_string_lossy(),
+        )),
         ast::JSXElementChild::JSXExprContainer(container) => match &container.expr {
             ast::JSXExpr::Expr(expr) => match &**expr {
                 ast::Expr::Lit(ast::Lit::Str(s)) => Some(s.value.to_string_lossy().into_owned()),
@@ -69,7 +71,7 @@ impl SolidJsx {
             .any(|a| matches!(a, ast::JSXAttrOrSpread::SpreadElement(_)));
         let has_children = element.children.iter().any(|child| match child {
             ast::JSXElementChild::JSXText(t) => {
-                !crate::jsx::normalize_jsx_text(&t.value).is_empty()
+                !crate::jsx::normalize_jsx_text(&t.value.to_string_lossy()).is_empty()
             }
             ast::JSXElementChild::JSXExprContainer(c) => matches!(c.expr, ast::JSXExpr::Expr(_)),
             _ => true,
@@ -278,7 +280,7 @@ impl SolidJsx {
         }));
         let callback = ast::Expr::Arrow(ast::ArrowExpr {
             params: vec![ast::Pat::Ident(previous.into())],
-            body: Box::new(ast::BlockStmtOrExpr::BlockStmt(ast::BlockStmt {
+            body: Box::new(ast::ArrowFunctionBody::FunctionBody(ast::FunctionBody {
                 stmts: reads,
                 ..Default::default()
             })),

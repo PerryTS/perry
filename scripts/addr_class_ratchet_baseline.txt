@@ -43,7 +43,7 @@ handle-floor | crates/perry-runtime/src/buffer/copy_bytes.rs | 1
 handle-floor | crates/perry-runtime/src/buffer/encode.rs | 6
 handle-floor | crates/perry-runtime/src/buffer/from.rs | 9
 handle-floor | crates/perry-runtime/src/buffer/iter.rs | 1
-handle-floor | crates/perry-runtime/src/buffer/query.rs | 5
+handle-floor | crates/perry-runtime/src/buffer/query.rs | 4
 handle-floor | crates/perry-runtime/src/buffer/transcode.rs | 2
 handle-floor | crates/perry-runtime/src/buffer/u8_codec.rs | 7
 handle-floor | crates/perry-runtime/src/buffer/validate.rs | 1
@@ -81,9 +81,8 @@ handle-floor | crates/perry-runtime/src/node_inspector.rs | 1
 handle-floor | crates/perry-runtime/src/node_repl.rs | 1
 handle-floor | crates/perry-runtime/src/node_stream.rs | 1
 handle-floor | crates/perry-runtime/src/node_stream_constructors/introspection.rs | 1
-handle-floor | crates/perry-runtime/src/node_stream_chunk_collect.rs | 1
 handle-floor | crates/perry-runtime/src/node_stream_json.rs | 1
-handle-floor | crates/perry-runtime/src/node_stream_readwrite.rs | 1
+handle-floor | crates/perry-runtime/src/node_stream_readwrite.rs | 2
 handle-floor | crates/perry-runtime/src/node_submodules/blob.rs | 1
 handle-floor | crates/perry-runtime/src/node_submodules/consumers.rs | 1
 handle-floor | crates/perry-runtime/src/node_submodules/diagnostics.rs | 1
@@ -206,7 +205,6 @@ handle-floor | crates/perry-stdlib/src/webcrypto/hmac.rs | 1
 handle-floor | crates/perry-stdlib/src/webcrypto/jwk.rs | 1
 handle-floor | crates/perry-stdlib/src/webcrypto/supports.rs | 1
 handle-floor | crates/perry-stdlib/src/webcrypto/util.rs | 5
-handle-floor | crates/perry-stdlib/src/zlib.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/buffer/access.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/collection_iter.rs | 1
 lone-valid-obj-ptr | crates/perry-runtime/src/error.rs | 3

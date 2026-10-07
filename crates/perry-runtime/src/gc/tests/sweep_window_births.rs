@@ -147,7 +147,7 @@ fn inline_births_during_a_budgeted_block_cleanup_stay_inside_their_block() {
 
     // Several Eden blocks of garbage, so the cleanup resets blocks behind the
     // current one and then moves allocation back to the first of them.
-    for _ in 0..1200 {
+    for _ in 0..8 * crate::arena::BLOCK_SIZE / (8 * 1024) {
         let _ = crate::arena::arena_alloc_gc(8 * 1024, 8, GC_TYPE_STRING);
     }
     let inline_block_before = unsafe { (*crate::arena::js_inline_arena_state()).data } as usize;

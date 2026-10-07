@@ -9,6 +9,15 @@ use crate::node_stream::native_hooks::tests::{
 use crate::value::{JSValue, TAG_UNDEFINED};
 use std::sync::atomic::Ordering;
 
+/// Restores the thread's lazy-registration suppression on drop.
+struct AutoGcInitRestore(bool);
+
+impl Drop for AutoGcInitRestore {
+    fn drop(&mut self) {
+        crate::gc::set_auto_gc_init_suppressed(self.0);
+    }
+}
+
 fn finalized() -> usize {
     crate::native_handle::PAYLOAD_FINALIZED.load(Ordering::SeqCst)
 }
@@ -66,13 +75,29 @@ fn retained_heap_bytes() -> usize {
 /// touched (a chunk, a listener, a codec's scratch) outlives it.
 #[test]
 fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
+    // This churn can reach an automatic copying minor with either block size.
+    // Isolate scanner/cache roots just like the other copying-GC witnesses.
+    let _gc = super::support::CopyingNurseryTestGuard::new(0);
     let _reset = FamilyReset::new();
-    const N: usize = 2000;
+    // The isolation guard empties the scanner registry and suppresses lazy
+    // registration. This workload fills caches no hand-picked subset covers
+    // (canonical key lists, interned key names, shape caches, the payload
+    // prototype): a cache scanner missing from the set leaves a stale address
+    // after the first collection (a forwarded keys array read as live,
+    // #12136). Register the production set, exactly as an agent has it.
+    let _auto_init = AutoGcInitRestore(crate::gc::set_auto_gc_init_suppressed(false));
+    crate::gc::gc_init();
+    // Warm up for a block's worth of streams, then measure six batches.
+    const BLOCK_SCALE: usize = crate::arena::BLOCK_SIZE / (1024 * 1024);
+    const WARMUP_BATCHES: usize = 2 * BLOCK_SCALE;
+    const BATCHES: usize = WARMUP_BATCHES + 6;
+    const PER_BATCH: usize = 250 * BLOCK_SCALE;
+    const N: usize = BATCHES * PER_BATCH;
     let input = vec![b'q'; 1024];
     let before_cells = finalized();
     let mut retained = Vec::new();
-    for batch in 0..8 {
-        for _ in 0..N / 8 {
+    for batch in 0..BATCHES {
+        for _ in 0..PER_BATCH {
             let scope = crate::gc::RuntimeHandleScope::new();
             let rot = scope.root_nanbox_f64(new_rot13(Rot13Opts::default()));
             on_data(rot.get_nanbox_f64(), crate::fn_info!(sink_data, 1));
@@ -126,11 +151,11 @@ fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
         "the dead streams' cells were swept: {cells} of {}",
         2 * N
     );
-    // Batches 0 and 1 settle the runtime's one-time state (prototype, side
-    // tables). After that, 1500 more streams may leave less than 64 KiB, so
-    // a stream that retains 44 bytes fails.
-    let warm = retained[2];
-    let peak = *retained[2..].iter().max().unwrap();
+    // The warmup batches settle the runtime's one-time state (prototype, side
+    // tables). After that, 6 * PER_BATCH more streams may leave less than
+    // 64 KiB, so a stream that retains 44 bytes fails.
+    let warm = retained[WARMUP_BATCHES];
+    let peak = *retained[WARMUP_BATCHES..].iter().max().unwrap();
     assert!(
         peak.saturating_sub(warm) < 64 << 10,
         "the heap a full collection keeps is flat after warmup: {retained:?}"

@@ -18,7 +18,7 @@ fn map_store_full_sweep_reclaims_dead_active_block_and_preserves_live_owner() {
             js_gc_register_global_root(&mut root as *mut u64 as i64);
             let dead = js_map_alloc(8);
             js_map_set(dead, 1.0, 2.0);
-            let before = test_map_side_deallocation_snapshot();
+            let before = test_thread_map_side_deallocation_snapshot();
             let mut cycle = GcCycleState::new_full(GcTriggerSnapshot {
                 kind: GcTriggerKind::Manual,
                 steps_before: Some(GcStepSnapshot::current()),
@@ -28,15 +28,15 @@ fn map_store_full_sweep_reclaims_dead_active_block_and_preserves_live_owner() {
             } else {
                 cycle.run_to_completion();
             }
-            let after = test_map_side_deallocation_snapshot();
+            let after = test_thread_map_side_deallocation_snapshot();
             assert_eq!((after.0 - before.0, after.1 - before.1), (1, 128));
             let live = (root & crate::value::POINTER_MASK) as *mut MapHeader;
             assert!(is_registered_map(live as usize));
             assert_eq!(js_map_get(live, 42.0), 99.0);
-            let before = test_map_side_deallocation_snapshot();
+            let before = test_thread_map_side_deallocation_snapshot();
             release_current_thread_map_side_allocations();
             release_current_thread_map_side_allocations();
-            let after = test_map_side_deallocation_snapshot();
+            let after = test_thread_map_side_deallocation_snapshot();
             assert_eq!((after.0 - before.0, after.1 - before.1), (1, 128));
         })
         .join()
@@ -63,7 +63,7 @@ fn map_store_compaction_history_survives_actual_copying_collection() {
     let dead = js_map_alloc(8);
     js_map_set(dead, 1.0, 2.0);
     let from_space_before = test_from_space_map_finalizations();
-    let dealloc_before = test_map_side_deallocation_snapshot();
+    let dealloc_before = test_thread_map_side_deallocation_snapshot();
     let trace = collect_minor_trace(GcTriggerKind::Direct);
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
     assert_eq!(
@@ -81,7 +81,7 @@ fn map_store_compaction_history_survives_actual_copying_collection() {
 
 /// Map side-allocation deallocations `(count, bytes)` since `before`.
 fn dealloc_delta(before: (u64, u64)) -> (u64, u64) {
-    let after = test_map_side_deallocation_snapshot();
+    let after = test_thread_map_side_deallocation_snapshot();
     (after.0 - before.0, after.1 - before.1)
 }
 
@@ -151,7 +151,7 @@ fn map_store_survives_tenured_evacuation_sweeps_and_exit_walk() {
         js_map_set(map, 42.0, 99.0);
         js_shadow_slot_set(0, ptr_bits(map as usize));
 
-        let before = test_map_side_deallocation_snapshot();
+        let before = test_thread_map_side_deallocation_snapshot();
         let moved = evacuate_rooted_tenured_map_to_old();
         assert_eq!(
             dealloc_delta(before),
@@ -227,7 +227,7 @@ fn map_store_survives_old_page_defrag_sweeps_and_exit_walk() {
             "the test must seed an old-page defrag candidate holding the Map"
         );
 
-        let before = test_map_side_deallocation_snapshot();
+        let before = test_thread_map_side_deallocation_snapshot();
         // Defrag runs in the non-copying minor's evacuation phase.
         let trace = {
             let _copy_only = TemporaryCopyOnlyRootScanner::rust_bits(&[]);
@@ -286,7 +286,7 @@ fn map_store_non_copying_minor_reclaims_dead_active_block_map() {
             let from_space_before = test_from_space_map_finalizations();
             let force_marks_before = crate::gc::block_persist_force_mark_count();
 
-            let before = test_map_side_deallocation_snapshot();
+            let before = test_thread_map_side_deallocation_snapshot();
             let trace = if budgeted {
                 let mut state = test_start_budgeted_minor_fallback_state_with_trace(
                     GcTriggerKind::ArenaBytes,
@@ -327,4 +327,186 @@ fn map_store_non_copying_minor_reclaims_dead_active_block_map() {
             assert_eq!(dealloc_delta(before), (1, 128), "and never freed again");
         });
     }
+}
+/// Growth, retained clear/delete capacity, and real GC finalization must all
+/// agree with the reserved index payload, including the dense numeric table.
+#[test]
+fn map_index_external_bytes_balance_after_growth_clear_delete_and_collection() {
+    for clear in [false, true] {
+        std::thread::spawn(move || {
+            let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+            let _scan = ConservativeScanDisabledGuard::new();
+            reset_global_roots();
+            let _roots = ShadowAndGlobalRootResetGuard;
+            let baseline = policy::external_side_live_bytes();
+            let map = js_map_alloc(4);
+            let mut keys = Vec::new();
+            for i in 0..512 {
+                let text = format!("map-accounting-key-{i}");
+                let string = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+                let object = crate::object::js_object_alloc(0, 0);
+                let string_key = f64::from_bits(crate::value::STRING_TAG | string as u64);
+                let object_key = f64::from_bits(ptr_bits(object as usize));
+                for key in [i as f64, -(i as f64) - 0.5, string_key, object_key] {
+                    js_map_set(map, key, i as f64);
+                    keys.push(key);
+                }
+                unsafe {
+                    let entries = (*map).capacity as usize * 2 * std::mem::size_of::<f64>();
+                    let indexes = test_map_index_bytes(map);
+                    assert!(indexes > 0, "fixture must allocate all key indexes");
+                    assert_eq!(
+                        policy::external_side_live_bytes(),
+                        baseline + entries + indexes
+                    );
+                }
+            }
+            // Model a relocated pointer key so the GC hook must rebuild,
+            // rather than taking its unchanged-keys fast path.
+            let replacement = crate::object::js_object_alloc(0, 0);
+            let replacement_bits = ptr_bits(replacement as usize);
+            let raw = keys.len() - 1;
+            unsafe {
+                crate::gc::runtime_store_external_jsvalue_slot(
+                    map as usize,
+                    (*map).entries.add(raw * 2) as usize,
+                    replacement_bits,
+                );
+            }
+            keys[raw] = f64::from_bits(replacement_bits);
+            let before = policy::external_side_live_bytes();
+            rebuild_map_ptr_index_for_gc(map);
+            assert_eq!(policy::external_side_live_bytes(), before);
+            assert_eq!(js_map_get(map, keys[raw]), 511.0);
+            if clear {
+                js_map_clear(map);
+            } else {
+                for key in keys {
+                    assert_eq!(js_map_delete(map, key), 1);
+                }
+            }
+            assert_eq!(js_map_size(map), 0);
+            unsafe {
+                let entries = (*map).capacity as usize * 2 * std::mem::size_of::<f64>();
+                let indexes = test_map_index_bytes(map);
+                assert!(indexes > 0, "empty tables retain allocated capacity");
+                assert_eq!(
+                    policy::external_side_live_bytes(),
+                    baseline + entries + indexes
+                );
+            }
+            // The pointer above is deliberately not a root. A real full sweep
+            // must reach the Map finalizer even after its keys were removed.
+            let before = test_thread_map_side_deallocation_snapshot();
+            let cycle = GcCycleState::new_full(GcTriggerSnapshot {
+                kind: GcTriggerKind::Manual,
+                steps_before: Some(GcStepSnapshot::current()),
+            });
+            cycle.run_to_completion();
+            assert_eq!(test_thread_map_side_deallocation_snapshot().0 - before.0, 1);
+            assert_eq!(policy::external_side_live_bytes(), baseline);
+        })
+        .join()
+        .unwrap();
+    }
+}
+
+/// Run one copying minor that promotes the young generation in place, and
+/// assert it took the path asked for.
+fn promote_young_in_place(untraced: bool) {
+    let cycles = untraced_promotion_cycles();
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
+    assert!(
+        trace.copying_nursery.in_place_promotion,
+        "the cycle must promote in place"
+    );
+    assert_eq!(
+        untraced_promotion_cycles() > cycles,
+        untraced,
+        "untraced path taken: {} (decline reason: {})",
+        untraced_promotion_cycles() > cycles,
+        crate::gc::copying::last_untraced_decline_reason()
+    );
+}
+
+/// Fill a Map with `n` numeric entries, `key -> key * 2`.
+fn filled_map(n: usize) -> *mut MapHeader {
+    let map = js_map_alloc(8);
+    for i in 0..n {
+        js_map_set(map, i as f64, (i * 2) as f64);
+    }
+    map
+}
+
+/// #12141: an untraced in-place promotion marks nothing, so its unmarked
+/// Maps are live. The copying minor's from-space Map walk ran before the
+/// promoted blocks left the young arenas and freed the store of every Map on
+/// them, including a rooted one; the next `set` wrote through a null store.
+#[test]
+fn an_untraced_promotion_keeps_the_store_of_a_live_map() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _promote = super::super::promote_in_place::InPlacePromotionTestGuard::untraced();
+    let live = filled_map(1000);
+    js_shadow_slot_set(0, ptr_bits(live as usize));
+    // The dropped cohort, past the 131k entries the crashing probe needed.
+    let _dropped = filled_map(131_100);
+
+    let before = test_thread_map_side_deallocation_snapshot();
+    promote_young_in_place(true);
+    assert_eq!(
+        ptr_from_slot(0),
+        live,
+        "in-place promotion must not move it"
+    );
+    assert_eq!(
+        dealloc_delta(before),
+        (0, 0),
+        "an untraced promotion proves nothing dead, so it must free no store"
+    );
+    assert!(
+        test_map_side_allocation(live as usize).is_some(),
+        "the live Map lost its store"
+    );
+    unsafe {
+        assert_eq!((*live).size, 1000);
+        assert!(!(*live).entries.is_null());
+    }
+    assert_eq!(js_map_get(live, 999.0), 1998.0);
+    // Growing it goes through the store the walk used to null.
+    for i in 1000..2000 {
+        js_map_set(live, i as f64, (i * 2) as f64);
+    }
+    assert_eq!(js_map_get(live, 1999.0), 3998.0);
+    unsafe {
+        assert_eq!((*live).size, 2000);
+    }
+}
+
+/// The traced half of #12141: a traced in-place promotion's marks are real,
+/// so the live Map keeps its store and the dead one is reclaimed, no later
+/// than the next full collection.
+#[test]
+fn a_traced_promotion_keeps_the_live_map_and_reclaims_the_dead_one() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _promote = super::super::promote_in_place::InPlacePromotionTestGuard::enabled(1000);
+    let live = filled_map(1000);
+    js_shadow_slot_set(0, ptr_bits(live as usize));
+    let _dead = filled_map(64);
+
+    let before = test_thread_map_side_deallocation_snapshot();
+    promote_young_in_place(false);
+    assert_eq!(ptr_from_slot(0), live);
+    assert!(test_map_side_allocation(live as usize).is_some());
+    full_collection();
+    let live = ptr_from_slot(0);
+    assert!(test_map_side_allocation(live as usize).is_some());
+    assert_eq!(js_map_get(live, 999.0), 1998.0);
+    assert_eq!(
+        dealloc_delta(before).0,
+        1,
+        "the dead Map's store must be freed by the promotion or the next full"
+    );
 }

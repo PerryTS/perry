@@ -119,16 +119,17 @@ crate::perry_thread_local! {
 /// its whole extent would be mostly zero words.
 const CENSUS_BITMAP_MAX_EXTENT: usize = crate::arena::BLOCK_SIZE;
 
-/// Start bitmaps are allocated in chunks of this many words (8 KiB), one or two
-/// per block. A bitmap kept in one contiguous vector grew past the allocator's
+/// Start bitmaps are allocated in chunks of this many words (8 KiB). A bitmap
+/// kept in one contiguous vector grew past the allocator's
 /// small and medium size classes and made it commit a fresh large page:
 /// `records_array_1m:sparse` read +4.8 MiB peak RSS for a ~100 KB index. The
 /// start runs this replaces were 8 KiB vectors too.
 const CENSUS_BITMAP_CHUNK_WORDS: usize = 1024;
 const CENSUS_BITMAP_CHUNK_WORD_SHIFT: u32 = 10;
 /// Chunks a bitmap block can need: `CENSUS_BITMAP_MAX_EXTENT` bytes at one bit
-/// per 8 bytes is `2 * CENSUS_BITMAP_CHUNK_WORDS` words.
-const CENSUS_BITMAP_MAX_CHUNKS: usize = 2;
+/// per 8 bytes, with 64 bits per word and chunked word storage.
+const CENSUS_BITMAP_MAX_CHUNKS: usize =
+    CENSUS_BITMAP_MAX_EXTENT.div_ceil(8 * 64 * CENSUS_BITMAP_CHUNK_WORDS);
 
 /// Arena object starts sit on 8-byte boundaries relative to their block's
 /// `data` pointer: `ArenaObjectCursor::next_budgeted` rounds every header

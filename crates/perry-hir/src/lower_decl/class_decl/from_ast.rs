@@ -591,7 +591,7 @@ pub(crate) fn lower_class_from_ast(
                 // boundary, so a `var` declared in one block leaked into the
                 // next block/module scope instead of staying local (test262
                 // static-init-scope-var-close.js).
-                let body = lower_fn_body_block_stmt(ctx, &block.body)?;
+                let body = lower_fn_body_block_stmt(ctx, block.body.span, &block.body.stmts)?;
                 ctx.exit_scope(scope_mark);
                 ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 

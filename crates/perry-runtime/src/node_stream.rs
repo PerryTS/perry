@@ -178,10 +178,10 @@ fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f6
         // captures a real object pointer, so existing instance-bound closures
         // never hit this branch.
         if bits != crate::value::TAG_UNDEFINED {
-            return f64::from_bits(bits);
+            return constructors::ensure_lazy_stream(f64::from_bits(bits));
         }
     }
-    this.as_f64()
+    constructors::ensure_lazy_stream(this.as_f64())
 }
 
 extern "C" fn ns_chain1(
@@ -840,7 +840,9 @@ fn chunk_byte_len(chunk: f64) -> usize {
     }
     let raw = raw_ptr_from_value(chunk);
     if raw >= 0x10000 && crate::buffer::is_registered_buffer(raw) {
-        return unsafe { (*(raw as *const crate::buffer::BufferHeader)).length as usize };
+        return crate::buffer::bytes::no_gc(|scope| {
+            crate::buffer::bytes::bytes(chunk, scope).map_or(0, |bytes| bytes.len())
+        });
     }
     1
 }

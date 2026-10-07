@@ -387,7 +387,7 @@ fn reload_policy_arrow_expression_body_scanned() {
             let ast::Expr::Arrow(arrow) = init.as_ref() else {
                 panic!("expected arrow init");
             };
-            let ast::BlockStmtOrExpr::Expr(expr) = arrow.body.as_ref() else {
+            let ast::ArrowFunctionBody::Expr(expr) = arrow.body.as_ref() else {
                 panic!("expected expression body");
             };
             scan_provider_return_expr_for_reload_policy(expr, &mut found, &mut unparsed);

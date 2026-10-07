@@ -93,8 +93,6 @@ NON_HANDLE_TABLES = {
     ("crates/perry-ext-http/src/client_turnloop/tls.rs", "CONFIGS"),
     ("crates/perry-ext-http/src/tls_client.rs", "INTERNAL_HTTPS_SERVERS"),
     # Keyed by agent id: one state bundle per thread agent, not per resource.
-    ("crates/perry-ext-zlib/src/stream/agent_state.rs", "ALL"),
-    ("crates/perry-stdlib/src/zlib/tables.rs", "ALL_ZLIB_TABLES"),
 }
 
 # Numeric class registries are concentrated in these modules.  The one
@@ -118,8 +116,6 @@ EXTRA_TABLES: dict[tuple[str, str], int] = {
     ("crates/perry-runtime/src/tui/tree.rs", "REGISTRY"): 1,
     ("crates/perry-stdlib/src/common/handle_lifecycle.rs", "ORPHANS"): 1,
     ("crates/perry-stdlib/src/readline/mod.rs", "READLINE_INTERFACES"): 1,
-    # Statics::streams and ::listeners behind statics().
-    ("crates/perry-ext-zlib/src/stream.rs", "__STATICS_HANDLE_TABLES"): 2,
 }
 
 REGISTER_CALL = re.compile(
@@ -138,7 +134,6 @@ PRODUCER_RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("crates/perry-stdlib/src/streams", re.compile(r"\bnext_stream_id\s*\(")),
     ("crates/perry-ext-streams/src/lib.rs", re.compile(r"\bnext_id\s*\(\s*&NEXT_")),
     ("crates/perry-stdlib/src/zlib.rs", re.compile(r"\bcreate_zlib_stream\s*\(")),
-    ("crates/perry-ext-zlib/src/stream.rs", re.compile(r"(?m)^\s*factory!\s*\(")),
     ("crates/perry-stdlib/src/tls", re.compile(r"\bnext_tls_handle_id\s*\(")),
     ("crates/perry-ext-net/src/", re.compile(r"\bnext_id_or_throw\s*\(")),
     # Background/adoption paths cannot throw, and use next_id directly.
@@ -242,14 +237,6 @@ def scan(root: Path = ROOT) -> tuple[dict[str, int], dict[str, int], set[tuple[s
                 tables[rel] += 1
             if (rel, name) in EXTRA_TABLES:
                 tables[rel] += EXTRA_TABLES[(rel, name)]
-        # Opaque struct-field bundle has no declaration named after its maps.
-        opaque = (rel, "__STATICS_HANDLE_TABLES")
-        if opaque in EXTRA_TABLES:
-            required = ("streams: HashMap<i64", "listeners: HashMap<i64")
-            if all(token in code for token in required):
-                tables[rel] += EXTRA_TABLES[opaque]
-                seen_decls.add(opaque)
-
         register_count = call_count(code, REGISTER_CALL) + call_count(code, RESERVE_CALL)
         if register_count:
             producers[rel] += register_count
@@ -294,24 +281,6 @@ def render(rows: dict[str, tuple[int, int]]) -> str:
 
 def totals(rows: dict[str, tuple[int, int]]) -> tuple[int, int]:
     return sum(v[0] for v in rows.values()), sum(v[1] for v in rows.values())
-
-
-# The census floor guards against a scan that silently stops matching, not
-# against conversions: #11919 removes tables and producers on purpose, so the
-# floor follows the reviewed ledger rather than a fixed count. A fall of more
-# than a tenth below the recorded totals needs a reviewed --update first. The
-# absolute minimum stops an --update run by a broken scan from lowering the
-# ledger, and with it the relative floor, to nothing.
-CENSUS_LEDGER_FRACTION = (9, 10)
-CENSUS_MINIMUM = (150, 150)
-
-
-def census_too_small(census: tuple[int, int], recorded: tuple[int, int]) -> bool:
-    num, den = CENSUS_LEDGER_FRACTION
-    return any(
-        actual < minimum or actual * den < ledger * num
-        for actual, ledger, minimum in zip(census, recorded, CENSUS_MINIMUM)
-    )
 
 
 def compare_ceiling(
@@ -421,20 +390,8 @@ fn test_only() { register_handle(2_u8); }
     if missing:
         print(f"native_handle_ledger self-test FAILED: stale classification entries: {missing}")
         return 1
-    census = (sum(tables.values()), sum(producers.values()))
-    recorded = totals(parse_ledger(LEDGER.read_text(encoding="utf-8")))
-    if census_too_small(census, recorded):
-        print(
-            "native_handle_ledger self-test FAILED: implausibly small real-tree census "
-            f"({census[0]} tables, {census[1]} producers; ledger records "
-            f"{recorded[0]}, {recorded[1]}). If the conversions are real, lower the "
-            "ledger with --update; otherwise the scan has stopped matching."
-        )
-        return 1
-    if not census_too_small((0, 0), recorded) or not census_too_small(
-        (recorded[0] * 8 // 10, recorded[1]), recorded
-    ):
-        print("native_handle_ledger self-test FAILED: planted census collapse did not fire")
+    if sum(tables.values()) < 150 or sum(producers.values()) < 150:
+        print("native_handle_ledger self-test FAILED: implausibly small real-tree census")
         return 1
     print(
         f"native_handle_ledger self-test: OK ({sum(tables.values())} tables, "

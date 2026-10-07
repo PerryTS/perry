@@ -168,7 +168,7 @@ pub fn lower_private_method(
 
     // Lower body — see issue #569.
     let mut body = if let Some(ref block) = method.function.body {
-        lower_fn_body_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
     } else {
         Vec::new()
     };
@@ -258,7 +258,7 @@ pub fn lower_private_getter(
         .unwrap_or(Type::Any);
 
     let body = if let Some(ref block) = method.function.body {
-        lower_fn_body_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
     } else {
         Vec::new()
     };
@@ -332,7 +332,7 @@ pub fn lower_private_setter(
     }
 
     let mut body = if let Some(ref block) = method.function.body {
-        lower_fn_body_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
     } else {
         Vec::new()
     };

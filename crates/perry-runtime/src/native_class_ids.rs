@@ -68,6 +68,7 @@ pub const SQLITE_STATEMENT_ITERATOR: u32 = 0xFFFF_2419;
 pub const SQLITE_TAG_STORE: u32 = 0xFFFF_241A;
 pub const SQLITE_SESSION: u32 = 0xFFFF_241B;
 pub const SQLITE_LIMITS: u32 = 0xFFFF_241C;
+pub use perry_abi::native_class_ids::*;
 
 /// #10926: `AsyncResource` is native-backed too, but keeps its LEGACY
 /// `0xFFFF_0079`, which `instanceof` and `class_registry::parent_static`
@@ -81,7 +82,7 @@ pub const ASYNC_LOCAL_STORAGE_LEGACY: u32 = 0xFFFF_0078;
 /// family between them carries a `native_state` word the far side of a
 /// `postMessage` could not reconstruct.
 const NATIVE_BACKED_FIRST: u32 = ABORT_CONTROLLER;
-const NATIVE_BACKED_LAST: u32 = SQLITE_LIMITS;
+const NATIVE_BACKED_LAST: u32 = ZLIB_BASE;
 
 /// Class ids whose instances are ordinary objects carrying native state that
 /// cannot cross a thread boundary (#340/#341).
@@ -142,6 +143,18 @@ const ALL: &[u32] = &[
     SQLITE_TAG_STORE,
     SQLITE_SESSION,
     SQLITE_LIMITS,
+    GZIP,
+    GUNZIP,
+    DEFLATE,
+    INFLATE,
+    DEFLATE_RAW,
+    INFLATE_RAW,
+    UNZIP,
+    BROTLI_COMPRESS,
+    BROTLI_DECOMPRESS,
+    ZSTD_COMPRESS,
+    ZSTD_DECOMPRESS,
+    ZLIB_BASE,
 ];
 
 /// Strictly ascending ⟹ no two families share an id, and the block stays
@@ -209,6 +222,18 @@ mod tests {
             SQLITE_TAG_STORE,
             SQLITE_SESSION,
             SQLITE_LIMITS,
+            GZIP,
+            GUNZIP,
+            DEFLATE,
+            INFLATE,
+            DEFLATE_RAW,
+            INFLATE_RAW,
+            UNZIP,
+            BROTLI_COMPRESS,
+            BROTLI_DECOMPRESS,
+            ZSTD_COMPRESS,
+            ZSTD_DECOMPRESS,
+            ZLIB_BASE,
             ASYNC_LOCAL_STORAGE_LEGACY,
             ASYNC_RESOURCE_LEGACY,
         ] {

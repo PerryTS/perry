@@ -14,6 +14,10 @@ crate-type = ["staticlib", "rlib"]
 [dependencies]
 perry-ffi.workspace = true
 flate2 = "1"
+# flate2's default backend. Streams drive it directly, and the payload
+# accounts its fixed workspace from this pinned version (stream/allocation.rs).
+miniz_oxide = "=0.9.1"
+adler2 = "2"
 # zstd codecs: `zlib.zstdCompressSync` / `createZstdDecompress`. When `zlib`
 # routes here, perry-stdlib's `compression` module is compiled out — this
 # archive must carry the full zstd surface too, or programs whose compiled JS
@@ -22,7 +26,8 @@ flate2 = "1"
 zstd.workspace = true
 # Brotli stream + one-shot support (#1843). Matches the version the
 # `compression` feature pulls into perry-stdlib.
-brotli = "8.0.2"
+brotli = "9.0"
 
 [dev-dependencies]
+perry-runtime.workspace = true
 perry-ffi = { workspace = true, features = ["runtime-link"] }

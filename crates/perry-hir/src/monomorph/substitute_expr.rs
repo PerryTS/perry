@@ -911,10 +911,6 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             pattern: pattern.clone(),
             flags: flags.clone(),
         },
-        Expr::RegExpTest { regex, string } => Expr::RegExpTest {
-            regex: Box::new(substitute_expr(regex, substitutions)),
-            string: Box::new(substitute_expr(string, substitutions)),
-        },
         Expr::StringMatch { string, regex } => Expr::StringMatch {
             string: Box::new(substitute_expr(string, substitutions)),
             regex: Box::new(substitute_expr(regex, substitutions)),

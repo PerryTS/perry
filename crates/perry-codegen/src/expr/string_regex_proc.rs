@@ -90,20 +90,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             rooted_group.release(ctx);
             Ok(rooted_result)
         }
-        Expr::RegExpSource(o) => {
-            let r_box = lower_expr(ctx, o)?;
-            let blk = ctx.block();
-            let r_handle = unbox_to_i64(blk, &r_box);
-            let s_handle = blk.call(I64, "js_regexp_get_source", &[(I64, &r_handle)]);
-            Ok(nanbox_string_inline(blk, &s_handle))
-        }
-        Expr::RegExpFlags(o) => {
-            let r_box = lower_expr(ctx, o)?;
-            let blk = ctx.block();
-            let r_handle = unbox_to_i64(blk, &r_box);
-            let s_handle = blk.call(I64, "js_regexp_get_flags", &[(I64, &r_handle)]);
-            Ok(nanbox_string_inline(blk, &s_handle))
-        }
         Expr::ProcessChdir(p) => {
             // #2013 — route through the f64-taking entry so a
             // non-string argument throws TypeError ERR_INVALID_ARG_TYPE
@@ -415,14 +401,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let handle = blk.call(I64, "js_string_from_char_code_array", &[(DOUBLE, &v)]);
             Ok(nanbox_string_inline(blk, &handle))
         }
-        Expr::RegExpSetLastIndex { regex, value } => lower_expr(
-            ctx,
-            &Expr::PropertySet {
-                object: regex.clone(),
-                property: "lastIndex".into(),
-                value: value.clone(),
-            },
-        ),
         Expr::ProcessStdin => Ok(ctx.block().call(DOUBLE, "js_process_stdin", &[])),
         Expr::ProcessStdout => Ok(ctx.block().call(DOUBLE, "js_process_stdout", &[])),
         Expr::ProcessStderr => Ok(ctx.block().call(DOUBLE, "js_process_stderr", &[])),

@@ -353,10 +353,6 @@ pub(crate) fn readable_handle_async_iterator(value: f64) -> Option<f64> {
     is_readable_handle(value).then(|| build_readable_async_iterator(value, true))
 }
 
-pub(crate) fn readable_handle_iterator_with_options(stream: f64, opts: f64) -> f64 {
-    build_readable_async_iterator(stream, destroy_on_return_from_options(opts))
-}
-
 fn uses_method_listeners(stream: f64) -> bool {
     has_truthy_hidden(stream, hidden_key(METHOD_LISTENER_READABLE_KEY))
         || is_readable_handle(stream)
@@ -500,6 +496,10 @@ extern "C" fn ns_readable_iter_on_close(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let iterator = scope.root_nanbox_f64(iterator_from_listener(closure));
+    if iterator_is_done(iterator.get_nanbox_f64()) {
+        iterator_remove_listeners(iterator.get_nanbox_f64());
+        return f64::from_bits(TAG_UNDEFINED);
+    }
     if !iterator_is_done(iterator.get_nanbox_f64())
         && !iterator_stream_ended(iterator.get_nanbox_f64())
         && iterator_stored_error(iterator.get_nanbox_f64()).is_none()
@@ -848,7 +848,9 @@ extern "C" fn ns_readable_iterator_return(
         iterator.get_nanbox_f64(),
         hidden_key(READABLE_ITERATOR_STREAM_KEY),
     );
-    if stream.is_some_and(is_readable_handle) && iterator_has_pending(iterator.get_nanbox_f64()) {
+    if stream.is_some_and(uses_async_generator_ordering)
+        && iterator_has_pending(iterator.get_nanbox_f64())
+    {
         let queue = get_hidden_value(
             iterator.get_nanbox_f64(),
             hidden_key(READABLE_ITERATOR_PENDING_KEY),
@@ -878,8 +880,35 @@ extern "C" fn ns_readable_iterator_return(
         iterator.get_nanbox_f64(),
         hidden_key(READABLE_ITERATOR_ATTACHED_KEY),
     );
+    let aborting = !already_done
+        && attached
+        && iterator_destroys_on_return(iterator.get_nanbox_f64())
+        && stream.is_some_and(uses_async_generator_ordering);
     iterator_mark_done(iterator.get_nanbox_f64());
-    iterator_remove_listeners(iterator.get_nanbox_f64());
+    if aborting {
+        // Keep the existing error/close listeners until destroy completes.
+        // An iterator's own AbortError is handled during generator cleanup.
+        if let Some(stream) = get_hidden_value(
+            iterator.get_nanbox_f64(),
+            hidden_key(READABLE_ITERATOR_STREAM_KEY),
+        ) {
+            let stream = scope.root_nanbox_f64(stream);
+            remove_iterator_listener(
+                iterator.get_nanbox_f64(),
+                stream.get_nanbox_f64(),
+                b"data",
+                READABLE_ITERATOR_DATA_CB_KEY,
+            );
+            remove_iterator_listener(
+                iterator.get_nanbox_f64(),
+                stream.get_nanbox_f64(),
+                b"end",
+                READABLE_ITERATOR_END_CB_KEY,
+            );
+        }
+    } else {
+        iterator_remove_listeners(iterator.get_nanbox_f64());
+    }
     iterator_resolve_all_pending_done(iterator.get_nanbox_f64());
     if !already_done
         && (iterator_has_yielded(iterator.get_nanbox_f64()) || attached)
@@ -891,7 +920,7 @@ extern "C" fn ns_readable_iterator_return(
         ) {
             let stream = scope.root_nanbox_f64(stream);
             call_source_iterator_return(stream.get_nanbox_f64());
-            let reason = if is_readable_handle(stream.get_nanbox_f64()) {
+            let reason = if uses_async_generator_ordering(stream.get_nanbox_f64()) {
                 let msg =
                     crate::string::js_string_from_bytes(b"The operation was aborted".as_ptr(), 25);
                 crate::node_submodules::register_error_code_pub(msg, "ABORT_ERR");
@@ -907,6 +936,10 @@ extern "C" fn ns_readable_iterator_return(
         }
     }
     readable_iterator_done()
+}
+
+fn uses_async_generator_ordering(stream: f64) -> bool {
+    is_readable_handle(stream) || super::native_hooks::hooks_of(stream).is_some()
 }
 
 extern "C" fn ns_readable_iterator_return_after_pull(

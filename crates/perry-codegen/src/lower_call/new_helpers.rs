@@ -89,6 +89,7 @@ pub(crate) enum NativeInstanceBase {
     Event,
     CustomEvent,
     DomException,
+    Zlib(&'static str),
 }
 
 /// The native base a parent NAME denotes, if any.
@@ -117,6 +118,18 @@ pub(crate) fn native_instance_base(name: &str) -> Option<NativeInstanceBase> {
         "Event" => Some(NativeInstanceBase::Event),
         "CustomEvent" => Some(NativeInstanceBase::CustomEvent),
         "DOMException" => Some(NativeInstanceBase::DomException),
+        "Gzip" => Some(NativeInstanceBase::Zlib("js_zlib_gzip_init")),
+        "Gunzip" => Some(NativeInstanceBase::Zlib("js_zlib_gunzip_init")),
+        "Deflate" => Some(NativeInstanceBase::Zlib("js_zlib_deflate_init")),
+        "Inflate" => Some(NativeInstanceBase::Zlib("js_zlib_inflate_init")),
+        "DeflateRaw" => Some(NativeInstanceBase::Zlib("js_zlib_deflate_raw_init")),
+        "InflateRaw" => Some(NativeInstanceBase::Zlib("js_zlib_inflate_raw_init")),
+        "Unzip" => Some(NativeInstanceBase::Zlib("js_zlib_unzip_init")),
+        "BrotliCompress" => Some(NativeInstanceBase::Zlib("js_zlib_brotli_compress_init")),
+        "BrotliDecompress" => Some(NativeInstanceBase::Zlib("js_zlib_brotli_decompress_init")),
+        "ZstdCompress" => Some(NativeInstanceBase::Zlib("js_zlib_zstd_compress_init")),
+        "ZstdDecompress" => Some(NativeInstanceBase::Zlib("js_zlib_zstd_decompress_init")),
+
         _ => None,
     }
 }
@@ -226,6 +239,11 @@ pub(crate) fn emit_native_instance_base_init(
 ) {
     let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
     match base {
+        NativeInstanceBase::Zlib(init) => {
+            let options = lowered_args.first().cloned().unwrap_or(undef);
+            ctx.block()
+                .call(DOUBLE, init, &[(DOUBLE, this_box), (DOUBLE, &options)]);
+        }
         NativeInstanceBase::EventEmitter => {
             // node's `EventEmitter.init(opts)`: the first argument is the
             // options bag (`captureRejections`).

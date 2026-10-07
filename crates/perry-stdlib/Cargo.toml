@@ -119,15 +119,10 @@ bundled-net = []
 # promise bridge (turnloop P8 lane L).
 external-net-pump = ["async-bridge"]
 
-# Activated by `optimized_libs::build_optimized_libs` (#1843) when the
-# well-known flip routes `node:zlib` to perry-ext-zlib and strips
-# `compression`. Routes lost-static-type `gz.write()` / `.on()` /
-# `.pipe()` calls through `js_ext_zlib_dispatch_method`. It also registers
-# `js_ext_zlib_native_dispatch` for captured module exports such as
-# `util.promisify(zlib.gzip)`; pump and keepalive registration is owned by
-# perry-ext-zlib. perry-ext-zlib is synchronous (no tokio task), so this
-# needs only the promise bridge, not the tokio runtime (turnloop P8 lane L).
-external-zlib-pump = ["async-bridge"]
+# Optimized builds resolve module exports from the separately linked binding.
+# Stream methods and deferred codec jobs are owned by the runtime. The legacy
+# feature name remains compatible with the optimized feature selector.
+external-zlib-pump = []
 
 # Activated by `optimized_libs::build_optimized_libs` (v0.5.714) when
 # the well-known flip routes `node:http` / `node:https` / `node:http2`
@@ -213,27 +208,10 @@ bundled-argon2 = ["dep:argon2", "async-bridge"]
 # routes to perry-ext-ethers when `import 'ethers'` is detected.
 bundled-ethers = []
 
-# Compression (node:zlib) — per-codec split (stdlib cherry-pick).
-# `compression-gzip` is the base codec family (gzip/deflate/inflate/
-# unzip/crc32 via flate2) and gates `pub mod zlib` itself; the Brotli
-# and zstd codecs layer on top and imply it (the zlib module's stream
-# framework, options validation and pump are shared). The auto-optimize
-# feature computation maps `import 'node:zlib'` to `compression-gzip`
-# and adds `compression-brotli` / `compression-zstd` only when the HIR
-# references a Brotli / zstd API token (see
-# `collect_modules/feature_detect.rs`), falling back to the full
-# umbrella when deferred dynamic code could call codecs by runtime
-# strings. The `compression` umbrella stays as the union for
-# backwards compatibility (`--features compression` and the default
-# `full` build are byte-identical to the pre-split archive).
-# `async-bridge` is explicit here (not inherited): zlib's deferred
-# stream/one-shot events are queued through `common::async_bridge`'s
-# pump, which only compiles under `async-bridge`. Historically the
-# auto-optimize path always enabled it transitively (the force-added
-# `crypto` feature implied it), so `--features compression` never
-# compiled standalone — now it does. It was `async-runtime` (tokio)
-# until turnloop P8 lane L split the pump from the runtime.
-compression-gzip = ["dep:flate2", "async-bridge"]
+# Compression features select the sole ext-zlib provider in default and
+# optimized builds. Codec feature detection retains the existing public
+# feature names; all deferred stream and callback jobs use the runtime queue.
+compression-gzip = ["dep:perry-ext-zlib"]
 compression-brotli = ["compression-gzip", "dep:brotli"]
 compression-zstd = ["compression-gzip", "dep:zstd"]
 compression = ["compression-gzip", "compression-brotli", "compression-zstd"]
@@ -301,6 +279,7 @@ async-bridge = []
 container = ["dep:perry-container-compose", "async-bridge"]
 
 [dependencies]
+perry-ext-zlib = { workspace = true, optional = true }
 perry-ffi.workspace = true
 perry-runtime = { workspace = true, features = ["stdlib"] }
 # Re-bundle updater symbols into libperry_stdlib.a so user binaries that
@@ -411,7 +390,7 @@ ml-kem = { version = "0.3.2", features = ["pkcs8"], optional = true }
 # Compression
 flate2 = { version = "1.0", optional = true }
 # Brotli decompression — feature-checked by axios at module init.
-brotli = { version = "8.0.2", optional = true }
+brotli = { version = "9.0", optional = true }
 # Zstd codecs — exposed by modern Node alongside gzip/deflate/Brotli.
 zstd = { version = "0.13.3", optional = true }
 

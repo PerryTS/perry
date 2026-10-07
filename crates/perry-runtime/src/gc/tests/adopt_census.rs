@@ -1,7 +1,7 @@
 //! #10182: a promoted-cohort full adopts the census record the in-place
 //! promotion walk made of each block it promoted, instead of walking it again.
 //!
-//! A young population of about two megabytes — a rooted young array of young
+//! A young population spanning multiple blocks — a rooted young array of young
 //! arrays holding young strings, with dead strings between them — is promoted
 //! whole by an untraced minor while recording is armed. Half the held strings
 //! then die, and the cohort full runs. Every adopted block is re-walked by the
@@ -31,7 +31,7 @@ fn promote_then_collect_cohort(sabotaged: bool) -> Outcome {
     cohort::seed_for_tests(0, 0, 0);
 
     const INNER: usize = 64;
-    const OUTER: usize = 64;
+    const OUTER: usize = crate::arena::BLOCK_SIZE / (16 * 1024);
     let mut outer = crate::array::js_array_alloc(OUTER as u32);
     let mut held: Vec<(usize, usize, usize)> = Vec::new();
     for o in 0..OUTER {

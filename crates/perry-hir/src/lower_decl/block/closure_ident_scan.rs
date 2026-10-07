@@ -175,10 +175,10 @@ pub(super) fn cic_expr(e: &ast::Expr, in_cl: bool, out: &mut std::collections::H
                 cic_pat(p, true, out);
             }
             match &*a.body {
-                ast::BlockStmtOrExpr::BlockStmt(b) => {
+                ast::ArrowFunctionBody::FunctionBody(b) => {
                     b.stmts.iter().for_each(|st| cic_stmt(st, true, out))
                 }
-                ast::BlockStmtOrExpr::Expr(ex) => cic_expr(ex, true, out),
+                ast::ArrowFunctionBody::Expr(ex) => cic_expr(ex, true, out),
             }
         }
         Fn(f) => cic_function(&f.function, out),
@@ -301,12 +301,12 @@ fn cic_prop(p: &ast::Prop, in_cl: bool, out: &mut std::collections::HashSet<Stri
             cic_expr(&kv.value, in_cl, out);
         }
         ast::Prop::Getter(g) => {
-            if let Some(b) = &g.body {
+            if let Some(b) = &g.function.body {
                 b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
             }
         }
         ast::Prop::Setter(s) => {
-            if let Some(b) = &s.body {
+            if let Some(b) = &s.function.body {
                 b.stmts.iter().for_each(|st| cic_stmt(st, true, out));
             }
         }

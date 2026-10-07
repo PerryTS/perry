@@ -1,15 +1,23 @@
 //! #11471 thread-exit regression tests (streams group).
 //!
-//! Each test populates a process-global Web Streams / zlib table from a
+//! Web Streams tests populate a process-global table from a
 //! short-lived thread through the real FFI surface, reports whether the entry
 //! was present while that thread lived (so the absence asserted after the
 //! join is not vacuous), and checks the exiting thread's `Arena::drop`
 //! released it.
 
+thread_local! {
+    static CALLBACK_COUNT: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicUsize>>> = const { std::cell::RefCell::new(None) };
+}
 extern "C" fn probe_thunk(
     _closure: *const perry_runtime::ClosureHeader,
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
+    CALLBACK_COUNT.with(|count| {
+        if let Some(count) = &*count.borrow() {
+            count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    });
     0.0
 }
 
@@ -209,55 +217,131 @@ mod web_streams {
 }
 
 #[cfg(feature = "compression-gzip")]
-#[test]
-fn thread_exit_releases_zlib_streams_listeners_and_events() {
-    use crate::zlib as z;
-    let (handle, alive) = std::thread::spawn(|| unsafe {
-        let handle = z::js_zlib_create_gzip(undef());
-        let cb = perry_runtime::js_nanbox_get_pointer(closure_value());
-        z::zlib_stream_on(handle, string_value("data"), cb);
-        // `.end()` queues the stream's Data/End events on the global queue.
-        z::zlib_stream_end(handle, undef());
-        let (stream, listeners, events) = z::zlib_tables_for_test(handle);
-        (handle, stream && listeners == 1 && events > 0)
-    })
-    .join()
-    .unwrap();
-
-    assert!(
-        alive,
-        "the zlib records must exist while their thread lives"
-    );
-    assert_eq!(
-        z::zlib_tables_for_test(handle),
-        (false, 0, 0),
-        "a dead thread's zlib stream, listener or queued events outlived its heap"
-    );
-}
-
-/// A retired worker agent's zlib tables go with it, including a stream that
-/// names nothing in its heap, which no freed-range check would ever drop.
-#[cfg(feature = "compression-gzip")]
-#[test]
-fn agent_retirement_releases_the_agents_zlib_tables() {
-    use crate::zlib as z;
-    let (agent, while_alive) = std::thread::spawn(|| {
-        let agent = perry_runtime::agent::enter_worker_agent();
-        unsafe { z::js_zlib_create_gzip(undef()) };
-        let while_alive = z::zlib_agent_stream_count_for_test(agent);
-        perry_runtime::agent::retire_agent(agent);
-        (agent, while_alive)
-    })
-    .join()
-    .unwrap();
-    assert_eq!(
-        while_alive,
-        Some(1),
-        "the stream must be in its agent's tables while the agent lives"
-    );
-    assert_eq!(
-        z::zlib_agent_stream_count_for_test(agent),
-        None,
-        "a retired agent's zlib tables outlived it"
-    );
+mod zlib_payloads {
+    use super::*;
+    use std::ffi::c_void;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+    struct Watched {
+        resource: *mut c_void,
+        drop: unsafe extern "C" fn(*mut c_void, *mut c_void),
+        dropped: Arc<AtomicUsize>,
+    }
+    unsafe extern "C" fn drop_watched(resource: *mut c_void, _: *mut c_void) {
+        let watched = Box::from_raw(resource as *mut Watched);
+        (watched.drop)(watched.resource, std::ptr::null_mut());
+        watched.dropped.fetch_add(1, Ordering::SeqCst);
+    }
+    static WATCH: perry_runtime::native_payload::PayloadVTable =
+        perry_runtime::native_payload::PayloadVTable {
+            drop: drop_watched,
+            stream: None,
+        };
+    extern "C" {
+        fn js_nm_install_zlib();
+    }
+    fn queued_codec(retire: bool) -> Arc<AtomicUsize> {
+        let dropped = Arc::new(AtomicUsize::new(0));
+        let count = dropped.clone();
+        let callbacks = Arc::new(AtomicUsize::new(0));
+        let worker_callbacks = callbacks.clone();
+        std::thread::spawn(move || unsafe {
+            CALLBACK_COUNT.with(|count| *count.borrow_mut() = Some(worker_callbacks));
+            let agent = perry_runtime::agent::enter_worker_agent();
+            perry_runtime::gc::gc_init();
+            js_nm_install_zlib();
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let owner = scope.root_nanbox_f64(perry_ext_zlib::js_zlib_create_gzip(undef()));
+            let callback = scope.root_nanbox_f64(closure_value());
+            let data = scope.root_nanbox_f64(string_value("data"));
+            perry_runtime::node_stream::js_node_stream_method_on(
+                perry_runtime::js_nanbox_get_pointer(owner.get_nanbox_f64()),
+                data.get_nanbox_f64(),
+                callback.get_nanbox_f64(),
+            );
+            let input = scope.root_nanbox_f64(string_value("queued gzip write"));
+            perry_runtime::node_stream::js_node_stream_method_end3(
+                perry_runtime::js_nanbox_get_pointer(owner.get_nanbox_f64()),
+                input.get_nanbox_f64(),
+                undef(),
+                undef(),
+            );
+            // A JS probe in the same immediate queue observes an erroneous
+            // teardown drain even when the finalized codec's step is inert.
+            perry_runtime::timer::js_set_immediate_callback(perry_runtime::js_nanbox_get_pointer(
+                callback.get_nanbox_f64(),
+            ));
+            assert_eq!(perry_runtime::timer::js_immediate_has_pending(), 1);
+            // Wrap only the native destructor after queuing. The real codec
+            // is freed by its original vtable; no GC address leaves the worker.
+            let obj = perry_runtime::JSValue::from_bits(owner.get_nanbox_u64())
+                .as_pointer::<perry_runtime::object::ObjectHeader>();
+            let cell = perry_runtime::JSValue::from_bits((*(*obj).meta).native_state)
+                .as_pointer::<perry_runtime::native_handle::NativeHandleHeader>()
+                .cast_mut();
+            assert!((*cell).external_bytes > 100000);
+            let original =
+                &*((*cell).finalizer as *const perry_runtime::native_payload::PayloadVTable);
+            let watched = Box::new(Watched {
+                resource: (*cell).resource_ptr,
+                drop: original.drop,
+                dropped: count.clone(),
+            });
+            (*cell).resource_ptr = Box::into_raw(watched).cast();
+            (*cell).finalizer = (&WATCH as *const perry_runtime::native_payload::PayloadVTable)
+                .cast_mut()
+                .cast();
+            assert_eq!(count.load(Ordering::SeqCst), 0);
+            if std::env::var("PERRY_TEST_ZLIB_TEARDOWN_SABOTAGE").as_deref()
+                == Ok("drain_after_finalize")
+            {
+                perry_runtime::native_handle::js_native_handle_dispose(f64::from_bits(
+                    perry_runtime::JSValue::pointer(cell.cast()).bits(),
+                ));
+                perry_runtime::timer::js_event_loop_check_phase();
+            }
+            if retire {
+                perry_runtime::agent::retire_agent(agent);
+            }
+        })
+        .join()
+        .unwrap();
+        assert_eq!(
+            callbacks.load(Ordering::SeqCst),
+            0,
+            "worker teardown never invokes JS"
+        );
+        // The main agent remains usable after the worker's heap retires.
+        perry_runtime::gc::gc_init();
+        assert!(!perry_runtime::buffer::js_buffer_alloc(16, 0).is_null());
+        dropped
+    }
+    #[test]
+    fn thread_exit_releases_a_real_codec_with_a_step_queued() {
+        assert_eq!(queued_codec(false).load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn retired_worker_heap_releases_a_real_codec_with_a_step_queued() {
+        assert_eq!(queued_codec(true).load(Ordering::SeqCst), 1);
+    }
+    #[test]
+    fn draining_after_codec_finalize_turns_worker_witness_red() {
+        let witness = "runtime_thread_exit_tests::streams_tests::zlib_payloads::retired_worker_heap_releases_a_real_codec_with_a_step_queued";
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", witness, "--nocapture"])
+            .env("PERRY_TEST_ZLIB_TEARDOWN_SABOTAGE", "drain_after_finalize")
+            .output()
+            .unwrap();
+        let log = format!(
+            "{}{}",
+            String::from_utf8_lossy(&child.stdout),
+            String::from_utf8_lossy(&child.stderr)
+        );
+        assert!(
+            !child.status.success() && log.contains("worker teardown never invokes JS"),
+            "{log}"
+        );
+    }
 }

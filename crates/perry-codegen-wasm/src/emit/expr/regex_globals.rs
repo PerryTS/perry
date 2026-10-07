@@ -28,20 +28,6 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_const(func, 1, f64::from_bits(flags_bits));
                 self.emit_memcall(func, "regexp_new", 2);
             }
-            Expr::RegExpTest { regex, string } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, regex);
-                self.emit_store_arg(func, 1, string);
-                self.emit_memcall_i32(func, "regexp_test", 2);
-                func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-                    ValType::I64,
-                )));
-                func.instruction(&Instruction::I64Const(TAG_TRUE as i64));
-                func.instruction(&Instruction::Else);
-                func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
-                func.instruction(&Instruction::End);
-            }
-
             // --- Global builtins ---
             Expr::ParseInt { string, radix } => {
                 self.emit_expr(func, string);

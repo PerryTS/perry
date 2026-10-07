@@ -13,7 +13,7 @@ use crate::native_payload::PayloadVTable;
 use crate::node_stream::native_hooks::{StepIn, StepOut, StreamHooks};
 
 /// Revision of this ABI. Bumped with any signature or layout change.
-pub const PERRY_STREAM_ABI_VERSION: u8 = 1;
+pub const PERRY_STREAM_ABI_VERSION: u8 = 2;
 
 pub(crate) const fn stream_abi_layout() -> u64 {
     use std::mem::{offset_of, size_of};
@@ -90,4 +90,38 @@ pub extern "C" fn js_perry_stream_queue_immediate(closure: f64) -> i32 {
     }
     crate::timer::js_set_immediate_callback(addr as i64);
     0
+}
+
+/// Base prototype _transform/_flush, sharing the runner and its traced record.
+#[no_mangle]
+pub extern "C" fn js_perry_stream_prototype_step(
+    value: f64,
+    chunk: f64,
+    callback: f64,
+    final_op: i32,
+) -> i32 {
+    if crate::node_stream::native_hooks::begin_prototype_step(value, chunk, callback, final_op != 0)
+    {
+        0
+    } else {
+        -1
+    }
+}
+
+#[cfg(feature = "keepalive-anchors")]
+mod keepalive {
+    use super::*;
+    #[used(compiler)]
+    static DIGEST: extern "C" fn() -> u64 = js_perry_stream_abi_layout;
+    #[used(compiler)]
+    static TRANSFORM: extern "C" fn(f64, f64) -> i32 = js_perry_stream_init_transform;
+    #[used(compiler)]
+    static WRITABLE: extern "C" fn(f64, f64) -> i32 = js_perry_stream_init_writable;
+    #[used(compiler)]
+    static FLUSH: extern "C" fn(f64, i32, f64) -> i32 = js_perry_stream_flush;
+    #[used(compiler)]
+    static IMMEDIATE: extern "C" fn(f64) -> i32 = js_perry_stream_queue_immediate;
+    #[used(compiler)]
+    static PROTOTYPE_STEP: extern "C" fn(f64, f64, f64, i32) -> i32 =
+        js_perry_stream_prototype_step;
 }

@@ -21,7 +21,7 @@
 //! |                        | crypto, fastify, UI widgets, timers, …)                          |
 //! | `[0x40000, 0xE0000)`   | Web Fetch family (Request/Response/Headers/Blob), perry-stdlib   |
 //! |                        | `fetch/mod.rs` `FETCH_HANDLE_ID_{START,END}` (#3973/#3974/#4004) |
-//! | `[0xE0000, 0xF0000)`   | zlib streams, perry-stdlib `zlib.rs` (#1843)                     |
+//! | `[0xE0000, 0xF0000)`   | unallocated (former zlib ids, now ordinary payload objects)     |
 //! | `[0xF0000, 0x100000)`  | revocable Proxy ids, perry-runtime `proxy.rs` `PROXY_TAG_BASE`   |
 //! |                        | (#2846 crash cluster)                                            |
 //! | `>= 0x100000`          | plausible heap addresses (see [`is_valid_obj_ptr`] for the       |
@@ -34,7 +34,7 @@
 //! The `0x100000` ceiling was established by #1843 (zlib handle deref'd as
 //! heap object), #4004 (fetch handles moved to 0x40000), and #4800
 //! (`is_builtin_iterator_class_id` used an 0x1008 floor and deref'd a Headers
-//! handle on every hono response). All four sub-bands must stay below
+//! handle on every hono response). All allocated sub-bands must stay below
 //! [`HANDLE_BAND_MAX`]; perry-stdlib re-exports these constants and its unit
 //! tests assert the containment.
 
@@ -58,12 +58,6 @@ pub const COMMON_HANDLE_BAND_END: usize = 0x40000;
 /// common registry's way).
 pub const FETCH_HANDLE_BAND_START: usize = 0x40000;
 pub const FETCH_HANDLE_BAND_END: usize = 0xE0000;
-
-/// zlib stream handle band `[ZLIB_HANDLE_BAND_START, ZLIB_HANDLE_BAND_END)`,
-/// owned by perry-stdlib `zlib.rs` (#1843 established that these ids must not
-/// be dereferenced as heap objects).
-pub const ZLIB_HANDLE_BAND_START: usize = 0xE0000;
-pub const ZLIB_HANDLE_BAND_END: usize = 0xF0000;
 
 /// Revocable Proxy id band `[PROXY_ID_BAND_START, HANDLE_BAND_MAX)`, owned by
 /// perry-runtime `proxy.rs` (`PROXY_TAG_BASE`). Kept at the top of the handle
@@ -101,11 +95,6 @@ pub fn is_common_handle_band(addr: usize) -> bool {
 #[inline(always)]
 pub fn is_fetch_handle_band(addr: usize) -> bool {
     (FETCH_HANDLE_BAND_START..FETCH_HANDLE_BAND_END).contains(&addr)
-}
-
-#[inline(always)]
-pub fn is_zlib_handle_band(addr: usize) -> bool {
-    (ZLIB_HANDLE_BAND_START..ZLIB_HANDLE_BAND_END).contains(&addr)
 }
 
 /// Complement of [`is_handle_band`]: the payload is above the handle band and
@@ -438,8 +427,7 @@ mod tests {
     fn band_layout_is_contiguous_and_contained() {
         assert!(COMMON_HANDLE_BAND_END <= FETCH_HANDLE_BAND_START);
         assert!(FETCH_HANDLE_BAND_START < FETCH_HANDLE_BAND_END);
-        assert!(FETCH_HANDLE_BAND_END <= ZLIB_HANDLE_BAND_START);
-        assert!(ZLIB_HANDLE_BAND_END <= PROXY_ID_BAND_START);
+        assert!(FETCH_HANDLE_BAND_END <= PROXY_ID_BAND_START);
         assert!(PROXY_ID_BAND_START < HANDLE_BAND_MAX);
         assert!(STREAM_ID_BAND_START >= HANDLE_BAND_MAX);
     }

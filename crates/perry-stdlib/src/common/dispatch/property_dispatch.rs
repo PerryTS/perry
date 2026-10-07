@@ -1,15 +1,11 @@
 #[cfg(any(feature = "crypto", feature = "http-client"))]
 use super::super::handle::with_handle;
-#[cfg(feature = "external-zlib-pump")]
-use super::nanbox_handle_value;
 use crate::common::feature_hooks::{Hook, PropertyArm};
 
 // One slot per optional-feature position in `js_handle_property_dispatch`, in
 // hub order; see `method_dispatch.rs` for the scheme.
 static PROP_TLS: Hook<PropertyArm> = Hook::empty();
 static PROP_STREAMS: Hook<PropertyArm> = Hook::empty();
-static PROP_ZLIB: Hook<PropertyArm> = Hook::empty();
-static PROP_EXTERNAL_ZLIB: Hook<PropertyArm> = Hook::empty();
 static PROP_HTTP_AGENT: Hook<PropertyArm> = Hook::empty();
 static PROP_SQLITE: Hook<PropertyArm> = Hook::empty();
 static PROP_HTTP_SERVER: Hook<PropertyArm> = Hook::empty();
@@ -48,10 +44,6 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     {
         return value;
     }
-
-    try_arm!(PROP_ZLIB, handle, property_name);
-
-    try_arm!(PROP_EXTERNAL_ZLIB, handle, property_name);
 
     try_arm!(PROP_HTTP_AGENT, handle, property_name);
 
@@ -137,113 +129,6 @@ unsafe fn prop_streams(handle: i64, property_name: &str) -> Option<f64> {
             handle as f64,
             property_name,
         ));
-    }
-    None
-}
-
-#[cfg(feature = "compression-gzip")]
-unsafe fn prop_zlib(handle: i64, property_name: &str) -> Option<f64> {
-    // zlib Transform streams: `typeof createGzip().write` must read
-    // "function". The actual call dispatch is HANDLE_METHOD_DISPATCH
-    // (above), but feature-checks read through the property table — we
-    // bind a closure here so the typeof short-circuit sees "function".
-    if crate::zlib::is_zlib_stream_handle(handle) {
-        if property_name == "bytesWritten" {
-            return Some(crate::zlib::zlib_stream_bytes_written(handle));
-        }
-        let method: Option<&'static [u8]> = match property_name {
-            "write" => Some(b"write"),
-            "end" => Some(b"end"),
-            "on" => Some(b"on"),
-            "once" => Some(b"once"),
-            "emit" => Some(b"emit"),
-            "pipe" => Some(b"pipe"),
-            "flush" => Some(b"flush"),
-            "close" => Some(b"close"),
-            "destroy" => Some(b"destroy"),
-            "params" => Some(b"params"),
-            "reset" => Some(b"reset"),
-            "removeListener" => Some(b"removeListener"),
-            "removeAllListeners" => Some(b"removeAllListeners"),
-            _ => None,
-        };
-        if let Some(name_bytes) = method {
-            extern "C" {
-                fn js_class_method_bind(
-                    instance: f64,
-                    method_name_ptr: *const u8,
-                    method_name_len: usize,
-                ) -> f64;
-            }
-            return Some(js_class_method_bind(
-                f64::from_bits(handle as u64),
-                name_bytes.as_ptr(),
-                name_bytes.len(),
-            ));
-        }
-    }
-    None
-}
-
-#[cfg(feature = "external-zlib-pump")]
-unsafe fn prop_external_zlib(handle: i64, property_name: &str) -> Option<f64> {
-    {
-        extern "C" {
-            fn js_ext_zlib_is_stream_handle(handle: i64) -> i32;
-            fn js_ext_zlib_stream_bytes_written(handle: i64) -> f64;
-            fn js_ext_zlib_stream_property(handle: i64, which: i32) -> f64;
-            fn js_class_method_bind(
-                instance: f64,
-                method_name_ptr: *const u8,
-                method_name_len: usize,
-            ) -> f64;
-        }
-
-        if js_ext_zlib_is_stream_handle(handle) != 0 {
-            if property_name == "bytesWritten" {
-                return Some(js_ext_zlib_stream_bytes_written(handle));
-            }
-            let property = match property_name {
-                "readableLength" => Some(0),
-                "readableHighWaterMark" => Some(1),
-                "writableLength" => Some(2),
-                "writableHighWaterMark" => Some(3),
-                "destroyed" => Some(4),
-                "readableEnded" => Some(5),
-                "writableFinished" => Some(6),
-                _ => None,
-            };
-            if let Some(which) = property {
-                return Some(js_ext_zlib_stream_property(handle, which));
-            }
-            let method: Option<&'static [u8]> = match property_name {
-                "write" => Some(b"write"),
-                "end" => Some(b"end"),
-                "on" => Some(b"on"),
-                "once" => Some(b"once"),
-                "addListener" => Some(b"addListener"),
-                "pipe" => Some(b"pipe"),
-                "iterator" => Some(b"iterator"),
-                "@@asyncIterator" => Some(b"@@asyncIterator"),
-                "flush" => Some(b"flush"),
-                "close" => Some(b"close"),
-                "destroy" => Some(b"destroy"),
-                "params" => Some(b"params"),
-                "reset" => Some(b"reset"),
-                "pause" => Some(b"pause"),
-                "resume" => Some(b"resume"),
-                "off" => Some(b"off"),
-                "removeListener" => Some(b"removeListener"),
-                _ => None,
-            };
-            if let Some(name_bytes) = method {
-                return Some(js_class_method_bind(
-                    nanbox_handle_value(handle),
-                    name_bytes.as_ptr(),
-                    name_bytes.len(),
-                ));
-            }
-        }
     }
     None
 }
@@ -696,14 +581,7 @@ pub(super) fn install_tls() {
 pub(super) fn install_streams() {
     PROP_STREAMS.set(prop_streams);
 }
-#[cfg(feature = "compression-gzip")]
-pub(super) fn install_zlib() {
-    PROP_ZLIB.set(prop_zlib);
-}
-#[cfg(feature = "external-zlib-pump")]
-pub(super) fn install_external_zlib() {
-    PROP_EXTERNAL_ZLIB.set(prop_external_zlib);
-}
+
 #[cfg(feature = "external-http-client-pump")]
 pub(super) fn install_external_http_client() {
     PROP_HTTP_AGENT.set(prop_http_agent);

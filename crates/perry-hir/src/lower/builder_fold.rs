@@ -323,8 +323,8 @@ fn scan_expr(e: &ast::Expr) -> bool {
             .as_ref()
             .is_some_and(|b| stmts_have_candidate(&b.stmts)),
         E::Arrow(a) => match &*a.body {
-            ast::BlockStmtOrExpr::BlockStmt(b) => stmts_have_candidate(&b.stmts),
-            ast::BlockStmtOrExpr::Expr(e) => scan_expr(e),
+            ast::ArrowFunctionBody::FunctionBody(b) => stmts_have_candidate(&b.stmts),
+            ast::ArrowFunctionBody::Expr(e) => scan_expr(e),
         },
         E::Class(c) => scan_class(&c.class),
         E::Array(a) => a.elems.iter().flatten().any(|el| scan_expr(&el.expr)),
@@ -338,10 +338,12 @@ fn scan_expr(e: &ast::Expr) -> bool {
                     .as_ref()
                     .is_some_and(|b| stmts_have_candidate(&b.stmts)),
                 ast::Prop::Getter(g) => g
+                    .function
                     .body
                     .as_ref()
                     .is_some_and(|b| stmts_have_candidate(&b.stmts)),
                 ast::Prop::Setter(st) => st
+                    .function
                     .body
                     .as_ref()
                     .is_some_and(|b| stmts_have_candidate(&b.stmts)),
@@ -1174,11 +1176,11 @@ impl Visit for ObserverScan<'_> {
         }
         a.params.visit_with(self);
         match &*a.body {
-            ast::BlockStmtOrExpr::BlockStmt(body) => {
+            ast::ArrowFunctionBody::FunctionBody(body) => {
                 self.bind_body(&body.stmts);
                 body.visit_with(self);
             }
-            ast::BlockStmtOrExpr::Expr(body) => body.visit_with(self),
+            ast::ArrowFunctionBody::Expr(body) => body.visit_with(self),
         }
         self.leave(mark);
     }
@@ -1205,7 +1207,7 @@ impl Visit for ObserverScan<'_> {
     fn visit_getter_prop(&mut self, g: &ast::GetterProp) {
         let mark = self.enter(g.span.lo);
         g.key.visit_with(self);
-        if let Some(body) = &g.body {
+        if let Some(body) = &g.function.body {
             self.bind_body(&body.stmts);
             body.visit_with(self);
         }
@@ -1213,10 +1215,12 @@ impl Visit for ObserverScan<'_> {
     }
     fn visit_setter_prop(&mut self, st: &ast::SetterProp) {
         let mark = self.enter(st.span.lo);
-        self.bind_pat(&st.param);
+        for param in &st.function.params {
+            self.bind_pat(&param.pat);
+        }
         st.key.visit_with(self);
-        st.param.visit_with(self);
-        if let Some(body) = &st.body {
+        st.function.params.visit_with(self);
+        if let Some(body) = &st.function.body {
             self.bind_body(&body.stmts);
             body.visit_with(self);
         }
@@ -1426,10 +1430,10 @@ fn walk_expr(e: &mut ast::Expr, changed: &mut bool, visible: &Visible<'_>) {
         E::Arrow(a) => {
             let params = param_names(a.params.iter());
             match &mut *a.body {
-                ast::BlockStmtOrExpr::BlockStmt(b) => {
+                ast::ArrowFunctionBody::FunctionBody(b) => {
                     fold_body(&mut b.stmts, changed, params, visible)
                 }
-                ast::BlockStmtOrExpr::Expr(e) => walk_expr(e, changed, &visible.child(params)),
+                ast::ArrowFunctionBody::Expr(e) => walk_expr(e, changed, &visible.child(params)),
             }
         }
         E::Class(c) => walk_class(&mut c.class, changed, visible),
@@ -1451,13 +1455,14 @@ fn walk_expr(e: &mut ast::Expr, changed: &mut bool, visible: &Visible<'_>) {
                             }
                         }
                         ast::Prop::Getter(g) => {
-                            if let Some(body) = &mut g.body {
+                            if let Some(body) = &mut g.function.body {
                                 fold_body(&mut body.stmts, changed, Vec::new(), visible);
                             }
                         }
                         ast::Prop::Setter(sst) => {
-                            let params = param_names(std::iter::once(&*sst.param));
-                            if let Some(body) = &mut sst.body {
+                            let params =
+                                param_names(sst.function.params.iter().map(|param| &param.pat));
+                            if let Some(body) = &mut sst.function.body {
                                 fold_body(&mut body.stmts, changed, params, visible);
                             }
                         }

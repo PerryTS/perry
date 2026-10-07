@@ -7,7 +7,6 @@ use crate::common::feature_hooks::{Hook, MethodArm, RawMethodArm};
 // hub order. Filled by the owning feature's install (see `feature_hooks`); an
 // empty slot is skipped, which is exactly what the `#[cfg]` that used to gate
 // the arm did in a build without that feature.
-static RAW_EXTERNAL_ZLIB: Hook<RawMethodArm> = Hook::empty();
 static RAW_EXTERNAL_HTTP_CLIENT: Hook<RawMethodArm> = Hook::empty();
 static ARM_STREAMS: Hook<MethodArm> = Hook::empty();
 static ARM_NODEMAILER: Hook<MethodArm> = Hook::empty();
@@ -15,80 +14,11 @@ static ARM_NODE_SQLITE: Hook<MethodArm> = Hook::empty();
 static ARM_CRYPTO: Hook<MethodArm> = Hook::empty();
 static ARM_TLS: Hook<MethodArm> = Hook::empty();
 static ARM_SQLITE: Hook<MethodArm> = Hook::empty();
-static ARM_ZLIB: Hook<MethodArm> = Hook::empty();
 static ARM_HTTP_CLIENT: Hook<MethodArm> = Hook::empty();
 static ARM_HTTP_SERVER: Hook<MethodArm> = Hook::empty();
 static ARM_HTTP_CLIENT_PAUSE_RESUME: Hook<MethodArm> = Hook::empty();
 static ARM_EXTERNAL_NET: Hook<MethodArm> = Hook::empty();
 static ARM_FETCH: Hook<MethodArm> = Hook::empty();
-
-/// Route external zlib stream methods before the generic dispatcher creates
-/// owned method/argument copies. The external implementation is synchronous:
-/// it consumes string/buffer arguments before returning and copies callbacks or
-/// pipe destinations into its rooted registries. Keeping this FFI boundary
-/// allocation-free on the stdlib side also avoids freeing a temporary with the
-/// wrong private allocator shim in stripped well-known-wrapper links.
-#[cfg(feature = "external-zlib-pump")]
-unsafe fn try_dispatch_external_zlib_stream(
-    handle: i64,
-    method_name_ptr: *const u8,
-    method_name_len: usize,
-    args_ptr: *const f64,
-    args_len: usize,
-) -> Option<f64> {
-    if method_name_ptr.is_null() || method_name_len == 0 {
-        return None;
-    }
-    let method_bytes = std::slice::from_raw_parts(method_name_ptr, method_name_len);
-    let method_name = std::str::from_utf8(method_bytes).ok()?;
-    if !matches!(
-        method_name,
-        "write"
-            | "end"
-            | "on"
-            | "once"
-            | "addListener"
-            | "off"
-            | "removeListener"
-            | "listenerCount"
-            | "pipe"
-            | "iterator"
-            | "@@asyncIterator"
-            | "pause"
-            | "resume"
-            | "_perryDrain"
-            | "_perryIteratorState"
-            | "_perryIteratorError"
-            | "flush"
-            | "params"
-            | "reset"
-            | "close"
-            | "destroy"
-    ) {
-        return None;
-    }
-
-    extern "C" {
-        fn js_ext_zlib_is_stream_handle(handle: i64) -> i32;
-        fn js_ext_zlib_dispatch_method(
-            handle: i64,
-            method_ptr: *const u8,
-            method_len: usize,
-            args_ptr: *const f64,
-            args_len: usize,
-        ) -> f64;
-    }
-    if js_ext_zlib_is_stream_handle(handle) == 0 {
-        return None;
-    }
-    Some(js_ext_zlib_dispatch_method(
-        handle,
-        method_name_ptr,
-        method_name_len,
-        args_ptr,
-        args_len,
-    ))
-}
 
 /// Route external `Agent` and client-side `IncomingMessage`
 /// methods before this dispatcher creates owned copies of the method name and
@@ -99,8 +29,7 @@ unsafe fn try_dispatch_external_zlib_stream(
 ///
 /// These methods either consume their arguments synchronously or only return
 /// the receiver, so borrowing the caller-provided slices for the duration of
-/// the call is sufficient. This mirrors the allocation-free external-zlib
-/// fast path above.
+/// the call is sufficient.
 #[cfg(feature = "external-http-client-pump")]
 unsafe fn try_dispatch_external_http_client(
     handle: i64,
@@ -215,19 +144,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     #[cfg(not(feature = "bundled-streams"))]
     let static_name: Option<&'static str> = None;
 
-    // These are the only known stream spellings also handled by external
-    // zlib. Retain its precedence: its monotonically allocated ids can reach
-    // the stream band. All other known spellings cannot match its vocabulary.
-    if static_name.is_none() || matches!(static_name, Some("write" | "close")) {
-        try_arm!(
-            RAW_EXTERNAL_ZLIB,
-            handle,
-            method_name_ptr,
-            method_name_len,
-            args_ptr,
-            args_len,
-        );
-    }
     // No known stream spelling is an external HTTP client method.
     if static_name.is_none() {
         try_arm!(
@@ -300,8 +216,6 @@ pub unsafe extern "C" fn js_handle_method_dispatch(
     try_arm!(ARM_TLS, handle, method_name, &args);
 
     try_arm!(ARM_SQLITE, handle, method_name, &args);
-
-    try_arm!(ARM_ZLIB, handle, method_name, &args);
 
     try_arm!(ARM_HTTP_CLIENT, handle, method_name, &args);
 
@@ -528,40 +442,6 @@ unsafe fn arm_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Option<f64
         if result.to_bits() != perry_runtime::JSValue::undefined().bits() {
             return Some(result);
         }
-    }
-    None
-}
-
-#[cfg(feature = "compression-gzip")]
-unsafe fn arm_zlib(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
-    // zlib Transform streams (#1843): `zlib.createGzip()` etc. return handles
-    // in the zlib small-handle range; their `.write`/`.end`/`.on`/`.pipe`/`.flush`/
-    // `.params`/`.reset`/`.close` calls lose their static type and route here.
-    // Gated on the registry AND the method vocabulary so a handle-id reused
-    // across another subsystem's registry can't misroute (handle id-spaces
-    // aren't unified — see the long comment above).
-    if matches!(
-        method_name,
-        "write"
-            | "end"
-            | "on"
-            | "once"
-            | "off"
-            | "removeListener"
-            | "pipe"
-            | "flush"
-            | "params"
-            | "reset"
-            | "close"
-            | "destroy"
-    ) && crate::zlib::is_zlib_stream_handle(handle)
-    {
-        // zlib streams are synchronous, so nothing else triggers the pump
-        // registration that async ops (spawn/queue) normally do. Register here
-        // so the event loop's `has_active` gate + pump drain the deferred
-        // 'data'/'end' events instead of exiting before they fire (#1843).
-        crate::common::async_bridge::ensure_pump_registered();
-        return Some(dispatch_zlib_stream(handle, method_name, &args));
     }
     None
 }
@@ -983,14 +863,7 @@ pub(super) fn install_crypto() {
 pub(super) fn install_tls() {
     ARM_TLS.set(arm_tls);
 }
-#[cfg(feature = "compression-gzip")]
-pub(super) fn install_zlib() {
-    ARM_ZLIB.set(arm_zlib);
-}
-#[cfg(feature = "external-zlib-pump")]
-pub(super) fn install_external_zlib() {
-    RAW_EXTERNAL_ZLIB.set(try_dispatch_external_zlib_stream);
-}
+
 #[cfg(feature = "external-http-client-pump")]
 pub(super) fn install_external_http_client() {
     RAW_EXTERNAL_HTTP_CLIENT.set(try_dispatch_external_http_client);

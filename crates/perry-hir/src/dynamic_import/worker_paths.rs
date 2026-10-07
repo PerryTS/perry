@@ -490,7 +490,6 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
                 | Expr::PutValueSet { .. }
                 | Expr::ProxySet { .. }
                 | Expr::BufferIndexSet { .. }
-                | Expr::RegExpSetLastIndex { .. }
                 | Expr::ProcessSetTitle(..)
                 | Expr::UrlSetHref { .. }
                 | Expr::UrlSetPathname { .. }

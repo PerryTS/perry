@@ -1887,41 +1887,6 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
         }
     }
 
-    // RegExp property access: regex.source / .flags / .lastIndex
-    // Detect when receiver is a regex literal or local typed as RegExp.
-    if let ast::MemberProp::Ident(prop_ident) = &member.prop {
-        let prop_name = prop_ident.sym.as_ref();
-        if prop_name == "source" || prop_name == "flags" || prop_name == "lastIndex" {
-            let is_regex_obj = match member.obj.as_ref() {
-                ast::Expr::Lit(ast::Lit::Regex(_)) => true,
-                ast::Expr::Ident(ident) => ctx
-                    .lookup_local_type(ident.sym.as_ref())
-                    .map(|ty| matches!(ty, Type::Named(n) if n == "RegExp"))
-                    .unwrap_or(false),
-                _ => false,
-            };
-            if is_regex_obj {
-                let regex_expr = lower_expr(ctx, &member.obj)?;
-                if matches!(&regex_expr, Expr::RegExp { .. })
-                    || matches!(&regex_expr, Expr::LocalGet(_))
-                {
-                    return Ok(match prop_name {
-                        "source" => Expr::RegExpSource(Box::new(regex_expr)),
-                        "flags" => Expr::RegExpFlags(Box::new(regex_expr)),
-                        "lastIndex" => Expr::RegExpLastIndex(Box::new(regex_expr)),
-                        _ => unreachable!(),
-                    });
-                }
-            }
-        }
-        // RegExpExecArray `.index` / `.groups` / `.input` are NOT folded to
-        // thread-local reads: the runtime attaches them as real own properties
-        // on each exec/match result array (regex.rs::set_exec_array_metadata /
-        // set_exec_array_groups), so a generic PropertyGet reads the per-result
-        // value. That keeps a stored `m.index` / `m.groups` correct after an
-        // intervening match on another regex, where a thread-local was clobbered.
-    }
-
     // Tagged-template `.raw` — recognize `<strings>.raw` where the
     // receiver is an Array-typed local (the typical signature is
     // `function tag(strings: TemplateStringsArray, ...)`, which Perry's

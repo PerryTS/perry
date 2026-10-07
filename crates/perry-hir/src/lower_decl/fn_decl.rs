@@ -103,8 +103,8 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     // Lower parameters with type extraction (using context for type param resolution)
     //
     // Mirrors the `expr_function.rs` site: TypeScript's `this: T` is a
-    // TYPE-only marker (SWC emits it as a regular `Param { pat: Ident("this") }`),
-    // so skip it up front. Without this skip, `function greet(this: ..., prefix)`
+    // TYPE-only marker, now stored separately by SWC. It must stay out
+    // of runtime arity. Without this skip, `function greet(this: ..., prefix)`
     // is lowered as a 2-arg function and `.call(obj, 'Hi')` binds `this=obj,
     // prefix=undefined` — which breaks `Function.prototype.{call,apply}` on
     // FnDecls that use TS `this:` annotations.
@@ -316,7 +316,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         fn_decl.function.body.as_ref(),
     );
     let mut body = if let Some(ref block) = fn_decl.function.body {
-        lower_fn_body_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
     } else {
         Vec::new()
     };

@@ -394,3 +394,6 @@ mod tests {
         assert_eq!(read_string(null_handle), None);
     }
 }
+
+/// Class ids shared by runtime and binding crates.
+pub use perry_abi::native_class_ids;

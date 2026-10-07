@@ -1370,7 +1370,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // Function-call form `RegExp(x)`: identity shortcut (a RegExp arg + undefined
     // flags returns the same object) then falls back to `js_regexp_construct`.
     module.declare_function("js_regexp_construct_call", I64, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_regexp_test", I32, &[I64, I64]);
     // RegExp.escape(str) — #2899. Takes/returns NaN-boxed f64 (string).
     module.declare_function("js_regexp_escape", DOUBLE, &[DOUBLE]);
     module.declare_function("js_get_string_pointer_unified", I64, &[DOUBLE]);

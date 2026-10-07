@@ -1202,8 +1202,9 @@ pub(super) fn run_copied_minor_attempt(
     //   existing proof, which this reuses verbatim (it is a precondition here).
     //   With no young generation left, `remembered_set_clear()` is exact.
     // * **The address-keyed death-pruning passes prune nothing anyway.**
-    //   `dead_owner::owner_is_dead` and the map/set/error finalizers all require
-    //   the owner to classify as `Nursery` on a minor; after the retag none do.
+    //   `dead_owner::owner_is_dead` and the map/set/error/lazy-tape finalizers
+    //   all ask `dead_owner::minor_side_owner_is_dead` (#12141), which requires
+    //   the owner's block to be from-space; after the retag none is.
     //   They still run below, and still find nothing, at their usual O(registered
     //   holders) cost.
     // * **Weak semantics need marks**, so a cycle with any weak-target holder

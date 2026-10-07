@@ -179,7 +179,6 @@ pub extern "C" fn js_stdlib_install_tls_runtime() {
 pub extern "C" fn js_stdlib_install_compression_gzip() {
     install_once!({
         super::dispatch::install_zlib();
-        super::async_bridge::install_zlib_pump();
     });
 }
 

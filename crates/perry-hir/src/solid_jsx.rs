@@ -166,7 +166,7 @@ fn call(callee: ast::Expr, args: Vec<ast::Expr>) -> ast::Expr {
 
 fn arrow(value: ast::Expr) -> ast::Expr {
     ast::Expr::Arrow(ast::ArrowExpr {
-        body: Box::new(ast::BlockStmtOrExpr::Expr(Box::new(value))),
+        body: Box::new(ast::ArrowFunctionBody::Expr(Box::new(value))),
         ..Default::default()
     })
 }
@@ -198,7 +198,7 @@ fn block_expr(mut statements: Vec<ast::Stmt>, result: ast::Expr) -> ast::Expr {
     }));
     call(
         ast::Expr::Arrow(ast::ArrowExpr {
-            body: Box::new(ast::BlockStmtOrExpr::BlockStmt(ast::BlockStmt {
+            body: Box::new(ast::ArrowFunctionBody::FunctionBody(ast::FunctionBody {
                 stmts: statements,
                 ..Default::default()
             })),
@@ -218,12 +218,14 @@ fn property(name: &str, value: ast::Expr, getter: bool) -> ast::PropOrSpread {
         ast::Prop::Getter(ast::GetterProp {
             span: value.span(),
             key,
-            type_ann: None,
-            body: Some(ast::BlockStmt {
-                stmts: vec![ast::Stmt::Return(ast::ReturnStmt {
-                    span: value.span(),
-                    arg: Some(Box::new(value)),
-                })],
+            function: Box::new(ast::Function {
+                body: Some(ast::FunctionBody {
+                    stmts: vec![ast::Stmt::Return(ast::ReturnStmt {
+                        span: value.span(),
+                        arg: Some(Box::new(value)),
+                    })],
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
         })
@@ -462,7 +464,7 @@ impl SolidJsx {
             alt: Box::new(fallback),
         });
         let callback = ast::Expr::Arrow(ast::ArrowExpr {
-            body: Box::new(ast::BlockStmtOrExpr::BlockStmt(ast::BlockStmt {
+            body: Box::new(ast::ArrowFunctionBody::FunctionBody(ast::FunctionBody {
                 stmts: vec![binding(current, value), statement(action)],
                 ..Default::default()
             })),
@@ -474,7 +476,7 @@ impl SolidJsx {
         let untracked = self.helper("use", vec![callback, ast::Expr::Ident(node.clone())]);
         ast::Expr::Arrow(ast::ArrowExpr {
             params: vec![ast::Pat::Ident(node.into())],
-            body: Box::new(ast::BlockStmtOrExpr::Expr(Box::new(untracked))),
+            body: Box::new(ast::ArrowFunctionBody::Expr(Box::new(untracked))),
             ..Default::default()
         })
     }
@@ -482,7 +484,7 @@ impl SolidJsx {
     fn child(&mut self, child: &ast::JSXElementChild, native: bool) -> Option<ast::Expr> {
         match child {
             ast::JSXElementChild::JSXText(text) => {
-                let text = crate::jsx::normalize_jsx_text(&text.value);
+                let text = crate::jsx::normalize_jsx_text(&text.value.to_string_lossy());
                 (!text.is_empty()).then(|| string(&text))
             }
             ast::JSXElementChild::JSXElement(element) => Some(self.element(element)),

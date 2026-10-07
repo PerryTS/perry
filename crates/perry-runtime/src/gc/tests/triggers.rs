@@ -157,15 +157,7 @@ fn test_gc_bump_medium_parse_allows_one_arena_bump_per_gc_cycle() {
 
 #[test]
 fn test_gc_bump_never_lowers_existing_arena_trigger() {
-    // The "never lower" invariant is asserted against the RAW trigger cell, whose
-    // relationship to the bump target only holds under legacy pacing: with moving
-    // mode on, `effective_next_arena_trigger` is clamped to the small nursery cap,
-    // so a bump target above that cap legitimately re-arms the cell (without ever
-    // lowering the EFFECTIVE, capped trigger). Pin legacy to keep asserting the
-    // raw-cell arithmetic this test was written for. (The new nursery-cap value
-    // itself is asserted under the default by
-    // `test_effective_arena_trigger_respects_armed_values`.)
-    let _legacy_pacing = crate::gc::policy::force_legacy_gc_pacing();
+    let _moving_pacing = crate::gc::policy::force_moving_gc_pacing();
     let existing_trigger = GC_TRIGGER_ABSOLUTE_CEILING + (32 * 1024 * 1024);
     let _guard = GcBumpTriggerTestGuard::new(existing_trigger, GC_THRESHOLD_INITIAL_BYTES);
     let bytes_now = GC_TRIGGER_ABSOLUTE_CEILING + (16 * 1024 * 1024);
@@ -178,6 +170,44 @@ fn test_gc_bump_never_lowers_existing_arena_trigger() {
         existing_trigger
     );
     assert!(!GcBumpTriggerTestGuard::trigger_bumped());
+}
+
+/// Fastify's tiny request parses keep several nearly full arenas alive.
+/// Rounding each arena to a block moves the total across the 128 MiB ceiling
+/// with 2 MiB blocks, without allocating another byte of live request data.
+/// Parse completion must preserve the headroom armed by the previous minor.
+#[test]
+fn tiny_request_churn_preserves_minor_headroom_at_both_block_geometries() {
+    const MIB: usize = 1024 * 1024;
+    let _moving = crate::gc::policy::force_moving_gc_pacing();
+    let armed_before = GC_TRIGGER_ARMED.with(|a| a.replace(true));
+    let counts: Vec<usize> = [MIB, 2 * MIB]
+        .into_iter()
+        .map(|block| {
+            let _cells = GcBumpTriggerTestGuard::new(144 * MIB, 128 * MIB);
+            // Four independent arenas, each containing 30.5 MiB of data.
+            let rounded = (30 * MIB + MIB / 2).div_ceil(block) * block;
+            let total = 4 * rounded;
+            let mut minors = 0;
+            for _request in 0..1000 {
+                GcBumpTriggerTestGuard::set_pre_suppress(total);
+                assert!(gc_bump_malloc_trigger_with_snapshot(0, total));
+                if total >= crate::gc::policy::next_arena_trigger_base() {
+                    minors += 1;
+                    GC_NEXT_TRIGGER_BYTES.with(|t| t.set(total + 16 * MIB));
+                }
+            }
+            // A real 16 MiB of later allocation still crosses the boundary.
+            assert!(144 * MIB >= crate::gc::policy::next_arena_trigger_base());
+            minors
+        })
+        .collect();
+    GC_TRIGGER_ARMED.with(|a| a.set(armed_before));
+    assert_eq!(
+        counts,
+        [0, 0],
+        "mapped-capacity rounding must not rearm minors"
+    );
 }
 
 /// #10928: the old-reclaim rule is PROPORTIONAL ONLY.

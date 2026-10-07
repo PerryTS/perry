@@ -17,7 +17,7 @@ macro_rules! try_arm {
     };
 }
 
-mod fastify_net_zlib;
+mod fastify_net;
 mod init;
 mod method_dispatch;
 mod property_dispatch;
@@ -43,9 +43,7 @@ pub(crate) use sqlite::{dispatch_sqlite_db, dispatch_sqlite_stmt};
     not(target_os = "ios"),
     not(target_os = "android")
 ))]
-pub(crate) use fastify_net_zlib::dispatch_external_net_socket;
-#[cfg(feature = "compression-gzip")]
-pub(crate) use fastify_net_zlib::dispatch_zlib_stream;
+pub(crate) use fastify_net::dispatch_external_net_socket;
 
 // ---- per-feature installs (see `super::feature_hooks`) ----
 //
@@ -97,15 +95,11 @@ pub(crate) fn install_tls() {
 
 #[cfg(feature = "compression-gzip")]
 pub(crate) fn install_zlib() {
-    method_dispatch::install_zlib();
-    property_dispatch::install_zlib();
     unsafe { init::install_zlib_registrations() };
 }
 
 #[cfg(feature = "external-zlib-pump")]
 pub(crate) fn install_external_zlib() {
-    method_dispatch::install_external_zlib();
-    property_dispatch::install_external_zlib();
     unsafe { init::install_external_zlib_registrations() };
 }
 
@@ -140,9 +134,7 @@ pub(crate) fn install_fetch() {
 }
 
 pub(crate) const TAG_UNDEFINED_F64: f64 = f64::from_bits(0x7FFC_0000_0000_0001);
-pub(crate) const POINTER_TAG_BITS: u64 = 0x7FFD_0000_0000_0000;
-pub(crate) const POINTER_MASK_BITS: u64 = 0x0000_FFFF_FFFF_FFFF;
-
+#[cfg(feature = "external-http-client-pump")]
 pub(crate) fn nanbox_handle_value(handle: i64) -> f64 {
-    f64::from_bits(POINTER_TAG_BITS | (handle as u64 & POINTER_MASK_BITS))
+    f64::from_bits(0x7FFD_0000_0000_0000 | (handle as u64 & 0x0000_FFFF_FFFF_FFFF))
 }

@@ -892,7 +892,7 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                 && !arrow.is_generator
             {
                 let inferred = match arrow.body.as_ref() {
-                    ast::BlockStmtOrExpr::Expr(expr) => {
+                    ast::ArrowFunctionBody::Expr(expr) => {
                         let t = infer_type_from_expr(expr, ctx);
                         if matches!(t, Type::Any) {
                             None
@@ -900,7 +900,7 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                             Some(t)
                         }
                     }
-                    ast::BlockStmtOrExpr::BlockStmt(block) => {
+                    ast::ArrowFunctionBody::FunctionBody(block) => {
                         infer_body_return_type(&block.stmts, ctx)
                     }
                 };
@@ -960,12 +960,12 @@ fn infer_type_from_expr_inner(expr: &ast::Expr, ctx: &LoweringContext) -> Type {
                 annotated
             };
             Type::Function(crate::types::FunctionType {
-                params: function
-                    .params
-                    .iter()
-                    .map(|p| {
-                        let name = get_pat_name(&p.pat).unwrap_or_default();
-                        let ty = extract_param_type_with_ctx(&p.pat, None);
+                // Keep the full syntactic signature, including the type-only
+                // `this` marker; runtime parameter lowering still excludes it.
+                params: perry_parser::function_parameter_patterns(function)
+                    .map(|pat| {
+                        let name = get_pat_name(&pat).unwrap_or_default();
+                        let ty = extract_param_type_with_ctx(&pat, None);
                         (name, ty, false)
                     })
                     .collect(),

@@ -215,7 +215,9 @@ pub(crate) use copying_pointer_set::CopyingPointerSet;
 #[cfg(test)]
 pub(crate) use copying::MAX_YOUNG_MOVE_BYTES;
 mod dead_owner;
-pub(crate) use dead_owner::owner_is_dead_copied_minor_from_space_of_type;
+pub(crate) use dead_owner::{
+    minor_side_owner_is_dead, owner_is_dead_copied_minor_from_space_of_type,
+};
 mod old_free;
 use old_free::*;
 pub(crate) use old_free::{old_free_bytes, old_free_filter_range, old_free_take_exact};
@@ -1788,3 +1790,8 @@ pub(crate) use tests::support::{
     register_runtime_handle_root_scanner_for_tests, CopyingNurseryTestGuard,
     GcTriggerThresholdTestGuard,
 };
+
+#[cfg(test)]
+pub(crate) fn test_external_side_live_bytes() -> usize {
+    policy::external_side_live_bytes()
+}

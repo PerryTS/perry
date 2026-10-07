@@ -563,6 +563,37 @@ fn init_transform_kind(this: f64, opts: f64, how: StreamInit, passthrough: bool)
     } else if let Some(flush) = &subclass_flush {
         set_hidden_value(t(), hidden_transform_flush_key(), flush.get_nanbox_f64());
     }
+    if crate::node_stream::native_hooks::hooks_of(t())
+        .is_some_and(|h| h.timing == crate::node_stream::native_hooks::StepTiming::DEFERRED)
+    {
+        // A binding's inherited final/flush bodies participate in the same
+        // lifecycle as user hooks. In particular a no-op _final completes
+        // writable finish before the deferred _flush output is consumed.
+        for (name, slot) in [
+            (
+                b"_flush".as_slice(),
+                hidden_transform_flush_key as fn() -> *mut crate::StringHeader,
+            ),
+            (
+                b"_final".as_slice(),
+                hidden_writable_final_key as fn() -> *mut crate::StringHeader,
+            ),
+        ] {
+            let slot = scope.root_string_ptr(slot());
+            if slot
+                .with_mut_ptr(|slot| get_hidden_value(t(), slot))
+                .is_none()
+            {
+                let hook = scope.root_nanbox_f64(js_object_get_field_by_name_f64(
+                    object_ptr_from_value(t()).unwrap(),
+                    hidden_key(name),
+                ));
+                if is_callable_value(hook.get_nanbox_f64()) {
+                    slot.with_mut_ptr(|slot| set_hidden_value(t(), slot, hook.get_nanbox_f64()));
+                }
+            }
+        }
+    }
     mark_transform_stream(t());
     if passthrough && transform_hidden_callback(t()).is_none() {
         set_hidden_value(
@@ -579,7 +610,42 @@ fn init_transform_kind(this: f64, opts: f64, how: StreamInit, passthrough: bool)
 /// the payload's hooks; a JS `_transform`/`_flush` override on a subclass is
 /// still captured here and takes precedence (`native_hooks`).
 pub fn init_transform_in_place(stream: f64, opts: f64) {
+    if crate::node_stream::native_hooks::hooks_of(stream).is_some_and(|hooks| hooks.lazy) {
+        #[cfg(test)]
+        if crate::node_stream::native_hooks::stream_sabotage("eager_lazy_init") {
+            init_transform_kind(stream, opts, StreamInit::Subclass, false);
+            return;
+        }
+        set_hidden_value(stream, hidden_key(b"__perry_native_stream_options"), opts);
+        return;
+    }
     init_transform_kind(stream, opts, StreamInit::Subclass, false);
+}
+
+/// First stream use of a LazyTransform. The ordinary stream flags are the
+/// initialization proof; there is no extra latch or native state machine.
+pub(crate) fn ensure_lazy_stream(stream: f64) -> f64 {
+    if !crate::node_stream::native_hooks::hooks_of(stream).is_some_and(|hooks| hooks.lazy)
+        || get_hidden_value(stream, hidden_readable_flag_key()).is_some()
+    {
+        return stream;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(stream);
+    let opts = scope.root_nanbox_f64(
+        get_hidden_value(
+            stream.get_nanbox_f64(),
+            hidden_key(b"__perry_native_stream_options"),
+        )
+        .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
+    );
+    init_transform_kind(
+        stream.get_nanbox_f64(),
+        opts.get_nanbox_f64(),
+        StreamInit::Subclass,
+        false,
+    );
+    stream.get_nanbox_f64()
 }
 
 /// `Writable`'s constructor body for a native-payload Writable family

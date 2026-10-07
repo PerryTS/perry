@@ -15,7 +15,6 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // (`expr::body_call::emit_receiver_prologue`). Can allocate: a safepoint.
     module.declare_function("js_this_coerce_sloppy", DOUBLE, &[DOUBLE]);
     // RegExp exec
-    module.declare_function("js_regexp_exec", I64, &[I64, I64]);
     module.declare_function("js_number_to_precision", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_number_to_exponential", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_date_new", DOUBLE, &[]);
@@ -419,8 +418,6 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // Regex extras (runtime has them; codegen was stubbing).
     module.declare_function("js_regexp_exec_get_index", DOUBLE, &[]);
     module.declare_function("js_regexp_exec_get_groups", I64, &[]);
-    module.declare_function("js_regexp_get_source", I64, &[I64]);
-    module.declare_function("js_regexp_get_flags", I64, &[I64]);
     module.declare_function("js_string_replace_regex_named", I64, &[I64, I64, I64]);
     module.declare_function("js_string_replace_all_regex_named", I64, &[I64, I64, I64]);
     module.declare_function("js_string_replace_string_fn", I64, &[I64, I64, DOUBLE]);
@@ -662,7 +659,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // `zlib.createBrotliDecompress(options?)` — axios feature-check
     // shim. Returns a registered Buffer-shaped handle (NaN-boxed at
     // the call site).
-    module.declare_function("js_zlib_create_brotli_decompress", I64, &[DOUBLE]);
+    module.declare_function("js_zlib_create_brotli_decompress", DOUBLE, &[DOUBLE]);
     // crypto.randomFillSync(buf, offset?, size?) → returns the same
     // NaN-boxed buffer with random bytes written in-place.
     module.declare_function(

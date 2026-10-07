@@ -159,6 +159,17 @@ pub(crate) fn builtin_parent_reserved_class_id(name: &str) -> Option<u32> {
         "Duplex" => 0xFFFF0073,
         "Transform" => 0xFFFF0074,
         "PassThrough" => 0xFFFF0075,
+        "Gzip" => perry_abi::native_class_ids::GZIP,
+        "Gunzip" => perry_abi::native_class_ids::GUNZIP,
+        "Deflate" => perry_abi::native_class_ids::DEFLATE,
+        "Inflate" => perry_abi::native_class_ids::INFLATE,
+        "DeflateRaw" => perry_abi::native_class_ids::DEFLATE_RAW,
+        "InflateRaw" => perry_abi::native_class_ids::INFLATE_RAW,
+        "Unzip" => perry_abi::native_class_ids::UNZIP,
+        "BrotliCompress" => perry_abi::native_class_ids::BROTLI_COMPRESS,
+        "BrotliDecompress" => perry_abi::native_class_ids::BROTLI_DECOMPRESS,
+        "ZstdCompress" => perry_abi::native_class_ids::ZSTD_COMPRESS,
+        "ZstdDecompress" => perry_abi::native_class_ids::ZSTD_DECOMPRESS,
         _ => return None,
     })
 }
@@ -1288,119 +1299,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
                 Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
             })
-        }
-
-        // -------- RegExpTest --------
-        // regex.test(str) -> boolean. Real call to js_regexp_test.
-        // Receiver is a NaN-tagged i64 RegExpHeader pointer; arg is
-        // a NaN-tagged string. Both must be unboxed before the call.
-        Expr::RegExpTest { regex, string } => {
-            // Literal construction always creates an ordinary fresh object.
-            // Resolve its method with the same call lowering as any receiver.
-            if matches!(regex.as_ref(), Expr::RegExp { .. }) {
-                return lower_expr(
-                    ctx,
-                    &Expr::Call {
-                        callee: Box::new(Expr::PropertyGet {
-                            object: regex.clone(),
-                            property: "test".to_string(),
-                            byte_offset: 0,
-                        }),
-                        args: vec![*string.clone()],
-                        type_args: Vec::new(),
-                        byte_offset: 0,
-                    },
-                );
-            }
-            // #7154: the receiver is live across BOTH the string operand's own
-            // lowering and the `js_jsvalue_to_string_coerce` below it, and the
-            // coerce is unconditional — it allocates, and on an object argument
-            // it runs a user `toString`, which is arbitrary JS with its own
-            // back-edge polls. So the window always exists, which is what
-            // `with_operands_rooted_across_call` states: an emitted call is not
-            // an `Expr`, so `any_may_trigger_gc` has nothing to read and the
-            // answer cannot be derived from the `string` operand.
-            //
-            // This is the site the registry reproducer faults at
-            // (`defineApiCall + 404`, `obj_type=3 size=80`): `js_regexp_new`'s
-            // raw result went into a bare `x20`, the coerce drove an evacuating
-            // minor that moved it, and `js_regexp_test` dereferenced from-space.
-            // The static checker could not see it because `ALLOC_RE` spelled the
-            // allocator `regexp_alloc\w*` and the call is `js_regexp_new`.
-            rooting::with_operands_rooted_across_call(
-                ctx,
-                &[regex],
-                |ctx| {
-                    let str_box = lower_expr(ctx, string)?;
-                    // Per spec `RegExp.prototype.test` does `ToString(argument)`,
-                    // so a String wrapper (`re.test(new String("x"))`), a number
-                    // (`re.test(123)`), or an object with a custom `toString`
-                    // must be coerced — and a throwing `toString`/`valueOf` must
-                    // propagate. `js_get_string_pointer_unified` only unwraps
-                    // real strings, so use the coercing ToString that dispatches
-                    // `toString` on objects.
-                    Ok(ctx
-                        .block()
-                        .call(I64, "js_jsvalue_to_string_coerce", &[(DOUBLE, &str_box)]))
-                },
-                |ctx, vals, str_handle| {
-                    // Unbox BELOW the re-read. Unboxing above the coerce is what
-                    // parked the pre-move address in a register in the first
-                    // place. The release follows the call, which allocates while
-                    // reading these.
-                    let blk = ctx.block();
-                    let regex_handle = unbox_to_i64(blk, &vals[0]);
-                    let i32_v = blk.call(
-                        I32,
-                        "js_regexp_test",
-                        &[(I64, &regex_handle), (I64, &str_handle)],
-                    );
-                    Ok(i32_bool_to_nanbox(ctx.block(), &i32_v))
-                },
-            )
-        }
-        Expr::RegExpExec { regex, string } => {
-            // Returns ArrayHeader* or null. For a null (0) result we must
-            // produce TAG_NULL so `re.exec(s) !== null` loops terminate
-            // correctly — just NaN-boxing 0 with POINTER_TAG produces a
-            // non-null pointer value that compares unequal to null, causing
-            // infinite loops + segfaults when callers IndexGet on the result.
-            // #7154, identical shape to `RegExpTest` above and found with it:
-            // the receiver is live across the string operand's lowering and
-            // across the unconditional coerce, which allocates and can run a
-            // user `toString`.
-            let result = rooting::with_operands_rooted_across_call(
-                ctx,
-                &[regex],
-                |ctx| {
-                    let str_box = lower_expr(ctx, string)?;
-                    // `RegExp.prototype.exec` does `ToString(argument)` — coerce
-                    // String wrappers / numbers / objects (and propagate a
-                    // throwing toString) rather than only unwrapping real
-                    // strings (see RegExpTest above).
-                    Ok(ctx
-                        .block()
-                        .call(I64, "js_jsvalue_to_string_coerce", &[(DOUBLE, &str_box)]))
-                },
-                |ctx, vals, str_handle| {
-                    let blk = ctx.block();
-                    let regex_handle = unbox_to_i64(blk, &vals[0]);
-                    Ok(blk.call(
-                        I64,
-                        "js_regexp_exec",
-                        &[(I64, &regex_handle), (I64, &str_handle)],
-                    ))
-                },
-            )?;
-            let blk = ctx.block();
-            // Branch on result == 0 → TAG_NULL; else NaN-box as pointer.
-            let is_null = blk.icmp_eq(I64, &result, "0");
-            let ptr_boxed = nanbox_pointer_inline(ctx.block(), &result);
-            let ptr_bits = ctx.block().bitcast_double_to_i64(&ptr_boxed);
-            let selected =
-                ctx.block()
-                    .select(I1, &is_null, I64, crate::nanbox::TAG_NULL_I64, &ptr_bits);
-            Ok(ctx.block().bitcast_i64_to_double(&selected))
         }
 
         // -------- GlobalGet stub --------

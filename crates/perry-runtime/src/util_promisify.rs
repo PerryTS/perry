@@ -1005,7 +1005,10 @@ mod callable_then_field_tests {
                 addr_class::FETCH_HANDLE_BAND_START,
                 "fetch band start (new Response())",
             ),
-            (addr_class::ZLIB_HANDLE_BAND_START, "zlib band start"),
+            (
+                addr_class::FETCH_HANDLE_BAND_END,
+                "reserved fetch/proxy boundary",
+            ),
             (addr_class::PROXY_ID_BAND_START, "proxy id band start"),
             (addr_class::HANDLE_BAND_MAX - 1, "last handle-band address"),
         ];
@@ -1031,7 +1034,7 @@ mod callable_then_field_tests {
             addr_class::COMMON_HANDLE_BAND_END,
             addr_class::FETCH_HANDLE_BAND_START,
             addr_class::FETCH_HANDLE_BAND_START + 1,
-            addr_class::ZLIB_HANDLE_BAND_START,
+            addr_class::FETCH_HANDLE_BAND_END,
             addr_class::PROXY_ID_BAND_START,
             addr_class::HANDLE_BAND_MAX - 1,
         ];

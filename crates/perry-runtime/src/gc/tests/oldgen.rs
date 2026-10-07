@@ -454,11 +454,17 @@ fn test_old_page_defrag_policy_selection_prefers_fragmented_unpinned_pages() {
         }
     }
 
-    let low_dead = meta(0x1000_0000, 100, 80, 20, 0);
-    let high_dead = meta(0x1000_1000, 100, 10, 90, 0);
-    let high_dead_more_live = meta(0x1000_2000, 100, 20, 80, 0);
-    let pinned = meta(0x1000_3000, 100, 10, 90, 8);
-    let empty = meta(0x1000_4000, 0, 0, 0, 0);
+    let _triggers = super::support::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // Selection now requires backing owned by the old arena. Keep the
+    // synthetic accounting, but put its page addresses inside a real block.
+    let user = crate::arena::arena_alloc_gc_old(6 * 4096, 8, GC_TYPE_STRING) as usize;
+    let base = (user + 4095) & !4095;
+
+    let low_dead = meta(base, 100, 80, 20, 0);
+    let high_dead = meta(base + 1 * 4096, 100, 10, 90, 0);
+    let high_dead_more_live = meta(base + 2 * 4096, 100, 20, 80, 0);
+    let pinned = meta(base + 3 * 4096, 100, 10, 90, 8);
+    let empty = meta(base + 4 * 4096, 0, 0, 0, 0);
     let snapshot = [low_dead, high_dead_more_live, pinned, empty, high_dead];
 
     let selection = select_old_page_defrag_pages_from_snapshot(&snapshot, false);

@@ -208,6 +208,9 @@ fn after_write(stream: f64, callback: f64) {
     if writable_length(s.get_nanbox_f64()) == 0.0 {
         let should_emit_drain = writable_need_drain_raw(s.get_nanbox_f64())
             && !stream_hidden_ended(s.get_nanbox_f64())
+            && !has_truthy_hidden(s.get_nanbox_f64(), hidden_transform_end_pending_key())
+            && !has_truthy_hidden(s.get_nanbox_f64(), hidden_stream_pipe_end_pending_key())
+            && !has_truthy_hidden(s.get_nanbox_f64(), hidden_transform_finishing_key())
             && !has_truthy_hidden(s.get_nanbox_f64(), hidden_key(b"destroyed"));
         set_writable_need_drain(s.get_nanbox_f64(), false);
         if should_emit_drain {
