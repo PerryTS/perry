@@ -756,13 +756,8 @@ pub(super) fn external_side_parse_pressure_due() -> bool {
     )
 }
 
-/// Record `bytes` of fresh external side-buffer allocation (Map entries /
-/// Set elements — creation or growth delta) and poke the trigger check when
-/// the accumulated churn window fills. Callers must invoke this only when
-/// the owning collection header is in a consistent state: a triggered cycle
-/// scans conservatively at this call point (`gc_check_trigger`'s direct
-/// arms use `force_full_scan`), which also keeps it non-moving, so raw
-/// header pointers held by the caller stay valid across the call.
+/// Account for external storage at birth. Allocation entries never collect;
+/// pressure is consumed at the collector's safepoints.
 pub(crate) fn gc_note_external_side_alloc(bytes: usize) {
     super::allocation_pacing::note_allocation(bytes, bytes >= 16 * 1024);
     GC_EXTERNAL_SIDE_LIVE_BYTES.with(|c| c.set(c.get().saturating_add(bytes)));
@@ -777,7 +772,7 @@ pub(crate) fn gc_note_external_side_alloc(bytes: usize) {
         }
     });
     if due {
-        gc_check_trigger();
+        set_safepoint_pending(true);
     }
 }
 

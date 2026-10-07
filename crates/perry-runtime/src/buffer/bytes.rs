@@ -359,10 +359,10 @@ pub enum Brand {
     ArrayBuffer = 2,
     DataView = 3,
 }
-#[derive(Clone, Copy)]
 pub enum Init {
     Zero,
     Uninit,
+    AdoptVec(Vec<u8>),
 }
 
 fn allocate(brand: Brand, len: usize, init: Init) -> f64 {
@@ -373,7 +373,16 @@ fn allocate(brand: Brand, len: usize, init: Init) -> f64 {
     let native_fixture = TEST_NATIVE_COPY.with(|c| c.get());
     #[cfg(not(test))]
     let native_fixture = false;
-    let ptr = if native_fixture {
+    let ptr = if let Init::AdoptVec(body) = init {
+        assert_eq!(body.len(), len as usize);
+        #[cfg(test)]
+        let body = if sabotage("adopt_copy") {
+            body.clone()
+        } else {
+            body
+        };
+        super::buffer_adopt_backing(super::backing::Backing::from_vec(body), len as u32)
+    } else if native_fixture {
         // Test the future B3 placement through EXACTLY the same consumer.
         super::buffer_alloc_owned(len as u32, len as u32)
     } else if matches!(brand, Brand::Uint8Array) {
@@ -390,6 +399,7 @@ fn allocate(brand: Brand, len: usize, init: Init) -> f64 {
         match init {
             Init::Zero => super::js_buffer_alloc(len, 0),
             Init::Uninit => super::js_buffer_alloc_unsafe(len),
+            Init::AdoptVec(_) => unreachable!(),
         }
     };
     match brand {

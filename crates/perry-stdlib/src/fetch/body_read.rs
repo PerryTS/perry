@@ -75,24 +75,27 @@ fn text(body: Vec<u8>, _: String) -> Result<f64, f64> {
 fn json(body: Vec<u8>, _: String) -> Result<f64, f64> {
     unsafe { parse_json_body(&body).map(|v| f64::from_bits(v.bits())) }
 }
+fn body_bytes(body: Vec<u8>, brand: perry_runtime::buffer::bytes::Brand) -> f64 {
+    let len = body.len();
+    let (value, pin) = perry_runtime::buffer::bytes::new_bytes(
+        brand,
+        len,
+        perry_runtime::buffer::bytes::Init::AdoptVec(body),
+    );
+    drop(pin);
+    value
+}
 fn array_buffer(body: Vec<u8>, _: String) -> Result<f64, f64> {
-    unsafe {
-        let buf = perry_runtime::buffer::buffer_alloc(body.len() as u32);
-        (*buf).length = body.len() as u32;
-        std::ptr::copy_nonoverlapping(
-            body.as_ptr(),
-            perry_runtime::buffer::buffer_data_mut(buf),
-            body.len(),
-        );
-        Ok(f64::from_bits(JSValue::object_ptr(buf as *mut u8).bits()))
-    }
+    Ok(body_bytes(
+        body,
+        perry_runtime::buffer::bytes::Brand::ArrayBuffer,
+    ))
 }
 fn bytes(body: Vec<u8>, _: String) -> Result<f64, f64> {
-    unsafe {
-        Ok(f64::from_bits(crate::streams::alloc_uint8array_from_bytes(
-            &body,
-        )))
-    }
+    Ok(body_bytes(
+        body,
+        perry_runtime::buffer::bytes::Brand::Uint8Array,
+    ))
 }
 fn blob(body: Vec<u8>, content_type: String) -> Result<f64, f64> {
     Ok(handle_to_f64(alloc_blob(BlobData::blob(
@@ -105,4 +108,24 @@ fn form_data(body: Vec<u8>, content_type: String) -> Result<f64, f64> {
     body_metadata::form_data_from_body(&body, &content_type)
         .map(|form| handle_to_f64(body_metadata::alloc_form_data(form)))
         .map_err(|message| unsafe { f64::from_bits(fetch_type_error_bits(message)) })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn array_buffer_adopts_the_body_allocation() {
+        let mut body = Vec::with_capacity(1024 * 1024);
+        body.resize(1024 * 1024, 0);
+        body[..3].copy_from_slice(&[37, 91, 7]);
+        let original = body.as_ptr();
+        let value = array_buffer(body, String::new()).unwrap();
+        let pin = perry_runtime::buffer::bytes::pin(value).unwrap();
+        assert_eq!(pin.as_ptr(), original, "Response body must be adopted");
+        assert_eq!(pin.len(), 1024 * 1024);
+        let ptr = JSValue::from_bits(value.to_bits()).as_pointer::<u8>();
+        assert!(perry_runtime::buffer::is_array_buffer(ptr as usize));
+        perry_runtime::gc::js_gc_collect();
+        assert_eq!(unsafe { *pin.as_ptr().add(1) }, 91);
+    }
 }
