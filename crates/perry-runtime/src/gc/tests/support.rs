@@ -255,6 +255,21 @@ pub(crate) fn register_runtime_handle_root_scanner_for_tests() {
     );
 }
 
+/// The production scanners for the object model: runtime handles, the object
+/// caches (global this, the lazy intrinsics, the canonical keys trie), the
+/// shape and transition caches, and the shape table's rekey. The isolation
+/// guards take the thread's registry away, so a test whose subject reaches the
+/// object model (a lazily populated global, a function bag, a keys list)
+/// registers these, or its collections leave those tables naming moved and
+/// reclaimed cells for a reason unrelated to the code under test.
+pub(crate) fn register_object_model_scanners_for_tests() {
+    register_runtime_handle_root_scanner_for_tests();
+    gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+}
+
 /// Pin this thread's conservative-scan mode to `Disabled` for the guard's
 /// lifetime, restoring the prior override on drop.
 ///

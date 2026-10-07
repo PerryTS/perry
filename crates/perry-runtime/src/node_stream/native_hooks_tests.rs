@@ -730,13 +730,19 @@ fn trace_way(way: u8, chunks: &[Vec<u8>]) -> (Vec<u8>, Vec<String>) {
         // pipeline(source, rot)
         _ => {
             let src = scope.root_nanbox_f64(new_source());
-            let mut args = crate::array::js_array_alloc(2);
-            args = crate::array::js_array_push_f64(args, src.get_nanbox_f64());
-            args = crate::array::js_array_push_f64(args, rot.get_nanbox_f64());
-            let done = closure0(crate::fn_info!(on_named, 0), &[name("pipeline-done")]);
-            args = crate::array::js_array_push_f64(args, done);
-            let args = scope.root_raw_mut_ptr(args);
-            js_node_stream_pipeline(args.get_raw_mut_ptr::<crate::array::ArrayHeader>());
+            // `closure0` allocates, so the argument array is rooted before it.
+            let args = scope.root_raw_mut_ptr(crate::array::js_array_alloc(2));
+            let push = |value: f64| {
+                let grown = args.with_mut_ptr(|args| crate::array::js_array_push_f64(args, value));
+                args.set_raw_mut_ptr(grown);
+            };
+            push(src.get_nanbox_f64());
+            push(rot.get_nanbox_f64());
+            push(closure0(
+                crate::fn_info!(on_named, 0),
+                &[name("pipeline-done")],
+            ));
+            args.with_const_ptr(|args| js_node_stream_pipeline(args));
             for c in chunks {
                 js_node_stream_method_push(
                     handle(src.get_nanbox_f64()),
@@ -1103,6 +1109,7 @@ fn every_stream_sabotage_makes_its_witness_red() {
         ("hooks_first", "node_stream::native_hooks::tests::z11_subclass_transform_override_wins_and_super_runs_the_codec"),
         ("skip_release_autodestroy", "gc::tests::native_payload_streams::z8_churn_releases_every_codec_at_completion_and_drops_every_payload"),
         ("keep_step_closure", "gc::tests::native_payload_streams::z8_churn_releases_every_codec_at_completion_and_drops_every_payload"),
+        ("retain_chunk", "gc::tests::native_payload_streams::z8_churn_releases_every_codec_at_completion_and_drops_every_payload"),
         ("hold_slice_across_push", "gc::tests::native_payload_streams::z9_moving_gc_inside_data_keeps_the_output_correct"),
         ("drain_after_teardown", "gc::tests::native_payload_streams::z10_worker_exit_with_a_step_queued_runs_no_step"),
     ] {

@@ -361,7 +361,8 @@ CALLED_FUNCTION = re.compile(
 # `static NAME: Lazy<...>`. The `=` may be on a later line; `declarations`
 # joins continuation lines, so the type is NOT captured here.
 DECL = re.compile(
-    r"^\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?static\s+(?:ref\s+)?(?:mut\s+)?"
+    r"^\s*(?:(?:crate::|\$crate::)?per_test_global!\s*\(\s*)?"
+    r"(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?static\s+(?:ref\s+)?(?:mut\s+)?"
     r"(?P<name>[A-Z][A-Z0-9_]*)\s*:\s*(?P<type>.*)$"
 )
 
@@ -1434,6 +1435,7 @@ pub fn scan_thing_roots_mut(v: &mut V) {
     "crates/perry-runtime/src/leak.rs": """
 static UNCOVERED_TYPED: Cell<*mut ArrayHeader> = Cell::new(std::ptr::null_mut());
 static UNCOVERED_INT: Cell<f64> = Cell::new(0.0);
+per_test_global!(pub(super) static UNCOVERED_PER_TEST: Cell<*mut ObjectHeader> = Cell::new(std::ptr::null_mut()));
 struct OpaqueTls { value: String }
 perry_thread_local! {
     static UNCOVERED_OPAQUE_TLS: OpaqueTls = OpaqueTls { value: String::new() };
@@ -1669,6 +1671,12 @@ def self_test() -> int:
         "UNCOVERED_INT",
         False,
         "rule B: Cell<f64> in a file that allocates — the CACHED_ENV shape",
+    )
+    expect(
+        "crates/perry-runtime/src/leak.rs",
+        "UNCOVERED_PER_TEST",
+        False,
+        "one-line per_test_global!(static ...) form, a real static outside tests",
     )
     expect(
         "crates/perry-runtime/src/leak.rs",

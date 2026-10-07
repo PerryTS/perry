@@ -263,6 +263,14 @@ fn test_residual_prototype_owners_of_every_movable_kind_survive_a_copying_minor(
     // One rooted owner at a time; its prototype is deliberately unrooted.
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // `setPrototypeOf` on a Map, Set, Error, Promise, Date or RegExp reads the
+    // built-in's prototype, which populates the global object and its
+    // intrinsics part-way through the loop. Without these scanners the next
+    // minor would leave those caches and the canonical keys trie naming
+    // reclaimed cells, and a later iteration would read freed keys. None of
+    // them holds the marked prototype, so it still lives only through the
+    // registry entry.
+    register_object_model_scanners_for_tests();
 
     type Alloc = Box<dyn Fn() -> usize>;
     let mut owners: Vec<(&str, Alloc)> = vec![

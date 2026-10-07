@@ -865,6 +865,8 @@ pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHea
         (*ptr).header.length = length;
         (*ptr).header.capacity = length;
         (*ptr).data = data;
+        // GC_STORE_AUDIT(INIT): the native backing owner of the cell allocated
+        // above, before it is published.
         std::ptr::write(&mut (*ptr).owned, None);
         #[cfg(feature = "node-api-host")]
         {
@@ -904,8 +906,10 @@ pub(crate) fn buffer_adopt_backing(
     // Pressure accounting may collect: publish a consistent cell and root it.
     let scope = crate::gc::RuntimeHandleScope::new();
     let root = scope.root_raw_mut_ptr(ptr);
-    crate::gc::gc_note_external_side_alloc(capacity as usize);
-    root.get_raw_mut_ptr()
+    let ((), ptr) = root.across_mut::<BufferHeader, _>(|| {
+        crate::gc::gc_note_external_side_alloc(capacity as usize)
+    });
+    ptr
 }
 
 /// Whether this foreign-shaped cell owns bytes whose release Perry controls.

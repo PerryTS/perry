@@ -117,7 +117,7 @@ pub(super) fn own_key(target: f64, key_bits: u64, bytes: &[u8]) -> OwnKey {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// The method resolver's site memo. Each way also validates the pooled
     /// method id; two names on identical receiver/holder words cannot alias.
     static EMIT_METHOD: crate::object::method_site::own_slot_memo::ProtoSlotMemo =
@@ -161,7 +161,7 @@ pub(super) fn own_get(target: f64, key_bits: u64, bytes: &[u8]) -> Option<f64> {
     }
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// The emitter state keys' site memos (`object::own_slot_memo`): the
     /// receiver words on which each is an own plain data slot.
     pub(super) static EVENTS_SLOT: crate::object::method_site::own_slot_memo::OwnSlotMemo =
@@ -173,7 +173,7 @@ thread_local! {
 }
 
 pub(super) type StateMemo =
-    std::thread::LocalKey<crate::object::method_site::own_slot_memo::OwnSlotMemo>;
+    crate::tls_hot::HotKey<crate::object::method_site::own_slot_memo::OwnSlotMemo>;
 
 /// The inline slot of the state key `memo` remembers on `target`, priming
 /// the memo from the shape's own key list on a miss. `None` when `target`'s
@@ -238,6 +238,17 @@ pub(super) fn state_set(target: f64, memo: &'static StateMemo, name: &[u8], valu
     set_named(target, name, value);
 }
 
+/// The `StringHeader` behind a heap string key. `None` for any other value,
+/// an inline short string included: it has no header, so a caller resolves
+/// it through its bytes.
+fn heap_string_header(key_bits: u64) -> Option<*const crate::StringHeader> {
+    let value = JSValue::from_bits(key_bits);
+    if !value.is_any_string() || value.is_short_string() {
+        return None;
+    }
+    Some(value.as_string_ptr())
+}
+
 /// `target[key] = value` answered by `target`'s shape: an overwrite of an
 /// own data slot (on a receiver with no descriptor and not frozen), or, on a
 /// null-prototype object whose own list lacks the key (nothing on a chain can
@@ -262,13 +273,12 @@ pub(super) fn shape_set(target: f64, key_bits: u64, bytes: &[u8], value: f64) ->
                 return false;
             }
             // The transition cache is keyed by the interned heap string.
-            let key = if key_bits & !crate::value::POINTER_MASK == crate::value::STRING_TAG {
-                (key_bits & crate::value::POINTER_MASK) as *const crate::StringHeader
-            } else {
-                match crate::string::intern_lookup_bytes(bytes) {
+            let key = match heap_string_header(key_bits) {
+                Some(key) => key,
+                None => match crate::string::intern_lookup_bytes(bytes) {
                     Some(key) => key,
                     None => return false,
-                }
+                },
             };
             let mut refresh = None;
             crate::object::object_set_field_by_name_transition_only_fast_value(
@@ -331,7 +341,7 @@ fn emitter_view(target: f64, meta: &[u8]) -> Option<EmitterView> {
     })
 }
 
-thread_local! {
+crate::perry_thread_local! {
     /// The `_events` words with no `newListener` / `removeListener` key.
     static NO_NEW_LISTENER: crate::object::method_site::own_slot_memo::AbsentKeyMemo =
         const { crate::object::method_site::own_slot_memo::AbsentKeyMemo::new() };
@@ -388,13 +398,10 @@ pub(super) fn add_first_listener_fast(target: f64, event: f64, listener: f64) ->
             return None;
         }
         // The key-add edges are keyed by the interned heap string.
-        let heap = key_bits & !crate::value::POINTER_MASK == crate::value::STRING_TAG;
-        let ptr = (key_bits & crate::value::POINTER_MASK) as *const crate::StringHeader;
-        // SAFETY: a heap string value's pointer names a live string header.
-        if heap && unsafe { string_is_interned(ptr) } {
-            Some(ptr)
-        } else {
-            crate::string::intern_lookup_bytes(bytes)
+        match heap_string_header(key_bits) {
+            // SAFETY: a heap string value's pointer names a live string header.
+            Some(ptr) if unsafe { string_is_interned(ptr) } => Some(ptr),
+            _ => crate::string::intern_lookup_bytes(bytes),
         }
     });
     let Some(Some(key)) = key else {

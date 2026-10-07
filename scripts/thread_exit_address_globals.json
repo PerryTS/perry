@@ -928,6 +928,16 @@
    "why": "AtomicUsize count/flag republished from the primary agent's timer partition by publish_primary (timer/store.rs:828-832) for the event loop's liveness check; a counter."
   },
   {
+   "file": "crates/perry-runtime/src/timer/store.rs",
+   "names": [
+    "STORE"
+   ],
+   "verdict": "thread_exit_invalidated",
+   "why": "Process-global map from AgentId to that agent's timer partition, whose entries hold callback closures, argument values and timer promises in the owning agent's arena. agent::retire_agent (agent.rs) calls timer::purge_agent_timers, which runs store::purge_agent to remove the exiting worker agent's whole partition before its arena is unmapped. The primary agent is never retired.",
+   "hook": "purge_agent_timers",
+   "hook_file": "crates/perry-runtime/src/timer.rs"
+  },
+  {
    "file": "crates/perry-runtime/src/arena/quarantine.rs",
    "names": [
     "CACHED"
@@ -1425,15 +1435,6 @@
    ],
    "verdict": "thread_exit_invalidated",
    "why": "Direct-mapped process-global cache of (typed-array address << 8 | kind); Arena::drop clears every slot naming a freed block with a compare-exchange (#11463/#11467).",
-   "hook": "invalidate_caches_in_range"
-  },
-  {
-   "file": "crates/perry-runtime/src/typedarray/mod.rs",
-   "names": [
-    "INLINE_OWNING_U32_CACHE"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Process-global cache of owning-Uint32Array addresses admitted by the codegen inline path; cleared for freed blocks by the same Arena::drop call (#11467).",
    "hook": "invalidate_caches_in_range"
   },
   {

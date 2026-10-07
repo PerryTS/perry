@@ -280,7 +280,10 @@ def split_functions(lines: list[str]):
 
 
 def calls_any(line: str, names) -> bool:
-    return any(n in line for n in names)
+    # A name matches only at the start of an identifier: `no_gc(` opens a scope
+    # that forbids collection, so if a bare substring test matched it against
+    # `gc(` the detector would report the one shape that cannot move a pointer.
+    return any(re.search(r"(?<![A-Za-z0-9_])" + re.escape(n), line) for n in names)
 
 
 def scan_function(name: str, lines: list[str], start: int, end: int):
@@ -447,6 +450,18 @@ unsafe fn clean_wrapped_shadow_rebinds() -> usize {
     let err_str =
         js_string_from_bytes(second.as_ptr(), second.len() as u32);
     string_len(err_str)
+}
+
+unsafe fn planted_explicit_gc(value: f64) -> usize {
+    let raw = js_nanbox_get_pointer(value) as *mut ObjectHeader;
+    crate::gc();
+    (*raw).shape_id
+}
+
+unsafe fn clean_no_gc_scope(value: f64) -> usize {
+    let raw = js_nanbox_get_pointer(value) as *mut ObjectHeader;
+    let len = perry_ffi::bytes::no_gc(|scope| read_len(raw, scope));
+    len + (*raw).shape_id
 }
 
 unsafe fn planted_inside_wrapped_closure() {
@@ -635,6 +650,7 @@ def self_test() -> int:
         # bindings and collection points; swallowing it into one expression
         # would trade #10715's blind spot for a strictly larger one.
         "planted_inside_wrapped_closure",
+        "planted_explicit_gc",
     }
     missing = required - names
     if missing:
@@ -650,6 +666,8 @@ def self_test() -> int:
         # of that name stayed live and every use of the fresh one was reported.
         # Eleven of the findings in perry-stdlib/src/ioredis.rs were this.
         "clean_wrapped_shadow_rebinds",
+        # `no_gc(` contains `gc(`; the scope it opens cannot collect.
+        "clean_no_gc_scope",
     } & names
     if forbidden:
         print(f"SELF-TEST FAIL: flagged clean control(s): {sorted(forbidden)}", file=sys.stderr)

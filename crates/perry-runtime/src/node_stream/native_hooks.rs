@@ -336,6 +336,15 @@ pub(crate) fn init_runner_slots(stream: f64) {
 }
 
 fn clear_record(stream: f64) {
+    #[cfg(test)]
+    if stream_sabotage("retain_chunk") {
+        let chunk = get_hidden_value(stream, hidden_key(NATIVE_CHUNK_KEY))
+            .map(|c| crate::value::JSValue::from_bits(c.to_bits()))
+            .filter(|c| c.is_pointer());
+        if let Some(chunk) = chunk {
+            keep_alive(chunk.as_pointer::<u8>() as usize);
+        }
+    }
     super::set_internal_value(stream, NATIVE_OP_KEY, REC_NONE);
     super::set_internal_value(stream, NATIVE_CHUNK_KEY, f64::from_bits(TAG_UNDEFINED));
     super::set_internal_value(stream, NATIVE_CB_KEY, f64::from_bits(TAG_UNDEFINED));
@@ -366,31 +375,38 @@ fn schedule(stream: f64) {
     crate::closure::js_closure_set_capture_f64(job, 0, s.get_nanbox_f64());
     #[cfg(test)]
     if stream_sabotage("keep_step_closure") {
-        let first = KEPT_JOBS.with(|jobs| {
-            let mut jobs = jobs.borrow_mut();
-            jobs.push(job as usize);
-            jobs.len() == 1
-        });
-        if first {
-            crate::gc::gc_register_mutable_root_scanner_named(
-                "streamrt_kept_jobs",
-                kept_jobs_scanner,
-            );
-        }
+        keep_alive(job as usize);
     }
     crate::timer::js_set_immediate_callback(job as i64);
 }
 
+/// Root a heap object for the rest of the test thread: the leak the sabotage
+/// children plant.
 #[cfg(test)]
-thread_local! {
-    static KEPT_JOBS: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+fn keep_alive(object: usize) {
+    let first = KEPT_ALIVE.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        kept.push(object);
+        kept.len() == 1
+    });
+    if first {
+        crate::gc::gc_register_mutable_root_scanner_named(
+            "streamrt_kept_alive",
+            kept_alive_scanner,
+        );
+    }
 }
 
 #[cfg(test)]
-fn kept_jobs_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    KEPT_JOBS.with(|jobs| {
-        for job in jobs.borrow_mut().iter_mut() {
-            visitor.visit_tagged_usize_slot(job, crate::value::POINTER_TAG);
+thread_local! {
+    static KEPT_ALIVE: std::cell::RefCell<Vec<usize>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn kept_alive_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    KEPT_ALIVE.with(|kept| {
+        for object in kept.borrow_mut().iter_mut() {
+            visitor.visit_tagged_usize_slot(object, crate::value::POINTER_TAG);
         }
     });
 }

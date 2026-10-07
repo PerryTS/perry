@@ -190,10 +190,11 @@ fn bulk_boxed_birth_survives_collection_inside_allocation() {
     );
     let scope = RuntimeHandleScope::new();
     let second_root = scope.root_raw_mut_ptr(second);
-    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    let (trace, second) = second_root.across_mut::<crate::closure::ClosureHeader, _>(|| {
+        collect_minor_trace(GcTriggerKind::Direct)
+    });
     assert!(trace.copying_nursery.copied_objects > 0);
     let first = (js_shadow_slot_get(0) & POINTER_MASK) as *const crate::closure::ClosureHeader;
-    let second = second_root.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
     let first_cell = crate::closure::js_closure_get_capture_ptr(first, 0) as *mut crate::r#box::Box;
     assert_eq!(
         first_cell as i64,

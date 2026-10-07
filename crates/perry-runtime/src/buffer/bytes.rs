@@ -21,7 +21,7 @@ pub enum NotBytes {
 /// exclusive access to the byte span (including all aliased JS views).
 pub struct NoGc<'s>(PhantomData<&'s mut &'s ()>);
 #[cfg(any(debug_assertions, test))]
-thread_local! { static NO_GC_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
+crate::perry_thread_local! { static NO_GC_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) }; }
 
 pub fn no_gc<R>(f: impl for<'s> FnOnce(&'s NoGc<'s>) -> R) -> R {
     #[cfg(any(debug_assertions, test))]

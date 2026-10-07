@@ -189,10 +189,11 @@ unsafe fn shared_pairs<'s>(
             set,
             ..Default::default()
         });
-        let next = crate::array::js_array_push(
-            pairs.get_raw_mut_ptr(),
-            crate::JSValue::from_bits(crate::value::js_nanbox_pointer(pair as i64).to_bits()),
-        );
+        let pair =
+            crate::JSValue::from_bits(crate::value::js_nanbox_pointer(pair as i64).to_bits());
+        let next = pairs.with_mut_ptr::<crate::array::ArrayHeader, _>(|array| {
+            crate::array::js_array_push(array, pair)
+        });
         pairs.set_raw_mut_ptr(next);
     }
     let mut state = proto
