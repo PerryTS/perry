@@ -334,6 +334,12 @@ pub(crate) fn purge_agent_timers(agent: crate::agent::AgentId) {
     store::purge_agent(agent);
 }
 
+/// Drop queued timers and immediates that point into an exiting thread's
+/// arena (`arena::thread_exit`).
+pub(crate) fn release_timers_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
+    store::release_entries_in_freed_ranges(freed);
+}
+
 /// Sleep for the specified number of milliseconds.
 /// This is a blocking sleep - use sparingly
 #[no_mangle]

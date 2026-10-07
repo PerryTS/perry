@@ -117,7 +117,9 @@ pub(super) struct Entry {
 // of the agent whose partition holds this entry. The partition is selected by
 // `current_agent()` at every read, so an entry is only ever dereferenced by a
 // thread acting for its owner — the property #6185's owner tag asserted and
-// this structure enforces.
+// this structure enforces. A thread that acts for the primary agent from its
+// own arena takes its entries with it when that arena is freed
+// (`release_entries_in_freed_ranges`).
 unsafe impl Send for Entry {}
 
 impl Entry {
@@ -599,6 +601,13 @@ impl AgentTimers {
         if !accept(class) {
             return None;
         }
+        self.remove_at(index)
+    }
+
+    /// Detach the live entry at slab `index` from whichever queue holds it.
+    fn remove_at(&mut self, index: usize) -> Option<Entry> {
+        let entry = self.slab.get(index)?.as_ref()?;
+        let (class, refed) = (entry.class, entry.refed);
         if class.is_timer() {
             self.heap_detach(index);
         } else if class == Class::Pending {
@@ -607,11 +616,26 @@ impl AgentTimers {
         } else {
             // Leave the queue placeholder: `pop_check` skips it.
             // Removing it here would be O(n) in the queue length for no gain.
-            let refed = self.slab[index].as_ref().expect("live entry").refed;
             self.refed_check -= usize::from(refed);
             self.check_live -= 1;
         }
         self.take(index)
+    }
+
+    /// Remove every entry `dead` admits. The entries are returned so the
+    /// caller drops them (and their ref-state ids) after releasing the store.
+    fn remove_where(&mut self, dead: impl Fn(&Entry) -> bool) -> Vec<Entry> {
+        let doomed: Vec<usize> = self
+            .slab
+            .iter()
+            .enumerate()
+            .filter(|(_, slot)| slot.as_ref().is_some_and(&dead))
+            .map(|(index, _)| index)
+            .collect();
+        doomed
+            .into_iter()
+            .filter_map(|index| self.remove_at(index))
+            .collect()
     }
 
     /// Apply `ref()`/`unref()` to a queued entry. Returns whether one was found.
@@ -888,6 +912,55 @@ pub(crate) fn purge_agent(agent: AgentId) {
     if agent == PRIMARY_AGENT {
         publish_primary(&AgentTimers::default());
     }
+}
+
+/// Thread exit (#11471): drop every entry whose promise, callback, receiver,
+/// value or arguments lie in an exiting thread's arena.
+///
+/// A worker's partition is purged whole at retirement (`purge_agent`). A thread
+/// that never entered a worker agent acts for the primary agent while
+/// allocating in its own arena, so the entries it queued sit in the primary
+/// partition and name blocks the next thread's arena may reuse; the next check
+/// phase would call whatever object now lives there.
+///
+/// Runs in the exiting thread's TLS destructor (`arena::thread_exit`): the
+/// store's lock only, poison-tolerant, no thread-locals. The removed entries
+/// drop after the lock is released, because each one's `ScheduledTimerId`
+/// retires its id under the ref-state registry's own lock.
+pub(crate) fn release_entries_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges) {
+    // Under `cfg(test)` the store is per thread and dies with its thread.
+    #[cfg(not(test))]
+    {
+        let dead: Vec<Entry> = {
+            let mut store = STORE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut dead = Vec::new();
+            for (agent, timers) in store.agents.iter_mut() {
+                let removed = timers.remove_where(|entry| entry_in_freed_ranges(freed, entry));
+                if removed.is_empty() {
+                    continue;
+                }
+                dead.extend(removed);
+                if *agent == PRIMARY_AGENT {
+                    publish_primary(timers);
+                }
+            }
+            dead
+        };
+        drop(dead);
+    }
+    #[cfg(test)]
+    let _ = freed;
+}
+
+#[cfg(not(test))]
+fn entry_in_freed_ranges(freed: &crate::arena::thread_exit::FreedRanges, entry: &Entry) -> bool {
+    freed.contains(entry.promise as usize)
+        || freed.holds_i64(entry.callback)
+        || freed.holds_value(entry.js_handle)
+        || freed.holds_value(entry.value)
+        || entry.args.iter().any(|&arg| freed.holds_value(arg))
 }
 
 /// O(1) for the primary agent: are there ref'd timers keeping it alive?

@@ -28,6 +28,25 @@ mod one_shot_callback;
 mod zlib_encoder;
 pub(crate) use one_shot_callback::queue_one_shot_callback;
 
+/// Runs a test body as its own agent, the way a worker runs (#11417). Unclaimed
+/// libtest threads all resolve to the primary agent, so concurrent tests share
+/// one timer store: one test's check phase ran another test's immediates, from
+/// another thread's arena. Retiring on drop purges what the test left queued.
+#[cfg(test)]
+pub(crate) struct OwnAgent(perry_runtime::agent::AgentId);
+#[cfg(test)]
+impl OwnAgent {
+    pub(crate) fn enter() -> Self {
+        Self(perry_runtime::agent::enter_worker_agent())
+    }
+}
+#[cfg(test)]
+impl Drop for OwnAgent {
+    fn drop(&mut self) {
+        perry_runtime::agent::retire_agent(self.0);
+    }
+}
+
 pub(crate) unsafe fn read_input_from_bits(bits: i64) -> Option<Vec<u8>> {
     let value = JsValue::from_bits(bits as u64);
     if let Some(bytes) = bytes::no_gc(|scope| bytes::borrow(value, scope).map(|b| b.to_vec())) {
