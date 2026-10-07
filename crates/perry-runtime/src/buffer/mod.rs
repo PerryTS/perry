@@ -10,6 +10,8 @@ use crate::string::{
 mod access;
 mod backing;
 #[cfg(test)]
+mod byte_cell_admission_tests;
+#[cfg(test)]
 pub(crate) use backing::LIVE_BACKINGS;
 pub mod bytes;
 pub use backing::TransferredBacking;

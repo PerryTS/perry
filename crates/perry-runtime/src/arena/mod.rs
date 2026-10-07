@@ -85,6 +85,7 @@ pub(crate) use page_meta::{page_generation_cache_hot_addr, page_generations_hot_
 // `PERRY_GC_CENSUS` accessors (gc/census.rs).
 pub(crate) use block::block_pool_bytes;
 pub(crate) use page_meta::page_meta_census;
+pub(crate) use region::contains as region_contains;
 pub(crate) use stats::arena_free_list_bytes;
 pub(crate) use walk::arena_space_census;
 

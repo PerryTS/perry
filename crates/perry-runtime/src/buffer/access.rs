@@ -229,9 +229,9 @@ pub(crate) unsafe fn byte_access_data(buf_ptr: *const BufferHeader) -> *mut u8 {
 
 #[inline(always)]
 pub(crate) fn admitted_u8_read(addr: usize, index: i32) -> Option<u8> {
-    let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
+    let obj_type = super::header::byte_cell_type(addr)?;
     if !matches!(
-        header.obj_type & !0x20,
+        obj_type & !0x20,
         crate::gc::GC_TYPE_BUFFER | crate::gc::GC_TYPE_BUFFER_UINT8ARRAY
     ) {
         return None;
@@ -239,9 +239,10 @@ pub(crate) fn admitted_u8_read(addr: usize, index: i32) -> Option<u8> {
     unsafe { read_buffer_byte(addr as *const BufferHeader, index) }
 }
 
-/// Is `addr` a cell `admitted_u8_read` / `admitted_u8_write` serve (a Node
-/// `Buffer` owner or view)? One header load and one compare, so a dispatcher
-/// can keep every other receiver off the out-of-line byte arm.
+/// Could `addr` be a cell `admitted_u8_read` / `admitted_u8_write` serve (a
+/// Node `Buffer` owner or view)? One header load and one compare, so a
+/// dispatcher can keep every other receiver off the out-of-line byte arm. A
+/// filter only: the arm itself proves the cell before reading it.
 #[inline(always)]
 pub(crate) fn is_admitted_u8_cell(addr: usize) -> bool {
     unsafe { crate::value::addr_class::try_read_gc_header(addr) }
@@ -250,11 +251,11 @@ pub(crate) fn is_admitted_u8_cell(addr: usize) -> bool {
 
 #[inline(always)]
 pub(crate) fn admitted_u8_write(addr: usize, index: i32, byte: u8) -> bool {
-    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
+    let Some(obj_type) = super::header::byte_cell_type(addr) else {
         return false;
     };
     if !matches!(
-        header.obj_type & !0x20,
+        obj_type & !0x20,
         crate::gc::GC_TYPE_BUFFER | crate::gc::GC_TYPE_BUFFER_UINT8ARRAY
     ) {
         return false;

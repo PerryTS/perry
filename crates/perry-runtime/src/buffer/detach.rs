@@ -22,9 +22,7 @@ pub(crate) const DETACHED: u16 = 1 << 14;
 /// Detached state is born and dies with the store owner, never its address.
 #[inline]
 pub fn is_detached_buffer(addr: usize) -> bool {
-    if !unsafe { crate::value::addr_class::try_read_gc_header(addr) }
-        .is_some_and(|h| crate::gc::is_byte_family_type(h.obj_type))
-    {
+    if super::header::byte_cell_type(addr).is_none() {
         return false;
     }
     unsafe { (*super::store::header(super::store::owner(addr)))._reserved & DETACHED != 0 }

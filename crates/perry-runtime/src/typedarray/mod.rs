@@ -190,14 +190,13 @@ pub(crate) fn test_typed_array_registry_probe_count() -> u64 {
 pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
     #[cfg(test)]
     TEST_TA_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
-    let ty = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?.obj_type;
+    let ty = crate::buffer::header::byte_cell_type(addr)?;
     crate::gc::is_typed_array_type(ty).then(|| BRAND_KINDS[(ty & 0x1f) as usize])
 }
 
 #[inline]
 pub fn is_offheap_sidetable_alloc(addr: usize) -> bool {
-    unsafe { crate::value::addr_class::try_read_gc_header(addr) }
-        .is_some_and(|h| crate::gc::is_byte_family_type(h.obj_type))
+    crate::buffer::header::byte_cell_type(addr).is_some()
 }
 
 /// Retained allocator notification; byte admission has no address entries.
@@ -319,7 +318,9 @@ pub(crate) fn classify_element_read_receiver(raw: u64) -> ElementReadReceiver {
         }
     };
     match obj_type {
-        ty if crate::gc::is_typed_array_type(ty) => ElementReadReceiver::TypedArray(addr),
+        // `lookup_typed_array_kind` above refused it: a typed-array type byte
+        // the allocator does not own names no cell.
+        ty if crate::gc::is_typed_array_type(ty) => ElementReadReceiver::Absent,
         crate::gc::GC_TYPE_STRING => {
             let boxed = crate::value::js_nanbox_pointer(addr as i64);
             if unsafe { crate::symbol::js_is_symbol(boxed) } != 0 {

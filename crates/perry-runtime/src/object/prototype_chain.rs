@@ -673,8 +673,7 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
             // only for an allocator-proven cell. Ordinary objects never get here.
             Some(obj_type)
                 if crate::gc::is_byte_family_type(obj_type)
-                    && crate::value::addr_class::try_read_tracked_gc_header(obj_ptr)
-                        .is_some_and(|h| h.as_ref().obj_type == obj_type) =>
+                    && crate::buffer::header::byte_cell_is_owned(obj_ptr, obj_type) =>
             {
                 return crate::buffer::store::bag_get(obj_ptr, crate::buffer::store::PROTOTYPE_KEY)
                     .map(f64::to_bits);
