@@ -608,7 +608,7 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
     };
 
     if crate::buffer::is_registered_buffer(addr) {
-        let len = unsafe { (*(addr as *const crate::buffer::BufferHeader)).length as u64 };
+        let len = unsafe { crate::buffer::store::length(addr) as u64 };
         let access_kind = match index {
             Some(i) if i != u32::MAX && i as u64 >= len => ARRAY_ACCESS_INDEXED_OUT_OF_BOUNDS,
             _ => access_kind,
@@ -623,7 +623,10 @@ fn classify_array(addr: usize, index: Option<u32>) -> (u32, u16, u64, u16) {
     }
 
     if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-        let len = unsafe { (*(addr as *const crate::typedarray::TypedArrayHeader)).length as u64 };
+        let len = unsafe {
+            crate::typedarray::element_length(addr as *const crate::typedarray::TypedArrayHeader)
+                as u64
+        };
         let access_kind = match index {
             Some(i) if i != u32::MAX && i as u64 >= len => ARRAY_ACCESS_INDEXED_OUT_OF_BOUNDS,
             _ => access_kind,
@@ -1701,7 +1704,12 @@ fn masked_window_ta_kind(addr: usize, min_idx: i32, max_idx_exclusive: i32) -> i
         crate::typedarray::KIND_FLOAT64 => MASKED_WINDOW_TA_KIND_F64,
         _ => return MASKED_WINDOW_TA_KIND_NONE,
     };
-    let len = unsafe { (*(addr as *const crate::typedarray::TypedArrayHeader)).length };
+    // A view's p+0 word is its construction length; detach, resize and
+    // out-of-bounds are read from the owner, so the window must be checked
+    // against the current length (0 once detached).
+    let len = unsafe {
+        crate::typedarray::element_length(addr as *const crate::typedarray::TypedArrayHeader)
+    };
     if i64::from(max_idx_exclusive) > i64::from(len) {
         return MASKED_WINDOW_TA_KIND_NONE;
     }

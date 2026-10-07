@@ -795,7 +795,9 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
         let proto_addr = crate::value::js_nanbox_get_pointer(f64::from_bits(proto_bits)) as usize;
         if proto_addr != 0 && crate::typedarray::lookup_typed_array_kind(proto_addr).is_some() {
             let length = unsafe {
-                (*(proto_addr as *const crate::typedarray::TypedArrayHeader)).length as u32
+                crate::typedarray::element_length(
+                    proto_addr as *const crate::typedarray::TypedArrayHeader,
+                )
             };
             let is_valid_index = finite_nonnegative_u32_index(index)
                 .is_some_and(|numeric_index| numeric_index < length);

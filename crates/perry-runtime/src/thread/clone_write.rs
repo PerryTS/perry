@@ -663,7 +663,7 @@ impl Writer<'_> {
             return seen;
         }
         if self.transfer.contains(&backing) {
-            let length = (*(backing as *const crate::buffer::BufferHeader)).length;
+            let length = crate::buffer::store::length(backing) as u32;
             return SerializedValue::TransferredArrayBuffer(
                 crate::buffer::TransferredBacking::pending(backing, length),
             );

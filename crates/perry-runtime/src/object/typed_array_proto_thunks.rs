@@ -330,7 +330,7 @@ fn to_uint8(value: f64) -> u8 {
 
 #[inline]
 unsafe fn uint8_len(addr: usize) -> usize {
-    (*(addr as *const crate::buffer::BufferHeader)).length as usize
+    crate::buffer::store::length(addr)
 }
 
 #[inline]
