@@ -30,6 +30,12 @@ pub(crate) extern "C" fn function_prototype_call_thunk(
         }
         return crate::proxy::js_proxy_apply(target, this_arg, rest);
     }
+    // `Function.prototype.call.call(undefined)` reaches here with the
+    // non-callable receiver as `this`; the value-call bridge would return
+    // `undefined` for it instead of the spec `TypeError`.
+    if unsafe { crate::object::fn_proto_receiver_not_callable(target) } {
+        crate::object::throw_fn_proto_not_callable("call");
+    }
     let args = global_this_rest_array_values(rest);
     let (args_ptr, args_len) = if args.is_empty() {
         (std::ptr::null::<f64>(), 0)
@@ -599,6 +605,10 @@ pub(crate) extern "C" fn function_prototype_apply_thunk(
         if crate::proxy::js_proxy_is_proxy(target) == 1 {
             return function_apply_proxy(target, this_arg, args_array);
         }
+        // Same brand check as `function_prototype_call_thunk`.
+        if crate::object::fn_proto_receiver_not_callable(target) {
+            crate::object::throw_fn_proto_not_callable("apply");
+        }
         let args = function_apply_args(args_array);
         let this_arg = crate::closure::coerce_call_this(target, this_arg);
         // Rebind a concise/object-literal method's baked `this` slot to the
@@ -1036,3 +1046,5 @@ pub(crate) extern "C" fn array_prototype_concat_thunk(
 
 #[cfg(test)]
 mod apply_args_tests;
+#[cfg(test)]
+mod fn_proto_this_tests;
