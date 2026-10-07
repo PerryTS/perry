@@ -119,10 +119,15 @@ class CategoryRoutingTests(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request'", full["if"])
         self.assertIn("route_result", full["steps"][0]["run"])
         self.assertTrue({"lint", "check", "warnings", "cargo-test", "security-audit"}.issubset(set(full["needs"])))
-        self.assertEqual(jobs["security-weekly"]["name"], "security-weekly")
+        self.assertEqual(jobs["security-weekly"]["name"], "Weekly Security Audit / suite result")
         self.assertIn("needs.route.outputs.plan", jobs["security-weekly"]["if"])
-        for module in ("coverage", "zizmor", "native-result-ledger", "npm-launcher"):
-            self.assertEqual(jobs[module]["name"], module)
+        for module, display_name in {
+            "coverage": "Coverage / suite result",
+            "zizmor": "zizmor / suite result",
+            "native-result-ledger": "Native Result Ledger / suite result",
+            "npm-launcher": "npm launcher / suite result",
+        }.items():
+            self.assertEqual(jobs[module]["name"], display_name)
 
     def test_auxiliary_ci_dispatch_does_not_run_core(self):
         result = select("ci", "workflow_dispatch", {"inputs":{"tier":"full"}}, suite="coverage", catalog=CATALOG)
