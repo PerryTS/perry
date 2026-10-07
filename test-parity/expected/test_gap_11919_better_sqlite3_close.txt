@@ -1,0 +1,7 @@
+second close ok
+prepare TypeError The database connection is not open
+exec TypeError The database connection is not open
+stmt get TypeError The database connection is not open
+stmt all TypeError The database connection is not open
+stmt run TypeError The database connection is not open
+10k close resources flat true true

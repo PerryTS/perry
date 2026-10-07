@@ -10,13 +10,6 @@
     }
   },
   "tests": {
-    "test_gap_2159_defineproperty_class_prototype": {
-      "status": "parity_fail",
-      "issue": "2159",
-      "added": "2026-07-04",
-      "category": "bug-open",
-      "reason": "defineProperty on class prototypes — standing gap (issue encoded in name); confirmed standing (pre-dates v0.5.1205) in the #5917 parity diff."
-    },
     "test_gap_2514_settracesigint": {
       "status": "parity_fail",
       "issue": "2514",
@@ -121,6 +114,13 @@
       "added": "2026-09-16",
       "category": "module-inventory",
       "reason": "node:http2 real transport (#10327). settings() applies immediately and fires its callback with no peer ACK and no third (duration) argument; no SETTINGS frame reaches the wire; no remoteSettings at connect; a peer SETTINGS frame mid-session is answered with GOAWAY(code=1) instead of an ACK. TIMEOUT: full output, then no exit."
+    },
+    "test_gap_iterret_generator_prototype": {
+      "status": "parity_fail",
+      "issue": "12148",
+      "added": "2026-10-07",
+      "category": "bug-open",
+      "reason": "Generator objects own next/return/throw, so a patched %GeneratorPrototype%.return is shadowed. Fix: move the methods onto %GeneratorPrototype% with hidden per-generator state. The test was added failing in #12101."
     },
     "test_gap_perfhooks_3088_3008_3010_3011": {
       "status": "parity_fail",
