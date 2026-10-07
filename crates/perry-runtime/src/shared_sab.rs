@@ -149,6 +149,14 @@ fn alloc_shared_block(size: u32) -> *mut BufferHeader {
 
 /// Each agent owns its metadata while sharing only the process store.
 pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
+    crate::buffer::store::store_alloc(
+        GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER,
+        size,
+        crate::buffer::store::Init::Shared,
+    )
+}
+
+pub(crate) fn alloc_shared_sab_impl(size: u32) -> *mut BufferHeader {
     let block = alloc_shared_block(size);
     wrap_shared_sab(block as usize)
 }

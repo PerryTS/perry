@@ -680,32 +680,26 @@ pub fn buffer_byte_offset(buf: usize) -> u32 {
 /// post-trace registry pruning below. Their bytes now also count toward
 /// `arena_total_bytes`, so allocation pressure finally triggers collections.
 pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
-    super::bytes::assert_allocation_allowed();
-    // RULE 3 (`object/shape_rule3.rs`): `capacity` occupies payload `+4`, the
-    // word the emitted property-read path compares against a cached ShapeId,
-    // and a 2 GiB buffer would write `0x8000_0000` there — shape #1. Every
-    // user-facing constructor (`Buffer.alloc`, `new ArrayBuffer`, the typed
-    // arrays) already stops at `i32::MAX` and raises exactly this
-    // `RangeError`; the paths that reached here still clamping at `u32::MAX`
-    // (`Buffer.from(arrayLike)`, `Buffer.concat`, `buffer::copy_bytes`) now
-    // agree with them instead of producing an unreadable cell.
-    let capacity = crate::object::shape_rule3::checked_plus_four_word(
-        capacity,
-        b"Array buffer allocation failed",
-    );
-    let ptr = crate::arena::arena_alloc_gc_old(
-        buffer_payload_size(capacity as usize),
-        8,
+    let ptr = super::store::store_alloc(
         crate::gc::GC_TYPE_BUFFER,
-    ) as *mut BufferHeader;
+        capacity,
+        super::store::Init::Uninit,
+    );
     unsafe {
-        let header = (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-        (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
         (*ptr).length = 0;
+    }
+    ptr
+}
+
+pub(super) fn alloc_inline(brand: u8, capacity: u32, length: u32) -> *mut BufferHeader {
+    let ptr = crate::arena::arena_alloc_gc_old(buffer_payload_size(capacity as usize), 8, brand)
+        as *mut BufferHeader;
+    unsafe {
+        (*super::store::header(ptr as usize)).gc_flags |= crate::gc::GC_FLAG_TENURED;
+        (*ptr).length = length;
         (*ptr).capacity = capacity;
         (*ptr).link = 0;
     }
-    register_buffer(ptr);
     ptr
 }
 
@@ -717,6 +711,14 @@ pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
 /// Fresh allocations start with no foreign-data bit, so recycled addresses
 /// cannot inherit a previous owner's native pointer.
 pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHeader {
+    super::store::store_alloc(
+        crate::gc::GC_TYPE_BUFFER,
+        length,
+        super::store::Init::Foreign(data),
+    )
+}
+
+pub(super) fn alloc_foreign(brand: u8, data: *mut u8, length: u32) -> *mut BufferHeader {
     super::bytes::assert_allocation_allowed();
     // RULE 3: this wrapper is reached from `extern "C"` Node-API entry points
     // where a JS throw has nowhere to land, so the over-range span is clamped
@@ -730,11 +732,8 @@ pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHea
         "BufferHeader::capacity (foreign span)",
         length,
     );
-    let ptr = crate::arena::arena_alloc_gc_old(
-        std::mem::size_of::<ForeignBuffer>(),
-        8,
-        crate::gc::GC_TYPE_BUFFER,
-    ) as *mut ForeignBuffer;
+    let ptr = crate::arena::arena_alloc_gc_old(std::mem::size_of::<ForeignBuffer>(), 8, brand)
+        as *mut ForeignBuffer;
     unsafe {
         let gc = (ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
         (*gc).gc_flags |= crate::gc::GC_FLAG_TENURED;
@@ -761,29 +760,44 @@ pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHea
 /// Allocate native backing from birth, so ordinary ArrayBuffer transfer moves
 /// the original byte pointer. The wrapper alone lives in the old arena.
 pub(crate) fn buffer_alloc_owned(capacity: u32, length: u32) -> *mut BufferHeader {
+    // NativeArena has explicit Native provenance, even for small reservations.
     let capacity = crate::object::shape_rule3::checked_plus_four_word(
         capacity,
         b"Array buffer allocation failed",
     );
-    buffer_adopt_backing(super::backing::Backing::zeroed(capacity), length)
+    assert!(length <= capacity);
+    super::store::store_alloc(
+        crate::gc::GC_TYPE_BUFFER,
+        length,
+        super::store::Init::AdoptBacking(super::backing::Backing::zeroed(capacity)),
+    )
 }
 
 pub(crate) fn buffer_adopt_backing(
     backing: super::backing::Backing,
     length: u32,
 ) -> *mut BufferHeader {
+    super::store::store_alloc(
+        crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
+        length,
+        super::store::Init::AdoptBacking(backing),
+    )
+}
+
+pub(super) fn alloc_backing(
+    brand: u8,
+    backing: super::backing::Backing,
+    length: u32,
+) -> *mut BufferHeader {
     assert!(length <= backing.capacity());
     let capacity = backing.capacity();
-    let ptr = buffer_alloc_foreign(backing.data(), length);
+    let ptr = alloc_foreign(brand, backing.data(), length);
     unsafe {
         (*ptr).capacity = capacity;
         (*(ptr as *mut ForeignBuffer)).owned = Some(backing);
     }
-    // Pressure accounting may collect: publish a consistent cell and root it.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let root = scope.root_raw_mut_ptr(ptr);
     crate::gc::gc_note_external_side_alloc(capacity as usize);
-    root.get_raw_mut_ptr()
+    ptr
 }
 
 /// Whether this foreign-shaped cell owns bytes whose release Perry controls.

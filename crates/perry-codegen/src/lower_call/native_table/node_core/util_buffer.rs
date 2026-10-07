@@ -612,6 +612,15 @@ pub(crate) const NODE_CORE_UTIL_BUFFER_ROWS: &[NativeModSig] = &[
     NativeModSig {
         module: "buffer",
         has_receiver: false,
+        method: "allocUnsafeSlow",
+        class_filter: None,
+        runtime: "js_buffer_alloc_unsafe_slow",
+        args: &[NA_F64],
+        ret: NR_GCPTR,
+    },
+    NativeModSig {
+        module: "buffer",
+        has_receiver: false,
         method: "copyBytesFrom",
         class_filter: None,
         runtime: "js_buffer_copy_bytes_from",

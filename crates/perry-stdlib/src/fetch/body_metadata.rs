@@ -419,17 +419,8 @@ pub extern "C" fn js_response_static_error() -> f64 {
 }
 
 unsafe fn resolve_bytes_promise(promise: *mut perry_runtime::Promise, body: Vec<u8>) {
-    let buf = perry_runtime::buffer::buffer_alloc(body.len() as u32);
-    (*buf).length = body.len() as u32;
-    if !body.is_empty() {
-        std::ptr::copy_nonoverlapping(
-            body.as_ptr(),
-            perry_runtime::buffer::buffer_data_mut(buf),
-            body.len(),
-        );
-    }
-    let value = JSValue::object_ptr(buf as *mut u8);
-    perry_runtime::js_promise_resolve(promise, f64::from_bits(value.bits()));
+    let value = super::body_read::body_bytes(body, perry_runtime::buffer::bytes::Brand::Uint8Array);
+    perry_runtime::js_promise_resolve(promise, value);
 }
 
 #[no_mangle]

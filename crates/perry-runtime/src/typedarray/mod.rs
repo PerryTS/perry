@@ -683,33 +683,13 @@ unsafe fn native_memory_copy_accepts_buffer(addr: usize) -> bool {
     addr >= 0x1000 && crate::buffer::is_uint8array_buffer(addr)
 }
 
-#[inline]
-fn typed_array_payload_size(capacity: u32, _elem_size: usize) -> usize {
-    crate::codegen_abi::BYTES_STORE + capacity as usize
-}
-
-/// Allocate a zero-filled, nonmoving typed owner in the old arena.
+/// All typed owners use the common byte-store entry and placement rule.
 pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
-    crate::buffer::bytes::assert_allocation_allowed();
-    let size = elem_size_for_kind(kind);
-    let capacity = length as u64 * size as u64;
-    if capacity > crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as u64 {
-        throw_range_error(b"Array buffer allocation failed");
-    }
-    let capacity = capacity as u32;
-    let p = crate::arena::arena_alloc_gc_old(
-        typed_array_payload_size(capacity, size),
-        8,
+    crate::buffer::store::store_alloc(
         type_for_kind(kind),
-    ) as *mut TypedArrayHeader;
-    unsafe {
-        (*crate::buffer::store::header(p as usize)).gc_flags |= crate::gc::GC_FLAG_TENURED;
-        (*p).length = length;
-        (*p).capacity = capacity;
-        (*p).link = 0;
-        ptr::write_bytes(data_ptr_mut(p), 0, capacity as usize);
-    }
-    p
+        length,
+        crate::buffer::store::Init::Zero,
+    )
 }
 
 /// Convert an f64 (NaN-boxed JS value) to the numeric value to store. Strings

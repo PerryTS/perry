@@ -423,7 +423,7 @@ fn buffer_from_array_with_brand(arr_ptr: *const ArrayHeader, brand: u8) -> *mut 
             .map(|i| buffer_byte_from_js_value(crate::array::js_array_get_f64(arr_ptr, i)))
             .collect();
 
-        let buf = super::pool::place(brand, super::pool::Init::Copy, len);
+        let buf = super::pool::place(brand, super::pool::Init::PoolCopy, len);
         super::store::set_length(buf as usize, len);
         if !bytes.is_empty() {
             super::bytes::no_gc(|scope| {
@@ -499,7 +499,11 @@ fn js_uint8array_from_source(source: f64) -> *mut BufferHeader {
         .collect();
 
     unsafe {
-        let buf = buffer_alloc(bytes.len() as u32);
+        let buf = super::store::store_alloc(
+            crate::gc::GC_TYPE_BUFFER_UINT8ARRAY,
+            bytes.len() as u32,
+            super::store::Init::Uninit,
+        );
         super::store::set_length(buf as usize, bytes.len() as u32);
         if !bytes.is_empty() {
             super::bytes::no_gc(|scope| {
@@ -551,29 +555,11 @@ fn uint8array_length_or_throw(val: f64) -> u32 {
 #[no_mangle]
 pub extern "C" fn js_uint8array_alloc(length: i32) -> *mut BufferHeader {
     let length = uint8array_length_or_throw(length as f64);
-    let buf = buffer_alloc(length);
-    unsafe {
-        super::store::set_length(buf as usize, length);
-        // `buffer_alloc` hands back old-arena memory that is NOT guaranteed
-        // zeroed: the old generation reclaims and re-hands dirty blocks, and
-        // only pristine mmap pages read as zero. `new Uint8Array(n)` (and the
-        // bool / string / numeric-length sources that funnel here) is
-        // spec-mandated zero-filled, so clear the payload explicitly instead of
-        // relying on incidental zeroing. The sibling `js_buffer_alloc`
-        // (Buffer.alloc) already does this; this path was the lone gap. Latent
-        // on macOS (fresh pages read zero); leaked stale bytes on Linux once an
-        // unrelated codegen change shifted these allocations onto reclaimed
-        // blocks.
-        if length > 0 {
-            super::bytes::no_gc(|scope| {
-                super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
-                    .unwrap()
-                    .fill(0);
-            });
-        }
-    }
-    mark_as_uint8array(buf as usize);
-    buf
+    super::store::store_alloc(
+        crate::gc::GC_TYPE_BUFFER_UINT8ARRAY,
+        length,
+        super::store::Init::Zero,
+    )
 }
 
 /// `new Uint8Array(x)` runtime dispatch.
@@ -627,7 +613,11 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
             // bytes into a fresh storage region.
             let source =
                 super::bytes::ReadLease::new(crate::value::js_nanbox_pointer(raw as i64)).unwrap();
-            let dst = buffer_alloc(source.len() as u32);
+            let dst = super::store::store_alloc(
+                crate::gc::GC_TYPE_BUFFER_UINT8ARRAY,
+                source.len() as u32,
+                super::store::Init::Uninit,
+            );
             unsafe {
                 super::store::set_length(dst as usize, source.len() as u32);
             }
@@ -648,7 +638,11 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
                 let roots = crate::gc::RuntimeHandleScope::new();
                 let source = roots.root_raw_const_ptr(src);
                 let len = crate::typedarray::js_typed_array_length(src).max(0) as u32;
-                let result = roots.root_raw_mut_ptr(buffer_alloc(len));
+                let result = roots.root_raw_mut_ptr(super::store::store_alloc(
+                    crate::gc::GC_TYPE_BUFFER_UINT8ARRAY,
+                    len,
+                    super::store::Init::Uninit,
+                ));
                 super::store::set_length(result.get_raw_mut_ptr::<BufferHeader>() as usize, len);
                 for i in 0..len as usize {
                     let value = source
@@ -757,7 +751,11 @@ pub extern "C" fn js_uint8array_view(
 
 pub(super) fn zeroed_array_buffer_storage(size: i32) -> *mut BufferHeader {
     let size = size.max(0) as u32;
-    buffer_alloc_owned(size, size)
+    super::store::store_alloc(
+        crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
+        size,
+        super::store::Init::Zero,
+    )
 }
 
 fn throw_array_buffer_range_error() -> ! {
@@ -1000,7 +998,7 @@ fn validate_buffer_alloc_size(size: i32) -> u32 {
 #[no_mangle]
 pub extern "C" fn js_buffer_alloc(size: i32, fill: i32) -> *mut BufferHeader {
     let size = validate_buffer_alloc_size(size);
-    let buf = super::pool::place(crate::gc::GC_TYPE_BUFFER, super::pool::Init::Zeroed, size);
+    let buf = super::pool::place(crate::gc::GC_TYPE_BUFFER, super::pool::Init::Zero, size);
     unsafe {
         super::store::set_length(buf as usize, size);
         super::bytes::no_gc(|scope| {
@@ -1169,11 +1167,22 @@ pub extern "C" fn js_buffer_fill_value_range(
 #[no_mangle]
 pub extern "C" fn js_buffer_alloc_unsafe(size: i32) -> *mut BufferHeader {
     let size = validate_buffer_alloc_size(size);
-    let buf = super::pool::place(crate::gc::GC_TYPE_BUFFER, super::pool::Init::Unsafe, size);
+    let buf = super::pool::place(
+        crate::gc::GC_TYPE_BUFFER,
+        super::pool::Init::PoolUnsafe,
+        size,
+    );
     unsafe {
         super::store::set_length(buf as usize, size);
     }
     buf
+}
+
+/// allocUnsafeSlow has unpooled provenance even when it fits in a pool.
+#[no_mangle]
+pub extern "C" fn js_buffer_alloc_unsafe_slow(size: f64) -> *mut BufferHeader {
+    let size = super::js_buffer_validate_size(size) as u32;
+    super::store::store_alloc(crate::gc::GC_TYPE_BUFFER, size, super::store::Init::Uninit)
 }
 
 fn throw_buffer_concat_invalid_arg_type(index: usize, element: f64) -> ! {
@@ -1273,7 +1282,7 @@ fn js_buffer_concat_impl(
         // Allocate result buffer
         let result = super::pool::place(
             crate::gc::GC_TYPE_BUFFER,
-            super::pool::Init::Unsafe,
+            super::pool::Init::PoolUnsafe,
             total_size as u32,
         );
         super::store::set_length(result as usize, total_size as u32);

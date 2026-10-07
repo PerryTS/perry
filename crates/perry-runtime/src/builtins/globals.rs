@@ -805,6 +805,15 @@ fn js_structured_clone_inner(value: f64, depth: usize) -> f64 {
                 structured_clone_memo_record(memo_index, cloned);
                 return cloned;
             }
+            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+                let memo_index = structured_clone_memo_reserve(value);
+                let cloned = crate::buffer::bytes::copy_typed_range(value, 0, usize::MAX, false)
+                    .unwrap_or_else(|_| {
+                        throw_data_clone_error("An ArrayBuffer is detached and could not be cloned")
+                    });
+                structured_clone_memo_record(memo_index, cloned);
+                return cloned;
+            }
             // Set is tracked in SET_REGISTRY (not GC_TYPE_SET since it has
             // no GC header). Check the registry BEFORE touching the GC
             // header bytes — they'd be garbage for raw-allocated sets.

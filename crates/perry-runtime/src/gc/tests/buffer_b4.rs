@@ -352,6 +352,8 @@ fn views_observe_owner_resize_and_detach_after_a_live_collection() {
 
 #[test]
 fn pinned_inline_detach_retains_pages_until_the_last_unpin() {
+    // Exercise B4 Inline pin/page retention independently of the placement cutoff.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     let _guard = CopyingNurseryTestGuard::new(0);
     gc_register_named_mutable_root_scanner("pinned", crate::gc::pin::scan_pinned_object_roots_mut);
     let handles = RuntimeHandleScope::new();
@@ -599,7 +601,7 @@ fn pool_identity_alignment_rollover_and_root_are_real_owner_edges() {
         gc_register_named_mutable_root_scanner("b4 pool", buffer::pool::scan_pool_roots_mut);
     }
     let first = buffer::pool::copy(3);
-    let second = buffer::pool::place(GC_TYPE_BUFFER, buffer::pool::Init::Unsafe, 5);
+    let second = buffer::pool::place(GC_TYPE_BUFFER, buffer::pool::Init::PoolUnsafe, 5);
     let owner = unsafe { buffer::store::owner(first as usize) };
     assert_ne!(owner, first as usize);
     assert_eq!(unsafe { buffer::store::owner(second as usize) }, owner);
@@ -607,7 +609,7 @@ fn pool_identity_alignment_rollover_and_root_are_real_owner_edges() {
     assert_eq!(unsafe { (*second).capacity }, 8);
     assert_eq!(buffer::buffer_backing_array_buffer(first as usize), owner);
     assert_eq!(buffer::buffer_backing_array_buffer(second as usize), owner);
-    let unpooled = buffer::pool::place(GC_TYPE_BUFFER, buffer::pool::Init::Copy, 4096);
+    let unpooled = buffer::pool::place(GC_TYPE_BUFFER, buffer::pool::Init::PoolCopy, 4096);
     assert_eq!(
         unsafe { buffer::store::owner(unpooled as usize) },
         unpooled as usize

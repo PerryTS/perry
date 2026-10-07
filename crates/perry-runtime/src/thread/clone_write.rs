@@ -593,8 +593,7 @@ impl Writer<'_> {
     }
 
     unsafe fn typed_array(&mut self, addr: usize, kind: u8) -> SerializedValue {
-        let ta = addr as *const crate::typedarray::TypedArrayHeader;
-        let length = (*ta).length;
+        let length = crate::buffer::store::length(addr) as u32;
         let meta = crate::typedarray_view::view_meta_of(addr);
         if meta.is_some_and(|meta| crate::buffer::is_detached_buffer(meta.backing)) {
             return SerializedValue::Unsupported("detached ArrayBuffer");
@@ -663,7 +662,8 @@ impl Writer<'_> {
             return seen;
         }
         if self.transfer.contains(&backing) {
-            let length = crate::buffer::store::length(backing) as u32;
+            // A typed owner stores an element count; its ArrayBuffer carries bytes.
+            let length = crate::buffer::store::owner_byte_length(backing) as u32;
             return SerializedValue::TransferredArrayBuffer(
                 crate::buffer::TransferredBacking::pending(backing, length),
             );

@@ -1233,10 +1233,19 @@ pub(super) fn try_module_static_methods(
                                 encoding,
                             }));
                         }
-                        "allocUnsafe" | "allocUnsafeSlow" if !args.is_empty() => {
+                        "allocUnsafe" if !args.is_empty() => {
                             return Ok(Ok(Expr::BufferAllocUnsafe(Box::new(
                                 args.into_iter().next().unwrap(),
                             ))));
+                        }
+                        "allocUnsafeSlow" => {
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                module: "buffer".to_string(),
+                                class_name: None,
+                                object: None,
+                                method: "allocUnsafeSlow".to_string(),
+                                args,
+                            }));
                         }
                         "concat" if !args.is_empty() => {
                             let mut args_iter = args.into_iter();

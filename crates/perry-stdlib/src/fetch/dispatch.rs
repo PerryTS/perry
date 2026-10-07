@@ -220,17 +220,12 @@ pub(crate) unsafe fn body_addr_buffer_bytes(addr: usize) -> Option<Vec<u8>> {
     if addr < 0x1000 {
         return None;
     }
-    if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
-        return perry_runtime::typedarray::typed_array_bytes(ta).map(|b| b.to_vec());
-    }
-    if perry_runtime::buffer::is_registered_buffer(addr) {
-        let ptr = addr as *const perry_runtime::buffer::BufferHeader;
-        let len = (*ptr).length as usize;
-        let data = perry_runtime::buffer::buffer_data(ptr);
-        return Some(std::slice::from_raw_parts(data, len).to_vec());
-    }
-    None
+    let value = perry_runtime::value::js_nanbox_pointer(addr as i64);
+    perry_runtime::buffer::bytes::no_gc(|scope| {
+        perry_runtime::buffer::bytes::bytes(value, scope)
+            .ok()
+            .map(<[u8]>::to_vec)
+    })
 }
 
 /// Extract a fetch *request* body as raw bytes for the send paths
