@@ -218,7 +218,7 @@ def select(category_key: str, event_name: str, event: dict[str, Any], ref: str =
             valid = categories[category_key]["dispatch_inputs"]["suite"]["options"]
             if requested == "all" or requested not in valid:
                 raise ValueError(f"unknown Maintenance suite selection: {requested}")
-            requested_ids = set([] if requested == "validate" else [requested])
+            requested_ids = set([] if requested in {"validate", "delete-retired-runs"} else [requested])
         else:
             requested = suite or category.get("dispatch_inputs", {}).get("suite", {}).get("default", "all")
             valid = ["all", *ids]

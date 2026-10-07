@@ -201,6 +201,14 @@ class CategoryRoutingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown Maintenance"):
             select("maintenance", "workflow_dispatch", {}, suite="all", catalog=CATALOG)
 
+    def test_retired_run_cleanup_dispatch_selects_no_unrelated_suite(self):
+        result = select("maintenance", "workflow_dispatch", {}, suite="delete-retired-runs", catalog=CATALOG)
+        self.assertEqual(result["selection"], "")
+        self.assertFalse(any(json.loads(result["plan"]).values()))
+        with self.assertRaisesRegex(ValueError, "only from main"):
+            select("maintenance", "workflow_dispatch", {}, ref="refs/heads/topic",
+                   suite="delete-retired-runs", catalog=CATALOG)
+
     def test_maintenance_workflow_run_accepts_only_trusted_upstream_runs(self):
         def event(name, branch="main", trigger="schedule"):
             return {"workflow_run":{"name":name,"head_branch":branch,"event":trigger}}
