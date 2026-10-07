@@ -21,30 +21,10 @@ use crate::types::DOUBLE;
 /// here is a dispatch table; each module's `lower(ctx, expr)` contains the
 /// original arm bodies verbatim.
 pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
-    let value = lower_expr_inner(ctx, expr)?;
-    if ctx.receiver_descriptors.has_hoisted_byte_owners()
-        && !ctx.block().is_terminated()
-        && crate::collectors::expr_region_ender(expr, &|e| {
-            crate::rooting::expr_is_inert_primitive(ctx, e)
-        })
-        .is_some()
-    {
-        // Native checked reads refresh their runtime miss arm directly.
-        let native_read = match expr {
-            Expr::IndexGet { object, index } => {
-                super::ta_element_read::receiver_kind(ctx, object).is_some()
-                    || (super::u8_buffer_read::u8_buffer_receiver_eligible(ctx, object)
-                        && super::index_get::numeric_index_has_integer_array_index_proof(
-                            ctx, index,
-                        ))
-            }
-            _ => false,
-        };
-        if !native_read {
-            super::byte_cell::refresh_hoisted_byte_accesses(ctx);
-        }
-    }
-    Ok(value)
+    // Hoisted byte-access proofs are dirtied by every executed call at the
+    // call-emission choke point and revalidated at their next use; no
+    // expression boundary refreshes them.
+    lower_expr_inner(ctx, expr)
 }
 
 fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {

@@ -126,6 +126,9 @@ pub struct RegCounter {
     /// path-sensitive: cold IC misses dirty the proof, while their unexecuted
     /// hot siblings do not impose a revalidation on every read.
     stable_packed_revalidation_slots: RefCell<Vec<String>>,
+    /// Dirty flags of the function's hoisted byte-cell access proofs. The same
+    /// call-emission choke point sets them; the next byte access revalidates.
+    byte_access_dirty_slots: RefCell<Vec<String>>,
 }
 
 impl RegCounter {
@@ -139,6 +142,7 @@ impl RegCounter {
             fn_infos: RefCell::new(None),
             null_guard_symbol: RefCell::new(None),
             stable_packed_revalidation_slots: RefCell::new(Vec::new()),
+            byte_access_dirty_slots: RefCell::new(Vec::new()),
         }
     }
 
@@ -172,6 +176,18 @@ impl RegCounter {
 
     fn stable_packed_revalidation_slots(&self) -> Vec<String> {
         self.stable_packed_revalidation_slots.borrow().clone()
+    }
+
+    /// Function-scoped: a byte access proof lives until the function ends.
+    pub(crate) fn push_byte_access_dirty_slot(&self, slot: String) {
+        let mut slots = self.byte_access_dirty_slots.borrow_mut();
+        if !slots.contains(&slot) {
+            slots.push(slot);
+        }
+    }
+
+    fn byte_access_dirty_slots(&self) -> Vec<String> {
+        self.byte_access_dirty_slots.borrow().clone()
     }
 
     /// Install the module's `preserve_nonecc` symbol registry (#8175). Called
@@ -427,7 +443,7 @@ impl LlBlock {
     /// JS-visible shape, prototype, length, or indexed values. Every other
     /// direct call stays conservative, including unknown GC-leaf helpers that
     /// may perform a semantic write without collecting.
-    fn dirty_stable_packed_revalidations_before_call(&mut self, direct_callee: Option<&str>) {
+    fn dirty_revalidations_before_call(&mut self, direct_callee: Option<&str>) {
         if direct_callee.is_some_and(|callee| {
             callee.starts_with("llvm.")
                 || callee.starts_with("js_shadow_")
@@ -437,6 +453,9 @@ impl LlBlock {
         }
         for slot in self.counter.stable_packed_revalidation_slots() {
             self.store(crate::types::I1, "1", &slot);
+        }
+        for slot in self.counter.byte_access_dirty_slots() {
+            self.store(crate::types::I8, "0", &slot);
         }
     }
 
@@ -1510,7 +1529,7 @@ impl LlBlock {
         args: &[(LlvmType, &str)],
         gc_leaf: bool,
     ) -> String {
-        self.dirty_stable_packed_revalidations_before_call(Some(func_name));
+        self.dirty_revalidations_before_call(Some(func_name));
         // #835 + #846: record this emission against the FFI provenance
         // registry. The driver consults the registry after all per-module
         // codegen finishes to auto-link the providing crate.
@@ -1552,7 +1571,7 @@ impl LlBlock {
     }
 
     pub fn call_void(&mut self, func_name: &str, args: &[(LlvmType, &str)]) {
-        self.dirty_stable_packed_revalidations_before_call(Some(func_name));
+        self.dirty_revalidations_before_call(Some(func_name));
         // #835 + #846: same registry hook as `call` — see comment there.
         crate::ext_registry::record_ffi_call(func_name);
         self.counter
@@ -1622,7 +1641,7 @@ impl LlBlock {
         args: &[(LlvmType, &str)],
         gc_leaf: bool,
     ) -> String {
-        self.dirty_stable_packed_revalidations_before_call(None);
+        self.dirty_revalidations_before_call(None);
         let r = self.reg();
         // Indirect targets (closures, method pointers) can always throw.
         if let Some(lpad) = self.counter.current_eh_unwind_label() {

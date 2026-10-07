@@ -1008,8 +1008,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(materialize_js_value(ctx, value, reason));
                 }
                 if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
-                    let param_access = super::u8_buffer_read::byte_view_param_for(ctx, object);
                     return rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
+                        let param_access = super::u8_buffer_read::byte_view_param_for(
+                            ctx,
+                            object,
+                            &vals[0],
+                            &super::u8_buffer_read::U8_BRANDS,
+                        );
                         // Keep the boxed receiver: numeric bits must never
                         // become an unchecked raw pointer. This existing
                         // dynamic guard preserves fractional/OOB/key semantics.

@@ -119,7 +119,7 @@ fn lower_u8_buffer_checked_load(
 ) -> Result<String> {
     let obj_box = lower_expr(ctx, object)?;
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
-    let param_access = byte_view_param_for(ctx, object);
+    let param_access = byte_view_param_for(ctx, object, &obj_box, &U8_BRANDS);
 
     let chk_idx = ctx.new_block("u8b.get.chk");
     let load_idx = ctx.new_block("u8b.get.load");
@@ -216,7 +216,6 @@ fn lower_u8_buffer_checked_load(
         "js_u8_buffer_read_f64",
         &[(I64, &raw), (I32, &idx_i32)],
     );
-    super::byte_cell::refresh_hoisted_byte_accesses(ctx);
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
@@ -343,7 +342,6 @@ pub(crate) fn emit_u8_cached_get_i32(
     let (slow_val, slow_end) = {
         let blk = ctx.block();
         let val = blk.call(I32, slow_fn, &[(I64, &raw), (I32, idx_i32)]);
-        super::byte_cell::refresh_hoisted_byte_accesses(ctx);
         let end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
         (val, end)
@@ -555,7 +553,6 @@ pub(crate) fn emit_u8_cached_set_i32(
     {
         let blk = ctx.block();
         blk.call_void(slow_fn, &[(I64, &raw), (I32, idx_i32), (I32, val_i32)]);
-        super::byte_cell::refresh_hoisted_byte_accesses(ctx);
         ctx.block().br(&merge_label);
     }
     ctx.current_block = merge_idx;
@@ -637,18 +634,38 @@ pub(crate) fn emit_u8_atomic_load_f64(
     blk.uitofp(I32, &byte, DOUBLE)
 }
 
+/// The hoisted access proof for a byte read or write on local `object`,
+/// revalidated for the current receiver `boxed` when it is dirty or was
+/// resolved for another value. Captured (boxed) locals and module globals
+/// keep the per-access header resolution.
 pub(crate) fn byte_view_param_for(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
+    boxed: &str,
+    brands: &[u8],
 ) -> Option<crate::collectors::ByteViewParamAccess> {
     let Expr::LocalGet(id) = object else {
         return None;
     };
-    let mut access = ctx.receiver_descriptors.byte_view_param(*id)?.clone();
-    access.valid_i1 = ctx.block().load(I1, &access.valid_slot);
+    if ctx.boxed_vars.contains(id)
+        || ctx.module_globals.contains_key(id)
+        || !ctx.locals.contains_key(id)
+    {
+        return None;
+    }
+    let mut access = super::byte_cell::access_for(ctx, *id, brands);
+    super::byte_cell::revalidate(ctx, &access, boxed);
+    let state = ctx.block().load(crate::types::I8, &access.valid_slot);
+    access.valid_i1 = ctx.block().icmp_eq(crate::types::I8, &state, "1");
     access.data_i64 = ctx.block().load(I64, &access.data_slot);
     Some(access)
 }
+
+/// The brand set of a Uint8Array/Buffer receiver proof.
+pub(crate) const U8_BRANDS: [u8; 2] = [
+    crate::runtime_abi::GC_TYPE_BUFFER,
+    crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY,
+];
 
 /// Amortize entry validation only for indexed reads in loops. Single-read
 /// helpers retain their existing owning-cache hit and add no entry calls.
@@ -726,15 +743,7 @@ pub(crate) fn loop_param_is_read(body: &[perry_hir::Stmt], id: u32) -> bool {
 }
 
 pub(crate) fn materialize_byte_view_param(ctx: &mut FnCtx<'_>, id: u32, boxed: &str) {
-    super::byte_cell::materialize_param(
-        ctx,
-        id,
-        boxed,
-        &[
-            crate::runtime_abi::GC_TYPE_BUFFER,
-            crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY,
-        ],
-    );
+    super::byte_cell::materialize_param(ctx, id, boxed, &U8_BRANDS);
 }
 
 pub(crate) fn emit_u8_view_param_or_guard(

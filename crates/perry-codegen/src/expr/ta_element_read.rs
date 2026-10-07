@@ -70,7 +70,8 @@ pub(crate) fn try_lower(
     }
     let integer_index = super::index_get::numeric_index_has_integer_array_index_proof(ctx, index);
     crate::rooting::with_operands_rooted(ctx, &[object, index], |ctx, values| {
-        let proof = super::u8_buffer_read::byte_view_param_for(ctx, object);
+        let brands = [super::byte_cell::brand_for_kind(kind)];
+        let proof = super::u8_buffer_read::byte_view_param_for(ctx, object, &values[0], &brands);
         Ok(Some(emit_get(
             ctx,
             &values[0],
@@ -195,7 +196,6 @@ fn emit_get(
     } else {
         fallback
     };
-    super::byte_cell::refresh_hoisted_byte_accesses(ctx);
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&done_l);
     ctx.current_block = done;

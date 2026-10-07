@@ -511,7 +511,6 @@ fn emit_guarded_param_read(
             (I64, "1"),
         ],
     );
-    crate::expr::byte_cell::refresh_hoisted_byte_accesses(ctx);
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&done_l);
     ctx.current_block = done;
