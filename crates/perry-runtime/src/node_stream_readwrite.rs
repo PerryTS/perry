@@ -153,9 +153,34 @@ pub(super) fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
     Some(raw as *mut ObjectHeader)
 }
 
+/// The runtime's private stream state (`__perry…` keys) is written only on
+/// the object it describes, never on a prototype, so it is read as an own
+/// property: a missing private key must not walk the stream's prototype
+/// chain. Public names (`destroyed`, `autoDestroy`, …) keep ordinary [[Get]],
+/// since a subclass or an options object may supply them by inheritance.
+fn is_private_key(key: *const crate::string::StringHeader) -> bool {
+    const PRIVATE: &[u8] = b"__perry";
+    if key.is_null() {
+        return false;
+    }
+    unsafe {
+        let len = (*key).byte_len as usize;
+        len >= PRIVATE.len()
+            && std::slice::from_raw_parts(
+                (key as *const u8).add(std::mem::size_of::<crate::string::StringHeader>()),
+                PRIVATE.len(),
+            ) == PRIVATE
+    }
+}
+
 pub(super) fn get_hidden_value(value: f64, key: *mut crate::string::StringHeader) -> Option<f64> {
     let obj = object_ptr_from_value(value)?;
-    let value = js_object_get_field_by_name_f64(obj as *const ObjectHeader, key);
+    let value = if is_private_key(key) {
+        let own = unsafe { crate::object::own_data_field_by_name(obj, key) }?;
+        f64::from_bits(own.bits())
+    } else {
+        js_object_get_field_by_name_f64(obj as *const ObjectHeader, key)
+    };
     if value.to_bits() == TAG_UNDEFINED {
         None
     } else {
