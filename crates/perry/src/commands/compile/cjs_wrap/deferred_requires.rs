@@ -109,12 +109,12 @@ impl Visit for Requires {
 
     fn visit_getter_prop(&mut self, getter: &ast::GetterProp) {
         getter.key.visit_with(self);
-        self.defer(|visitor| getter.body.visit_with(visitor));
+        self.defer(|visitor| getter.function.body.visit_with(visitor));
     }
 
     fn visit_setter_prop(&mut self, setter: &ast::SetterProp) {
         setter.key.visit_with(self);
-        self.defer(|visitor| setter.body.visit_with(visitor));
+        self.defer(|visitor| setter.function.body.visit_with(visitor));
     }
 
     fn visit_if_stmt(&mut self, stmt: &ast::IfStmt) {

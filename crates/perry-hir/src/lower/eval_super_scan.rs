@@ -595,7 +595,7 @@ fn scan_expr(scan: &mut Scan, expr: &ast::Expr, transparent: bool) {
                             if let ast::PropName::Computed(c) = &g.key {
                                 scan_expr(scan, &c.expr, transparent);
                             }
-                            if let Some(body) = &g.body {
+                            if let Some(body) = &g.function.body {
                                 for s in &body.stmts {
                                     scan_stmt(scan, s, false);
                                 }
@@ -605,7 +605,7 @@ fn scan_expr(scan: &mut Scan, expr: &ast::Expr, transparent: bool) {
                             if let ast::PropName::Computed(c) = &s.key {
                                 scan_expr(scan, &c.expr, transparent);
                             }
-                            if let Some(body) = &s.body {
+                            if let Some(body) = &s.function.body {
                                 for st in &body.stmts {
                                     scan_stmt(scan, st, false);
                                 }
@@ -628,12 +628,12 @@ fn scan_expr(scan: &mut Scan, expr: &ast::Expr, transparent: bool) {
                 scan_pat(scan, p, transparent);
             }
             match arrow.body.as_ref() {
-                ast::BlockStmtOrExpr::BlockStmt(b) => {
+                ast::ArrowFunctionBody::FunctionBody(b) => {
                     for s in &b.stmts {
                         scan_stmt(scan, s, transparent);
                     }
                 }
-                ast::BlockStmtOrExpr::Expr(e) => scan_expr(scan, e, transparent),
+                ast::ArrowFunctionBody::Expr(e) => scan_expr(scan, e, transparent),
             }
         }
         E::Class(class_expr) => scan_class(scan, &class_expr.class, transparent),

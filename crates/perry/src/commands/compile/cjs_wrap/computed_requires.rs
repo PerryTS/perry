@@ -143,6 +143,19 @@ impl Visit for ComputedRequires {
         self.bindings.pop();
     }
 
+    fn visit_function_body(&mut self, body: &ast::FunctionBody) {
+        // Function bodies used to visit as BlockStmt. Retain their lexical
+        // predeclarations so a later let/const binding shadows require throughout.
+        self.bindings.push(HashMap::new());
+        for statement in &body.stmts {
+            if let ast::Stmt::Decl(declaration) = statement {
+                self.predeclare(declaration);
+            }
+        }
+        body.visit_children_with(self);
+        self.bindings.pop();
+    }
+
     fn visit_call_expr(&mut self, call: &ast::CallExpr) {
         if let ast::Callee::Expr(callee) = &call.callee {
             if matches!(callee.as_ref(), ast::Expr::Ident(name) if self.is_require(name.sym.as_ref()))
@@ -221,16 +234,16 @@ impl Visit for ComputedRequires {
     fn visit_getter_prop(&mut self, getter: &ast::GetterProp) {
         getter.key.visit_with(self);
         self.parameters(std::iter::empty());
-        self.hoist(&getter.body);
-        getter.body.visit_with(self);
+        self.hoist(&getter.function.body);
+        getter.function.body.visit_with(self);
         self.leave_function();
     }
 
     fn visit_setter_prop(&mut self, setter: &ast::SetterProp) {
         setter.key.visit_with(self);
-        self.parameters(std::iter::once(setter.param.as_ref()));
-        self.hoist(&setter.body);
-        setter.body.visit_with(self);
+        self.parameters(setter.function.params.iter().map(|param| &param.pat));
+        self.hoist(&setter.function.body);
+        setter.function.body.visit_with(self);
         self.leave_function();
     }
 
@@ -335,5 +348,21 @@ mod tests {
             1
         );
         assert!(offsets("const r = require; r = other; r(name);").is_empty());
+    }
+
+    #[test]
+    fn function_body_lexical_bindings_and_accessor_parameters_shadow_require() {
+        for source in [
+            "function load() { require(name); let require = other; }",
+            "const load = () => { require(name); const require = other; };",
+            "const obj = { get value() { require(name); let require = other; } };",
+            "const obj = { set value(require) { require(name); } };",
+        ] {
+            assert!(offsets(source).is_empty(), "{source}");
+        }
+        assert_eq!(
+            offsets("const obj = { get value() { return require(name); }, set value(v) { require(v); } };").len(),
+            2
+        );
     }
 }

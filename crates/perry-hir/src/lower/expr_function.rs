@@ -64,7 +64,7 @@ pub(crate) fn capture_function_source(
     );
 }
 
-fn block_has_use_strict(block: Option<&ast::BlockStmt>) -> bool {
+fn block_has_use_strict(block: Option<&ast::FunctionBody>) -> bool {
     let Some(block) = block else {
         return false;
     };
@@ -79,10 +79,10 @@ fn block_has_use_strict(block: Option<&ast::BlockStmt>) -> bool {
     false
 }
 
-fn arrow_body_has_use_strict(body: &ast::BlockStmtOrExpr) -> bool {
+fn arrow_body_has_use_strict(body: &ast::ArrowFunctionBody) -> bool {
     match body {
-        ast::BlockStmtOrExpr::BlockStmt(block) => block_has_use_strict(Some(block)),
-        ast::BlockStmtOrExpr::Expr(_) => false,
+        ast::ArrowFunctionBody::FunctionBody(block) => block_has_use_strict(Some(block)),
+        ast::ArrowFunctionBody::Expr(_) => false,
     }
 }
 
@@ -210,10 +210,10 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     let body_class_expr_captures_mark = ctx.body_class_expr_captures.len();
     let strict = ctx.current_strict_mode()
         || match &*arrow.body {
-            ast::BlockStmtOrExpr::BlockStmt(block) => {
+            ast::ArrowFunctionBody::FunctionBody(block) => {
                 crate::lower_decl::body_has_use_strict(&block.stmts)
             }
-            ast::BlockStmtOrExpr::Expr(_) => false,
+            ast::ArrowFunctionBody::Expr(_) => false,
         };
     ctx.enter_strict_mode(strict);
 
@@ -382,10 +382,10 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
     // eagerly invoke the call and break user code.
     crate::lower::unrebound_params::note(ctx, &params, arrow.params.iter(), Some(&*arrow.body));
     let mut body = match &*arrow.body {
-        ast::BlockStmtOrExpr::BlockStmt(block) => {
-            crate::lower_decl::lower_fn_body_block_stmt(ctx, block)?
+        ast::ArrowFunctionBody::FunctionBody(block) => {
+            crate::lower_decl::lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
         }
-        ast::BlockStmtOrExpr::Expr(expr) => {
+        ast::ArrowFunctionBody::Expr(expr) => {
             let return_expr = lower_expr(ctx, expr)?;
             vec![Stmt::Return(Some(return_expr))]
         }
@@ -1127,8 +1127,11 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         // api` (Next.js tracer), which it misses. Shared with arrow / fn-decl
         // bodies (`lower_fn_body_block_stmt`). Bindings already pre-registered
         // above are skipped (the `already_in_scope` guard inside).
-        forward_boxed_ids =
-            crate::lower_decl::pre_register_forward_captured_lets(ctx, block, outer_locals_len);
+        forward_boxed_ids = crate::lower_decl::pre_register_forward_captured_lets(
+            ctx,
+            &block.stmts,
+            outer_locals_len,
+        );
     }
 
     // Lower body with JS hoisting: only function declarations are fully

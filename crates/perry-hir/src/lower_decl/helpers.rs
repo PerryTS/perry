@@ -433,8 +433,8 @@ fn expr_uses_arguments(expr: &ast::Expr) -> bool {
         // function must synthesize the binding so the arrow's closure
         // capture mechanism can see it via the scope chain.
         ast::Expr::Arrow(a) => match &*a.body {
-            ast::BlockStmtOrExpr::BlockStmt(b) => body_uses_arguments(&b.stmts),
-            ast::BlockStmtOrExpr::Expr(e) => expr_uses_arguments(e),
+            ast::ArrowFunctionBody::FunctionBody(b) => body_uses_arguments(&b.stmts),
+            ast::ArrowFunctionBody::Expr(e) => expr_uses_arguments(e),
         },
         // Sequence (comma) expressions: `return n.date = t, n.args = arguments, x`.
         // Minified bundlers (e.g. dayjs) hide `arguments` inside these, so the

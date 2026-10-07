@@ -177,7 +177,7 @@ pub(super) fn lower_nested_fn_decl(
         fn_decl.function.body.as_ref(),
     );
     let mut body = if let Some(ref block) = fn_decl.function.body {
-        lower_fn_body_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
     } else {
         Vec::new()
     };

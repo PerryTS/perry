@@ -328,7 +328,7 @@ fn lower_method_prop(
         method.function.body.as_ref(),
     );
     let mut body = if let Some(ref block) = method.function.body {
-        lower_fn_body_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
     } else {
         Vec::new()
     };
@@ -503,7 +503,7 @@ fn lower_accessor_prop(
     ctx: &mut LoweringContext,
     key: &ast::PropName,
     setter_param: Option<&ast::Pat>,
-    body: Option<&ast::BlockStmt>,
+    body: Option<&ast::FunctionBody>,
 ) -> Result<Option<(MethodKeyKind, Expr)>> {
     let accessor_key = match key {
         ast::PropName::Ident(ident) => MethodKeyKind::Static(ident.sym.to_string()),
@@ -578,7 +578,7 @@ fn lower_accessor_prop(
     }
 
     let mut body = if let Some(block) = body {
-        lower_fn_body_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
     } else {
         Vec::new()
     };
@@ -1200,8 +1200,12 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     // `js_object_define_accessor` op at this source position.
                     ast::Prop::Getter(getter) => {
                         ctx.object_super_home_stack.push(param_id);
-                        let lowered_getter =
-                            lower_accessor_prop(ctx, &getter.key, None, getter.body.as_ref());
+                        let lowered_getter = lower_accessor_prop(
+                            ctx,
+                            &getter.key,
+                            None,
+                            getter.function.body.as_ref(),
+                        );
                         ctx.object_super_home_stack.pop();
                         if let Some((gkey, closure)) = lowered_getter? {
                             ops.push(SpreadOp::DefineAccessor {
@@ -1216,8 +1220,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         let lowered_setter = lower_accessor_prop(
                             ctx,
                             &setter.key,
-                            Some(setter.param.as_ref()),
-                            setter.body.as_ref(),
+                            setter.function.params.first().map(|param| &param.pat),
+                            setter.function.body.as_ref(),
                         );
                         ctx.object_super_home_stack.pop();
                         if let Some((skey, closure)) = lowered_setter? {

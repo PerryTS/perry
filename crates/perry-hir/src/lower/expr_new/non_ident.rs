@@ -54,19 +54,15 @@ pub(crate) fn register_stream_controller_params(
                                             if let Some((_, idx, mod_name, class_name)) =
                                                 field_specs.iter().find(|(f, _, _, _)| *f == name)
                                             {
-                                                let pat: Option<&ast::Pat> = match kv.value.as_ref()
+                                                let pat: Option<std::borrow::Cow<'_, ast::Pat>> = match kv.value.as_ref()
                                                 {
                                                     ast::Expr::Arrow(arrow) => {
-                                                        arrow.params.get(*idx)
+                                                        arrow.params.get(*idx).map(std::borrow::Cow::Borrowed)
                                                     }
-                                                    ast::Expr::Fn(fn_expr) => fn_expr
-                                                        .function
-                                                        .params
-                                                        .get(*idx)
-                                                        .map(|p| &p.pat),
+                                                    ast::Expr::Fn(fn_expr) => perry_parser::function_parameter_patterns(&fn_expr.function).nth(*idx),
                                                     _ => None,
                                                 };
-                                                if let Some(ast::Pat::Ident(pid)) = pat {
+                                                if let Some(ast::Pat::Ident(pid)) = pat.as_deref() {
                                                     ctx.register_native_instance(
                                                         pid.id.sym.to_string(),
                                                         mod_name.to_string(),
@@ -87,15 +83,19 @@ pub(crate) fn register_stream_controller_params(
                                             if let Some((_, idx, mod_name, class_name)) =
                                                 field_specs.iter().find(|(f, _, _, _)| *f == name)
                                             {
-                                                if let Some(param) = m.function.params.get(*idx) {
-                                                    if let ast::Pat::Ident(pid) = &param.pat {
-                                                        ctx.register_native_instance(
-                                                            pid.id.sym.to_string(),
-                                                            mod_name.to_string(),
-                                                            class_name.to_string(),
-                                                        );
-                                                        handled = true;
-                                                    }
+                                                if let Some(ast::Pat::Ident(pid)) =
+                                                    perry_parser::function_parameter_patterns(
+                                                        &m.function,
+                                                    )
+                                                    .nth(*idx)
+                                                    .as_deref()
+                                                {
+                                                    ctx.register_native_instance(
+                                                        pid.id.sym.to_string(),
+                                                        mod_name.to_string(),
+                                                        class_name.to_string(),
+                                                    );
+                                                    handled = true;
                                                 }
                                             }
                                         }

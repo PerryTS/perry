@@ -710,7 +710,7 @@ fn collect_top_level_closure_reassigned_identifiers(ast_module: &ast::Module) ->
                     }
                 }
                 ast::Expr::Arrow(arrow) => {
-                    if let ast::BlockStmtOrExpr::BlockStmt(body) = arrow.body.as_ref() {
+                    if let ast::ArrowFunctionBody::FunctionBody(body) = arrow.body.as_ref() {
                         collect_stmts(&body.stmts, &arrow.params, &mut out);
                     }
                 }
@@ -1065,12 +1065,10 @@ pub fn lower_module_full_with_platform_globals(
 
                 // No implementation exists - treat as external FFI declaration
                 // Extract parameter types for FFI signature
-                let param_types: Vec<Type> = fn_decl
-                    .function
-                    .params
-                    .iter()
-                    .map(|param| extract_param_type_with_ctx(&param.pat, None))
-                    .collect();
+                let param_types: Vec<Type> =
+                    perry_parser::function_parameter_patterns(&fn_decl.function)
+                        .map(|pat| extract_param_type_with_ctx(&pat, None))
+                        .collect();
 
                 // Extract return type
                 let return_type = fn_decl

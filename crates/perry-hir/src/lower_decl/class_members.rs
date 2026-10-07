@@ -190,7 +190,7 @@ pub fn lower_constructor(
     // inner function declarations that need PreallocateBoxes for sibling
     // captures.
     let mut body = if let Some(ref block) = ctor.body {
-        lower_fn_body_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
     } else {
         Vec::new()
     };
@@ -648,7 +648,7 @@ pub fn lower_class_method_with_name(
     );
     // Lower body — see issue #569.
     let mut body = if let Some(ref block) = method.function.body {
-        lower_fn_body_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
     } else {
         Vec::new()
     };
@@ -812,7 +812,7 @@ pub fn lower_getter_method_with_name(
 
     // Lower body — see issue #569.
     let mut body = if let Some(ref block) = method.function.body {
-        lower_fn_body_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
     } else {
         Vec::new()
     };
@@ -970,7 +970,7 @@ pub fn lower_setter_method_with_name(
 
     // Lower body — see issue #569.
     let mut body = if let Some(ref block) = method.function.body {
-        lower_fn_body_block_stmt(ctx, block)?
+        lower_fn_body_block_stmt(ctx, block.span, &block.stmts)?
     } else {
         Vec::new()
     };

@@ -203,8 +203,8 @@ fn hint_walk_expr(e: &ast::Expr, hints: &mut std::collections::HashMap<u32, u32>
             }
         }
         E::Arrow(a) => match &*a.body {
-            ast::BlockStmtOrExpr::BlockStmt(b) => hint_scan_stmts(&b.stmts, hints),
-            ast::BlockStmtOrExpr::Expr(x) => hint_walk_expr(x, hints),
+            ast::ArrowFunctionBody::FunctionBody(b) => hint_scan_stmts(&b.stmts, hints),
+            ast::ArrowFunctionBody::Expr(x) => hint_walk_expr(x, hints),
         },
         E::Class(c) => hint_walk_class(&c.class, hints),
         E::Paren(p) => hint_walk_expr(&p.expr, hints),

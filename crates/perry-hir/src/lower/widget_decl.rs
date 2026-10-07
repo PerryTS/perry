@@ -71,21 +71,27 @@ pub(crate) fn try_lower_widget_decl(
                     let key = prop_name_to_string(&method.key);
                     if key == "render" {
                         // Extract parameter name
-                        if let Some(param) = method.function.params.first() {
-                            if let ast::Pat::Ident(ident) = &param.pat {
-                                entry_param_name = ident.id.sym.to_string();
-                            }
+                        if let Some(ast::Pat::Ident(ident)) =
+                            perry_parser::function_parameter_patterns(&method.function)
+                                .next()
+                                .as_deref()
+                        {
+                            entry_param_name = ident.id.sym.to_string();
                         }
                         // Check for 2nd parameter (family)
-                        if let Some(param) = method.function.params.get(1) {
-                            if let ast::Pat::Ident(ident) = &param.pat {
-                                family_param_name = Some(ident.id.sym.to_string());
-                            }
+                        if let Some(ast::Pat::Ident(ident)) =
+                            perry_parser::function_parameter_patterns(&method.function)
+                                .nth(1)
+                                .as_deref()
+                        {
+                            family_param_name = Some(ident.id.sym.to_string());
                         }
                         // Extract type annotation for entry fields (only if not already specified via entryFields)
                         if entry_fields.is_empty() {
-                            if let Some(param) = method.function.params.first() {
-                                extract_entry_fields_from_param(&param.pat, &mut entry_fields);
+                            if let Some(param) =
+                                perry_parser::function_parameter_patterns(&method.function).next()
+                            {
+                                extract_entry_fields_from_param(&param, &mut entry_fields);
                             }
                         }
                         // Parse render body — detect family switches
@@ -171,14 +177,14 @@ pub(crate) fn try_lower_widget_decl(
                     };
                     provider_func_name = Some(func_name);
                     match arrow.body.as_ref() {
-                        ast::BlockStmtOrExpr::BlockStmt(block) => {
+                        ast::ArrowFunctionBody::FunctionBody(block) => {
                             scan_provider_stmts_for_reload_policy(
                                 &block.stmts,
                                 &mut reload_policy_seconds,
                                 &mut reload_policy_unparsed,
                             );
                         }
-                        ast::BlockStmtOrExpr::Expr(expr) => {
+                        ast::ArrowFunctionBody::Expr(expr) => {
                             scan_provider_return_expr_for_reload_policy(
                                 expr,
                                 &mut reload_policy_seconds,
@@ -247,12 +253,12 @@ pub(crate) fn try_lower_widget_decl(
                     }
                     // Parse body
                     match arrow.body.as_ref() {
-                        ast::BlockStmtOrExpr::Expr(expr) => {
+                        ast::ArrowFunctionBody::Expr(expr) => {
                             if let Some(node) = parse_widget_node(expr) {
                                 render_body.push(node);
                             }
                         }
-                        ast::BlockStmtOrExpr::BlockStmt(block) => {
+                        ast::ArrowFunctionBody::FunctionBody(block) => {
                             let nodes = parse_render_body_stmts(&block.stmts, &family_param_name);
                             render_body = nodes;
                         }
@@ -1083,8 +1089,8 @@ fn parse_foreach_node(args: &[ast::ExprOrSpread]) -> Option<WidgetNode> {
     };
 
     let body = match arrow.body.as_ref() {
-        ast::BlockStmtOrExpr::Expr(expr) => parse_widget_node(expr)?,
-        ast::BlockStmtOrExpr::BlockStmt(block) => {
+        ast::ArrowFunctionBody::Expr(expr) => parse_widget_node(expr)?,
+        ast::ArrowFunctionBody::FunctionBody(block) => {
             for stmt in &block.stmts {
                 if let ast::Stmt::Return(ret) = stmt {
                     if let Some(arg) = &ret.arg {

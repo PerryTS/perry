@@ -538,8 +538,8 @@ fn fn_body_has_stray_private_name(fn_expr: &ast::FnExpr) -> bool {
                 .map(|b| b.stmts.iter().any(stmt_has))
                 .unwrap_or(false),
             ast::Expr::Arrow(a) => match a.body.as_ref() {
-                ast::BlockStmtOrExpr::BlockStmt(b) => b.stmts.iter().any(stmt_has),
-                ast::BlockStmtOrExpr::Expr(e) => expr_has(e),
+                ast::ArrowFunctionBody::FunctionBody(b) => b.stmts.iter().any(stmt_has),
+                ast::ArrowFunctionBody::Expr(e) => expr_has(e),
             },
             // Private names are legal inside class bodies.
             ast::Expr::Class(_) => false,
@@ -1712,7 +1712,7 @@ fn build_eval_completion_iife(
     let Some(mut arrow) = extract_arrow_expr_owned(template_module) else {
         return Ok(None);
     };
-    let ast::BlockStmtOrExpr::BlockStmt(body) = arrow.body.as_mut() else {
+    let ast::ArrowFunctionBody::FunctionBody(body) = arrow.body.as_mut() else {
         return Ok(None);
     };
     if body.stmts.len() != 3 {

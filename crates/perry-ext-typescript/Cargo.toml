@@ -17,15 +17,14 @@ perry-ffi.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 swc_bundler.workspace = true
-swc_common = "26.0"
-swc_ecma_ast = "29.0"
-swc_ecma_codegen = "32.0"
+swc_common.workspace = true
+swc_ecma_ast.workspace = true
+swc_ecma_codegen.workspace = true
 swc_ecma_loader.workspace = true
-# Runtime transpilation and Bun.build use the SWC generation required by
-# bundler 56 / loader 27. Their C ABI carries strings and JS values, not SWC
-# ASTs; Perry's compiler parser/HIR keep their separately compatible stack.
-swc_ecma_parser = "45.1"
-swc_ecma_transforms_base = "49.0"
+# Runtime transpilation, Bun.build and compiler parsing/lowering share the
+# SWC generation required by bundler 56 / loader 27.
+swc_ecma_parser.workspace = true
+swc_ecma_transforms_base.workspace = true
 swc_ecma_transforms_react.workspace = true
 swc_ecma_transforms_typescript.workspace = true
-swc_ecma_visit = "29.0"
+swc_ecma_visit.workspace = true
