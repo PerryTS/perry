@@ -334,16 +334,6 @@ pub(crate) fn test_seed_symbol_property_root(owner: usize, sym_key: usize, value
 }
 
 #[cfg(test)]
-pub(crate) fn test_symbol_property_roots(owner: usize) -> Vec<(usize, u64)> {
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    guard
-        .as_ref()
-        .and_then(|map| map.get(&owner))
-        .cloned()
-        .unwrap_or_default()
-}
-
-#[cfg(test)]
 pub(crate) fn test_symbol_property_root_bits(owner: usize, sym_key: usize) -> Option<u64> {
     let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
     guard.as_ref().and_then(|map| {
