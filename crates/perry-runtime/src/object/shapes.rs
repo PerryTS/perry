@@ -2472,6 +2472,15 @@ pub(crate) fn shape_record_by_id(shape_id: u32) -> Option<ShapeRecordRef> {
     std::ptr::NonNull::new(record).map(ShapeRecordRef)
 }
 
+/// Whether a previously published ShapeId no longer names a live record in
+/// this agent's shape table. ShapeIds are never reused: a retired receiver
+/// cannot compete with a live one in a read cache.
+/// Miss paths only; hit paths validate their existing shape/holder/lane facts.
+#[inline]
+pub(crate) fn shape_is_retired(shape_id: u32) -> bool {
+    ShapeSlab::agent_record_present(shape_id).is_none()
+}
+
 /// The field-representation word (`field_rep`) of `shape_id` in this agent,
 /// deprecated lanes included. An id that names no record here reads the
 /// absent record's word, 0 — `Any` in every lane, which is exactly the

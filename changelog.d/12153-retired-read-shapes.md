@@ -1,0 +1,1 @@
+Unify ordinary read-holder expiry for getter, data and absent entries through the shape table’s shared `shape_is_retired` miss helper. Retired receiver ShapeIds do not consume the replacement budget; prior live-shape churn remains counted. Extend the moving-GC witness to all three entries and interleaved live polymorphism.
