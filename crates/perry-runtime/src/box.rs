@@ -112,12 +112,13 @@ pub(crate) fn has_cell_type(addr: usize, kind: u8, size: Option<usize>) -> bool 
         return false;
     }
     unsafe {
-        crate::value::addr_class::try_read_tracked_gc_header(addr).is_some_and(|header| {
-            let header = header.as_ref();
-            header.obj_type == kind
-                && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-                && size.is_none_or(|size| header.size as usize == size)
-        })
+        crate::value::addr_class::try_read_tracked_gc_header_of_type(addr, kind).is_some_and(
+            |header| {
+                let header = header.as_ref();
+                header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                    && size.is_none_or(|size| header.size as usize == size)
+            },
+        )
     }
 }
 fn is_registered_box_ptr(ptr: *mut Box) -> bool {
