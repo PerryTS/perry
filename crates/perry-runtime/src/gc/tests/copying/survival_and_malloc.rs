@@ -871,11 +871,9 @@ fn test_copying_minor_old_to_malloc_nursery_grandchild_survives() {
 // movable Promise precedent.
 #[test]
 fn test_movable_date_evacuation_migrates_expando_and_preserves_ts() {
-    // Date cells are movable (#6186). The flag only gates old-page defrag, but
-    // any move (incl. copied-minor evacuation, via `gc_type_after_payload_move`)
-    // runs the ExoticExpandoOwner hook — so a Date's `d.foo = ...` expandos must
-    // migrate with the cell and its `ts` must survive, per the movable-Promise
-    // precedent.
+    // Date cells are movable (#6186). Their metadata owns the property bag,
+    // so evacuation must preserve both that edge and the timestamp, and
+    // trace the bag's slots without an address-owned expando entry.
     assert!(
         crate::gc::gc_type_is_movable(crate::gc::GC_TYPE_DATE_CELL),
         "GC_TYPE_DATE_CELL must be movable after #6186"
@@ -892,7 +890,9 @@ fn test_movable_date_evacuation_migrates_expando_and_preserves_ts() {
         "tag",
         expando_val.to_bits(),
     );
-    assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(date_addr));
+    assert!(!crate::object::exotic_expando::test_exotic_expando_entry_exists(date_addr));
+    let bag_before = unsafe { crate::object::exotic_expando::property_bag(date_addr) };
+    assert!(!bag_before.is_null(), "the Date owns its property holder");
     js_shadow_slot_set(0, ptr_bits(date_addr));
 
     let _ = gc_collect_minor();
@@ -909,11 +909,20 @@ fn test_movable_date_evacuation_migrates_expando_and_preserves_ts() {
     assert_eq!(moved_ts, ts, "Date ts must survive evacuation");
     assert!(crate::date::is_date_cell_addr(new_addr));
 
-    // Expando migrated to the new address (ExoticExpandoOwner move hook fired)
-    // and does not linger at the stale old address.
+    // The Date's metadata edge and the holder's value slot both survive.
+    let bag_after = unsafe { crate::object::exotic_expando::property_bag(new_addr) };
+    assert_ne!(bag_before, bag_after, "the owned holder must evacuate too");
+    assert_eq!(
+        crate::object::exotic_expando::value_lookup(
+            crate::object::exotic_expando::ExoticKind::Date,
+            new_addr,
+            "tag",
+        ),
+        Some(expando_val.to_bits()),
+    );
     assert!(
-        crate::object::exotic_expando::test_exotic_expando_entry_exists(new_addr),
-        "expando must migrate to the evacuated Date's new address"
+        !crate::object::exotic_expando::test_exotic_expando_entry_exists(new_addr),
+        "the evacuated Date must not need an expando owner-table entry"
     );
     assert!(
         !crate::object::exotic_expando::test_exotic_expando_entry_exists(date_addr),

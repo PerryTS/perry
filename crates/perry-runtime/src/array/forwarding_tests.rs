@@ -47,14 +47,37 @@ fn growth_of_old_array_keeps_forwarding_target_out_of_copying_nursery() {
 }
 
 #[test]
-fn growth_transfers_array_descriptor_side_tables() {
+fn growth_preserves_the_owned_array_accessor_pair_and_attributes() {
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let initial = js_array_alloc_literal(1);
     let first = js_array_grow(initial, 2);
+    extern "C" fn get_value(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        42.0
+    }
+    extern "C" fn set_value(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+        _value: f64,
+    ) -> f64 {
+        84.0
+    }
+    let get = crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(
+        crate::fn_info!(get_value, 0),
+        0,
+    ) as i64)
+    .to_bits();
+    let set = crate::value::js_nanbox_pointer(crate::closure::js_closure_alloc(
+        crate::fn_info!(set_value, 1),
+        0,
+    ) as i64)
+    .to_bits();
     crate::object::set_accessor_descriptor(
         first as usize,
         "1".to_string(),
-        crate::object::AccessorDescriptor { get: 42, set: 84 },
+        crate::object::AccessorDescriptor { get, set },
     );
     crate::object::set_property_attrs(
         first as usize,
@@ -66,8 +89,8 @@ fn growth_transfers_array_descriptor_side_tables() {
 
     let accessor = crate::object::get_accessor_descriptor(second as usize, "1")
         .expect("accessor descriptor must follow array growth");
-    assert_eq!(accessor.get, 42);
-    assert_eq!(accessor.set, 84);
+    assert_eq!(accessor.get, get);
+    assert_eq!(accessor.set, set);
     let attrs = crate::object::get_property_attrs(second as usize, "1")
         .expect("property attributes must follow array growth");
     assert!(!attrs.writable());
