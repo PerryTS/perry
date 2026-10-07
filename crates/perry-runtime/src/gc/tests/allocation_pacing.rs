@@ -7,6 +7,8 @@ const MIB: usize = 1024 * 1024;
 #[test]
 fn nursery_garbage_cannot_reset_mature_reclaim_backoff() {
     let _isolation = GcTestIsolationGuard::new();
+    // This fixture measures old-arena debt and holes, so keep its byte payloads there.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     let _moving = policy::force_moving_gc_pacing();
     let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let frame = js_shadow_frame_push(1);
@@ -49,6 +51,8 @@ fn nursery_garbage_cannot_reset_mature_reclaim_backoff() {
 #[test]
 fn an_owed_boundary_full_does_not_start_a_redundant_budgeted_minor() {
     let _isolation = GcTestIsolationGuard::new();
+    // This fixture measures old-arena debt and holes, so keep its byte payloads there.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     let _moving = policy::force_moving_gc_pacing();
     let thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);
@@ -82,6 +86,8 @@ fn an_owed_boundary_full_does_not_start_a_redundant_budgeted_minor() {
 #[test]
 fn a_parked_budgeted_minor_cannot_block_a_dead_large_buffer_burst() {
     let _isolation = GcTestIsolationGuard::new();
+    // This fixture measures old-arena debt and holes, so keep its byte payloads there.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     let _moving = policy::force_moving_gc_pacing();
     let thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);
@@ -120,6 +126,8 @@ fn a_parked_budgeted_minor_cannot_block_a_dead_large_buffer_burst() {
 #[test]
 fn a_budgeted_full_pays_only_the_burst_present_at_its_boundary_start() {
     let _isolation = GcTestIsolationGuard::new();
+    // This fixture measures old-arena debt and holes, so keep its byte payloads there.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     let _moving = policy::force_moving_gc_pacing();
     let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);
@@ -171,6 +179,8 @@ fn a_budgeted_full_pays_only_the_burst_present_at_its_boundary_start() {
 #[test]
 fn mutator_windows_in_a_budgeted_minor_still_count_allocation() {
     let _isolation = GcTestIsolationGuard::new();
+    // This fixture measures old-arena debt and holes, so keep its byte payloads there.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);
     let before = test_debt().0;
@@ -189,6 +199,8 @@ fn mutator_windows_in_a_budgeted_minor_still_count_allocation() {
 #[test]
 fn large_buffer_burst_reclaims_at_a_precise_boundary_and_keeps_roots() {
     let _isolation = GcTestIsolationGuard::new();
+    // This fixture measures old-arena debt and holes, so keep its byte payloads there.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     let _moving = policy::force_moving_gc_pacing();
     let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);
@@ -234,6 +246,8 @@ fn large_buffer_burst_reclaims_at_a_precise_boundary_and_keeps_roots() {
 #[test]
 fn minors_preserve_allocation_debt_and_collector_copies_do_not_add_to_it() {
     let _isolation = GcTestIsolationGuard::new();
+    // This fixture measures old-arena debt and holes, so keep its byte payloads there.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);
     crate::buffer::js_buffer_alloc(2 * MIB as i32, 1);
@@ -248,6 +262,8 @@ fn minors_preserve_allocation_debt_and_collector_copies_do_not_add_to_it() {
 #[test]
 fn malloc_growth_and_external_releases_keep_byte_pressure() {
     let _isolation = GcTestIsolationGuard::new();
+    // This fixture measures old-arena debt and holes, so keep its byte payloads there.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);
     let p = gc_malloc(MIB, GC_TYPE_BUFFER);
@@ -273,6 +289,8 @@ fn malloc_growth_and_external_releases_keep_byte_pressure() {
 #[test]
 fn process_pressure_combines_heaps_and_thread_exit_removes_their_debt() {
     let _isolation = GcTestIsolationGuard::new();
+    // This fixture measures old-arena debt and holes, so keep its byte payloads there.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     finish_full(0, 4 * MIB);
     let (ready_tx, ready_rx) = std::sync::mpsc::channel();
     let (exit_tx, exit_rx) = std::sync::mpsc::channel();
@@ -300,6 +318,8 @@ fn process_pressure_combines_heaps_and_thread_exit_removes_their_debt() {
 #[test]
 fn generated_bumps_and_runtime_bumps_are_counted_once() {
     let _isolation = GcTestIsolationGuard::new();
+    // This fixture measures old-arena debt and holes, so keep its byte payloads there.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);
     let before = test_debt().0;
@@ -337,6 +357,8 @@ fn generated_bumps_and_runtime_bumps_are_counted_once() {
 #[test]
 fn old_hole_reuse_counts_bytes_even_when_the_bump_pointer_stands_still() {
     let _isolation = GcTestIsolationGuard::new();
+    // This fixture measures old-arena debt and holes, so keep its byte payloads there.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);
     crate::buffer::js_buffer_alloc((MIB / 2) as i32, 3);
@@ -361,6 +383,8 @@ fn old_hole_reuse_counts_bytes_even_when_the_bump_pointer_stands_still() {
 #[test]
 fn a_mid_task_full_does_not_erase_the_later_dead_buffer_opportunity() {
     let _isolation = GcTestIsolationGuard::new();
+    // This fixture measures old-arena debt and holes, so keep its byte payloads there.
+    let _placement = policy::ByteStorePolicyTestGuard::new(usize::MAX);
     let _moving = policy::force_moving_gc_pacing();
     let _thresholds = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     finish_full(0, 4 * MIB);

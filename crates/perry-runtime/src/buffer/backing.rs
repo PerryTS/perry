@@ -1,7 +1,7 @@
 //! Owned, 8-aligned native bytes. The GC wrapper stays in its own heap;
 //! only this allocation crosses threads. Allocation and free both use Rust's
 //! process-global allocator (as SharedArrayBuffer does), including remote frees.
-use std::alloc::{alloc_zeroed, dealloc, handle_alloc_error, Layout};
+use std::alloc::{alloc, alloc_zeroed, dealloc, handle_alloc_error, Layout};
 use std::sync::Mutex;
 
 #[derive(Debug)]
@@ -18,6 +18,21 @@ impl Backing {
     pub(crate) fn zeroed(capacity: u32) -> Self {
         let layout = Self::layout(capacity);
         let data = unsafe { alloc_zeroed(layout) };
+        if data.is_null() {
+            handle_alloc_error(layout);
+        }
+        #[cfg(test)]
+        LIVE_BACKINGS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self {
+            data,
+            capacity,
+            alignment: 8,
+        }
+    }
+
+    pub(crate) fn uninit(capacity: u32) -> Self {
+        let layout = Self::layout(capacity);
+        let data = unsafe { alloc(layout) };
         if data.is_null() {
             handle_alloc_error(layout);
         }
@@ -62,7 +77,7 @@ impl Backing {
     }
 
     pub(crate) unsafe fn copy(data: *const u8, length: u32) -> Self {
-        let backing = Self::zeroed(length);
+        let backing = Self::uninit(length);
         if length != 0 {
             std::ptr::copy_nonoverlapping(data, backing.data, length as usize);
         }

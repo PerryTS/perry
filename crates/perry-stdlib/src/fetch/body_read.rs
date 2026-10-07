@@ -75,7 +75,7 @@ fn text(body: Vec<u8>, _: String) -> Result<f64, f64> {
 fn json(body: Vec<u8>, _: String) -> Result<f64, f64> {
     unsafe { parse_json_body(&body).map(|v| f64::from_bits(v.bits())) }
 }
-fn body_bytes(body: Vec<u8>, brand: perry_runtime::buffer::bytes::Brand) -> f64 {
+pub(super) fn body_bytes(body: Vec<u8>, brand: perry_runtime::buffer::bytes::Brand) -> f64 {
     let len = body.len();
     let (value, pin) = perry_runtime::buffer::bytes::new_bytes(
         brand,

@@ -1,0 +1,12 @@
+import { Buffer } from 'node:buffer';
+declare function gc(): void;
+const parts: Buffer[] = [];
+for (let i = 0; i < 300; i++) parts.push(Buffer.alloc(17476, i & 255));
+const big = Buffer.concat(parts);
+const view = big.subarray(1);
+if (typeof gc === 'function') gc();
+console.log('concat', big.length, big.readUInt32BE(17476), big.buffer === view.buffer);
+view[0] = 91;
+console.log('shared', big[1], new Uint8Array(big.buffer, big.byteOffset, big.length)[1]);
+const tail = Buffer.concat([Buffer.from([1, 2])], 5);
+console.log('tail', tail.toString('hex'));

@@ -94,7 +94,7 @@ mod transfer_tests {
     #[test]
     fn worker_data_adopts_transfer_once_and_roots_repeated_reads() {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
-        let source = perry_runtime::buffer::js_array_buffer_new(16);
+        let source = perry_runtime::buffer::js_array_buffer_new(128 * 1024);
         let original = perry_runtime::buffer::bytes::no_gc(|scope| {
             perry_runtime::buffer::bytes::bytes(
                 perry_runtime::value::js_nanbox_pointer(source as i64),
@@ -130,7 +130,7 @@ mod transfer_tests {
                 original
             )
         });
-        assert_eq!(unsafe { (*buffer).length }, 16);
+        assert_eq!(unsafe { (*buffer).length }, 128 * 1024);
         CURRENT_WORKER_DATA.with(|slot| *slot.borrow_mut() = None);
     }
 }

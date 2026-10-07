@@ -7,27 +7,14 @@ crate::perry_thread_local! {
     static POOL_OFFSET: Cell<u32> = const { Cell::new(0) };
 }
 
-#[derive(Clone, Copy)]
-pub(crate) enum Init {
-    Copy,
-    Unsafe,
-    Zeroed,
+pub(crate) use super::store::Init;
+
+pub(crate) fn place(brand: u8, init: Init<'_>, len: u32) -> *mut BufferHeader {
+    super::store::store_alloc(brand, len, init)
 }
 
-/// Only Buffer copy/unsafe allocation participates; typed arrays never pool.
-pub(crate) fn place(brand: u8, init: Init, len: u32) -> *mut BufferHeader {
-    if brand != crate::gc::GC_TYPE_BUFFER || matches!(init, Init::Zeroed) || len == 0 {
-        return super::buffer_alloc(len);
-    }
-    let requested = crate::object::native_module::buffer_pool_size();
-    let size = if requested.is_finite() && requested > 0.0 {
-        requested.min(crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as f64) as u32
-    } else {
-        0
-    };
-    if len >= size / 2 {
-        return super::buffer_alloc(len);
-    }
+/// PoolView is a mechanism; eligibility and the new pool size come from policy.
+pub(crate) fn alloc_view(size: u32, len: u32) -> *mut BufferHeader {
     // Construction does not collect with an unrooted source byte span live.
     let _suppress = crate::gc::GcSuppressScope::new();
     POOL_OWNER.with(|owner| {
@@ -35,9 +22,11 @@ pub(crate) fn place(brand: u8, init: Init, len: u32) -> *mut BufferHeader {
             let mut pool = owner.get();
             let start = offset.get();
             if pool == 0 || start.saturating_add(len) > (*(pool as *const BufferHeader)).capacity {
-                let fresh = super::buffer_alloc(size);
-                (*fresh).length = size;
-                super::mark_as_array_buffer(fresh as usize);
+                let fresh = super::store::store_alloc(
+                    crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
+                    size,
+                    Init::Uninit,
+                );
                 pool = fresh as usize;
                 owner.set(pool);
                 offset.set(0);
@@ -46,7 +35,7 @@ pub(crate) fn place(brand: u8, init: Init, len: u32) -> *mut BufferHeader {
                 );
             }
             let start = offset.get();
-            let view = super::store::new_view(brand, pool, start, len, false);
+            let view = super::store::new_view(crate::gc::GC_TYPE_BUFFER, pool, start, len, false);
             #[cfg(test)]
             if super::bytes::b4_sabotage("pool_identity") {
                 return super::buffer_alloc(len);
@@ -58,7 +47,7 @@ pub(crate) fn place(brand: u8, init: Init, len: u32) -> *mut BufferHeader {
 }
 
 pub(crate) fn copy(len: u32) -> *mut BufferHeader {
-    place(crate::gc::GC_TYPE_BUFFER, Init::Copy, len)
+    place(crate::gc::GC_TYPE_BUFFER, Init::PoolCopy, len)
 }
 
 pub(crate) fn scan_pool_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {

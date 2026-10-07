@@ -291,3 +291,94 @@ pub(crate) fn new_view(
         cell
     }
 }
+
+/// Initialization and provenance at the one store entry. PoolCopy/PoolUnsafe
+/// identify precisely the copying Buffer.from, allocUnsafe and concat paths.
+pub(crate) enum Init<'a> {
+    Zero,
+    Uninit,
+    Copy(&'a [u8]),
+    PoolCopy,
+    PoolUnsafe,
+    AdoptVec(Vec<u8>),
+    AdoptBacking(super::backing::Backing),
+    Foreign(*mut u8),
+    Shared,
+}
+
+pub(crate) fn store_alloc(brand: u8, len: u32, init: Init<'_>) -> *mut BufferHeader {
+    use super::backing::Backing;
+    use crate::gc::ByteStorePlacement;
+    super::bytes::assert_allocation_allowed();
+    let size = 1usize << crate::codegen_abi::BYTES_ELEMENT_SHIFT[(brand & 0x1f) as usize];
+    let byte_len = (len as usize)
+        .checked_mul(size)
+        .filter(|&n| n <= crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as usize)
+        .unwrap_or_else(|| crate::typedarray::throw_range_error(b"Array buffer allocation failed"));
+    let placement = crate::gc::byte_store_placement(brand, &init, byte_len);
+    #[cfg(test)]
+    let placement = if super::bytes::native_copy_fixture() {
+        ByteStorePlacement::Native
+    } else if super::bytes::sabotage("large_inline") {
+        ByteStorePlacement::Inline
+    } else {
+        placement
+    };
+    let capacity = byte_len as u32;
+    let ptr = match init {
+        Init::Shared => {
+            assert_eq!(brand, crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER);
+            return crate::shared_sab::alloc_shared_sab_impl(capacity);
+        }
+        Init::Foreign(data) => super::header::alloc_foreign(brand, data, len),
+        Init::AdoptBacking(backing) => super::header::alloc_backing(brand, backing, len),
+        init => {
+            let ptr = match placement {
+                ByteStorePlacement::PoolView { size } => super::pool::alloc_view(size, len),
+                ByteStorePlacement::Native => {
+                    let backing = match init {
+                        Init::Zero => Backing::zeroed(capacity),
+                        Init::Copy(body) => {
+                            assert_eq!(body.len(), byte_len);
+                            unsafe { Backing::copy(body.as_ptr(), capacity) }
+                        }
+                        Init::AdoptVec(body) => {
+                            assert_eq!(body.len(), byte_len);
+                            #[cfg(test)]
+                            let body = if super::bytes::sabotage("adopt_copy") {
+                                body.clone()
+                            } else {
+                                body
+                            };
+                            Backing::from_vec(body)
+                        }
+                        _ => Backing::uninit(capacity),
+                    };
+                    return super::header::alloc_backing(brand, backing, len);
+                }
+                ByteStorePlacement::Inline => super::header::alloc_inline(brand, capacity, len),
+            };
+            unsafe {
+                match init {
+                    Init::Zero => std::ptr::write_bytes(data(ptr as usize), 0, byte_len),
+                    Init::Copy(body) => {
+                        assert_eq!(body.len(), byte_len);
+                        std::ptr::copy_nonoverlapping(body.as_ptr(), data(ptr as usize), byte_len);
+                    }
+                    Init::AdoptVec(body) => {
+                        assert_eq!(body.len(), byte_len);
+                        std::ptr::copy_nonoverlapping(body.as_ptr(), data(ptr as usize), byte_len);
+                    }
+                    Init::Uninit | Init::PoolCopy | Init::PoolUnsafe => (),
+                    _ => unreachable!(),
+                }
+            }
+            ptr
+        }
+    };
+    ptr
+}
+
+#[cfg(test)]
+#[path = "store_tests.rs"]
+mod tests;

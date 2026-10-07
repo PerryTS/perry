@@ -407,9 +407,12 @@ pub(crate) unsafe fn nm_dispatch_buffer(ctx: &NmCtx, module_name: &str, method_n
             };
             ptr_to_f64(buf as *const u8)
         }
-        ("buffer.Buffer", "allocUnsafe") | ("buffer.Buffer", "allocUnsafeSlow") => {
+        ("buffer.Buffer", "allocUnsafe") => {
             let buf = crate::buffer::js_buffer_alloc_unsafe(i32_arg(0));
             ptr_to_f64(buf as *const u8)
+        }
+        ("buffer.Buffer", "allocUnsafeSlow") => {
+            ptr_to_f64(crate::buffer::js_buffer_alloc_unsafe_slow(arg(0)) as *const u8)
         }
         ("buffer.Buffer", "concat") => {
             let arr = ptr_addr(arg(0)) as *const crate::array::ArrayHeader;

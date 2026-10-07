@@ -88,10 +88,19 @@ pub(super) fn try_buffer_uint8array_statics(
                         encoding,
                     }));
                 }
-                "allocUnsafe" | "allocUnsafeSlow" => {
+                "allocUnsafe" => {
                     // #2013: missing `size` → Node ERR_INVALID_ARG_TYPE.
                     let size = args.first().cloned().unwrap_or(Expr::Undefined);
                     return Ok(Ok(Expr::BufferAllocUnsafe(Box::new(size))));
+                }
+                "allocUnsafeSlow" => {
+                    return Ok(Ok(Expr::NativeMethodCall {
+                        module: "buffer".to_string(),
+                        class_name: None,
+                        object: None,
+                        method: "allocUnsafeSlow".to_string(),
+                        args,
+                    }));
                 }
                 "concat" => {
                     let list = args.first().cloned().unwrap_or(Expr::Array(vec![]));
