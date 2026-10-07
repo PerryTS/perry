@@ -3,51 +3,51 @@ run-name: ${{ format('Maintenance / {0} / {1}', inputs.suite || 'scheduled', git
 on:
   pull_request:
     types:
-    - opened
-    - reopened
-    - synchronize
+      - opened
+      - reopened
+      - synchronize
     paths:
-    - .github/workflows/*.yml
-    - .github/workflows/ci-queue-reaper.yml
-    - .github/workflows/gate-failure-watch.yml
-    - .github/workflows/gate-freshness.yml
-    - .github/workflows/maintenance.yml
-    - .github/workflows/npm-publish-freshness.yml
-    - .github/workflows/soak-autofix.yml
-    - npm/**
-    - scripts/actions_catalog.json
-    - scripts/actions_plan.py
-    - scripts/check_gate_freshness.py
-    - scripts/check_npm_publish_freshness.py
-    - scripts/gate_failure_watch.json
-    - scripts/gate_failure_watch.py
-    - scripts/gate_freshness.json
-    - scripts/npm_publish_freshness.json
+      - .github/workflows/*.yml
+      - .github/workflows/ci-queue-reaper.yml
+      - .github/workflows/gate-failure-watch.yml
+      - .github/workflows/gate-freshness.yml
+      - .github/workflows/maintenance.yml
+      - .github/workflows/npm-publish-freshness.yml
+      - .github/workflows/soak-autofix.yml
+      - npm/**
+      - scripts/actions_catalog.json
+      - scripts/actions_plan.py
+      - scripts/check_gate_freshness.py
+      - scripts/check_npm_publish_freshness.py
+      - scripts/gate_failure_watch.json
+      - scripts/gate_failure_watch.py
+      - scripts/gate_freshness.json
+      - scripts/npm_publish_freshness.json
   schedule:
-  - cron: 13,43 * * * *
-  - cron: 17 0 * * *
-  - cron: 20 7 * * *
-  - cron: 5 */2 * * *
+    - cron: 13,43 * * * *
+    - cron: 17 0 * * *
+    - cron: 20 7 * * *
+    - cron: 5 */2 * * *
   workflow_run:
     workflows:
-    - CI
-    - Compiler and Runtime
-    - GC
-    - Integration
-    - Performance
+      - CI
+      - Compiler and Runtime
+      - GC
+      - Integration
+      - Performance
     types:
-    - completed
+      - completed
   workflow_dispatch:
     inputs:
       suite:
         description: Offline validation by default; choose a live task explicitly.
         type: choice
         options:
-        - validate
-        - ci-queue-reaper
-        - gate-freshness
-        - soak-autofix
-        - npm-publish-freshness
+          - validate
+          - ci-queue-reaper
+          - gate-freshness
+          - soak-autofix
+          - npm-publish-freshness
         default: validate
       apply:
         description: Apply queue cleanup; unchecked is dry run.
@@ -55,8 +55,7 @@ on:
         default: false
 permissions: {}
 concurrency:
-  group: maintenance-${{ github.event_name == 'pull_request' && github.ref || github.run_id
-    }}
+  group: maintenance-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   route:
@@ -71,36 +70,36 @@ jobs:
       module_inputs: ${{ steps.route.outputs.module_inputs }}
       validate: ${{ steps.route.outputs.validate }}
     steps:
-    - uses: ./.github/actions/perry/actions/checkout
-      with:
-        ref: ${{ github.sha }}
-        fetch-depth: '1'
-        persist-credentials: 'false'
-    - name: Route suites
-      id: route
-      env:
-        SUITE: ${{ inputs.suite }}
-        GH_TOKEN: ${{ github.token }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        EVENT_NAME: ${{ github.event_name }}
-        EVENT_PATH: ${{ github.event_path }}
-        REF: ${{ github.ref }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        args=(--category maintenance --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
-        if [[ "$EVENT_NAME" == "pull_request" ]]; then
-          python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
-          args+=(--changed-files changed-files.txt)
-        fi
-        args+=(--suite "${SUITE:-}")
-        python3 scripts/actions_plan.py "${args[@]}"
-        pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
-        \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
-        \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
-        \ \"${args[@]}\"\n"
+      - uses: ./.github/actions/perry/actions/checkout
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: '1'
+          persist-credentials: 'false'
+      - name: Route suites
+        id: route
+        env:
+          SUITE: ${{ inputs.suite }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          REF: ${{ github.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--category maintenance --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+            args+=(--changed-files changed-files.txt)
+          fi
+          args+=(--suite "${SUITE:-}")
+          python3 scripts/actions_plan.py "${args[@]}"
+          pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
+          \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
+          \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
+          \ \"${args[@]}\"\n"
   validate:
     name: Offline workflow and monitor checks
     needs: route
@@ -110,35 +109,35 @@ jobs:
     permissions:
       contents: read
     steps:
-    - uses: ./.github/actions/perry/actions/checkout
-      with:
-        ref: ${{ github.sha }}
-        fetch-depth: '1'
-        persist-credentials: 'false'
-    - name: Install YAML parser for audit scripts
-      run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
-    - name: Run offline routing and monitor checks
-      run: 'set -euo pipefail
+      - uses: ./.github/actions/perry/actions/checkout
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: '1'
+          persist-credentials: 'false'
+      - name: Install YAML parser for audit scripts
+        run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
+      - name: Run offline routing and monitor checks
+        run: 'set -euo pipefail
 
-        python3 scripts/test_actions_plan.py
+          python3 scripts/test_actions_plan.py
 
-        python3 scripts/check_actions_topology.py
+          python3 scripts/check_actions_topology.py
 
-        python3 scripts/check_gate_freshness.py --self-test
+          python3 scripts/check_gate_freshness.py --self-test
 
-        python3 scripts/gate_failure_watch.py --self-test
+          python3 scripts/gate_failure_watch.py --self-test
 
-        python3 scripts/gate_failure_watch.py --check-config
+          python3 scripts/gate_failure_watch.py --check-config
 
-        python3 scripts/check_npm_publish_freshness.py --self-test
+          python3 scripts/check_npm_publish_freshness.py --self-test
 
-        python3 scripts/check_npm_publish_freshness.py --check-manifest
+          python3 scripts/check_npm_publish_freshness.py --check-manifest
 
-        python3 scripts/gc_gate_wiring_check.py --self-test
+          python3 scripts/gc_gate_wiring_check.py --self-test
 
-        python3 scripts/reap_stale_ci_runs.py --self-test
+          python3 scripts/reap_stale_ci_runs.py --self-test
 
-        '
+          '
   reject-nonmain-write:
     name: Reject off-main maintenance writes
     needs: route
@@ -146,56 +145,497 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-    - name: Require main for live maintenance
-      run: |
-        echo "::error::${{ inputs.suite }} live maintenance may be dispatched only from refs/heads/main (got $GITHUB_REF). Queue cleanup is dry-run only off main."
-        exit 1
+      - name: Require main for live maintenance
+        run: |
+          echo "::error::${{ inputs.suite }} live maintenance may be dispatched only from refs/heads/main (got $GITHUB_REF). Queue cleanup is dry-run only off main."
+          exit 1
 
-  ci-queue-reaper:
-    name: ci-queue-reaper
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['ci-queue-reaper'] && (!inputs.apply || github.ref == 'refs/heads/main')
-    with:
-      apply: ${{ fromJSON(needs.route.outputs.module_inputs)['ci-queue-reaper'].apply
-        }}
+  ci-queue-reaper__reap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       actions: write
       pull-requests: read
-    uses: ./.github/workflows/ci-queue-reaper.yml
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Self-test the reaping policy
+        run: python3 scripts/reap_stale_ci_runs.py --self-test
+      - name: Reap stale queued pull-request runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLY: ${{ github.event_name == 'schedule' || fromJSON(needs.route.outputs.module_inputs)['ci-queue-reaper'].apply }}
+        run: |
+          set -euo pipefail
+          if [[ "$APPLY" == "true" ]]; then
+            python3 scripts/reap_stale_ci_runs.py --apply
+          else
+            python3 scripts/reap_stale_ci_runs.py
+          fi
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['ci-queue-reaper'] && (!inputs.apply || github.ref == 'refs/heads/main') }}
+    name: CI Queue Reaper
+  ci-queue-reaper:
+    name: CI Queue Reaper / suite result
+    needs:
+      - route
+      - ci-queue-reaper__reap
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['ci-queue-reaper'] && (!inputs.apply || github.ref == 'refs/heads/main')) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["ci-queue-reaper__reap"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  gate-freshness__gate-freshness:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Self-test the freshness checker (can this gate still fail?)
+        run: python3 scripts/check_gate_freshness.py --self-test
+      - name: Check post-merge gate freshness
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/check_gate_freshness.py
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-freshness'] }}
+    name: Gate Freshness
   gate-freshness:
-    name: gate-freshness
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-freshness']
+    name: Gate Freshness / suite result
+    needs:
+      - route
+      - gate-freshness__gate-freshness
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-freshness']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["gate-freshness__gate-freshness"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  gate-failure-watch__validate:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-failure-watch'] && (github.event_name == 'pull_request') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Self-test the failure observer
+        run: python3 scripts/gate_failure_watch.py --self-test
+      - name: Check watched-workflow configuration
+        run: python3 scripts/gate_failure_watch.py --check-config
+    needs:
+      - route
+    name: Scheduled Gate Failure Watch / validate
+  gate-failure-watch__observe:
+    if: >-
+      ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-failure-watch'] && (github.event_name == 'workflow_run' && (
+        github.event.workflow_run.event == 'schedule' ||
+        (
+          (github.event.workflow_run.event == 'workflow_dispatch' ||
+           github.event.workflow_run.event == 'repository_dispatch') &&
+          github.event.workflow_run.head_branch == 'main'
+        ) ||
+        (
+          github.event.workflow_run.event == 'push' &&
+          (github.event.workflow_run.head_branch == 'main' ||
+           startsWith(github.event.workflow_run.head_branch, 'v'))
+        )
+      )) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
       actions: read
+      contents: read
       issues: write
-    uses: ./.github/workflows/gate-freshness.yml
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: main
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Open, update, or close the workflow's failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: python3 scripts/gate_failure_watch.py
+    needs:
+      - route
+    name: Scheduled Gate Failure Watch / observe
   gate-failure-watch:
-    name: gate-failure-watch
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-failure-watch']
-    permissions:
-      contents: read
-      actions: read
-      issues: write
-    uses: ./.github/workflows/gate-failure-watch.yml
-  soak-autofix:
-    name: soak-autofix
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['soak-autofix']
+    name: Scheduled Gate Failure Watch / suite result
+    needs:
+      - route
+      - gate-failure-watch__validate
+      - gate-failure-watch__observe
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-failure-watch']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["gate-failure-watch__validate","gate-failure-watch__observe"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  soak-autofix__autofix:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['soak-autofix'] && (github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
       pull-requests: write
-    secrets:
-      SOAK_AUTOFIX_TOKEN: ${{ secrets.SOAK_AUTOFIX_TOKEN }}
-    uses: ./.github/workflows/soak-autofix.yml
-  npm-publish-freshness:
-    name: npm-publish-freshness
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-publish-freshness']
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ secrets.SOAK_AUTOFIX_TOKEN || github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - name: Run the soak fixers
+        id: fixers
+        run: |
+          status=0
+          node scripts/soak/soak.mts --fix || status=$?
+          node scripts/soak/external-tools.mts --fix || status=$?
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+      - name: Commit + PR when something was fixed
+        env:
+          GH_TOKEN: ${{ secrets.SOAK_AUTOFIX_TOKEN || github.token }}
+        run: |
+          if git diff --quiet; then
+            echo "soak surfaces clean — nothing to fix"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          BRANCH="bot/soak-autofix"
+          expected_oid=""
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch origin "refs/heads/$BRANCH:refs/remotes/origin/$BRANCH"
+            expected_oid="$(git rev-parse "refs/remotes/origin/$BRANCH")"
+          fi
+          git checkout -B "$BRANCH"
+          git add -A
+          git commit -m "chore(soak): prune expired soak annotations (automated)
+
+          Generated by the soak-autofix workflow: soak.mts --fix +
+          external-tools.mts --fix. Windows that cleared have soaked;
+          their bypass annotations are dead weight the gates would
+          otherwise fail on."
+          if [ -n "$expected_oid" ]; then
+            git push --force-with-lease="refs/heads/$BRANCH:$expected_oid" \
+              origin "HEAD:refs/heads/$BRANCH"
+          else
+            git push origin "HEAD:refs/heads/$BRANCH"
+          fi
+          if [ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')" ]; then
+            gh pr create --head "$BRANCH" \
+              --title "chore(soak): prune expired soak annotations (automated)" \
+              --body "Automated by the soak-autofix workflow. The listed soak windows have cleared, so their bypass annotations are stale. Diff is the full review: only annotation/window lines are touched."
+          fi
+      - name: Re-raise fixer findings
+        if: steps.fixers.outputs.status != '0'
+        run: |
+          echo "soak fixers exited nonzero — human-actionable findings remain (see fixer step log)"
+          exit 1
+    needs:
+      - route
+    name: soak-autofix
+  soak-autofix:
+    name: soak-autofix / suite result
+    needs:
+      - route
+      - soak-autofix__autofix
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['soak-autofix']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["soak-autofix__autofix"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  npm-publish-freshness__validate:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-publish-freshness'] && (github.event_name == 'pull_request') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Self-test — prove the checker can fail
+        run: python3 scripts/check_npm_publish_freshness.py --self-test
+      - name: Manifest covers every package published from npm/
+        run: python3 scripts/check_npm_publish_freshness.py --check-manifest
+    needs:
+      - route
+    name: npm publish freshness / validate
+  npm-publish-freshness__reject-nonmain-dispatch:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-publish-freshness'] && (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions:
+      contents: read
+    steps:
+      - name: Require a main-branch dispatch
+        run: |
+          echo "::error::npm freshness may be dispatched only from main (got $GITHUB_REF)"
+          exit 1
+    needs:
+      - route
+    name: npm publish freshness / reject-nonmain-dispatch
+  npm-publish-freshness__npm-publish-freshness:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-publish-freshness'] && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       issues: write
-    uses: ./.github/workflows/npm-publish-freshness.yml
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: main
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Self-test — prove the checker can fail
+        run: python3 scripts/check_npm_publish_freshness.py --self-test
+      - name: Manifest covers every package published from npm/
+        run: python3 scripts/check_npm_publish_freshness.py --check-manifest
+      - name: Compare the registry against main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/check_npm_publish_freshness.py
+    needs:
+      - route
+    name: npm publish freshness / npm-publish-freshness
+  npm-publish-freshness:
+    name: npm publish freshness / suite result
+    needs:
+      - route
+      - npm-publish-freshness__validate
+      - npm-publish-freshness__reject-nonmain-dispatch
+      - npm-publish-freshness__npm-publish-freshness
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-publish-freshness']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["npm-publish-freshness__validate","npm-publish-freshness__reject-nonmain-dispatch","npm-publish-freshness__npm-publish-freshness"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY

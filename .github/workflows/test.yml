@@ -5156,81 +5156,11 @@ jobs:
 
   # ---------------------------------------------------------------------------
   # security-audit: cargo-audit / cargo-deny / supply-chain soak gate / agent +
-  # skills scans, from the reusable .github/workflows/security-audit.yml. In
+  # skills scans, inlined here. In
   # the PR tier the plan turns it on only when the diff touches a lockfile,
   # manifest or policy file (ci_plan.py DEPS_GLOBS) -- a code-only PR cannot
   # introduce a new advisory, and the weekly schedule in that workflow catches
   # advisory-database updates on their own. Sweep and full tiers always run it.
-  # ---------------------------------------------------------------------------
-  security-audit:
-    needs: plan
-    if: fromJSON(needs.plan.outputs.plan).jobs.security_audit
-    uses: ./.github/workflows/security-audit.yml
-    permissions:
-      contents: read
-
-  coverage:
-    name: coverage
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['coverage']
-    permissions:
-      contents: read
-    uses: ./.github/workflows/coverage.yml
-
-  security-weekly:
-    name: security-weekly
-    needs: route
-    if: needs.route.result == 'success' && needs.route.outputs.run_core != 'true' && fromJSON(needs.route.outputs.plan)['security-audit']
-    permissions:
-      contents: read
-    uses: ./.github/workflows/security-audit.yml
-
-  zizmor:
-    name: zizmor
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['zizmor']
-    permissions:
-      contents: read
-    uses: ./.github/workflows/zizmor.yml
-
-  native-result-ledger:
-    name: native-result-ledger
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['native-result-ledger']
-    permissions:
-      contents: read
-    uses: ./.github/workflows/native-result-ledger.yml
-
-  npm-launcher:
-    name: npm-launcher
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-launcher']
-    permissions:
-      contents: read
-    uses: ./.github/workflows/npm-launcher.yml
-
-  # ---------------------------------------------------------------------------
-  # THE fan-in. One job, one status, named by tier so the outside world can
-  # key on it without knowing the job list:
-  #
-  #   pr-gate           pull_request runs. THE ONLY REQUIRED STATUS CONTEXT.
-  #                     Adding or removing a job above never needs a
-  #                     branch-protection edit again.
-  #   main-gate         push-to-main sweeps.
-  #   full-suite-gate   full-tier runs (nightly, tags, dispatch, labelled PRs
-  #                     -- a labelled PR is still `pr-gate`, the event wins).
-  #                     release-packages.yml's await-tests polls for THIS job
-  #                     on the release SHA, so a sweep-level green can never
-  #                     be mistaken for a release-grade one.
-  #
-  # `if: always()` so it reports even when something upstream failed or was
-  # cancelled -- a fan-in that is skipped when a dependency fails would leave
-  # the required context in "expected" limbo, which is exactly the state that
-  # forces admin bypasses. Verdict rules:
-  #   * `plan` itself must be `success` (a broken planner must not turn into
-  #     "everything skipped, therefore green");
-  #   * every other needed job must be `success` or `skipped` (skipped == the
-  #     plan turned it off, which is fine); `failure` and `cancelled` fail.
   # ---------------------------------------------------------------------------
   gate:
     name: ${{ github.event_name == 'pull_request' && 'pr-gate' || (needs.plan.outputs.tier == 'full' && 'full-suite-gate' || 'main-gate') }}
@@ -5291,3 +5221,846 @@ jobs:
           fi
           ran="$(echo "$NEEDS" | jq -r 'to_entries[] | select(.value.result == "success") | .key' | wc -l)"
           echo "OK: $ran job(s) passed, the rest were turned off by the plan."
+  coverage__llvm-cov:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal --component llvm-tools-preview
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        with:
+          shared-key: ${{ runner.os }}-perry-coverage
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install cargo-llvm-cov
+        uses: ./.github/actions/perry/taiki-e/install-action
+        with:
+          tool: cargo-llvm-cov
+      - name: Run coverage
+        run: |
+          mapfile -t excluded < <(python3 scripts/workspace_architecture.py \
+            --print-excluded-scope linux-test)
+          exclude_args=()
+          for package in "${excluded[@]}"; do exclude_args+=(--exclude "$package"); done
+          cargo llvm-cov --workspace --no-fail-fast --ignore-run-fail \
+            "${exclude_args[@]}" \
+            --html --output-dir target/llvm-cov-html
+          cargo llvm-cov report \
+            "${exclude_args[@]}" \
+            --lcov --output-path target/lcov.info
+          cargo llvm-cov report \
+            "${exclude_args[@]}" \
+            --summary-only > target/summary.txt
+        continue-on-error: true
+      - name: Print summary to job log
+        if: always()
+        run: |
+          echo "## Coverage summary" >> "$GITHUB_STEP_SUMMARY"
+          if [[ -f target/summary.txt ]]; then
+            {
+              echo '```'
+              cat target/summary.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "_(summary.txt not produced — see logs.)_" >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Upload HTML report
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: coverage-html
+          path: target/llvm-cov-html
+          if-no-files-found: warn
+          retention-days: 90
+      - name: Upload lcov.info
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: coverage-lcov
+          path: target/lcov.info
+          if-no-files-found: warn
+          retention-days: 90
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['coverage'] }}
+    env:
+      CARGO_TERM_COLOR: always
+
+    permissions:
+      contents: read
+    name: Coverage
+  coverage:
+    name: Coverage / suite result
+    needs:
+      - route
+      - coverage__llvm-cov
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['coverage']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["coverage__llvm-cov"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  security-audit__security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        with:
+          shared-key: security-audit
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2026-0118 \
+            --ignore RUSTSEC-2026-0119 \
+            --ignore RUSTSEC-2026-0187 \
+            --ignore RUSTSEC-2026-0235
+      - name: Install cargo-deny
+        run: which cargo-deny || cargo install cargo-deny --locked
+      - name: Run cargo deny
+        run: cargo deny check licenses bans sources
+    needs:
+      - plan
+      - route
+    if: ${{ fromJSON(needs.plan.outputs.plan).jobs.security_audit }}
+    permissions:
+      contents: read
+
+    name: Security Audit / security-audit
+  security-audit__soak-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install script test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Soak window parity (npm run soak)
+        run: node scripts/check/dependency-soak-is-current.mts
+      - name: External-tool pins valid (npm run tools:check)
+        run: node scripts/check/external-tools-are-valid.mts
+      - name: Soak + publish script unit tests (npm run test:scripts)
+        run: node --test scripts/soak/*.test.mts scripts/publish/*.test.mts
+    needs:
+      - plan
+      - route
+    if: ${{ fromJSON(needs.plan.outputs.plan).jobs.security_audit }}
+    permissions:
+      contents: read
+
+    name: Security Audit / soak-gate
+  security-audit__config-scans:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - uses: ./.github/actions/perry/astral-sh/setup-uv
+        with:
+          version: "0.12.23"
+          add-problem-matchers: false
+          cache-dependency-glob: |
+            external-tools.json
+            scripts/soak/constants.mts
+      - name: Install pinned agentshield
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/soak/external-tools.mts --install agentshield
+      - name: Run security scans concurrently
+        run: |
+          set -euo pipefail
+          BIN_DIR="$(node scripts/soak/external-tools.mts --print-bin)"
+          export PATH="$BIN_DIR:$PATH"
+          skillspector_ref="$(jq -er '.tools.skillspector.version' external-tools.json)"
+          soak_days="$(sed -nE 's/^export const SOAK_DAYS = ([0-9]+)$/\1/p' scripts/soak/constants.mts)"
+          [[ -n "$soak_days" ]] || { echo "::error::SOAK_DAYS is missing"; exit 1; }
+          exclude_newer="$(date -u -d "${soak_days} days ago" '+%Y-%m-%dT%H:%M:%SZ')"
+          agent_log="$RUNNER_TEMP/agentshield.log"
+          skills_log="$RUNNER_TEMP/skillspector.log"
+          (
+            agentshield scan
+          ) >"$agent_log" 2>&1 &
+          agent_pid=$!
+          (
+            set -euo pipefail
+            for skill in .claude/skills/*/; do
+              echo "::group::skillspector ${skill}"
+              uv tool run --python 3.12 \
+                --exclude-newer "$exclude_newer" \
+                --from "git+https://github.com/NVIDIA/skillspector@${skillspector_ref}" \
+                skillspector scan "${skill}" --no-llm
+              echo "::endgroup::"
+            done
+          ) >"$skills_log" 2>&1 &
+          skills_pid=$!
+
+          agent_status=0
+          if wait "$agent_pid"; then :; else agent_status=$?; fi
+          skills_status=0
+          if wait "$skills_pid"; then :; else skills_status=$?; fi
+
+          echo '::group::AgentShield output'
+          cat "$agent_log"
+          echo '::endgroup::'
+          echo '::group::SkillSpector output'
+          cat "$skills_log"
+          echo '::endgroup::'
+
+          if [[ "$agent_status" -ne 0 || "$skills_status" -ne 0 ]]; then
+            echo "::error::security scan failures (AgentShield=$agent_status, SkillSpector=$skills_status)"
+            exit 1
+          fi
+    needs:
+      - plan
+      - route
+    if: ${{ fromJSON(needs.plan.outputs.plan).jobs.security_audit }}
+    permissions:
+      contents: read
+
+    name: Security Audit / config-scans
+  security-audit:
+    name: Security Audit / suite result
+    needs:
+      - route
+      - plan
+      - security-audit__security-audit
+      - security-audit__soak-gate
+      - security-audit__config-scans
+    if: ${{ always() && (fromJSON(needs.plan.outputs.plan).jobs.security_audit) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["security-audit__security-audit","security-audit__soak-gate","security-audit__config-scans"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  security-weekly__security-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        with:
+          shared-key: security-audit
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Run cargo audit
+        run: |
+          cargo audit \
+            --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2026-0118 \
+            --ignore RUSTSEC-2026-0119 \
+            --ignore RUSTSEC-2026-0187 \
+            --ignore RUSTSEC-2026-0235
+      - name: Install cargo-deny
+        run: which cargo-deny || cargo install cargo-deny --locked
+      - name: Run cargo deny
+        run: cargo deny check licenses bans sources
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && needs.route.outputs.run_core != 'true' && fromJSON(needs.route.outputs.plan)['security-audit'] }}
+    permissions:
+      contents: read
+    name: Weekly Security Audit / security-audit
+  security-weekly__soak-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install script test dependencies
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Soak window parity (npm run soak)
+        run: node scripts/check/dependency-soak-is-current.mts
+      - name: External-tool pins valid (npm run tools:check)
+        run: node scripts/check/external-tools-are-valid.mts
+      - name: Soak + publish script unit tests (npm run test:scripts)
+        run: node --test scripts/soak/*.test.mts scripts/publish/*.test.mts
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && needs.route.outputs.run_core != 'true' && fromJSON(needs.route.outputs.plan)['security-audit'] }}
+    permissions:
+      contents: read
+    name: Weekly Security Audit / soak-gate
+  security-weekly__config-scans:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - uses: ./.github/actions/perry/astral-sh/setup-uv
+        with:
+          version: "0.12.23"
+          add-problem-matchers: false
+          cache-dependency-glob: |
+            external-tools.json
+            scripts/soak/constants.mts
+      - name: Install pinned agentshield
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/soak/external-tools.mts --install agentshield
+      - name: Run security scans concurrently
+        run: |
+          set -euo pipefail
+          BIN_DIR="$(node scripts/soak/external-tools.mts --print-bin)"
+          export PATH="$BIN_DIR:$PATH"
+          skillspector_ref="$(jq -er '.tools.skillspector.version' external-tools.json)"
+          soak_days="$(sed -nE 's/^export const SOAK_DAYS = ([0-9]+)$/\1/p' scripts/soak/constants.mts)"
+          [[ -n "$soak_days" ]] || { echo "::error::SOAK_DAYS is missing"; exit 1; }
+          exclude_newer="$(date -u -d "${soak_days} days ago" '+%Y-%m-%dT%H:%M:%SZ')"
+          agent_log="$RUNNER_TEMP/agentshield.log"
+          skills_log="$RUNNER_TEMP/skillspector.log"
+          (
+            agentshield scan
+          ) >"$agent_log" 2>&1 &
+          agent_pid=$!
+          (
+            set -euo pipefail
+            for skill in .claude/skills/*/; do
+              echo "::group::skillspector ${skill}"
+              uv tool run --python 3.12 \
+                --exclude-newer "$exclude_newer" \
+                --from "git+https://github.com/NVIDIA/skillspector@${skillspector_ref}" \
+                skillspector scan "${skill}" --no-llm
+              echo "::endgroup::"
+            done
+          ) >"$skills_log" 2>&1 &
+          skills_pid=$!
+
+          agent_status=0
+          if wait "$agent_pid"; then :; else agent_status=$?; fi
+          skills_status=0
+          if wait "$skills_pid"; then :; else skills_status=$?; fi
+
+          echo '::group::AgentShield output'
+          cat "$agent_log"
+          echo '::endgroup::'
+          echo '::group::SkillSpector output'
+          cat "$skills_log"
+          echo '::endgroup::'
+
+          if [[ "$agent_status" -ne 0 || "$skills_status" -ne 0 ]]; then
+            echo "::error::security scan failures (AgentShield=$agent_status, SkillSpector=$skills_status)"
+            exit 1
+          fi
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && needs.route.outputs.run_core != 'true' && fromJSON(needs.route.outputs.plan)['security-audit'] }}
+    permissions:
+      contents: read
+    name: Weekly Security Audit / config-scans
+  security-weekly:
+    name: Weekly Security Audit / suite result
+    needs:
+      - route
+      - security-weekly__security-audit
+      - security-weekly__soak-gate
+      - security-weekly__config-scans
+    if: ${{ always() && (needs.route.result == 'success' && needs.route.outputs.run_core != 'true' && fromJSON(needs.route.outputs.plan)['security-audit']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["security-weekly__security-audit","security-weekly__soak-gate","security-weekly__config-scans"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  zizmor__zizmor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - name: Install pinned zizmor
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          node scripts/soak/external-tools.mts --install zizmor
+          node scripts/soak/external-tools.mts --print-bin >> "$GITHUB_PATH"
+      - name: Audit GitHub Actions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Pass the token only when non-empty: zizmor treats an empty
+          # --gh-token as a real token, then fatally errors when its online
+          # impostor-commit check can't authenticate.
+          #
+          # Starting gate: high only (config in .github/zizmor.yml). The 34
+          # medium findings (missing permissions: blocks in test.yml /
+          # benchmark.yml / container-tests.yml / cache-warm.yml /
+          # simctl-tests.yml) are a tracked ratchet — audit each job's real
+          # token needs, add the blocks, then gate at medium.
+          if [ -n "${GH_TOKEN}" ]; then
+            zizmor .github/ --gh-token "${GH_TOKEN}" --min-severity high
+          else
+            zizmor .github/ --min-severity high
+          fi
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['zizmor'] }}
+    name: zizmor
+  zizmor:
+    name: zizmor / suite result
+    needs:
+      - route
+      - zizmor__zizmor
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['zizmor']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["zizmor__zizmor"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  native-result-ledger__check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Prove and run the typed-result inventory
+        run: |
+          python3 scripts/native_result_ledger.py --self-test
+          python3 scripts/native_result_ledger.py
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['native-result-ledger'] }}
+    permissions:
+      contents: read
+    name: Native Result Ledger
+  native-result-ledger:
+    name: Native Result Ledger / suite result
+    needs:
+      - route
+      - native-result-ledger__check
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['native-result-ledger']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["native-result-ledger__check"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  npm-launcher__detect-self-test:
+    name: npm launcher / Platform resolution self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - run: node npm/perry/test/detect.test.cjs
+      - name: install.sh is valid POSIX sh
+        run: sh -n packaging/install.sh
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-launcher'] }}
+    permissions:
+      contents: read
+  npm-launcher__ubuntu-2204:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-launcher'] && (github.event_name == 'workflow_dispatch') }}
+    name: npm launcher / Ubuntu 22.04 native glibc end-to-end
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - name: Host glibc
+        run: |
+          ldd --version | head -1
+          node -p "'node reports glibcVersionRuntime: ' + process.report.getReport().header.glibcVersionRuntime"
+      - name: Install @perryts/perry the way a user would
+        run: |
+          mkdir -p /tmp/e2e && cd /tmp/e2e
+          npm init -y >/dev/null 2>&1
+          npm install @perryts/perry@latest --no-audit --no-fund
+          echo "installed platform packages:"
+          ls node_modules/@perryts/
+      - name: Native glibc binary loads on Ubuntu 22.04
+        run: |
+          cd /tmp/e2e
+          ./node_modules/@perryts/perry-linux-x64/bin/perry --version
+      - name: Launcher under test routes to the native build
+        run: |
+          cd /tmp/e2e
+          cp "$GITHUB_WORKSPACE/npm/perry/bin/perry.js" node_modules/@perryts/perry/bin/perry.js
+          cp "$GITHUB_WORKSPACE/npm/perry/bin/detect.cjs" node_modules/@perryts/perry/bin/detect.cjs
+          node node_modules/@perryts/perry/bin/perry.js --version
+      - name: Install clang 15 (jammy default clang is too old for opaque-pointer IR)
+        run: sudo apt-get update && sudo apt-get install -y clang-15
+      - name: Compile and run a TypeScript program with the native binary
+        env:
+          PERRY_LLVM_CLANG: /usr/bin/clang-15
+        run: |
+          cd /tmp/e2e
+          cat > hello.ts <<'TS'
+          class Greeter {
+            constructor(private who: string) {}
+            greet(): string { return `hello ${this.who}`; }
+          }
+          const doubled = [1, 2, 3].map((x) => x * 2);
+          console.log(new Greeter("22.04").greet(), doubled.join(","));
+          TS
+          node node_modules/@perryts/perry/bin/perry.js hello.ts -o hello
+          ./hello
+          test "$(./hello)" = "hello 22.04 2,4,6"
+          echo "compiled binary links against:"
+          ldd ./hello || true
+    needs:
+      - route
+    permissions:
+      contents: read
+  npm-launcher:
+    name: npm launcher / suite result
+    needs:
+      - route
+      - npm-launcher__detect-self-test
+      - npm-launcher__ubuntu-2204
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-launcher']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["npm-launcher__detect-self-test","npm-launcher__ubuntu-2204"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY

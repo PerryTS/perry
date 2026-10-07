@@ -3,54 +3,54 @@ run-name: ${{ format('Integration / {0} / {1}', inputs.suite || 'scheduled', git
 on:
   pull_request:
     types:
-    - labeled
-    - opened
-    - reopened
-    - synchronize
+      - labeled
+      - opened
+      - reopened
+      - synchronize
     paths:
-    - .github/actions/setup-llvm22/**
-    - .github/workflows/auto-opt-app-patterns.yml
-    - .github/workflows/container-tests.yml
-    - .github/workflows/integration.yml
-    - .github/workflows/next-app-route.yml
-    - .github/workflows/simctl-tests.yml
-    - .node-version
-    - Cargo.lock
-    - Cargo.toml
-    - benchmarks/app-patterns/**
-    - crates/**
-    - crates/perry-codegen/src/lower_call.rs
-    - crates/perry-container-compose/**
-    - crates/perry-container-e2e/**
-    - crates/perry-hir/src/ir.rs
-    - crates/perry-hir/src/lower.rs
-    - crates/perry-stdlib/src/container/**
-    - crates/perry-stdlib/tests/container_*
-    - scripts/actions_catalog.json
-    - scripts/actions_plan.py
-    - scripts/auto_opt_app_patterns.sh
-    - tests/e2e/**
-    - types/perry/compose/**
-    - types/perry/container/**
-    - types/perry/workloads/**
+      - .github/actions/setup-llvm22/**
+      - .github/workflows/auto-opt-app-patterns.yml
+      - .github/workflows/container-tests.yml
+      - .github/workflows/integration.yml
+      - .github/workflows/next-app-route.yml
+      - .github/workflows/simctl-tests.yml
+      - .node-version
+      - Cargo.lock
+      - Cargo.toml
+      - benchmarks/app-patterns/**
+      - crates/**
+      - crates/perry-codegen/src/lower_call.rs
+      - crates/perry-container-compose/**
+      - crates/perry-container-e2e/**
+      - crates/perry-hir/src/ir.rs
+      - crates/perry-hir/src/lower.rs
+      - crates/perry-stdlib/src/container/**
+      - crates/perry-stdlib/tests/container_*
+      - scripts/actions_catalog.json
+      - scripts/actions_plan.py
+      - scripts/auto_opt_app_patterns.sh
+      - tests/e2e/**
+      - types/perry/compose/**
+      - types/perry/container/**
+      - types/perry/workloads/**
   push:
     tags:
-    - v*
+      - v*
   schedule:
-  - cron: 17 3 * * *
-  - cron: 22 */6 * * *
-  - cron: 30 3 * * *
+    - cron: 17 3 * * *
+    - cron: 22 */6 * * *
+    - cron: 30 3 * * *
   workflow_dispatch:
     inputs:
       suite:
         description: Integration suite or all suites.
         type: choice
         options:
-        - all
-        - container-tests
-        - simctl-tests
-        - next-app-route
-        - auto-opt-app-patterns
+          - all
+          - container-tests
+          - simctl-tests
+          - next-app-route
+          - auto-opt-app-patterns
         default: all
       device:
         description: Simulator device name.
@@ -60,20 +60,19 @@ on:
         description: Run container E2E tests.
         type: choice
         options:
-        - 'true'
-        - 'false'
+          - 'true'
+          - 'false'
         default: 'false'
       run_fuzz:
         description: Run container fuzz tests.
         type: choice
         options:
-        - 'true'
-        - 'false'
+          - 'true'
+          - 'false'
         default: 'false'
 permissions: {}
 concurrency:
-  group: integration-${{ github.event_name == 'pull_request' && github.ref || github.run_id
-    }}
+  group: integration-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   route:
@@ -87,73 +86,788 @@ jobs:
       selection: ${{ steps.route.outputs.selection }}
       module_inputs: ${{ steps.route.outputs.module_inputs }}
     steps:
-    - uses: ./.github/actions/perry/actions/checkout
-      with:
-        ref: ${{ github.sha }}
-        fetch-depth: '1'
-        persist-credentials: 'false'
-    - name: Route suites
-      id: route
-      env:
-        SUITE: ${{ inputs.suite }}
-        GH_TOKEN: ${{ github.token }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        EVENT_NAME: ${{ github.event_name }}
-        EVENT_PATH: ${{ github.event_path }}
-        REF: ${{ github.ref }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        args=(--category integration --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
-        if [[ "$EVENT_NAME" == "pull_request" ]]; then
-          python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
-          args+=(--changed-files changed-files.txt)
-        fi
-        args+=(--suite "${SUITE:-}")
-        python3 scripts/actions_plan.py "${args[@]}"
-        pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
-        \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
-        \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
-        \ \"${args[@]}\"\n"
+      - uses: ./.github/actions/perry/actions/checkout
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: '1'
+          persist-credentials: 'false'
+      - name: Route suites
+        id: route
+        env:
+          SUITE: ${{ inputs.suite }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          REF: ${{ github.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--category integration --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+            args+=(--changed-files changed-files.txt)
+          fi
+          args+=(--suite "${SUITE:-}")
+          python3 scripts/actions_plan.py "${args[@]}"
+          pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
+          \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
+          \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
+          \ \"${args[@]}\"\n"
+  container-tests__hermetic:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['container-tests'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    name: Container Tests / Hermetic Tests (Layer A + B)
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-14
+          - ubuntu-24.04
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Free up disk space (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/*Simulator* || true
+          sudo rm -rf ~/Library/Developer/CoreSimulator/Caches/* || true
+          df -h / | tail -1
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - name: Cache cargo registry
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: ${{ runner.os }}-cargo-container-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-container-
+      - parallel:
+          - name: A.0 — perry-container-compose lib + protocol args
+            run: cargo test -p perry-container-compose --lib
+          - name: A.1 — Functional tests (MockBackend, hermetic)
+            run: |
+              cargo test -p perry-container-compose \
+                --features test-utils \
+                --test functional_orchestration \
+                -- --test-threads=2
+          - name: A.2 — Fixture + property tests
+            run: |
+              cargo test -p perry-container-compose \
+                --test fixtures_tests \
+                --test round_trip \
+                -- --test-threads=2
+          - name: A.3 — Workspace invariants
+            run: |
+              cargo test -p perry-stdlib \
+                --features container \
+                --test container_workspace_invariants
+          - name: B — FFI bug regressions
+            run: |
+              cargo test -p perry-stdlib \
+                --features container \
+                --test container_capability_tests \
+                --test container_extra_tests \
+                --test container_ffi_tests \
+                --test container_props \
+                --test container_verification_tests
+          - name: stdlib container::smoke_tests
+            run: cargo test -p perry-stdlib --features container --lib container::smoke_tests
+      - name: Wait for hermetic container suites
+        wait-all: true
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+      PERRY_NO_INSTALL_PROMPT: "1"
+      PERRY_NO_DEFAULT_SIGINT_CLEANUP: "1" # tests own their teardown via ProjectCleanup RAII
+
+    permissions:
+      contents: read
+      pull-requests: read
+  container-tests__integration-macos-apple:
+    name: Container Tests / Layer C — Integration (macOS / apple/container)
+    runs-on: macos-14
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['container-tests'] && ((github.event_name != 'pull_request' || github.base_ref == 'main') && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))) }}
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Free up disk space (macOS)
+        run: |
+          sudo rm -rf /Library/Developer/CoreSimulator/Profiles/Runtimes/*Simulator* || true
+          df -h / | tail -1
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - name: Cache cargo registry
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: macos-cargo-container-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: macos-cargo-container-integration-
+      - name: Probe apple/container availability
+        id: backend
+        run: |
+          if command -v container &>/dev/null && container --version; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::apple/container not available — Layer C skipped"
+          fi
+      - name: C — live_runtime_tests against apple/container
+        if: steps.backend.outputs.available == 'true'
+        run: |
+          cargo test -p perry-container-compose \
+            --features integration-tests \
+            --test live_runtime_tests \
+            -- --test-threads=1
+        env:
+          PERRY_INTEGRATION_TESTS: "1"
+          PERRY_CONTAINER_BACKEND: "apple/container"
+        timeout-minutes: 15
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+      PERRY_NO_INSTALL_PROMPT: "1"
+      PERRY_NO_DEFAULT_SIGINT_CLEANUP: "1" # tests own their teardown via ProjectCleanup RAII
+
+    permissions:
+      contents: read
+      pull-requests: read
+  container-tests__integration-linux-podman:
+    name: Container Tests / Layer C — Integration (Linux / podman)
+    runs-on: ubuntu-24.04
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['container-tests'] && ((github.event_name != 'pull_request' || github.base_ref == 'main') && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))) }}
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - name: Cache cargo registry
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: linux-cargo-container-integration-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-cargo-container-integration-
+      - name: Install podman
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y podman
+          podman --version
+      - name: C — live_runtime_tests against podman
+        run: |
+          cargo test -p perry-container-compose \
+            --features integration-tests \
+            --test live_runtime_tests \
+            -- --test-threads=1
+        env:
+          PERRY_INTEGRATION_TESTS: "1"
+          PERRY_CONTAINER_BACKEND: "podman"
+        timeout-minutes: 15
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+      PERRY_NO_INSTALL_PROMPT: "1"
+      PERRY_NO_DEFAULT_SIGINT_CLEANUP: "1" # tests own their teardown via ProjectCleanup RAII
+
+    permissions:
+      contents: read
+      pull-requests: read
+  container-tests__e2e-linux:
+    name: Container Tests / Layer D — E2E (Linux / docker)
+    runs-on: ubuntu-24.04
+    if: |-
+      ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['container-tests'] && (startsWith(github.ref, 'refs/tags/v') ||
+      fromJSON(needs.route.outputs.module_inputs)['container-tests'].run_e2e == 'true') }}
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - name: Cache cargo registry
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+          key: linux-cargo-container-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: linux-cargo-container-e2e-
+      - name: Probe docker
+        run: docker info --format '{{.ServerVersion}}'
+      - name: Build Perry CLI (release)
+        run: |
+          cargo build --release \
+            -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+      - name: D — redis smoke
+        run: |
+          cargo test -p perry-container-e2e --test e2e_container -- e2e_redis_smoke --test-threads=1
+        env:
+          PERRY_E2E_TESTS: "1"
+          PERRY_CONTAINER_BACKEND: "docker"
+        timeout-minutes: 10
+      - name: D — Forgejo full stack [advisory]
+        continue-on-error: true
+        run: |
+          cargo test -p perry-container-e2e --test e2e_container -- e2e_forgejo_stack --test-threads=1
+        env:
+          PERRY_E2E_TESTS: "1"
+          PERRY_E2E_FORGEJO: "1"
+          PERRY_CONTAINER_BACKEND: "docker"
+        timeout-minutes: 25
+      - name: Upload e2e binaries (debugging)
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: e2e-bins-linux
+          path: target/e2e-bin/
+          if-no-files-found: ignore
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+      PERRY_NO_INSTALL_PROMPT: "1"
+      PERRY_NO_DEFAULT_SIGINT_CLEANUP: "1" # tests own their teardown via ProjectCleanup RAII
+
+    permissions:
+      contents: read
+      pull-requests: read
+  container-tests__fuzz:
+    name: Container Tests / Layer E — Fuzz (libfuzzer)
+    runs-on: ubuntu-24.04
+    if: |-
+      ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['container-tests'] && (github.event_name == 'schedule' ||
+      fromJSON(needs.route.outputs.module_inputs)['container-tests'].run_fuzz == 'true') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - compose_yaml_parse
+          - env_interpolation
+          - compose_spec_json_round_trip
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install nightly Rust + cargo-fuzz
+        run: |
+          rustup toolchain install nightly --profile minimal --component rust-src
+          cargo install cargo-fuzz --locked
+      - name: Run fuzz target ${{ matrix.target }} for 5 minutes
+        working-directory: crates/perry-container-compose/fuzz
+        run: |
+          cargo +nightly fuzz run ${{ matrix.target }} -- -max_total_time=300
+      - name: Upload crash artifacts
+        if: failure()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: fuzz-crashes-${{ matrix.target }}
+          path: crates/perry-container-compose/fuzz/artifacts/${{ matrix.target }}/
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+      PERRY_NO_INSTALL_PROMPT: "1"
+      PERRY_NO_DEFAULT_SIGINT_CLEANUP: "1" # tests own their teardown via ProjectCleanup RAII
+
+    permissions:
+      contents: read
+      pull-requests: read
+  container-tests__container-tests-gate:
+    name: Container Tests / Container Tests Gate
+    runs-on: ubuntu-24.04
+    needs:
+      - route
+      - container-tests__hermetic
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['container-tests'] && ((always()) && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))) }}
+    steps:
+      - name: Check required jobs
+        run: |
+          if [[ "${{ needs.container-tests__hermetic.result }}" != "success" ]]; then
+            echo "::error::hermetic tier failed: ${{ needs.container-tests__hermetic.result }}"
+            exit 1
+          fi
+          echo "✅ Hermetic test tier passed."
+    env:
+      CARGO_TERM_COLOR: always
+      PERRY_NO_INSTALL_PROMPT: "1"
+      PERRY_NO_DEFAULT_SIGINT_CLEANUP: "1" # tests own their teardown via ProjectCleanup RAII
+
+    permissions:
+      contents: read
+      pull-requests: read
   container-tests:
-    name: container-tests
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['container-tests']
+    name: Container Tests / suite result
+    needs:
+      - route
+      - container-tests__hermetic
+      - container-tests__integration-macos-apple
+      - container-tests__integration-linux-podman
+      - container-tests__e2e-linux
+      - container-tests__fuzz
+      - container-tests__container-tests-gate
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['container-tests']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["container-tests__hermetic","container-tests__integration-macos-apple","container-tests__integration-linux-podman","container-tests__e2e-linux","container-tests__fuzz","container-tests__container-tests-gate"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  simctl-tests__simctl:
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - name: Install iOS simulator Rust target
+        run: rustup target add aarch64-apple-ios-sim aarch64-apple-ios
+      - name: Cache cargo
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Invalidate cached Geisterhand archives (#9037)
+        run: |
+          rm -rf target/geisterhand
+          test ! -e target/geisterhand
+      - name: Build perry + iOS UI lib
+        run: |
+          cargo build --release -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+          cargo build --release -p perry-ui-ios --target aarch64-apple-ios-sim
+      - name: Geisterhand iOS compile smoke (#1311)
+        run: |
+          cargo build --release -p perry-ui-ios --features geisterhand --target aarch64-apple-ios
+          cargo build --release -p perry-ui-geisterhand
+          ./target/release/perry compile docs/examples/ui/testing/geisterhand_demo.ts \
+            --target ios-simulator --enable-geisterhand \
+            -o "$RUNNER_TEMP/geisterhand_demo_ios"
+      - name: Run simctl doc-example verification
+        run: ./scripts/run_simctl_tests.sh
+        timeout-minutes: 45
+        env:
+          DEVICE: ${{ fromJSON(needs.route.outputs.module_inputs)['simctl-tests'].device || 'iPhone 15' }}
+      - name: Upload simctl logs
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: simctl-logs
+          path: target/perry-simctl-tests/*.log
+          if-no-files-found: warn
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['simctl-tests'] }}
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/container-tests.yml
-    with:
-      run_e2e: ${{ fromJSON(needs.route.outputs.module_inputs)['container-tests'].run_e2e
-        }}
-      run_fuzz: ${{ fromJSON(needs.route.outputs.module_inputs)['container-tests'].run_fuzz
-        }}
+    name: Simulator Tests (iOS)
   simctl-tests:
-    name: simctl-tests
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['simctl-tests']
+    name: Simulator Tests (iOS) / suite result
+    needs:
+      - route
+      - simctl-tests__simctl
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['simctl-tests']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["simctl-tests__simctl"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  next-app-route__next-app-route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "true"
+      SCCACHE_CACHE_SIZE: "4G"
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/mozilla-actions/sccache-action
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+          cache: npm
+          cache-dependency-path: tests/fixtures/next-app-route/package-lock.json
+      - name: Build Perry and provider archives
+        run: >-
+          cargo build --profile perry-dev -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static
+      - name: Focused four-store continuation parity
+        env:
+          PERRY_BIN: target/perry-dev/perry
+          PERRY_RUNTIME_DIR: target/perry-dev
+          PERRY_SKIP_BUILD: "1"
+        run: >-
+          ./run_parity_tests.sh --suite node-suite --module async_hooks --filter next-route-continuations
+      - name: Production App Route provider gate
+        run: tests/test_next_app_route_dylib.sh
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['next-app-route'] }}
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/simctl-tests.yml
-    with:
-      device: ${{ fromJSON(needs.route.outputs.module_inputs)['simctl-tests'].device
-        }}
+    name: Next App Route dylib
   next-app-route:
-    name: next-app-route
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['next-app-route']
+    name: Next App Route dylib / suite result
+    needs:
+      - route
+      - next-app-route__next-app-route
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['next-app-route']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["next-app-route__next-app-route"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  auto-opt-app-patterns__auto-opt-app-patterns:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['auto-opt-app-patterns'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/next-app-route.yml
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Decide whether this change can affect a compiled app
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request; running the kernels."
+            exit 0
+          fi
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed.txt
+          # Deliberately broad: anything under crates/ changes the compiled
+          # binary, and the auto-optimize feature selection reads the manifests.
+          # The filter only spares docs-only PRs a compiler build; `set -e`
+          # already aborted if the listing failed, so this cannot silently fall
+          # through to "not relevant".
+          # `.github/actions/setup-llvm22/` is in the list because it configures
+          # the LLVM the gate's compiler is built against — a change there can
+          # move the generated code without touching a single line under crates/.
+          if grep -qE '^(crates/|benchmarks/app-patterns/|scripts/auto_opt_app_patterns\.sh$|Cargo\.(toml|lock)$|\.node-version$|\.github/actions/setup-llvm22/|\.github/workflows/(auto-opt-app-patterns|integration)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Change can affect a compiled app; running the kernels."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No app-affecting paths changed."
+          fi
+      - name: Install Rust toolchain
+        if: steps.relevance.outputs.run == 'true'
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        if: steps.relevance.outputs.run == 'true'
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install clang
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+      - name: Setup Node oracle
+        if: steps.relevance.outputs.run == 'true'
+        uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - name: Build perry and the prebuilt runtime archives
+        if: steps.relevance.outputs.run == 'true'
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+        run: |
+          set -euo pipefail
+          # The auto-optimize path builds its OWN archives, but the driver still
+          # needs the prebuilt ones on disk for its fallback probe — and they are
+          # what the failure mode under test silently substitutes, so a run
+          # without them could not distinguish the two. perry-runtime and
+          # perry-stdlib are rlib-only; the `.a`s come from the -static wrappers.
+          cargo build --release \
+            -p perry -p perry-runtime -p perry-stdlib \
+            -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+      - name: Prove the liveness matcher can still fail
+        if: steps.relevance.outputs.run == 'true'
+        run: ./scripts/auto_opt_app_patterns.sh --self-test
+      - name: Run the app-pattern kernels through the auto-optimize link
+        if: steps.relevance.outputs.run == 'true'
+        env:
+          PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
+        run: ./scripts/auto_opt_app_patterns.sh
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+
+    name: Auto-Optimize App Patterns
   auto-opt-app-patterns:
-    name: auto-opt-app-patterns
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['auto-opt-app-patterns']
-    permissions:
-      contents: read
-      pull-requests: read
-    uses: ./.github/workflows/auto-opt-app-patterns.yml
+    name: Auto-Optimize App Patterns / suite result
+    needs:
+      - route
+      - auto-opt-app-patterns__auto-opt-app-patterns
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['auto-opt-app-patterns']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["auto-opt-app-patterns__auto-opt-app-patterns"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
