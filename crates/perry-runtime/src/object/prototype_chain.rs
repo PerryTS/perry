@@ -372,14 +372,13 @@ fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
 /// always on exactly one of the two storages.
 pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::ObjectHeader> {
     if !crate::value::addr_class::is_above_handle_band(obj_ptr)
-        // ArrayBuffer / SharedArrayBuffer / DataView use BufferHeader storage.
-        // Some of those headers pass the legacy ObjectHeader validity probe,
-        // but they do not have an ObjectMeta slot at the ObjectHeader offset.
-        || crate::buffer::is_registered_buffer(obj_ptr)
         || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8)
     {
         return None;
     }
+    // The type byte alone decides: every byte cell (Buffer, TypedArray,
+    // ArrayBuffer, DataView) carries its own byte-family type, never
+    // GC_TYPE_OBJECT, so no separate buffer probe is needed.
     let header = crate::value::addr_class::try_read_gc_header(obj_ptr)?;
     if header.obj_type != crate::gc::GC_TYPE_OBJECT {
         return None;
