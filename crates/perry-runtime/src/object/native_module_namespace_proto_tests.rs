@@ -112,3 +112,24 @@ fn read_through_object_create_of_namespace() {
     let obj2 = js_object_create(proto);
     assert!(JSValue::from_bits(obj2.to_bits()).is_pointer());
 }
+
+// nskeys: verify the public creator, including the CommonJS namespace path,
+// publishes the brand before any read or write could repair its shape.
+#[test]
+fn namespace_creation_publishes_brand_and_full_exports() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _gc = crate::gc::GcSuppressScope::new();
+    for module in ["zlib", "fs", "path", "path.default", "events", "crypto"] {
+        let ns = namespace(module);
+        let obj = crate::value::js_nanbox_get_pointer(ns) as *const ObjectHeader;
+        unsafe {
+            assert_eq!(
+                shapes::object_shape_descriptor(obj).unwrap().object_kind,
+                shapes::ShapeObjectKind::NativeNamespace,
+                "{module}: namespace must be branded at birth"
+            );
+            let keys = js_object_keys(obj);
+            assert!(crate::array::js_array_length(keys) > 1, "{module}: exports");
+        }
+    }
+}
