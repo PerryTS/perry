@@ -166,7 +166,7 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
     gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
 
-    // Ordinary-object symbols are shape slots; arrays still use this scanner.
+    // Array symbols and class symbols both live in owned holder slots.
     let owner = crate::array::js_array_alloc(0) as usize;
     let sym_key = unsafe { alloc_nursery_test_symbol() };
     let value = young_leaf();
@@ -190,6 +190,7 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     }
 
     let static_owner = crate::object::class_value::class_value_ptr(0x5402) as usize;
+    let array_bag = unsafe { crate::array::array_property_bag(owner as *const crate::ArrayHeader) };
     let static_bag = unsafe { crate::closure::props::bag_of(static_owner) };
     assert!(
         !crate::symbol::test_symbol_property_owner_exists(static_owner),
@@ -203,7 +204,13 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
     );
 
     let owner_after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
-    let entries = crate::symbol::test_symbol_property_roots(owner_after);
+    let array_bag_after =
+        unsafe { crate::array::array_property_bag(owner_after as *const crate::ArrayHeader) };
+    assert_ne!(
+        array_bag_after, array_bag,
+        "the array's owned holder must move"
+    );
+    let entries = unsafe { crate::object::shaped_symbols::entries(owner_after, false) };
     assert_eq!(entries.len(), 1);
     let (sym_key_after, value_bits_after) = entries[0];
     let value_after = (value_bits_after & POINTER_MASK) as usize;
@@ -226,6 +233,9 @@ fn test_copying_minor_rewrites_symbol_side_table_roots_and_lookups() {
         !crate::symbol::test_symbol_property_owner_exists(owner),
         "symbol side table should not keep the stale owner key after moving"
     );
+    assert!(!crate::symbol::test_symbol_property_owner_exists(
+        owner_after
+    ));
     assert!(crate::symbol::test_symbol_pointer_root_contains(
         sym_key_after
     ));

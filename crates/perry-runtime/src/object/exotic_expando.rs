@@ -160,14 +160,10 @@ fn expando_remove(addr: usize, key: &str) -> bool {
             return false;
         }
         let keys = super::object_keys(bag);
-        let Some(slot) =
-            super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key.as_bytes())
-        else {
+        if super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key.as_bytes())
+            .is_none()
+        {
             return false;
-        };
-        // Accessor conversion has already replaced this data slot with a pair.
-        if super::key_attrs::key_is_accessor_at(keys.arr(), slot) {
-            return true;
         }
         let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
         super::js_object_delete_field(bag, key) != 0
@@ -513,8 +509,7 @@ pub(crate) unsafe fn exotic_define_own_property(
             },
         };
         super::set_accessor_descriptor(addr, name.to_string(), merged);
-        // Data → accessor conversion drops the stored value.
-        value_remove(kind, addr, name);
+        // The accessor pair has replaced the data in the same holder slot.
         super::set_property_attrs(
             addr,
             name.to_string(),

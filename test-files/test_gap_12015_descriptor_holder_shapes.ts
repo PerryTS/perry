@@ -46,3 +46,11 @@ console.log("builtin-descriptors", arrayProtoDescriptors.map.writable, arrayProt
   arrayProtoDescriptors.map.configurable, typeof arrayProtoDescriptors.map.value,
   objectProtoDescriptors.hasOwnProperty.writable, objectProtoDescriptors.hasOwnProperty.enumerable,
   objectProtoDescriptors.hasOwnProperty.configurable, typeof objectProtoDescriptors.hasOwnProperty.value);
+
+// Deletion removes an exotic accessor's holder key as well as its pair.
+const date: any = new Date(0);
+Object.defineProperty(date, "lane12015", { get() { return 43; }, configurable: true });
+console.log("exotic-accessor", date.lane12015, desc(date, "lane12015"));
+console.log("exotic-delete", delete date.lane12015,
+  Object.prototype.hasOwnProperty.call(date, "lane12015"), typeof date.lane12015,
+  date.constructor.name);
