@@ -1320,7 +1320,7 @@ fn plain_array_index_guard_impl(
             return false;
         }
         // Index accessors / custom attribute descriptors divert element
-        // reads and writes through the descriptor tables; the inline
+        // reads and writes through their holder shapes; the inline
         // raw-slot fast path the guard admits would bypass them (test262
         // sort/precise-* read accessor indices after defineProperty).
         if (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {

@@ -1433,13 +1433,11 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 // Index properties may carry a non-default descriptor
                 // (`Object.defineProperty(arr, i, { enumerable: false })`).
                 // Object.keys / for-in must skip non-enumerable indices — but
-                // the per-index side-table lookup is only needed when this array
+                // the per-index holder-shape query is only needed when this array
                 // actually has descriptor entries, so the common all-default
                 // array stays on the fast path.
                 let owner = stripped as usize;
-                // O(1) via the owner index. This used to walk every descriptor
-                // in the program on every `Object.keys(array)` — profiling
-                // `claude -p` put this scan at the top of self-time by 4×.
+                // The holder shape summary is the constant-time absence proof.
                 let has_idx_descriptors = super::super::owner_has_property_descriptors(owner);
                 let result = crate::array::js_array_alloc(length);
                 for i in 0..length {
