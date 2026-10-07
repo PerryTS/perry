@@ -252,7 +252,11 @@ pub extern "C" fn js_buffer_byte_length_value(value: f64, encoding: f64) -> i32 
     super::validate::validate_byte_length_arg(value);
     let raw_ptr = raw_addr_from_value(value);
     if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
-        return unsafe { (*(raw_ptr as *const BufferHeader)).length as i32 };
+        // Current byte length from the owner: an ArrayBuffer view from
+        // `.buffer` tracks its owner, and a detached view reports 0.
+        return unsafe {
+            (super::store::length(raw_ptr) * super::store::element_size(raw_ptr)) as i32
+        };
     }
 
     let str_ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;

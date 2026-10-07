@@ -276,7 +276,7 @@ pub unsafe extern "C" fn node_api_create_buffer_from_arraybuffer(
         Ok(owner) if crate::buffer::is_array_buffer(owner) => owner,
         _ => return set_status(env, NapiStatus::InvalidArg, "value must be an ArrayBuffer"),
     };
-    let available = (*(owner as *const BufferHeader)).length as usize;
+    let available = crate::buffer::store::length(owner);
     let window = byte_offset
         .checked_add(byte_length)
         .filter(|end| *end <= available)
