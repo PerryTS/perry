@@ -30,9 +30,6 @@ use std::cell::{Cell, RefCell};
 /// explicitly incremental); each group struct lives next to the code that
 /// owns it so the table types stay private to their module.
 pub(crate) struct RuntimeState {
-    /// Property/accessor descriptor tables + their fast-path gates
-    /// (previously `object::descriptor_state`'s four `thread_local!`s).
-    pub(crate) descriptors: crate::object::DescriptorTables,
     /// Object field storage side tables: overflow fields, keys-index
     /// sidecar, shape and transition caches (previously five
     /// `thread_local!`s in `object::mod`).
@@ -52,7 +49,6 @@ pub(crate) struct RuntimeState {
 impl RuntimeState {
     fn new_boxed() -> Box<Self> {
         Box::new(RuntimeState {
-            descriptors: crate::object::DescriptorTables::new(),
             object_hot: crate::object::ObjectHotTables::new(),
             field_lookup: crate::object::FieldLookupCaches::new(),
             exotic_expando: crate::object::exotic_expando::ExoticExpandoTables::new(),

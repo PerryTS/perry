@@ -1,26 +1,46 @@
-//! Function descriptor writes use the ordinary own-property bag, including
-//! accessor pairs. Keep the function's shape in sync with its bag's keys.
+//! Normalize descriptor writes to each owner's ordinary property holder.
+//! A function additionally refreshes its receiver shape after editing its bag.
 use super::ObjectHeader;
 
-pub(crate) struct FunctionBagEdit {
+pub(crate) struct HolderEdit {
     owner: usize,
     pub(super) bag: *mut ObjectHeader,
     _no_move: crate::gc::GcSuppressScope,
 }
 
-impl FunctionBagEdit {
+impl HolderEdit {
     #[inline]
     pub(crate) fn new(owner: usize) -> Option<Self> {
         if !crate::closure::is_closure_ptr(owner) {
-            if crate::buffer::header::is_owned_byte_cell(owner) {
-                let no_move = crate::gc::GcSuppressScope::new();
-                return Some(Self {
-                    owner,
-                    bag: unsafe { crate::buffer::store::bag_ensure(owner) },
-                    _no_move: no_move,
-                });
-            }
-            return None;
+            let _no_move = crate::gc::GcSuppressScope::new();
+            let bag = unsafe {
+                let header = crate::value::addr_class::try_read_tracked_gc_header(owner);
+                match header.map(|h| (*h.as_ptr()).obj_type) {
+                    Some(crate::gc::GC_TYPE_ARRAY) => crate::array::array_property_bag_ensure(
+                        owner as *mut crate::array::ArrayHeader,
+                    ),
+                    Some(crate::gc::GC_TYPE_OBJECT)
+                        if super::super::key_attrs::attrs_live_in_keys_for_install(owner) =>
+                    {
+                        return None
+                    }
+                    _ if crate::buffer::header::is_owned_byte_cell(owner) => {
+                        crate::buffer::store::bag_ensure(owner)
+                    }
+                    Some(_) if super::super::cell_meta_slot(owner).is_some() => {
+                        super::super::cell_expando_ensure(owner)?
+                    }
+                    Some(crate::gc::GC_TYPE_TEMPORAL) => {
+                        super::super::exotic_expando::property_bag_ensure(owner)
+                    }
+                    _ => super::super::handle_expando::handle_property_bag_ensure(owner as i64),
+                }
+            };
+            return Some(Self {
+                owner,
+                bag,
+                _no_move,
+            });
         }
         Some(Self::for_closure(owner))
     }
@@ -61,7 +81,7 @@ impl FunctionBagEdit {
     }
 }
 
-impl Drop for FunctionBagEdit {
+impl Drop for HolderEdit {
     fn drop(&mut self) {
         if crate::closure::is_closure_ptr(self.owner) {
             crate::closure::shape::refresh_closure_shape(self.owner);

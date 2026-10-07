@@ -423,8 +423,8 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     // A per-object attribute (a builtin accessor installs no process gate)
     // must filter too: an accessor key's slot holds its accessor pair
     // (`accessor_pair.rs`), never a value to serialize.
-    let filter_non_enum = crate::object::descriptors_in_use()
-        || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
+    let filter_non_enum =
+        crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0;
     // An own key is hidden only on a class instance or a shape with a private
@@ -1043,8 +1043,8 @@ pub(crate) unsafe fn stringify_object_pretty(
     // A per-object attribute (a builtin accessor installs no process gate)
     // must filter too: an accessor key's slot holds its accessor pair
     // (`accessor_pair.rs`), never a value to serialize.
-    let filter_non_enum = crate::object::descriptors_in_use()
-        || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
+    let filter_non_enum =
+        crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0;
     // An own key is hidden only on a class instance or a shape with a private
@@ -1263,8 +1263,8 @@ pub(crate) unsafe fn stringify_object_with_array_replacer(
     // A per-object attribute (a builtin accessor installs no process gate)
     // must filter too: an accessor key's slot holds its accessor pair
     // (`accessor_pair.rs`), never a value to serialize.
-    let filter_non_enum = crate::object::descriptors_in_use()
-        || crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
+    let filter_non_enum =
+        crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0;
     // An own key is hidden only on a class instance or a shape with a private

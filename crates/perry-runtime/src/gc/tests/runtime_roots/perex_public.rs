@@ -26,7 +26,7 @@ pub(super) fn register_host_roots() {
     gc_register_mutable_root_scanner(crate::object::scan_overflow_fields_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
+
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_exotic_expando_roots_mut);

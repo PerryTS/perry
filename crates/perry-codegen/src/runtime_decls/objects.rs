@@ -28,12 +28,6 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         VOID,
         &[DOUBLE, PTR, PTR, I32],
     );
-    // #5093: sticky runtime flag (i8, 0 = enabled) gating the codegen-inlined
-    // class-field shape-guard fast path. The inline guard loads this directly
-    // and falls back to the full `js_typed_feedback_class_field_*_guard` call
-    // when it is non-zero (descriptors / typed-feedback in use). Defined in
-    // perry-runtime as `PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`.
-    module.add_external_global("PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED", I8);
     // #11791: one bit per private-class template (low 16 bits of the class
     // id), set once a fresh evaluation of it exists. A compiled private-access
     // site trusts its cached ShapeId only while its template's bit is clear.

@@ -4,7 +4,7 @@
 
 use super::*;
 
-/// Sabotage: dropping the tracked gate in `descriptor_summary_meta_ensure`
+/// Sabotage: dropping the tracked gate in `HolderEdit::new`
 /// lets the install write a meta pointer into the native buffer, and the last
 /// assertion fails.
 #[test]

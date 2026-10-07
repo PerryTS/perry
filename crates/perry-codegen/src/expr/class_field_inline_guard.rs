@@ -355,11 +355,6 @@ pub(crate) fn emit_plain_finite_number_check(
 ///   DYNAMIC: the `delete` shape barrier that stands the analysis down is
 ///   module-scoped while receivers alias across modules (#7143), so no static
 ///   proof is available at this site.
-/// * **The sticky `@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED` latch** — flipped
-///   the moment a descriptor / accessor lands on a class prototype or on
-///   `Object.prototype`, or typed-feedback tracing turns on. This is the very
-///   latch the per-access inline guard *inside the body being replaced* reads,
-///   so a routed call is never weaker than the lowering it displaces.
 /// * **Per-object `OBJ_FLAG_HAS_DESCRIPTORS`** — instance-level descriptor
 ///   installs deliberately do NOT flip the process-global latch (#5654), so
 ///   they are vetted per receiver, exactly as the per-access check does.
@@ -371,7 +366,7 @@ pub(crate) fn emit_plain_finite_number_check(
 /// * **Not-forwarded**, **`GC_TYPE_OBJECT`**, and **not a class object** — the
 ///   header predicates `js_object_get_class_id` does not itself check.
 ///
-/// Cost: one volatile `i8` load of the latch, three loads off the receiver (two
+/// Cost: three loads off the receiver (two
 /// of them from the `GcHeader` word the tower's class-id read already pulled
 /// in), nine ALU ops and one conditional branch. `expected_shape_id` is expected to
 /// come from an entry-hoisted slot (`LlFunction::entry_init_load_global`), so
@@ -387,12 +382,6 @@ pub(crate) fn emit_proven_shape_recheck(
     generic_label: &str,
 ) {
     let blk = ctx.block();
-
-    // Policy latch first — volatile for the same reason the per-access check
-    // loads it volatile: the runtime flips it sticky 0 -> 1 mid-execution and
-    // LLVM must not hoist a stale 0 across the flip.
-    let flag = blk.load_volatile(I8, "@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED");
-    let flag_ok = blk.icmp_eq(I8, &flag, "0");
 
     let obj_ptr = blk.inttoptr(I64, obj_handle);
 
@@ -415,7 +404,7 @@ pub(crate) fn emit_proven_shape_recheck(
     let shape_ok =
         crate::typed_shape::emit_compatible_shape_eq(blk, &shape_id, expected_shape_id, &[]);
 
-    let mut acc = blk.and(I1, &flag_ok, &not_fwd);
+    let mut acc = not_fwd;
     acc = blk.and(I1, &acc, &unlatched);
     acc = blk.and(I1, &acc, &shape_ok);
     blk.cond_br(&acc, proven_label, generic_label);

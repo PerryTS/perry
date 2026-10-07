@@ -1210,8 +1210,7 @@ unsafe fn ordinary_has_property(
         // EVERY `in`, dominating its profile (~60% of samples on a
         // descriptor-less receiver).
         if let Some(name) = key_name {
-            if crate::state::state().descriptors.accessors_in_use.get()
-                && crate::object::descriptor_state::object_has_descriptors(cur as usize)
+            if crate::object::descriptor_state::object_has_descriptors(cur as usize)
                 && get_accessor_descriptor(cur as usize, name).is_some()
             {
                 return true;

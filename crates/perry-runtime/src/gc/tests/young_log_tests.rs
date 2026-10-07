@@ -196,132 +196,20 @@ fn young_getter_across_a_minor(owner: usize) -> (usize, usize, usize) {
     (owner_after, getter, getter_after)
 }
 
-/// An array's accessors live in the owner-keyed table; its young-owner log
-/// moves the getter.
+/// Array descriptor closures are child edges of the shape-bearing bag in
+/// the array's traced reserve, rather than roots of an owner table.
 #[test]
-fn young_accessor_getter_is_moved_through_the_log() {
+fn young_array_accessor_getter_moves_with_its_holder_slot() {
     let _guard = CopyingNurseryTestGuard::new(1);
-    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
-
     let owner = unsafe { alloc_nursery_test_array() } as usize;
     young_getter_across_a_minor(owner);
-    assert!(crate::object::get_accessor_descriptor(owner, "g").is_none());
-    let row = walk("object.descriptors");
-    assert!(row.partial);
-    assert!(row.visited >= 1, "{row:?}");
 }
 
-/// An ordinary object's accessor pair lives in its key's slot (charter step
-/// 3), so the getter moves with the object's own trace — no table entry and
-/// no log visit. Sabotage: dropping the pair's closure words from its layout
-/// (`pair_new` skipping `rebuild_array_layout_from_slots`) leaves the getter
-/// unevacuated and the helper's `assert_ne!` fails.
 #[test]
 fn young_accessor_getter_moves_with_its_objects_slot() {
     let _guard = CopyingNurseryTestGuard::new(1);
-    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
-
     let (owner, _) = unsafe { alloc_nursery_test_object(0) };
-    let (owner_after, _, _) = young_getter_across_a_minor(owner as usize);
-    assert!(
-        !crate::state::state()
-            .descriptors
-            .accessor_descriptors
-            .borrow()
-            .keys()
-            .any(|(o, _)| *o == owner_after || *o == owner as usize),
-        "an ordinary object's accessor never reaches the owner table"
-    );
-    assert_eq!(walk("object.descriptors").visited, 0);
-}
-
-#[test]
-fn old_descriptor_owners_are_skipped_by_a_minor() {
-    let _guard = CopyingNurseryTestGuard::new(0);
-    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
-
-    // The descriptor tables are agent state that outlives every test on this
-    // thread, and the FIRST descriptor install on a thread bootstraps the
-    // lazy `globalThis` realm (#7975), which installs ~1.8k builtin
-    // descriptors on young objects. Warm that up, take a minor, then measure
-    // the delta: the old entry must add index rows but no visit.
-    let (warm, _) = unsafe { alloc_old_test_object(0) };
-    crate::object::set_property_attrs(
-        warm as usize,
-        "warm".to_string(),
-        crate::object::PropertyAttrs::new(false, true, true),
-    );
-    let _ = gc_collect_minor();
-    let before = walk("object.descriptors");
-
-    // An array owner: an ordinary object's descriptors live with its keys and
-    // slots (charter step 3); an array's are still in the owner-keyed tables.
-    let (owner, _) = unsafe { alloc_old_test_array(0) };
-    let owner = owner as usize;
-    let getter = old_closure();
-    crate::object::set_accessor_descriptor(
-        owner,
-        "g".to_string(),
-        crate::object::AccessorDescriptor {
-            get: ptr_bits(getter),
-            set: 0,
-        },
-    );
-    crate::object::set_property_attrs(
-        owner,
-        "p".to_string(),
-        crate::object::PropertyAttrs::new(false, true, true),
-    );
-
-    let _ = gc_collect_minor();
-
-    // The TABLE entry, read directly: this harness registers only the
-    // descriptor scanner.
-    assert_eq!(
-        crate::state::state()
-            .descriptors
-            .accessor_descriptors
-            .borrow()
-            .get(&(owner, "g".to_string()))
-            .map(|acc| acc.get),
-        Some(ptr_bits(getter))
-    );
-    let row = walk("object.descriptors");
-    assert!(row.partial);
-    // The first minor's prune can drop dead realm owners between the two
-    // walks, so the exact count is `kept` minus whatever died; the new old
-    // entry can only NOT add to it.
-    assert!(
-        row.visited <= before.kept,
-        "old owner, old getter: the new entry must not add a visit: {before:?} -> {row:?}"
-    );
-    assert!(
-        row.visited < row.table_len,
-        "the walk must stay partial: {row:?}"
-    );
-}
-
-#[test]
-fn dead_young_descriptor_owner_is_pruned_by_the_young_prune() {
-    let _guard = CopyingNurseryTestGuard::new(1);
-    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
-    js_shadow_slot_set(0, string_bits(young_leaf()));
-
-    let (dead, _) = unsafe { alloc_nursery_test_object(0) };
-    let dead = dead as usize;
-    crate::object::set_property_attrs(
-        dead,
-        "p".to_string(),
-        crate::object::PropertyAttrs::new(false, true, true),
-    );
-    assert!(crate::object::get_property_attrs(dead, "p").is_some());
-
-    let _ = gc_collect_minor();
-
-    assert!(
-        crate::object::get_property_attrs(dead, "p").is_none(),
-        "the dead young owner's descriptor must be pruned from the log"
-    );
+    young_getter_across_a_minor(owner as usize);
 }
 
 // ------------------------------------------------------------------- shapes

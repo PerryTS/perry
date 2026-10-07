@@ -924,7 +924,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 }
                 if let Ok(name) = std::str::from_utf8(key_bytes) {
                     if let Some(index) = super::super::canonical_array_index(name) {
-                        if crate::state::state().descriptors.accessors_in_use.get() {
+                        {
                             if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                                 if acc.get != 0 {
                                     let receiver = crate::value::js_nanbox_pointer(obj as i64);
@@ -945,7 +945,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                     }
                     // Named (non-index) accessor installed via
                     // `Object.defineProperty(arr, "prop", {get,set})`.
-                    if crate::state::state().descriptors.accessors_in_use.get() {
+                    {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                             if acc.get != 0 {
                                 let receiver = crate::value::js_nanbox_pointer(obj as i64);
@@ -1517,9 +1517,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 // thread-local gate keeps this off the hot path in the common case;
                 // the per-object flag gate avoids invoking a stale getter left by a
                 // freed object whose address this fresh object reused.
-                if st.descriptors.accessors_in_use.get()
-                    && super::super::object_has_descriptors(obj as usize)
-                {
+                if super::super::object_has_descriptors(obj as usize) {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                             if acc.get != 0 {
@@ -1550,9 +1548,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // linear scan below (the index is an accelerator, not authoritative).
         if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
             if let Some(i) = wide_key_index_lookup(keys_id, key_bytes, key, keys, key_count) {
-                if st.descriptors.accessors_in_use.get()
-                    && super::super::object_has_descriptors(obj as usize)
-                {
+                if super::super::object_has_descriptors(obj as usize) {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                             if acc.get != 0 {
@@ -1628,9 +1624,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                     wide_key_index_note_hit(keys_id, key_bytes, i as u32);
                 }
                 // Accessor short-circuit (see fast path above).
-                if st.descriptors.accessors_in_use.get()
-                    && super::super::object_has_descriptors(obj as usize)
-                {
+                if super::super::object_has_descriptors(obj as usize) {
                     if let Ok(name) = std::str::from_utf8(key_bytes) {
                         if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                             if acc.get != 0 {

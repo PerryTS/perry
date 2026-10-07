@@ -24,7 +24,7 @@ use super::descriptor_state::{
     clear_accessor_descriptor, clear_object_descriptors, clear_property_attrs,
     install_fresh_accessor_property, object_has_descriptors, set_accessor_descriptor,
     set_builtin_accessor_descriptor, set_builtin_property_attrs, set_property_attrs,
-    set_property_attrs_batch, transfer_descriptor_owner, AccessorDescriptor, PropertyAttrs,
+    set_property_attrs_batch, AccessorDescriptor, PropertyAttrs,
 };
 use super::{js_object_alloc, js_object_set_field_by_name, shapes, ObjectHeader};
 
@@ -273,7 +273,7 @@ fn rule1_transfer_descriptor_owner_preserves_the_shape() {
             shapes::object_shape_stamp(new),
             "test premise: an identical keyed descriptor install is shared"
         );
-        transfer_descriptor_owner(old as usize, new as usize);
+        // Shape facts stay with the copied holder; no owner table needs rekeying.
         assert_eq!(
             old_shape,
             shapes::object_shape_stamp(new),
@@ -287,44 +287,23 @@ fn rule1_transfer_descriptor_owner_preserves_the_shape() {
     }
 }
 
-/// The funnel (`note_descriptor_target_keyed`) sets
-/// `OBJ_FLAG_HAS_DESCRIPTORS` and transitions the shape for
-/// `GC_TYPE_OBJECT` ONLY. A typed array returns early before either; an array
-/// or closure fails the `obj_type` test inside.
-///
-/// This is load-bearing for the emitted read path in two opposite directions:
-///
-/// * the descriptor FLAG is worthless as a guard for these receivers (it is
-///   never set), so dropping the flag test loses nothing for them;
-/// * the SHAPE is equally worthless (never transitioned), so a shape-only
-///   guard must keep rejecting them by KIND. The GC-kind load cannot be
-///   removed from the read path for non-`GC_TYPE_OBJECT` receivers until
-///   their descriptor state is shape-carried too.
+/// Arrays have no ObjectHeader, but their traced property bag is an ordinary
+/// holder whose shape carries exactly the same descriptor facts.
 #[test]
-fn rule1_funnel_does_not_cover_non_object_receivers() {
+fn rule1_funnel_covers_array_property_bag_shapes() {
     let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
         let arr = crate::array::js_array_alloc(4);
         let addr = arr as usize;
-        let header = crate::value::addr_class::try_read_gc_header(addr)
-            .expect("a fresh array carries a GcHeader");
-        assert_eq!(
-            header.obj_type,
-            crate::gc::GC_TYPE_ARRAY,
-            "test premise: js_array_alloc produces GC_TYPE_ARRAY"
-        );
         set_property_attrs(addr, "0".to_string(), FROZEN_ATTRS);
-        assert!(
-            !object_has_descriptors(addr),
-            "the funnel only flags GC_TYPE_OBJECT — if this ever starts passing, \
-             the read path's flag test became meaningful for arrays and this \
-             test's conclusion below must be re-derived"
-        );
-        assert!(
-            super::descriptor_state::get_property_attrs(addr, "0").is_some(),
-            "the descriptor is still installed and observable: it is only the \
-             shape-and-flag record of it that is missing"
-        );
+        let bag = crate::array::array_property_bag(arr);
+        assert!(!bag.is_null());
+        assert!(object_has_descriptors(addr));
+        assert_ne!(super::key_attrs::object_key_entry(bag, b"0"), 0);
+        assert!(!super::descriptor_state::get_property_attrs(addr, "0")
+            .unwrap()
+            .writable());
     }
 }
 

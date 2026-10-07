@@ -590,14 +590,6 @@ unsafe fn prepare(slot: *mut MethodSiteSlot, recv: f64, method_id: i64, argc: us
     });
     let cell = matches!(kind, Some(t) if t != crate::gc::GC_TYPE_OBJECT
         && t != crate::gc::GC_TYPE_CLOSURE && t != u8::MAX);
-    // A primitive's or a native cell's read can run code only through an
-    // accessor (its own, or its builtin prototypes'), and none exists until
-    // the program defines one: one load answers every other program.
-    if (cell || (!is_pointer && !nullish))
-        && !crate::state::state().descriptors.accessors_in_use.get()
-    {
-        return direct;
-    }
     let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     let Some(name_ref) = crate::string::perry_string_ref_from_dispatch_id(method_id, &mut scratch)
     else {
@@ -901,16 +893,7 @@ unsafe fn builtin_prototype_has_accessor(proto: usize, object: usize, name: &[u8
             if h.obj_type == crate::gc::GC_TYPE_ARRAY
                 && !super::prototype_chain::array_static_proto_recorded() =>
         {
-            // `Array.prototype` carries the bit for its own named properties,
-            // so the bit alone rarely answers; the descriptor owner index (by
-            // address, no key string built) says whether it owns any accessor.
-            if h._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS == 0
-                || !super::descriptor_state::table_owner_has_accessors(proto)
-            {
-                return Some(false);
-            }
-            let key = std::str::from_utf8(name).ok()?;
-            Some(super::descriptor_state::get_accessor_descriptor(proto, key).is_some())
+            Some(super::descriptor_state::owner_key_is_accessor(proto, name))
         }
         _ => None,
     }
@@ -1037,9 +1020,6 @@ unsafe fn own_data_key(obj: *const ObjectHeader, name: &[u8]) -> bool {
 /// can run code (`native_call_method`'s accessor arm, gated alike). `None`
 /// when the cell has no such getter.
 unsafe fn own_getter_value(addr: usize, recv: f64, name: &[u8]) -> Option<f64> {
-    if !crate::state::state().descriptors.accessors_in_use.get() {
-        return None;
-    }
     let key = std::str::from_utf8(name).ok()?;
     let acc = super::descriptor_state::get_accessor_descriptor(addr, key)?;
     let getter = (acc.get & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
@@ -1158,11 +1138,7 @@ unsafe fn lookup_is_observable(recv: f64, name: &[u8]) -> bool {
     if bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL {
         return true;
     }
-    let accessors = crate::state::state().descriptors.accessors_in_use.get();
     let is_pointer = |b: u64| b & !crate::value::POINTER_MASK == crate::value::POINTER_TAG;
-    if !is_pointer(bits) && !accessors {
-        return false;
-    }
     let name_str = std::str::from_utf8(name).ok();
     let mut cur = recv;
     // A prototype chain is acyclic; the bound only guards a corrupt one.
@@ -1176,7 +1152,7 @@ unsafe fn lookup_is_observable(recv: f64, name: &[u8]) -> bool {
             // Every cell kind answers: an ordinary object from its shape's
             // summary and keys, any other cell (an array exotic prototype, a
             // collection) from its descriptor meta or tables.
-            if accessors && crate::value::addr_class::is_above_handle_band(addr) {
+            if crate::value::addr_class::is_above_handle_band(addr) {
                 match name_str {
                     Some(n) => {
                         if super::descriptor_state::get_accessor_descriptor(addr, n).is_some() {
@@ -1719,28 +1695,10 @@ fn address_is_prime_stable(addr: usize) -> bool {
         && crate::arena::classify_heap_generation(addr) != crate::arena::HeapGeneration::Unknown
 }
 
-/// Could `name` be an accessor (or a customized descriptor) on `obj`? The
-/// authoritative answer is the object's descriptor state, consulted the way
-/// the by-name read does; a clear Bloom bit in the meta record short-cuts it.
-/// Descriptor installs re-stamp the ShapeId (#10824), so a prime-time answer
-/// holds for every carrier of the shape.
+/// Accessor identity is a fact of the holder shape. Changing the entry
+/// publishes a new ShapeId and retires every memo of the previous holder.
 unsafe fn key_may_be_accessor(obj: *const ObjectHeader, name: &[u8]) -> bool {
-    let meta = (*obj).meta;
-    if !meta.is_null() {
-        let bit = 1u64 << (super::key_bytes_hash(name.as_ptr(), name.len()) & 63);
-        if (*meta).accessor_key_bits & bit != 0 || (*meta).attr_key_bits & bit != 0 {
-            return true;
-        }
-    }
-    if super::descriptor_state::object_has_descriptors(obj as usize) {
-        let Ok(name) = std::str::from_utf8(name) else {
-            return true;
-        };
-        if super::descriptor_state::get_accessor_descriptor(obj as usize, name).is_some() {
-            return true;
-        }
-    }
-    false
+    super::key_attrs::object_key_is_accessor(obj, name)
 }
 
 /// The value of spill-located key `index` as the emitted hit will read it:

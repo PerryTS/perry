@@ -648,9 +648,8 @@ fn own_data_slot(
             return None;
         }
         let meta = (*obj).meta;
-        let accessor_bit = 1u64 << (crate::object::key_bytes_hash(name.as_ptr(), name.len()) & 63);
-        if !meta.is_null()
-            && ((*meta).elements != 0 || (*meta).accessor_key_bits & accessor_bit != 0)
+        if (!meta.is_null() && (*meta).elements != 0)
+            || crate::object::key_attrs::object_key_is_accessor(obj, name)
         {
             return None;
         }

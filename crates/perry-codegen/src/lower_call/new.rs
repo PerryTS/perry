@@ -633,12 +633,7 @@ fn lower_new_impl_inner<'a>(
             let merge_label = ctx.block_label(merge_idx);
             {
                 let blk = ctx.block();
-                // The sticky policy latch, volatile for the same reason every
-                // other reader loads it volatile: the runtime flips it 0 -> 1
-                // mid-execution and LLVM must not hoist a stale 0 across it.
-                let flag =
-                    blk.load_volatile(crate::types::I8, "@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED");
-                let mut acc = blk.icmp_eq(crate::types::I8, &flag, "0");
+                let mut acc = "true".to_string();
                 // Charter step 5: a plain finite double is valid in an `F64` lane
                 // and in an `Any` lane alike, so the per-store number test
                 // below is the whole proof; no header layout bit is read.

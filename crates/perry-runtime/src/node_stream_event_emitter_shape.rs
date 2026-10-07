@@ -77,7 +77,11 @@ pub(super) fn own_slot_in(
     // immediately, with no allocation in between.
     unsafe {
         let meta = (*obj).meta;
-        if !meta.is_null() && ((*meta).elements != 0 || (*meta).accessor_key_bits != 0) {
+        if (!meta.is_null() && (*meta).elements != 0)
+            || crate::object::key_attrs::object_summary(obj)
+                & crate::object::key_attrs::SUMMARY_ACCESSOR
+                != 0
+        {
             return None;
         }
         let id = (*obj).parent_class_id;

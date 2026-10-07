@@ -316,8 +316,8 @@ pub(crate) use self::named_props::{
     array_named_property_delete, array_named_property_delete_by_name, array_named_property_get,
     array_named_property_get_by_name, array_named_property_has, array_named_property_names,
     array_named_property_set, array_named_props_reserve, array_named_props_slot,
-    carry_named_props_reserve, ensure_named_props_slot,
-    prune_dead_full_array_named_property_owners, store_named_props_word,
+    array_property_bag, array_property_bag_ensure, carry_named_props_reserve,
+    ensure_named_props_slot, prune_dead_full_array_named_property_owners, store_named_props_word,
     transfer_full_array_named_props_owner, visit_array_named_props_slots,
 };
 

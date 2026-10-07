@@ -304,34 +304,19 @@ fn test_descriptor_meta_summary_gates_probes() {
             crate::object::get_property_attrs(addr, "unrelated").is_none(),
             "un-installed key must miss through the gate"
         );
-        // Exact negative when the bits don't collide; a collision only
-        // costs a (missing) probe, which the getter assertion above covers.
-        let x_bit = crate::object::descriptor_state::test_descriptor_key_bit("x");
-        let other_bit = crate::object::descriptor_state::test_descriptor_key_bit("unrelated");
-        if x_bit != other_bit {
-            assert!(
-                !crate::object::descriptor_state::may_have_descriptor_entry(
-                    addr,
-                    "unrelated",
-                    false
-                ),
-                "non-colliding un-installed key must be a summary miss"
-            );
-        }
-        // The attr install must not set the ACCESSOR word.
-        if x_bit != 0 {
-            assert!(
-                !crate::object::descriptor_state::may_have_descriptor_entry(addr, "x", true),
-                "attr install must not claim a possible accessor entry"
-            );
-        }
-
-        // Handle-band owner (no GC header): conservative arm, still works.
+        assert!(!crate::object::descriptor_state::may_have_descriptor_entry(
+            addr,
+            "unrelated",
+            false
+        ));
+        assert!(!crate::object::descriptor_state::may_have_descriptor_entry(
+            addr, "x", true
+        ));
         let handle = 0x400usize;
-        assert!(
-            crate::object::descriptor_state::may_have_descriptor_entry(handle, "x", false),
-            "non-meta-capable owner must stay conservative"
-        );
+        crate::object::handle_expando::handle_expando_clear(handle as i64);
+        assert!(!crate::object::descriptor_state::may_have_descriptor_entry(
+            handle, "x", false
+        ));
         crate::object::set_property_attrs(
             handle,
             "h".to_string(),
@@ -354,7 +339,6 @@ fn test_descriptor_meta_summary_survives_copied_minor_move() {
     let _guard = CopyingNurseryTestGuard::new(2);
     // The scoped registry starts empty — install the scanner that rekeys
     // descriptor-table owner addresses on evacuation.
-    gc_register_mutable_root_scanner(crate::object::descriptor_state::scan_descriptor_roots_mut);
 
     let (owner, _) = unsafe { alloc_nursery_test_object(0) };
     let old_addr = owner as usize;
