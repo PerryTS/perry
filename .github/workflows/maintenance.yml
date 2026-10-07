@@ -48,9 +48,14 @@ on:
           - gate-freshness
           - soak-autofix
           - npm-publish-freshness
+          - delete-retired-runs
         default: validate
       apply:
         description: Apply queue cleanup; unchecked is dry run.
+        type: boolean
+        default: false
+      confirm_delete_retired_runs:
+        description: Required confirmation for deleting completed runs of retired workflows.
         type: boolean
         default: false
 permissions: {}
@@ -70,11 +75,18 @@ jobs:
       module_inputs: ${{ steps.route.outputs.module_inputs }}
       validate: ${{ steps.route.outputs.validate }}
     steps:
-      - uses: ./.github/actions/perry/actions/checkout
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: '1'
-          persist-credentials: 'false'
+      - name: Checkout workflow source for routing
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
       - name: Route suites
         id: route
         env:
@@ -141,7 +153,7 @@ jobs:
   reject-nonmain-write:
     name: Reject off-main maintenance writes
     needs: route
-    if: always() && github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && (inputs.suite == 'gate-freshness' || inputs.suite == 'soak-autofix' || inputs.suite == 'npm-publish-freshness' || (inputs.suite == 'ci-queue-reaper' && inputs.apply))
+    if: always() && github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && (inputs.suite == 'gate-freshness' || inputs.suite == 'soak-autofix' || inputs.suite == 'npm-publish-freshness' || inputs.suite == 'delete-retired-runs' || (inputs.suite == 'ci-queue-reaper' && inputs.apply))
     runs-on: ubuntu-latest
     permissions: {}
     steps:
@@ -639,3 +651,34 @@ jobs:
               raise SystemExit(1)
           print(f'{len(ids)} suite jobs completed or were intentionally skipped')
           PY
+  delete-retired-runs:
+    name: Delete completed runs from retired workflows
+    needs: route
+    if: ${{ needs.route.result == 'success' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.suite == 'delete-retired-runs' && inputs.confirm_delete_retired_runs }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    permissions:
+      actions: write
+      contents: read
+    concurrency:
+      group: retired-actions-history-cleanup
+      cancel-in-progress: false
+    steps:
+      - name: Checkout main (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: main
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+      - name: Delete retired workflow history
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_API_URL: ${{ github.api_url }}
+        run: python3 scripts/delete_retired_workflow_runs.py

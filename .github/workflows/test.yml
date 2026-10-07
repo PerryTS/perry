@@ -113,11 +113,18 @@ jobs:
       plan: ${{ steps.route.outputs.plan }}
       run_core: ${{ steps.route.outputs.run_core }}
     steps:
-      - uses: ./.github/actions/perry/actions/checkout
-        with:
-          ref: ${{ github.sha }}
-          fetch-depth: 1
-          persist-credentials: false
+      - name: Checkout workflow source for routing
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
       - name: Route CI suites
         id: route
         env:
