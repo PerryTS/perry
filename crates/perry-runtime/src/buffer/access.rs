@@ -239,6 +239,15 @@ pub(crate) fn admitted_u8_read(addr: usize, index: i32) -> Option<u8> {
     unsafe { read_buffer_byte(addr as *const BufferHeader, index) }
 }
 
+/// Is `addr` a cell `admitted_u8_read` / `admitted_u8_write` serve (a Node
+/// `Buffer` owner or view)? One header load and one compare, so a dispatcher
+/// can keep every other receiver off the out-of-line byte arm.
+#[inline(always)]
+pub(crate) fn is_admitted_u8_cell(addr: usize) -> bool {
+    unsafe { crate::value::addr_class::try_read_gc_header(addr) }
+        .is_some_and(|header| header.obj_type & !0x20 == crate::gc::GC_TYPE_BUFFER)
+}
+
 #[inline(always)]
 pub(crate) fn admitted_u8_write(addr: usize, index: i32, byte: u8) -> bool {
     let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {

@@ -319,15 +319,6 @@ pub(crate) fn is_owned_byte_cell(addr: usize) -> bool {
         .is_some_and(|h| crate::gc::is_byte_family_type(unsafe { h.as_ref() }.obj_type))
 }
 
-/// Uint8Array or Buffer, owner or view: the byte-index fast arms' admission.
-#[inline(always)]
-pub(crate) fn is_u8_byte_cell(addr: usize) -> bool {
-    matches!(
-        buffer_family_type(addr),
-        Some(crate::gc::GC_TYPE_BUFFER | crate::gc::GC_TYPE_BUFFER_UINT8ARRAY)
-    )
-}
-
 /// Brand the buffer at `addr` as a `Uint8Array` (formatted as
 /// `Uint8Array(N) [ a, b, c ]` instead of `<Buffer aa bb cc>`). A cell that is
 /// already Uint8Array-backed (a plain Uint8Array, a secret `KeyObject`, a

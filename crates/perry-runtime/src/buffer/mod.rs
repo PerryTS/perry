@@ -61,7 +61,7 @@ pub use header::{BufferHeader, BUFFER_TYPE_ID, NODE_BUFFER_CLASS_ID, SMALL_BUF_T
 // ---- Re-exports: allocation / registry helpers ----
 pub(crate) use header::is_small_buf_slab_addr;
 // #9342: primed by `typedarray::js_u8_buffer_read_f64` (codegen slow arm).
-pub(crate) use access::{admitted_u8_read, admitted_u8_write};
+pub(crate) use access::{admitted_u8_read, admitted_u8_write, is_admitted_u8_cell};
 // #10694: the brand is the cell's GC type byte; see `header`'s module note.
 pub use header::{
     asymmetric_key_meta, buffer_alloc, buffer_backing_array_buffer, buffer_byte_offset,

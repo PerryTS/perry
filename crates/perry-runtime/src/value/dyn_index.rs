@@ -308,7 +308,7 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
     // canonical in-bounds index answers from the inline-access cache instead
     // of the buffer-registry probes below. Placed where buffers are handled so
     // no other receiver pays for it.
-    if crate::buffer::header::is_u8_byte_cell(raw_ptr) {
+    if crate::buffer::is_admitted_u8_cell(raw_ptr) {
         if let Some(byte) = cached_u8_index_get(raw_ptr, index) {
             return byte;
         }
@@ -745,8 +745,7 @@ pub extern "C" fn js_dyn_index_set_strict(obj: f64, index: f64, value: f64, stri
     // the buffer-registry probes below. Only a Number: any other value's
     // ToNumber may run user code, which the full path orders against the
     // bounds check.
-    if crate::buffer::header::is_u8_byte_cell(raw_ptr) && cached_u8_index_set(raw_ptr, index, value)
-    {
+    if crate::buffer::is_admitted_u8_cell(raw_ptr) && cached_u8_index_set(raw_ptr, index, value) {
         return value;
     }
     // #8149: an index STORE on an `ArrayBuffer` / `SharedArrayBuffer` /
