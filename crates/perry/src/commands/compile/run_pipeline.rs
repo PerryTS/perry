@@ -1226,7 +1226,9 @@ pub fn run_with_parse_cache(
     ));
     // The compile's one routing decision: codegen emits a wrapper's install
     // hook and calls only for modules it routes to that wrapper, exactly the
-    // wrappers the linker links.
+    // wrappers the linker links. A module it leaves without any provider is a
+    // compile error, not a call that fails at run time.
+    optimized_libs::check_native_providers(&ctx)?;
     perry_codegen::set_program_native_routing(ctx.native_routing.clone());
     if program_has_worker && verbose > 0 {
         eprintln!(

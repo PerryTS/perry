@@ -150,7 +150,7 @@ pub(crate) fn native_routing() -> perry_codegen::NativeRouting {
         let provider = if flip || wrapper_is_sole_provider(&binding.package) {
             perry_codegen::NativeProvider::Wrapper(binding.lib.clone())
         } else {
-            perry_codegen::NativeProvider::Bundled
+            perry_codegen::NativeProvider::Bundled(binding.lib.clone())
         };
         (binding.package.clone(), provider)
     }))
@@ -160,6 +160,37 @@ pub(crate) fn native_routing() -> perry_codegen::NativeRouting {
 /// routing decision serves from a wrapper archive.
 pub(crate) fn routed_modules(ctx: &CompilationContext) -> BTreeSet<String> {
     ctx.native_routing.routed(&well_known_iteration_set(ctx))
+}
+
+/// Refuse a program that imports a native module the routing decision leaves
+/// without a provider ([`perry_codegen::NativeRouting::unprovided`]): its
+/// wrapper archive is not linked, and the bundled runtime does not implement
+/// it, so its calls would compile and then fail at run time. The program's
+/// modules are the same [`well_known_iteration_set`] the linker routes.
+pub(crate) fn check_native_providers(ctx: &CompilationContext) -> anyhow::Result<()> {
+    let errors: Vec<String> = well_known_iteration_set(ctx)
+        .iter()
+        .filter(|module| ctx.native_routing.unprovided(module))
+        .map(|module| {
+            let binding = super::well_known::lookup_well_known(module);
+            let name = match binding {
+                Some(binding) if binding.node_builtin => format!("node:{module}"),
+                _ => module.clone(),
+            };
+            let krate = binding.map_or("its wrapper crate", |binding| binding.krate.as_str());
+            format!(
+                "{name} has no provider: PERRY_DISABLE_WELL_KNOWN=1 disables its wrapper \
+                 crate {krate}, and the bundled runtime doesn't implement it (the whole \
+                 module is refused under this setting). Unset PERRY_DISABLE_WELL_KNOWN \
+                 to link {krate}."
+            )
+        })
+        .collect();
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(anyhow::anyhow!("{}", errors.join("\n")))
+    }
 }
 
 /// Name wrapper archives needed by emitted object-file symbols but absent from

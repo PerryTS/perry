@@ -51,11 +51,15 @@ fn compile_to_ir_impl(dir: &Path, source: &str, link: bool) -> String {
         // automatic well-known binding discovery too.
         command.env("PERRY_FORCE_WELL_KNOWN", "http,ws");
     } else {
-        // IR-only assertions do not need runtime or extension archives.
+        // IR-only assertions do not need runtime or extension archives. The
+        // upgrade handle is seeded by `node:http`'s `createServer`, which only
+        // perry-ext-http implements, so `node:http` stays routed to it: with
+        // PERRY_DISABLE_WELL_KNOWN=1 these programs have no http provider and
+        // do not compile.
         command
             .arg("--no-auto-optimize")
             .arg("--no-link")
-            .env("PERRY_DISABLE_WELL_KNOWN", "1");
+            .env_remove("PERRY_DISABLE_WELL_KNOWN");
     }
     let compile = command.output().expect("run perry compile");
     assert!(
