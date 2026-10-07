@@ -85,3 +85,45 @@ fn value_only_rewrites_skip_pointer_index_rebuild() {
         assert_eq!(js_map_has(map, f64::from_bits(key_bits)), 0);
     }
 }
+#[test]
+fn string_collision_capacity_accounting_releases_overflow_vectors() {
+    let baseline = crate::gc::test_external_side_live_bytes();
+    let mut index = StringIndex::default();
+    for raw in 0..1024 {
+        index.insert(42, raw);
+        let expected = index.first.capacity() * std::mem::size_of::<(u64, u32)>()
+            + index.collisions.capacity() * std::mem::size_of::<(u64, Vec<u32>)>()
+            + index
+                .collisions
+                .get(&42)
+                .map_or(0, |rest| rest.capacity() * std::mem::size_of::<u32>());
+        assert_eq!(
+            crate::gc::test_external_side_live_bytes(),
+            baseline + expected
+        );
+    }
+    let before = crate::gc::test_external_side_live_bytes();
+    let overflow = index.collisions[&42].capacity() * std::mem::size_of::<u32>();
+    index.clear();
+    assert_eq!(
+        crate::gc::test_external_side_live_bytes(),
+        before - overflow
+    );
+    assert_eq!(
+        crate::gc::test_external_side_live_bytes(),
+        baseline + index.byte_len()
+    );
+    for raw in 0..1024 {
+        index.insert(42, raw);
+    }
+    for raw in 0..1024 {
+        index.remove(42, raw);
+        assert_eq!(
+            crate::gc::test_external_side_live_bytes(),
+            baseline + index.byte_len()
+        );
+    }
+    crate::gc::gc_note_external_side_free(index.byte_len());
+    drop(index);
+    assert_eq!(crate::gc::test_external_side_live_bytes(), baseline);
+}

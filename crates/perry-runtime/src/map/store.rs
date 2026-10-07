@@ -23,7 +23,28 @@ pub(super) struct MapStore {
     pub(super) pointer_rebuilds: usize,
 }
 
+/// Index payload bytes follow reserved capacity, not the number of live keys.
+#[inline]
+pub(super) fn hash_index_bytes<K, V>(index: &PtrHashMap<K, V>) -> usize {
+    index.capacity() * std::mem::size_of::<(K, V)>()
+}
+
+/// Like SetIndex growth accounting, this records debt for the next safepoint;
+/// it must not introduce a collection while callers hold raw Map pointers.
+#[inline]
+pub(super) fn note_index_bytes_changed(before: usize, after: usize) {
+    if after > before {
+        crate::gc::gc_note_external_side_alloc(after - before);
+    } else if before > after {
+        crate::gc::gc_note_external_side_free(before - after);
+    }
+}
+
 impl MapStore {
+    pub(super) fn index_bytes(&self) -> usize {
+        self.numeric.byte_len() + self.strings.byte_len() + hash_index_bytes(&self.pointers)
+    }
+
     pub(super) fn new(entries: *mut f64, capacity: usize) -> Self {
         MAP_STORE_EVER_ALLOCATED.store(true, std::sync::atomic::Ordering::Relaxed);
         Self {
@@ -60,15 +81,34 @@ pub(super) struct StringIndex {
 }
 
 impl StringIndex {
+    pub(super) fn byte_len(&self) -> usize {
+        hash_index_bytes(&self.first)
+            + hash_index_bytes(&self.collisions)
+            + self
+                .collisions
+                .values()
+                .map(|rest| rest.capacity() * std::mem::size_of::<u32>())
+                .sum::<usize>()
+    }
+
     pub(super) fn insert(&mut self, hash: u64, index: u32) {
+        let before = hash_index_bytes(&self.first) + hash_index_bytes(&self.collisions);
+        let mut vector_growth = 0;
         match self.first.entry(hash) {
             std::collections::hash_map::Entry::Vacant(entry) => {
                 entry.insert(index);
             }
             std::collections::hash_map::Entry::Occupied(_) => {
-                self.collisions.entry(hash).or_default().push(index);
+                let rest = self.collisions.entry(hash).or_default();
+                let capacity = rest.capacity();
+                rest.push(index);
+                vector_growth = (rest.capacity() - capacity) * std::mem::size_of::<u32>();
             }
         }
+        note_index_bytes_changed(
+            before,
+            hash_index_bytes(&self.first) + hash_index_bytes(&self.collisions) + vector_growth,
+        );
     }
 
     pub(super) fn candidates(&self, hash: u64) -> impl Iterator<Item = u32> + '_ {
@@ -80,6 +120,12 @@ impl StringIndex {
     }
 
     pub(super) fn remove(&mut self, hash: u64, index: u32) {
+        let before = hash_index_bytes(&self.first)
+            + hash_index_bytes(&self.collisions)
+            + self
+                .collisions
+                .get(&hash)
+                .map_or(0, |rest| rest.capacity() * std::mem::size_of::<u32>());
         if self.first.get(&hash) == Some(&index) {
             if let Some(replacement) = self.collisions.get_mut(&hash).and_then(Vec::pop) {
                 self.first.insert(hash, replacement);
@@ -92,11 +138,20 @@ impl StringIndex {
         if self.collisions.get(&hash).is_some_and(Vec::is_empty) {
             self.collisions.remove(&hash);
         }
+        let after = hash_index_bytes(&self.first)
+            + hash_index_bytes(&self.collisions)
+            + self
+                .collisions
+                .get(&hash)
+                .map_or(0, |rest| rest.capacity() * std::mem::size_of::<u32>());
+        note_index_bytes_changed(before, after);
     }
 
     pub(super) fn clear(&mut self) {
+        let before = self.byte_len();
         self.first.clear();
         self.collisions.clear();
+        note_index_bytes_changed(before, self.byte_len());
     }
 }
 
@@ -136,7 +191,9 @@ pub(crate) unsafe fn finalize_map_side_allocation_for_gc(map: *mut MapHeader) {
         return;
     }
     let store = Box::from_raw(store);
-    crate::gc::gc_note_external_side_free(entries_layout(store.capacity).size());
+    crate::gc::gc_note_external_side_free(
+        entries_layout(store.capacity).size() + store.index_bytes(),
+    );
     drop(store);
     // GC_STORE_AUDIT(POINTER_FREE): the native owner and external entries have been freed.
     (*map).entries = ptr::null_mut();
@@ -245,3 +302,8 @@ pub(crate) unsafe fn drop_map_store_at_thread_exit(map: *mut MapHeader) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+pub(crate) unsafe fn test_map_index_bytes(map: *const MapHeader) -> usize {
+    (*(*map).store).index_bytes()
+}
