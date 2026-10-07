@@ -1615,7 +1615,18 @@ pub(crate) fn reset_old_page_meta_snapshot_calls_for_tests() {
 /// page-granular and carries no block identity, which is why #9772's selection
 /// could predict 44 MB of "releasable block bytes" from page granules and
 /// release nothing.
+#[cfg(test)]
 pub(crate) fn old_arena_block_ranges() -> Vec<(usize, usize, usize, usize)> {
+    old_arena_ranges(false)
+}
+
+/// Movable backing only, using the allocation class stored by the arena.
+/// Oversized object/byte extents stay excluded even if their geometry changes.
+pub(crate) fn old_arena_movable_block_ranges() -> Vec<(usize, usize, usize, usize)> {
+    old_arena_ranges(true)
+}
+
+fn old_arena_ranges(movable_only: bool) -> Vec<(usize, usize, usize, usize)> {
     let old_block_start = longlived_end();
     OLD_ARENA.with(|arena| {
         let arena = unsafe { &*arena.get() };
@@ -1627,6 +1638,9 @@ pub(crate) fn old_arena_block_ranges() -> Vec<(usize, usize, usize, usize)> {
                 if block.data.is_null() || block.size == 0 {
                     return None;
                 }
+                if movable_only && matches!(block.extent_kind, super::region::Kind::LargeObject) {
+                    return None;
+                }
                 let base = block.data as usize;
                 Some((base, base + block.size, old_block_start + i, block.size))
             })
@@ -1636,7 +1650,7 @@ pub(crate) fn old_arena_block_ranges() -> Vec<(usize, usize, usize, usize)> {
     })
 }
 
-/// Index into [`old_arena_block_ranges`] output for the block containing
+/// Index into an old-arena range snapshot for the block containing
 /// `addr`, or `None` when the address is not in a live old-gen block.
 pub(crate) fn old_arena_block_range_index(
     ranges: &[(usize, usize, usize, usize)],

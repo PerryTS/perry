@@ -500,10 +500,16 @@ fn test_old_page_defrag_selection_reports_releasable_granule_bytes() {
         }
     }
 
-    let selected_a = meta(0x2000_0000, 100, 10, 90, 0);
-    let selected_b = meta(0x2000_1000, 100, 20, 80, 0);
-    let unselected_low_dead = meta(0x2000_2000, 100, 80, 20, 0);
-    let pinned = meta(0x2000_3000, 100, 10, 90, 8);
+    let _triggers = super::support::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    // Selection now requires backing owned by the old arena. Keep the
+    // synthetic accounting, but put its page addresses inside a real block.
+    let user = crate::arena::arena_alloc_gc_old(6 * 4096, 8, GC_TYPE_STRING) as usize;
+    let base = (user + 4095) & !4095;
+
+    let selected_a = meta(base, 100, 10, 90, 0);
+    let selected_b = meta(base + 1 * 4096, 100, 20, 80, 0);
+    let unselected_low_dead = meta(base + 2 * 4096, 100, 80, 20, 0);
+    let pinned = meta(base + 3 * 4096, 100, 10, 90, 8);
     let snapshot = [selected_a, selected_b, unselected_low_dead, pinned];
 
     let selection = select_old_page_defrag_pages_from_snapshot(&snapshot, false);
@@ -737,7 +743,7 @@ fn test_sweep_reports_and_retains_non_evacuation_forwarded_stub() {
         set_forwarding_address(stub_header, target);
         (*stub_header).gc_flags |= GC_FLAG_MARKED;
     }
-    for _ in 0..90_000 {
+    for _ in 0..7 * crate::arena::BLOCK_SIZE / (64 + GC_HEADER_SIZE) {
         let _ = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     }
 
@@ -770,7 +776,7 @@ fn test_sweep_reclaims_unreached_old_forwarded_stub() {
     unsafe {
         set_forwarding_address(stub_header, target);
     }
-    for _ in 0..90_000 {
+    for _ in 0..7 * crate::arena::BLOCK_SIZE / (64 + GC_HEADER_SIZE) {
         let _ = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_OBJECT);
     }
 

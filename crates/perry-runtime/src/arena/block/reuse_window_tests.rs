@@ -167,3 +167,24 @@ fn collection_entry_discards_only_previously_idle_eden_pages_and_keeps_reuse_saf
 fn idle_advice_state_fits_existing_arena_block_padding() {
     assert_eq!(std::mem::size_of::<ArenaBlock>(), 48);
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+fn the_pool_charges_rounded_mapping_tails_and_releases_the_same_charge() {
+    crate::arena::tests::run_with_fresh_arenas(|| unsafe {
+        // Deliberately use step-1 geometry to distinguish mapped from usable.
+        let size = super::super::region::ALIGN / 2;
+        let raw = super::super::region::map(super::super::region::Kind::NurseryBlock, size);
+        assert!(!raw.is_null());
+        let before = block_pool_bytes_for_test();
+        assert!(block_pool_put(raw, size));
+        assert_eq!(block_pool_bytes_for_test() - before, 2 * size);
+        assert_eq!(block_pool_take(size), Some(raw));
+        assert_eq!(block_pool_bytes_for_test(), before);
+        assert!(block_pool_put(raw, size));
+        let drained = drain_block_pool();
+        assert_eq!(drained.bytes, before + 2 * size);
+        assert_eq!(block_pool_bytes_for_test(), 0);
+        dealloc_for_test(raw, size);
+    });
+}

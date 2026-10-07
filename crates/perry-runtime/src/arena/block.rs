@@ -1,9 +1,11 @@
 use super::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Keep main's usable block geometry for the allocation experiment. The OS
-/// extent is 2 MiB-aligned; 2 MiB usable blocks require hwp's census-capacity
-/// integration before they can run (see REGION-DESIGN).
+/// One usable block per aligned Linux region. Other backends keep their
+/// existing geometry until their OS reservation implementation is validated.
+#[cfg(target_os = "linux")]
+pub(crate) const BLOCK_SIZE: usize = super::region::ALIGN;
+#[cfg(not(target_os = "linux"))]
 pub(crate) const BLOCK_SIZE: usize = 1024 * 1024;
 pub(crate) const FRESH_GENERAL_BLOCK_MIN_USED_BYTES: usize = 256 * 1024;
 
@@ -80,7 +82,7 @@ impl Drop for BlockPool {
         let bytes = self
             .blocks
             .iter()
-            .map(|block| block.size)
+            .map(|block| super::region::backing_len(block.size))
             .fold(0usize, usize::saturating_add);
         block_pool_process_bytes_sub(bytes);
         for block in &self.blocks {
@@ -201,8 +203,9 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
         return false;
     }
     let cap = block_pool_cap_bytes();
-    if BLOCK_POOL_BYTES.with(Cell::get).saturating_add(size) > cap
-        || !block_pool_process_try_reserve(size)
+    let charge = super::region::backing_len(size);
+    if BLOCK_POOL_BYTES.with(Cell::get).saturating_add(charge) > cap
+        || !block_pool_process_try_reserve(charge)
     {
         return false;
     }
@@ -213,7 +216,7 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
             reuse_window: 2,
         });
     });
-    BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_add(size)));
+    BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_add(charge)));
     true
 }
 
@@ -223,8 +226,9 @@ fn block_pool_take(size: usize) -> Option<*mut u8> {
         let idx = pool.blocks.iter().rposition(|block| block.size == size)?;
         Some(pool.blocks.swap_remove(idx).data)
     })?;
-    BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_sub(size)));
-    block_pool_process_bytes_sub(size);
+    let charge = super::region::backing_len(size);
+    BLOCK_POOL_BYTES.with(|c| c.set(c.get().saturating_sub(charge)));
+    block_pool_process_bytes_sub(charge);
     Some(taken)
 }
 
@@ -281,7 +285,7 @@ pub(crate) fn drain_block_pool() -> BlockPoolDrainStats {
     let entries = BLOCK_POOL.with(|pool| std::mem::take(&mut pool.borrow_mut().blocks));
     let bytes = entries
         .iter()
-        .map(|block| block.size)
+        .map(|block| super::region::backing_len(block.size))
         .fold(0usize, usize::saturating_add);
     let tracked = BLOCK_POOL_BYTES.with(|cell| cell.replace(0));
     debug_assert_eq!(tracked, bytes, "thread block-pool byte accounting drifted");
@@ -350,6 +354,7 @@ fn try_alloc_block(
     if let Some(data) = block_pool_take(size) {
         unsafe { super::region::advise(data, size, kind) };
         return Some(ArenaBlock {
+            extent_kind: kind,
             data,
             size,
             offset: 0,
@@ -365,6 +370,7 @@ fn try_alloc_block(
         return None;
     }
     Some(ArenaBlock {
+        extent_kind: kind,
         data,
         size,
         offset: 0,
@@ -434,6 +440,8 @@ fn alloc_block_no_gc(min_size: usize, generation: HeapGeneration) -> ArenaBlock 
 
 /// A single arena block
 pub(crate) struct ArenaBlock {
+    /// Allocation class of this backing, preserved when blocks change generation.
+    pub(crate) extent_kind: super::region::Kind,
     pub(crate) data: *mut u8,
     pub(crate) size: usize,
     pub(crate) offset: usize,
@@ -692,6 +700,7 @@ impl Arena {
     fn new_lazy(generation: HeapGeneration, space: HeapSpace) -> Self {
         Arena {
             blocks: vec![ArenaBlock {
+                extent_kind: super::region::Kind::NurseryBlock,
                 data: std::ptr::null_mut(),
                 size: 0,
                 offset: 0,

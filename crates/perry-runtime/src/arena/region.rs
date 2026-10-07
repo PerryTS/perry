@@ -7,7 +7,7 @@ use super::HeapGeneration;
 pub(super) const ALIGN: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
-pub(super) enum Kind {
+pub(crate) enum Kind {
     NurseryBlock,
     OldBlock,
     LargeObject,
@@ -15,7 +15,9 @@ pub(super) enum Kind {
 
 pub(super) fn kind_for(generation: HeapGeneration, len: usize) -> Kind {
     match generation {
-        HeapGeneration::Old | HeapGeneration::Longlived if len > ALIGN => Kind::LargeObject,
+        HeapGeneration::Old | HeapGeneration::Longlived if len > super::BLOCK_SIZE => {
+            Kind::LargeObject
+        }
         HeapGeneration::Old | HeapGeneration::Longlived => Kind::OldBlock,
         _ => Kind::NurseryBlock,
     }
@@ -28,18 +30,40 @@ fn mapped_len(len: usize) -> Option<usize> {
     len.checked_add(ALIGN - 1).map(|n| n & !(ALIGN - 1))
 }
 
-/// Mature complete payload units are THP eligible. Nursery and sparse tail
-/// units are not. Advice precedes writes; neither prefault nor collapse.
+/// Charge the pool for the owned OS extent, including rounded tails. Other
+/// targets retain the allocator backend and its exact requested length.
+pub(super) fn backing_len(len: usize) -> usize {
+    #[cfg(target_os = "linux")]
+    {
+        mapped_len(len).expect("invalid region extent")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        len
+    }
+}
+
+/// Complete payload units are dense backing in every generation, including
+/// refilled nursery blocks. Sub-unit extents and partial tails stay on base
+/// pages. Advice precedes writes; neither prefault nor collapse.
 pub(super) unsafe fn advise(data: *mut u8, len: usize, kind: Kind) {
     #[cfg(target_os = "linux")]
     {
         let mapped = mapped_len(len).expect("invalid region extent");
-        assert_eq!(libc::madvise(data.cast(), mapped, libc::MADV_NOHUGEPAGE), 0);
-        if !matches!(kind, Kind::NurseryBlock) {
-            let dense = len / ALIGN * ALIGN;
-            if dense != 0 {
-                assert_eq!(libc::madvise(data.cast(), dense, libc::MADV_HUGEPAGE), 0);
-            }
+        let _ = kind;
+        let dense = len / ALIGN * ALIGN;
+        if dense != 0 {
+            assert_eq!(libc::madvise(data.cast(), dense, libc::MADV_HUGEPAGE), 0);
+        }
+        if dense < mapped {
+            assert_eq!(
+                libc::madvise(
+                    data.add(dense).cast(),
+                    mapped - dense,
+                    libc::MADV_NOHUGEPAGE
+                ),
+                0
+            );
         }
     }
     #[cfg(not(target_os = "linux"))]
@@ -127,18 +151,14 @@ mod tests {
     }
 
     #[test]
-    fn aligned_os_backing_has_kind_specific_thp_and_releases_pages() {
+    fn aligned_os_backing_has_whole_unit_thp_and_releases_pages() {
         unsafe {
             for kind in [Kind::NurseryBlock, Kind::OldBlock, Kind::LargeObject] {
                 let data = map(kind, 2 * ALIGN);
                 assert!(!data.is_null());
                 assert_eq!(data as usize & (ALIGN - 1), 0);
                 let flags = flags_for(data);
-                let expected = if matches!(kind, Kind::NurseryBlock) {
-                    "nh"
-                } else {
-                    "hg"
-                };
+                let expected = "hg";
                 assert!(flags.split_whitespace().any(|v| v == expected), "{flags}");
                 std::ptr::write_bytes(data, 0xa5, 2 * ALIGN);
                 let mut resident = vec![0u8; 2 * ALIGN / 4096];
@@ -165,11 +185,11 @@ mod tests {
     }
 
     #[test]
-    fn reused_region_changes_advice_before_new_birth() {
+    fn reused_whole_region_keeps_dense_advice_in_nursery() {
         unsafe {
             let data = map(Kind::OldBlock, ALIGN);
             advise(data, ALIGN, Kind::NurseryBlock);
-            assert!(flags_for(data).split_whitespace().any(|v| v == "nh"));
+            assert!(flags_for(data).split_whitespace().any(|v| v == "hg"));
             unmap(data, ALIGN);
         }
     }
@@ -180,6 +200,67 @@ mod tests {
             assert!(map(Kind::NurseryBlock, 0).is_null());
             assert!(map(Kind::NurseryBlock, ALIGN - 1).is_null());
             assert!(map(Kind::NurseryBlock, usize::MAX & !(ALIGN - 1)).is_null());
+        }
+    }
+
+    #[test]
+    fn dense_nursery_advice_survives_speculative_and_committed_promotion() {
+        crate::arena::tests::run_with_fresh_arenas(|| {
+            let user = crate::arena::arena_alloc_gc(24, 8, crate::gc::GC_TYPE_STRING);
+            let base = (user as usize & !(ALIGN - 1)) as *mut u8;
+            assert!(flags_for(base).split_whitespace().any(|v| v == "hg"));
+            let speculative = crate::arena::retag_young_for_in_place_promotion(true);
+            assert!(
+                !speculative.is_empty(),
+                "LIVE SUBJECT: retagged nursery block"
+            );
+            assert!(flags_for(base).split_whitespace().any(|v| v == "hg"));
+            crate::arena::undo_in_place_promotion_retag(&speculative);
+            assert!(flags_for(base).split_whitespace().any(|v| v == "hg"));
+            let promotion = crate::arena::retag_young_for_in_place_promotion(false);
+            let stats = crate::arena::finish_in_place_promotion(
+                promotion,
+                crate::arena::PromotionLiveness::AssumeAllLive,
+            );
+            assert!(stats.objects > 0);
+            assert!(crate::arena::pointer_in_old_gen(user as usize));
+            assert!(flags_for(base).split_whitespace().any(|v| v == "hg"));
+        });
+    }
+
+    #[test]
+    fn mature_complete_units_keep_partial_tails_on_base_pages() {
+        unsafe {
+            let len = ALIGN + 4096;
+            let data = map(Kind::LargeObject, len);
+            assert!(!data.is_null());
+            assert!(flags_for(data).split_whitespace().any(|v| v == "hg"));
+            assert!(flags_for(data.add(ALIGN))
+                .split_whitespace()
+                .any(|v| v == "nh"));
+            unmap(data, len);
+        }
+    }
+
+    #[test]
+    fn nursery_whole_units_are_huge_but_small_extents_and_tails_are_not() {
+        unsafe {
+            for len in [4096, ALIGN - 4096, ALIGN, ALIGN + 4096, 2 * ALIGN + 4096] {
+                let data = map(Kind::NurseryBlock, len);
+                assert!(!data.is_null(), "LIVE SUBJECT: mapped nursery backing");
+                let dense = len / ALIGN * ALIGN;
+                for offset in (0..backing_len(len)).step_by(4096) {
+                    // The kernel's VMA advice is the subject, independently of
+                    // whether THP allocation succeeds on this machine.
+                    let flags = flags_for(data.add(offset));
+                    let expected = if offset < dense { "hg" } else { "nh" };
+                    assert!(
+                        flags.split_whitespace().any(|v| v == expected),
+                        "len={len} offset={offset} expected={expected}: {flags}"
+                    );
+                }
+                unmap(data, len);
+            }
         }
     }
 }

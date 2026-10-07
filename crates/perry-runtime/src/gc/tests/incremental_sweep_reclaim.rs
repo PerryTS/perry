@@ -257,7 +257,7 @@ fn arena_sweep_pauses_before_block_cleanup_and_preserves_live_objects() {
     }
     js_shadow_slot_set(0, ptr_bits(live));
 
-    for _ in 0..1200 {
+    for _ in 0..8 * crate::arena::BLOCK_SIZE / (8 * 1024) {
         let _ = crate::arena::arena_alloc_gc(8 * 1024, 8, GC_TYPE_STRING);
     }
     let in_use_after_alloc = crate::arena::arena_in_use_bytes();

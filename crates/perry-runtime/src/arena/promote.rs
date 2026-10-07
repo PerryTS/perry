@@ -343,12 +343,22 @@ pub(crate) fn finish_in_place_promotion(
     OLD_ARENA.with(|old| {
         let old = unsafe { &mut *old.get() };
         for block in moved_blocks {
-            let base = block.data as usize;
+            let data = block.data;
+            let base = data as usize;
             let size = block.size;
             let offset = block.offset;
             super::block::old_gen_in_use_bytes_add(offset);
             install_block_into(old, block);
             retag_block_space(base, size, HeapGeneration::Old, HeapSpace::Old);
+            // Ownership/generation are committed; speculative retag and its
+            // rollback never change backing advice.
+            unsafe {
+                super::region::advise(
+                    data,
+                    size,
+                    super::region::kind_for(HeapGeneration::Old, size),
+                );
+            }
         }
     });
 
@@ -388,6 +398,7 @@ fn take_block(block: PromotedBlock) -> Option<ArenaBlock> {
         Some(std::mem::replace(
             &mut arena.blocks[index],
             ArenaBlock {
+                extent_kind: super::region::Kind::NurseryBlock,
                 data: std::ptr::null_mut(),
                 size: 0,
                 offset: 0,

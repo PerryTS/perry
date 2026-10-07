@@ -949,7 +949,7 @@ fn minor_sweep_retains_window_expired_growth_stub() {
     // Small allocations advance the GENERAL bump blocks (large ones are
     // routed to dedicated blocks and would leave `current` untouched).
     let general_before = crate::arena::general_block_count();
-    for _ in 0..3_000 {
+    for _ in 0..8 * crate::arena::BLOCK_SIZE / (4 * 1024) {
         let filler = crate::arena::arena_alloc_gc(4 * 1024, 8, GC_TYPE_STRING);
         std::hint::black_box(filler);
     }
