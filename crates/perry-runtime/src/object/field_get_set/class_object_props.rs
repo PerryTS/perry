@@ -125,7 +125,18 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
                 }
             }
         }
-        None => super::super::class_registry::global_object_prototype_bits(),
+        None => {
+            // A statically resolved parent has no per-evaluation heritage
+            // value to pin (native constructors use reserved class ids).
+            // The declared prototype already carries that parent edge in its
+            // shape; copy it rather than defaulting this evaluation to Object.
+            let template_proto = super::super::class_registry::class_decl_prototype_value(class_id);
+            if JSValue::from_bits(template_proto.to_bits()).is_pointer() {
+                Some(super::super::js_object_get_prototype_of(template_proto).to_bits())
+            } else {
+                super::super::class_registry::global_object_prototype_bits()
+            }
+        }
     };
     let parent_proto = parent_proto.map(|bits| scope.root_heap_word_u64(bits));
 

@@ -342,14 +342,9 @@ pub unsafe extern "C" fn js_object_super_get(home: f64, key_value: f64, _receive
 /// `super.prop` GET for class methods whose home object belongs to class
 /// `home_class_id`: `home.[[GetPrototypeOf]]().[[Get]](key, receiver)`.
 ///
-/// Where the runtime models that chain end to end (see
-/// `class_super_base`), it reads it: a patched, deleted or accessor parent
-/// member and a relinked home all apply. Otherwise it walks the declared
-/// parent class chain for an accessor (getter) named `key` and invokes it
-/// with `receiver` as `this` (lookup starts at the super prototype, but the
-/// getter runs with the current `this`); if no getter is found, it reads a
-/// data property off the parent prototype object. Refs
-/// class/super/in-{constructor,getter,methods,setter}.
+/// Instance reads follow the home prototype's actual parent edge with the
+/// original receiver, for both compiled and native parents. Static reads use
+/// the parent's constructor properties, including any relinked static chain.
 #[no_mangle]
 pub unsafe extern "C" fn js_super_accessor_get(home_class_id: u32, key: f64, receiver: f64) -> f64 {
     let parent_class_id = if home_class_id == 0 {
@@ -495,39 +490,34 @@ pub unsafe extern "C" fn js_super_accessor_get(home_class_id: u32, key: f64, rec
         }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    if let Some(key_name) = key_name {
-        // Charter step 3: a class accessor is a property of the parent's
-        // prototype chain; `this` is the receiver.
-        if let Some((v, _)) =
-            crate::object::class_chain_getter_value(parent_class_id, &key_name, || receiver)
-        {
-            return f64::from_bits(v.bits());
+    // Instance `super` starts at the home prototype's actual parent. Native
+    // parents have reserved class ids and no declared prototype entry; reading
+    // that entry loses their methods when a call is split before a spread.
+    // The home prototype's shape carries the same edge for native and compiled
+    // parents, including a per-evaluation class's pinned heritage.
+    let home = match super::class_super_chain::super_home_owner(home_class_id, receiver) {
+        Some(owner) if super::class_registry::is_class_object_value(owner) => {
+            let obj = crate::value::JSValue::from_bits(owner.to_bits())
+                .as_pointer::<super::ObjectHeader>();
+            f64::from_bits(super::field_get_set::class_object_prototype_value(obj).bits())
         }
+        _ => super::class_registry::class_decl_prototype_value(home_class_id),
+    };
+    let base = super::js_object_get_prototype_of(home);
+    let base_value = crate::value::JSValue::from_bits(base.to_bits());
+    if base_value.is_null() || base_value.is_undefined() {
+        let name = key_name.as_deref().unwrap_or("").as_bytes();
+        crate::error::js_throw_type_error_property_access(
+            base_value.is_null() as u32,
+            name.as_ptr(),
+            name.len(),
+        );
     }
-    // Prefer the *declared* prototype object (stable heap identity). A dynamic
-    // write `Parent.prototype.foo = v` lands on that object, whereas the older
-    // overloaded `CLASS_PROTOTYPE_OBJECTS` table may hold a distinct synthetic
-    // prototype that never sees such writes — so reading through it returned
-    // `undefined` for data properties added to a parent prototype after the
-    // class declaration (test262 super/prop-{dot,expr}-cls-val). Falls back to
-    // the older table for synthetic-prototype sources that lack a decl entry.
-    let mut proto = crate::object::class_decl_prototype_object(parent_class_id);
-    if proto.is_null() {
-        let materialized =
-            crate::object::class_registry::class_decl_prototype_value(parent_class_id);
-        if crate::value::JSValue::from_bits(materialized.to_bits()).is_pointer() {
-            proto = crate::value::JSValue::from_bits(materialized.to_bits())
-                .as_pointer::<crate::object::ObjectHeader>() as *mut _;
-        }
-    }
-    if proto.is_null() {
-        proto = crate::object::class_prototype_object(parent_class_id);
-    }
-    if !proto.is_null() {
-        let target = crate::value::js_nanbox_pointer(proto as i64);
-        return js_object_get_property_key(target, key_handle.get_nanbox_f64());
-    }
-    f64::from_bits(crate::value::TAG_UNDEFINED)
+    crate::proxy::js_reflect_get(
+        base,
+        key_handle.get_nanbox_f64(),
+        f64::from_bits(receiver_handle.get_heap_word_u64()),
+    )
 }
 
 /// `super[key] = value` for object-literal methods using the captured home
