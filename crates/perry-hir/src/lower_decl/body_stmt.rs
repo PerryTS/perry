@@ -8,7 +8,7 @@ use crate::destructuring::*;
 use crate::ir::*;
 use crate::lower::{
     collect_for_of_pattern_leaves, emit_for_of_pattern_binding, labeled_body_targets_loop,
-    lazy_iter_for_stmt, lazy_or_index_elem, lower_expr, wrap_lazy_for_of_body_close_on_throw,
+    lazy_iter_for_stmts, lazy_or_index_elem, lower_expr, wrap_lazy_for_of_body_close_on_throw,
     LoweringContext,
 };
 use crate::lower_patterns::*;
@@ -1519,13 +1519,15 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 } else {
                     raw_next_call
                 };
-                result.push(Stmt::Let {
-                    id: result_id,
-                    name: format!("__result_{}", result_id),
-                    ty: Type::Any,
-                    mutable: true,
-                    init: Some(Expr::Undefined),
-                });
+                if needs_await {
+                    result.push(Stmt::Let {
+                        id: result_id,
+                        name: format!("__result_{}", result_id),
+                        ty: Type::Any,
+                        mutable: true,
+                        init: Some(Expr::Undefined),
+                    });
+                }
 
                 let binding_pat: Option<&ast::Pat> =
                     if let ast::ForHead::VarDecl(var_decl) = &for_of_stmt.left {
@@ -1533,10 +1535,14 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     } else {
                         None
                     };
-                let value_expr = Expr::PropertyGet {
-                    byte_offset: 0,
-                    object: Box::new(Expr::LocalGet(result_id)),
-                    property: "value".to_string(),
+                let value_expr = if needs_await {
+                    Expr::PropertyGet {
+                        byte_offset: 0,
+                        object: Box::new(Expr::LocalGet(result_id)),
+                        property: "value".into(),
+                    }
+                } else {
+                    Expr::LocalGet(result_id)
                 };
                 let guard_binding = binding_pat.is_some_and(|p| !matches!(p, ast::Pat::Ident(_)));
                 let value_id = ctx.fresh_local();
@@ -1604,18 +1610,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         body_stmts,
                     );
                 } else {
-                    let mut loop_body = vec![
-                        Stmt::Expr(Expr::LocalSet(result_id, Box::new(next_call))),
-                        Stmt::If {
-                            condition: Expr::PropertyGet {
-                                byte_offset: 0,
-                                object: Box::new(Expr::LocalGet(result_id)),
-                                property: "done".to_string(),
-                            },
-                            then_branch: vec![Stmt::Break],
-                            else_branch: None,
-                        },
-                    ];
+                    let mut loop_body = Vec::new();
                     if guard_binding {
                         body_stmts.extend(user_body);
                         loop_body.push(value_stmt);
@@ -1636,10 +1631,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                             user_body,
                         ));
                     }
-                    result.push(Stmt::While {
-                        condition: Expr::Bool(true),
-                        body: loop_body,
-                    });
+                    result.extend(lazy_iter_for_stmts(ctx, iter_id, result_id, loop_body));
                 }
 
                 ctx.pop_block_scope(scope_mark);
@@ -2215,11 +2207,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         name: format!("__forof_value_{id}"),
                         ty: Type::Any,
                         mutable: false,
-                        init: Some(Expr::PropertyGet {
-                            byte_offset: 0,
-                            object: Box::new(Expr::LocalGet(result_id)),
-                            property: "value".to_string(),
-                        }),
+                        init: Some(Expr::LocalGet(result_id)),
                     });
                     guarded_stmts.extend(binding_stmts);
                 } else {
@@ -2232,7 +2220,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     for_of_stmt.span.lo.0,
                     guarded_stmts,
                 ));
-                result.push(lazy_iter_for_stmt(arr_id, result_id, full_body));
+                result.extend(lazy_iter_for_stmts(ctx, arr_id, result_id, full_body));
                 ctx.pop_block_scope(for_scope_mark);
                 return Ok(result);
             }

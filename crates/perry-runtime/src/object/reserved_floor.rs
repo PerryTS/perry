@@ -39,9 +39,9 @@ use crate::array::ArrayHeader;
 ///   * iterator helpers: `iterator_helpers.rs` (fields 0..3)
 pub(crate) fn reserved_slot_floor_for_class_id(class_id: u32) -> u32 {
     match class_id {
-        crate::array::ARRAY_ITERATOR_CLASS_ID => 6,
+        crate::array::ARRAY_ITERATOR_CLASS_ID => 5,
         crate::collection_iter_object::MAP_ITERATOR_CLASS_ID
-        | crate::collection_iter_object::SET_ITERATOR_CLASS_ID => 6,
+        | crate::collection_iter_object::SET_ITERATOR_CLASS_ID => 4,
         crate::string::STRING_ITERATOR_CLASS_ID => 2,
         crate::buffer::BUFFER_ITERATOR_CLASS_ID => 3,
         crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID => 5,
@@ -288,15 +288,15 @@ mod tests {
     fn floors_cover_every_reserved_family_and_nothing_else() {
         assert_eq!(
             reserved_slot_floor_for_class_id(crate::array::ARRAY_ITERATOR_CLASS_ID),
-            6
+            5
         );
         assert_eq!(
             reserved_slot_floor_for_class_id(crate::collection_iter_object::MAP_ITERATOR_CLASS_ID),
-            6
+            4
         );
         assert_eq!(
             reserved_slot_floor_for_class_id(crate::collection_iter_object::SET_ITERATOR_CLASS_ID),
-            6
+            4
         );
         assert_eq!(
             reserved_slot_floor_for_class_id(crate::string::STRING_ITERATOR_CLASS_ID),

@@ -327,6 +327,13 @@ pub fn declare_phase_b_arrays(module: &mut LlModule) {
     // Generator / iterator protocol: walk `.next()`/`.value` loop and collect into array.
     module.declare_function("js_iterator_to_array", I64, &[DOUBLE]);
     module.declare_function("js_iterator_next_result", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_iterator_step", I32, &[DOUBLE, DOUBLE, PTR]);
+    module.declare_function(
+        "js_iterator_step_rest_to_array",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
+    module.declare_function("js_iterator_next_method", DOUBLE, &[DOUBLE]);
     module.declare_function("js_iterator_close_if_not_done", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function(
         "js_iterator_close_on_throw",

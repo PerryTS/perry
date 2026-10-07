@@ -1472,9 +1472,12 @@ js_iter_result_set_i1	Leaf
 js_iter_result_set_i32	Leaf
 js_iterator_close_if_not_done	Reenters
 js_iterator_from	Reenters
+js_iterator_next_method	Reenters
 js_iterator_next_result	Reenters
 js_iterator_rest_to_array	Reenters
 js_iterator_result_validate	Reenters
+js_iterator_step	Reenters
+js_iterator_step_rest_to_array	Reenters
 js_iterator_to_array	Reenters
 js_json_get_bool	Reenters
 js_json_get_number	Reenters

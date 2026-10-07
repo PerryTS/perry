@@ -3153,6 +3153,7 @@ pub(crate) mod element_shape_reads;
 pub(crate) mod ic_fast_split;
 mod js_runtime;
 mod literals_vars;
+pub(crate) use literals_vars::bind_lowered_value_to_local;
 mod logical_collections;
 mod math_simple;
 pub(crate) mod method_site;

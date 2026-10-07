@@ -146,21 +146,13 @@ pub(crate) unsafe fn own_data_field_by_name(
 ///
 /// Ordinary [[Get]] order: an OWN property — user code can store one past
 /// the reserved floor since #9019 — shadows every synthetic method. This is
-/// also what makes user data properties on iterators readable at all: the
-/// old arm returned `undefined` for every non-`next` key without consulting
-/// own fields, so a stored value was write-only. `@@iterator` remains the only
-/// synthetic bound method: ordinary collection iterators do not have the
-/// generator-only `return`/`throw` methods (#9086). `next`, `return`, and
-/// `throw` deliberately resolve through the caller's generic scans (`None`),
-/// so the prototype chain remains authoritative; any other key is absent
-/// (`Some(undefined)`).
+/// also what makes user data properties and accessor descriptors readable.
+/// Only the legacy synthetic `@@iterator` alias is bound here; ordinary
+/// property reads resolve through the same generic Get as other objects.
 pub(crate) unsafe fn map_set_iterator_property(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
 ) -> Option<JSValue> {
-    if let Some(v) = own_data_field_by_name(obj, key) {
-        return Some(v);
-    }
     let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
     let key_len = (*key).byte_len as usize;
     let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
@@ -173,10 +165,9 @@ pub(crate) unsafe fn map_set_iterator_property(
         let result = super::super::js_class_method_bind(this_f64, name.as_ptr(), name.len());
         return Some(JSValue::from_bits(result.to_bits()));
     }
-    if matches!(key_bytes, b"next" | b"return" | b"throw") {
-        return None;
-    }
-    Some(JSValue::undefined())
+    // Ordinary reads (including own accessor pairs) use the same generic
+    // Get as every other object. Only the legacy synthetic alias lives here.
+    None
 }
 
 crate::perry_thread_local! {
