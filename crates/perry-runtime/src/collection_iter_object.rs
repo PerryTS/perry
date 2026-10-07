@@ -71,7 +71,7 @@ fn iterator_class_id(addr: usize) -> Option<u32> {
 unsafe fn alloc_iterator(class_id: u32, coll_nanboxed: f64, kind: i32) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let coll_h = scope.root_nanbox_f64(coll_nanboxed);
-    let obj_h = scope.root_raw_mut_ptr(js_object_alloc(class_id, 6));
+    let obj_h = scope.root_raw_mut_ptr(js_object_alloc(class_id, 4));
     // Field 0: backing collection (NaN-boxed pointer so the GC scanner keeps it).
     obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| {
         js_object_set_field(
@@ -92,14 +92,6 @@ unsafe fn alloc_iterator(class_id: u32, coll_nanboxed: f64, kind: i32) -> f64 {
     // since, so a compaction below the cursor can never skip an entry (#6075,
     // #6165 — and the multi-hole squeeze the key-based re-derive got wrong).
     obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_object_set_field(obj, 3, JSValue::number(0.0)));
-    // Field 4: unused since the epoch-based rebase (was the last-returned
-    // key); kept so the object layout and the cached-result field 5 stay put.
-    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_object_set_field(obj, 4, JSValue::undefined()));
-    // Field 5: the recycled `{value, done}` result the FUSED for-of driver
-    // mutates in place (one allocation per loop, not per element). Manual
-    // `.next()` calls never touch it — they keep returning fresh objects, so
-    // a caller that retains results observes spec behavior.
-    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_object_set_field(obj, 5, JSValue::undefined()));
     // Link `[[Prototype]]` to the shared `%MapIteratorPrototype%` /
     // `%SetIteratorPrototype%` singleton so `Object.getPrototypeOf(it)` and the
     // inherited `.next` read resolve.
@@ -220,7 +212,12 @@ unsafe fn make_pair_array(a: f64, b: f64) -> f64 {
 
 /// Dispatch `.next()` / `[Symbol.iterator]()` on a Map iterator object.
 pub unsafe fn dispatch_map_iterator_method(iter_obj: *mut ObjectHeader, method_name: &str) -> f64 {
-    dispatch_map_iterator_method_emit(iter_obj, method_name, false, true)
+    dispatch_map_iterator_method_emit(
+        iter_obj,
+        method_name,
+        crate::iter_result::IterResultTarget::Object,
+        true,
+    )
 }
 
 /// Builtin advance only — the canonical prototype thunk's entry (#9019).
@@ -233,13 +230,18 @@ pub(crate) unsafe fn dispatch_map_iterator_method_builtin(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
 ) -> f64 {
-    dispatch_map_iterator_method_emit(iter_obj, method_name, false, false)
+    dispatch_map_iterator_method_emit(
+        iter_obj,
+        method_name,
+        crate::iter_result::IterResultTarget::Object,
+        false,
+    )
 }
 
 unsafe fn dispatch_map_iterator_method_emit(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
-    emit_cached: bool,
+    target: crate::iter_result::IterResultTarget,
     honor_override: bool,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -259,7 +261,7 @@ unsafe fn dispatch_map_iterator_method_emit(
             let map = || js_nanbox_get_pointer(map_h.get_nanbox_f64()) as *const MapHeader;
             let kind = f64::from_bits(js_object_get_field(iter_obj(), 2).bits()) as i32;
             if map().is_null() {
-                return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
+                return emit_iter_result(target, JSValue::undefined(), true);
             }
             let cursor = f64::from_bits(js_object_get_field(iter_obj(), 1).bits()) as u32;
             // Field 3: the backing Map's compaction epoch this iterator last
@@ -281,7 +283,7 @@ unsafe fn dispatch_map_iterator_method_emit(
                 // Once a collection iterator is exhausted it stays exhausted,
                 // even if entries are appended later.
                 js_object_set_field(iter_obj(), 0, JSValue::undefined());
-                return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
+                return emit_iter_result(target, JSValue::undefined(), true);
             };
 
             let entry_key = crate::map::map_entry_key_raw(map(), idx);
@@ -298,7 +300,7 @@ unsafe fn dispatch_map_iterator_method_emit(
                     JSValue::from_bits(make_pair_array(entry_key, val).to_bits())
                 }
             };
-            emit_iter_result(&scope, &iter_h, emit_cached, value, false)
+            emit_iter_result(target, value, false)
         }
         "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj() as i64),
         _ => f64::from_bits(TAG_UNDEFINED),
@@ -307,7 +309,12 @@ unsafe fn dispatch_map_iterator_method_emit(
 
 /// Dispatch `.next()` / `[Symbol.iterator]()` on a Set iterator object.
 pub unsafe fn dispatch_set_iterator_method(iter_obj: *mut ObjectHeader, method_name: &str) -> f64 {
-    dispatch_set_iterator_method_emit(iter_obj, method_name, false, true)
+    dispatch_set_iterator_method_emit(
+        iter_obj,
+        method_name,
+        crate::iter_result::IterResultTarget::Object,
+        true,
+    )
 }
 
 /// Builtin advance only — see [`dispatch_map_iterator_method_builtin`].
@@ -315,13 +322,18 @@ pub(crate) unsafe fn dispatch_set_iterator_method_builtin(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
 ) -> f64 {
-    dispatch_set_iterator_method_emit(iter_obj, method_name, false, false)
+    dispatch_set_iterator_method_emit(
+        iter_obj,
+        method_name,
+        crate::iter_result::IterResultTarget::Object,
+        false,
+    )
 }
 
 unsafe fn dispatch_set_iterator_method_emit(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
-    emit_cached: bool,
+    target: crate::iter_result::IterResultTarget,
     honor_override: bool,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -341,7 +353,7 @@ unsafe fn dispatch_set_iterator_method_emit(
             let set = || js_nanbox_get_pointer(set_h.get_nanbox_f64()) as *const SetHeader;
             let kind = f64::from_bits(js_object_get_field(iter_obj(), 2).bits()) as i32;
             if set().is_null() {
-                return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
+                return emit_iter_result(target, JSValue::undefined(), true);
             }
             let cursor = f64::from_bits(js_object_get_field(iter_obj(), 1).bits()) as u32;
             // Field 3: the backing Set's compaction epoch (see the Map arm).
@@ -357,7 +369,7 @@ unsafe fn dispatch_set_iterator_method_emit(
             let Some(idx) = next else {
                 js_object_set_field(iter_obj(), 1, JSValue::number(used as f64));
                 js_object_set_field(iter_obj(), 0, JSValue::undefined());
-                return emit_iter_result(&scope, &iter_h, emit_cached, JSValue::undefined(), true);
+                return emit_iter_result(target, JSValue::undefined(), true);
             };
 
             let elem = crate::set::set_value_raw(set(), idx);
@@ -368,92 +380,46 @@ unsafe fn dispatch_set_iterator_method_emit(
                 KIND_ENTRIES => JSValue::from_bits(make_pair_array(elem, elem).to_bits()),
                 _ => JSValue::from_bits(elem.to_bits()),
             };
-            emit_iter_result(&scope, &iter_h, emit_cached, value, false)
+            emit_iter_result(target, value, false)
         }
         "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj() as i64),
         _ => f64::from_bits(TAG_UNDEFINED),
     }
 }
 
-/// Field of a Map/Set iterator object that holds the recycled `{value, done}`
-/// the fused `for…of` driver mutates in place. `alloc_iterator` reserves it.
-const ITER_RESULT_CACHE_FIELD: u32 = 5;
-
-/// Emit a `{value, done}` iterator result — see
-/// [`crate::iter_result::emit_iter_result_cached`] for the caching contract.
-/// The array iterator uses the same routine through the same helper, so the
-/// two cannot drift.
 unsafe fn emit_iter_result(
-    scope: &crate::gc::RuntimeHandleScope,
-    iter_h: &crate::gc::RuntimeHandle,
-    emit_cached: bool,
+    target: crate::iter_result::IterResultTarget,
     value: JSValue,
     done: bool,
 ) -> f64 {
-    crate::iter_result::emit_iter_result_cached(
-        scope,
-        iter_h,
-        ITER_RESULT_CACHE_FIELD,
-        emit_cached,
+    crate::iter_result::emit_iter_result(
+        target,
         crate::iter_result::IterResultOrder::ValueDone,
         value,
         done,
     )
 }
 
-/// One fused `IteratorNext` for the `for…of` desugar: advance + result in a
-/// single runtime call.
-///
-/// A builtin Map/Set/Array iterator advances in place and reuses its cached
-/// result object (see [`crate::iter_result::emit_iter_result_cached`]); the
-/// override probe inside each dispatcher still runs first, so a patched `next`
-/// wins exactly as it does on the manual path. Every other receiver —
-/// generators, user iterators, string and typed-array iterators — takes the arm
-/// at the bottom, which is byte-for-byte the two-call desugar this entry
-/// replaces: the dynamic `.next()` dispatch followed by spec IteratorNext
-/// result validation.
-///
-/// The array arm is the one that matters on a real program: the allocation-site
-/// census of the compiled claude-code TUI attributed **100 %** of its iterator
-/// -result bytes to `array::iter_object` — one 40-byte object per element of
-/// every generic `for…of`, which is what a minified bundle emits whenever the
-/// iterated value is not a statically proven array.
+/// Native consumer of the same Map/Set advance used by manual next calls.
+pub(crate) unsafe fn dispatch_collection_iterator_step(
+    obj: *mut ObjectHeader,
+    out: *mut crate::iter_result::IteratorStep,
+) {
+    let target = crate::iter_result::IterResultTarget::Step(out);
+    match (*obj).class_id {
+        MAP_ITERATOR_CLASS_ID => {
+            dispatch_map_iterator_method_emit(obj, "next", target, false);
+        }
+        SET_ITERATOR_CLASS_ID => {
+            dispatch_set_iterator_method_emit(obj, "next", target, false);
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// Public result-object protocol; only native compiled steps may elide it.
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_for_of_next(iter: f64) -> f64 {
-    let jv = JSValue::from_bits(iter.to_bits());
-    if jv.is_pointer() {
-        let raw = js_nanbox_get_pointer(iter) as usize;
-        if raw != 0 && !crate::value::addr_class::is_small_handle(raw) {
-            if let Some(header) = crate::value::addr_class::try_read_gc_header(raw) {
-                if header.obj_type == crate::gc::GC_TYPE_OBJECT {
-                    let obj = raw as *mut ObjectHeader;
-                    let class_id = (*obj).class_id;
-                    // Spec IteratorNext validation applies on the fused arms
-                    // too: a builtin advance always returns an object, but a
-                    // patched own `next` (#9019) can return anything, and
-                    // `for…of` must throw the same TypeError the generic arm
-                    // throws rather than hand the desugar a primitive.
-                    if class_id == MAP_ITERATOR_CLASS_ID {
-                        return crate::symbol::js_iterator_result_validate(
-                            dispatch_map_iterator_method_emit(obj, "next", true, true),
-                        );
-                    }
-                    if class_id == SET_ITERATOR_CLASS_ID {
-                        return crate::symbol::js_iterator_result_validate(
-                            dispatch_set_iterator_method_emit(obj, "next", true, true),
-                        );
-                    }
-                    if class_id == crate::array::ARRAY_ITERATOR_CLASS_ID {
-                        return crate::symbol::js_iterator_result_validate(
-                            crate::array::dispatch_array_iterator_method_emit(
-                                obj, "next", true, true,
-                            ),
-                        );
-                    }
-                }
-            }
-        }
-    }
     let result = crate::object::js_native_call_method(
         iter,
         b"next".as_ptr() as *const i8,
@@ -467,170 +433,3 @@ pub unsafe extern "C-unwind" fn js_for_of_next(iter: f64) -> f64 {
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_FOR_OF_NEXT: unsafe extern "C-unwind" fn(f64) -> f64 = js_for_of_next;
-
-#[cfg(test)]
-mod fused_for_of_tests {
-    use super::*;
-
-    unsafe fn value_of(res: f64) -> f64 {
-        f64::from_bits(
-            js_object_get_field(js_nanbox_get_pointer(res) as *mut ObjectHeader, 0).bits(),
-        )
-    }
-    unsafe fn done_of(res: f64) -> bool {
-        JSValue::from_bits(
-            js_object_get_field(js_nanbox_get_pointer(res) as *mut ObjectHeader, 1).bits(),
-        )
-        .as_bool()
-    }
-
-    /// The fused driver must walk a Set in insertion order, terminate, and
-    /// keep its recycled result in the iterator's field 5 — while the manual
-    /// dispatcher keeps allocating fresh results a caller may retain.
-    #[test]
-    fn fused_next_walks_a_set_and_recycles_its_result() {
-        unsafe {
-            let set = crate::set::js_set_alloc(4);
-            for v in [10.0f64, 20.0, 30.0] {
-                crate::set::js_set_add(set, v);
-            }
-            let iter = js_nanbox_pointer(js_set_values_iter_obj(set));
-
-            let r1 = js_for_of_next(iter);
-            assert_eq!(value_of(r1), 10.0);
-            assert!(!done_of(r1));
-            let cached = js_object_get_field(js_nanbox_get_pointer(iter) as *mut ObjectHeader, 5);
-            assert!(
-                JSValue::from_bits(cached.bits()).is_pointer(),
-                "the first fused advance must install the recycled result"
-            );
-            assert_eq!(value_of(js_for_of_next(iter)), 20.0);
-            assert_eq!(value_of(js_for_of_next(iter)), 30.0);
-            assert!(done_of(js_for_of_next(iter)), "exhausted after three");
-            assert!(done_of(js_for_of_next(iter)), "stays exhausted");
-
-            // The manual path still returns fresh, independent results.
-            let m1 = dispatch_set_iterator_method(
-                js_nanbox_get_pointer(js_nanbox_pointer(js_set_values_iter_obj(set)))
-                    as *mut ObjectHeader,
-                "next",
-            );
-            assert_eq!(value_of(m1), 10.0);
-        }
-    }
-
-    /// Mid-iteration delete: the cursor-repair contract (#6075) must hold on
-    /// the fused path because it runs the SAME advance code as the manual one.
-    #[test]
-    fn fused_next_survives_a_mid_iteration_delete() {
-        unsafe {
-            let map = crate::map::js_map_alloc(8);
-            for k in [1.0f64, 2.0, 3.0, 4.0] {
-                crate::map::js_map_set(map, k, k * 10.0);
-            }
-            let iter = js_nanbox_pointer(js_map_keys_iter_obj(map));
-            assert_eq!(value_of(js_for_of_next(iter)), 1.0);
-            // Deleting an EARLIER entry shifts the survivors down; the fused
-            // next must not skip or repeat.
-            crate::map::js_map_delete(map, 1.0);
-            assert_eq!(value_of(js_for_of_next(iter)), 2.0);
-            assert_eq!(value_of(js_for_of_next(iter)), 3.0);
-            assert_eq!(value_of(js_for_of_next(iter)), 4.0);
-            assert!(done_of(js_for_of_next(iter)));
-        }
-    }
-
-    /// The ARRAY arm — the one the allocation census says carries 100 % of a
-    /// real program's iterator-result bytes. Same contract as the Set arm:
-    /// correct walk, terminates, and ONE recycled result installed in the
-    /// iterator's cache field, while the manual dispatcher keeps allocating
-    /// fresh ones.
-    #[test]
-    fn fused_next_walks_an_array_and_recycles_its_result() {
-        unsafe {
-            let arr = crate::array::js_array_alloc(2);
-            crate::array::js_array_push_f64(arr, 7.0);
-            crate::array::js_array_push_f64(arr, 8.0);
-            let iter = crate::array::array_values_iter(js_nanbox_pointer(arr as i64));
-
-            // Read the cache field immediately after each advance rather than
-            // comparing two nan-boxed pointers taken across a possible
-            // collection: a copying minor between the two calls would move the
-            // result and make a raw bit comparison fail for the wrong reason.
-            let cache_now = || {
-                let iter_obj = js_nanbox_get_pointer(iter) as *mut ObjectHeader;
-                js_object_get_field(iter_obj, 5).bits()
-            };
-            let r1 = js_for_of_next(iter);
-            assert_eq!(value_of(r1), 7.0);
-            assert!(
-                JSValue::from_bits(cache_now()).is_pointer(),
-                "the first fused advance must install the recycled result"
-            );
-            assert_eq!(
-                r1.to_bits(),
-                cache_now(),
-                "the first result IS the cached object"
-            );
-            let r2 = js_for_of_next(iter);
-            assert_eq!(value_of(r2), 8.0);
-            assert_eq!(
-                r2.to_bits(),
-                cache_now(),
-                "the fused driver must hand back the cached object, or nothing is saved"
-            );
-            assert!(done_of(js_for_of_next(iter)));
-            assert!(done_of(js_for_of_next(iter)), "stays exhausted");
-
-            // The manual path still returns fresh, independent results — a
-            // caller that retains one must not see it mutate underneath.
-            let manual_iter = crate::array::array_values_iter(js_nanbox_pointer(arr as i64));
-            let m1 = crate::array::dispatch_array_iterator_method(
-                js_nanbox_get_pointer(manual_iter) as *mut ObjectHeader,
-                "next",
-            );
-            let m2 = crate::array::dispatch_array_iterator_method(
-                js_nanbox_get_pointer(manual_iter) as *mut ObjectHeader,
-                "next",
-            );
-            assert_eq!(value_of(m1), 7.0);
-            assert_eq!(value_of(m2), 8.0);
-            assert_ne!(
-                m1.to_bits(),
-                m2.to_bits(),
-                "manual .next() must keep allocating fresh results"
-            );
-            assert_eq!(
-                value_of(m1),
-                7.0,
-                "the first manual result must still read 7 after the second call"
-            );
-        }
-    }
-
-    /// A receiver outside the three fused families still takes the generic
-    /// arm: dynamic `.next()` dispatch plus spec IteratorNext validation.
-    /// Without this the fused branch could be "always taken" and the test
-    /// above would still pass.
-    #[test]
-    fn fused_next_routes_other_iterators_through_the_generic_arm() {
-        unsafe {
-            let s = crate::string::js_string_from_bytes(b"ab".as_ptr(), 2);
-            let iter = crate::string::string_values_iter(s);
-            let iter_obj = js_nanbox_get_pointer(iter) as *mut ObjectHeader;
-            let r1 = js_for_of_next(iter);
-            let r2 = js_for_of_next(iter);
-            assert_ne!(
-                r1.to_bits(),
-                r2.to_bits(),
-                "the generic arm must not recycle — it has no cache field"
-            );
-            assert!(done_of(js_for_of_next(iter)));
-            assert_eq!(
-                (*iter_obj).class_id,
-                crate::string::STRING_ITERATOR_CLASS_ID,
-                "receiver really is outside the fused families"
-            );
-        }
-    }
-}

@@ -606,3 +606,6 @@ pub(crate) fn lower_native_method_call(
 
     include!("native_instance_branch.rs")
 }
+
+#[cfg(test)]
+mod iterator_step_tests;

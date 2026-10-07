@@ -199,13 +199,11 @@ pub use self::iter_methods::{
     js_array_map_discard, js_array_reduce, js_array_some, js_array_some_captureless,
     js_array_to_locale_string, js_validate_array_callback, js_validate_array_map_callback,
 };
+pub(crate) use self::iter_object::dispatch_array_iterator_method_builtin;
 pub use self::iter_object::{
     arguments_values_iter, array_entries_iter, array_keys_iter, array_values_iter,
     dispatch_array_iterator_method, js_array_entries_iter_obj, js_array_keys_iter_obj,
     js_array_values_iter_obj, ARRAY_ITERATOR_CLASS_ID,
-};
-pub(crate) use self::iter_object::{
-    dispatch_array_iterator_method_builtin, dispatch_array_iterator_method_emit,
 };
 pub(crate) use self::iterator::iter_bt_dump;
 pub(crate) use self::iterator::{array_from_spread_value, is_builtin_iterator_class_id};
@@ -332,3 +330,10 @@ pub(crate) use self::named_props::{
 
 #[cfg(test)]
 pub(crate) use self::header::{test_seed_template_raw_roots, test_template_raw_roots};
+
+pub(crate) use iter_object::dispatch_array_iterator_step;
+
+mod iterator_step;
+pub use iterator_step::{
+    js_iterator_next_method, js_iterator_step, js_iterator_step_rest_to_array,
+};

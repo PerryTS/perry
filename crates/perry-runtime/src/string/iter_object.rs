@@ -83,7 +83,12 @@ pub unsafe fn dispatch_string_iterator_method(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
 ) -> f64 {
-    dispatch_string_iterator_method_inner(iter_obj, method_name, true)
+    dispatch_string_iterator_method_inner(
+        iter_obj,
+        method_name,
+        true,
+        crate::iter_result::IterResultTarget::Object,
+    )
 }
 
 /// Builtin advance only — the canonical prototype thunk's entry (#9019);
@@ -92,13 +97,19 @@ pub(crate) unsafe fn dispatch_string_iterator_method_builtin(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
 ) -> f64 {
-    dispatch_string_iterator_method_inner(iter_obj, method_name, false)
+    dispatch_string_iterator_method_inner(
+        iter_obj,
+        method_name,
+        false,
+        crate::iter_result::IterResultTarget::Object,
+    )
 }
 
 unsafe fn dispatch_string_iterator_method_inner(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
     honor_override: bool,
+    target: crate::iter_result::IterResultTarget,
 ) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iter_h = scope.root_nanbox_f64(js_nanbox_pointer(iter_obj as i64));
@@ -123,14 +134,36 @@ unsafe fn dispatch_string_iterator_method_inner(
                 crate::array::js_array_length(arr())
             };
             if idx >= len {
-                return make_iter_result(JSValue::undefined(), true);
+                return crate::iter_result::emit_iter_result(
+                    target,
+                    crate::iter_result::IterResultOrder::ValueDone,
+                    JSValue::undefined(),
+                    true,
+                );
             }
             js_object_set_field(iter_obj(), 1, JSValue::number((idx + 1) as f64));
             let elem = crate::array::js_array_get_f64(arr(), idx);
-            make_iter_result(JSValue::from_bits(elem.to_bits()), false)
+            crate::iter_result::emit_iter_result(
+                target,
+                crate::iter_result::IterResultOrder::ValueDone,
+                JSValue::from_bits(elem.to_bits()),
+                false,
+            )
         }
         "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj() as i64),
         "return" | "throw" => make_iter_result(JSValue::undefined(), true),
         _ => f64::from_bits(TAG_UNDEFINED),
     }
+}
+
+pub(crate) unsafe fn dispatch_string_iterator_step(
+    obj: *mut ObjectHeader,
+    out: *mut crate::iter_result::IteratorStep,
+) {
+    dispatch_string_iterator_method_inner(
+        obj,
+        "next",
+        false,
+        crate::iter_result::IterResultTarget::Step(out),
+    );
 }

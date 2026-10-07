@@ -51,32 +51,12 @@ pub(crate) fn lazy_or_index_elem(
     result_id: LocalId,
 ) -> Expr {
     if use_lazy_iter {
-        Expr::PropertyGet {
-            byte_offset: 0,
-            object: Box::new(Expr::LocalGet(result_id)),
-            property: "value".to_string(),
-        }
+        Expr::LocalGet(result_id)
     } else {
         Expr::IndexGet {
             object: Box::new(Expr::LocalGet(arr_id)),
             index: Box::new(Expr::LocalGet(idx_id)),
         }
-    }
-}
-
-/// One fused IteratorNext (`js_for_of_next(__iter)`): builtin Map/Set
-/// iterators advance in place; everything else runs the dynamic `.next()`
-/// plus result validation inside the entry — the two-call shape this emitted.
-pub(crate) fn iterator_next_call(iter_id: LocalId) -> Expr {
-    Expr::Call {
-        callee: Box::new(Expr::ExternFuncRef {
-            name: "js_for_of_next".to_string(),
-            param_types: vec![Type::Any],
-            return_type: Type::Any,
-        }),
-        args: vec![Expr::LocalGet(iter_id)],
-        type_args: vec![],
-        byte_offset: 0,
     }
 }
 
@@ -112,40 +92,75 @@ fn iter_driver_while_stmt(result_id: LocalId, next_call: Expr, rest: Vec<Stmt>) 
     }
 }
 
-/// The lazy `for...of` driver loop, modeled as a `for` so `continue` re-pulls
-/// the iterator via the update clause (a `while` with the advance at the body
-/// tail would skip it on `continue` and spin):
-///   for (let __result = __iter.next();
-///        !__result.done;
-///        __result = __iter.next()) { <loop_body> }
-/// `iter_id` holds the iterator, `result_id` the latest `{ value, done }`.
-pub(crate) fn lazy_iter_for_stmt(
+/// Native step writes the compiler-owned value binding and returns done.
+/// The LocalSet operand records the output write for every HIR visitor.
+pub(crate) fn iterator_step_call(iter_id: LocalId, next_id: LocalId, value_id: LocalId) -> Expr {
+    Expr::NativeMethodCall {
+        module: "__perry_runtime".to_string(),
+        class_name: None,
+        object: None,
+        method: "iteratorStep".to_string(),
+        args: vec![
+            Expr::LocalGet(iter_id),
+            Expr::LocalGet(next_id),
+            Expr::LocalSet(
+                value_id,
+                Box::new(Expr::NativeMethodCall {
+                    module: "__perry_runtime".into(),
+                    class_name: None,
+                    object: None,
+                    method: "iteratorStepOutput".into(),
+                    args: vec![],
+                }),
+            ),
+        ],
+    }
+}
+
+pub(crate) fn iterator_next_method_call(iter_id: LocalId) -> Expr {
+    Expr::NativeMethodCall {
+        module: "__perry_runtime".into(),
+        class_name: None,
+        object: None,
+        method: "iteratorNextMethod".into(),
+        args: vec![Expr::LocalGet(iter_id)],
+    }
+}
+
+/// Advance in the condition: continue always executes the next step.
+pub(crate) fn lazy_iter_for_stmts(
+    ctx: &mut LoweringContext,
     iter_id: LocalId,
     result_id: LocalId,
     loop_body: Vec<Stmt>,
-) -> Stmt {
-    Stmt::For {
-        init: Some(Box::new(Stmt::Let {
-            id: result_id,
-            name: format!("__result_{}", result_id),
+) -> Vec<Stmt> {
+    let next_id = ctx.fresh_local();
+    ctx.locals
+        .push((format!("__iter_next_{next_id}"), next_id, Type::Any));
+    vec![
+        Stmt::Let {
+            id: next_id,
+            name: format!("__iter_next_{next_id}"),
             ty: Type::Any,
-            mutable: true,
-            init: Some(iterator_next_call(iter_id)),
-        })),
-        condition: Some(Expr::Unary {
-            op: UnaryOp::Not,
-            operand: Box::new(Expr::PropertyGet {
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(result_id)),
-                property: "done".to_string(),
+            mutable: false,
+            init: Some(iterator_next_method_call(iter_id)),
+        },
+        Stmt::For {
+            init: Some(Box::new(Stmt::Let {
+                id: result_id,
+                name: format!("__result_{}", result_id),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            })),
+            condition: Some(Expr::Unary {
+                op: UnaryOp::Not,
+                operand: Box::new(iterator_step_call(iter_id, next_id, result_id)),
             }),
-        }),
-        update: Some(Expr::LocalSet(
-            result_id,
-            Box::new(iterator_next_call(iter_id)),
-        )),
-        body: loop_body,
-    }
+            update: None,
+            body: loop_body,
+        },
+    ]
 }
 
 /// Use the runtime GetMethod/Call entry: read `return` once and preserve
@@ -834,15 +849,17 @@ pub(super) fn lower_stmt_for_of_inner(
         let next_call = if needs_await {
             Expr::Await(Box::new(raw_next_call))
         } else {
-            iterator_next_call(iter_id)
+            raw_next_call
         };
-        module.init.push(Stmt::Let {
-            id: result_id,
-            name: format!("__result_{}", result_id),
-            ty: Type::Any,
-            mutable: true,
-            init: Some(Expr::Undefined),
-        });
+        if needs_await {
+            module.init.push(Stmt::Let {
+                id: result_id,
+                name: format!("__result_{}", result_id),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Undefined),
+            });
+        }
 
         // Extract the loop variable binding pattern.
         // For a simple Ident (`for (const x of gen())`), bind value directly to x.
@@ -855,10 +872,14 @@ pub(super) fn lower_stmt_for_of_inner(
             } else {
                 None
             };
-        let value_expr = Expr::PropertyGet {
-            byte_offset: 0,
-            object: Box::new(Expr::LocalGet(result_id)),
-            property: "value".to_string(),
+        let value_expr = if needs_await {
+            Expr::PropertyGet {
+                byte_offset: 0,
+                object: Box::new(Expr::LocalGet(result_id)),
+                property: "value".into(),
+            }
+        } else {
+            Expr::LocalGet(result_id)
         };
         let guard_binding = binding_pat.is_some_and(|p| !matches!(p, ast::Pat::Ident(_)));
         let value_id = ctx.fresh_local();
@@ -967,7 +988,7 @@ pub(super) fn lower_stmt_for_of_inner(
             };
             module
                 .init
-                .push(iter_driver_while_stmt(result_id, next_call, loop_body));
+                .extend(lazy_iter_for_stmts(ctx, iter_id, result_id, loop_body));
         }
 
         ctx.pop_block_scope(for_scope_mark);
@@ -1589,11 +1610,7 @@ pub(super) fn lower_stmt_for_of_inner(
                     if let Some(id) = binding_value {
                         Expr::LocalGet(id)
                     } else {
-                        Expr::PropertyGet {
-                            byte_offset: 0,
-                            object: Box::new(Expr::LocalGet(result_id)),
-                            property: "value".to_string(),
-                        }
+                        Expr::LocalGet(result_id)
                     }
                 } else {
                     let raw_item_expr = Expr::IndexGet {
@@ -1754,11 +1771,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 name: format!("__forof_value_{id}"),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::PropertyGet {
-                    byte_offset: 0,
-                    object: Box::new(Expr::LocalGet(result_id)),
-                    property: "value".to_string(),
-                }),
+                init: Some(Expr::LocalGet(result_id)),
             });
             guarded_stmts.extend(binding_stmts);
         } else {
@@ -1773,7 +1786,7 @@ pub(super) fn lower_stmt_for_of_inner(
         ));
         module
             .init
-            .push(lazy_iter_for_stmt(arr_id, result_id, full_body));
+            .extend(lazy_iter_for_stmts(ctx, arr_id, result_id, full_body));
         ctx.pop_block_scope(for_scope_mark);
         return Ok(false);
     }

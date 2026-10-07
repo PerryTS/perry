@@ -202,6 +202,7 @@ pub use iter::{
     dispatch_buffer_iterator_method, js_buffer_entries, js_buffer_keys, js_buffer_values,
     BUFFER_ITERATOR_CLASS_ID,
 };
+pub(crate) use iter::{dispatch_buffer_iterator_method_builtin, dispatch_buffer_iterator_step};
 
 #[cfg(test)]
 mod tests {

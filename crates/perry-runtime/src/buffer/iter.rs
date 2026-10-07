@@ -47,15 +47,17 @@ fn unbox_buffer_ptr(value: f64) -> *mut BufferHeader {
 unsafe fn alloc_iterator(buf_ptr: *mut BufferHeader, kind: i32) -> f64 {
     let handles = crate::gc::RuntimeHandleScope::new();
     let buffer = handles.root_raw_mut_ptr(buf_ptr);
-    let obj = js_object_alloc(BUFFER_ITERATOR_CLASS_ID, 3);
+    let obj = handles.root_raw_mut_ptr(js_object_alloc(BUFFER_ITERATOR_CLASS_ID, 3));
+    let obj_ptr = || obj.get_raw_mut_ptr::<ObjectHeader>();
     // Field 0: backing buffer (NaN-boxed pointer).
     let buf_nan = js_nanbox_pointer(buffer.get_raw_mut_ptr::<BufferHeader>() as i64);
-    js_object_set_field(obj, 0, JSValue::from_bits(buf_nan.to_bits()));
+    js_object_set_field(obj_ptr(), 0, JSValue::from_bits(buf_nan.to_bits()));
     // Field 1: cursor index, starts at 0.
-    js_object_set_field(obj, 1, JSValue::number(0.0));
+    js_object_set_field(obj_ptr(), 1, JSValue::number(0.0));
     // Field 2: iterator kind.
-    js_object_set_field(obj, 2, JSValue::number(kind as f64));
-    js_nanbox_pointer(obj as i64)
+    js_object_set_field(obj_ptr(), 2, JSValue::number(kind as f64));
+    obj.with_mut_ptr(|it| crate::object::attach_iterator_prototype(it, BUFFER_ITERATOR_CLASS_ID));
+    js_nanbox_pointer(obj_ptr() as i64)
 }
 
 /// `buf.values()` — iterator yielding each byte value.
@@ -91,7 +93,9 @@ pub extern "C" fn js_buffer_entries(buf_f64: f64) -> f64 {
 /// Build the `{ value, done }` iterator-result object.  `value`
 /// arrives as a NaN-boxed JSValue; `done` is a JS boolean.
 // #7564: was a local five-allocation copy with unrooted intermediates.
-use crate::iter_result::make_iter_result;
+use crate::iter_result::{
+    emit_iter_result, make_iter_result, IterResultOrder, IterResultTarget, IteratorStep,
+};
 
 unsafe fn make_pair_array(idx: u32, byte: u8) -> f64 {
     let pair = crate::array::js_array_alloc(2);
@@ -111,25 +115,54 @@ pub unsafe fn dispatch_buffer_iterator_method(
     iter_obj: *mut ObjectHeader,
     method_name: &str,
 ) -> f64 {
+    dispatch_buffer_iterator_method_inner(iter_obj, method_name, true, IterResultTarget::Object)
+}
+
+pub(crate) unsafe fn dispatch_buffer_iterator_method_builtin(
+    iter_obj: *mut ObjectHeader,
+    method_name: &str,
+) -> f64 {
+    dispatch_buffer_iterator_method_inner(iter_obj, method_name, false, IterResultTarget::Object)
+}
+
+pub(crate) unsafe fn dispatch_buffer_iterator_step(
+    iter_obj: *mut ObjectHeader,
+    out: *mut IteratorStep,
+) {
+    dispatch_buffer_iterator_method_inner(iter_obj, "next", false, IterResultTarget::Step(out));
+}
+
+unsafe fn dispatch_buffer_iterator_method_inner(
+    iter_obj: *mut ObjectHeader,
+    method_name: &str,
+    honor_override: bool,
+    target: IterResultTarget,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let iter = scope.root_nanbox_f64(js_nanbox_pointer(iter_obj as i64));
+    let iter_obj = || js_nanbox_get_pointer(iter.get_nanbox_f64()) as *mut ObjectHeader;
     match method_name {
         "next" => {
             // #9019: an own `next` assigned onto the iterator instance wins
             // over the builtin advance, exactly as on the Map/Set path.
-            if let Some(result) =
-                crate::object::call_overridden_iterator_next(iter_obj, BUFFER_ITERATOR_CLASS_ID)
-            {
-                return result;
+            if honor_override {
+                if let Some(result) = crate::object::call_overridden_iterator_next(
+                    iter_obj(),
+                    crate::array::ARRAY_ITERATOR_CLASS_ID,
+                ) {
+                    return result;
+                }
             }
             // Field 0: backing buffer pointer (NaN-boxed).
-            let backing_field = js_object_get_field(iter_obj, 0);
+            let backing_field = js_object_get_field(iter_obj(), 0);
             let backing_f64 = f64::from_bits(backing_field.bits());
             let buf_ptr = js_nanbox_get_pointer(backing_f64) as *mut BufferHeader;
             // Field 1: current index.
-            let idx_field = js_object_get_field(iter_obj, 1);
+            let idx_field = js_object_get_field(iter_obj(), 1);
             let idx_f64 = f64::from_bits(idx_field.bits());
             let idx = idx_f64 as u32;
             // Field 2: iterator kind.
-            let kind_field = js_object_get_field(iter_obj, 2);
+            let kind_field = js_object_get_field(iter_obj(), 2);
             let kind = f64::from_bits(kind_field.bits()) as i32;
 
             let len = if buf_ptr.is_null() {
@@ -139,12 +172,17 @@ pub unsafe fn dispatch_buffer_iterator_method(
             };
 
             if idx >= len {
-                return make_iter_result(JSValue::undefined(), true);
+                return emit_iter_result(
+                    target,
+                    IterResultOrder::ValueDone,
+                    JSValue::undefined(),
+                    true,
+                );
             }
 
             // Advance the stored cursor before computing the value so
             // a subsequent `.next()` call sees the bumped index.
-            js_object_set_field(iter_obj, 1, JSValue::number((idx + 1) as f64));
+            js_object_set_field(iter_obj(), 1, JSValue::number((idx + 1) as f64));
 
             let byte = if buf_ptr.is_null() {
                 0u8
@@ -161,14 +199,14 @@ pub unsafe fn dispatch_buffer_iterator_method(
                 }
                 _ => JSValue::undefined(),
             };
-            make_iter_result(value, false)
+            emit_iter_result(target, IterResultOrder::ValueDone, value, false)
         }
         // Iterators are themselves iterable — calling `[Symbol.iterator]()`
         // on one returns the same iterator. This is what Node does and
         // lets `for (const v of buf.values())` re-enter without an extra
         // wrapper. Without it the for-of fallback path would attempt to
         // index the iterator as an array and get nonsense.
-        "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj as i64),
+        "Symbol.iterator" | "@@iterator" => js_nanbox_pointer(iter_obj() as i64),
         // `return`/`throw` are part of the iterator spec but most
         // for-of paths don't need them; Node's BufferIterator inherits
         // them from %IteratorPrototype%. We return a `{ value: undefined,

@@ -107,9 +107,11 @@ fn is_strictly_undefined(value: Expr) -> Expr {
 fn iterator_next_value_stmts(
     ctx: &mut LoweringContext,
     iter_id: LocalId,
+    next_id: LocalId,
     done_id: LocalId,
     value_id: LocalId,
     track_step_failure: bool,
+    read_value: bool,
 ) -> Vec<Stmt> {
     let (step_id, step_name) = fresh_destruct_local(ctx, Type::Any);
     let mut pull_next = vec![
@@ -119,27 +121,33 @@ fn iterator_next_value_stmts(
             ty: Type::Any,
             mutable: false,
             init: Some(runtime_iterator_call(
-                "iteratorNextResult",
-                vec![Expr::LocalGet(iter_id)],
+                "iteratorStep",
+                vec![
+                    Expr::LocalGet(iter_id),
+                    Expr::LocalGet(next_id),
+                    Expr::LocalSet(
+                        value_id,
+                        Box::new(Expr::NativeMethodCall {
+                            module: "__perry_runtime".into(),
+                            class_name: None,
+                            object: None,
+                            method: "iteratorStepOutput".into(),
+                            args: vec![],
+                        }),
+                    ),
+                    Expr::Bool(read_value),
+                ],
             )),
         },
         Stmt::If {
-            condition: Expr::PropertyGet {
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(step_id)),
-                property: "done".to_string(),
-            },
-            then_branch: vec![
-                Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
-                Stmt::Expr(Expr::LocalSet(value_id, Box::new(Expr::Undefined))),
-            ],
+            condition: Expr::LocalGet(step_id),
+            then_branch: vec![Stmt::Expr(Expr::LocalSet(
+                done_id,
+                Box::new(Expr::Bool(true)),
+            ))],
             else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
                 value_id,
-                Box::new(Expr::PropertyGet {
-                    byte_offset: 0,
-                    object: Box::new(Expr::LocalGet(step_id)),
-                    property: "value".to_string(),
-                }),
+                Box::new(Expr::LocalGet(value_id)),
             ))]),
         },
     ];
@@ -197,6 +205,14 @@ fn lower_array_pattern_binding(
         mutable: false,
         init: Some(source.iter_init()),
     });
+    let (next_id, next_name) = fresh_destruct_local(ctx, Type::Any);
+    result.push(Stmt::Let {
+        id: next_id,
+        name: next_name,
+        ty: Type::Any,
+        mutable: false,
+        init: Some(source.next_init(iter_id)),
+    });
     let (done_id, done_name) = fresh_destruct_local(ctx, Type::Boolean);
     result.push(Stmt::Let {
         id: done_id,
@@ -220,8 +236,15 @@ fn lower_array_pattern_binding(
                     mutable: true,
                     init: Some(Expr::Undefined),
                 });
-                let pull =
-                    iterator_next_value_stmts(ctx, iter_id, done_id, value_id, track_step_failure);
+                let pull = iterator_next_value_stmts(
+                    ctx,
+                    iter_id,
+                    next_id,
+                    done_id,
+                    value_id,
+                    track_step_failure,
+                    false,
+                );
                 body.extend(source.pull(idx, value_id, pull));
             }
             // Rest element (`[...rest]`) — drain the remainder into an array.
@@ -250,7 +273,11 @@ fn lower_array_pattern_binding(
                     mutable: false,
                     init: Some(runtime_iterator_call(
                         "iteratorRestToArray",
-                        vec![Expr::LocalGet(iter_id), Expr::LocalGet(rest_done_id)],
+                        vec![
+                            Expr::LocalGet(iter_id),
+                            Expr::LocalGet(next_id),
+                            Expr::LocalGet(rest_done_id),
+                        ],
                     )),
                 });
                 // Draining exhausts the iterator, so it is now done.
@@ -277,8 +304,15 @@ fn lower_array_pattern_binding(
                     mutable: true,
                     init: Some(Expr::Undefined),
                 });
-                let pull =
-                    iterator_next_value_stmts(ctx, iter_id, done_id, value_id, track_step_failure);
+                let pull = iterator_next_value_stmts(
+                    ctx,
+                    iter_id,
+                    next_id,
+                    done_id,
+                    value_id,
+                    track_step_failure,
+                    true,
+                );
                 body.extend(source.pull(idx, value_id, pull));
 
                 // A `Pat::Assign` element carries a default initializer that is
@@ -918,7 +952,7 @@ mod iterator_close_tests {
                         if let Some(branch) = else_branch {
                             let next = branch.iter().position(|s| matches!(
                                 s, Stmt::Let { init: Some(Expr::NativeMethodCall { method, .. }), .. }
-                                if method == "iteratorNextResult"
+                                if method == "iteratorStep"
                             ));
                             if let Some(next) = next {
                                 assert!(next > 0, "IteratorNext must be preceded by marking done");
@@ -989,7 +1023,7 @@ mod iterator_close_tests {
         } = &body[rest]
         {
             assert!(
-                matches!(args[1], Expr::LocalGet(id) if id != done_id),
+                matches!(args[2], Expr::LocalGet(id) if id != done_id),
                 "rest must receive the saved pre-drain done bit"
             );
         }
