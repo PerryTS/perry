@@ -66,25 +66,10 @@ pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
 static KEEP_JS_VALUE_BUFFER_OR_TYPEDARRAY_DATA: unsafe extern "C" fn(f64, *mut u32) -> *const u8 =
     js_value_buffer_or_typedarray_data;
 
-/// Candidate address of a word offered to a buffer probe: a POINTER_TAG
-/// payload or a legacy untagged raw pointer, classified by TAG before any
-/// header is read. Every other tag (a double such as a numeric fd, INT32, SSO
-/// and heap strings, handles, singletons) is a primitive whose low 48 bits
-/// are not an address; stripping its tag and probing the remainder read a
-/// header at an arbitrary address (fs.appendFileSync(fd, ..) segfault).
+/// [`super::header::byte_word_address`]: the tag decides before any header
+/// is read.
 fn buffer_addr_from_raw(ptr: i64) -> Option<usize> {
-    let bits = ptr as u64;
-    if bits == 0 || bits < 0x1000 {
-        return None;
-    }
-    let addr = if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
-        bits & crate::value::POINTER_MASK
-    } else if (bits >> 48) == 0 {
-        bits
-    } else {
-        return None;
-    };
-    Some(addr as usize)
+    super::header::byte_word_address(ptr as u64)
 }
 
 /// Check whether a value uses Perry's shared BufferHeader storage.

@@ -297,10 +297,12 @@ pub(crate) fn classify_element_read_receiver(raw: u64) -> ElementReadReceiver {
     // No hand-rolled address floor: every probe below is either a side-table
     // lookup (safe for any bit pattern) or `try_read_gc_header`, which
     // magnitude-classifies — handle band included — before it dereferences.
-    let addr = strip_nanbox(raw);
-    if lookup_typed_array_kind(addr).is_some() {
-        return ElementReadReceiver::TypedArray(addr);
+    if let Some((addr, ty)) = crate::buffer::header::byte_cell_of_word(raw) {
+        if crate::gc::is_typed_array_type(ty) {
+            return ElementReadReceiver::TypedArray(addr);
+        }
     }
+    let addr = strip_nanbox(raw);
     // Only a POSITIVELY identified receiver is diverted. `try_read_gc_header`
     // magnitude-classifies before it dereferences, so garbage bits that
     // survived the mask never reach a managed-header read.
