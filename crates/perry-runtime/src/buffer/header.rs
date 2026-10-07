@@ -305,6 +305,29 @@ pub fn is_registered_buffer(addr: usize) -> bool {
     buffer_family_type(addr).is_some()
 }
 
+/// A byte cell proven by its allocator. Generic object paths ask this of every
+/// receiver. A readable header that names another kind answers with one load;
+/// anything else takes the allocator-proven read, whose answer this is.
+#[inline]
+pub(crate) fn is_owned_byte_cell(addr: usize) -> bool {
+    if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
+        if !crate::gc::is_byte_family_type(header.obj_type) {
+            return false;
+        }
+    }
+    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }
+        .is_some_and(|h| crate::gc::is_byte_family_type(unsafe { h.as_ref() }.obj_type))
+}
+
+/// Uint8Array or Buffer, owner or view: the byte-index fast arms' admission.
+#[inline(always)]
+pub(crate) fn is_u8_byte_cell(addr: usize) -> bool {
+    matches!(
+        buffer_family_type(addr),
+        Some(crate::gc::GC_TYPE_BUFFER | crate::gc::GC_TYPE_BUFFER_UINT8ARRAY)
+    )
+}
+
 /// Brand the buffer at `addr` as a `Uint8Array` (formatted as
 /// `Uint8Array(N) [ a, b, c ]` instead of `<Buffer aa bb cc>`). A cell that is
 /// already Uint8Array-backed (a plain Uint8Array, a secret `KeyObject`, a
