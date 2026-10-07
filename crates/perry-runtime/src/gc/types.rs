@@ -988,13 +988,32 @@ const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
     )),
 ];
 
-const fn byte_type_infos() -> [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_COUNT] {
-    let mut result = [None; MALLOC_KIND_BUCKET_COUNT];
+const INERT_TYPE_INFO: GcTypeInfo = gc_type_info_entry(
+    0,
+    "unused",
+    GcAllocationPolicy::Arena,
+    false,
+    GcRewriteDescriptorKind::Leaf,
+    GcLayoutSlotKind::None,
+    false,
+    GcExternalBytePolicy::None,
+    GcLargeObjectPolicy::NotApplicable,
+    true,
+    GcMoveHookKind::None,
+    GcRewriteHookKind::None,
+    GcFinalizeHookKind::None,
+);
+
+const fn byte_type_infos() -> [GcTypeInfo; MALLOC_KIND_BUCKET_COUNT] {
+    // Unused ids have fully initialized inert fields. A layout note can read
+    // its field directly from the sole descriptor authority; admission still
+    // rejects the zero type id. No separate layout-kind cache is needed.
+    let mut result = [INERT_TYPE_INFO; MALLOC_KIND_BUCKET_COUNT];
     let mut i = 0;
     while i < CORE_TYPE_INFOS.len() {
         if let Some(info) = CORE_TYPE_INFOS[i] {
             if !is_byte_family_type(info.type_id) {
-                result[info.type_id as usize] = Some(info);
+                result[info.type_id as usize] = info;
             }
         }
         i += 1;
@@ -1002,15 +1021,14 @@ const fn byte_type_infos() -> [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_COUNT] {
     i = 0x40;
     while i <= 0x7f {
         if is_byte_family_type(i as u8) {
-            result[i] = Some(buffer_family_type_info(i as u8, "bytes"));
+            result[i] = buffer_family_type_info(i as u8, "bytes");
         }
         i += 1;
     }
     result
 }
 
-pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_COUNT] =
-    byte_type_infos();
+pub(super) static GC_TYPE_INFO_BY_ID: [GcTypeInfo; MALLOC_KIND_BUCKET_COUNT] = byte_type_infos();
 
 /// One `GcTypeInfo` for every buffer-family flavor: the flavors differ only in
 /// the brand the type byte carries, never in layout, tracing or lifetime.
@@ -1035,7 +1053,7 @@ const fn buffer_family_type_info(type_id: u8, name: &'static str) -> GcTypeInfo 
 const FIRST_CORE_TYPE_GAP: u8 = {
     let infos = byte_type_infos();
     let mut kind = 1usize;
-    while kind < infos.len() && infos[kind].is_some() {
+    while kind < infos.len() && infos[kind].type_id != 0 {
         kind += 1;
     }
     kind as u8
@@ -1062,26 +1080,15 @@ pub(crate) fn gc_type_info(obj_type: u8) -> Option<&'static GcTypeInfo> {
     if obj_type == GC_TYPE_ARRAY
         && header_admission_tests::DENSE_DESCRIPTOR_FAULT.with(std::cell::Cell::get)
     {
-        return GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize].as_ref();
-    }
-    if obj_type.wrapping_sub(1) < FIRST_CORE_TYPE_GAP - 1 {
-        // FIRST_CORE_TYPE_GAP is computed from this exact immutable metadata.
-        // The range guard proves both indexing and Some, so common array,
-        // object and closure layout notes need no sparse presence load.
-        return Some(unsafe {
-            GC_TYPE_INFO_BY_ID
-                .get_unchecked(obj_type as usize)
-                .as_ref()
-                .unwrap_unchecked()
-        });
+        return Some(&GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize]);
     }
     GC_TYPE_INFO_BY_ID
         .get(obj_type as usize)
-        .and_then(Option::as_ref)
+        .filter(|info| info.type_id != 0)
 }
 
 pub(crate) fn gc_type_infos() -> impl Iterator<Item = &'static GcTypeInfo> {
-    GC_TYPE_INFO_BY_ID.iter().filter_map(Option::as_ref)
+    GC_TYPE_INFO_BY_ID.iter().filter(|info| info.type_id != 0)
 }
 
 #[inline]
@@ -1098,7 +1105,13 @@ pub(crate) fn gc_type_rewrite_descriptor_kind(obj_type: u8) -> GcRewriteDescript
 
 #[inline]
 pub(crate) fn gc_type_layout_slot_kind(obj_type: u8) -> GcLayoutSlotKind {
-    gc_type_info(obj_type).map_or(GcLayoutSlotKind::None, |info| info.layout_slot_kind)
+    #[cfg(test)]
+    if obj_type == 10 && header_admission_tests::INERT_LAYOUT_FAULT.with(std::cell::Cell::get) {
+        return GcLayoutSlotKind::ArrayElements;
+    }
+    GC_TYPE_INFO_BY_ID
+        .get(obj_type as usize)
+        .map_or(GcLayoutSlotKind::None, |info| info.layout_slot_kind)
 }
 
 #[inline]
@@ -1731,18 +1744,30 @@ mod header_admission_tests {
         pub(super) static DENSE_DESCRIPTOR_FAULT: std::cell::Cell<bool> = const {
             std::cell::Cell::new(false)
         };
+        pub(super) static INERT_LAYOUT_FAULT: std::cell::Cell<bool> = const {
+            std::cell::Cell::new(false)
+        };
     }
 
     #[test]
     fn sparse_header_admission_agrees_with_all_type_descriptors() {
         DENSE_DESCRIPTOR_FAULT.set(crate::buffer::bytes::b4_sabotage("dense_core_descriptor"));
+        INERT_LAYOUT_FAULT.set(crate::buffer::bytes::b4_sabotage("inert_layout_descriptor"));
         for kind in 0..=u8::MAX {
             assert_eq!(
                 super::gc_type_info(kind),
                 super::GC_TYPE_INFO_BY_ID
                     .get(kind as usize)
-                    .and_then(Option::as_ref),
+                    .filter(|info| info.type_id != 0),
                 "descriptor lookup must preserve the authoritative metadata for {kind:#x}"
+            );
+            assert_eq!(
+                super::gc_type_layout_slot_kind(kind),
+                super::GC_TYPE_INFO_BY_ID
+                    .get(kind as usize)
+                    .filter(|info| info.type_id != 0)
+                    .map_or(super::GcLayoutSlotKind::None, |info| info.layout_slot_kind),
+                "unused ids must have inert layout fields for {kind:#x}"
             );
             assert_eq!(
                 super::gc_type_is_known(kind),
@@ -1775,6 +1800,17 @@ mod header_admission_tests {
         assert!(
             !child.status.success(),
             "metadata substitution must be detected"
+        );
+    }
+    #[test]
+    fn changing_inert_layout_turns_layout_agreement_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "gc::types::header_admission_tests::sparse_header_admission_agrees_with_all_type_descriptors", "--nocapture"])
+            .env("PERRY_B4_SABOTAGE", "inert_layout_descriptor").output().unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(
+            !child.status.success(),
+            "an active retired layout must be detected"
         );
     }
     #[test]

@@ -1513,9 +1513,27 @@ pub(super) fn compile_function(
             let handle = crate::expr::unbox_to_i64(blk, &arg_val);
             let handle_ptr = blk.inttoptr(I64, &handle);
             // TypedArrayHeader layout: length at +0, data at +16.
+            let length = blk.load(I32, &handle_ptr);
             let data_ptr = blk.call(PTR, "js_native_buffer_data_ptr", &[(DOUBLE, &arg_val)]);
             let data_slot = ctx.func.alloca_entry(PTR);
             ctx.block().store(PTR, &data_ptr, &data_slot);
+            // The sealed call-site/body proof excludes detach, resize and
+            // rebinding. Hoist the actual length alongside data, rather than
+            // repeatedly reading an aliasable owner header inside the loop.
+            let length_slot = ctx.func.alloca_entry(I32);
+            ctx.block().store(I32, &length, &length_slot);
+            #[cfg(test)]
+            let length_slot =
+                if std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("spec_extent") {
+                    handle_ptr
+                } else {
+                    length_slot
+                };
+            ctx.block().emit_raw(format!(
+                "; bytes.spec.extent.hoist data={} length={}",
+                data_slot.trim_start_matches('%'),
+                length_slot.trim_start_matches('%')
+            ));
             let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
             ctx.buffer_data_slots
                 .insert(p.id, (data_slot.clone(), scope_idx));
@@ -1523,7 +1541,7 @@ pub(super) fn compile_function(
                 p.id,
                 BufferViewSlot {
                     data_slot,
-                    length_slot: Some(handle_ptr),
+                    length_slot: Some(length_slot),
                     scope_idx: Some(scope_idx),
                     elem,
                     element_width_bytes: width,
