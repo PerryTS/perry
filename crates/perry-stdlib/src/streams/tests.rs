@@ -667,3 +667,37 @@ fn generic_stream_dispatch_preserves_owner_and_controller_alias() {
         ));
     }
 }
+
+/// Stream chunks use Uint8Array placement at birth, including Native backing.
+#[test]
+fn stream_chunk_uses_uint8array_placement_at_birth() {
+    use perry_runtime::buffer::bytes;
+    use perry_runtime::codegen_abi::{BYTES_OUT_OF_LINE, BYTES_TYPE_VIEW};
+    let input: Vec<u8> = (0..64 * 1024).map(|i| (i % 251) as u8).collect();
+    for len in [0, 1, 127, 12 * 1024, input.len()] {
+        let bits = unsafe { alloc_uint8array_from_bytes(&input[..len]) };
+        let value = f64::from_bits(bits);
+        let pin = bytes::pin(value).expect("stream chunk must be pinnable");
+        let owner = JSValue::from_bits(bits).as_pointer::<u8>();
+        let header = unsafe {
+            &*owner
+                .sub(perry_runtime::gc::GC_HEADER_SIZE)
+                .cast::<perry_runtime::gc::GcHeader>()
+        };
+        assert_eq!(
+            header.obj_type,
+            perry_runtime::gc::GC_TYPE_BUFFER_UINT8ARRAY
+        );
+        assert_eq!(
+            header.obj_type & BYTES_TYPE_VIEW,
+            0,
+            "a stream chunk must never join Buffer's pool"
+        );
+        assert_eq!(header._reserved & BYTES_OUT_OF_LINE != 0, len > 4096);
+        assert_eq!(pin.len(), len);
+        assert_eq!(
+            unsafe { std::slice::from_raw_parts(pin.as_ptr(), pin.len()) },
+            &input[..len]
+        );
+    }
+}
