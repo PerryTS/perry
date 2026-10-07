@@ -52,6 +52,48 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+/// Candidate address of a word offered to a byte-cell probe: a POINTER_TAG
+/// payload or a legacy untagged raw pointer, classified by TAG before any
+/// header is read. Every other tag (a double such as a numeric fd, INT32, SSO
+/// and heap strings, handles, singletons) is a primitive whose low 48 bits
+/// are not an address; stripping its tag and probing the remainder read a
+/// header at an arbitrary address (fs.appendFileSync(fd, ..) segfault). A bare
+/// top-16-clear word is also what a denormal double looks like, so it is an
+/// address only when Perry's memory owns its header word (this thread's
+/// allocator, any thread's arena region, or a process-global
+/// SharedArrayBuffer block) — proven before the header is read.
+#[inline]
+pub(crate) fn byte_word_address(bits: u64) -> Option<usize> {
+    if bits < 0x1000 {
+        return None;
+    }
+    if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+        return Some((bits & crate::value::POINTER_MASK) as usize);
+    }
+    if (bits >> 48) != 0 {
+        return None;
+    }
+    let addr = bits as usize;
+    raw_byte_word_is_owned(addr).then_some(addr)
+}
+
+#[cold]
+fn raw_byte_word_is_owned(addr: usize) -> bool {
+    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.is_some()
+        || addr
+            .checked_sub(GC_HEADER_SIZE)
+            .is_some_and(|header| crate::arena::region_contains(header, GC_HEADER_SIZE))
+        || crate::shared_sab::is_shared_sab(addr)
+}
+
+/// [`byte_cell_type`] for a word that may be any JS value: classified by tag
+/// first ([`byte_word_address`]), then admitted. The address and full type.
+#[inline]
+pub(crate) fn byte_cell_of_word(bits: u64) -> Option<(usize, u8)> {
+    let addr = byte_word_address(bits)?;
+    Some((addr, byte_cell_type(addr)?))
+}
+
 /// The full GC type of the byte cell at `addr` (Buffer, Uint8Array, the
 /// %TypedArray% kinds, ArrayBuffer, SharedArrayBuffer, DataView, key objects;
 /// owners and views), or `None` when `addr` is not one.

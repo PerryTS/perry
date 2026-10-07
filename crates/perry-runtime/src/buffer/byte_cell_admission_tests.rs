@@ -135,3 +135,34 @@ fn another_thread_admits_this_threads_cell_and_refuses_the_fake() {
     assert_eq!(seen, (Some(GC_TYPE_BUFFER), None));
     drop(block);
 }
+
+/// Words are classified by tag before any header is read: a number (a numeric
+/// fd, a denormal whose bits look like a raw pointer) is never a byte cell,
+/// and a pointer-tagged or raw buffer address is.
+#[test]
+fn words_are_classified_by_tag_before_the_admission() {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let buf = super::buffer_alloc(16);
+    let _buf = scope.root_raw_mut_ptr(buf);
+    let addr = buf as usize;
+    let tagged = crate::value::js_nanbox_pointer(addr as i64).to_bits();
+    assert_eq!(
+        super::header::byte_cell_of_word(tagged),
+        Some((addr, GC_TYPE_BUFFER))
+    );
+    assert_eq!(
+        super::header::byte_cell_of_word(addr as u64),
+        Some((addr, GC_TYPE_BUFFER))
+    );
+    assert_eq!(super::header::byte_cell_of_word(3.0f64.to_bits()), None);
+    let denormal = 1e-310f64.to_bits();
+    assert_eq!(
+        denormal >> 48,
+        0,
+        "fixture: a denormal has the raw-pointer shape"
+    );
+    assert_eq!(super::header::byte_word_address(denormal), None);
+    let (block, fake) = fake_byte_cell(GC_TYPE_BUFFER);
+    assert_eq!(super::header::byte_word_address(fake as u64), None);
+    drop(block);
+}
