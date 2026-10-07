@@ -1,8 +1,8 @@
 # Native-payload zlib validation (#11919)
 
-Functional acceptance record; final performance measurement and attribution
-are still running. The code baseline is origin/main `78e2ab97e7`; the current
-implementation is `df52c29508`, which contains that main revision.
+Acceptance record against origin/main `78e2ab97e7`. The measured production
+implementation is `df52c29508`, which contains that main revision; the final
+crate suites include the subsequent test-only improvements in `f58706d1e7`.
 
 The eleven codecs now use one runtime Transform state machine. Codecs own only
 native workspace and bounded scratch behind PayloadVTable/StreamHooks, with
@@ -85,7 +85,7 @@ The release build and the four final crate suites have zero new failures:
 | codegen | 2042 / 0 / 1 | 2042 / 0 / 1 |
 | runtime | 5195 / 1 / 5 | 5201 / 0 / 5 |
 | stdlib | 257 / 2 / 0 | 250 / 2 / 0 |
-| ext-zlib | Original provider fixtures are superseded | 23 / 0 / 1 |
+| ext-zlib | 17 / 0 / 0 | 23 / 0 / 1 |
 
 The two stdlib failures are the existing Symbol and closure side-table teardown
 assertions, identical on main. Main's RSS witness passes in a clean standalone
@@ -122,5 +122,128 @@ MEASURE.lock, with a same-binary control for noise. Primary instructions and
 RSS samples have tracing off. Full-collection counts are from paired diagnostic
 companions, explicitly not the primary processes. Every primary sample also
 checks Node output and records its binary SHA-256. RSS steps near 2 MiB require
-a THP-disabled rerun. Final medians, noise floors and delta explanations are
-pending; no old-main performance measurements are acceptance claims.
+a THP-disabled rerun. No primary program RSS delta is near 2 MiB.
+
+| Program | Instructions, billions main → head | Delta | RSS MiB main → head | Full collections main → head | Same-binary instruction range |
+|---|---:|---:|---:|---:|---:|
+| hello | 0.001354424 → 0.001356098 | +0.1236% | 15.871 → 15.172 | 0 → 0 | 0.0024% |
+| tsc | 26.974285 → 26.981391 | +0.0263% | 249.562 → 249.664 | 1 → 1 | 0.0663% |
+| Zod x5000 | 14.640727 → 14.642836 | +0.0144% | 51.258 → 50.699 | 0 → 0 | 0.0807% |
+| qs parse | 23.404537 → 23.403250 | −0.0055% | 56.258 → 56.203 | 0 → 0 | 0.0304% |
+| qs stringify | 59.916768 → 59.902444 | −0.0239% | 54.125 → 54.223 | 0 → 0 | 0.0478% |
+| commander | 30.675221 → 30.690643 | +0.0503% | 51.328 → 51.719 | 1 → 1 | 0.0283% |
+| fastify | 112.773449 → 112.794518 | +0.0187% | 246.203 → 245.445 | 1 → 1 | 0.1486% |
+| Effect | 25.694203 → 25.689824 | −0.0170% | 189.090 → 188.430 | 2 → 2 | 0.2813% |
+| buffer_heavy | main fails → 14.673203 | not gated | — → 91.668 | — → 36 | 0.0073% |
+| worker_heavy | 2.130656 → 2.117234 | −0.6299% | 221.012 → 221.438 | 42 → 41 | 1.6688% |
+
+The instruction floor is the larger range of the two same-binary control
+arms, each with five samples. tsc, Zod, both qs programs, fastify and Effect
+are inside that floor. worker_heavy is also inside its 1.6688% control range:
+worker scheduling changes the amount of collection work (the control full
+counts also vary), so its negative delta is not claimed as a speedup.
+
+Hello is above its floor by 1,674 instructions. Five interleaved diagnostic
+runs count instructions at actual primary-binary main/call boundaries:
+pre-main increases by 1,704, while main startup/body call scopes are unchanged
+apart from single instructions and GC initialization noise. ELF packed relative
+relocations increase from 30,550 to 30,666 pointer fixups (1,448 to 1,452 encoded
+RELR words), with identical explicit relocation and PLT counts. Linked runtime
+pointer metadata accounts for the bounded, once-per-process loader increase;
+it is not per-operation codec or GC work. The fix-forward is to reduce linked
+runtime metadata and relocation entries with finer section granularity, without
+adding caches or family checks. The diagnostic symbol copies have identical
+.text and build IDs to the primary binaries.
+
+Commander remains above the initial instruction floor (+0.0503%). Its n=5
+THP-disabled rerun is +0.0371%, with 1 full and 124 copying minors in both arms,
+zero AnonHugePages, and RSS 25,368 → 25,740 KiB. Its five paired GC traces have
+identical copied bytes/objects, layout scan work and root slot counts. Five interleaved primary-binary copying-collection scopes measure
+304,867,577 → 304,902,018 instructions, with 124 calls in both arms: only
+34,441 extra instructions, far below the program delta. The synchronous full
+mark/sweep entry is not called in this workload; the full trace event comes
+from the incremental path, so this scope is not claimed to cover all GC.
+
+The shared receiver extractor in node_stream::this_value now calls
+ensure_lazy_stream, including from EventEmitter's on/once/emit/listener
+methods. Commander repeatedly registers option listeners. The new negative
+StreamHooks check and its caller's argument preservation are a bounded
+per-emitter-operation cost from implementing lazy state generically. An
+n=5 interleaved same-primary-binary diagnostic replaces only this function's
+entry with ret in a child process's private text: commander has no lazy native
+streams, and every original/patched output agrees with Node. Its medians are
+30,693,773,389 → 30,685,279,123 instructions, an 8,494,266-instruction difference
+(+0.0277% for the check). This is an attribution estimate, not a new primary
+A/B: its original-arm range is 0.0835%, so the number is not claimed as an
+exact isolated instruction budget. The check's demonstrated path plus caller
+argument preservation explains the bounded architectural cost; subtracting the
+estimated check cost from the original 15,421,713-instruction program delta
+leaves 6,927,447 (0.0226%), inside the initial 0.0283% same-binary floor. The
+fix-forward is to put initialization at stream state accessors and stream
+operations, rather than at the shared EventEmitter receiver extractor; keep
+one stream state machine, without a cache or family-name guard.
+
+RSS attribution uses separate n=5 interleaved smaps_rollup samples, without
+changing either executable. For commander, the sampled peak grows by 460 KiB:
+420 KiB is file-backed PSS and 40 KiB anonymous. Zod's sampled peak decreases
+380 KiB, with file PSS down 391 KiB and anonymous up 8 KiB. qs parse/stringify
+have identical anonymous medians; their file-backed changes are +260/+231 KiB.
+These are bounded code/page residency differences from the linked provider and
+stream machinery, rather than retained codec workspace or extra collections.
+Sampled instantaneous peaks are diagnostic companions, not replacements for
+the primary GNU time high-water marks.
+
+The tsc, fastify, Effect and worker primary RSS differences are within their
+same-binary controls' RSS ranges (roughly 2.5, 4.1, 2.5 and 16.8 MiB). Their
+full counts are unchanged except for worker scheduling variation. Hello is
+shorter than the smaps polling interval, so its GNU time RSS difference is
+not attributed from incomplete smaps snapshots. Five synchronized samples of
+the kernel's VmHWM at its actual main/call boundaries measure 15,756 → 15,808
+KiB: +52 KiB, rather than the first pass's −716 KiB. The initial negative RSS
+delta is not reproducible and is not claimed as a saving; the synchronized
+execution shows a small code/page-footprint difference, zero full collections
+and unchanged execution scopes. Diagnostic text breakpoints also make these
+kernel samples companions rather than replacement primary measurements.
+
+### Streaming micro witnesses
+
+| Workload | Instructions main → head | RSS KiB main → head | Full collections main → head | Comparison |
+|---|---:|---:|---:|---|
+| 50k Gzip Transforms | main exits 13 → 126,003,469,409 | — → 52,760 | — → 432 | main leaves top-level await unsettled; no valid A/B |
+| 64 MiB Gzip pipeline | main exits 13 → 26,854,768,065 | — → 89,964 | — → 8 | main leaves top-level await unsettled; no valid A/B |
+| 64 MiB Hash write/pipe | 262,719,147 → 262,734,308 | 36,896 → 36,944 | 0 → 0 | +0.00577%, within 0.00973% control floor |
+
+All three final head witnesses agree with Node; n=5 interleaved samples (head
+only for the two baseline failures). The Hash witness uses the supported
+write/digest plus readable pipe interface; pipeline into Hash lacks _transform
+in both arms. This lane implements lazy state generically, but does not port
+crypto codecs to StreamHooks. Raw rows preserve cycles/task-clock measured on
+qb6 measurement cores, hashes, output checks, huge-page samples and companion
+collection counts. They are kept with the lane evidence under the approved
+scratchpad directory.
+
+## Final acceptance and evidence
+
+The two instruction increases above the initial control floors are explained
+and bounded: hello's once-per-process relocation work and commander's generic
+lazy-state guard on emitter operations. Both are below 0.5%, with the named
+fix-forward plans above. The implementation unifies codec ownership and stream
+state, removes handle tables/raw callbacks, and adds no production cache or
+resource side table. This lane makes no global GC, allocator or THP change.
+
+Evidence: `/Users/amlug/projects/perry/secret-tests/scratchpad/codex-small/zlib2/`
+contains the source checks, crate/gap/witness logs and an `evidence/` copy of
+host program hashes, raw primary/control/THP rows, companion collection counts,
+profiles and attribution JSON. `final-program-report.json` recomputes medians
+from complete raw rows and checks each measured executable's SHA-256. The
+symbol copies used for diagnostic profiles have identical .text; the newer
+commander shadow's build-id note is aligned with its primary after validating
+that equality, because its compile stamp differs. Primary binaries are unchanged.
+The compressed bundle is refreshed after each commit milestone.
+
+Unmet literal requirement: the design's total-process bomb RSS limit. The
+valid fixture, observed native/queue bounds, Node comparison, cold and slow
+consumer RSS, and THP-off diagnostic are recorded above rather than asserting
+that a 1 KB → 100 MB gzip or a total-RSS <32 KiB process is possible. The four
+remaining gap failures also fail on main. Baseline buffer_heavy and the two
+streaming gzip micro workloads fail functionally, so they supply no gated A/B.
