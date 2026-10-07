@@ -973,14 +973,17 @@ pub(crate) fn lower(
                 return Ok(value);
             }
             if !numeric_index_has_integer_array_index_proof(ctx, index) {
-                if let Some(access) = super::u8_buffer_read::byte_view_param_for(ctx, array) {
-                    return rooting::with_operands_rooted(ctx, &[array, index], |ctx, vals| {
-                        Ok(super::index_get::inline_dyn_typed_array::lower_inline_dyn_typed_array_get_with_byte_view_param(
-                            ctx, &vals[0], &vals[1], false, Some(&access),
-                        ))
-                    });
-                }
                 return rooting::with_operands_rooted(ctx, &[array, index], |ctx, vals| {
+                    if let Some(access) = super::u8_buffer_read::byte_view_param_for(
+                        ctx,
+                        array,
+                        &vals[0],
+                        &super::u8_buffer_read::U8_BRANDS,
+                    ) {
+                        return Ok(super::index_get::inline_dyn_typed_array::lower_inline_dyn_typed_array_get_with_byte_view_param(
+                            ctx, &vals[0], &vals[1], false, Some(&access),
+                        ));
+                    }
                     let a = vals[0].clone();
                     let key = vals[1].clone();
                     let blk = ctx.block();

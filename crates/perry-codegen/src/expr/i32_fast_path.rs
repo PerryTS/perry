@@ -734,7 +734,6 @@ fn lower_checked_typed_array_i32_load(
         "js_typed_array_read_int32",
         &[(I64, &raw), (I32, &idx_i32)],
     );
-    super::byte_cell::refresh_hoisted_byte_accesses(ctx);
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 

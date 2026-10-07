@@ -339,7 +339,6 @@ fn lower_checked_typed_array_f64_load(
     } else {
         slow_val
     };
-    super::byte_cell::refresh_hoisted_byte_accesses(ctx);
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 
