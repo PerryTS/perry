@@ -1788,3 +1788,8 @@ pub(crate) use tests::support::{
     register_runtime_handle_root_scanner_for_tests, CopyingNurseryTestGuard,
     GcTriggerThresholdTestGuard,
 };
+
+#[cfg(test)]
+pub(crate) fn test_external_side_live_bytes() -> usize {
+    policy::external_side_live_bytes()
+}

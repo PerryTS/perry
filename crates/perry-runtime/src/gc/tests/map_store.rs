@@ -328,3 +328,85 @@ fn map_store_non_copying_minor_reclaims_dead_active_block_map() {
         });
     }
 }
+/// Growth, retained clear/delete capacity, and real GC finalization must all
+/// agree with the reserved index payload, including the dense numeric table.
+#[test]
+fn map_index_external_bytes_balance_after_growth_clear_delete_and_collection() {
+    for clear in [false, true] {
+        std::thread::spawn(move || {
+            let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+            let _scan = ConservativeScanDisabledGuard::new();
+            reset_global_roots();
+            let _roots = ShadowAndGlobalRootResetGuard;
+            let baseline = policy::external_side_live_bytes();
+            let map = js_map_alloc(4);
+            let mut keys = Vec::new();
+            for i in 0..512 {
+                let text = format!("map-accounting-key-{i}");
+                let string = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+                let object = crate::object::js_object_alloc(0, 0);
+                let string_key = f64::from_bits(crate::value::STRING_TAG | string as u64);
+                let object_key = f64::from_bits(ptr_bits(object as usize));
+                for key in [i as f64, -(i as f64) - 0.5, string_key, object_key] {
+                    js_map_set(map, key, i as f64);
+                    keys.push(key);
+                }
+                unsafe {
+                    let entries = (*map).capacity as usize * 2 * std::mem::size_of::<f64>();
+                    let indexes = test_map_index_bytes(map);
+                    assert!(indexes > 0, "fixture must allocate all key indexes");
+                    assert_eq!(
+                        policy::external_side_live_bytes(),
+                        baseline + entries + indexes
+                    );
+                }
+            }
+            // Model a relocated pointer key so the GC hook must rebuild,
+            // rather than taking its unchanged-keys fast path.
+            let replacement = crate::object::js_object_alloc(0, 0);
+            let replacement_bits = ptr_bits(replacement as usize);
+            let raw = keys.len() - 1;
+            unsafe {
+                crate::gc::runtime_store_external_jsvalue_slot(
+                    map as usize,
+                    (*map).entries.add(raw * 2) as usize,
+                    replacement_bits,
+                );
+            }
+            keys[raw] = f64::from_bits(replacement_bits);
+            let before = policy::external_side_live_bytes();
+            rebuild_map_ptr_index_for_gc(map);
+            assert_eq!(policy::external_side_live_bytes(), before);
+            assert_eq!(js_map_get(map, keys[raw]), 511.0);
+            if clear {
+                js_map_clear(map);
+            } else {
+                for key in keys {
+                    assert_eq!(js_map_delete(map, key), 1);
+                }
+            }
+            assert_eq!(js_map_size(map), 0);
+            unsafe {
+                let entries = (*map).capacity as usize * 2 * std::mem::size_of::<f64>();
+                let indexes = test_map_index_bytes(map);
+                assert!(indexes > 0, "empty tables retain allocated capacity");
+                assert_eq!(
+                    policy::external_side_live_bytes(),
+                    baseline + entries + indexes
+                );
+            }
+            // The pointer above is deliberately not a root. A real full sweep
+            // must reach the Map finalizer even after its keys were removed.
+            let before = test_map_side_deallocation_snapshot();
+            let mut cycle = GcCycleState::new_full(GcTriggerSnapshot {
+                kind: GcTriggerKind::Manual,
+                steps_before: Some(GcStepSnapshot::current()),
+            });
+            cycle.run_to_completion();
+            assert_eq!(test_map_side_deallocation_snapshot().0 - before.0, 1);
+            assert_eq!(policy::external_side_live_bytes(), baseline);
+        })
+        .join()
+        .unwrap();
+    }
+}

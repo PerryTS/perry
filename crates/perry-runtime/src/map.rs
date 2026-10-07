@@ -322,7 +322,8 @@ pub(crate) use store::{
 };
 #[cfg(test)]
 pub(crate) use store::{
-    test_from_space_map_finalizations, test_map_side_allocation, test_map_store_word,
+    test_from_space_map_finalizations, test_map_index_bytes, test_map_side_allocation,
+    test_map_store_word,
 };
 use string_key::StrKey;
 
@@ -442,6 +443,13 @@ fn dense_integer_key(key: NumericKey) -> Option<u32> {
 }
 
 impl NumericIndex {
+    fn byte_len(&self) -> usize {
+        hash_index_bytes(&self.hashed)
+            + self.dense.as_ref().map_or(0, |dense| {
+                dense.slots.capacity() * std::mem::size_of::<u32>()
+            })
+    }
+
     fn new() -> Self {
         Self {
             hashed: crate::fast_hash::new_ptr_hash_map(),
@@ -491,7 +499,9 @@ impl NumericIndex {
                 }
             }
         }
+        let before = hash_index_bytes(&self.hashed);
         let is_new = self.hashed.insert(key, entry_index).is_none();
+        note_index_bytes_changed(before, hash_index_bytes(&self.hashed));
         if is_new && integer.is_some() {
             self.dense_key_count += 1;
         }
@@ -508,7 +518,9 @@ impl NumericIndex {
 
     fn remove(&mut self, key: &NumericKey) -> Option<u32> {
         let integer = dense_integer_key(*key);
+        let before = hash_index_bytes(&self.hashed);
         let mut removed = self.hashed.remove(key);
+        note_index_bytes_changed(before, hash_index_bytes(&self.hashed));
         if let (Some(integer), Some(dense)) = (integer, self.dense.as_mut()) {
             if integer >= dense.base {
                 let offset = integer as usize - dense.base as usize;
@@ -530,7 +542,9 @@ impl NumericIndex {
     }
 
     fn clear(&mut self) {
+        let before = hash_index_bytes(&self.hashed);
         self.hashed.clear();
+        note_index_bytes_changed(before, hash_index_bytes(&self.hashed));
         // Keep the allocated span: `Map.clear()` followed by the same id
         // population (a per-frame grouping map) would otherwise rebuild the
         // table from scratch every cycle. The slots are reset, and the span
@@ -598,6 +612,7 @@ impl NumericIndex {
     }
 
     fn rebuild_dense(&mut self, base: u32, len: usize) {
+        let before = self.byte_len();
         let mut slots = vec![DENSE_NUMERIC_EMPTY; len];
         for (&key, &entry_index) in &self.hashed {
             let Some(integer) = dense_integer_key(key) else {
@@ -633,6 +648,7 @@ impl NumericIndex {
             }
         }
         self.dense = Some(DenseNumericIndex { base, slots });
+        note_index_bytes_changed(before, self.byte_len());
     }
 }
 
@@ -1897,7 +1913,10 @@ fn map_set_resolved(map: *mut MapHeader, key: f64, value: f64) {
                 (*(*map).store).strings.insert(h, used);
             }
         } else {
-            (*(*map).store).pointers.insert(MapPtrKey(key), used);
+            let index = &mut (*(*map).store).pointers;
+            let before = hash_index_bytes(index);
+            index.insert(MapPtrKey(key), used);
+            note_index_bytes_changed(before, hash_index_bytes(index));
         }
     }
 }
@@ -2362,7 +2381,9 @@ unsafe fn forget_map_index_entry(map: *mut MapHeader, deleted_key: f64, deleted_
     }
     if is_ptr_index_key(deleted_bits) {
         if let Some(index) = (*map).store.as_mut().map(|store| &mut store.pointers) {
+            let before = hash_index_bytes(index);
             index.remove(&MapPtrKey(deleted_key));
+            note_index_bytes_changed(before, hash_index_bytes(index));
         }
     }
 }
@@ -2387,6 +2408,7 @@ unsafe fn rebuild_map_ptr_index(map: *mut MapHeader) {
     }
     {
         let slot = &mut (*(*map).store).pointers;
+        let before = hash_index_bytes(slot);
         slot.clear();
         for i in 0..used {
             let entry_key = ptr::read(entries.add(i * 2));
@@ -2394,6 +2416,7 @@ unsafe fn rebuild_map_ptr_index(map: *mut MapHeader) {
                 slot.insert(MapPtrKey(entry_key), i as u32);
             }
         }
+        note_index_bytes_changed(before, hash_index_bytes(slot));
     }
 }
 
@@ -2489,7 +2512,9 @@ pub extern "C" fn js_map_clear(map: *mut MapHeader) {
     };
     unsafe {
         if let Some(slot) = (*map).store.as_mut().map(|store| &mut store.pointers) {
+            let before = hash_index_bytes(slot);
             slot.clear();
+            note_index_bytes_changed(before, hash_index_bytes(slot));
         }
     };
 }
