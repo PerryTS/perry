@@ -15,18 +15,18 @@ name: Node Core Subset Radar
 # incrementally so a partial sweep still publishes a (clearly-flagged) number.
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
       apis:
         description: "Optional space-separated API list, e.g. 'path url buffer'"
+        type: string
         required: false
         default: ""
       max_per_api:
         description: "Maximum upstream Node tests to sample per API; 0 means no cap"
+        type: string
         required: false
         default: "25"
-  schedule:
-    - cron: "17 3 * * *"
 
 permissions:
   contents: read

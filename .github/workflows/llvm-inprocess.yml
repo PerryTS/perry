@@ -15,24 +15,7 @@ name: llvm-inprocess
 # the `changes` job instead: a job skipped by `if:` still reports a check
 # run (conclusion: skipped), which branch protection accepts.
 on:
-  pull_request:
-    # PR arm is OPT-IN via the `run-extended-tests` label (see the header of
-    # test.yml and docs/src/testing/ci-tiers.md): an unlabelled PR still gets
-    # a run, but every job in it is skipped, which costs no runner slot. The
-    # main-line arm (schedule / tags) is unchanged. `labeled` re-fires the run
-    # when the label lands.
-    types: [opened, synchronize, reopened, labeled]
-  # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
-  # `push: branches: [main]` starved this gate and nine others for two days
-  # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
-  # concurrency ceiling. The pull-request arm is unchanged -- every PR is still
-  # measured. ***DO NOT RESTORE `push: branches: [main]`.***
-  # Rationale, measurement and cost: docs/src/testing/ci-gate-scheduling.md
-  schedule:
-    - cron: "42 */6 * * *"
-  push:
-    tags: ["v*"]
-  workflow_dispatch:
+  workflow_call:
 
 concurrency:
   # ***#7966: KEY EVERY MAIN-LINE RUN ON `github.run_id`, NOT `github.sha`.***
@@ -87,7 +70,7 @@ jobs:
             exit 0
           fi
           files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files"             --paginate --jq '.[].filename')
-          if echo "$files" | grep -qE '^(crates/perry-codegen/|crates/perry/src/commands/compile/|experiments/llvm-inprocess-spike/|benchmarks/app-patterns/kernels/batch\.ts$|\.github/workflows/llvm-inprocess\.yml$)'; then
+          if echo "$files" | grep -qE '^(crates/perry-codegen/|crates/perry/src/commands/compile/|experiments/llvm-inprocess-spike/|benchmarks/app-patterns/kernels/batch\.ts$|\.github/workflows/(llvm-inprocess|compiler-runtime)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)'; then
             echo "relevant=true" >> "$GITHUB_OUTPUT"
           else
             echo "relevant=false" >> "$GITHUB_OUTPUT"

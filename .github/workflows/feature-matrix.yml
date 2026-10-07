@@ -1,18 +1,7 @@
 name: TypeScript Feature Matrix
 
 on:
-  # Advisory language-feature drift signal — NOT a required gate. Runs on a
-  # nightly schedule and on demand only; intentionally NOT on pull_request.
-  #
-  # The check regenerates the matrix and diffs it against the committed
-  # snapshot (test-features/feature_matrix.md), so any single regressed row
-  # (a probe that flips PASS/DIFF/RUNTIME-FAIL) fails it on *every* PR that
-  # touches the compiler, regardless of that PR's content. Surfacing drift as
-  # a red, required-looking check on unrelated PRs is noise; the nightly run
-  # plus the uploaded artifact/summary is the actual signal.
-  workflow_dispatch:
-  schedule:
-    - cron: "43 4 * * *"
+  workflow_call:
 
 permissions:
   contents: read

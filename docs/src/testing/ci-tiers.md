@@ -255,3 +255,10 @@ runs inside each shard (it is shard-safe by design); the threshold minimums and 
 per-module matrix trend run once in `parity-aggregate` over the merged report
 (`scripts/parity_report_merge.py`, which refuses a missing shard rather than
 shrinking the suite).
+
+
+## Workflow suite selection
+
+The **CI** Actions workflow defaults to `suite=core`, preserving the tiered `pr-gate`, `main-gate`, and `full-suite-gate`. Select `suite=coverage`, `suite=security-audit`, or another auxiliary ID to run that nested workflow independently; `suite=all` adds all auxiliary workflows to core CI. The `tier` selector continues to control core CI.
+
+Related scheduled suites appear under **GC**, **Compiler and Runtime**, **Compatibility**, **Integration**, **Performance**, **Documentation**, and **Maintenance**. Each parent offers `suite=all` or one child suite ID for a focused run. Schedules still select only their original suite. Maintenance defaults to offline workflow and monitor validation; use a named live suite only for the intended maintenance action.

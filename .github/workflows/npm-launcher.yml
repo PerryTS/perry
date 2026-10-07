@@ -8,16 +8,8 @@ name: npm launcher
 # Path-filtered: it only runs when the launcher or the install script changes.
 
 on:
-  pull_request:
-    paths:
-      - "npm/**"
-      - "packaging/install.sh"
-      - ".github/workflows/npm-launcher.yml"
-  workflow_dispatch:
+  workflow_call:
 
-# This workflow installs and executes published registry content (the platform
-# packages) — so it must not carry a writable token, and checkout must not leave
-# a git credential on disk for that content to find.
 permissions:
   contents: read
 

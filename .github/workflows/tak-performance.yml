@@ -5,11 +5,11 @@ name: tak Performance Report
 # stable history exists. This is separate from benchmark.yml's public
 # Node/Bun artifact and its macOS release regression gate.
 on:
-  push:
-    tags: ['v*']
-  workflow_dispatch:
-  schedule:
-    - cron: '30 4 * * *'
+  workflow_call:
+    secrets:
+      GITHUB_TOKEN:
+        description: "Repository token for report artifacts."
+        required: true
 
 permissions:
   contents: read

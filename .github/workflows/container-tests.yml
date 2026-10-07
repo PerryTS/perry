@@ -17,45 +17,20 @@ name: Container Tests
 # requiring a runtime; ubuntu-only for hermetic tests + fuzz.
 
 on:
-  push:
-    tags: ['v*']
-  pull_request:
-    branches: [main]
-    # PR arm is OPT-IN via the `run-extended-tests` label (job-level `if:`
-    # below); the paths filter still decides whether a run is created at
-    # all. Post-merge coverage is the nightly `schedule` -- the old
-    # `push: main` arm was 5 jobs (2 macOS) per merge that touched
-    # lower.rs / lower_call.rs, and the workflow has been red on every
-    # scheduled run since 2026-08-07 regardless.
-    types: [opened, synchronize, reopened, labeled]
-    paths:
-      - 'crates/perry-container-compose/**'
-      - 'crates/perry-container-e2e/**'
-      - 'crates/perry-stdlib/src/container/**'
-      - 'crates/perry-stdlib/tests/container_*'
-      - 'crates/perry-hir/src/lower.rs'
-      - 'crates/perry-hir/src/ir.rs'
-      - 'crates/perry-codegen/src/lower_call.rs'
-      - 'tests/e2e/**'
-      - 'types/perry/{container,compose,workloads}/**'
-      - '.github/workflows/container-tests.yml'
-  schedule:
-    # Nightly fuzz at 03:30 UTC
-    - cron: '30 3 * * *'
-  workflow_dispatch:
+  workflow_call:
     inputs:
       run_e2e:
         description: "Run e2e tests (Layer D)"
+        type: string
         required: false
         default: "false"
-        type: choice
-        options: ["true", "false"]
+        # Caller provides one of: true, false
       run_fuzz:
         description: "Run fuzz tests (Layer E)"
+        type: string
         required: false
         default: "false"
-        type: choice
-        options: ["true", "false"]
+        # Caller provides one of: true, false
 
 concurrency:
   # #7966: keyed per RUN for non-PR events. A group that is constant across
@@ -64,7 +39,7 @@ concurrency:
   # `cancel-in-progress`. PR runs keep the shared per-ref group so superseded
   # pushes still coalesce. Enforced by scripts/gc_gate_wiring_check.py.
   group: container-tests-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -301,7 +276,7 @@ jobs:
     # `push: main` arm is gone, so this is tags + manual now.
     if: |
       startsWith(github.ref, 'refs/tags/v') ||
-      github.event.inputs.run_e2e == 'true'
+      inputs.run_e2e == 'true'
     steps:
       - name: Checkout repository (inline git)
         shell: bash
@@ -382,7 +357,7 @@ jobs:
     runs-on: ubuntu-24.04
     if: |
       github.event_name == 'schedule' ||
-      github.event.inputs.run_fuzz == 'true'
+      inputs.run_fuzz == 'true'
     strategy:
       fail-fast: false
       matrix:

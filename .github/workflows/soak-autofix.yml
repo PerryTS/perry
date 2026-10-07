@@ -8,16 +8,12 @@ name: soak-autofix
 # human to delete two lines.
 
 on:
-  schedule:
-    # Daily, shortly after midnight UTC — annotations expire on date
-    # boundaries, so the fix lands the morning a window clears.
-    - cron: '17 0 * * *'
-  workflow_dispatch:
+  workflow_call:
+    secrets:
+      SOAK_AUTOFIX_TOKEN:
+        description: "Optional bot token for opening the soak fix pull request."
+        required: false
 
-permissions: {}
-
-# One run at a time: overlapping runs would race on the bot branch
-# force-push and the open-PR check.
 concurrency:
   # #7966: keyed per RUN for non-PR events. A group that is constant across
   # scheduled runs lets only the first one execute -- GitHub keeps at most one

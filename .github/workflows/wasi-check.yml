@@ -30,41 +30,7 @@ name: WASI Check
 #      smoke test requires every program to run and at least one to exist.
 
 on:
-  pull_request:
-    # Opt-in via the `run-extended-tests` label, like the other satellite
-    # gates (docs/src/testing/ci-tiers.md), and only when something that can
-    # break the WASI build changed.
-    types: [opened, synchronize, reopened, labeled]
-    paths:
-      - "crates/perry-runtime/**"
-      - "crates/perry-dispatch/**"
-      # The ABI table is built from the runtime, stdlib and ext crates, and
-      # the codegen job builds the perry driver and compiles gap programs.
-      - "crates/perry-stdlib/**"
-      - "crates/perry-ext-*/**"
-      - "crates/perry/**"
-      - "crates/perry-codegen/Cargo.toml"
-      - "test-files/test_gap_*.ts"
-      - ".github/actions/setup-llvm22/**"
-      - "Cargo.toml"
-      - ".cargo/**"
-      - "Cargo.lock"
-      - "rust-toolchain.toml"
-      - "scripts/wasi_check.sh"
-      - "scripts/runtime_abi_check.py"
-      - "scripts/wasi_ir_check.sh"
-      - "scripts/wasi_toolchain.sh"
-      - "scripts/wasi_build_runtime.sh"
-      - "scripts/wasi_smoke.sh"
-      - "scripts/wasi_smoke/**"
-      - "crates/perry-codegen/src/**"
-      - "crates/perry/src/commands/compile/**"
-      - ".github/workflows/wasi-check.yml"
-  # Main-line arm: one daily sweep, not one run per merge — see
-  # docs/src/testing/ci-gate-scheduling.md before adding `push: branches: [main]`.
-  schedule:
-    - cron: "41 2 * * *"
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

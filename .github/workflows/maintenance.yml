@@ -1,0 +1,201 @@
+name: Maintenance
+run-name: ${{ format('Maintenance / {0} / {1}', inputs.suite || 'scheduled', github.ref_name) }}
+on:
+  pull_request:
+    types:
+    - opened
+    - reopened
+    - synchronize
+    paths:
+    - .github/workflows/*.yml
+    - .github/workflows/ci-queue-reaper.yml
+    - .github/workflows/gate-failure-watch.yml
+    - .github/workflows/gate-freshness.yml
+    - .github/workflows/maintenance.yml
+    - .github/workflows/npm-publish-freshness.yml
+    - .github/workflows/soak-autofix.yml
+    - npm/**
+    - scripts/actions_catalog.json
+    - scripts/actions_plan.py
+    - scripts/check_gate_freshness.py
+    - scripts/check_npm_publish_freshness.py
+    - scripts/gate_failure_watch.json
+    - scripts/gate_failure_watch.py
+    - scripts/gate_freshness.json
+    - scripts/npm_publish_freshness.json
+  schedule:
+  - cron: 13,43 * * * *
+  - cron: 17 0 * * *
+  - cron: 20 7 * * *
+  - cron: 5 */2 * * *
+  workflow_run:
+    workflows:
+    - CI
+    - Compiler and Runtime
+    - GC
+    - Integration
+    - Performance
+    types:
+    - completed
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Offline validation by default; choose a live task explicitly.
+        type: choice
+        options:
+        - validate
+        - ci-queue-reaper
+        - gate-freshness
+        - soak-autofix
+        - npm-publish-freshness
+        default: validate
+      apply:
+        description: Apply queue cleanup; unchecked is dry run.
+        type: boolean
+        default: false
+permissions: {}
+concurrency:
+  group: maintenance-${{ github.event_name == 'pull_request' && github.ref || github.run_id
+    }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      plan: ${{ steps.route.outputs.plan }}
+      selection: ${{ steps.route.outputs.selection }}
+      module_inputs: ${{ steps.route.outputs.module_inputs }}
+      validate: ${{ steps.route.outputs.validate }}
+    steps:
+    - uses: ./.github/actions/perry/actions/checkout
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: '1'
+        persist-credentials: 'false'
+    - name: Route suites
+      id: route
+      env:
+        SUITE: ${{ inputs.suite }}
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_PATH: ${{ github.event_path }}
+        REF: ${{ github.ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=(--category maintenance --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+        if [[ "$EVENT_NAME" == "pull_request" ]]; then
+          python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+          args+=(--changed-files changed-files.txt)
+        fi
+        args+=(--suite "${SUITE:-}")
+        python3 scripts/actions_plan.py "${args[@]}"
+        pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
+        \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
+        \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
+        \ \"${args[@]}\"\n"
+  validate:
+    name: Offline workflow and monitor checks
+    needs: route
+    if: needs.route.result == 'success' && needs.route.outputs.validate == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+    - uses: ./.github/actions/perry/actions/checkout
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: '1'
+        persist-credentials: 'false'
+    - name: Install YAML parser for audit scripts
+      run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
+    - name: Run offline routing and monitor checks
+      run: 'set -euo pipefail
+
+        python3 scripts/test_actions_plan.py
+
+        python3 scripts/check_actions_topology.py
+
+        python3 scripts/check_gate_freshness.py --self-test
+
+        python3 scripts/gate_failure_watch.py --self-test
+
+        python3 scripts/gate_failure_watch.py --check-config
+
+        python3 scripts/check_npm_publish_freshness.py --self-test
+
+        python3 scripts/check_npm_publish_freshness.py --check-manifest
+
+        python3 scripts/gc_gate_wiring_check.py --self-test
+
+        python3 scripts/reap_stale_ci_runs.py --self-test
+
+        '
+  reject-nonmain-write:
+    name: Reject off-main maintenance writes
+    needs: route
+    if: always() && github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && (inputs.suite == 'gate-freshness' || inputs.suite == 'soak-autofix' || inputs.suite == 'npm-publish-freshness' || (inputs.suite == 'ci-queue-reaper' && inputs.apply))
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+    - name: Require main for live maintenance
+      run: |
+        echo "::error::${{ inputs.suite }} live maintenance may be dispatched only from refs/heads/main (got $GITHUB_REF). Queue cleanup is dry-run only off main."
+        exit 1
+
+  ci-queue-reaper:
+    name: ci-queue-reaper
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['ci-queue-reaper'] && (!inputs.apply || github.ref == 'refs/heads/main')
+    with:
+      apply: ${{ fromJSON(needs.route.outputs.module_inputs)['ci-queue-reaper'].apply
+        }}
+    permissions:
+      contents: read
+      actions: write
+      pull-requests: read
+    uses: ./.github/workflows/ci-queue-reaper.yml
+  gate-freshness:
+    name: gate-freshness
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-freshness']
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    uses: ./.github/workflows/gate-freshness.yml
+  gate-failure-watch:
+    name: gate-failure-watch
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-failure-watch']
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    uses: ./.github/workflows/gate-failure-watch.yml
+  soak-autofix:
+    name: soak-autofix
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['soak-autofix']
+    permissions:
+      contents: write
+      pull-requests: write
+    secrets:
+      SOAK_AUTOFIX_TOKEN: ${{ secrets.SOAK_AUTOFIX_TOKEN }}
+    uses: ./.github/workflows/soak-autofix.yml
+  npm-publish-freshness:
+    name: npm-publish-freshness
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-publish-freshness']
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/npm-publish-freshness.yml

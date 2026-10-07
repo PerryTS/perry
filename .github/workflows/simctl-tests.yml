@@ -7,18 +7,17 @@ name: Simulator Tests (iOS)
 # every PR.
 
 on:
-  push:
-    tags: ['v*']
-  workflow_dispatch:
+  workflow_call:
     inputs:
       device:
         description: "Simulator device name (default: iPhone 15)"
+        type: string
         required: false
         default: "iPhone 15"
 
 concurrency:
-  group: simctl-${{ github.ref }}
-  cancel-in-progress: true
+  group: simctl-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
@@ -100,7 +99,7 @@ jobs:
         run: ./scripts/run_simctl_tests.sh
         timeout-minutes: 45
         env:
-          DEVICE: ${{ github.event.inputs.device || 'iPhone 15' }}
+          DEVICE: ${{ inputs.device || 'iPhone 15' }}
 
       - name: Upload simctl logs
         if: always()

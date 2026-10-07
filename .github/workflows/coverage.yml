@@ -6,11 +6,7 @@ name: Coverage
 # regression gate. (#795 / part of #793.)
 
 on:
-  schedule:
-    # Mondays at 04:00 UTC — runs after the Sunday-night benchmark
-    # window so we don't fight a 1-vCPU runner with two long jobs.
-    - cron: "0 4 * * 1"
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -22,7 +18,7 @@ concurrency:
   # `cancel-in-progress`. PR runs keep the shared per-ref group so superseded
   # pushes still coalesce. Enforced by scripts/gc_gate_wiring_check.py.
   group: coverage-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always

@@ -1,4 +1,5 @@
 name: CI
+run-name: ${{ format('CI / {0} / {1}', inputs.suite || 'scheduled', github.ref_name) }}
 
 # ---------------------------------------------------------------------------
 # ONE workflow, THREE tiers. Which jobs run is decided by `scripts/ci_plan.py`
@@ -55,8 +56,17 @@ on:
     # the reliable arm; the push trigger stays for quiet periods. :47 to dodge
     # the contended :00 scheduler slot and the six-hourly satellite gates.
     - cron: '47 */2 * * *'
+    # Auxiliary workflows share this entrypoint but remain separate runs from
+    # the main CI gate; the route job turns core CI off for these schedules.
+    - cron: '0 4 * * 1'
+    - cron: '0 12 * * 1'
   workflow_dispatch:
     inputs:
+      suite:
+        description: 'Core CI or one auxiliary check.'
+        type: choice
+        options: [core, all, coverage, security-audit, zizmor, native-result-ledger, npm-launcher]
+        default: core
       tier:
         description: 'Which tier to run (release-packages.yml dispatches `full`)'
         type: choice
@@ -92,6 +102,44 @@ env:
   MACOSX_DEPLOYMENT_TARGET: "13.0"
 
 jobs:
+  route:
+    name: CI suite routing
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      plan: ${{ steps.route.outputs.plan }}
+      run_core: ${{ steps.route.outputs.run_core }}
+    steps:
+      - uses: ./.github/actions/perry/actions/checkout
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Route CI suites
+        id: route
+        env:
+          SUITE: ${{ inputs.suite }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          REF: ${{ github.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--category ci --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+            args+=(--changed-files changed-files.txt)
+          fi
+          args+=(--suite "${SUITE:-}")
+          python3 scripts/actions_plan.py "${args[@]}"
+
   # ---------------------------------------------------------------------------
   # plan: the one job that decides what this run does. ~20 s, no toolchain.
   # Everything below is `needs: plan` + `if: fromJSON(...).jobs.<x>`. If THIS
@@ -99,6 +147,8 @@ jobs:
   # `needs.plan.result != 'success'` -- a broken plan cannot silently pass.
   # ---------------------------------------------------------------------------
   plan:
+    needs: route
+    if: needs.route.result == 'success' && needs.route.outputs.run_core == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
@@ -349,11 +399,18 @@ jobs:
       # docs-only PRs skip the compile tier, an empty file listing is treated
       # as core, ...). The table in docs/src/testing/ci-tiers.md is generated
       # from it and must not drift.
+      - name: Install YAML parser for workflow topology tests
+        if: ${{ !cancelled() }}
+        run: python3 -m pip install --disable-pip-version-check PyYAML==6.0.2
+
       - name: CI plan policy self-test + docs table freshness
         if: ${{ !cancelled() }}
         run: |
           python3 scripts/ci_plan.py --self-test
           python3 scripts/ci_pr_files.py --self-test
+          python3 scripts/test_actions_plan.py
+          python3 scripts/check_actions_topology.py
+          python3 scripts/test_release_gate_runs.py
           python3 scripts/ci_cargo_test_shard.py --self-test
           python3 scripts/ci_compile_smoke_shard.py --self-test
           python3 scripts/ci_cargo_test_shard.py --package perry \
@@ -5111,7 +5168,46 @@ jobs:
     uses: ./.github/workflows/security-audit.yml
     permissions:
       contents: read
-    secrets: inherit
+
+  coverage:
+    name: coverage
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['coverage']
+    permissions:
+      contents: read
+    uses: ./.github/workflows/coverage.yml
+
+  security-weekly:
+    name: security-weekly
+    needs: route
+    if: needs.route.result == 'success' && needs.route.outputs.run_core != 'true' && fromJSON(needs.route.outputs.plan)['security-audit']
+    permissions:
+      contents: read
+    uses: ./.github/workflows/security-audit.yml
+
+  zizmor:
+    name: zizmor
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['zizmor']
+    permissions:
+      contents: read
+    uses: ./.github/workflows/zizmor.yml
+
+  native-result-ledger:
+    name: native-result-ledger
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['native-result-ledger']
+    permissions:
+      contents: read
+    uses: ./.github/workflows/native-result-ledger.yml
+
+  npm-launcher:
+    name: npm-launcher
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-launcher']
+    permissions:
+      contents: read
+    uses: ./.github/workflows/npm-launcher.yml
 
   # ---------------------------------------------------------------------------
   # THE fan-in. One job, one status, named by tier so the outside world can
@@ -5138,8 +5234,9 @@ jobs:
   # ---------------------------------------------------------------------------
   gate:
     name: ${{ github.event_name == 'pull_request' && 'pr-gate' || (needs.plan.outputs.tier == 'full' && 'full-suite-gate' || 'main-gate') }}
-    if: always()
+    if: always() && (github.event_name == 'pull_request' || needs.route.outputs.run_core == 'true')
     needs:
+      - route
       - plan
       - lint
       - check
@@ -5178,6 +5275,11 @@ jobs:
           echo "tier: ${TIER:-<plan did not run>}"
           echo "$NEEDS" | jq -r 'to_entries[] | "  \(.key): \(.value.result)"'
           plan_result="$(echo "$NEEDS" | jq -r '.plan.result')"
+          route_result="$(echo "$NEEDS" | jq -r '.route.result')"
+          if [ "$route_result" != "success" ]; then
+            echo "::error::the suite routing job did not succeed ($route_result)."
+            exit 1
+          fi
           if [ "$plan_result" != "success" ]; then
             echo "::error::the plan job did not succeed ($plan_result); nothing below it ran, so this is a red run, not a green one."
             exit 1

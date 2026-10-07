@@ -1,0 +1,124 @@
+name: GC
+run-name: ${{ format('GC / {0} / {1}', inputs.suite || 'scheduled', github.ref_name) }}
+on:
+  pull_request:
+    types:
+    - labeled
+    - opened
+    - reopened
+    - synchronize
+  push:
+    tags:
+    - v*
+  schedule:
+  - cron: 12 */6 * * *
+  - cron: 17 */6 * * *
+  - cron: 37 */6 * * *
+  - cron: 47 */6 * * *
+  - cron: 57 */6 * * *
+  - cron: 7 */6 * * *
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: GC suite or all suites.
+        type: choice
+        options:
+        - all
+        - gc-ratchet
+        - gc-moving-witnesses
+        - gc-native-roots
+        - gc-root-dominance
+        - gc-parse-churn-gate
+        - gc-ptr-shape-off-witness
+        default: all
+permissions: {}
+concurrency:
+  group: gc-${{ github.event_name == 'pull_request' && github.ref || github.run_id
+    }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      plan: ${{ steps.route.outputs.plan }}
+      selection: ${{ steps.route.outputs.selection }}
+      module_inputs: ${{ steps.route.outputs.module_inputs }}
+    steps:
+    - uses: ./.github/actions/perry/actions/checkout
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: '1'
+        persist-credentials: 'false'
+    - name: Route suites
+      id: route
+      env:
+        SUITE: ${{ inputs.suite }}
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_PATH: ${{ github.event_path }}
+        REF: ${{ github.ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=(--category gc --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+        if [[ "$EVENT_NAME" == "pull_request" ]]; then
+          python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+          args+=(--changed-files changed-files.txt)
+        fi
+        args+=(--suite "${SUITE:-}")
+        python3 scripts/actions_plan.py "${args[@]}"
+  gc-ratchet:
+    name: gc-ratchet
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-ratchet']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/gc-ratchet.yml
+  gc-moving-witnesses:
+    name: gc-moving-witnesses
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-moving-witnesses']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/gc-moving-witnesses.yml
+  gc-native-roots:
+    name: gc-native-roots
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-native-roots']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/gc-native-roots.yml
+  gc-root-dominance:
+    name: gc-root-dominance
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-root-dominance']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/gc-root-dominance.yml
+  gc-parse-churn-gate:
+    name: gc-parse-churn-gate
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-parse-churn-gate']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/gc-parse-churn-gate.yml
+  gc-ptr-shape-off-witness:
+    name: gc-ptr-shape-off-witness
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-ptr-shape-off-witness']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/gc-ptr-shape-off-witness.yml

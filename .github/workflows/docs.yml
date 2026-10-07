@@ -1,11 +1,11 @@
 name: Deploy Docs
 on:
-  # Deploy docs on release tags so the public site stays pinned to the
-  # latest released binary. Use workflow_dispatch to push out-of-band fixes
-  # (typos, clarifications) without waiting for the next release.
-  push:
-    tags: ['v*']
-  workflow_dispatch:
+  workflow_call:
+    secrets:
+      GITHUB_TOKEN:
+        description: "Repository token for documentation checkout."
+        required: true
+
 permissions:
   contents: read
   pages: write

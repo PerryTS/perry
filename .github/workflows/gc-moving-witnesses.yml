@@ -107,24 +107,7 @@ name: GC Moving Witnesses
 # there is no allowlist here to rot. A witness that goes red goes red.
 
 on:
-  pull_request:
-    # PR arm is OPT-IN via the `run-extended-tests` label (see the header of
-    # test.yml and docs/src/testing/ci-tiers.md): an unlabelled PR still gets
-    # a run, but every job in it is skipped, which costs no runner slot. The
-    # main-line arm (schedule / tags) is unchanged. `labeled` re-fires the run
-    # when the label lands.
-    types: [opened, synchronize, reopened, labeled]
-  # POST-MERGE ARM: staggered six-hourly sweep of `main`, NOT one run per merge.
-  # `push: branches: [main]` starved this gate and nine others for two days
-  # (#7856): ~29 jobs enqueued per merge at 58 merges/day against a ~9-job
-  # concurrency ceiling. The pull-request arm is unchanged -- every PR is still
-  # measured. ***DO NOT RESTORE `push: branches: [main]`.***
-  # Rationale, measurement and cost: docs/src/testing/ci-gate-scheduling.md
-  schedule:
-    - cron: "12 */6 * * *"
-  push:
-    tags: ["v*"]
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -232,7 +215,7 @@ jobs:
           # The filter exists only to spare docs-only PRs a compiler build. If
           # the listing is empty or the API failed, `set -e` already aborted, so
           # the job cannot silently fall through to "not relevant".
-          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|scripts/gc_matrix_fixture_env(_test)?\.py$|test-files/test_gap_gc_|test-parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/gc-moving-witnesses\.yml$)' changed.txt; then
+          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|scripts/gc_matrix_fixture_env(_test)?\.py$|test-files/test_gap_gc_|test-parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/(gc-moving-witnesses|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change touches collector-relevant paths; running the witnesses."
           else

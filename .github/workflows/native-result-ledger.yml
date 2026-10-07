@@ -1,20 +1,7 @@
 name: Native Result Ledger
 
 on:
-  pull_request:
-    paths:
-      - "crates/perry-codegen/src/lower_call/native_table/**"
-      - "scripts/native_result_ledger.py"
-      - "scripts/native_result_ledger.tsv"
-      - ".github/workflows/native-result-ledger.yml"
-  push:
-    branches: [main]
-    paths:
-      - "crates/perry-codegen/src/lower_call/native_table/**"
-      - "scripts/native_result_ledger.py"
-      - "scripts/native_result_ledger.tsv"
-      - ".github/workflows/native-result-ledger.yml"
-  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

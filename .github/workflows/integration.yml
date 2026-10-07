@@ -1,0 +1,159 @@
+name: Integration
+run-name: ${{ format('Integration / {0} / {1}', inputs.suite || 'scheduled', github.ref_name) }}
+on:
+  pull_request:
+    types:
+    - labeled
+    - opened
+    - reopened
+    - synchronize
+    paths:
+    - .github/actions/setup-llvm22/**
+    - .github/workflows/auto-opt-app-patterns.yml
+    - .github/workflows/container-tests.yml
+    - .github/workflows/integration.yml
+    - .github/workflows/next-app-route.yml
+    - .github/workflows/simctl-tests.yml
+    - .node-version
+    - Cargo.lock
+    - Cargo.toml
+    - benchmarks/app-patterns/**
+    - crates/**
+    - crates/perry-codegen/src/lower_call.rs
+    - crates/perry-container-compose/**
+    - crates/perry-container-e2e/**
+    - crates/perry-hir/src/ir.rs
+    - crates/perry-hir/src/lower.rs
+    - crates/perry-stdlib/src/container/**
+    - crates/perry-stdlib/tests/container_*
+    - scripts/actions_catalog.json
+    - scripts/actions_plan.py
+    - scripts/auto_opt_app_patterns.sh
+    - tests/e2e/**
+    - types/perry/compose/**
+    - types/perry/container/**
+    - types/perry/workloads/**
+  push:
+    tags:
+    - v*
+  schedule:
+  - cron: 17 3 * * *
+  - cron: 22 */6 * * *
+  - cron: 30 3 * * *
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: Integration suite or all suites.
+        type: choice
+        options:
+        - all
+        - container-tests
+        - simctl-tests
+        - next-app-route
+        - auto-opt-app-patterns
+        default: all
+      device:
+        description: Simulator device name.
+        type: string
+        default: iPhone 15
+      run_e2e:
+        description: Run container E2E tests.
+        type: choice
+        options:
+        - 'true'
+        - 'false'
+        default: 'false'
+      run_fuzz:
+        description: Run container fuzz tests.
+        type: choice
+        options:
+        - 'true'
+        - 'false'
+        default: 'false'
+permissions: {}
+concurrency:
+  group: integration-${{ github.event_name == 'pull_request' && github.ref || github.run_id
+    }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  route:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      plan: ${{ steps.route.outputs.plan }}
+      selection: ${{ steps.route.outputs.selection }}
+      module_inputs: ${{ steps.route.outputs.module_inputs }}
+    steps:
+    - uses: ./.github/actions/perry/actions/checkout
+      with:
+        ref: ${{ github.sha }}
+        fetch-depth: '1'
+        persist-credentials: 'false'
+    - name: Route suites
+      id: route
+      env:
+        SUITE: ${{ inputs.suite }}
+        GH_TOKEN: ${{ github.token }}
+        GITHUB_REPOSITORY: ${{ github.repository }}
+        EVENT_NAME: ${{ github.event_name }}
+        EVENT_PATH: ${{ github.event_path }}
+        REF: ${{ github.ref }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        args=(--category integration --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+        if [[ "$EVENT_NAME" == "pull_request" ]]; then
+          python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+          args+=(--changed-files changed-files.txt)
+        fi
+        args+=(--suite "${SUITE:-}")
+        python3 scripts/actions_plan.py "${args[@]}"
+        pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
+        \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
+        \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
+        \ \"${args[@]}\"\n"
+  container-tests:
+    name: container-tests
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['container-tests']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/container-tests.yml
+    with:
+      run_e2e: ${{ fromJSON(needs.route.outputs.module_inputs)['container-tests'].run_e2e
+        }}
+      run_fuzz: ${{ fromJSON(needs.route.outputs.module_inputs)['container-tests'].run_fuzz
+        }}
+  simctl-tests:
+    name: simctl-tests
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['simctl-tests']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/simctl-tests.yml
+    with:
+      device: ${{ fromJSON(needs.route.outputs.module_inputs)['simctl-tests'].device
+        }}
+  next-app-route:
+    name: next-app-route
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['next-app-route']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/next-app-route.yml
+  auto-opt-app-patterns:
+    name: auto-opt-app-patterns
+    needs: route
+    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['auto-opt-app-patterns']
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/auto-opt-app-patterns.yml

@@ -8,10 +8,7 @@ name: Next App Route dylib
 # then promote it — a gate that has never been green must not be made required
 # (CLAUDE.md, "a *new* gate has never been green").
 on:
-  workflow_dispatch:
-  schedule:
-    # 03:17 UTC daily, off the hour to avoid the Actions scheduling spike.
-    - cron: "17 3 * * *"
+  workflow_call:
 
 permissions:
   contents: read

@@ -45,6 +45,14 @@ rules:
       # manifests at the next tag). Tracked as follow-up.
       - release-packages.yml
 
+  dangerous-triggers:
+    ignore:
+      # The only workflow_run listener is Maintenance. Its observer caller runs
+      # only for the five allowlisted upstream names after route validation,
+      # and the child fetches trusted main instead of upstream code/artifacts.
+      # Keep this exception scoped to that one observer entrypoint.
+      - maintenance.yml
+
   # 2026-08-05: three findings, all audit-confidence Low, all of them the one
   # `LLVM_SYS_221_PREFIX=<prefix>` line that setup-llvm22 exists to write —
   # once per platform arm. This gate went red at #7353, the commit that

@@ -18,12 +18,7 @@ name: Node Compat Matrix Guard
 # runs nightly + on demand today, and the merge_group trigger is INERT until a
 # maintainer enables the merge queue in branch protection.
 on:
-  workflow_dispatch:
-  schedule:
-    # Nightly, offset from node-suite-guard (37 4) and the Core Subset Radar
-    # (17 3) to avoid overlap.
-    - cron: "57 4 * * *"
-  merge_group:
+  workflow_call:
 
 permissions:
   contents: read
