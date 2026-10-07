@@ -1,8 +1,14 @@
 # Native-payload zlib validation (#11919)
 
-Acceptance record against origin/main `78e2ab97e7`. The measured production
-implementation is `df52c29508`, which contains that main revision; the final
-crate suites include the subsequent test-only improvements in `f58706d1e7`.
+Final head is rebased onto origin/main `31bbc3da48`. Final current-main
+acceptance is **blocked**: both main and the rebased lane fail release builds
+and the four-crate test command with the same 15 perry-parser SWC errors.
+Tests do not start. The isolated ext-zlib release check passes with Brotli 9.
+
+The functional and performance tables below are historical evidence against
+`78e2ab97e7`, not acceptance claims for `31bbc3da48`. Their measured production
+implementation was `df52c29508`; final suites included test-only improvements
+in `f58706d1e7`. Those commits were rewritten by the final clean rebase.
 
 The eleven codecs now use one runtime Transform state machine. Codecs own only
 native workspace and bounded scratch behind PayloadVTable/StreamHooks, with
@@ -76,7 +82,7 @@ slow-consumer TS witness is measured independently. Queue/workspace bounds
 and clean-process RSS are measured separately; no global
 memory-policy workaround or masked producer baseline is used.
 
-## Current-main comparisons
+## Last buildable-main comparisons (`78e2ab97e7`)
 
 The release build and the four final crate suites have zero new failures:
 
@@ -222,7 +228,7 @@ qb6 measurement cores, hashes, output checks, huge-page samples and companion
 collection counts. They are kept with the lane evidence under the approved
 scratchpad directory.
 
-## Final acceptance and evidence
+## Historical performance acceptance and evidence
 
 The two instruction increases above the initial control floors are explained
 and bounded: hello's once-per-process relocation work and commander's generic
@@ -247,3 +253,34 @@ consumer RSS, and THP-off diagnostic are recorded above rather than asserting
 that a 1 KB → 100 MB gzip or a total-RSS <32 KiB process is possible. The four
 remaining gap failures also fail on main. Baseline buffer_heavy and the two
 streaming gzip micro workloads fail functionally, so they supply no gated A/B.
+
+## Final rebase and upstream verification block
+
+The final fetch found nine dependency-only main commits after `78e2ab97e7`:
+SWC common/AST/parser/codegen major updates, llvm-sys 231, Brotli 9, thiserror 2,
+notify 8 and a minor/patch dependency group. The lane rebased cleanly onto
+`31bbc3da4814720bcd12fb73044ff3f49362289b`; no project versions were bumped.
+
+| Current-main check | Main `31bbc3da48` | Rebased lane |
+|---|---|---|
+| Requested four-package release build | FAIL: 15 perry-parser errors | Same 15 errors |
+| runtime/stdlib/codegen/ext-zlib test command | Compile fails; no tests run | Same compile failure |
+| Isolated ext-zlib release library check | Not used as an acceptance substitute | PASS, including Brotli 9 |
+| Final gap/Node program rerun | Blocked by compiler build | Blocked by compiler build |
+| Final n=5 current-main A/B | Blocked | Blocked |
+
+`current-main-build-errors.json` compares all fifteen diagnostic codes,
+messages and source locations and asserts equality between arms. The parser
+source is unchanged by this lane. Failures are E0053 visitor signature type
+mismatches, E0308 SWC type mismatches and E0599 missing VisitMutWith methods.
+The host has LLVM 21/22 and no LLVM 23; parser failures occur first, so the
+missing newer toolchain is not claimed as the observed failure. Logs are
+`main-31bbc-build.log`, `head-31bbc-build.log`, `main-31bbc-crates.log`,
+`head-31bbc-crates.log` and `head-31bbc-ext-check.log` in the evidence copy.
+
+No dependency rollback or unrelated parser migration is included. Current-main
+crate/gap/oracle/performance verification must be rerun after the upstream
+SWC dependency set builds; the historical program table must not be used to
+ship against the newer dependency baseline. The canonical bundle is rebased
+and refreshed against the final origin/main. Owned targets are deleted after
+preserving the receipts.
