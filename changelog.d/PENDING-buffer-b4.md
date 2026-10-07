@@ -12,7 +12,7 @@ Removed:
 - the residual-prototype entries for byte cells;
 - the emitted PERRY_U8_INLINE_CACHE and PERRY_TA_KIND_CACHE, together with js_u8_resolve_read_data.
 
-The buffer-layout source ratchet drops from 282 sites to 18. The remaining 18 are in fetch and stream files and are left for their owners.
+The buffer-layout source ratchet drops from 272 sites to 15. The remaining 15 are in fetch and stream files and are left for their owners.
 
 Emitted typed and byte reads guard one header word and then resolve the owner's data. Loops hoist (data, length) and keep both the receiver and the owner live across statepoints. They refresh after calls and polls.
 
