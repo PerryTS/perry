@@ -5555,17 +5555,71 @@ pub(crate) fn prune_dead_shape_keys_young(is_dead_owner: &dyn Fn(usize) -> bool)
             kept.push(keys);
             continue;
         }
-        inner.indices.remove(&addr);
-        let ids: Vec<u32> = inner
-            .families
-            .get(&keys)
-            .map(|ids| ids.as_slice().to_vec())
-            .unwrap_or_default();
-        for id in ids {
-            remove_descriptor_indexed_under(&mut inner, id, keys);
-        }
+        retire_shape_keys_entries(&mut inner, keys);
     }
     inner.young_keys.extend(kept);
+}
+
+/// Decide what happens to a keys address just drained from the young log
+/// (#12098). Apart from the young prune, which retires a provably dead
+/// owner's entries in the same step, this is the only place a drained address
+/// is dropped instead of re-logged. It leaves the log in one of two ways:
+///
+/// * A minor can no longer act on it: the keys array is old, or it is
+///   longlived with only immortal key leaves. Its entries stay in the table,
+///   unlogged. No minor can move or kill that keys array, and the full walk
+///   visits every entry.
+/// * Its memory no longer belongs to this thread's GC heap: the block that
+///   held it was released, or the malloc sweep freed it. Nothing lives at the
+///   address, so its slot index and its family leave together with the log
+///   entry. If they stayed, no prune could ever remove them, because every
+///   dead-owner probe skips an address it cannot attribute. They would come
+///   back, unlogged, as soon as the address was reused: a rule-2 panic in a
+///   debug build, and in a release build a stale slot index answering for a
+///   different keys array.
+///
+/// Otherwise the address is re-logged into `kept`.
+fn relog_or_retire_shape_keys(
+    table: &ShapeTable,
+    inner: &mut ShapeTableInner,
+    kept: &mut Vec<u64>,
+    keys: u64,
+) {
+    if shape_keys_address_left_heap(keys) {
+        retire_shape_keys_entries(inner, keys);
+    } else if shape_keys_entry_is_minor_relevant(table, inner, keys) {
+        kept.push(keys);
+    }
+}
+
+/// True when a keys address the young log named no longer belongs to this
+/// thread's GC heap. The answer only means something for a LOGGED address.
+/// The log names only addresses that were minor-collectible when they were
+/// noted (`note_young_keys`, `note_shape_carrier_candidate`), so an address
+/// that now classifies nowhere has left the heap; it was not outside it all
+/// along. Address 0 is the keyless family and is never logged.
+fn shape_keys_address_left_heap(keys: u64) -> bool {
+    let addr = keys as usize;
+    addr != 0
+        && matches!(
+            crate::arena::classify_heap_space(addr),
+            crate::arena::HeapSpace::Unknown
+        )
+        && !crate::gc::young_log::addr_is_minor_collectible(addr)
+}
+
+/// Remove everything indexed under a dead keys address: its slot index and
+/// every descriptor in its family.
+fn retire_shape_keys_entries(inner: &mut ShapeTableInner, keys: u64) {
+    inner.indices.remove(&(keys as usize));
+    let ids: Vec<u32> = inner
+        .families
+        .get(&keys)
+        .map(|ids| ids.as_slice().to_vec())
+        .unwrap_or_default();
+    for id in ids {
+        remove_descriptor_indexed_under(inner, id, keys);
+    }
 }
 
 /// Metadata-only forwarding repair for the weak descriptor table and
@@ -5592,6 +5646,14 @@ pub(crate) fn scan_shape_table_rekey_mut(visitor: &mut crate::gc::RuntimeRootVis
     if visitor.young_scope() {
         scan_shape_table_young(visitor, table, &mut inner, rewrite_phase);
         return;
+    }
+    // The full walk rebuilds the log from the tables at the end. Before that,
+    // settle what the log named, so an address that left the heap takes its
+    // entries with it here too. The rebuild below discards `relogged`.
+    let drained = inner.young_keys.take_sorted();
+    let mut relogged = Vec::new();
+    for keys in drained {
+        relog_or_retire_shape_keys(table, &mut inner, &mut relogged, keys);
     }
     let table_len = (inner.families.len() + inner.indices.len()) as u64;
     let mut moved_families: Vec<(u64, u64)> = Vec::new();
@@ -5758,9 +5820,10 @@ fn relevant_shape_keys(table: &ShapeTable, inner: &ShapeTableInner) -> Vec<u64> 
 /// Exact minor-work predicate for one shape-table key.
 ///
 /// Nursery addresses must be rekeyed even for weak metadata entries. Malloc
-/// arrays must be rooted when a carrier owns the family. A Longlived keys
-/// array never moves or dies, so it matters only while a rooted family exposes
-/// a collectible property-key leaf from its payload. Property keys are
+/// arrays must be rooted when a carrier owns the family, and they stay
+/// relevant without one because a minor's malloc sweep can free them. A
+/// Longlived keys array never moves or dies, so it matters only while a rooted
+/// family exposes a collectible property-key leaf from its payload. Property keys are
 /// strings/symbol headers and both are GC leaves; tracing through an immortal
 /// key cannot discover a younger grandchild.
 fn shape_keys_entry_is_minor_relevant(
@@ -5778,9 +5841,13 @@ fn shape_keys_entry_is_minor_relevant(
         | crate::arena::HeapSpace::Survivor1
         | crate::arena::HeapSpace::PromotedYoung => return true,
         crate::arena::HeapSpace::Old => return false,
+        // A tracked malloc keys array: a minor sweep can free it, so it stays
+        // logged, with or without a carrier, until that happens and
+        // `relog_or_retire_shape_keys` retires its entries. Dropping it while
+        // it is still collectible would leave its entries for good once the
+        // sweep frees it (#12098).
         crate::arena::HeapSpace::Unknown => {
-            return family_has_root_carrier(table, inner, keys)
-                && crate::gc::young_log::addr_is_minor_collectible(addr);
+            return crate::gc::young_log::addr_is_minor_collectible(addr);
         }
         crate::arena::HeapSpace::Longlived => {}
     }
@@ -5844,11 +5911,8 @@ fn scan_shape_table_young(
                 continue;
             }
             visited += 1;
-            let (post, relevant) =
-                scan_shape_keys_address(visitor, table, inner, rewrite_phase, keys);
-            if relevant {
-                kept.push(post);
-            }
+            let post = scan_shape_keys_address(visitor, table, inner, rewrite_phase, keys);
+            relog_or_retire_shape_keys(table, inner, &mut kept, post);
             // The family moves in the MARK pass (a carrier's `visit_usize_slot`
             // copies the keys array) while the slot index is re-keyed only in
             // the REWRITE pass, so between the two the index still sits under
@@ -5873,15 +5937,19 @@ fn scan_shape_table_young(
 }
 
 /// Visit one keys address — its family and its slot index — with the same
-/// per-entry body as the full walk. Returns the post-visit address and
-/// whether the keys array can still matter to a minor.
+/// per-entry body as the full walk. Returns the post-visit address, which the
+/// caller settles with [`relog_or_retire_shape_keys`]. An address that has
+/// left the heap is not visited; the caller retires its entries.
 fn scan_shape_keys_address(
     visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
     table: &ShapeTable,
     inner: &mut ShapeTableInner,
     rewrite_phase: bool,
     indexed: u64,
-) -> (u64, bool) {
+) -> u64 {
+    if shape_keys_address_left_heap(indexed) {
+        return indexed;
+    }
     let mut post = indexed;
     let ids: Vec<u32> = inner
         .families
@@ -5947,7 +6015,7 @@ fn scan_shape_keys_address(
             inner.indices.remove(&addr);
         }
     }
-    (post, shape_keys_entry_is_minor_relevant(table, inner, post))
+    post
 }
 
 // #8112 sabotage switch. Suppressing the descriptor edge proves the fixture's
