@@ -12,9 +12,7 @@ impl FunctionBagEdit {
     #[inline]
     pub(crate) fn new(owner: usize) -> Option<Self> {
         if !crate::closure::is_closure_ptr(owner) {
-            if unsafe { crate::value::addr_class::try_read_tracked_gc_header(owner) }
-                .is_some_and(|h| crate::gc::is_byte_family_type(unsafe { h.as_ref() }.obj_type))
-            {
+            if crate::buffer::header::is_owned_byte_cell(owner) {
                 let no_move = crate::gc::GcSuppressScope::new();
                 return Some(Self {
                     owner,

@@ -1321,9 +1321,7 @@ pub(crate) fn handle_accessor_descriptor_keys(handle: usize) -> Vec<String> {
 /// descriptors in the program) walk, per enumeration, to decide whether a
 /// per-index `enumerable` check was needed at all.
 pub(crate) fn owner_has_property_descriptors(owner: usize) -> bool {
-    if unsafe { crate::value::addr_class::try_read_tracked_gc_header(owner) }
-        .is_some_and(|h| crate::gc::is_byte_family_type(unsafe { h.as_ref() }.obj_type))
-    {
+    if crate::buffer::header::is_owned_byte_cell(owner) {
         let bag = unsafe { crate::buffer::store::bag(owner) };
         return !bag.is_null() && owner_has_property_descriptors(bag as usize);
     }
@@ -1356,9 +1354,7 @@ pub(crate) fn owner_has_property_descriptors(owner: usize) -> bool {
 }
 
 pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
-    if unsafe { crate::value::addr_class::try_read_tracked_gc_header(obj) }
-        .is_some_and(|h| crate::gc::is_byte_family_type(unsafe { h.as_ref() }.obj_type))
-    {
+    if crate::buffer::header::is_owned_byte_cell(obj) {
         let bag = unsafe { crate::buffer::store::bag(obj) };
         return if bag.is_null() {
             Vec::new()

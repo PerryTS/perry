@@ -535,9 +535,7 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
     // receiver) records it in its meta record. Non-object owners fall through
     // to the residual registry.
     unsafe {
-        if crate::value::addr_class::try_read_tracked_gc_header(obj_ptr)
-            .is_some_and(|h| crate::gc::is_byte_family_type(h.as_ref().obj_type))
-        {
+        if crate::buffer::header::is_owned_byte_cell(obj_ptr) {
             crate::buffer::store::bag_set(
                 obj_ptr,
                 crate::buffer::store::PROTOTYPE_KEY,
@@ -660,15 +658,13 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
     // a residual registry entry (the write path classifies identically), so
     // a miss for a shaped object is authoritative.
     unsafe {
-        if crate::value::addr_class::try_read_tracked_gc_header(obj_ptr)
-            .is_some_and(|h| crate::gc::is_byte_family_type(h.as_ref().obj_type))
-        {
-            return crate::buffer::store::bag_get(obj_ptr, crate::buffer::store::PROTOTYPE_KEY)
-                .map(f64::to_bits);
-        }
         if let Some(obj) = meta_capable_object(obj_ptr) {
             let bits = crate::object::shapes::object_prototype_word(obj);
             return (bits != 0).then_some(bits);
+        }
+        if crate::buffer::header::is_owned_byte_cell(obj_ptr) {
+            return crate::buffer::store::bag_get(obj_ptr, crate::buffer::store::PROTOTYPE_KEY)
+                .map(f64::to_bits);
         }
     }
     if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
