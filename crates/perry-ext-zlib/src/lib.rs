@@ -558,6 +558,7 @@ mod tests {
 
     #[test]
     fn external_native_dispatch_routes_async_gzip_callback() {
+        let _agent = crate::stream::OwnAgent::enter();
         DISPATCH_CALLBACK_FIRED.with(|fired| fired.set(false));
         DISPATCH_CALLBACK_OK.with(|ok| ok.set(false));
 
@@ -586,6 +587,7 @@ mod tests {
 
     #[test]
     fn external_dispatch_accepts_options_and_honors_level_zero() {
+        let _agent = crate::stream::OwnAgent::enter();
         extern "C" fn callback(
             _closure: *const RawClosureHeader,
             _this: perry_ffi::JsThis,
@@ -627,6 +629,63 @@ mod tests {
             perry_runtime::timer::js_event_loop_check_phase();
         }
         assert!(DISPATCH_CALLBACK_FIRED.with(Cell::get));
+    }
+
+    static PLAIN_THREAD_CALLBACKS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    extern "C" fn count_plain_thread_callback(
+        _closure: *const RawClosureHeader,
+        _this: perry_ffi::JsThis,
+        _err: f64,
+        _value: f64,
+    ) -> f64 {
+        PLAIN_THREAD_CALLBACKS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        f64::from_bits(JsValue::UNDEFINED.bits())
+    }
+
+    /// Queue a one-shot gzip on the calling thread; optionally run its check
+    /// phase. Both threads below act for the primary agent from their own
+    /// arenas, as any thread that is not a worker does.
+    fn queue_plain_thread_one_shot(run: bool) {
+        let scope = perry_ffi::TransientRootScope::enter();
+        let callback = scope.root_nanbox(f64::from_bits(
+            JsValue::from_object_ptr(alloc_closure(
+                perry_ffi::js_function_info!(count_plain_thread_callback, 2; with_declared(2)),
+                0,
+            ))
+            .bits(),
+        ));
+        let data = scope.root_nanbox(f64::from_bits(
+            JsValue::from_object_ptr(alloc_buffer(b"plain thread")).bits(),
+        ));
+        let args = [data.get(), callback.get()];
+        unsafe {
+            js_ext_zlib_native_dispatch(b"gzip".as_ptr(), 4, args.as_ptr(), args.len());
+        }
+        if run {
+            perry_runtime::timer::js_event_loop_check_phase();
+        }
+    }
+
+    /// A thread's exit frees its arena, and the next thread's arena may reuse
+    /// those addresses. An immediate the exited thread left queued must go
+    /// with it: run later it called a dead closure, or a TypeError on whatever
+    /// object the next thread allocated there.
+    #[test]
+    fn plain_thread_exit_drops_its_queued_one_shots() {
+        PLAIN_THREAD_CALLBACKS.store(0, std::sync::atomic::Ordering::SeqCst);
+        std::thread::spawn(|| queue_plain_thread_one_shot(false))
+            .join()
+            .unwrap();
+        std::thread::spawn(|| queue_plain_thread_one_shot(true))
+            .join()
+            .unwrap();
+        assert_eq!(
+            PLAIN_THREAD_CALLBACKS.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "only the live thread's callback runs"
+        );
     }
 
     // End-to-end TS smoke tests cover the FFI Buffer allocation path.

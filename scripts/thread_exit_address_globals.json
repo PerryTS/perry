@@ -3553,14 +3553,6 @@
    "why": "#[cfg(test)] function-local RegistryAddrFilter fixture (concurrent_filter_admits_never_drop_an_address) fed synthetic 0x5_0000_0000-range integers; test-only. | (second declaration) #[cfg(test)] function-local RegistryAddrFilter fixture (filter_admit_is_visible_to_another_thread) admitting the synthetic constant 0x9_0000_1000; test-only."
   },
   {
-   "file": "crates/perry-stdlib/src/zlib.rs",
-   "names": [
-    "NEXT_ZLIB_ID"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Monotonic i64 handle counter in the ZLIB handle band (next_zlib_id, zlib.rs:786-797)."
-  },
-  {
    "file": "crates/perry-runtime/src/node_submodules/mod.rs",
    "names": [
     "SUBMOD_REGISTRY"
@@ -3908,23 +3900,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "Maps a Rust-owned PathBuf to the code address of a compiled worker module's <module>__init, which the generated main registers through js_worker_threads_register_entry (a ptrtoint of the function) before any module runs; no heap address."
-  },
-  {
-   "file": "crates/perry-stdlib/src/zlib/tables.rs",
-   "names": [
-    "ALL_ZLIB_TABLES"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "hook": "release_zlib_in_freed_ranges",
-   "why": "Agent id -> a Box::leak'd ZlibTables (never freed, in no arena) whose streams' .pipe(dest) targets, .on(event, cb) closures and queued callback closures are heap words of the thread that set them. The range hook checks every agent's tables and drops a stream whose pipes or listeners lie in the freed ranges (with its listeners and Data/End/Error events) and a queued callback whose closure does. release_zlib_tables_of_agent, a retire hook, also empties a retired agent's tables and removes its entry."
-  },
-  {
-   "file": "crates/perry-stdlib/src/zlib/tables.rs",
-   "names": [
-    "FREE_ZLIB_TABLES"
-   ],
-   "verdict": "process_global_allocation",
-   "why": "Addresses of Box::leak'd ZlibTables sets (Rust heap, never freed, in no arena) that release_zlib_tables_of_agent emptied when their agent retired; tables() hands them to the next agent that needs tables. Thread exit cannot free them."
   },
   {
    "file": "crates/perry-runtime/src/regex.rs",

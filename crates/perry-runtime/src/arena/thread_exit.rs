@@ -133,6 +133,7 @@ pub(crate) fn release_freed_ranges(ranges: &[(usize, usize)]) {
     crate::object::release_global_this_ptr_in_freed_ranges(&freed);
     crate::promise::native_async::release_native_async_tokens_in_freed_ranges(&freed);
     crate::typed_feedback::release_typed_feedback_in_freed_ranges(&freed);
+    crate::timer::release_timers_in_freed_ranges(&freed);
     // -- end perry-runtime tables --
     // Copied out so a hook may itself take locks without holding this one.
     let hooks: Vec<fn(&FreedRanges)> = RANGE_HOOKS

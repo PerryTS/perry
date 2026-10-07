@@ -39,6 +39,7 @@ extern "C" fn one_shot(_: *const RawClosureHeader, _: JsThis, err: f64, output: 
 
 #[test]
 fn ten_thousand_one_shots_keep_captures_through_a_collection_before_run() {
+    let _agent = super::OwnAgent::enter();
     clear();
     ONE_SHOTS.with(|n| n.set(0));
     ONE_SHOT_ERRORS.with(|v| v.borrow_mut().clear());
@@ -213,6 +214,7 @@ fn factory(name: &str, opts: f64) -> f64 {
 }
 #[test]
 fn a_fresh_factory_installs_its_inherited_methods_without_a_stream_import() {
+    let _agent = super::OwnAgent::enter();
     if std::env::var("PERRY_TEST_ZLIB_FRESH_FACTORY").is_err() {
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "stream::runtime_tests::a_fresh_factory_installs_its_inherited_methods_without_a_stream_import", "--nocapture"])
@@ -250,6 +252,7 @@ fn a_fresh_factory_installs_its_inherited_methods_without_a_stream_import() {
 }
 #[test]
 fn constructor_fields_survive_collection_before_the_last_write_state() {
+    let _agent = super::OwnAgent::enter();
     if std::env::var("PERRY_TEST_ZLIB_CONSTRUCTOR_GC").is_err() {
         let result = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", "stream::runtime_tests::constructor_fields_survive_collection_before_the_last_write_state", "--nocapture"])
@@ -335,6 +338,7 @@ fn options() -> f64 {
 }
 #[test]
 fn eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion() {
+    let _agent = super::OwnAgent::enter();
     let input: Vec<_> = (0..100000).map(|i| (i % 251) as u8).collect();
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(options());
@@ -398,6 +402,7 @@ fn eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion() {
 }
 #[test]
 fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
+    let _agent = super::OwnAgent::enter();
     clear();
     let _barriers = CompiledBarriers::new();
     let copies_before = perry_runtime::gc::copying_minor_cycles();
@@ -455,6 +460,7 @@ fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
 }
 #[test]
 fn brotli_destroy_inside_data_releases_before_gc_and_closes_once_later() {
+    let _agent = super::OwnAgent::enter();
     clear();
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(options());
@@ -476,6 +482,7 @@ fn brotli_destroy_inside_data_releases_before_gc_and_closes_once_later() {
 }
 #[test]
 fn every_decoder_reports_corrupt_input_then_close() {
+    let _agent = super::OwnAgent::enter();
     let roots = TransientRootScope::enter();
     let opts = roots.root_nanbox(options());
     for name in [
@@ -594,6 +601,7 @@ fn rss() -> usize {
 #[test]
 #[ignore = "full Z8: 50,000 completions per codec plus 50,000 immediate destroys"]
 fn fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss() {
+    let _agent = super::OwnAgent::enter();
     clear();
     let _barriers = CompiledBarriers::new();
     let copies_before = perry_runtime::gc::copying_minor_cycles();
