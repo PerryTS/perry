@@ -1228,6 +1228,22 @@ fn specialized_typed_parameter_keeps_its_own_owner_root() {
             specialized.contains("asm sideeffect"),
             "{mode}: owner not live after call"
         );
+        let extent = specialized
+            .lines()
+            .find(|line| line.contains("; bytes.spec.extent.hoist "))
+            .unwrap();
+        let length = format!("%{}", extent.split("length=").nth(1).unwrap().trim());
+        assert!(
+            specialized.contains(&format!("{length} = alloca i32")),
+            "{mode}: sealed extent must have a scalar preheader home:\n{specialized}"
+        );
+        assert!(
+            specialized
+                .lines()
+                .any(|line| line.trim_start().starts_with("store i32 ")
+                    && line.ends_with(&format!(", ptr {length}"))),
+            "{mode}: actual owner length was not hoisted:\n{specialized}"
+        );
     });
 }
 
@@ -1246,5 +1262,17 @@ fn dropping_specialized_owner_root_turns_the_invariant_red() {
     assert!(
         !child.status.success(),
         "missing specialized owner root must be detected"
+    );
+}
+
+#[test]
+fn dropping_specialized_extent_hoist_turns_the_invariant_red() {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "codegen::ordinary_param_guard_tests::specialized_typed_parameter_keeps_its_own_owner_root", "--nocapture"])
+        .env("PERRY_B4_SABOTAGE", "spec_extent").output().unwrap();
+    assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+    assert!(
+        !child.status.success(),
+        "loss of the extent hoist must be detected"
     );
 }

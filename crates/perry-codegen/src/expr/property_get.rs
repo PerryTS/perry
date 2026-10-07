@@ -359,7 +359,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .unwrap_or(-8);
             let blk = ctx.block();
             let len_i32 = if let Some(length_slot) = length_slot.as_ref() {
-                blk.load(I32, length_slot)
+                if length_fixed {
+                    blk.load_invariant(I32, length_slot)
+                } else {
+                    blk.load(I32, length_slot)
+                }
             } else {
                 let data_ptr = blk.load(PTR, &ptr_slot);
                 let header_ptr = blk.gep(I8, &data_ptr, &[(I32, &length_offset.to_string())]);
