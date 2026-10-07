@@ -233,14 +233,12 @@ pub(crate) fn map_header_moved_for_gc(old_addr: usize, new_addr: usize) {
 pub(crate) fn finalize_dead_copied_minor_from_space_maps() -> usize {
     let mut count = 0;
     crate::arena::walk_map_allocations(true, |header| unsafe {
-        if (*header).gc_flags
-            & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_FORWARDED | crate::gc::GC_FLAG_PINNED)
-            == 0
-        {
-            let map = header
-                .cast::<u8>()
-                .add(crate::gc::GC_HEADER_SIZE)
-                .cast::<MapHeader>();
+        let map = header
+            .cast::<u8>()
+            .add(crate::gc::GC_HEADER_SIZE)
+            .cast::<MapHeader>();
+        let space = crate::arena::classify_heap_space(map as usize);
+        if crate::gc::minor_side_owner_is_dead(&*header, space) {
             if !(*map).store.is_null() {
                 finalize_map_side_allocation_for_gc(map);
                 count += 1;

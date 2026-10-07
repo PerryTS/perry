@@ -381,24 +381,7 @@ pub(crate) unsafe fn finalize_set_side_allocation_for_gc(set: *mut SetHeader) {
 }
 
 fn is_dead_copied_minor_from_space_set(addr: usize) -> bool {
-    let space = crate::arena::classify_heap_space(addr);
-    if !matches!(space, crate::arena::HeapSpace::NurseryEden)
-        && space != crate::arena::active_survivor_space()
-    {
-        return false;
-    }
-    if addr < crate::gc::GC_HEADER_SIZE {
-        return false;
-    }
-    unsafe {
-        let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*header).obj_type != crate::gc::GC_TYPE_SET {
-            return false;
-        }
-        let flags = (*header).gc_flags;
-        flags & crate::gc::GC_FLAG_ARENA != 0
-            && flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_FORWARDED) == 0
-    }
+    crate::gc::owner_is_dead_copied_minor_from_space_of_type(addr, crate::gc::GC_TYPE_SET)
 }
 
 /// #6010: registry-driven finalization of DEAD Sets at sweep entry — the Set

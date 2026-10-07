@@ -178,22 +178,37 @@ pub(crate) fn owner_is_dead_copied_minor_from_space_of_type(addr: usize, obj_typ
 
 fn owner_is_dead_copied_minor_from_space(addr: usize, expected_obj_type: Option<u8>) -> bool {
     let space = crate::arena::classify_heap_space(addr);
-    if !matches!(space, crate::arena::HeapSpace::NurseryEden)
-        && space != crate::arena::active_survivor_space()
-    {
-        return false;
-    }
-    if addr < GC_HEADER_SIZE {
+    if !is_minor_from_space(space) || addr < GC_HEADER_SIZE {
         return false;
     }
     // The space classification is backed by this thread's live arena page
     // ranges, so the header read is on mapped arena memory.
     let header = unsafe { &*((addr - GC_HEADER_SIZE) as *const GcHeader) };
-    if !owner_type_matches(header, expected_obj_type) {
-        return false;
-    }
+    owner_type_matches(header, expected_obj_type) && minor_side_owner_is_dead(header, space)
+}
+
+/// Eden or the active survivor half: the spaces a copying minor evacuates.
+#[inline]
+fn is_minor_from_space(space: crate::arena::HeapSpace) -> bool {
+    space == crate::arena::HeapSpace::NurseryEden || space == crate::arena::active_survivor_space()
+}
+
+/// #12141: the one rule for "this side-allocation owner died in the copying
+/// minor that is running now". Every from-space finalizer and prune asks it.
+/// `space` is the class of the block that holds `header`.
+///
+/// Only a from-space object can die in a minor, and only an unmarked,
+/// unforwarded, unpinned one. An in-place promotion retags the young blocks
+/// as `PromotedYoung` before this runs, so their objects are never dead here:
+/// an untraced promotion marks nothing, and treating its unmarked live
+/// objects as dead freed the store of a live Map. A traced promotion's dead
+/// objects are left to the old generation. TENURED is old-generation by
+/// definition (`Old ⟹ TENURED`), so it is never minor garbage either.
+pub(crate) fn minor_side_owner_is_dead(header: &GcHeader, space: crate::arena::HeapSpace) -> bool {
     let flags = header.gc_flags;
-    flags & GC_FLAG_ARENA != 0 && flags & (GC_FLAG_MARKED | GC_FLAG_FORWARDED) == 0
+    is_minor_from_space(space)
+        && flags & GC_FLAG_ARENA != 0
+        && flags & (GC_FLAG_MARKED | GC_FLAG_FORWARDED | GC_FLAG_PINNED | GC_FLAG_TENURED) == 0
 }
 
 #[inline]
