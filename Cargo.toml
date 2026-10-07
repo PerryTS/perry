@@ -383,7 +383,7 @@ swc_ecma_transforms_typescript = "55.0"
 # We'll use libgc-sys or similar
 
 # Utilities
-thiserror = "1.0"
+thiserror = "2.0"
 anyhow = "1.0"
 log = "0.4"
 clap = { version = "4.5", features = ["derive"] }
@@ -507,7 +507,7 @@ dialoguer = "0.12"
 
 # File system
 walkdir = "2.4"
-notify = "6.1"
+notify = "8.2"
 
 # HTTP. No tokio-ecosystem crate is declared here any more: `tokio`,
 # `tokio-tungstenite`, `tokio-rustls`, `reqwest`, `hyper` and `hyper-util` were
