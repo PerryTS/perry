@@ -25,21 +25,6 @@ fn remember_class_keys(class_id: u32, field_count: u32, keys: crate::object::Obj
         .class_keys_by_id
         .borrow_mut()
         .insert(class_id, (keys.arr() as usize, field_count, keys.count()));
-    // #6759 C5a: harvest this class's declared instance-field names into
-    // the process-wide name-hash set the per-key inline-guard vetting
-    // consults — and retro-check them against prototype-level descriptor
-    // keys installed BEFORE this class registered (module-init ordering
-    // must not create an unsound skip).
-    unsafe {
-        let count = field_count.min(keys.count()) as usize;
-        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-        for i in 0..count {
-            let v = keys.get(i as u32);
-            if let Some(b) = crate::string::js_string_key_bytes(v, &mut sso) {
-                super::descriptor_state::note_declared_instance_field_name(b);
-            }
-        }
-    }
 }
 
 /// GC root scanner: rewrite each remembered keys-array address across a move.

@@ -51,26 +51,4 @@ fn function_attribute_writes_are_owned_by_the_bag() {
     assert_eq!(accessor_descriptor_keys_for_obj(closure), vec!["custom"]);
     clear_accessor_descriptor(closure, "custom");
     assert!(get_accessor_descriptor(closure, "custom").is_none());
-    assert!(!state()
-        .descriptors
-        .property_descriptors
-        .borrow()
-        .keys()
-        .any(|(owner, _)| *owner == closure));
-    assert!(!state()
-        .descriptors
-        .attr_keys_by_owner
-        .borrow()
-        .contains_key(&closure));
-    assert!(!state()
-        .descriptors
-        .accessor_descriptors
-        .borrow()
-        .keys()
-        .any(|(owner, _)| *owner == closure));
-    assert!(!state()
-        .descriptors
-        .accessor_keys_by_owner
-        .borrow()
-        .contains_key(&closure));
 }

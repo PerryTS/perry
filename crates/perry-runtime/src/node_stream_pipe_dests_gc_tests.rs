@@ -62,9 +62,7 @@ fn fan_out_after_collecting_listener(
         crate::arena::ProtectionModeGuard::set(crate::arena::FromSpaceProtection::PoisonOnly);
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    crate::gc::gc_register_mutable_root_scanner(
-        crate::object::descriptor_state::scan_descriptor_roots_mut,
-    );
+
     COLLECTIONS.with(|count| count.set(0));
     SEEN.with(|seen| seen.borrow_mut().clear());
 

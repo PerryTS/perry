@@ -145,8 +145,7 @@ pub(crate) use class_meta::{
 };
 #[cfg(test)]
 pub(crate) use prototype_methods::{
-    class_prototype_fast_guards_invalidated, CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED,
-    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD,
+    CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED, CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD,
 };
 
 // ── prototype_methods.rs ────────────────────────────────────────────────────

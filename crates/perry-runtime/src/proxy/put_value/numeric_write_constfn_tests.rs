@@ -51,7 +51,7 @@ fn assert_family(array: f64, keys: [f64; 2], lanes: u64) {
 fn numeric_write_guards_refuse_constfn_targets_and_preserve_mixed_shapes() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_gc = crate::gc::GcSuppressScope::new();
-    crate::object::descriptor_state::test_reset_class_field_inline_guard();
+
     const CLASS: u32 = 0x5c68_09;
     let names = b"cf_numeric_method\0cf_numeric_any\0cf_numeric_f64\0";
     let keys =

@@ -125,9 +125,7 @@ pub(crate) fn set_field_by_name_object_tail(
             // fresh array reusing a freed address (its `_reserved` zeroed at
             // allocation) skips this lookup and can't fire a previous tenant's
             // stale accessor.
-            if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
-                && crate::state::state().descriptors.accessors_in_use.get()
-            {
+            if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
                 if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                     if acc.set != 0 {
                         let closure = (acc.set & crate::value::POINTER_MASK)

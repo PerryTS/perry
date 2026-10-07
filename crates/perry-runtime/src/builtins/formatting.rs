@@ -1187,7 +1187,7 @@ unsafe fn format_object_as_json(
     //   - non-enumerable + !showHidden → skip
     // See #1200.
     let show_hidden = inspect_show_hidden();
-    let descriptors_in_use = crate::object::descriptors_in_use();
+    let descriptors_in_use = crate::object::owner_has_property_descriptors(obj_ptr as usize);
 
     let mut string_parts: Vec<(String, String)> = Vec::with_capacity(key_count);
 

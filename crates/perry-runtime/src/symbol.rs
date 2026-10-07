@@ -1278,7 +1278,7 @@ pub(crate) fn store_object_symbol_property_root(
 ) -> bool {
     note_symbol_key_installed(sym_key);
     note_symbol_owner_installed(obj_key);
-    let _function_bag = crate::object::descriptor_state::FunctionBagEdit::new(obj_key);
+    let _holder_edit = crate::object::descriptor_state::HolderEdit::new(obj_key);
     if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
         let existed = unsafe { crate::object::shaped_symbols::entry(obj_key, sym_key) };
         let entry = existed.unwrap_or(0) & !crate::object::key_attrs::ENTRY_ACCESSOR_MASK;

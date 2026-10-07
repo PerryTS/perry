@@ -148,14 +148,7 @@ fn an_ordinary_objects_accessor_lives_in_its_slot() {
             get,
             "the pair is in the key's slot"
         );
-        assert!(
-            !crate::state::state()
-                .descriptors
-                .accessor_descriptors
-                .borrow()
-                .contains_key(&(obj as usize, "acc".to_string())),
-            "an ordinary object's accessor never reaches the owner table"
-        );
+
         assert_eq!(
             crate::object::get_accessor_descriptor(obj as usize, "acc").map(|a| a.get),
             Some(get)

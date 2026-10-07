@@ -585,30 +585,10 @@ unsafe fn materialize_class_prototype(obj: *const ObjectHeader) {
     crate::object::class_registry::class_decl_prototype_value(class_id);
 }
 
-/// Could a [[Get]] of `name` on `obj` run an accessor? The read-side form of
-/// `method_site::key_may_be_accessor`: a data property's attributes
-/// (non-enumerable, read-only, non-configurable: the meta record's
-/// `attr_key_bits`) do not change what a Get answers, so only the accessor
-/// Bloom bit short-cuts, and the authoritative descriptor state decides the
-/// rest. `%Object.prototype%.constructor` and every class prototype's methods
-/// are non-enumerable data properties.
+/// Accessor identity is a fact of the holder shape. Changing the entry
+/// publishes a new ShapeId and retires every memo of the previous holder.
 unsafe fn key_may_be_accessor(obj: *const ObjectHeader, name: &[u8]) -> bool {
-    let meta = (*obj).meta;
-    if !meta.is_null() {
-        let bit = 1u64 << (crate::object::key_bytes_hash(name.as_ptr(), name.len()) & 63);
-        if (*meta).accessor_key_bits & bit != 0 {
-            return true;
-        }
-    }
-    if crate::object::descriptor_state::object_has_descriptors(obj as usize) {
-        let Ok(name) = std::str::from_utf8(name) else {
-            return true;
-        };
-        if crate::object::descriptor_state::get_accessor_descriptor(obj as usize, name).is_some() {
-            return true;
-        }
-    }
-    false
+    crate::object::key_attrs::object_key_is_accessor(obj, name)
 }
 
 /// [`holder_name_admitted`] for an ordinary read site's receiver. The

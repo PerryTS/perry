@@ -943,7 +943,7 @@ pub(crate) unsafe fn stringify_value_depth(
 /// `enumerable: false` descriptor (`Object.defineProperty`, `freeze`/`seal`,
 /// or a builtin descriptor such as `Uint8Array.prototype.BYTES_PER_ELEMENT`),
 /// so the caller must skip it. Callers gate this behind
-/// `crate::object::descriptors_in_use()` so the common no-descriptor object
+/// `true` so the common no-descriptor object
 /// pays only a single relaxed atomic load and never touches the descriptor map.
 pub(crate) unsafe fn json_key_non_enumerable(
     obj: *const crate::ObjectHeader,

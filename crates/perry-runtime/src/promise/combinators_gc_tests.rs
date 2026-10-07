@@ -32,9 +32,7 @@ pub(in crate::promise) fn moving_gc() -> MovingGc {
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     crate::gc::gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
-    crate::gc::gc_register_mutable_root_scanner(
-        crate::object::descriptor_state::scan_descriptor_roots_mut,
-    );
+
     THEN_GETTER_CALLS.with(|count| count.set(0));
     THEN_THIS.with(|this| this.set(0));
     guards

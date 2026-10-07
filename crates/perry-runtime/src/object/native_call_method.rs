@@ -1754,7 +1754,7 @@ pub(crate) unsafe fn native_call_method_tower(
     // yield-star-* with `get next()`). `get_accessor_descriptor` is a cheap
     // keyed HashMap lookup (no deref), gated on the accessor hot-path flag so
     // non-accessor programs skip it entirely.
-    if jsval().is_pointer() && crate::state::state().descriptors.accessors_in_use.get() {
+    if jsval().is_pointer() {
         let obj_usize = crate::value::js_nanbox_get_pointer(object()) as usize;
         if crate::value::addr_class::is_above_handle_band(obj_usize) {
             if let Some(acc) = crate::object::get_accessor_descriptor(obj_usize, method_name) {

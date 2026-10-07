@@ -1589,8 +1589,8 @@ fn tower_route_is_guarded_by_the_class_shape_id() {
     assert!(
         guard_body
             .iter()
-            .any(|l| l.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED")),
-        "the routed call must also honour the sticky inline-guard latch:\n{guard_body:#?}"
+            .all(|l| !l.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED")),
+        "the routed call must use shape facts without a process latch:\n{guard_body:#?}"
     );
 }
 

@@ -872,12 +872,6 @@
       "why": "Source order for Symbol-keyed class members: HashMap<(class_id, SymbolHeader::id, is_static), u32>. The u64 is the symbol's stable id (read once at registration in record_class_symbol_member_order), NOT its address, so the table needs no re-key when a Symbol is evacuated; the value is an order index. The member values themselves live in CLASS_SYMBOL_METHODS/CLASS_SYMBOL_ACCESSORS, which scan_class_symbol_member_keys_mut visits and rewrite_class_symbol_method_key_if_forwarded re-keys."
     },
     {
-      "file": "crates/perry-runtime/src/object/descriptor_state.rs",
-      "name": "TEST_SUPPRESS_DESCRIPTOR_YOUNG_NOTE",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9976: the descriptor-table twin of TEST_SUPPRESS_CLOSURE_YOUNG_NOTE \u2014 a `Cell<bool>` test seam, not a pointer."
-    },
-    {
       "file": "crates/perry-runtime/src/object/field_get_set/exotic_named_read.rs",
       "name": "ORDINARY_PROBES",
       "verdict": "test_only",

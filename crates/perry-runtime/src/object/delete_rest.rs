@@ -276,7 +276,7 @@ pub extern "C" fn js_object_delete_field(
                     }
                     // Deleting an accessor from a class/Object prototype changes
                     // method resolution for this key just like installing it.
-                    super::descriptor_state::disable_inline_guards_for_descriptor_target(
+                    super::descriptor_state::invalidate_prototype_descriptor_guards(
                         obj as usize,
                         name,
                     );
@@ -391,10 +391,7 @@ pub extern "C" fn js_object_delete_field(
                 }
                 // A configurable data method on a class/Object prototype is about
                 // to disappear. Retire only this name's direct-method guards.
-                super::descriptor_state::disable_inline_guards_for_descriptor_target(
-                    obj as usize,
-                    name,
-                );
+                super::descriptor_state::invalidate_prototype_descriptor_guards(obj as usize, name);
             }
         }
 

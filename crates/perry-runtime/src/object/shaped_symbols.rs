@@ -5,17 +5,12 @@ use super::*;
 pub(crate) const PRIVATE_ENTRY: u8 = 0x40;
 
 pub(crate) unsafe fn owner(addr: usize) -> Option<*mut ObjectHeader> {
-    let header = crate::value::addr_class::try_read_tracked_gc_header(addr)?;
-    match header.as_ref().obj_type {
-        crate::gc::GC_TYPE_OBJECT => Some(addr as *mut ObjectHeader),
-        crate::gc::GC_TYPE_CLOSURE
-            if header.as_ref().gc_flags & crate::gc::GC_FLAG_FORWARDED == 0 =>
-        {
-            let bag = crate::closure::props::bag_of(addr);
-            (!bag.is_null()).then_some(bag)
-        }
-        _ => None,
-    }
+    let bag = if crate::value::addr_class::try_read_tracked_gc_header(addr).is_some() {
+        descriptor_state::descriptor_holder(addr)
+    } else {
+        super::handle_expando::handle_property_bag(addr as i64)
+    };
+    (!bag.is_null()).then_some(bag)
 }
 
 pub(crate) unsafe fn position(obj: *const ObjectHeader, symbol: usize) -> Option<u32> {
@@ -36,8 +31,8 @@ pub(crate) unsafe fn get(addr: usize, symbol: usize) -> Option<u64> {
 /// Root all operands while publishing the shared layout and growing storage.
 /// Existing symbol keys share exactly the same indexed store as string keys.
 pub(crate) unsafe fn define(addr: usize, symbol: usize, bits: u64, entry: u8) -> bool {
-    let _function_bag = descriptor_state::FunctionBagEdit::new(addr);
-    if _function_bag.is_some() {
+    let _holder_edit = descriptor_state::HolderEdit::new(addr);
+    if _holder_edit.is_some() {
         crate::closure::shape::note_function_own_state_changed(addr);
     }
     let Some(obj) = owner(addr) else {
@@ -135,7 +130,7 @@ pub(crate) unsafe fn entry(addr: usize, symbol: usize) -> Option<u8> {
 }
 
 pub(crate) unsafe fn set_entry(addr: usize, symbol: usize, entry: u8) {
-    let _function_bag = descriptor_state::FunctionBagEdit::new(addr);
+    let _holder_edit = descriptor_state::HolderEdit::new(addr);
     let Some(obj) = owner(addr) else {
         return;
     };
@@ -183,8 +178,8 @@ pub(crate) unsafe fn accessor(addr: usize, symbol: usize) -> Option<(u64, u64)> 
 }
 
 pub(crate) unsafe fn define_accessor(addr: usize, symbol: usize, get: u64, set: u64) -> bool {
-    let _function_bag = descriptor_state::FunctionBagEdit::new(addr);
-    if _function_bag.is_some() {
+    let _holder_edit = descriptor_state::HolderEdit::new(addr);
+    if _holder_edit.is_some() {
         crate::closure::shape::note_function_own_state_changed(addr);
     }
     let Some(owner) = owner(addr) else {
@@ -241,7 +236,7 @@ pub(crate) unsafe fn define_accessor(addr: usize, symbol: usize, get: u64, set: 
 }
 
 pub(crate) unsafe fn delete(addr: usize, symbol: usize) -> bool {
-    let _function_bag = descriptor_state::FunctionBagEdit::new(addr);
+    let _holder_edit = descriptor_state::HolderEdit::new(addr);
     let Some(obj) = owner(addr) else {
         return false;
     };

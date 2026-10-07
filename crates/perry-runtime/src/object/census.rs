@@ -30,23 +30,5 @@ pub(crate) fn object_tables_census() -> Vec<crate::gc::census::SideTableRow> {
         SHAPE_INLINE_CACHE_SIZE,
         SHAPE_INLINE_CACHE_SIZE * std::mem::size_of::<ShapeCacheEntry>(),
     ));
-    {
-        let m = st.descriptors.property_descriptors.borrow();
-        let inner: usize = m.keys().map(|(_, k)| k.capacity()).sum();
-        rows.push((
-            "object.property_descriptors",
-            m.len(),
-            map_bytes(&m) + inner,
-        ));
-    }
-    {
-        let m = st.descriptors.accessor_descriptors.borrow();
-        let inner: usize = m.keys().map(|(_, k)| k.capacity()).sum();
-        rows.push((
-            "object.accessor_descriptors",
-            m.len(),
-            map_bytes(&m) + inner,
-        ));
-    }
     rows
 }

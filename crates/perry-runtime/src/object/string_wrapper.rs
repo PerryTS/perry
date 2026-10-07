@@ -190,18 +190,7 @@ mod tests {
                 assert_eq!(length(owner), Some(4096));
                 let physical_keys_view = crate::object::object_keys(owner as *const ObjectHeader);
                 assert_eq!(physical_keys_view.count(), 1, "only length is stored");
-                assert_eq!(
-                    crate::state::state()
-                        .descriptors
-                        .property_descriptors
-                        .borrow()
-                        .keys()
-                        .filter(|(ptr, _)| *ptr == owner)
-                        .count(),
-                    0,
-                    "indices must not populate descriptor_state (and `length`'s \
-                     attributes live with the keys, charter step 3)",
-                );
+
                 assert!(has_index(owner, "4095"));
                 assert!(!has_index(owner, "4096"));
                 assert!(!has_index(owner, "01"));

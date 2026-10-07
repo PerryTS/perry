@@ -40,9 +40,7 @@ fn moving_gc() -> MovingGc {
     };
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    crate::gc::gc_register_mutable_root_scanner(
-        crate::object::descriptor_state::scan_descriptor_roots_mut,
-    );
+
     WRITES.with(|count| count.set(0));
     ENDS.with(|count| count.set(0));
     COLLECT_IN_WRITE.with(|flag| flag.set(false));

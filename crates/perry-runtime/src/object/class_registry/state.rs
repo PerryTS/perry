@@ -942,7 +942,7 @@ pub(crate) fn builtin_parent_ctor_in_chain(class_id: u32) -> Option<f64> {
 /// Reverse lookup: which declared class's `.prototype` is this heap object?
 /// Used by `Object.getOwnPropertyDescriptor(C.prototype, name)` to surface
 /// vtable accessors as own properties of the prototype object, and by
-/// `descriptor_state::disable_inline_guards_for_descriptor_target` on every
+/// `descriptor_state::invalidate_prototype_descriptor_guards` on every
 /// `Object.defineProperty`.
 ///
 /// Callers ask about arbitrary objects (#9180: on a bundled application most

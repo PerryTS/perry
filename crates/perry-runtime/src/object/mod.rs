@@ -366,20 +366,16 @@ pub use class_meta_registry::{
 };
 #[cfg(test)]
 pub(crate) use descriptor_state::test_may_have_descriptor_entry;
-pub use descriptor_state::PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED;
 pub(crate) use descriptor_state::{
-    accessor_descriptor_keys_for_obj, class_field_inline_guard_enabled,
-    class_instance_set_may_intercept, clear_accessor_descriptor, clear_property_attrs,
-    constructor_accessor_ever_installed, define_builtin_data_property, descriptors_in_use,
-    disable_class_field_inline_guard, get_accessor_descriptor, get_property_attrs,
-    install_fresh_accessor_property, json_object_getter_value, mark_all_keys,
+    accessor_descriptor_keys_for_obj, class_instance_set_may_intercept, clear_accessor_descriptor,
+    clear_property_attrs, define_builtin_data_property, get_accessor_descriptor,
+    get_property_attrs, install_fresh_accessor_property, json_object_getter_value, mark_all_keys,
     object_has_descriptors, object_proto_may_intercept_key, own_descriptors_skip_key,
     owner_has_property_descriptors, owner_may_have_descriptor_entries,
     plain_custom_prototype_may_intercept, plain_data_write_may_intercept,
-    prune_dead_descriptor_owner_entries, prune_dead_descriptor_owner_entries_young,
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
-    set_builtin_accessor_pair, set_builtin_property_attrs, set_property_attrs,
-    transfer_descriptor_owner, AccessorDescriptor, DescriptorTables, PropertyAttrs,
+    set_builtin_accessor_pair, set_builtin_property_attrs, set_property_attrs, AccessorDescriptor,
+    PropertyAttrs,
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
@@ -1822,9 +1818,7 @@ const _: () = assert!(
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
 pub(crate) mod cell_meta;
-pub(crate) use cell_meta::{
-    cell_expando_ensure, cell_expando_get, cell_meta_slot, cell_meta_slot_for_header,
-};
+pub(crate) use cell_meta::{cell_expando_ensure, cell_expando_get, cell_meta_slot};
 // `cell_has_meta_edge` is `#[cfg(test)]` in `cell_meta`, so its re-export
 // must be too or the import is unresolved in a non-test build.
 #[cfg(test)]

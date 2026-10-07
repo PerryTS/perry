@@ -1468,7 +1468,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 // Accessor-only named properties (defineProperty {get/set})
                 // live solely in the accessor side table — include the
                 // enumerable ones.
-                if super::super::descriptors_in_use() {
+                {
                     for name in accessor_descriptor_keys_for_obj(owner) {
                         if super::super::canonical_array_index(&name).is_some()
                             || named.contains(&name)

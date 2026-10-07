@@ -1300,7 +1300,7 @@ fn js_object_get_own_property_names_shape(obj_value: f64) -> f64 {
                     }
                     // Accessor-only named properties (defineProperty {get/set})
                     // are own keys too (gOPN includes non-enumerable).
-                    if super::descriptors_in_use() {
+                    {
                         for name in super::accessor_descriptor_keys_for_obj(ap as usize) {
                             if super::canonical_array_index(&name).is_some()
                                 || named.contains(&name)

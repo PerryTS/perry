@@ -124,7 +124,6 @@ unsafe fn try_data_lookup_key(
     // the WTF-8-aware slow path; no String is allocated for ordinary keys.
     std::str::from_utf8(key).ok()?;
     let key_hash = super::key_bytes_hash(key.as_ptr(), key.len());
-    let accessor_bit = 1u64 << (key_hash & 63);
     let mut object = receiver.as_pointer::<ObjectHeader>();
     let mut inherited = false;
     for _ in 0..32 {
@@ -196,11 +195,8 @@ unsafe fn try_data_lookup_key(
         if !meta.is_null() && (*meta).elements != 0 {
             return None;
         }
-        // A data slot can remain underneath an accessor. A clear Bloom bit
-        // proves no accessor for THIS key; collisions conservatively decline.
-        // Same summary as descriptor_state::may_have_descriptor_entry; the
-        // receiver has already been classified, so do not classify it again.
-        if meta.is_null() || (*meta).accessor_key_bits & accessor_bit == 0 {
+        // The shape entry decides whether this own slot contains data.
+        if !super::key_attrs::object_key_is_accessor(object, key) {
             let keys = keys as usize as *const crate::array::ArrayHeader;
             if !keys.is_null() {
                 // Public reads skip intrinsic and class-private entries.

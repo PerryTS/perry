@@ -143,6 +143,6 @@ fn empty_checkpoint_delivers_recorded_finalization_job() {
     .join();
     // `js_gc_init` disables the process-wide class-field inline gate in test
     // builds; the spawned thread does not isolate that, so restore it.
-    crate::object::descriptor_state::test_reset_class_field_inline_guard();
+
     result.unwrap();
 }

@@ -1999,22 +1999,6 @@
    "why": "OnceLock<(usize,usize)> caching major-GC pacing floor bytes and growth numerator from env; config."
   },
   {
-   "file": "crates/perry-runtime/src/object/descriptor_state.rs",
-   "names": [
-    "DECLARED_FIELD_NAME_HASHES"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Set of FNV hashes of declared instance-field names, written at class registration; hashes, not addresses."
-  },
-  {
-   "file": "crates/perry-runtime/src/object/descriptor_state.rs",
-   "names": [
-    "PROTO_DESCRIPTOR_KEY_HASHES"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Set of FNV key-name hashes installed on prototype descriptor targets; hashes, not addresses."
-  },
-  {
    "file": "crates/perry-runtime/src/pty/reactor.rs",
    "names": [
     "PTY_EVENT_QUEUE"
