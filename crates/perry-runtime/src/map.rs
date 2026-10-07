@@ -289,12 +289,32 @@ static TEST_MAP_SIDE_DEALLOCATIONS: std::sync::atomic::AtomicU64 =
 static TEST_MAP_SIDE_DEALLOCATED_BYTES: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
 
+// The same counts for the current thread only. Map heaps are per-thread, so a
+// test that collects on its own thread can assert exact deltas here while
+// other test threads free Maps in parallel.
+#[cfg(test)]
+std::thread_local! {
+    static TEST_THREAD_MAP_SIDE_DEALLOCATIONS: std::cell::Cell<(u64, u64)> =
+        const { std::cell::Cell::new((0, 0)) };
+}
+
 #[cfg(test)]
 fn note_test_map_side_deallocation(bytes: usize) {
     use std::sync::atomic::Ordering;
 
     TEST_MAP_SIDE_DEALLOCATIONS.fetch_add(1, Ordering::Relaxed);
     TEST_MAP_SIDE_DEALLOCATED_BYTES.fetch_add(bytes as u64, Ordering::Relaxed);
+    // `try_with`: a store can drop during thread-exit TLS teardown.
+    let _ = TEST_THREAD_MAP_SIDE_DEALLOCATIONS.try_with(|count| {
+        let (frees, freed) = count.get();
+        count.set((frees + 1, freed + bytes as u64));
+    });
+}
+
+/// (frees, bytes) of Map side storage released on the current thread.
+#[cfg(test)]
+pub(crate) fn test_thread_map_side_deallocation_snapshot() -> (u64, u64) {
+    TEST_THREAD_MAP_SIDE_DEALLOCATIONS.with(std::cell::Cell::get)
 }
 
 #[cfg(not(test))]
