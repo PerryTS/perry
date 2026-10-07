@@ -1050,28 +1050,33 @@ const fn buffer_family_type_info(type_id: u8, name: &'static str) -> GcTypeInfo 
     )
 }
 
-const FIRST_CORE_TYPE_GAP: u8 = {
+/// One bit per type id that has a `GcTypeInfo`, derived at compile time from
+/// the same descriptor table tracing uses. The type ids are no longer one
+/// dense run (core kinds, then the byte-family block at 0x40), so header
+/// admission tests a constant bit instead of loading a table entry.
+const GC_TYPE_KNOWN_BITS: u128 = {
     let infos = byte_type_infos();
-    let mut kind = 1usize;
-    while kind < infos.len() && infos[kind].type_id != 0 {
+    let mut bits = 0u128;
+    let mut kind = 0usize;
+    while kind < infos.len() {
+        if infos[kind].type_id != 0 {
+            bits |= 1u128 << kind;
+        }
         kind += 1;
     }
-    kind as u8
+    bits
 };
+const _: () = assert!(MALLOC_KIND_BUCKET_COUNT <= 128);
 
-/// Header admission uses the same metadata as tracing. The dense initial
-/// range is derived at compile time so ordinary arrays/objects do not pay a
-/// sparse-table load after the byte brands move to the type-byte block.
+/// Header admission uses the same metadata as tracing: a type id is known
+/// exactly when it has a descriptor.
 #[inline(always)]
 pub(crate) fn gc_type_is_known(obj_type: u8) -> bool {
     #[cfg(test)]
     if obj_type == 10 && crate::buffer::bytes::b4_sabotage("retired_type_admission") {
         return true;
     }
-    if obj_type.wrapping_sub(1) < FIRST_CORE_TYPE_GAP - 1 {
-        return true;
-    }
-    gc_type_info(obj_type).is_some()
+    obj_type < 128 && (GC_TYPE_KNOWN_BITS >> obj_type) & 1 != 0
 }
 
 #[inline]
