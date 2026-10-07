@@ -28,6 +28,12 @@ on:
     - cron: 17 0 * * *
     - cron: 20 7 * * *
     - cron: 5 */2 * * *
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/maintenance.yml
+      - scripts/delete_retired_workflow_runs.py
   workflow_run:
     workflows:
       - CI
@@ -657,7 +663,12 @@ jobs:
   delete-retired-runs:
     name: Delete completed runs from retired workflows
     needs: route
-    if: ${{ needs.route.result == 'success' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.suite == 'delete-retired-runs' && inputs.confirm_delete_retired_runs }}
+    if: >-
+      ${{
+        needs.route.result == 'success' && github.ref == 'refs/heads/main' &&
+        ((github.event_name == 'workflow_dispatch' && inputs.suite == 'delete-retired-runs' && inputs.confirm_delete_retired_runs) ||
+         github.event_name == 'push')
+      }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
     permissions:
