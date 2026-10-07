@@ -73,6 +73,21 @@ fn marked_prototype() -> usize {
     proto as usize
 }
 
+/// `CopyingNurseryTestGuard` starts with an empty root scanner registry. But
+/// `Object.setPrototypeOf` and `Object.getPrototypeOf` on a builtin owner build
+/// intrinsics lazily inside the window, and that mints key strings in the
+/// thread's string atom table. Without that table's scanner, a copying minor
+/// frees the atoms while the table still names them. The next intrinsic build
+/// then takes a freed address as a key, and a key list later reads a garbage
+/// length from it, up to the end of the 2 MiB block (#12137). Register the
+/// key tables as production does: the atom and intern table holds its strings,
+/// and the shape table and canonical keys trie follow moved keys arrays.
+fn register_key_table_scanners() {
+    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
+}
+
 fn forget_owners(owners: &[usize]) {
     crate::object::prototype_chain::prune_dead_object_prototype_owners(&|owner| {
         owners.contains(&owner)
@@ -91,6 +106,7 @@ fn test_lazy_array_explicit_prototype_survives_a_copying_minor() {
     // slots: a store outside the pushed frame is a silent no-op (#7184).
     let _guard = CopyingNurseryTestGuard::new(2);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_key_table_scanners();
 
     let lazy = nursery_lazy_array(b"[1,2,3]");
     assert_eq!(
@@ -194,6 +210,7 @@ fn test_suppressing_the_residual_owner_bit_loses_the_prototype() {
     let _latch = ArrayPrototypeLatchRestore::capture();
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_key_table_scanners();
 
     let owner = crate::array::js_array_alloc(4) as usize;
     let obj_type = obj_type_at(owner);
@@ -263,6 +280,7 @@ fn test_residual_prototype_owners_of_every_movable_kind_survive_a_copying_minor(
     // One rooted owner at a time; its prototype is deliberately unrooted.
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    register_key_table_scanners();
 
     type Alloc = Box<dyn Fn() -> usize>;
     let mut owners: Vec<(&str, Alloc)> = vec![
