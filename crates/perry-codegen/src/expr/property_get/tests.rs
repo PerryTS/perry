@@ -1712,7 +1712,7 @@ fn the_generic_tower_is_one_leaf_call_two_exits_and_a_bounded_number_of_blocks()
         "pic.miss.call",
         "pget.recv_merge",
         // #10498: the class-accessor arm on the compare's false edge, ahead of
-        // the front: seven guards that decline to the front, and the direct
+        // the front: the shared guard program declines to the front, and the direct
         // getter call (`verify_accessor_arm` pins the chain).
         "pic.acc.empty",
         "pic.acc.cache",
@@ -1897,11 +1897,11 @@ fn guarded_length_reads_admit_byte_views_and_use_a_pooled_cold_key() {
         .unwrap_or_else(|| panic!("expected the typed metadata guard:\n{ir}"));
     let typed = typed.split("\n\n").next().unwrap();
     assert!(
-        typed.contains(", 10") && typed.contains(", 26"),
+        typed.contains(", 64") && typed.contains(", 76"),
         "Buffer and Uint8Array type bytes must be admitted:\n{typed}"
     );
     assert!(
-        typed.contains("@PERRY_TYPED_NAMED_PROPS_INVALIDATED"),
+        ir.contains("@PERRY_TYPED_NAMED_PROPS_INVALIDATED") && ir.contains("plen.byte_header"),
         "metadata overrides must withdraw the proof:\n{typed}"
     );
     assert!(!ir.contains("call double @js_value_length_property_ic_f64"));

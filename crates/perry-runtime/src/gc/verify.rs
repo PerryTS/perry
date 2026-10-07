@@ -332,7 +332,9 @@ pub(super) unsafe fn remember_evacuated_old_copy_young_slots(
         return;
     }
     visit_gc_rewrite_slots(header, |slot| unsafe {
-        if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+        if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
+            && (*header).obj_type != GC_TYPE_WEAK_STORAGE
+        {
             return;
         }
         slot.record_layout_read();
@@ -427,7 +429,9 @@ fn restore_surviving_dirty_coverage_impl<const DIAGNOSTICS: bool>(
                 // targets and primitive values. This measures traversal work.
                 slots_visited += 1;
             }
-            if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+            if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
+                && (*header).obj_type != GC_TYPE_WEAK_STORAGE
+            {
                 return;
             }
             slot.record_layout_read();
@@ -535,7 +539,9 @@ fn cross_check_covered_parent(header: *mut GcHeader, sticky: &mut StickyRemember
             return;
         }
         visit_gc_rewrite_slots(header, |slot| {
-            if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+            if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
+                && (*header).obj_type != GC_TYPE_WEAK_STORAGE
+            {
                 return;
             }
             slot.record_layout_read();
@@ -572,7 +578,9 @@ unsafe fn remember_retained_old_to_young_slots(
         return;
     }
     visit_gc_rewrite_slots(header, |slot| unsafe {
-        if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+        if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
+            && (*header).obj_type != GC_TYPE_WEAK_STORAGE
+        {
             return;
         }
         slot.record_layout_read();
@@ -897,7 +905,9 @@ pub(super) unsafe fn verify_old_young_parent_slots_covered(
     }
     stats.checked_old_objects = stats.checked_old_objects.saturating_add(1);
     visit_gc_rewrite_slots(header, |slot| unsafe {
-        if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+        if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
+            && (*header).obj_type != GC_TYPE_WEAK_STORAGE
+        {
             return;
         }
         // #8112: the shape table's shared keys word is not a slot this parent
@@ -1054,7 +1064,9 @@ pub(super) unsafe fn verify_marked_object_child_marks(
     let parent = (header as *mut u8).add(GC_HEADER_SIZE) as usize;
     stats.checked_marked_objects = stats.checked_marked_objects.saturating_add(1);
     visit_gc_rewrite_slots(header, |slot| unsafe {
-        if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+        if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
+            && !super::ephemeron::value_slot_is_enabled(header, slot.slot, false)
+        {
             return;
         }
         slot.record_layout_read();
@@ -1397,7 +1409,9 @@ pub(super) fn verify_minor_unmarked_young_children_report(phase: &str) {
         }
         checked_parents += 1;
         visit_gc_rewrite_slots(header, |slot| {
-            if crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
+            if crate::weakref::is_weak_target_trace_slot(header, slot.slot)
+                && !super::ephemeron::value_slot_is_enabled(header, slot.slot, true)
+            {
                 return;
             }
             slot.record_layout_read();

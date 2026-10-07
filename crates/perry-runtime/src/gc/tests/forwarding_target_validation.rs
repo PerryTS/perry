@@ -10,7 +10,7 @@
 //! but deliberately not marked — neither is: the key's object can die, the
 //! arena recycles the address, and the recycled payload bytes get read as a
 //! `GcHeader`. #8040 is that, observed: `gc_flags = 0x86` (`GC_FLAG_FORWARDED`
-//! set by coincidence), `obj_type = 104`, and a "forwarding pointer" that was
+//! set by coincidence), `obj_type = 127`, and a "forwarding pointer" that was
 //! really a NaN-boxed value. The walk stopped one hop later because the word
 //! did not classify — and RETURNED it. `visit_metadata_nanbox_key` masked it to
 //! 48 bits and got a live, unrelated survivor.
@@ -118,7 +118,7 @@ fn a_nan_boxed_forwarding_target_is_refused() {
 ///
 /// This is #8040 one step earlier than the case above — the walk should never
 /// have reached the forwarding word at all. The planted bytes are the ones the
-/// #8168 investigation observed (`gc_flags = 0x86`, `obj_type = 104`), and the
+/// #8168 investigation observed (`gc_flags = 0x86`, `obj_type = 127`), and the
 /// forwarding word planted behind them names a genuinely live object, which is
 /// what made the old behaviour corrupt rather than merely useless.
 #[test]
@@ -130,7 +130,7 @@ fn recycled_bytes_are_not_read_as_a_forwarding_stub() {
     let stale_key = owner as usize + 64;
     let fake_header = (stale_key - GC_HEADER_SIZE) as *mut GcHeader;
     unsafe {
-        (*fake_header).obj_type = 104;
+        (*fake_header).obj_type = 127;
         (*fake_header).gc_flags = 0x86;
         (*fake_header)._reserved = 0;
         (*fake_header).size = 48;
@@ -152,8 +152,8 @@ fn recycled_bytes_are_not_read_as_a_forwarding_stub() {
         "premise: the recycled bytes present as forwarded"
     );
     assert!(
-        gc_type_info(104).is_none(),
-        "premise: 104 is not a registered GC type, which is what makes these \
+        gc_type_info(127).is_none(),
+        "premise: 127 is not a registered GC type, which is what makes these \
          bytes distinguishable from an object"
     );
 

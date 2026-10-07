@@ -47,6 +47,13 @@ use crate::array::{
 };
 use crate::typedarray::{js_typed_array_get, js_typed_array_set, TypedArrayHeader};
 
+fn data_view_receiver() -> *mut crate::buffer::BufferHeader {
+    let value = crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 4]);
+    crate::value::JSValue::from_bits(value.to_bits())
+        .as_pointer::<crate::buffer::BufferHeader>()
+        .cast_mut()
+}
+
 /// `Uint16Array` (kind 4 per `elem_size_for_kind`) — 2-byte elements, so a
 /// value above 0xFFFF proves the store went through the per-kind accessor.
 const UINT16: u8 = crate::typedarray::KIND_UINT16;
@@ -413,27 +420,19 @@ fn uint8_buffer(values: &[f64]) -> *mut ArrayHeader {
 }
 
 #[test]
-fn a_new_uint8array_is_a_buffer_not_a_registry_typed_array() {
+fn a_new_uint8array_has_the_common_byte_cell_header() {
     let _serialized = crate::array::test_serialize();
     let buf = uint8_buffer(&[1.0, 2.0, 3.0, 4.0]);
     let addr = buf as usize;
 
-    // This is the precondition the Buffer arm exists for. If it ever flips —
-    // `new Uint8Array` starting to produce a registry typed array — the arm
-    // becomes redundant and `typed_array_receiver` covers this shape, so this
-    // failing is a signal to re-read the constructor, not to delete the test.
-    assert!(
-        crate::buffer::is_registered_buffer(addr),
-        "new Uint8Array([…]) must be a registered buffer"
+    assert!(crate::buffer::is_registered_buffer(addr));
+    assert_eq!(
+        crate::typedarray::lookup_typed_array_kind(addr),
+        Some(crate::typedarray::KIND_UINT8)
     );
     assert!(
-        crate::typedarray::lookup_typed_array_kind(addr).is_none(),
-        "…and NOT in the typed-array registry, which is why \
-         typed_array_receiver cannot answer for it"
-    );
-    assert!(
-        crate::array::header::typed_array_receiver(buf).is_none(),
-        "typed_array_receiver is registry-backed, so it must answer None here"
+        crate::array::header::typed_array_receiver(buf).is_some(),
+        "the common header admits Uint8Array without a registry"
     );
     // …and the shared funnel still rejects it, so a post-clean branch would be
     // just as unreachable as it is for a real GC_TYPE_TYPED_ARRAY.
@@ -503,15 +502,13 @@ fn an_array_buffer_receiver_is_not_treated_as_a_uint8array() {
     // %TypedArray%.prototype — node throws `TypeError: … is not a function`
     // rather than answering elements, so the Buffer arm must decline them and
     // leave the pre-existing behaviour alone.
-    let ab = crate::buffer::buffer_alloc(4);
-    crate::buffer::mark_as_array_buffer(ab as usize);
+    let ab = crate::buffer::js_array_buffer_new(4);
     assert!(
         crate::array::buffer_receiver_as_uint8_typed_array(ab as *mut ArrayHeader).is_none(),
         "an ArrayBuffer receiver must not be served as a Uint8Array"
     );
 
-    let dv = crate::buffer::buffer_alloc(4);
-    crate::buffer::mark_as_data_view(dv as usize);
+    let dv = data_view_receiver();
     assert!(
         crate::array::buffer_receiver_as_uint8_typed_array(dv as *mut ArrayHeader).is_none(),
         "a DataView receiver must not be served as a Uint8Array"
@@ -686,9 +683,7 @@ fn an_array_buffer_or_data_view_receiver_gets_no_element_iterator() {
     // answering elements. The Buffer arm must decline them and leave the
     // pre-existing behaviour untouched, exactly as
     // `buffer_receiver_as_uint8_typed_array` does.
-    let ab = crate::buffer::buffer_alloc(4);
-    unsafe { (*ab).length = 4 };
-    crate::buffer::mark_as_array_buffer(ab as usize);
+    let ab = crate::buffer::js_array_buffer_new(4);
     assert!(
         drain_iter(crate::array::js_array_values_iter_obj(
             ab as *mut ArrayHeader
@@ -697,9 +692,7 @@ fn an_array_buffer_or_data_view_receiver_gets_no_element_iterator() {
         "an ArrayBuffer receiver must not be served a Uint8Array iterator"
     );
 
-    let dv = crate::buffer::buffer_alloc(4);
-    unsafe { (*dv).length = 4 };
-    crate::buffer::mark_as_data_view(dv as usize);
+    let dv = data_view_receiver();
     assert!(
         drain_iter(crate::array::js_array_values_iter_obj(
             dv as *mut ArrayHeader
@@ -1166,18 +1159,14 @@ fn an_array_buffer_or_data_view_receiver_is_not_given_element_semantics() {
     // %TypedArray%.prototype. The gate must decline them so this change cannot
     // INVENT iteration node does not have — exactly as
     // `buffer_receiver_as_uint8_typed_array` and #8140's iterator arm do.
-    let ab = crate::buffer::buffer_alloc(4);
-    unsafe { (*ab).length = 4 };
-    crate::buffer::mark_as_array_buffer(ab as usize);
+    let ab = crate::buffer::js_array_buffer_new(4);
     assert!(
         crate::array::buffer_receiver_dispatch(ab as *const ArrayHeader, "forEach", &[0.0])
             .is_none(),
         "an ArrayBuffer receiver must not be served Uint8Array iteration"
     );
 
-    let dv = crate::buffer::buffer_alloc(4);
-    unsafe { (*dv).length = 4 };
-    crate::buffer::mark_as_data_view(dv as usize);
+    let dv = data_view_receiver();
     assert!(
         crate::array::buffer_receiver_dispatch(dv as *const ArrayHeader, "reduce", &[0.0])
             .is_none(),
@@ -1312,12 +1301,11 @@ fn the_buffer_search_arm_declines_array_buffer_and_data_view_receivers() {
     let _serialized = crate::array::test_serialize();
     // Neither has `%TypedArray%.prototype`; node throws `… is not a function`
     // rather than answering bytes, so the arm must not invent a hit for them.
-    let ab = crate::buffer::buffer_alloc(4);
-    unsafe {
-        (*ab).length = 4;
-        *crate::buffer::buffer_data_mut(ab) = 44;
-    }
-    crate::buffer::mark_as_array_buffer(ab as usize);
+    let value =
+        crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::ArrayBuffer, &[44, 0, 0, 0]);
+    let ab = crate::value::JSValue::from_bits(value.to_bits())
+        .as_pointer::<crate::buffer::BufferHeader>()
+        .cast_mut();
     assert!(
         crate::array::buffer_receiver_dispatch(ab as *const ArrayHeader, "indexOf", &[44.0])
             .is_none(),

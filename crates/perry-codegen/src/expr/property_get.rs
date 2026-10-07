@@ -301,7 +301,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // conservative cross-closure proof that such a definition may
             // have happened; retain the zero-overhead load for the common
             // barrier-free module and use full property semantics otherwise.
-            if ctx.module_has_shape_barrier_sites {
+            let native_length_is_fixed = match object.as_ref() {
+                Expr::LocalGet(id) => ctx
+                    .receiver_descriptors
+                    .buffer_view(*id)
+                    .is_some_and(|view| view.length_fixed && view.pointer_state.is_stable()),
+                _ => false,
+            };
+            if ctx.module_has_shape_barrier_sites || !native_length_is_fixed {
                 let recv = lower_expr(ctx, object)?;
                 let key_idx = ctx.strings.intern("length");
                 let key_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
@@ -352,7 +359,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .unwrap_or(-8);
             let blk = ctx.block();
             let len_i32 = if let Some(length_slot) = length_slot.as_ref() {
-                blk.load(I32, length_slot)
+                if length_fixed {
+                    blk.load_invariant(I32, length_slot)
+                } else {
+                    blk.load(I32, length_slot)
+                }
             } else {
                 let data_ptr = blk.load(PTR, &ptr_slot);
                 let header_ptr = blk.gep(I8, &data_ptr, &[(I32, &length_offset.to_string())]);
@@ -594,12 +605,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // metadata or prototype edits withdraw the accessor proof before
             // publication; the cold edge uses its pooled literal key.
             ctx.current_block = typed_array_idx;
-            let is_typed_array = ctx.block().icmp_eq(I8, &gc_type, "11"); // GC_TYPE_TYPED_ARRAY
-            let is_buffer = ctx.block().icmp_eq(I8, &gc_type, "10"); // GC_TYPE_BUFFER
-            let is_u8 = ctx.block().icmp_eq(I8, &gc_type, "26"); // GC_TYPE_BUFFER_UINT8ARRAY
-            let is_byte_view = ctx.block().or(I1, &is_buffer, &is_u8);
-            let is_typed_array = ctx.block().or(I1, &is_typed_array, &is_byte_view);
-            let ta_header_ok = ctx.block().and(I1, &is_typed_array, &not_forwarded);
+            let owning_byte = ctx.block().icmp_uge(I8, &gc_type, "64");
+            let indexed_byte = ctx.block().icmp_ule(I8, &gc_type, "76");
+            let is_typed_array = ctx.block().and(I1, &owning_byte, &indexed_byte);
+            let byte_header_idx = ctx.new_block("plen.byte_header");
+            let byte_header_label = ctx.block_label(byte_header_idx);
+            ctx.block()
+                .cond_br(&is_typed_array, &byte_header_label, &slow_label);
+            ctx.current_block = byte_header_idx;
+            let link_addr = ctx.block().add(
+                I64,
+                &recv_handle,
+                &crate::runtime_abi::BYTES_LINK.to_string(),
+            );
+            let link_ptr = ctx.block().inttoptr(I64, &link_addr);
+            let link = ctx.block().load(PTR, &link_ptr);
+            let empty = ctx.block().icmp_eq(PTR, &link, "null");
+            let ta_header_ok = ctx.block().and(I1, &empty, &not_forwarded);
             let named_invalidated =
                 ctx.block()
                     .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);

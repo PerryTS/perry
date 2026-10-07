@@ -35,22 +35,16 @@ fn is_undefined(v: f64) -> bool {
 
 /// A registered `BufferHeader` holding `bytes`, marked as `mark` dictates.
 fn buffer_with(bytes: &[u8]) -> *mut crate::buffer::BufferHeader {
-    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
-    unsafe {
-        (*buf).length = bytes.len() as u32;
-        std::ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            crate::buffer::buffer_data_mut(buf),
-            bytes.len(),
-        );
-    }
-    buf
+    crate::JSValue::from_bits(
+        crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes).to_bits(),
+    )
+    .as_pointer::<crate::buffer::BufferHeader>()
+    .cast_mut()
 }
 
 fn data_view(bytes: &[u8]) -> usize {
-    let buf = buffer_with(bytes) as usize;
-    crate::buffer::mark_as_data_view(buf);
-    buf
+    (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, bytes).to_bits()
+        & crate::value::POINTER_MASK) as usize
 }
 
 fn array_buffer(bytes: &[u8]) -> usize {

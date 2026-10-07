@@ -34,81 +34,44 @@ pub extern "C" fn js_buffer_fill_random(buf_ptr: f64) -> f64 {
     if buf.is_null() {
         return buf_ptr;
     }
-    unsafe {
-        let len = (*buf).length as usize;
-        let data = buffer_data_mut(buf);
-        let bytes = std::slice::from_raw_parts_mut(data, len);
-        rand::rng().fill_bytes(bytes);
-    }
+    super::bytes::no_gc(|scope| unsafe {
+        if let Ok(bytes) =
+            super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+        {
+            rand::rng().fill_bytes(bytes);
+        }
+    });
     buf_ptr
 }
 
-/// `buf.swap16()` — pairs of bytes are swapped in-place.
-#[no_mangle]
-pub extern "C" fn js_buffer_swap16(buf_ptr: f64) {
-    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    if buf.is_null() {
-        return;
-    }
-    unsafe {
-        let len = (*buf).length as usize;
-        if !len.is_multiple_of(2) {
-            throw_invalid_buffer_size();
+/// Reverse each word without holding a byte borrow across error construction.
+fn swap_words(value: f64, width: usize) {
+    let result = super::bytes::no_gc(|scope| unsafe {
+        let Ok(bytes) = super::bytes::bytes_mut(value, scope) else {
+            return true;
+        };
+        if !bytes.len().is_multiple_of(width) {
+            return false;
         }
-        let data = buffer_data_mut(buf);
-        for i in (0..len).step_by(2) {
-            let a = *data.add(i);
-            *data.add(i) = *data.add(i + 1);
-            *data.add(i + 1) = a;
+        for word in bytes.chunks_exact_mut(width) {
+            word.reverse();
         }
+        true
+    });
+    if !result {
+        throw_invalid_buffer_size();
     }
 }
 
-/// `buf.swap32()` — groups of 4 bytes byte-swapped in-place.
 #[no_mangle]
-pub extern "C" fn js_buffer_swap32(buf_ptr: f64) {
-    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    if buf.is_null() {
-        return;
-    }
-    unsafe {
-        let len = (*buf).length as usize;
-        if !len.is_multiple_of(4) {
-            throw_invalid_buffer_size();
-        }
-        let data = buffer_data_mut(buf);
-        for i in (0..len).step_by(4) {
-            let b0 = *data.add(i);
-            let b1 = *data.add(i + 1);
-            let b2 = *data.add(i + 2);
-            let b3 = *data.add(i + 3);
-            *data.add(i) = b3;
-            *data.add(i + 1) = b2;
-            *data.add(i + 2) = b1;
-            *data.add(i + 3) = b0;
-        }
-    }
+pub extern "C" fn js_buffer_swap16(value: f64) {
+    swap_words(value, 2);
 }
-
-/// `buf.swap64()` — groups of 8 bytes byte-swapped in-place.
 #[no_mangle]
-pub extern "C" fn js_buffer_swap64(buf_ptr: f64) {
-    let buf = unbox_buffer_ptr(buf_ptr.to_bits()) as *mut BufferHeader;
-    if buf.is_null() {
-        return;
-    }
-    unsafe {
-        let len = (*buf).length as usize;
-        if !len.is_multiple_of(8) {
-            throw_invalid_buffer_size();
-        }
-        let data = buffer_data_mut(buf);
-        for i in (0..len).step_by(8) {
-            for j in 0..4 {
-                let a = *data.add(i + j);
-                *data.add(i + j) = *data.add(i + 7 - j);
-                *data.add(i + 7 - j) = a;
-            }
-        }
-    }
+pub extern "C" fn js_buffer_swap32(value: f64) {
+    swap_words(value, 4);
+}
+#[no_mangle]
+pub extern "C" fn js_buffer_swap64(value: f64) {
+    swap_words(value, 8);
 }

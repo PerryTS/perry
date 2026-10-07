@@ -251,11 +251,21 @@ fn length_bound_guarded_copy_has_no_per_access_check() {
         );
         // The guard has plain header reads. Sealed loop conditions may carry
         // invariant metadata elsewhere, but the guard must not.
-        let start = guard.rfind("getelementptr i8").unwrap();
-        let tail = &guard[start..];
         assert!(
-            tail.contains("load i32, ptr") && !tail.contains("!invariant.load"),
-            "{tail}"
+            guard.contains("load i32, ptr"),
+            "live independent length: {guard}"
+        );
+        // Constructors may resolve their initial extent with a helper. The
+        // region's bounds guard itself must read the canonical length slot.
+        for block in guard
+            .split("\n\n")
+            .filter(|block| block.contains("fcmp ole double") && !block.contains("2147483647.0"))
+        {
+            assert!(!block.contains("call i32 @js_buffer_length("), "{block}");
+        }
+        assert!(
+            !guard.contains("!invariant.load"),
+            "length guard must observe current storage: {guard}"
         );
     }
 }
@@ -310,7 +320,7 @@ fn late_exposed_length_is_plain_at_entry_and_every_recheck() {
     let rc = &ir[ir.find(label).unwrap() + label.len()..];
     let rc = rc.split("\n\n").next().unwrap();
     assert!(
-        rc.matches("load i32, ptr").count() >= 2 && rc.contains("fcmp ole double"),
+        rc.matches("call i32 @js_buffer_length(").count() >= 2 && rc.contains("fcmp ole double"),
         "{rc}"
     );
     assert!(!rc.contains("!invariant.load"), "{rc}");

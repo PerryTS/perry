@@ -1,19 +1,11 @@
-use std::cell::RefCell;
-
 use crate::array::ArrayHeader;
 use crate::closure::ClosureHeader;
 use crate::typedarray::{
     js_typed_array_get, js_typed_array_set, lookup_typed_array_kind, TypedArrayHeader,
 };
 
-crate::perry_thread_local! {
-    static TYPED_ARRAY_OWN_PROPS: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<TypedArrayOwnProp>>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_map());
-}
-
 #[derive(Clone)]
 struct TypedArrayOwnProp {
-    key: String,
     value: f64,
     is_data: bool,
 }
@@ -36,9 +28,7 @@ fn typed_array_owner_kind(owner: usize) -> Option<TypedArrayOwnerKind> {
     // #10694: both owners are recognized by the type byte, so read it once;
     // the recognizers then run only for a header that already says yes.
     let obj_type = unsafe { crate::value::addr_class::try_read_gc_header(owner) }?.obj_type;
-    if obj_type == crate::gc::GC_TYPE_TYPED_ARRAY
-        || obj_type == crate::gc::GC_TYPE_NATIVE_TYPED_VIEW
-    {
+    if crate::gc::is_typed_array_type(obj_type) {
         lookup_typed_array_kind(owner).map(|_| TypedArrayOwnerKind::TypedArray)
     } else if crate::gc::is_uint8array_buffer_type(obj_type) {
         crate::buffer::is_uint8array_buffer(owner).then_some(TypedArrayOwnerKind::Uint8ArrayBuffer)
@@ -59,7 +49,9 @@ fn typed_array_owner_kind(owner: usize) -> Option<TypedArrayOwnerKind> {
 /// accepted.
 unsafe fn typed_array_owner_length_for(owner: usize, kind: TypedArrayOwnerKind) -> u32 {
     match kind {
-        TypedArrayOwnerKind::TypedArray => (*(owner as *const TypedArrayHeader)).length,
+        TypedArrayOwnerKind::TypedArray => {
+            crate::typedarray::element_length(owner as *const TypedArrayHeader)
+        }
         TypedArrayOwnerKind::Uint8ArrayBuffer => {
             crate::buffer::js_buffer_length(owner as *const crate::buffer::BufferHeader) as u32
         }
@@ -92,7 +84,7 @@ pub(crate) unsafe fn species_result_store(owner: usize, index: usize, raw: f64) 
     match typed_array_owner_kind(owner) {
         Some(TypedArrayOwnerKind::TypedArray) => {
             let ta = owner as *mut TypedArrayHeader;
-            let kind = (*ta).kind;
+            let kind = crate::typedarray::element_kind(ta);
             crate::typedarray::species::store_coerced(ta, index, kind, raw);
         }
         Some(TypedArrayOwnerKind::Uint8ArrayBuffer) => {
@@ -145,12 +137,6 @@ unsafe fn typed_array_owner_set(owner: usize, index: u32, value: f64) {
         }
         None => {}
     }
-}
-
-pub(crate) fn typed_array_clear_own_props(owner: usize) {
-    TYPED_ARRAY_OWN_PROPS.with(|m| {
-        m.borrow_mut().remove(&owner);
-    });
 }
 
 pub(crate) fn typed_array_addr_from_value(value: f64) -> Option<usize> {
@@ -262,97 +248,23 @@ fn invoke_typed_array_accessor_setter(set_bits: u64, receiver: f64, value: f64) 
     crate::closure::js_closure_call1(closure, crate::closure::JsThis::from_f64(receiver), value);
 }
 
-fn barrier_typed_array_own_props(owner: usize, props: &mut [TypedArrayOwnProp]) {
-    for prop in props.iter_mut().filter(|prop| prop.is_data) {
-        crate::gc::runtime_write_barrier_external_slot(
-            owner,
-            &mut prop.value as *mut f64 as usize,
-            prop.value.to_bits(),
-        );
-    }
-}
-
-/// Sticky: `1` once any `TypedArrayHeader` receiver has carried an own ordinary
-/// (named) property. Generated `.length` reads load `length` straight from a
-/// typed array's header only while this reads `0`, because an own `length`
-/// data or accessor property shadows the prototype getter.
-#[no_mangle]
-pub static PERRY_TA_OWN_PROPS_PRESENT: std::sync::atomic::AtomicU8 =
-    std::sync::atomic::AtomicU8::new(0);
-
 fn upsert_typed_array_own_prop(owner: usize, key: String, value: f64, is_data: bool) {
-    crate::typedarray_named::note_named_mutation(owner, key.as_bytes());
-    // A constructor-created Uint8Array uses BufferHeader rather than
-    // TypedArrayHeader. Store its ordinary properties in the existing GC-traced
-    // Buffer table, so direct assignment, Reflect.set, descriptors, and
-    // enumeration all observe one value instead of two invisible side tables (#9347).
-    if matches!(
-        typed_array_owner_kind(owner),
-        Some(TypedArrayOwnerKind::Uint8ArrayBuffer)
-    ) {
+    if is_data {
         crate::buffer::buffer_define_own_data_prop(owner, &key, value);
-        return;
     }
-    // Before the entry is visible: a reader that sees no flag must also see no
-    // property.
-    PERRY_TA_OWN_PROPS_PRESENT.store(1, std::sync::atomic::Ordering::Relaxed);
-    TYPED_ARRAY_OWN_PROPS.with(|m| {
-        let mut map = m.borrow_mut();
-        let props = map.entry(owner).or_default();
-        if let Some(prop) = props.iter_mut().find(|prop| prop.key == key) {
-            prop.value = value;
-            prop.is_data = is_data;
-        } else {
-            props.push(TypedArrayOwnProp {
-                key,
-                value,
-                is_data,
-            });
-        }
-        barrier_typed_array_own_props(owner, props);
-    });
 }
 
 fn remove_typed_array_own_prop(owner: usize, key: &str) -> bool {
-    let removed_typed_array = TYPED_ARRAY_OWN_PROPS.with(|m| {
-        let mut map = m.borrow_mut();
-        let Some(props) = map.get_mut(&owner) else {
-            return false;
-        };
-        let Some(index) = props.iter().position(|prop| prop.key == key) else {
-            return false;
-        };
-        props.remove(index);
-        if props.is_empty() {
-            map.remove(&owner);
-        }
-        true
-    });
-    let removed_buffer = matches!(
-        typed_array_owner_kind(owner),
-        Some(TypedArrayOwnerKind::Uint8ArrayBuffer)
-    ) && crate::buffer::buffer_delete_own_prop(owner, key);
-    removed_typed_array || removed_buffer
+    crate::buffer::buffer_delete_own_prop(owner, key)
 }
 
 fn typed_array_own_prop_snapshot(owner: usize, key: &str) -> Option<TypedArrayOwnProp> {
-    let typed_array_prop = TYPED_ARRAY_OWN_PROPS.with(|m| {
-        m.borrow()
-            .get(&owner)
-            .and_then(|props| props.iter().find(|prop| prop.key == key).cloned())
-    });
-    if typed_array_prop.is_some() {
-        return typed_array_prop;
-    }
-    if !matches!(
-        typed_array_owner_kind(owner),
-        Some(TypedArrayOwnerKind::Uint8ArrayBuffer)
-    ) {
+    if !crate::buffer::buffer_has_own_prop(owner, key) {
         return None;
     }
-    crate::buffer::buffer_get_own_prop(owner, key).map(|value| TypedArrayOwnProp {
-        key: key.to_string(),
-        value,
+    Some(TypedArrayOwnProp {
+        value: crate::buffer::buffer_get_own_prop(owner, key)
+            .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED)),
         is_data: crate::object::get_accessor_descriptor(owner, key).is_none(),
     })
 }
@@ -386,34 +298,14 @@ fn throw_typed_array_define_error(message: String) -> ! {
     throw_type_error(message.as_bytes())
 }
 
-crate::perry_thread_local! {
-    /// Typed arrays marked non-extensible by `Object.preventExtensions`.
-    /// A SIDE TABLE, not the GC-header flag: small typed arrays are plain
-    /// `alloc`ed without a `GcHeader`, so flag reads/writes at `addr - 8`
-    /// would touch allocator metadata (observed as random `NO_EXTEND` reads
-    /// and heap corruption).
-    static TYPED_ARRAY_NO_EXTEND: RefCell<std::collections::HashSet<usize>> =
-        RefCell::new(std::collections::HashSet::new());
-}
-
-/// Mark a typed array non-extensible (`Object.preventExtensions(ta)`).
 pub(crate) fn typed_array_mark_no_extend(owner: usize) {
-    TYPED_ARRAY_NO_EXTEND.with(|s| {
-        s.borrow_mut().insert(owner);
-    });
+    unsafe {
+        (*crate::buffer::store::header(owner))._reserved |= crate::gc::OBJ_FLAG_NO_EXTEND;
+    }
 }
 
-/// Has `Object.preventExtensions(ta)` run for this typed array?
 pub(crate) fn typed_array_owner_no_extend(owner: usize) -> bool {
-    TYPED_ARRAY_NO_EXTEND.with(|s| s.borrow().contains(&owner))
-}
-
-/// Drop the non-extensible mark when a typed array is collected (called from
-/// `unregister_typed_array`, mirroring the own-props cleanup).
-pub(crate) fn typed_array_clear_no_extend(owner: usize) {
-    TYPED_ARRAY_NO_EXTEND.with(|s| {
-        s.borrow_mut().remove(&owner);
-    });
+    unsafe { (*crate::buffer::store::header(owner))._reserved & crate::gc::OBJ_FLAG_NO_EXTEND != 0 }
 }
 
 #[cold]
@@ -429,6 +321,7 @@ pub(crate) unsafe fn typed_array_define_own_property(
     key: *const crate::string::StringHeader,
     key_name: &str,
     descriptor_value: f64,
+    desc_view: Option<&crate::object::object_ops::DescView<'_>>,
 ) -> f64 {
     if ta.is_null() {
         return obj_value;
@@ -480,6 +373,26 @@ pub(crate) unsafe fn typed_array_define_own_property(
                 .unwrap_or(crate::object::PropertyAttrs::new(
                     existing, existing, existing,
                 ));
+            let current_accessor = crate::object::get_accessor_descriptor(owner, key_name);
+            if existing
+                && !current_attrs.configurable()
+                && !current_attrs.writable()
+                && current_accessor.is_none()
+            {
+                // Engine keys use the same immutable data descriptors as any
+                // other shaped property. A permitted redefinition is a no-op;
+                // never let it replace the view's traced owner or pin count.
+                crate::object::object_ops::validate_nonconfigurable_redefine(
+                    key_name,
+                    current_attrs,
+                    None,
+                    crate::buffer::buffer_get_own_prop(owner, key_name)
+                        .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED)),
+                    descriptor_value,
+                    desc_view,
+                );
+                return obj_value;
+            }
             let has_get = descriptor_has(desc_ptr, b"get");
             let has_set = descriptor_has(desc_ptr, b"set");
             let has_accessor = has_get || has_set;
@@ -639,7 +552,7 @@ pub(crate) unsafe fn typed_array_set_property_by_name(
 unsafe fn typed_array_coerce_element_for_side_effects(owner: usize, value: f64) {
     match typed_array_owner_kind(owner) {
         Some(TypedArrayOwnerKind::TypedArray) => {
-            let kind = (*(owner as *const TypedArrayHeader)).kind;
+            let kind = crate::typedarray::element_kind(owner as *const TypedArrayHeader);
             // `coerce_for_kind` performs ToBigInt for BigInt views (throwing on
             // a Number) and ToNumber otherwise; its result is discarded — only
             // the side effect / throw matters.
@@ -1138,13 +1051,8 @@ pub(crate) fn typed_array_canonical_index_validity(owner: usize, name: &str) -> 
     }
 }
 
-/// The kind of own set-descriptor an ordinary (non-index) string key carries on
-/// a typed array, as seen by OrdinarySet. Typed arrays keep their expando own
-/// properties in the side tables (`TYPED_ARRAY_OWN_PROPS` +
-/// `PROPERTY_DESCRIPTORS`/`ACCESSOR_DESCRIPTORS`), which the generic
-/// `own_set_descriptor` walk skips because `object_has_descriptors` is gated off
-/// for typed arrays. This exposes that state to the receiver-threading `[[Set]]`
-/// so `Reflect.set(ta, k, v)` reports the right boolean.
+/// Access uses the common cell header and current owner storage. Any derived
+/// data address is consumed without collection, or retained with its owner.
 #[derive(Clone, Copy)]
 pub(crate) enum TypedArrayOwnSetDescriptor {
     /// Data property present with the given writability.
@@ -1248,59 +1156,13 @@ pub(crate) unsafe fn typed_array_property_is_enumerable(
 }
 
 fn typed_array_non_index_keys(owner: usize, enumerable_only: bool) -> Vec<String> {
-    let mut keys = TYPED_ARRAY_OWN_PROPS.with(|m| {
-        m.borrow()
-            .get(&owner)
-            .map(|props| {
-                props
-                    .iter()
-                    .filter_map(|prop| {
-                        if enumerable_only {
-                            let enumerable = crate::object::get_property_attrs(owner, &prop.key)
-                                .map(|attrs| attrs.enumerable())
-                                .unwrap_or(true);
-                            if !enumerable {
-                                return None;
-                            }
-                        }
-                        Some(prop.key.clone())
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default()
-    });
-    if matches!(
-        typed_array_owner_kind(owner),
-        Some(TypedArrayOwnerKind::Uint8ArrayBuffer)
-    ) {
-        for key in crate::buffer::buffer_own_prop_names(owner) {
-            if keys.iter().any(|existing| existing == &key) {
-                continue;
-            }
-            if enumerable_only
-                && crate::object::get_property_attrs(owner, &key)
-                    .is_some_and(|attrs| !attrs.enumerable())
-            {
-                continue;
-            }
-            keys.push(key);
-        }
-    }
-    for key in crate::object::accessor_descriptor_keys_for_obj(owner) {
-        if keys.iter().any(|existing| existing == &key) {
-            continue;
-        }
-        if enumerable_only {
-            let enumerable = crate::object::get_property_attrs(owner, &key)
-                .map(|attrs| attrs.enumerable())
-                .unwrap_or(false);
-            if !enumerable {
-                continue;
-            }
-        }
-        keys.push(key);
-    }
-    keys
+    crate::buffer::buffer_own_prop_names(owner)
+        .into_iter()
+        .filter(|key| {
+            !enumerable_only
+                || crate::object::get_property_attrs(owner, key).is_none_or(|a| a.enumerable())
+        })
+        .collect()
 }
 
 pub(crate) unsafe fn typed_array_own_property_names(
@@ -1465,16 +1327,4 @@ pub(crate) unsafe fn typed_array_delete_own_property(
             1
         }
     }
-}
-
-pub(crate) fn scan_typed_array_own_props_roots_mut(
-    visitor: &mut crate::gc::RuntimeRootVisitor<'_>,
-) {
-    TYPED_ARRAY_OWN_PROPS.with(|m| {
-        for props in m.borrow_mut().values_mut() {
-            for prop in props.iter_mut().filter(|prop| prop.is_data) {
-                visitor.visit_nanbox_f64_slot(&mut prop.value);
-            }
-        }
-    });
 }

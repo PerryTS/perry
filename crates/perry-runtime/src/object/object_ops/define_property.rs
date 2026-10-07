@@ -590,13 +590,7 @@ pub extern "C" fn js_object_define_property(
                             set: set_bits,
                         },
                     );
-                    // Keep an order/enumeration placeholder; accessor-aware
-                    // reads ignore its undefined payload.
-                    crate::buffer::buffer_define_own_data_prop(
-                        addr,
-                        &name,
-                        f64::from_bits(crate::value::TAG_UNDEFINED),
-                    );
+                    // The accessor pair itself occupies the shaped bag slot.
                 } else if has_value || has_writable || existing_attrs.is_none() {
                     // Data descriptor (or a brand-new generic descriptor).
                     let addr = current_addr();
@@ -1158,6 +1152,7 @@ pub extern "C" fn js_object_define_property(
                     key_str,
                     key_name,
                     descriptor_value,
+                    desc_view.as_ref(),
                 );
             }
             return obj_value;
@@ -1348,6 +1343,7 @@ pub extern "C" fn js_object_define_property(
                     key_str,
                     key_name,
                     descriptor_value,
+                    desc_view.as_ref(),
                 );
             }
             return obj_value;

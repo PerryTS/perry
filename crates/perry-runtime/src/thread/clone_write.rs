@@ -290,7 +290,7 @@ impl Writer<'_> {
         }
         // SharedArrayBuffer storage is process-global and never freed, so it
         // crosses by address and both threads see the same bytes (#4913).
-        if crate::shared_sab::is_shared_sab(addr) {
+        if let Some(addr) = crate::shared_sab::shared_store_owner(addr) {
             return SerializedValue::SharedArrayBuffer { addr };
         }
         if crate::buffer::is_registered_buffer(addr) || crate::buffer::is_uint8array_buffer(addr) {
@@ -659,8 +659,8 @@ impl Writer<'_> {
     /// The whole store behind a view (or an ArrayBuffer itself), written
     /// once per message however many views share it.
     unsafe fn backing(&mut self, backing: usize) -> SerializedValue {
-        if crate::shared_sab::is_shared_sab(backing) {
-            return SerializedValue::SharedArrayBuffer { addr: backing };
+        if let Some(addr) = crate::shared_sab::shared_store_owner(backing) {
+            return SerializedValue::SharedArrayBuffer { addr };
         }
         if crate::buffer::is_detached_buffer(backing) {
             return SerializedValue::Unsupported("detached ArrayBuffer");
@@ -669,7 +669,7 @@ impl Writer<'_> {
             return seen;
         }
         if self.transfer.contains(&backing) {
-            let length = (*(backing as *const crate::buffer::BufferHeader)).length;
+            let length = crate::buffer::store::length(backing) as u32;
             return SerializedValue::TransferredArrayBuffer(
                 crate::buffer::TransferredBacking::pending(backing, length),
             );

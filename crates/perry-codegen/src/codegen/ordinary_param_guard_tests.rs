@@ -362,8 +362,8 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
 
     assert_eq!(
         root_slots(specialized),
-        0,
-        "the specialized typed-array proof makes every value of n non-pointer:\n{specialized}"
+        1,
+        "the specialized clone retains its exact owner, while every value of n is non-pointer:\n{specialized}"
     );
     assert_eq!(
         root_slots(generic),
@@ -1130,5 +1130,149 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
         generic.contains("js_dynamic_string_or_number_add"),
         "the unguarded body must keep the dynamic add — if it does not, the \
          clone above is buying nothing and this test is vacuous:\n{generic}"
+    );
+}
+
+#[test]
+fn specialized_typed_parameter_keeps_its_own_owner_root() {
+    use perry_hir::{Function, Module, Param};
+    crate::temp_root_coverage::under_both_lowerings(|mode| {
+        let mut module = Module::new("spec_owner.ts");
+        module.functions.push(Function {
+            id: 10,
+            name: "read".into(),
+            type_params: vec![],
+            params: [1, 2]
+                .into_iter()
+                .map(|id| Param {
+                    id,
+                    name: format!("p{id}"),
+                    ty: Type::Any,
+                    default: None,
+                    decorators: vec![],
+                    is_rest: false,
+                    arguments_object: None,
+                })
+                .collect(),
+            return_type: Type::Number,
+            body: vec![
+                Stmt::Expr(Expr::Call {
+                    callee: Box::new(Expr::GlobalGet(100)),
+                    args: vec![],
+                    type_args: vec![],
+                    byte_offset: 0,
+                }),
+                Stmt::Return(Some(Expr::IndexGet {
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::LocalGet(2)),
+                })),
+            ],
+            is_async: false,
+            is_generator: false,
+            is_strict: true,
+            is_exported: false,
+            captures: vec![],
+            decorators: vec![],
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        module.init = vec![
+            Stmt::Let {
+                id: 20,
+                name: "array".into(),
+                ty: Type::Named("Float64Array".into()),
+                mutable: false,
+                init: Some(Expr::TypedArrayNew {
+                    kind: perry_hir::TYPED_ARRAY_KIND_FLOAT64,
+                    arg: Some(Box::new(Expr::Integer(64))),
+                }),
+            },
+            Stmt::Expr(Expr::Call {
+                callee: Box::new(Expr::FuncRef(10)),
+                args: vec![Expr::LocalGet(20), Expr::Integer(0)],
+                type_args: vec![],
+                byte_offset: 0,
+            }),
+        ];
+        let ir = String::from_utf8(
+            crate::compile_module(
+                &module,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let definition = ir
+            .lines()
+            .find(|line| line.starts_with("define ") && line.contains("$spec_ta"))
+            .unwrap_or_else(|| panic!("{mode}: no specialized entry:\n{ir}"));
+        let specialized = ir[ir.find(definition).unwrap()..]
+            .split("\n}\n")
+            .next()
+            .unwrap();
+        let marker = specialized
+            .lines()
+            .find(|line| line.contains("; bytes.spec.owner.root "))
+            .unwrap();
+        let slot = format!("%{}", marker.split("owner=").nth(1).unwrap().trim());
+        let roots = crate::testing::root_slots::bound_slots(specialized);
+        assert!(
+            roots.contains_key(&slot)
+                || specialized.contains(&format!("{slot} = alloca ptr addrspace(1)")),
+            "{mode}: specialized interior pointer has no callee owner root:\n{specialized}"
+        );
+        assert!(
+            specialized.contains("asm sideeffect"),
+            "{mode}: owner not live after call"
+        );
+        let extent = specialized
+            .lines()
+            .find(|line| line.contains("; bytes.spec.extent.hoist "))
+            .unwrap();
+        let length = format!("%{}", extent.split("length=").nth(1).unwrap().trim());
+        assert!(
+            specialized.contains(&format!("{length} = alloca i32")),
+            "{mode}: sealed extent must have a scalar preheader home:\n{specialized}"
+        );
+        assert!(
+            specialized
+                .lines()
+                .any(|line| line.trim_start().starts_with("store i32 ")
+                    && line.ends_with(&format!(", ptr {length}"))),
+            "{mode}: actual owner length was not hoisted:\n{specialized}"
+        );
+    });
+}
+
+#[test]
+fn dropping_specialized_owner_root_turns_the_invariant_red() {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "codegen::ordinary_param_guard_tests::specialized_typed_parameter_keeps_its_own_owner_root",
+            "--nocapture",
+        ])
+        .env("PERRY_B4_SABOTAGE", "spec_owner")
+        .output()
+        .unwrap();
+    assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+    assert!(
+        !child.status.success(),
+        "missing specialized owner root must be detected"
+    );
+}
+
+#[test]
+fn dropping_specialized_extent_hoist_turns_the_invariant_red() {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "codegen::ordinary_param_guard_tests::specialized_typed_parameter_keeps_its_own_owner_root", "--nocapture"])
+        .env("PERRY_B4_SABOTAGE", "spec_extent").output().unwrap();
+    assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+    assert!(
+        !child.status.success(),
+        "loss of the extent hoist must be detected"
     );
 }

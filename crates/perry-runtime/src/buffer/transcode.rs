@@ -88,44 +88,30 @@ fn throw_transcode_error() -> ! {
     crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
 }
 
-fn buffer_bytes<'a>(buf_ptr: *const BufferHeader) -> &'a [u8] {
-    if buf_ptr.is_null() || (buf_ptr as usize) < 0x1000 {
-        return &[];
-    }
-    unsafe {
-        let len = (*buf_ptr).length as usize;
-        let data = buffer_data(buf_ptr);
-        std::slice::from_raw_parts(data, len)
-    }
-}
-
-fn source_bytes(value: f64) -> &'static [u8] {
+fn source_bytes(value: f64) -> Vec<u8> {
     let addr = raw_addr_from_value(value);
-    if addr != 0 {
-        if is_uint8array_buffer(addr)
+    let accepted = addr != 0
+        && (is_uint8array_buffer(addr)
             || (is_registered_buffer(addr) && !is_any_array_buffer(addr) && !is_data_view(addr))
-        {
-            return buffer_bytes(addr as *const BufferHeader);
-        }
-        if crate::typedarray::lookup_typed_array_kind(addr) == Some(crate::typedarray::KIND_UINT8) {
-            let ptr = addr as *const crate::typedarray::TypedArrayHeader;
-            if let Some(bytes) = unsafe { crate::typedarray::typed_array_bytes(ptr) } {
-                return bytes;
-            }
-        }
+            || crate::typedarray::lookup_typed_array_kind(addr)
+                == Some(crate::typedarray::KIND_UINT8));
+    if !accepted {
+        throw_invalid_source(value);
     }
-    throw_invalid_source(value)
+    super::bytes::no_gc(|scope| {
+        super::bytes::bytes(crate::value::js_nanbox_pointer(addr as i64), scope)
+            .ok()
+            .map(<[u8]>::to_vec)
+    })
+    .unwrap_or_else(|| throw_invalid_source(value))
 }
 
 fn buffer_from_bytes(out: &[u8]) -> *mut BufferHeader {
-    let buf = buffer_alloc(out.len() as u32);
-    unsafe {
-        (*buf).length = out.len() as u32;
-        if !out.is_empty() {
-            std::ptr::copy_nonoverlapping(out.as_ptr(), buffer_data_mut(buf), out.len());
-        }
-    }
-    buf
+    crate::value::JSValue::from_bits(
+        super::bytes::from_slice(super::bytes::Brand::Buffer, out).to_bits(),
+    )
+    .as_pointer::<BufferHeader>()
+    .cast_mut()
 }
 
 fn utf16le_to_utf8(bytes: &[u8]) -> Vec<u8> {
@@ -191,14 +177,14 @@ pub extern "C" fn js_buffer_transcode(
     }
 
     if from == to {
-        return buffer_from_bytes(src_bytes);
+        return buffer_from_bytes(&src_bytes);
     }
 
     let out: Vec<u8> = match (from, to) {
-        (TranscodeEnc::Utf16Le, TranscodeEnc::Utf8) => utf16le_to_utf8(src_bytes),
-        (TranscodeEnc::Utf8, TranscodeEnc::Utf16Le) => utf8_to_utf16le(src_bytes),
-        (TranscodeEnc::Latin1, TranscodeEnc::Utf16Le) => latin1_to_utf16le(src_bytes),
-        (TranscodeEnc::Latin1, TranscodeEnc::Utf8) => latin1_to_utf8(src_bytes),
+        (TranscodeEnc::Utf16Le, TranscodeEnc::Utf8) => utf16le_to_utf8(&src_bytes),
+        (TranscodeEnc::Utf8, TranscodeEnc::Utf16Le) => utf8_to_utf16le(&src_bytes),
+        (TranscodeEnc::Latin1, TranscodeEnc::Utf16Le) => latin1_to_utf16le(&src_bytes),
+        (TranscodeEnc::Latin1, TranscodeEnc::Utf8) => latin1_to_utf8(&src_bytes),
         // utf8/utf16le → latin1: lossy narrow per Node — only the low byte
         // of each code unit is kept; code points > 0xFF emit '?'.
         (TranscodeEnc::Utf16Le, TranscodeEnc::Latin1) => {
@@ -211,7 +197,7 @@ pub extern "C" fn js_buffer_transcode(
             out
         }
         (TranscodeEnc::Utf8, TranscodeEnc::Latin1) => {
-            let cow = String::from_utf8_lossy(src_bytes);
+            let cow = String::from_utf8_lossy(&src_bytes);
             let mut out = Vec::with_capacity(cow.len());
             for ch in cow.chars() {
                 let cp = ch as u32;

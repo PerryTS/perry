@@ -1079,7 +1079,8 @@ unsafe fn append_at_tip(
         parent_len as usize,
         appended.element_word().to_bits(),
     );
-    (*backing).length = parent_len + 1;
+    let key_array = backing;
+    (*key_array).length = parent_len + 1;
     try_with_table(|t| {
         let id = if let Some(id) = probe_node(t, pnode, parent_len, appended, entry, h) {
             t.publish(id, backing as usize, all_ptr);

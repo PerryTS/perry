@@ -10,11 +10,11 @@ use perry_hir::Function;
 use crate::expr::FnCtx;
 use crate::module::LlModule;
 use crate::native_value::{
-    AliasState, BufferElem, BufferIndexUnit, BufferViewPointerState, BufferViewSlot, LengthSource,
+    AliasState, BufferIndexUnit, BufferViewPointerState, BufferViewSlot, LengthSource,
 };
 use crate::stmt;
 use crate::strings::StringPool;
-use crate::types::{LlvmType, DOUBLE, I1, I32, I64, I8, PTR};
+use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
 
 use super::helpers::precise_root_analysis_enabled;
 use super::helpers::{inline_hot_small_enabled, inline_hot_small_size_cap, INLINE_HOT_SMALL_MIN};
@@ -843,29 +843,23 @@ pub(super) fn compile_function(
                     let boxed = crate::expr::nanbox_pointer_inline(blk, &arg_name);
                     let slot = blk.alloca(DOUBLE);
                     blk.store(DOUBLE, &boxed, &slot);
-                    // No callee-side shadow binding. Both halves of that
-                    // argument are load-bearing, and the second one is NOT
-                    // "typed-array storage is non-movable" — the value passed
-                    // is the HEADER, and a header is an object (#6981):
-                    //
-                    //  1. Liveness — every route into this entry is a Tier-A
-                    //     call (`lower_call/func_ref.rs`) whose argument is a
-                    //     pre-pass-proven, never-reassigned, non-closure-
-                    //     referenced binding: a module-global root, or the
-                    //     caller's own shadow-bound frame slot. That root
-                    //     keeps the header live for the whole call.
-                    //  2. Address stability — the header does not MOVE,
-                    //     because `typed_array_alloc` puts the whole
-                    //     allocation (header + inline payload) in the OLD
-                    //     arena with `GC_FLAG_TENURED`. The nursery copying
-                    //     minor only relocates nursery objects, and old-page
-                    //     defrag is the one consumer of `gc_type_is_movable`,
-                    //     which is `false` for `GC_TYPE_TYPED_ARRAY`.
-                    //
-                    // Both together are what make the callee root redundant
-                    // TLS traffic. Neither generalizes: an ordinary
-                    // `GC_TYPE_OBJECT` IS movable and IS nursery-allocated,
-                    // so any new raw-pointer rep must argue (2) afresh.
+                    // Keep the exact owner in the callee even when its only
+                    // later use is the cached interior pointer. A caller's
+                    // binding may be dead after passing this argument.
+                    #[cfg(test)]
+                    let omit_owner =
+                        std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("spec_owner");
+                    #[cfg(not(test))]
+                    let omit_owner = false;
+                    if !omit_owner {
+                        if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
+                            bound_param_slots.insert(slot_idx);
+                            blk.call_void(
+                                "js_shadow_slot_bind",
+                                &[(I32, &slot_idx.to_string()), (PTR, &slot)],
+                            );
+                        }
+                    }
                     map.insert(p.id, slot);
                     continue;
                 }
@@ -1454,73 +1448,25 @@ pub(super) fn compile_function(
         crate::expr::body_call::emit_sloppy_receiver_coercion(&mut ctx, &slot);
     }
 
-    // Issue #92 follow-up: pre-register `buffer_data_slots` entries for
-    // `Buffer`-typed function parameters so that the readInt32BE/etc.
-    // intrinsic fast path in `lower_call.rs` fires on
-    // `function decode(row: Buffer) { row.readInt32BE(off) }` — the real
-    // Postgres-driver hot-path shape, not just the `const buf = Buffer.alloc(N)`
-    // micro-benchmark. Skipped when the param is reassigned (has_any_mutation
-    // covers LocalSet/Update/ARRAY_MUTATORS — `buf = ...`, `buf.fill(...)` etc.)
-    // because a cached data_ptr would go stale, and skipped for boxed params
-    // (same reason via cross-closure mutation). Uint8Array-typed params are
-    // deliberately excluded: a pre-existing crash surfaces when the same
-    // program defines both a Buffer-param and a Uint8Array-param function and
-    // then invokes them in sequence (reproducible on main without any of
-    // this extension's changes). Tracked separately; Buffer coverage alone
-    // hits the Postgres decode path which is the target workload here.
+    // Buffer parameters retain exact receiver/owner starts and resolve the
+    // same common-cell preheader as typed parameters. Numeric reads recheck
+    // bounds and named-property authority before their single element load.
     for p in &f.params {
-        let is_buffer_typed = matches!(
-            &p.ty,
-            perry_hir::types::Type::Named(n) if n == "Buffer"
-        );
-        if !is_buffer_typed {
+        if !matches!(&p.ty, perry_hir::types::Type::Named(n) if n == "Buffer")
+            || ctx.boxed_vars.contains(&p.id)
+            || crate::collectors::has_any_mutation(&f.body, p.id)
+        {
             continue;
         }
-        if ctx.boxed_vars.contains(&p.id) {
-            continue;
+        if let Some(slot) = ctx.locals.get(&p.id).cloned() {
+            let value = ctx.block().load(DOUBLE, &slot);
+            crate::expr::byte_cell::materialize_param(
+                &mut ctx,
+                p.id,
+                &value,
+                &[crate::runtime_abi::GC_TYPE_BUFFER],
+            );
         }
-        if crate::collectors::has_any_mutation(&f.body, p.id) {
-            continue;
-        }
-        let Some(param_slot) = ctx.locals.get(&p.id).cloned() else {
-            continue;
-        };
-        let blk = ctx.block();
-        let arg_val = blk.load(DOUBLE, &param_slot);
-        let handle = crate::expr::unbox_to_i64(blk, &arg_val);
-        let handle_ptr = blk.inttoptr(I64, &handle);
-        // Use the same backing resolution as Uint8Array views: a
-        // Buffer argument may own inline bytes or carry a view/native span.
-        let data_ptr = blk.call(PTR, "js_native_buffer_data_ptr", &[(DOUBLE, &arg_val)]);
-        let buf_slot = ctx.func.alloca_entry(PTR);
-        ctx.block().store(PTR, &data_ptr, &buf_slot);
-        let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
-        ctx.buffer_data_slots
-            .insert(p.id, (buf_slot.clone(), scope_idx));
-        ctx.receiver_descriptors.materialize_buffer_view(
-            p.id,
-            BufferViewSlot {
-                data_slot: buf_slot,
-                // Length belongs to the receiver header, not data_ptr - 8.
-                // Keep it live so detach/resize still invalidate bounds.
-                length_slot: Some(handle_ptr),
-                scope_idx: Some(scope_idx),
-                elem: BufferElem::U8,
-                element_width_bytes: 1,
-                index_unit: BufferIndexUnit::Byte,
-                view_byte_offset: None,
-                length_offset_from_data: -8,
-                alias: AliasState::Unknown,
-                length_source: Some(LengthSource::Unknown),
-                native_owned: None,
-                pointer_state: BufferViewPointerState::Stable,
-                // Declared-type hoist only — the construction form is unknown,
-                // so no inline-storage proof.
-                storage_inline_proven: false,
-                // Any caller's Buffer, which JS may detach between reads.
-                length_fixed: false,
-            },
-        );
     }
 
     // Representation-selection Phase 2: bind each `TaPtr` param as a PROVEN
@@ -1531,10 +1477,8 @@ pub(super) fn compile_function(
     // (`ta_int_elem_load_is_i32_provable`, `lower_typed_array_load`, the
     // proven-view checked tier) with bounds checks against the entry length —
     // and NEVER through the per-site guarded fast paths (`ta_param_f64_read`
-    // skips receivers with a registered view slot). GC note: the header stays
-    // live through the CALLER's proven never-reassigned rooted binding (a
-    // module-global root or the caller's own frame slot — the only routes into
-    // this entry are Tier-A calls whose args carry that proof); the hoisted
+    // skips receivers with a registered view slot). The callee binds the
+    // exact owner and keeps that binding live after its safepoints; the hoisted
     // data pointer stays valid because the HEADER itself never moves —
     // `typed_array_alloc` allocates header + inline payload in the OLD arena
     // (`arena_alloc_gc_old`, `GC_FLAG_TENURED`), which the nursery copying
@@ -1545,8 +1489,7 @@ pub(super) fn compile_function(
     // data pointer and length stay valid only because every call site passes
     // a SEALED binding and this param is itself sealed in the body
     // (`spec_abi_sites::buffer_exposed_bindings`): construction alone does
-    // not keep them, since observing `.buffer` rebinds the array to an
-    // external backing and `buffer.transfer()` then detaches it (length 0).
+    // not keep them, since `array.buffer.transfer()` detaches the store.
     if let Some(plan) = spec_entry {
         for (p, rep) in f.params.iter().zip(plan.reps.iter()) {
             let crate::collectors::SpecParamRep::TaPtr { kind, const_len } = rep else {
@@ -1558,14 +1501,39 @@ pub(super) fn compile_function(
             let Some(param_slot) = ctx.locals.get(&p.id).cloned() else {
                 continue;
             };
+            ctx.block().emit_raw(format!(
+                "; bytes.spec.owner.root owner={}",
+                param_slot.trim_start_matches('%')
+            ));
+            ctx.receiver_descriptors
+                .retain_byte_owner(param_slot.clone(), param_slot.clone());
+            ctx.block().retain_byte_owner_root_slot(&param_slot);
             let blk = ctx.block();
             let arg_val = blk.load(DOUBLE, &param_slot);
             let handle = crate::expr::unbox_to_i64(blk, &arg_val);
             let handle_ptr = blk.inttoptr(I64, &handle);
             // TypedArrayHeader layout: length at +0, data at +16.
-            let data_ptr = blk.gep(I8, &handle_ptr, &[(I32, "16")]);
+            let length = blk.load(I32, &handle_ptr);
+            let data_ptr = blk.call(PTR, "js_native_buffer_data_ptr", &[(DOUBLE, &arg_val)]);
             let data_slot = ctx.func.alloca_entry(PTR);
             ctx.block().store(PTR, &data_ptr, &data_slot);
+            // The sealed call-site/body proof excludes detach, resize and
+            // rebinding. Hoist the actual length alongside data, rather than
+            // repeatedly reading an aliasable owner header inside the loop.
+            let length_slot = ctx.func.alloca_entry(I32);
+            ctx.block().store(I32, &length, &length_slot);
+            #[cfg(test)]
+            let length_slot =
+                if std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("spec_extent") {
+                    handle_ptr
+                } else {
+                    length_slot
+                };
+            ctx.block().emit_raw(format!(
+                "; bytes.spec.extent.hoist data={} length={}",
+                data_slot.trim_start_matches('%'),
+                length_slot.trim_start_matches('%')
+            ));
             let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
             ctx.buffer_data_slots
                 .insert(p.id, (data_slot.clone(), scope_idx));
@@ -1573,13 +1541,13 @@ pub(super) fn compile_function(
                 p.id,
                 BufferViewSlot {
                     data_slot,
-                    length_slot: None,
+                    length_slot: Some(length_slot),
                     scope_idx: Some(scope_idx),
                     elem,
                     element_width_bytes: width,
                     index_unit: BufferIndexUnit::Element,
                     view_byte_offset: Some(0),
-                    length_offset_from_data: -16,
+                    length_offset_from_data: 0,
                     // Distinct `TaPtr` args are distinct fresh allocations
                     // (the Tier A call-site match rejects duplicate locals),
                     // so pairwise noalias holds by construction.

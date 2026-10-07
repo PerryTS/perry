@@ -3,6 +3,37 @@
 //! Production in-band descriptors and byte-store ownership are in REGION-DESIGN.
 
 use super::HeapGeneration;
+use std::collections::BTreeMap;
+use std::sync::RwLock;
+
+/// Every live region's extent (start -> end), process-wide. `map` and `unmap`
+/// are the only OS backing of arena blocks, nursery, old and large alike, so
+/// this answers "is this word inside Perry's GC memory" for any thread
+/// without per-thread metadata. Pooled blocks stay mapped and stay listed.
+static REGIONS: RwLock<BTreeMap<usize, usize>> = RwLock::new(BTreeMap::new());
+
+fn extent_len(len: usize) -> usize {
+    #[cfg(target_os = "linux")]
+    {
+        mapped_len(len).expect("invalid region extent")
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        len
+    }
+}
+
+/// Does one live region hold all of `[addr, addr + len)`?
+pub(crate) fn contains(addr: usize, len: usize) -> bool {
+    let Some(end) = addr.checked_add(len) else {
+        return false;
+    };
+    let regions = REGIONS.read().unwrap_or_else(|e| e.into_inner());
+    regions
+        .range(..=addr)
+        .next_back()
+        .is_some_and(|(_, &region_end)| end <= region_end)
+}
 
 #[cfg(target_os = "linux")]
 pub(super) const ALIGN: usize = 2 * 1024 * 1024;
@@ -106,18 +137,35 @@ pub(super) unsafe fn map(kind: Kind, len: usize) -> *mut u8 {
         }
         let data = aligned as *mut u8;
         advise(data, len, kind);
+        register(data, len);
         data
     }
     #[cfg(not(target_os = "linux"))]
     {
         let _ = kind;
-        std::alloc::alloc(std::alloc::Layout::from_size_align(len, 16).unwrap())
+        let data = std::alloc::alloc(std::alloc::Layout::from_size_align(len, 16).unwrap());
+        if !data.is_null() {
+            register(data, len);
+        }
+        data
     }
+}
+
+fn register(data: *mut u8, len: usize) {
+    let start = data as usize;
+    REGIONS
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(start, start + extent_len(len));
 }
 
 /// Physical destruction, used by pool overflow, pool drain and TLS teardown.
 /// Callers remove page metadata and external owners before destruction.
 pub(super) unsafe fn unmap(data: *mut u8, len: usize) {
+    REGIONS
+        .write()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&(data as usize));
     #[cfg(target_os = "linux")]
     assert_eq!(
         libc::munmap(data.cast(), mapped_len(len).expect("invalid extent")),

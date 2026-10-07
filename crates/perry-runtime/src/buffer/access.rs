@@ -107,8 +107,10 @@ fn decode_buffer_set_source(value: f64) -> BufferSetSource {
 }
 
 unsafe fn array_like_object_length(obj: *const crate::object::ObjectHeader) -> usize {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_const_ptr(obj);
     let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
-    let value = crate::object::js_object_get_field_by_name(obj, key);
+    let value = obj.with_const_ptr(|obj| crate::object::js_object_get_field_by_name(obj, key));
     let number = value.to_number();
     if !number.is_finite() || number <= 0.0 {
         0
@@ -123,7 +125,7 @@ unsafe fn buffer_set_source_len(source: BufferSetSource) -> usize {
             if ptr.is_null() {
                 0
             } else {
-                (*ptr).length as usize
+                super::store::length(ptr as usize)
             }
         }
         BufferSetSource::TypedArray(ptr) => {
@@ -156,15 +158,22 @@ unsafe fn collect_buffer_set_bytes(source: BufferSetSource, source_len: usize) -
             }
         }
         BufferSetSource::Array(ptr) => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let source = scope.root_raw_const_ptr(ptr);
             for i in 0..source_len {
-                bytes.push(to_uint8(crate::array::js_array_get_f64(ptr, i as u32)));
+                let value =
+                    source.with_const_ptr(|ptr| crate::array::js_array_get_f64(ptr, i as u32));
+                bytes.push(to_uint8(value));
             }
         }
         BufferSetSource::Object(ptr) => {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let source = scope.root_raw_const_ptr(ptr);
             for i in 0..source_len {
                 let key = i.to_string();
                 let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-                let value = crate::object::js_object_get_field_by_name(ptr, key_ptr);
+                let value = source
+                    .with_const_ptr(|ptr| crate::object::js_object_get_field_by_name(ptr, key_ptr));
                 bytes.push(to_uint8(f64::from_bits(value.bits())));
             }
         }
@@ -173,41 +182,19 @@ unsafe fn collect_buffer_set_bytes(source: BufferSetSource, source_len: usize) -
     bytes
 }
 
-/// Resolve a raw byte span for sources whose elements need no per-index
-/// coercion: a `Buffer`/`Uint8Array` source, or a same-element-width
-/// (1-byte-per-element) `TypedArray` source (`Int8Array`, `Uint8Array`,
-/// `Uint8ClampedArray`) — for these kinds the stored byte already equals
-/// `to_uint8` of the read element (two's-complement reinterpretation for
-/// `Int8Array`, identity for the other two), so the underlying bytes can be
-/// copied directly. Returns `None` for `Array`/`Object` sources (need
-/// per-index `ToNumber`/property-read coercion) and for wider or BigInt
-/// `TypedArray` kinds (need per-element numeric coercion) — those fall back
-/// to [`collect_buffer_set_bytes`].
-///
-/// Resolving through [`super::view::resolve_data_ptr`] / [`crate::
-/// typedarray::data_ptr`] here (once) rather than through [`js_buffer_get`]
-/// / [`crate::typedarray::js_typed_array_get`] per byte (#10088) is what
-/// collapses the view-registry lookup from O(n) to O(1) per call.
-unsafe fn bulk_copy_source_ptr(source: BufferSetSource) -> Option<*const u8> {
+/// Byte-width typed sources can be copied together within one NoGc scope.
+fn bulk_source_is_bytes(source: BufferSetSource) -> bool {
     match source {
-        BufferSetSource::Buffer(ptr) => {
-            if ptr.is_null() {
-                None
-            } else {
-                Some(super::view::resolve_data_ptr(ptr))
-            }
-        }
-        BufferSetSource::TypedArray(ptr) => {
-            let kind = crate::typedarray::lookup_typed_array_kind(ptr as usize)?;
-            matches!(
-                kind,
+        BufferSetSource::Buffer(ptr) => !ptr.is_null(),
+        BufferSetSource::TypedArray(ptr) => matches!(
+            crate::typedarray::lookup_typed_array_kind(ptr as usize),
+            Some(
                 crate::typedarray::KIND_INT8
                     | crate::typedarray::KIND_UINT8
                     | crate::typedarray::KIND_UINT8_CLAMPED
             )
-            .then(|| crate::typedarray::data_ptr(ptr))
-        }
-        BufferSetSource::Array(_) | BufferSetSource::Object(_) | BufferSetSource::Empty => None,
+        ),
+        _ => false,
     }
 }
 
@@ -218,13 +205,11 @@ unsafe fn bulk_copy_source_ptr(source: BufferSetSource) -> Option<*const u8> {
 /// (`js_buffer_index_get_value`) so their read semantics never drift.
 #[inline]
 unsafe fn read_buffer_byte(buf_ptr: *const BufferHeader, index: i32) -> Option<u8> {
-    if buf_ptr.is_null() || index < 0 || index as u32 >= (*buf_ptr).length {
+    if buf_ptr.is_null() || index < 0 || index as usize >= super::store::length(buf_ptr as usize) {
         return None;
     }
     let data = byte_access_data(buf_ptr);
-    let gc =
-        &*((buf_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
-    if gc._reserved & crate::gc::GC_BUFFER_VIEW_DATA != 0 {
+    if super::is_shared_array_buffer(super::store::owner(buf_ptr as usize)) {
         // A pointer-backed view may alias a SAB on another agent. Relaxed
         // atomic bytes preserve ordinary shared-memory reads without allowing
         // the optimizer to treat their contents as loop-invariant.
@@ -236,63 +221,49 @@ unsafe fn read_buffer_byte(buf_ptr: *const BufferHeader, index: i32) -> Option<u
     Some(*data.add(index as usize))
 }
 
-/// The byte data of a buffer an element access is about to touch, resolving a
-/// registered view to its backing exactly as [`buffer_data`] does — and, for an
-/// owning buffer, admitting it to the inline-access cache (#10515) so the next
-/// access through ANY site (the emitted guards, and the cache test at the top
-/// of the runtime accessors) skips the registry probes entirely. A view is
-/// answered from its pointer slot (or metadata for a rebindable backing)
-/// and never pays for the admission attempt; only non-admissible owners — foreign-backed
-/// spans, a stale-hint ArrayBuffer — retry it on each access.
+/// Resolve the current owner store immediately before a leaf element access.
 #[inline]
 pub(crate) unsafe fn byte_access_data(buf_ptr: *const BufferHeader) -> *mut u8 {
-    let addr = buf_ptr as usize;
-    let gc =
-        &*((buf_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
-    if gc._reserved & crate::gc::GC_BUFFER_VIEW_DATA != 0 {
-        return super::view::cached_data_ptr(buf_ptr) as *mut u8;
-    }
-    if let Some(info) = super::view::lookup(addr) {
-        return (buffer_data(info.backing as *const BufferHeader) as *mut u8)
-            .add(info.offset as usize);
-    }
-    super::header::u8_inline_cache_try_prime(addr);
-    buffer_data(buf_ptr) as *mut u8
+    super::store::data(buf_ptr as usize)
 }
 
-/// #10515: the inline-access cache hit shared by every runtime byte accessor.
-/// `Some(byte)` when `addr` is an admitted owning byte view and `index` is in
-/// bounds; `None` sends the caller down its unchanged dispatch (which answers
-/// out-of-range reads itself). The cache contract makes this read exactly what
-/// `read_buffer_byte` would return, without the typed-array and buffer
-/// registry probes that precede it.
 #[inline(always)]
-pub(crate) fn cached_u8_read(addr: usize, index: i32) -> Option<u8> {
-    if !super::header::u8_inline_cache_hit(addr) {
+pub(crate) fn admitted_u8_read(addr: usize, index: i32) -> Option<u8> {
+    let obj_type = super::header::byte_cell_type(addr)?;
+    if !matches!(
+        obj_type & !0x20,
+        crate::gc::GC_TYPE_BUFFER | crate::gc::GC_TYPE_BUFFER_UINT8ARRAY
+    ) {
         return None;
     }
-    unsafe {
-        let len = *(addr as *const u32);
-        if index < 0 || index as u32 >= len {
-            return None;
-        }
-        Some(*((addr + std::mem::size_of::<BufferHeader>()) as *const u8).add(index as usize))
-    }
+    unsafe { read_buffer_byte(addr as *const BufferHeader, index) }
 }
 
-/// Store twin of [`cached_u8_read`]: `true` when the byte was written.
+/// Could `addr` be a cell `admitted_u8_read` / `admitted_u8_write` serve (a
+/// Node `Buffer` owner or view)? One header load and one compare, so a
+/// dispatcher can keep every other receiver off the out-of-line byte arm. A
+/// filter only: the arm itself proves the cell before reading it.
 #[inline(always)]
-pub(crate) fn cached_u8_write(addr: usize, index: i32, byte: u8) -> bool {
-    if !super::header::u8_inline_cache_hit(addr) {
+pub(crate) fn is_admitted_u8_cell(addr: usize) -> bool {
+    unsafe { crate::value::addr_class::try_read_gc_header(addr) }
+        .is_some_and(|header| header.obj_type & !0x20 == crate::gc::GC_TYPE_BUFFER)
+}
+
+#[inline(always)]
+pub(crate) fn admitted_u8_write(addr: usize, index: i32, byte: u8) -> bool {
+    let Some(obj_type) = super::header::byte_cell_type(addr) else {
+        return false;
+    };
+    if !matches!(
+        obj_type & !0x20,
+        crate::gc::GC_TYPE_BUFFER | crate::gc::GC_TYPE_BUFFER_UINT8ARRAY
+    ) {
         return false;
     }
-    unsafe {
-        let len = *(addr as *const u32);
-        if index < 0 || index as u32 >= len {
-            return false;
-        }
-        super::bytes::write_admitted_inline_byte(addr, index as usize, byte);
+    if index < 0 || index as usize >= unsafe { super::store::length(addr) } {
+        return false;
     }
+    js_buffer_set(addr as *mut BufferHeader, index, byte as i32);
     true
 }
 
@@ -338,14 +309,12 @@ pub extern "C" fn js_buffer_set(buf_ptr: *mut BufferHeader, index: i32, value: i
         return;
     }
     unsafe {
-        if index as u32 >= (*buf_ptr).length {
+        if index as usize >= super::store::length(buf_ptr as usize) {
             return;
         }
         let byte = (value & 0xFF) as u8;
         let data = byte_access_data(buf_ptr);
-        let gc =
-            &*((buf_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
-        if gc._reserved & crate::gc::GC_BUFFER_VIEW_DATA != 0 {
+        if super::is_shared_array_buffer(super::store::owner(buf_ptr as usize)) {
             (*(data.add(index as usize) as *const std::sync::atomic::AtomicU8))
                 .store(byte, std::sync::atomic::Ordering::Relaxed);
             return;
@@ -414,11 +383,14 @@ pub extern "C" fn js_buffer_set_from_value(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
+    let roots = crate::gc::RuntimeHandleScope::new();
+    let target_root = roots.root_raw_mut_ptr(target);
+    let source_root = roots.root_nanbox_u64(source_value.to_bits());
     let offset = to_integer_or_zero(offset_value);
-    let source = decode_buffer_set_source(source_value);
+    let source = decode_buffer_set_source(f64::from_bits(source_root.get_nanbox_u64()));
 
     unsafe {
-        let target_len = (*target).length as usize;
+        let target_len = (super::store::length(target as usize) as u32) as usize;
         let source_len = buffer_set_source_len(source);
         if offset < 0 {
             super::numeric::throw_out_of_range();
@@ -431,23 +403,63 @@ pub extern "C" fn js_buffer_set_from_value(
             super::numeric::throw_out_of_range();
         }
 
-        match bulk_copy_source_ptr(source) {
-            Some(src_data) if source_len > 0 => {
-                // `ptr::copy` (memmove) rather than `copy_nonoverlapping`:
-                // `src_data` can legitimately point into the same backing
-                // buffer `target` is a view of (or vice versa), e.g.
-                // `buf.set(buf.subarray(2))`, so source and destination
-                // ranges may overlap for real.
-                let target_data = buffer_data_mut(target).add(offset);
-                ptr::copy(src_data, target_data, source_len);
-            }
-            Some(_) => {}
-            None => {
-                let bytes = collect_buffer_set_bytes(source, source_len);
-                if !bytes.is_empty() {
-                    let target_data = buffer_data_mut(target).add(offset);
-                    ptr::copy_nonoverlapping(bytes.as_ptr(), target_data, bytes.len());
+        if bulk_source_is_bytes(source) {
+            let source_value = f64::from_bits(source_root.get_nanbox_u64());
+            let copied = super::bytes::no_gc(|_| {
+                let src = super::bytes::span(source_value, false)?;
+                let dst = super::bytes::span(
+                    crate::value::js_nanbox_pointer(
+                        target_root.get_raw_mut_ptr::<BufferHeader>() as i64
+                    ),
+                    true,
+                )?;
+                if source_len > src.len
+                    || offset
+                        .checked_add(source_len)
+                        .is_none_or(|end| end > dst.len)
+                {
+                    return Ok(false);
                 }
+                // Aliased JS views require memmove, without overlapping Rust borrows.
+                ptr::copy(src.ptr, dst.ptr.add(offset), source_len);
+                Ok::<_, super::bytes::NotBytes>(true)
+            });
+            match copied {
+                Ok(true) => (),
+                Ok(false) => super::numeric::throw_out_of_range(),
+                Err(super::bytes::NotBytes::Frozen) => {
+                    crate::typedarray::throw_type_error(b"Cannot modify a frozen typed array")
+                }
+                Err(_) => crate::typedarray::throw_type_error(
+                    b"Cannot perform set on a detached ArrayBuffer",
+                ),
+            }
+        } else {
+            let copied = collect_buffer_set_bytes(
+                decode_buffer_set_source(f64::from_bits(source_root.get_nanbox_u64())),
+                source_len,
+            );
+            let written = super::bytes::no_gc(|scope| {
+                super::bytes::bytes_mut(
+                    crate::value::js_nanbox_pointer(
+                        target_root.get_raw_mut_ptr::<BufferHeader>() as i64
+                    ),
+                    scope,
+                )
+                .map(|dst| {
+                    if offset
+                        .checked_add(copied.len())
+                        .is_some_and(|end| end <= dst.len())
+                    {
+                        dst[offset..offset + copied.len()].copy_from_slice(&copied);
+                        true
+                    } else {
+                        false
+                    }
+                })
+            });
+            if written != Ok(true) {
+                super::numeric::throw_out_of_range();
             }
         }
     }
@@ -474,7 +486,7 @@ pub extern "C" fn js_buffer_slice(
 }
 
 fn slice_bounds(buf: *const BufferHeader, start: i32, end: i32) -> (u32, u32) {
-    let len = unsafe { (*buf).length as i64 };
+    let len = unsafe { (super::store::length(buf as usize) as u32) as i64 };
     let bound = |index: i32| {
         if index < 0 {
             (len + index as i64).max(0)
@@ -498,13 +510,17 @@ pub(crate) fn buffer_slice_copy(
     let source = scope.root_raw_const_ptr(buf);
     let result = buffer_alloc(length);
     unsafe {
-        (*result).length = length;
-        source.with_const_ptr::<BufferHeader, _>(|buf| {
-            ptr::copy_nonoverlapping(
-                buffer_data(buf).add(start as usize),
-                buffer_data_mut(result),
-                length as usize,
-            );
+        super::store::set_length(result as usize, length);
+        super::bytes::no_gc(|scope| {
+            let src = super::bytes::bytes(
+                crate::value::js_nanbox_pointer(source.get_raw_const_ptr::<BufferHeader>() as i64),
+                scope,
+            )
+            .unwrap();
+            let dst =
+                super::bytes::bytes_mut(crate::value::js_nanbox_pointer(result as i64), scope)
+                    .unwrap();
+            dst.copy_from_slice(&src[start as usize..start as usize + length as usize]);
         });
     }
     result

@@ -264,6 +264,12 @@ impl ShapeDescriptor {
 pub(crate) struct ShapeRecordRef(std::ptr::NonNull<ShapeRecord>);
 
 impl ShapeRecordRef {
+    #[inline]
+    pub(crate) fn weak_collection_brand(self) -> Option<u32> {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).weak_collection_brand() }
+    }
+
     /// The authoritative layout kind, without lifting a descriptor copy.
     #[inline]
     pub(crate) fn object_kind(self) -> ShapeObjectKind {
@@ -2470,6 +2476,15 @@ pub(crate) fn shape_descriptor_by_id(shape_id: u32) -> Option<ShapeDescriptor> {
 pub(crate) fn shape_record_by_id(shape_id: u32) -> Option<ShapeRecordRef> {
     let record = ShapeSlab::agent_record_present(shape_id)?;
     std::ptr::NonNull::new(record).map(ShapeRecordRef)
+}
+
+/// Whether a previously published ShapeId no longer names a live record in
+/// this agent's shape table. ShapeIds are never reused: a retired receiver
+/// cannot compete with a live one in a read cache.
+/// Miss paths only; hit paths validate their existing shape/holder/lane facts.
+#[inline]
+pub(crate) fn shape_is_retired(shape_id: u32) -> bool {
+    ShapeSlab::agent_record_present(shape_id).is_none()
 }
 
 /// The field-representation word (`field_rep`) of `shape_id` in this agent,

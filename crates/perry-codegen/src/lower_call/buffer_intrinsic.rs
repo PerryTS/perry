@@ -10,7 +10,7 @@ use perry_hir::Expr;
 
 use crate::expr::{access_facts_for_spec, attach_buffer_view_facts, BufferAccessSpec, FnCtx};
 use crate::native_value::{BufferEndian, LoweredValue};
-use crate::types::{F32, I32};
+use crate::types::{DOUBLE, F32, I1, I32, I64, PTR};
 
 /// Issue #92: inline Buffer numeric reads (`buf.readInt32BE(offset)` etc.)
 /// as LLVM load + bswap + convert instead of a runtime dispatch through
@@ -341,42 +341,12 @@ pub(crate) fn module_shadows_buffer_read_method(module: &perry_hir::Module) -> b
     found
 }
 
-pub(super) fn try_emit_buffer_read_intrinsic(
-    ctx: &mut FnCtx<'_>,
-    object: &Expr,
-    method: &str,
-    args: &[Expr],
-) -> Result<Option<LoweredValue>> {
-    // #6405: an own property shadows the same-named Buffer.prototype method.
-    // If the module assigns any such method name as a property, deopt the
-    // inline read fold so the call routes through the own-prop-aware runtime
-    // dispatch. The flag is module-wide but only set for programs that
-    // actually shadow, so the fast path is unaffected everywhere else.
-    if ctx.program_shadows_buffer_read_method {
-        return Ok(None);
-    }
-    let spec = match classify_buffer_numeric_read(method) {
-        Some(s) => s,
-        None => return Ok(None),
-    };
-    // Node-style readers take exactly one `offset` arg. `readUInt8(offset)`
-    // allows omitted offset but the compiler sees that as 0-arg; not our
-    // concern here — fall through to runtime which handles the default.
-    if args.len() != 1 {
-        return Ok(None);
-    }
-    let access_spec = BufferAccessSpec::buffer_numeric_read(
-        spec.width_bytes,
-        spec.endian,
-        spec.signed,
-        spec.is_float,
-    );
-    let Some(proof) = crate::expr::lower_buffer_access_proof(ctx, object, &args[0], access_spec)?
-    else {
-        return Ok(None);
-    };
-    let emission = crate::expr::emit_buffer_access_pointer(ctx, &proof, access_spec);
-    let blk = ctx.block();
+fn emit_numeric_load(
+    blk: &mut crate::block::LlBlock,
+    spec: &BufferNumericReadSpec,
+    element_ptr: &str,
+    alias_metadata: &str,
+) -> LoweredValue {
     // Load raw bytes at the correct width.
     let (load_ty, swap_intrinsic) = match spec.width_bytes {
         1 => ("i8", None),
@@ -386,14 +356,10 @@ pub(super) fn try_emit_buffer_read_intrinsic(
         _ => unreachable!(),
     };
     let raw = blk.fresh_reg();
-    let load_align = if access_spec.index_unit == crate::native_value::BufferIndexUnit::Byte {
-        1
-    } else {
-        spec.width_bytes.max(1)
-    };
+    let load_align = 1;
     blk.emit_raw(format!(
         "{} = load {}, ptr {}, align {}{}",
-        raw, load_ty, emission.elem_ptr, load_align, emission.alias_metadata
+        raw, load_ty, element_ptr, load_align, alias_metadata
     ));
     // Byte-swap for BE on multi-byte widths (swap.i8 doesn't exist; width=1
     // never has `swap=true` in the spec table anyway).
@@ -448,7 +414,7 @@ pub(super) fn try_emit_buffer_read_intrinsic(
                 // Signed 8-byte reads (BigInt64) would need BigInt allocation;
                 // only reach here for width_bytes==8 when is_float, which already
                 // returned above. Defensive early-out.
-                return Ok(None);
+                unreachable!("eight-byte integer readers are not classified here");
             }
             _ => unreachable!(),
         };
@@ -458,6 +424,150 @@ pub(super) fn try_emit_buffer_read_intrinsic(
             LoweredValue::u32(i32_val)
         }
     };
+    result
+}
+
+/// Buffer parameters use the same owner/view guard and retained starts as
+/// indexed typed parameters. Named-method shadows go through normal dispatch.
+fn emit_guarded_param_read(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    method: &str,
+    index: &Expr,
+    spec: &BufferNumericReadSpec,
+) -> Result<LoweredValue> {
+    let boxed = crate::expr::lower_expr(ctx, object)?;
+    let index = crate::expr::lower_expr_as_i32(ctx, index)?;
+    let slow = ctx.new_block("bytes.numeric.slow");
+    let load = ctx.new_block("bytes.numeric.load");
+    let done = ctx.new_block("bytes.numeric.done");
+    let slow_l = ctx.block_label(slow);
+    let load_l = ctx.block_label(load);
+    let done_l = ctx.block_label(done);
+    let access = crate::expr::byte_cell::resolve_read(
+        ctx,
+        object,
+        &boxed,
+        &[crate::runtime_abi::GC_TYPE_BUFFER],
+        &slow_l,
+    );
+    let id = match object {
+        Expr::LocalGet(id) => *id,
+        _ => unreachable!(),
+    };
+    let cache = ctx
+        .receiver_descriptors
+        .byte_view_param(id)
+        .unwrap()
+        .clone();
+    // A view's direct owner link proves no own props; an owner needs link=0.
+    let owner = ctx.block().load(DOUBLE, &cache.owner_root_slot);
+    let owner_bits = ctx.block().bitcast_double_to_i64(&owner);
+    let receiver_bits = ctx.block().bitcast_double_to_i64(&boxed);
+    let view = ctx.block().icmp_ne(I64, &owner_bits, &receiver_bits);
+    let link_addr = ctx.block().add(
+        I64,
+        &access.raw,
+        &crate::runtime_abi::BYTES_LINK.to_string(),
+    );
+    let link_ptr = ctx.block().inttoptr(I64, &link_addr);
+    let link = ctx.block().load(I64, &link_ptr);
+    let no_bag = ctx.block().icmp_eq(I64, &link, "0");
+    let no_shadow = ctx.block().or(I1, &view, &no_bag);
+    let width = spec.width_bytes.to_string();
+    let enough = ctx.block().icmp_uge(I32, &access.len, &width);
+    let last = ctx.block().sub(I32, &access.len, &width);
+    let in_bounds = ctx.block().icmp_ule(I32, &index, &last);
+    let in_bounds = ctx.block().and(I1, &enough, &in_bounds);
+    let admitted = ctx.block().and(I1, &no_shadow, &in_bounds);
+    ctx.block().cond_br(&admitted, &load_l, &slow_l);
+    ctx.current_block = load;
+    let offset = ctx.block().zext(I32, &index, I64);
+    let addr = ctx.block().add(I64, &access.data, &offset);
+    let ptr = ctx.block().inttoptr(I64, &addr);
+    let fast = emit_numeric_load(ctx.block(), spec, &ptr, "");
+    let fast = crate::expr::materialize_js_value(
+        ctx,
+        fast,
+        crate::native_value::MaterializationReason::FunctionAbi,
+    );
+    let fast_l = ctx.block().label.clone();
+    ctx.block().br(&done_l);
+    ctx.current_block = slow;
+    let argument = ctx.block().sitofp(I32, &index, DOUBLE);
+    let arguments = ctx.func.alloca_entry(DOUBLE);
+    ctx.block().store(DOUBLE, &argument, &arguments);
+    let key = ctx.strings.intern(method);
+    let name = format!("@{}", ctx.strings.entry(key).bytes_global);
+    let length = method.len();
+    let result = ctx.block().call(
+        DOUBLE,
+        "js_native_call_method",
+        &[
+            (DOUBLE, &boxed),
+            (PTR, &name),
+            (I64, &length.to_string()),
+            (PTR, &arguments),
+            (I64, "1"),
+        ],
+    );
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&done_l);
+    ctx.current_block = done;
+    let result = ctx
+        .block()
+        .phi(DOUBLE, &[(&fast, &fast_l), (&result, &slow_end)]);
+    Ok(LoweredValue::js_value(result))
+}
+
+pub(super) fn try_emit_buffer_read_intrinsic(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    method: &str,
+    args: &[Expr],
+) -> Result<Option<LoweredValue>> {
+    // #6405: an own property shadows the same-named Buffer.prototype method.
+    // If the module assigns any such method name as a property, deopt the
+    // inline read fold so the call routes through the own-prop-aware runtime
+    // dispatch. The flag is module-wide but only set for programs that
+    // actually shadow, so the fast path is unaffected everywhere else.
+    if ctx.program_shadows_buffer_read_method {
+        return Ok(None);
+    }
+    let spec = match classify_buffer_numeric_read(method) {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+    // Node-style readers take exactly one `offset` arg. `readUInt8(offset)`
+    // allows omitted offset but the compiler sees that as 0-arg; not our
+    // concern here — fall through to runtime which handles the default.
+    if args.len() != 1 {
+        return Ok(None);
+    }
+    if let Expr::LocalGet(id) = object {
+        if ctx.receiver_descriptors.byte_view_param(*id).is_some()
+            && crate::expr::numeric_index_has_integer_array_index_proof(ctx, &args[0])
+        {
+            return emit_guarded_param_read(ctx, object, method, &args[0], &spec).map(Some);
+        }
+    }
+    let access_spec = BufferAccessSpec::buffer_numeric_read(
+        spec.width_bytes,
+        spec.endian,
+        spec.signed,
+        spec.is_float,
+    );
+    let Some(proof) = crate::expr::lower_buffer_access_proof(ctx, object, &args[0], access_spec)?
+    else {
+        return Ok(None);
+    };
+    let emission = crate::expr::emit_buffer_access_pointer(ctx, &proof, access_spec);
+    let result = emit_numeric_load(
+        ctx.block(),
+        &spec,
+        &emission.elem_ptr,
+        &emission.alias_metadata,
+    );
     let buffer_view = crate::expr::buffer_view_lowered_value(
         &emission.data_ptr,
         &emission.len_i32,

@@ -317,6 +317,12 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
         "registered: u32 — the Symbol.for flag is exactly 0 or 1",
         Rule3Word::StructurallySmall,
     ),
+    (
+        gc::GC_TYPE_WEAK_STORAGE,
+        "WeakStorage",
+        "len: u32 <= capacity; storage::grow bounds capacity by the u32 allocation size / 28",
+        Rule3Word::BoundedBelowRange,
+    ),
 ];
 
 /// Rule 3, checked where the word is written.
@@ -428,9 +434,15 @@ mod tests {
     /// new kind would otherwise silently inherit "nobody looked".
     #[test]
     fn rule3_table_covers_every_gc_kind() {
-        for kind in 1..=gc::GC_TYPE_MAX {
+        for info in gc::gc_type_infos() {
+            let kind = info.type_id;
             assert!(
-                RULE3_KINDS.iter().any(|(k, ..)| *k == kind),
+                RULE3_KINDS.iter().any(|(k, ..)| *k == kind)
+                    || (gc::is_byte_family_type(kind)
+                        && RULE3_KINDS
+                            .iter()
+                            .any(|(k, _, _, verdict)| *k == gc::GC_TYPE_BUFFER
+                                && *verdict == Rule3Word::BoundedBelowRange)),
                 "GC kind {kind} has no rule-3 verdict: what does it store at payload +4, \
                  and can that value land in [{SHAPE_ID_BASE:#x}, {SHAPE_ID_END:#x})?"
             );
@@ -438,7 +450,7 @@ mod tests {
         // And nothing stale: every row names a live kind.
         for (kind, name, ..) in RULE3_KINDS {
             assert!(
-                (1..=gc::GC_TYPE_MAX).contains(kind),
+                gc::gc_type_info(*kind).is_some(),
                 "{name} names GC kind {kind}, which no longer exists"
             );
         }

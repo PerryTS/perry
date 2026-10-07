@@ -183,7 +183,7 @@ unsafe fn read_bytes<const N: usize>(buf: *const BufferHeader, offset: i64) -> [
     if buf.is_null() || offset < 0 {
         throw_dataview_oob();
     }
-    let len = (*buf).length as i64;
+    let len = (super::store::length(buf as usize) as u32) as i64;
     if offset + (N as i64) > len {
         // Failure path only: a view its resizable buffer shrank past has a
         // zeroed length, and the spec's answer for it is a TypeError
@@ -205,7 +205,7 @@ unsafe fn write_bytes(buf: *mut BufferHeader, offset: i64, bytes: &[u8]) {
     if buf.is_null() || offset < 0 {
         throw_dataview_oob();
     }
-    let len = (*buf).length as i64;
+    let len = (super::store::length(buf as usize) as u32) as i64;
     // Detach zeroes every registered view's length before decommitting backing
     // pages. Keep the common non-empty path table-free; only a zero-length view
     // needs to distinguish detached TypeError from ordinary RangeError.
@@ -371,8 +371,8 @@ pub fn js_data_view_set(
 ) -> f64 {
     // Both inputs are already Numbers and ToIndex is already resolved: no call
     // below can allocate, invoke JavaScript, collect, or move/reclaim `buf`.
-    // Avoid publishing a transient GC root and use the construction-time data
-    // pointer cache instead of probing VIEW_REGISTRY on every numeric write.
+    // Avoid publishing a transient GC root; the write resolves the data
+    // pointer from the view cell and its current owner.
     if !kind.is_bigint() && crate::value::JSValue::from_bits(value.to_bits()).is_number() {
         if let Some(offset) = numeric_byte_offset(offset_value) {
             let buf = unbox_buffer_ptr(buf_f64.to_bits()) as *mut BufferHeader;
@@ -421,8 +421,7 @@ fn data_view_direct_receiver(recv: f64, method_name: &str) -> Option<usize> {
     // `dv.getFloat64 = fn` style shadows live in the buffer own-props table;
     // the monotonic flag keeps this probe (a process-global mutex) off the
     // hot path for programs that never store props on a buffer.
-    if super::buffer_own_props_possible() && super::buffer_get_own_prop(addr, method_name).is_some()
-    {
+    if super::buffer_get_own_prop(addr, method_name).is_some() {
         return None;
     }
     Some(addr)

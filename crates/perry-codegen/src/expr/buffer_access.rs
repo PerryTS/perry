@@ -330,10 +330,10 @@ pub(crate) fn lower_buffer_access_proof(
         return Ok(None);
     }
 
-    // A tracked ArrayBuffer/native-arena view caches a raw backing pointer in
-    // `data_slot`. Moving GC rewrites `TYPED_ARRAY_VIEW_META.backing`, not that
-    // compiler-created alloca, and native-arena disposal can invalidate it
-    // outright. If evaluating the index can collect or re-enter user code,
+    // A view over an ArrayBuffer or NativeArena owner holds a raw data pointer
+    // in `data_slot` that was resolved from its owner. Detach, resize and
+    // native-arena disposal change the owner, not that compiler-created
+    // alloca. If evaluating the index can collect or re-enter user code,
     // decline before evaluating anything; the caller's dynamic path keeps the
     // receiver rooted and resolves its current backing at the consuming call.
     // Fresh inline Buffer/TypedArray storage is explicitly non-movable, so its
@@ -412,29 +412,18 @@ pub(crate) fn emit_buffer_access_pointer(
     }
     let blk = ctx.block();
     let data_ptr = blk.load(PTR, &proof.view.data_slot);
-    let len_i32 = if region_proven {
-        // Only for callers that consume the length; dead otherwise.
-        let header_ptr = blk.gep(
-            I8,
-            &data_ptr,
-            &[(I32, &proof.view.length_offset_from_data.to_string())],
-        );
-        blk.load(I32, &header_ptr)
-    } else if let Some(length_slot) = proof.view.length_slot.as_ref() {
+    let len_i32 = if let Some(length_slot) = proof.view.length_slot.as_ref() {
         blk.load(I32, length_slot)
+    } else if let Some(crate::native_value::LengthSource::Constant(len)) = proof.view.length_source
+    {
+        len.to_string()
     } else {
-        let header_ptr = blk.gep(
-            I8,
-            &data_ptr,
-            &[(I32, &proof.view.length_offset_from_data.to_string())],
+        assert!(
+            region_proven,
+            "a byte view must carry its receiver length independently of its data pointer"
         );
-        // `!invariant.load` only when nothing can detach the receiver: JS
-        // between two accesses (`buffer.transfer()`) zeroes the length.
-        if proof.view.length_fixed {
-            blk.load_invariant(I32, &header_ptr)
-        } else {
-            blk.load(I32, &header_ptr)
-        }
+        // A region proof consumed its bound at admission; this value is dead.
+        "0".to_string()
     };
     if proof.may_emit_inbounds && !region_proven {
         let bounds_width_units = spec.bounds_width_units();

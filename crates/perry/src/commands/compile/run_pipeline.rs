@@ -1224,6 +1224,12 @@ pub fn run_with_parse_cache(
     perry_codegen::set_program_patched_proto_methods(perry_hir::patched_prototype_methods(
         &ctx.patched_builtins,
     ));
+    // The compile's one routing decision: codegen emits a wrapper's install
+    // hook and calls only for modules it routes to that wrapper, exactly the
+    // wrappers the linker links. A module it leaves without any provider is a
+    // compile error, not a call that fails at run time.
+    optimized_libs::check_native_providers(&ctx)?;
+    perry_codegen::set_program_native_routing(ctx.native_routing.clone());
     if program_has_worker && verbose > 0 {
         eprintln!(
             "  #10399: program constructs a worker_threads Worker — \
@@ -1233,31 +1239,17 @@ pub fn run_with_parse_cache(
 
     let non_entry_module_names: Vec<String> =
         topo_sort_non_entry_modules(&ctx, &entry_path, format, verbose);
-    // #10428/#10429: every imported module the well-known flip serves from a
-    // provider crate (net, http/https/http2) gets that provider's install
-    // wrapper called from the entry prologue, so the provider's export
-    // dispatcher is live for module objects the runtime creates itself (a
-    // CommonJS `require('net')` goes through `createRequire`, not codegen).
-    // No flip, no provider on the link line: emit nothing — except for the
-    // bindings whose wrapper is the only provider (`net`), which the flip
-    // routes even with PERRY_DISABLE_WELL_KNOWN=1 (tokio lane L4).
-    // A `tls` import installs the `net` provider too: `tls.connect` is
-    // perry-ext-net's, and its install hook registers it with the runtime
-    // for the `tls` module's dynamic dispatch (tokio lane L4).
-    let imports_tls = ctx
-        .native_module_imports
-        .iter()
-        .any(|m| m.strip_prefix("node:").unwrap_or(m) == "tls");
-    let mut native_provider_installs: Vec<String> = perry_codegen::native_provider_install_symbols(
-        ctx.native_module_imports
-            .iter()
-            .map(String::as_str)
-            .chain(imports_tls.then_some("net"))
-            .filter(|module| {
-                optimized_libs::well_known_flip_enabled()
-                    || optimized_libs::wrapper_is_sole_provider(module)
-            }),
-    );
+    // #10428/#10429: every program module the routing decision serves from a
+    // wrapper with an install hook (net, http/https/http2 normally; only net
+    // with PERRY_DISABLE_WELL_KNOWN=1) gets that hook called from the entry
+    // prologue, so the wrapper's export dispatcher is live for module objects
+    // the runtime creates itself (a CommonJS `require('net')` goes through
+    // `createRequire`, not codegen). A `tls` import counts as `net`
+    // (`well_known_iteration_set`): `tls.connect` is perry-ext-net's.
+    let program_modules = optimized_libs::well_known_iteration_set(&ctx);
+    let mut native_provider_installs: Vec<String> = ctx
+        .native_routing
+        .wrapper_install_hooks(program_modules.iter().map(String::as_str));
     // #11616: only the direct `process.getBuiltinModule(id)` call reaches the
     // devirt entry that arms the install-all hooks. Reached any other way — a
     // `const proc = process` alias, `process?.getBuiltinModule?.(id)` — the

@@ -110,8 +110,8 @@ fn native_backed_alloc_buffer_consumer_preserves_the_pointer_word() {
 fn every_current_byte_placement_and_view_resolves_the_canonical_window() {
     let _guard = guard(2);
     let ab = buffer::js_array_buffer_new(16);
-    unsafe {
-        *buffer::buffer_data_mut(ab).add(4) = 77;
+    {
+        buffer::js_buffer_set(ab, 4, 77);
     }
     let u8view = buffer::js_buffer_slice(ab, 4, 8);
     let dv = buffer::js_buffer_slice(ab, 4, 8);
@@ -125,8 +125,8 @@ fn every_current_byte_placement_and_view_resolves_the_canonical_window() {
     let mut foreign = [77, 0, 0, 0];
     let foreign_cell = buffer::buffer_alloc_foreign(foreign.as_mut_ptr(), 4);
     let shared = crate::shared_sab::alloc_shared_sab(4);
-    unsafe {
-        *buffer::buffer_data_mut(shared) = 77;
+    {
+        buffer::js_buffer_set(shared, 0, 77);
     }
     let inline = bytes::from_slice(Brand::Buffer, &foreign);
     for value in [
@@ -187,6 +187,8 @@ fn no_gc_byte_allocation_is_rejected() {
 fn process_shared_pins_leave_the_global_header_read_only() {
     let _guard = guard(0);
     let shared = crate::shared_sab::alloc_shared_sab(32);
+    let shared = crate::shared_sab::shared_store_owner(shared as usize).unwrap()
+        as *mut buffer::BufferHeader;
     let value = bits(shared);
     let header = unsafe { crate::gc::header_from_trusted_user_ptr(shared.cast()) };
     let before = unsafe { ((*header).gc_flags, (*header)._reserved) };
@@ -289,9 +291,9 @@ fn native_arena_dispose_defers_free_until_unpin() {
         *pin.as_mut_ptr() = 62;
     }
     crate::native_arena::js_native_arena_dispose(owner as u64);
-    assert_ne!(unsafe { (*owner).disposed }, 0);
+    assert!(buffer::is_detached_buffer(owner as usize));
     assert!(
-        !unsafe { (*owner).data }.is_null(),
+        !unsafe { buffer::store::owner_data(owner as usize) }.is_null(),
         "dispose freed pinned native arena bytes"
     );
     unsafe {
@@ -299,7 +301,7 @@ fn native_arena_dispose_defers_free_until_unpin() {
     }
     drop(pin);
     assert!(
-        unsafe { (*owner).data }.is_null(),
+        unsafe { buffer::store::owner_data(owner as usize) }.is_null(),
         "last unpin must pay the deferred release"
     );
 }

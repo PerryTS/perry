@@ -148,9 +148,10 @@ fn build_interleaved_static_init_stmts_impl(
         // be emitted (value = undefined) rather than dropped: (1) the key
         // expression has observable side effects, and (2) a key that evaluates
         // to "prototype" is a TypeError (test262 fields-computed-name-static-
-        // *propname-prototype). A NON-computed uninit static field is a plain
-        // named slot and keeps the pre-existing "skip when no init" behavior.
-        if sf.init.is_none() && sf.key_expr.is_none() {
+        // *propname-prototype). An uninitialized private field must also be
+        // added here, at its source position, with value undefined. Public
+        // named slots retain their existing early registration path.
+        if sf.init.is_none() && sf.key_expr.is_none() && !sf.is_private {
             return;
         }
         // `this` in a static field initializer is the class constructor.

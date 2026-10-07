@@ -10,6 +10,8 @@ use crate::string::{
 mod access;
 mod backing;
 #[cfg(test)]
+mod byte_cell_admission_tests;
+#[cfg(test)]
 pub(crate) use backing::LIVE_BACKINGS;
 pub mod bytes;
 pub use backing::TransferredBacking;
@@ -27,7 +29,7 @@ mod exotic_view;
 #[cfg(test)]
 mod exotic_view_tests;
 mod from;
-mod header;
+pub(crate) mod header;
 /// #10694: the brand is the cell's GC type byte.
 #[cfg(test)]
 mod header_brand_tests;
@@ -35,11 +37,13 @@ mod iter;
 mod mutate;
 mod numeric;
 mod own_props;
+pub(crate) mod pool;
 mod query;
 mod resizable;
 /// #10873: resizable ArrayBuffer storage model + view relength.
 #[cfg(test)]
 mod resizable_tests;
+pub(crate) mod store;
 mod transcode;
 mod u8_codec;
 pub mod validate;
@@ -57,22 +61,18 @@ pub(crate) use header::buffer_payload_size;
 pub use header::{BufferHeader, BUFFER_TYPE_ID, NODE_BUFFER_CLASS_ID, SMALL_BUF_THRESHOLD};
 
 // ---- Re-exports: allocation / registry helpers ----
-pub(crate) use header::{is_small_buf_slab_addr, visit_ab_alias_slot};
+pub(crate) use header::is_small_buf_slab_addr;
 // #9342: primed by `typedarray::js_u8_buffer_read_f64` (codegen slow arm).
-pub(crate) use access::{cached_u8_read, cached_u8_write};
-#[cfg(test)]
-pub(crate) use header::test_u8_inline_cache_holds;
-pub(crate) use header::{u8_inline_cache_hit, u8_inline_cache_try_prime};
+pub(crate) use access::{admitted_u8_read, admitted_u8_write, is_admitted_u8_cell};
 // #10694: the brand is the cell's GC type byte; see `header`'s module note.
 pub use header::{
-    asymmetric_key_meta, buffer_ab_alias, buffer_alloc, buffer_backing_array_buffer,
-    buffer_byte_offset, buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,
+    asymmetric_key_meta, buffer_alloc, buffer_backing_array_buffer, buffer_byte_offset,
+    buffer_data, buffer_data_mut, crypto_key_meta, ensure_buffer_ab_alias,
     external_registries_hold_for_test, is_any_array_buffer, is_array_buffer, is_data_view,
     is_registered_buffer, is_secret_key, is_shared_array_buffer, is_uint8array_buffer,
     js_set_crypto_key_death_hook, mark_as_array_buffer, mark_as_asymmetric_key, mark_as_crypto_key,
     mark_as_data_view, mark_as_secret_key, mark_as_shared_array_buffer, mark_as_uint8array,
-    register_buffer, resolve_buffer_ab_alias, set_buffer_ab_alias, u8_inline_cache_holds_for_test,
-    CryptoKeyDeathHookFn,
+    register_buffer, CryptoKeyDeathHookFn,
 };
 pub(crate) use header::{
     buffer_alloc_foreign, drop_owned_backing_at_thread_exit, finalize_collected_dead_buffer,
@@ -89,20 +89,14 @@ pub(crate) use header::rebind_foreign_buffer;
 // part of the public surface.
 pub use detach::is_detached_buffer;
 pub(crate) use detach::{array_buffer_transfer, detach_array_buffer};
-#[cfg(test)]
-pub(crate) use own_props::test_buffer_own_props_owner_count;
 pub use own_props::{
     buffer_define_own_data_prop, buffer_delete_own_prop, buffer_get_own_prop, buffer_has_own_prop,
-    buffer_own_prop_names, buffer_own_props_possible, buffer_read_own_prop, buffer_set_own_prop,
-    clear_buffer_own_props, scan_buffer_own_props_roots_mut,
+    buffer_own_prop_names, buffer_read_own_prop, buffer_set_own_prop,
 };
 // ---- Re-exports: resizable ArrayBuffer (#10873) ----
 pub use header::resizable_max_byte_length;
-pub(crate) use header::{
-    any_resizable_buffer, mark_as_resizable_buffer, resizable_info, set_resizable_dirty_end,
-    ResizableInfo,
-};
-pub(crate) use resizable::{array_buffer_resize, view_length_after_resize};
+pub(crate) use header::{mark_as_resizable_buffer, resizable_info, ResizableInfo};
+pub(crate) use resizable::array_buffer_resize;
 pub use resizable::{
     is_out_of_bounds_data_view, is_resizable_buffer, js_array_buffer_new_with_options,
 };
@@ -326,8 +320,12 @@ mod tests {
     fn test_buffer_symbol_iterator_uses_values_iterator() {
         let buf = buffer_alloc(3);
         unsafe {
-            (*buf).length = 3;
-            std::ptr::copy_nonoverlapping([7u8, 8, 9].as_ptr(), buffer_data_mut(buf), 3);
+            super::store::set_length(buf as usize, 3);
+            bytes::no_gc(|scope| {
+                bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+                    .unwrap()
+                    .copy_from_slice(&[7, 8, 9])
+            });
         }
         let buf_value = f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits());
         let iter_sym = crate::symbol::well_known_symbol("iterator");
@@ -370,8 +368,8 @@ mod tests {
     fn test_buffer_symbol_iterator_respects_own_symbol_property() {
         let buf = buffer_alloc(1);
         unsafe {
-            (*buf).length = 1;
-            *buffer_data_mut(buf) = 7;
+            super::store::set_length(buf as usize, 1);
+            js_buffer_set(buf, 0, 7);
         }
         let buf_value = f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits());
         let iter_sym = crate::symbol::well_known_symbol("iterator");
@@ -392,8 +390,12 @@ mod tests {
     fn test_array_from_small_buffer_materializes_bytes() {
         let buf = buffer_alloc(4);
         unsafe {
-            (*buf).length = 4;
-            std::ptr::copy_nonoverlapping([1u8, 2, 3, 4].as_ptr(), buffer_data_mut(buf), 4);
+            super::store::set_length(buf as usize, 4);
+            bytes::no_gc(|scope| {
+                bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+                    .unwrap()
+                    .copy_from_slice(&[1, 2, 3, 4])
+            });
         }
 
         let arr = crate::array::js_array_clone(buf as *const crate::array::ArrayHeader);
@@ -427,7 +429,7 @@ mod tests {
                 (buf as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             assert_eq!((*header).obj_type, crate::gc::GC_TYPE_BUFFER);
             assert_ne!((*header).gc_flags & crate::gc::GC_FLAG_TENURED, 0);
-            (*buf).length = cap;
+            super::store::set_length(buf as usize, cap);
         }
 
         js_buffer_set(buf, 0, 0x12);
@@ -544,7 +546,9 @@ mod tests {
     /// Bytes currently in an `ArrayBuffer`'s own storage — the shared truth a
     /// DataView and a typed array over it must both agree with.
     fn backing_bytes(ab: *const BufferHeader, len: usize) -> Vec<u8> {
-        unsafe { std::slice::from_raw_parts(buffer_data(ab), len).to_vec() }
+        bytes::no_gc(|scope| {
+            bytes::bytes(crate::value::js_nanbox_pointer(ab as i64), scope).unwrap()[..len].to_vec()
+        })
     }
 
     /// A `DataView` and a MULTI-BYTE typed array over the same `ArrayBuffer`

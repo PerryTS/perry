@@ -1705,8 +1705,13 @@ pub(crate) unsafe fn own_key_hidden_bytes(obj: *const ObjectHeader, key: &[u8]) 
 /// plain name (`emit`), which `Object.keys` wrongly reported as an own key.
 #[inline]
 pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
-    b == crate::object::map_set_subclass::BACKING_KEY
-        || b == crate::weakref::WEAK_ENTRIES_KEY
+    matches!(
+        b,
+        b"#<perry:array-buffer>"
+            | b"#<perry:view-owner>"
+            | b"#<perry:pin-overflow>"
+            | b"#<perry:prototype>"
+    ) || b == crate::object::map_set_subclass::BACKING_KEY
         || b == crate::object::parent_static::CLASS_OBJECT_PARENT_KEY.as_bytes()
         || b == crate::object::class_registry::evaluation_heritage::INSTANCE_CONSTRUCTING_CLASS_KEY
             .as_bytes()

@@ -23,24 +23,8 @@ use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
 
 use super::FnCtx;
 
-/// #5525 follow-up: guarded **inline** typed-array element STORE for an
-/// `obj[i] = v` whose receiver static type is erased (`any`/unknown) but is, at
-/// runtime, commonly an owning numeric typed array (bcryptjs's `P[i]=`/`S[i]=`
-/// Int32Array boxes). Mirrors [`index_get::lower_inline_dyn_typed_array_get`]:
-/// the same pointer / `PERRY_TA_KIND_CACHE` (tag = kind + storage) / index
-/// guards, then a direct per-kind store into `header + 16 + idx*elem_size`,
-/// falling back to `js_dyn_index_set` on any guard miss. The store result is the
-/// assigned value (`val_double`), matching `js_dyn_index_set`'s return.
-///
-/// Only the kinds with a simple ToInt32/ToUint32 truncating store (Int8/Uint8/
-/// Int16/Uint16/Int32/Uint32) or a direct float store (Float32/Float64) are
-/// inlined — i.e. `kind <= KIND_FLOAT64` (7). Uint8ClampedArray (round-half-to-
-/// even clamp), the BigInt kinds (ToBigInt / throw) and Float16 (f16 encode) are
-/// excluded by the guard and defer to the runtime, which already owns them. The
-/// integer truncation here (`toint32(value)` then narrow) is bit-identical to
-/// the runtime `store_at`'s `to_uint32_bits(value) as <width>`; the float store
-/// is identical to `store_at`'s direct slot write — so behavior matches the
-/// existing runtime fast path exactly.
+/// Access uses the common cell header and current owner storage. Any derived
+/// data address is consumed without collection, or retained with its owner.
 pub(super) fn lower_inline_dyn_typed_array_set(
     ctx: &mut FnCtx<'_>,
     obj_box: &str,
@@ -92,26 +76,19 @@ pub(super) fn lower_inline_dyn_typed_array_set(
     let array_label = ctx.block_label(array_idx);
     let slow_label = ctx.block_label(slow_idx);
     let done_label = ctx.block_label(done_idx);
-    {
-        let blk = ctx.block();
-        let obj_bits = blk.bitcast_double_to_i64(obj_box);
-        let raw = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
-        let slot = blk.lshr(I64, &raw, "3");
-        let slot = blk.and(I64, &slot, "63");
-        let entry_ptr = blk.gep(
-            "[64 x i64]",
-            "@PERRY_TA_KIND_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let entry_val = blk.load(I64, &entry_ptr);
-        let entry_addr = blk.lshr(I64, &entry_val, "8");
-        // A cache entry names a heap address, so a non-pointer box whose low
-        // 48 bits collide with one still fails the full guard in `dynarr.ta`.
-        let cached_typed_array = blk.icmp_eq(I64, &entry_addr, &raw);
-        blk.cond_br(&cached_typed_array, &ta_label, &array_label);
-    }
+    // One header admission decides whether to attempt the typed-array tier.
+    let brands: Vec<u8> = (0..8).map(super::byte_cell::brand_for_kind).collect();
+    let access = super::byte_cell::resolve_write(ctx, obj_box, &brands, &array_label);
+    ctx.block().br(&ta_label);
     ctx.current_block = ta_idx;
-    emit_inline_ta_set(ctx, obj_box, idx_d, val_double, Some(&slow_label));
+    emit_inline_ta_set(
+        ctx,
+        obj_box,
+        idx_d,
+        val_double,
+        Some(&slow_label),
+        Some(access),
+    );
     ctx.block().br(&done_label);
 
     ctx.current_block = array_idx;
@@ -193,7 +170,7 @@ fn emit_inline_ta_set_then_runtime(
     val_double: &str,
     strict: bool,
 ) -> String {
-    emit_inline_ta_set(ctx, obj_box, idx_d, val_double, None)
+    emit_inline_ta_set(ctx, obj_box, idx_d, val_double, None, None)
         .expect("a typed-array store without a shared decline emits its own")
         .emit(ctx, obj_box, idx_d, val_double, strict);
     val_double.to_string()
@@ -228,11 +205,8 @@ fn emit_inline_ta_set(
     idx_d: &str,
     val_double: &str,
     decline: Option<&str>,
+    admitted: Option<super::byte_cell::Access>,
 ) -> Option<OwnDecline> {
-    let tag_mask = crate::nanbox::i64_literal(crate::nanbox::TAG_MASK);
-    let pointer_tag = crate::nanbox::POINTER_TAG_I64;
-    let pointer_mask = crate::nanbox::POINTER_MASK_I64;
-
     let fast_idx = ctx.new_block("tav.set.fast");
     let store_idx = ctx.new_block("tav.set.store");
     let own_slow_idx = decline.is_none().then(|| ctx.new_block("tav.set.slow"));
@@ -246,31 +220,16 @@ fn emit_inline_ta_set(
     };
     let merge_label = ctx.block_label(merge_idx);
 
-    // ---- entry: combined cache/kind/range guard -> fast | slow ----
+    let brands: Vec<u8> = (0..8).map(super::byte_cell::brand_for_kind).collect();
+    let access = admitted
+        .unwrap_or_else(|| super::byte_cell::resolve_write(ctx, obj_box, &brands, &slow_label));
+    let h = access.word.clone();
+    let (kind, _) = super::byte_cell::kind_and_width(ctx.block(), &h);
     let entry_guard = {
         let blk = ctx.block();
-        let obj_bits = blk.bitcast_double_to_i64(obj_box);
-        let raw = blk.and(I64, &obj_bits, pointer_mask);
-        let tagged = blk.and(I64, &obj_bits, &tag_mask);
-        let is_ptr = blk.icmp_eq(I64, &tagged, pointer_tag);
-        // #10516: the kind-cache tag carries the receiver's storage: an
-        // external-storage typed array (a view) caches `kind | 0x80`, so the
-        // kind compare below rejects it. No process-wide view count.
-        let slot = blk.lshr(I64, &raw, "3");
-        let slot = blk.and(I64, &slot, "63");
-        let entry_ptr = blk.gep(
-            "[64 x i64]",
-            "@PERRY_TA_KIND_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let entry_val = blk.load(I64, &entry_ptr);
-        let entry_addr = blk.lshr(I64, &entry_val, "8");
-        let addr_match = blk.icmp_eq(I64, &entry_addr, &raw);
-        let kind = blk.and(I64, &entry_val, "255");
-        // Stores inline only kinds with a trivial truncating/float store:
-        // kind <= KIND_FLOAT64 (7). Uint8Clamped (8), BigInt (9/10), Float16
-        // (11), and the 0xFF sentinel all defer to the runtime.
-        let kind_ok = blk.icmp_ule(I64, &kind, "7");
+        let kind_ok = "true";
+        let is_ptr = "true";
+        let addr_match = "true";
         let idx_ge0 = blk.fcmp("oge", idx_d, "0.0");
         let idx_lt = blk.fcmp("olt", idx_d, "4294967296.0");
         // The store arms below apply ToNumber's identity only: a float kind
@@ -294,28 +253,12 @@ fn emit_inline_ta_set(
 
     // ---- fast: validate integer index + bounds -> store | slow ----
     ctx.current_block = fast_idx;
-    let (raw, idx_i64, kind) = {
-        let blk = ctx.block();
-        let obj_bits = blk.bitcast_double_to_i64(obj_box);
-        let raw = blk.and(I64, &obj_bits, pointer_mask);
-        let slot = blk.lshr(I64, &raw, "3");
-        let slot = blk.and(I64, &slot, "63");
-        let entry_ptr = blk.gep(
-            "[64 x i64]",
-            "@PERRY_TA_KIND_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let entry_val = blk.load(I64, &entry_ptr);
-        let kind = blk.and(I64, &entry_val, "255");
-        let idx_i64 = blk.fptosi(DOUBLE, idx_d, I64);
-        (raw, idx_i64, kind)
-    };
+    let idx_i64 = ctx.block().fptosi(DOUBLE, idx_d, I64);
     let fast_ok = {
         let blk = ctx.block();
         let idx_back = blk.sitofp(I64, &idx_i64, DOUBLE);
         let is_int = blk.fcmp("oeq", &idx_back, idx_d);
-        let hdr_ptr = blk.inttoptr(I64, &raw);
-        let len = blk.load(I32, &hdr_ptr);
+        let len = &access.len;
         let len_i64 = blk.zext(I32, &len, I64);
         let in_bounds = blk.icmp_ult(I64, &idx_i64, &len_i64);
         blk.and(I1, &is_int, &in_bounds)
@@ -324,10 +267,7 @@ fn emit_inline_ta_set(
 
     // ---- store: per-kind direct element store (data = header + 16) ----
     ctx.current_block = store_idx;
-    let data_base = {
-        let blk = ctx.block();
-        blk.add(I64, &raw, "16")
-    };
+    let data_base = access.data;
     // ToInt32 of the value once (shared by all integer kinds). For float kinds
     // we use the raw double directly. `toint32_wrap` matches the runtime
     // `to_uint32_bits` for EVERY finite value (NaN/±Inf/±0 → 0, else

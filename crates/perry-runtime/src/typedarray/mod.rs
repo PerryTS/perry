@@ -1,17 +1,11 @@
 //! TypedArray support for all JS typed-array element kinds.
 //!
-//! Each TypedArrayHeader stores its element kind + size and a contiguous
-//! data region. Element-level read/write goes through `js_typed_array_get`
-//! and `js_typed_array_set`, which handle the per-kind cast/store. The
-//! immutable methods (`toSorted`, `toReversed`, `with`, etc.) materialize
-//! a new TypedArrayHeader of the same kind.
-//!
-//! Pointers are NaN-boxed with POINTER_TAG (0x7FFD). A typed array is
-//! recognized by its own header (#10694): a `GC_TYPE_TYPED_ARRAY` or
-//! `GC_TYPE_NATIVE_TYPED_VIEW` cell whose `TypedArrayHeader::kind` is the kind.
+//! TypedArrayHeader is the shared 16-byte byte cell. The GC type byte carries
+//! element kind and owner/view role. Reads resolve the current owner store;
+//! immutable methods allocate a same-kind owner with retained source roots.
+//! NaN-boxed pointers identify the cell whose GC header sits at p-8.
 
 use std::ptr;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::typedarray_half::{f16_bits_to_f64, f64_to_f16_bits};
 
@@ -30,6 +24,7 @@ mod iterate;
 #[cfg(test)]
 mod resolved_read_tests;
 mod shared_access;
+pub(crate) use shared_access::copy_lane as copy_shared_lane;
 mod slice_ops;
 #[cfg(test)]
 mod thread_exit_tests;
@@ -163,308 +158,63 @@ pub fn kind_for_name(name: &str) -> Option<u8> {
     }
 }
 
-/// TypedArrayHeader. The data region follows the header inline.
-#[repr(C)]
-pub struct TypedArrayHeader {
-    /// Number of elements.
-    pub length: u32,
-    /// Capacity in elements.
-    pub capacity: u32,
-    /// Element kind tag (KIND_*).
-    pub kind: u8,
-    /// Element size in bytes (1, 2, 4, 8).
-    pub elem_size: u8,
-    /// Where element 0 lives: [`TA_STORAGE_INLINE`] (right after this
-    /// header), [`TA_STORAGE_RESOLVED`] (a cached ArrayBuffer data pointer),
-    /// or [`TA_STORAGE_EXTERNAL`] (native/foreign storage). Byte 10 of the header;
-    /// emitted code reads it, so the offset is part of the codegen contract.
-    pub storage: u8,
-    /// [`TA_FLAG_SHARED_BACKING`]; the rest are zero.
-    pub flags: u8,
-    pub _pad: [u8; 4],
+/// Buffer, typed arrays and views share the same sixteen-byte cell.
+pub type TypedArrayHeader = crate::buffer::BufferHeader;
+
+const KIND_BRANDS: [u8; 12] = [2, 0, 4, 3, 6, 5, 8, 9, 1, 10, 11, 7];
+const BRAND_KINDS: [u8; 12] = [1, 8, 0, 3, 2, 5, 4, 11, 6, 7, 9, 10];
+
+#[inline(always)]
+pub(crate) fn type_for_kind(kind: u8) -> u8 {
+    crate::codegen_abi::BYTES_TYPE_BASE | KIND_BRANDS[kind as usize]
 }
 
-/// [`TypedArrayHeader::flags`]: this view's elements live in a
-/// `SharedArrayBuffer`, so `Atomics.wait` may block on it. A fact of the view
-/// set once, when it is bound to its backing (it used to be membership in a
-/// thread-local `TYPED_ARRAY_SHARED_BACKING` set).
-pub const TA_FLAG_SHARED_BACKING: u8 = 0x01;
-const _: () = assert!(std::mem::size_of::<TypedArrayHeader>() == 16);
-
-/// [`TypedArrayHeader::storage`]: the elements follow the header inline.
-pub const TA_STORAGE_INLINE: u8 = 0;
-/// [`TypedArrayHeader::storage`]: the elements live elsewhere (an
-/// `ArrayBuffer`-aliasing view, a materialized `.buffer`, a native-arena view).
-/// Set before the typed array can be read through its new backing, and never
-/// cleared while the header lives: a backing, once taken, is kept.
-pub const TA_STORAGE_EXTERNAL: u8 = 1;
-/// ArrayBuffer storage with a resolved pointer in the former inline region.
-/// The header stays 16 bytes; even empty owners reserve one pointer slot so
-/// observing `.buffer` can install this representation without moving the cell.
-pub const TA_STORAGE_RESOLVED: u8 = crate::codegen_abi::TA_STORAGE_RESOLVED;
-pub const TA_DATA_OFFSET: usize = crate::codegen_abi::TA_DATA_OFFSET;
-const _: () = assert!(std::mem::size_of::<TypedArrayHeader>() == TA_DATA_OFFSET);
-
-pub(crate) unsafe fn resolved_data(ta: *const TypedArrayHeader) -> *mut u8 {
-    *((ta as *const u8).add(TA_DATA_OFFSET) as *const *mut u8)
+#[inline(always)]
+pub(crate) unsafe fn element_kind(ta: *const TypedArrayHeader) -> u8 {
+    BRAND_KINDS[((*crate::buffer::store::header(ta as usize)).obj_type & 0x1f) as usize]
 }
 
-pub(crate) unsafe fn set_resolved_data(ta: *mut TypedArrayHeader, data: *mut u8) {
-    *((ta as *mut u8).add(TA_DATA_OFFSET) as *mut *mut u8) = data;
-}
-/// Byte offset of [`TypedArrayHeader::storage`], for emitted header reads.
-pub const TA_STORAGE_OFFSET: usize = 10;
-const _: () = assert!(std::mem::offset_of!(TypedArrayHeader, storage) == TA_STORAGE_OFFSET);
-
-/// [`PERRY_TA_KIND_CACHE`] tag bit for a typed array with external storage.
-/// The tag of an inline-storage array is its bare kind, so an emitted guard
-/// that compares the tag with the kind it expects (or tests `kind <= N`)
-/// rejects an external-storage array by the same compare: the receiver's own
-/// representation decides, not a process-wide count of live views.
-pub const TA_CACHE_EXTERNAL_STORAGE: u64 = 0x80;
-
-/// Process-global, lock-free admission cache read by EMITTED code (#5525): a
-/// guarded inline typed-array element access compares one slot against
-/// `(receiver << 8) | expected kind` instead of calling into the runtime. The
-/// runtime itself no longer consults it — `lookup_typed_array_kind` reads the
-/// receiver's header — but keeps it populated (on allocation and on every
-/// positive lookup) and invalidates an address when its typed array dies.
-/// Originally it fronted the thread-local registry (#5525). A single untyped `arr[i]` element access on
-/// a value whose static type was erased (e.g. a typed array reaching a function
-/// through an untyped `Array.<number>` parameter — the shape bcryptjs's
-/// Blowfish core uses for its `P`/`S` boxes) funnels through
-/// `lookup_typed_array_kind` ~5 times (`js_dyn_index_get`,
-/// `typed_array_addr_from_value`, `typed_array_get_numeric_index`,
-/// `typed_array_owner_length`, `typed_array_owner_get`). Each call is a
-/// thread-local access (`_tlv_get_addr`) plus a `RefCell` borrow + hash probe.
-/// At ~600M element reads for one cost-12 `bcrypt.compareSync` that dominated
-/// the profile (~45% of samples in `_tlv_get_addr`), turning a ~50ms operation
-/// into ~28s and reading as an infinite-loop hang.
-///
-/// The cache is a small direct-mapped table of `(addr << 8) | tag` words (0 =
-/// empty). The low byte is the element kind for a typed array, or the
-/// [`TA_CACHE_NEGATIVE`] sentinel meaning "this address is *not* a typed array".
-/// Negative entries matter because the same dispatcher serves plain-array
-/// element access too (bcryptjs's `_crypt` reads its `lr`/`cdata`/`b`/`salt`
-/// plain-array boxes through the identical untyped path), and without them
-/// every such read would still fall through to the thread-local registry on a
-/// miss. Both populations are small and stable here, so a 64-entry table keeps
-/// the hot typed *and* plain arrays resident.
-///
-/// A hit returns the same answer the registry would: the cache only records
-/// facts the registry established (positive on a registry hit, negative on a
-/// registry miss). It is process-global (not thread-local) so a hit costs no
-/// `_tlv_get_addr`; that is sound because arenas never hand out the same live
-/// address to two threads, a typed array's address is stable (off-heap raw
-/// alloc or tenured old-gen, never moved), and every registry mutation
-/// (`register`/`unregister`) overwrites/clears the matching slot below — so a
-/// freed-then-reused address can never read back a stale kind or a stale
-/// "not a typed array".
-pub const TA_KIND_CACHE_SLOTS: usize = 64;
-pub const TA_CACHE_NEGATIVE: u64 = 0xFF;
-// #5525 follow-up: exported under a stable link name so the codegen can emit a
-// guarded *inline* typed-array element load/store at the access site (it reads a
-// cache slot, checks the address tag + element kind, bounds-checks against the
-// header `length`, and loads/stores the slot directly), bypassing the
-// out-of-line `js_dyn_index_{get,set}` call + `lookup_typed_array_kind` +
-// `js_number_coerce` on bcrypt's ~600M hot `S[i]`/`P[i]` Int32Array accesses.
-// The inline reader observes exactly the same `(addr << 8) | tag` words this
-// module maintains; cache misses / non-typed-array / exotic-key cases fall
-// through to the existing runtime slow path, so semantics are unchanged.
-#[no_mangle]
-pub static PERRY_TA_KIND_CACHE: [AtomicU64; TA_KIND_CACHE_SLOTS] =
-    [const { AtomicU64::new(0) }; TA_KIND_CACHE_SLOTS];
-
-/// The [`PERRY_TA_KIND_CACHE`] tag for the registered typed array at `ta`:
-/// its kind, plus [`TA_CACHE_EXTERNAL_STORAGE`] when its elements do not
-/// follow the header (#10516).
-///
-/// # Safety
-/// `ta` is a live registered typed array (or native typed view) header.
-#[inline]
-unsafe fn kind_cache_tag(ta: *const TypedArrayHeader, kind: u8) -> u64 {
-    if (*ta).storage == TA_STORAGE_INLINE {
-        kind as u64
-    } else {
-        kind as u64 | TA_CACHE_EXTERNAL_STORAGE
-    }
-}
-
-/// Move the typed array at `ta` to external storage (#10516): from here on its
-/// elements are reached through `data_ptr`, never at `header + 16`. Drops the
-/// address's inline-path admissions so the next lookup re-derives them from
-/// the header.
-pub(crate) fn note_external_storage(ta: *mut TypedArrayHeader) {
-    unsafe { (*ta).storage = TA_STORAGE_EXTERNAL };
-    ta_kind_cache_invalidate(ta as usize);
-}
-
-#[inline]
-fn ta_kind_cache_slot(addr: usize) -> usize {
-    // Addresses are 8-byte aligned; the low 3 bits are always 0. Use the bits
-    // above them so distinct live arrays (e.g. `P` and `S`) land in different
-    // slots and both stay resident across an alternating access loop.
-    (addr >> 3) & (TA_KIND_CACHE_SLOTS - 1)
-}
-
-#[inline]
-fn ta_kind_cache_store_tag(addr: usize, tag: u64) {
-    // `addr` is always > 0x10000, so `(addr << 8) | tag` is never 0 (= empty).
-    PERRY_TA_KIND_CACHE[ta_kind_cache_slot(addr)]
-        .store(((addr as u64) << 8) | tag, Ordering::Relaxed);
-}
-
-#[inline]
-fn ta_kind_cache_invalidate(addr: usize) {
-    let slot = ta_kind_cache_slot(addr);
-    let entry = PERRY_TA_KIND_CACHE[slot].load(Ordering::Relaxed);
-    if entry != 0 && (entry >> 8) as usize == addr {
-        PERRY_TA_KIND_CACHE[slot].store(0, Ordering::Relaxed);
-    }
-}
-
-/// Drop exported kind-cache entries before retiring arena memory is reused.
-/// No separate whole-loop admission cache remains.
-pub(crate) fn invalidate_caches_in_range(start: usize, end: usize) {
-    for slot in &PERRY_TA_KIND_CACHE {
-        let entry = slot.load(Ordering::Relaxed);
-        let address = (entry >> 8) as usize;
-        if (start..end).contains(&address) {
-            let _ = slot.compare_exchange(entry, 0, Ordering::Relaxed, Ordering::Relaxed);
-        }
-    }
-}
-
-/// Cache probe: `None` = miss, `Some(None)` = a negative entry, `Some(Some(kind))`
-/// = an admitted typed array. Only tests read the cache from Rust; emitted code
-/// reads it directly.
-#[cfg(test)]
-fn ta_kind_cache_get(addr: usize) -> Option<Option<u8>> {
-    let entry = PERRY_TA_KIND_CACHE[ta_kind_cache_slot(addr)].load(Ordering::Relaxed);
-    if entry != 0 && (entry >> 8) as usize == addr {
-        let tag = entry & 0xff;
-        if tag == TA_CACHE_NEGATIVE {
-            Some(None)
-        } else {
-            Some(Some((tag & !TA_CACHE_EXTERNAL_STORAGE) as u8))
-        }
-    } else {
-        None
-    }
-}
-
-/// Admit a freshly allocated typed array (or native typed view) to the
-/// emitted-code kind cache. Its kind is already in its header; nothing else
-/// records it.
-pub fn register_typed_array(ptr: *const TypedArrayHeader, kind: u8) {
-    debug_assert_eq!(unsafe { (*ptr).kind }, kind);
-    // Overwrite any colliding/stale slot so a freed-then-reused address never
-    // reads back its previous kind.
-    ta_kind_cache_store_tag(ptr as usize, unsafe { kind_cache_tag(ptr, kind) });
-}
-
-/// A typed array is going away (its cell was swept, or a native view's
-/// finalizer ran): drop its emitted-code cache admissions and every
-/// address-keyed attribute it may own, before the address can be re-issued.
-pub fn unregister_typed_array(ptr: *const TypedArrayHeader) {
-    let owner = ptr as usize;
-    ta_kind_cache_invalidate(owner);
-    crate::typedarray_view::clear_view_meta(owner);
-    crate::typedarray_props::typed_array_clear_own_props(owner);
-    crate::typedarray_props::typed_array_clear_no_extend(owner);
+#[inline(always)]
+pub(crate) unsafe fn element_length(ta: *const TypedArrayHeader) -> u32 {
+    crate::buffer::store::length(ta as usize) as u32
 }
 
 #[cfg(test)]
-thread_local! {
-/// Every entry into [`lookup_typed_array_kind`], i.e. every caller that could
-/// not rule a typed array out more cheaply. Mirrors
-/// `map::TEST_MAP_REGISTRY_PROBES` (#7765) and exists for the same reason: the
-/// receiver-tag gates that let a `GC_TYPE_ARRAY` receiver skip this probe are
-/// asserted against it, so deleting a gate fails a test even though the ANSWER
-/// stays correct. A fast path nobody can prove ran is not a fast path.
-    static TEST_TA_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
+thread_local! { static TEST_TA_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) }; }
 #[cfg(test)]
 pub(crate) fn test_typed_array_registry_probe_count() -> u64 {
     TEST_TA_REGISTRY_PROBES.with(|c| c.get())
 }
 
-/// `Some(kind)` when the (already-stripped) address is a typed array — a
-/// `GC_TYPE_TYPED_ARRAY` or `GC_TYPE_NATIVE_TYPED_VIEW` cell — else `None`.
-///
-/// One magnitude/alignment check, the header load, a compare and the kind
-/// byte: the cell says what it is (#10694). This used to be a latch, an
-/// address window, a direct-mapped cache, a thread-local resolution and a hash
-/// lookup into `TYPED_ARRAY_REGISTRY`, which duplicated the `kind` the header
-/// already carries (#9347).
 #[inline]
 pub fn lookup_typed_array_kind(addr: usize) -> Option<u8> {
     #[cfg(test)]
     TEST_TA_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
-    let obj_type = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?.obj_type;
-    if obj_type != crate::gc::GC_TYPE_TYPED_ARRAY
-        && obj_type != crate::gc::GC_TYPE_NATIVE_TYPED_VIEW
-    {
-        return None;
-    }
-    // A `Box`-leaked symbol has no `GcHeader`; see the twin screen in
-    // `buffer::header::buffer_family_type`.
-    if unsafe { crate::symbol::may_be_symbol_header(addr as *const u8) }
-        && !crate::buffer::header_is_owned(addr)
-    {
-        return None;
-    }
-    let ta = addr as *const TypedArrayHeader;
-    // SAFETY: the header says this is a typed-array cell, whose payload starts
-    // with a `TypedArrayHeader` (a native view's prefix matches it exactly).
-    let kind = unsafe { (*ta).kind };
-    ta_kind_cache_admit(addr, unsafe { kind_cache_tag(ta, kind) });
-    Some(kind)
+    let ty = crate::buffer::header::byte_cell_type(addr)?;
+    crate::gc::is_typed_array_type(ty).then(|| BRAND_KINDS[(ty & 0x1f) as usize])
 }
 
-/// Keep a looked-up typed array admitted to the emitted-code cache: a slot the
-/// emitted guard lost to a colliding address is won back by the next runtime
-/// access, as it was when the runtime itself read through the cache. A load
-/// and a compare when the slot already holds it, so the hot repeat costs no
-/// store to a shared line.
-#[inline]
-fn ta_kind_cache_admit(addr: usize, tag: u64) {
-    let word = ((addr as u64) << 8) | tag;
-    let slot = &PERRY_TA_KIND_CACHE[ta_kind_cache_slot(addr)];
-    if slot.load(Ordering::Relaxed) != word {
-        slot.store(word, Ordering::Relaxed);
-    }
-}
-
-/// True for a typed array or any buffer-family cell. The name is historical:
-/// these used to be raw-`alloc`'d with NO `GcHeader` and tracked only in side
-/// tables, so the runtime's `*(ptr - GC_HEADER_SIZE)` type probes had to skip
-/// them first (#5226). Every one now has a real header carrying its brand
-/// (#10694), so this is one header read; callers keep it for routing.
 #[inline]
 pub fn is_offheap_sidetable_alloc(addr: usize) -> bool {
-    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
-        return false;
-    };
-    let obj_type = header.obj_type;
-    let candidate = crate::gc::is_buffer_family_type(obj_type)
-        || obj_type == crate::gc::GC_TYPE_TYPED_ARRAY
-        || obj_type == crate::gc::GC_TYPE_NATIVE_TYPED_VIEW;
-    // The headerless-symbol screen of `buffer::header::buffer_family_type`.
-    candidate
-        && (!unsafe { crate::symbol::may_be_symbol_header(addr as *const u8) }
-            || crate::buffer::header_is_owned(addr))
+    crate::buffer::header::byte_cell_type(addr).is_some()
 }
 
-pub(crate) fn mark_typed_array_shared_backing(ptr: *const TypedArrayHeader) {
-    unsafe { (*(ptr as *mut TypedArrayHeader)).flags |= TA_FLAG_SHARED_BACKING };
+/// Retained allocator notification; byte admission has no address entries.
+pub(crate) fn invalidate_caches_in_range(_start: usize, _end: usize) {}
+
+pub fn register_typed_array(ptr: *const TypedArrayHeader, expected: u8) {
+    debug_assert_eq!(lookup_typed_array_kind(ptr as usize), Some(expected));
 }
 
 pub(crate) fn typed_array_has_shared_backing(ptr: *const TypedArrayHeader) -> bool {
     let ptr = clean_ta_ptr(ptr);
-    lookup_typed_array_kind(ptr as usize).is_some()
-        && unsafe { (*ptr).flags } & TA_FLAG_SHARED_BACKING != 0
+    if lookup_typed_array_kind(ptr as usize).is_none() {
+        return false;
+    }
+    unsafe {
+        (*crate::buffer::store::header(crate::buffer::store::owner(ptr as usize))).obj_type & !0x20
+            == crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER
+    }
 }
 
 #[inline]
@@ -515,9 +265,9 @@ pub(crate) enum ElementReadReceiver {
 /// and the failure is worse, because `clean_ta_ptr` performs **no registry
 /// check at all**: it only rejects addresses below `0x1000`. So a plain
 /// array or object that arrives through a stale *static* typed-array hint
-/// was read AS a `TypedArrayHeader` — `(*ta).length` landed on
+/// was read AS a `TypedArrayHeader` — `crate::typedarray::element_length(ta)` landed on
 /// `ArrayHeader::length` (both at offset 0, so bounds checks "passed"),
-/// `(*ta).kind` / `elem_size` on the low bytes of element 0's NaN box, and
+/// `crate::typedarray::element_kind(ta)` / `elem_size` on the low bytes of element 0's NaN box, and
 /// `data_ptr(ta)` 8 bytes past the real element region. The observable
 /// result was a silent `0` for every element read (#8100).
 ///
@@ -547,10 +297,12 @@ pub(crate) fn classify_element_read_receiver(raw: u64) -> ElementReadReceiver {
     // No hand-rolled address floor: every probe below is either a side-table
     // lookup (safe for any bit pattern) or `try_read_gc_header`, which
     // magnitude-classifies — handle band included — before it dereferences.
-    let addr = strip_nanbox(raw);
-    if lookup_typed_array_kind(addr).is_some() {
-        return ElementReadReceiver::TypedArray(addr);
+    if let Some((addr, ty)) = crate::buffer::header::byte_cell_of_word(raw) {
+        if crate::gc::is_typed_array_type(ty) {
+            return ElementReadReceiver::TypedArray(addr);
+        }
     }
+    let addr = strip_nanbox(raw);
     // Only a POSITIVELY identified receiver is diverted. `try_read_gc_header`
     // magnitude-classifies before it dereferences, so garbage bits that
     // survived the mask never reach a managed-header read.
@@ -568,9 +320,9 @@ pub(crate) fn classify_element_read_receiver(raw: u64) -> ElementReadReceiver {
         }
     };
     match obj_type {
-        crate::gc::GC_TYPE_TYPED_ARRAY | crate::gc::GC_TYPE_NATIVE_TYPED_VIEW => {
-            ElementReadReceiver::TypedArray(addr)
-        }
+        // `lookup_typed_array_kind` above refused it: a typed-array type byte
+        // the allocator does not own names no cell.
+        ty if crate::gc::is_typed_array_type(ty) => ElementReadReceiver::Absent,
         crate::gc::GC_TYPE_STRING => {
             let boxed = crate::value::js_nanbox_pointer(addr as i64);
             if unsafe { crate::symbol::js_is_symbol(boxed) } != 0 {
@@ -586,30 +338,25 @@ pub(crate) fn classify_element_read_receiver(raw: u64) -> ElementReadReceiver {
 #[inline]
 pub(crate) fn data_ptr(ta: *const TypedArrayHeader) -> *const u8 {
     unsafe {
-        if (*ta).storage == TA_STORAGE_INLINE {
-            (ta as *const u8).add(std::mem::size_of::<TypedArrayHeader>())
-        } else if (*ta).storage == TA_STORAGE_RESOLVED {
-            resolved_data(ta)
-        } else if crate::native_arena::is_native_typed_view(ta) {
-            crate::native_arena::native_view_data_ptr(ta)
-        } else if let Some(p) = crate::typedarray_view::view_backing_data_ptr(ta as usize) {
-            p as *const u8
-        } else {
-            (ta as *const u8).add(std::mem::size_of::<TypedArrayHeader>())
+        let owner = crate::buffer::store::owner(ta as usize);
+        if (*crate::buffer::store::header(owner)).obj_type == crate::gc::GC_TYPE_NATIVE_ARENA_OWNER
+            && (*crate::buffer::store::header(owner))._reserved & crate::codegen_abi::BYTES_DETACHED
+                != 0
+        {
+            crate::native_arena::throw_native_arena_disposed();
         }
+        #[cfg(test)]
+        if crate::buffer::bytes::b4_sabotage("native_resolution")
+            && crate::buffer::store::is_view(ta as usize)
+        {
+            return (ta as *const u8).add(crate::codegen_abi::BYTES_STORE);
+        }
+        crate::buffer::store::data(ta as usize)
     }
 }
 
-/// #6750 follow-up: preheader data-pointer hoist for the masked-window
-/// typed-array loop tiers. Returns element 0's address for a registered typed
-/// array (owning inline storage, ArrayBuffer view, or native-arena view), or
-/// 0 when the receiver is not a registered typed array. Sound to cache for a
-/// guarded fast-loop copy: the copy's body is call-free (no allocation → no
-/// GC), the typed array's own address is stable (raw alloc or tenured
-/// old-gen — see `PERRY_TA_KIND_CACHE`), and view backings live for the
-/// thread's lifetime (`typedarray_view::TYPED_ARRAY_VIEW_META`), so nothing
-/// can invalidate the pointer between the loop-entry probe and the last
-/// iteration.
+/// Access uses the common cell header and current owner storage. Any derived
+/// data address is consumed without collection, or retained with its owner.
 #[no_mangle]
 pub extern "C" fn js_typed_array_masked_window_data_ptr(receiver: f64) -> i64 {
     let addr = strip_nanbox(receiver.to_bits());
@@ -639,10 +386,8 @@ pub(crate) fn inline_u32_addr(receiver: f64) -> usize {
     }
     unsafe {
         let h = crate::gc::header_from_trusted_user_ptr(addr as *const u8);
-        let ta = addr as *const TypedArrayHeader;
-        if (*h).obj_type == crate::gc::GC_TYPE_TYPED_ARRAY
-            && (*ta).kind == KIND_UINT32
-            && (*ta).storage == TA_STORAGE_INLINE
+        if (*h).obj_type == type_for_kind(KIND_UINT32)
+            && (*h)._reserved & crate::codegen_abi::BYTES_OUT_OF_LINE == 0
         {
             addr
         } else {
@@ -664,7 +409,9 @@ pub(crate) fn data_ptr_mut(ta: *mut TypedArrayHeader) -> *mut u8 {
 pub unsafe fn typed_array_bytes<'a>(ta: *const TypedArrayHeader) -> Option<&'a [u8]> {
     let ta = typed_array_for_byte_helper(ta)? as *const TypedArrayHeader;
     let data = data_ptr(ta);
-    let len = ((*ta).length as usize).saturating_mul((*ta).elem_size as usize);
+    let len = (crate::typedarray::element_length(ta) as usize).saturating_mul(
+        crate::typedarray::elem_size_for_kind(crate::typedarray::element_kind(ta)) as usize,
+    );
     if len == 0 {
         return Some(std::slice::from_raw_parts(
             ptr::NonNull::<u8>::dangling().as_ptr(),
@@ -683,7 +430,9 @@ pub unsafe fn typed_array_bytes<'a>(ta: *const TypedArrayHeader) -> Option<&'a [
 pub unsafe fn typed_array_bytes_mut<'a>(ta: *mut TypedArrayHeader) -> Option<&'a mut [u8]> {
     let ta = typed_array_for_byte_helper(ta as *const TypedArrayHeader)?;
     let data = data_ptr_mut(ta);
-    let len = ((*ta).length as usize).saturating_mul((*ta).elem_size as usize);
+    let len = (crate::typedarray::element_length(ta) as usize).saturating_mul(
+        crate::typedarray::elem_size_for_kind(crate::typedarray::element_kind(ta)) as usize,
+    );
     if len == 0 {
         return Some(std::slice::from_raw_parts_mut(
             ptr::NonNull::<u8>::dangling().as_ptr(),
@@ -699,25 +448,25 @@ pub unsafe fn typed_array_bytes_mut<'a>(ta: *mut TypedArrayHeader) -> Option<&'a
 pub fn typed_array_to_array_buffer(
     ta: *const TypedArrayHeader,
 ) -> *mut crate::buffer::BufferHeader {
-    let Some(bytes) = (unsafe { typed_array_bytes(ta) }) else {
+    let admitted = unsafe { typed_array_for_byte_helper(ta) };
+    #[cfg(test)]
+    let admitted = if crate::buffer::bytes::b4_sabotage("copy_kind") {
+        Some(clean_ta_ptr(ta).cast_mut())
+    } else {
+        admitted
+    };
+    let Some(ta) = admitted else {
         return std::ptr::null_mut();
     };
-    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
-    if buf.is_null() {
-        return std::ptr::null_mut();
+    // Destination allocation can collect. Keep the source value rooted and
+    // resolve its bytes afterward, rather than retaining an unscoped slice.
+    let input = crate::value::js_nanbox_pointer(ta as i64);
+    match crate::buffer::bytes::copy_value(crate::buffer::bytes::Brand::ArrayBuffer, input) {
+        Ok(value) => crate::value::JSValue::from_bits(value.to_bits())
+            .as_pointer::<crate::buffer::BufferHeader>()
+            .cast_mut(),
+        Err(_) => std::ptr::null_mut(),
     }
-    unsafe {
-        (*buf).length = bytes.len() as u32;
-        if !bytes.is_empty() {
-            std::ptr::copy_nonoverlapping(
-                bytes.as_ptr(),
-                crate::buffer::buffer_data_mut(buf),
-                bytes.len(),
-            );
-        }
-    }
-    crate::buffer::mark_as_array_buffer(buf as usize);
-    buf
 }
 
 unsafe fn typed_array_for_byte_helper(
@@ -855,14 +604,22 @@ unsafe fn strict_typed_array_from_raw(
             crate::native_arena::native_view_from_typed_array(ta as *const TypedArrayHeader),
         );
     } else {
-        validate_arena_payload_gc_type(addr, crate::gc::GC_TYPE_TYPED_ARRAY, message);
+        validate_arena_payload_gc_type(
+            addr,
+            type_for_kind(kind)
+                | (unsafe { (*crate::buffer::store::header(addr)).obj_type }
+                    & crate::codegen_abi::BYTES_TYPE_VIEW),
+            message,
+        );
     }
     ta
 }
 
 unsafe fn typed_array_raw_bytes(ta: *const TypedArrayHeader) -> (*const u8, usize) {
     let data = data_ptr(ta);
-    let len = ((*ta).length as usize).saturating_mul((*ta).elem_size as usize);
+    let len = (crate::typedarray::element_length(ta) as usize).saturating_mul(
+        crate::typedarray::elem_size_for_kind(crate::typedarray::element_kind(ta)) as usize,
+    );
     if len == 0 {
         return (ptr::NonNull::<u8>::dangling().as_ptr(), 0);
     }
@@ -874,7 +631,9 @@ unsafe fn typed_array_raw_bytes(ta: *const TypedArrayHeader) -> (*const u8, usiz
 
 unsafe fn typed_array_raw_bytes_mut(ta: *mut TypedArrayHeader) -> (*mut u8, usize) {
     let data = data_ptr_mut(ta);
-    let len = ((*ta).length as usize).saturating_mul((*ta).elem_size as usize);
+    let len = (crate::typedarray::element_length(ta) as usize).saturating_mul(
+        crate::typedarray::elem_size_for_kind(crate::typedarray::element_kind(ta)) as usize,
+    );
     if len == 0 {
         return (ptr::NonNull::<u8>::dangling().as_ptr(), 0);
     }
@@ -895,7 +654,7 @@ unsafe fn native_memory_copy_src_bytes(raw: u64) -> (*const u8, usize) {
         let buffer = addr as *const crate::buffer::BufferHeader;
         return (
             crate::buffer::buffer_data(buffer),
-            (*buffer).length as usize,
+            crate::typedarray::element_length(buffer) as usize,
         );
     }
     throw_type_error(b"NativeMemory.copy expects typed array views");
@@ -912,7 +671,7 @@ unsafe fn native_memory_copy_dst_bytes(raw: u64) -> (*mut u8, usize) {
         let buffer = addr as *mut crate::buffer::BufferHeader;
         return (
             crate::buffer::buffer_data_mut(buffer),
-            (*buffer).length as usize,
+            crate::typedarray::element_length(buffer) as usize,
         );
     }
     throw_type_error(b"NativeMemory.copy expects typed array views");
@@ -925,58 +684,32 @@ unsafe fn native_memory_copy_accepts_buffer(addr: usize) -> bool {
 }
 
 #[inline]
-fn typed_array_payload_size(capacity: u32, elem_size: usize) -> usize {
-    let total = std::mem::size_of::<TypedArrayHeader>() + (capacity as usize) * elem_size;
-    total.max(std::mem::size_of::<TypedArrayHeader>() + std::mem::size_of::<*mut u8>())
+fn typed_array_payload_size(capacity: u32, _elem_size: usize) -> usize {
+    crate::codegen_abi::BYTES_STORE + capacity as usize
 }
 
-/// Allocate a zero-filled typed array of `length` elements.
+/// Allocate a zero-filled, nonmoving typed owner in the old arena.
 pub fn typed_array_alloc(kind: u8, length: u32) -> *mut TypedArrayHeader {
     crate::buffer::bytes::assert_allocation_allowed();
-    let elem_size = elem_size_for_kind(kind);
-    // RULE 3 (`object/shape_rule3.rs`): `capacity` occupies payload `+4`.
-    // `typed_array_length_or_throw` already refuses an over-range length at
-    // the constructor; this is the same bound at the allocation funnel, which
-    // the internal callers (`subarray`, `slice`, the `set` paths) also reach.
-    let capacity = crate::object::shape_rule3::checked_plus_four_word(
-        length.max(1),
-        b"Array buffer allocation failed",
-    );
-    // 2026-07-09 audit: small typed arrays were raw-`alloc`'d with NO
-    // GcHeader and never freed — invisible to every GC trigger, unbounded
-    // RSS on churn. Every typed array now takes the old-arena GC path
-    // (non-movable space: raw data pointers are handed out), reclaimed by
-    // full-cycle block resets + the post-trace registry pruning below. The
-    // bytes now also count toward `arena_total_bytes` trigger pressure.
+    let size = elem_size_for_kind(kind);
+    let capacity = length as u64 * size as u64;
+    if capacity > crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as u64 {
+        throw_range_error(b"Array buffer allocation failed");
+    }
+    let capacity = capacity as u32;
     let p = crate::arena::arena_alloc_gc_old(
-        typed_array_payload_size(capacity, elem_size),
+        typed_array_payload_size(capacity, size),
         8,
-        crate::gc::GC_TYPE_TYPED_ARRAY,
+        type_for_kind(kind),
     ) as *mut TypedArrayHeader;
     unsafe {
-        let header = (p as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-        (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
+        (*crate::buffer::store::header(p as usize)).gc_flags |= crate::gc::GC_FLAG_TENURED;
         (*p).length = length;
         (*p).capacity = capacity;
-        (*p).kind = kind;
-        (*p).elem_size = elem_size as u8;
-        (*p).storage = TA_STORAGE_INLINE;
-        (*p).flags = 0;
-        (*p)._pad = [0; 4];
-        let data = data_ptr_mut(p);
-        ptr::write_bytes(data, 0, (capacity as usize) * elem_size);
+        (*p).link = 0;
+        ptr::write_bytes(data_ptr_mut(p), 0, capacity as usize);
     }
-    register_typed_array(p, kind);
     p
-}
-
-/// Finalize one collected-dead typed array (the `GC_TYPE_TYPED_ARRAY` finalize
-/// hook): `unregister_typed_array` clears the global kind-cache slots, the view
-/// metadata and the own-props / no-extend side tables — closing both the leak
-/// and the address-reuse (kind-cache ABA) hazard for ordinary typed arrays.
-pub(crate) fn finalize_collected_dead_typed_array(addr: usize) {
-    unregister_typed_array(addr as *const TypedArrayHeader);
-    crate::buffer::view::remove_entries_for_dead_buffer(addr);
 }
 
 /// Convert an f64 (NaN-boxed JS value) to the numeric value to store. Strings
@@ -1097,11 +830,12 @@ fn to_uint8_clamp(value: f64) -> u8 {
 
 /// Store a number into the typed array slot, performing the per-kind cast.
 pub(crate) unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
-    let kind = (*ta).kind;
-    let elem_size = (*ta).elem_size as usize;
+    let kind = crate::typedarray::element_kind(ta);
+    let elem_size =
+        crate::typedarray::elem_size_for_kind(crate::typedarray::element_kind(ta)) as usize;
     let base = data_ptr_mut(ta);
     let off = idx * elem_size;
-    if (*ta).flags & TA_FLAG_SHARED_BACKING != 0 {
+    if typed_array_has_shared_backing(ta) {
         return shared_access::store(base.add(off), kind, value);
     }
     match kind {
@@ -1151,11 +885,12 @@ pub(crate) unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64)
 
 /// Load a slot, returning a plain f64 (numeric, not NaN-boxed).
 pub(crate) unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
-    let kind = (*ta).kind;
-    let elem_size = (*ta).elem_size as usize;
+    let kind = crate::typedarray::element_kind(ta);
+    let elem_size =
+        crate::typedarray::elem_size_for_kind(crate::typedarray::element_kind(ta)) as usize;
     let base = data_ptr(ta);
     let off = idx * elem_size;
-    if (*ta).flags & TA_FLAG_SHARED_BACKING != 0 {
+    if typed_array_has_shared_backing(ta) {
         return shared_access::load(base.add(off), kind);
     }
     match kind {
@@ -1229,7 +964,7 @@ pub fn typed_array_fast_index_get(ptr: usize, kind: u8, index: f64) -> Option<f6
     }
     let idx = index as u32;
     unsafe {
-        if idx >= (*ta).length {
+        if idx >= crate::typedarray::element_length(ta) {
             return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
         }
         Some(load_at(ta, idx as usize))
@@ -1263,7 +998,7 @@ pub fn typed_array_fast_index_set(ptr: usize, kind: u8, index: f64, value: f64) 
     }
     let idx = index as u32;
     unsafe {
-        if idx < (*ta).length {
+        if idx < crate::typedarray::element_length(ta) {
             store_at(ta, idx as usize, value);
         }
         // In-bounds → stored; out-of-bounds canonical index → dropped per spec.
@@ -1309,16 +1044,18 @@ mod tests {
         let boxed = crate::value::js_nanbox_pointer(ta as i64);
         assert_eq!(inline_u32_addr(boxed), ta as usize);
         unsafe {
-            (*ta).storage = TA_STORAGE_EXTERNAL;
+            (*crate::buffer::store::header(ta as usize))._reserved |=
+                crate::codegen_abi::BYTES_OUT_OF_LINE;
         }
         assert_eq!(inline_u32_addr(boxed), 0);
         unsafe {
-            (*ta).storage = TA_STORAGE_INLINE;
-            (*ta).kind = KIND_INT32;
+            (*crate::buffer::store::header(ta as usize))._reserved &=
+                !crate::codegen_abi::BYTES_OUT_OF_LINE;
+            (*crate::buffer::store::header(ta as usize)).obj_type = type_for_kind(KIND_INT32);
         }
         assert_eq!(inline_u32_addr(boxed), 0);
         unsafe {
-            (*ta).kind = KIND_UINT32;
+            (*crate::buffer::store::header(ta as usize)).obj_type = type_for_kind(KIND_UINT32);
         }
         assert_eq!(inline_u32_addr(boxed), ta as usize);
     }
@@ -1332,7 +1069,7 @@ mod tests {
         unsafe {
             let header =
                 (ta as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            assert_eq!((*header).obj_type, crate::gc::GC_TYPE_TYPED_ARRAY);
+            assert_eq!((*header).obj_type, type_for_kind(KIND_UINT8));
             assert_ne!((*header).gc_flags & crate::gc::GC_FLAG_TENURED, 0);
         }
 

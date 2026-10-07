@@ -980,8 +980,9 @@ pub(crate) fn lower_generic_property_get(
             .unwrap_or_else(|| token_miss_label.clone());
         ctx.block().cond_br(&token_eq, &hit_label, &miss);
     }
+    let accessor_header_bytes =
+        crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
     let accessor_arm = accessor_entry.map(|(entry_idx, biased)| {
-        let header_bytes = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
         super::accessor_arm::emit_class_accessor_arm(
             ctx,
             entry_idx,
@@ -990,7 +991,7 @@ pub(crate) fn lower_generic_property_get(
             &cache_slot_ref,
             &biased,
             &obj_box,
-            header_bytes,
+            accessor_header_bytes,
             &token_miss_label,
             &merge_label,
         )

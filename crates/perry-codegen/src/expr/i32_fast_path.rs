@@ -16,7 +16,7 @@ use crate::type_analysis::{
     expr_may_return_boxed_value_from_raw_f64_fallback, is_numeric_expr,
     string_value_is_runtime_guaranteed,
 };
-use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
+use crate::types::{DOUBLE, F32, I16, I32, I64, I8};
 
 #[cfg(test)]
 mod bits_tests;
@@ -579,45 +579,8 @@ fn ta_int_elem_load_is_i32_provable(ctx: &FnCtx<'_>, object: &Expr, index: &Expr
     super::bounds_for_buffer_access_width(ctx, *id, index, 1).allows_inbounds()
 }
 
-/// Element kind of a statically-typed **integer** typed-array receiver eligible
-/// for the *checked* inline i32 element load. Returns
-/// `(runtime_kind_tag, elem_llvm_ty, signed, elem_size_bytes)` for the integer
-/// kinds whose element widens into a signed i32 (I8/U8/U8Clamped/I16/U16/I32);
-/// `None` for U32 / the float kinds and for any non-typed-array / non-local
-/// receiver.
-///
-/// Unlike [`ta_int_elem_load_is_i32_provable`], this requires NEITHER a tracked
-/// buffer view NOR a static bounds proof — which is exactly what an
-/// `Int32Array` **parameter** (`function f(S: Int32Array){ S[i] }`) lacks, since
-/// its length and inline-vs-view storage are unknown at compile time. Soundness
-/// comes from the *checked* emission ([`lower_checked_typed_array_i32_load`]): a
-/// runtime guard (pointer + kind-cache entry whose tag says inline storage
-/// match) and a header-length bounds check gate a bare load, an in-kind
-/// out-of-bounds read yields `0` (`== ToInt32(undefined)`), and every rejected
-/// shape (view/detached/resizable backing, wrong runtime kind) defers to the
-/// full runtime `[[Get]]`+`ToInt32`. Returning `0` on OOB is exact *only* in the
-/// i32/`ToInt32` consumer context this predicate participates in — the sole
-/// observable value there — so it is confined to the i32-native fast path.
-/// A DECLARED typed-array class on a non-reassigned local or parameter
-/// (#9363/#5525).
-///
-/// `receiver_class_name` answers only from `proven_local_types`, which is
-/// runtime-derived and therefore empty for a PARAMETER — its value comes from
-/// outside the body. That left the shape this machinery was built for on the
-/// slow path: bcryptjs's `_encipher(lr, off, P: Int32Array, S: Int32Array)`
-/// does ~600M `S[i]` reads through parameters and emitted a
-/// `js_typed_array_get` CALL for every one, while the identical loop over a
-/// module-global receiver took the inline checked load. Measured on
-/// `bench_typed_array_untyped_access`: the param body emits zero `ctaf.get`
-/// blocks, the module-global body 66.
-///
-/// A declaration is not a lifetime proof, and this does not treat it as one.
-/// It is an OPTIMISTIC hint whose only consumer is a load whose runtime guard
-/// re-derives the truth: a receiver that is not the expected kind misses the
-/// `PERRY_TA_KIND_CACHE` entry and defers to the memory-safe helper. So a
-/// wrong hint costs a missed speedup, never a wrong answer — the same
-/// reasoning the module-global arm already documents. Reassigned bindings are
-/// still excluded, matching `receiver_class_name`'s own #6906 rule.
+/// Access uses the common cell header and current owner storage. Any derived
+/// data address is consumed without collection, or retained with its owner.
 fn declared_typed_array_class_i32(ctx: &FnCtx<'_>, id: &u32) -> Option<String> {
     if ctx.reassigned_locals.contains(id) {
         return None;
@@ -681,15 +644,8 @@ fn i32_kind_from_class(name: &str) -> Option<(u8, crate::types::LlvmType, bool, 
     }
 }
 
-/// Emit a *checked* inline i32 typed-array element load for an integer-kind
-/// receiver whose storage/length is not statically known (a typed-array
-/// parameter). Mirrors the runtime `TypedArrayHeader` layout (length `u32` at
-/// offset 0, inline data at offset 16) and the process-global fast-path facts
-/// (`PERRY_TA_KIND_CACHE`, whose tag carries inline storage). Hot path is a bare native
-/// load; a genuine in-kind out-of-bounds read merges in `0`; every guard miss
-/// defers to `js_typed_array_read_int32`. See [`checked_typed_array_i32_kind`]
-/// for the soundness argument. Callers must have proven the receiver eligible
-/// via that predicate.
+/// Access uses the common cell header and current owner storage. Any derived
+/// data address is consumed without collection, or retained with its owner.
 fn lower_checked_typed_array_i32_load(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -701,6 +657,12 @@ fn lower_checked_typed_array_i32_load(
 ) -> Result<String> {
     let obj_box = lower_expr(ctx, object)?;
     let idx_i32 = lower_expr_as_i32(ctx, index)?;
+    // Admission can branch to the runtime before producing an Access. Keep
+    // the receiver's raw handle in the dominating block for that fallback.
+    let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+    let raw = ctx
+        .block()
+        .and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
 
     let chk_idx = ctx.new_block("cta.get.chk");
     let load_idx = ctx.new_block("cta.get.load");
@@ -713,46 +675,23 @@ fn lower_checked_typed_array_i32_load(
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    let tag_mask = crate::nanbox::i64_literal(crate::nanbox::TAG_MASK);
-
-    // ---- entry guard: pointer + inline-storage + kind-cache addr/kind ----
-    let raw = {
-        let blk = ctx.block();
-        let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-        let raw = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
-        let tagged = blk.and(I64, &obj_bits, &tag_mask);
-        let is_ptr = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
-        // #10516: the kind-cache tag carries the receiver's storage: an
-        // external-storage typed array (a view) caches `kind | 0x80`, so the
-        // kind compare below rejects it. No process-wide view count.
-        // Kind-cache probe: slot = (raw >> 3) & 63; entry = (addr << 8) | kind.
-        let slot = blk.lshr(I64, &raw, "3");
-        let slot = blk.and(I64, &slot, "63");
-        let entry_ptr = blk.gep(
-            "[64 x i64]",
-            "@PERRY_TA_KIND_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let entry_val = blk.load(I64, &entry_ptr);
-        let entry_addr = blk.lshr(I64, &entry_val, "8");
-        let addr_match = blk.icmp_eq(I64, &entry_addr, &raw); // also rejects empty slot 0
-        let kind_bits = blk.and(I64, &entry_val, "255");
-        let kind_ok = blk.icmp_eq(I64, &kind_bits, &kind.to_string());
-        let g = blk.and(I1, &is_ptr, &addr_match);
-        let g = blk.and(I1, &g, &kind_ok);
-        blk.cond_br(&g, &chk_label, &slow_label);
-        raw
-    };
+    let access = super::byte_cell::resolve_read(
+        ctx,
+        object,
+        &obj_box,
+        &[super::byte_cell::brand_for_kind(kind)],
+        &slow_label,
+    );
+    ctx.block().br(&chk_label);
 
     // ---- chk: bounds check against header length (u32 at offset 0) ----
     ctx.current_block = chk_idx;
     {
         let blk = ctx.block();
-        let hdr_ptr = blk.inttoptr(I64, &raw);
-        let len = blk.load(I32, &hdr_ptr);
+        let len = &access.len;
         // `ult` also rejects a negative i32 index (wraps to a huge unsigned) —
         // matching JS: `S[-1]` is undefined -> ToInt32 -> 0 (via the oob arm).
-        let in_bounds = blk.icmp_ult(I32, &idx_i32, &len);
+        let in_bounds = blk.icmp_ult(I32, &idx_i32, len);
         blk.cond_br(&in_bounds, &load_label, &oob_label);
     }
 
@@ -760,7 +699,7 @@ fn lower_checked_typed_array_i32_load(
     ctx.current_block = load_idx;
     let (load_val, load_end) = {
         let blk = ctx.block();
-        let data_base = blk.add(I64, &raw, "16");
+        let data_base = &access.data;
         let idx_i64 = blk.zext(I32, &idx_i32, I64);
         let shift = elem_size.trailing_zeros().to_string();
         let off = blk.shl(I64, &idx_i64, &shift);
@@ -790,17 +729,13 @@ fn lower_checked_typed_array_i32_load(
 
     // ---- slow: view / detached / wrong-kind -> full runtime read+ToInt32 ----
     ctx.current_block = slow_idx;
-    let (slow_val, slow_end) = {
-        let blk = ctx.block();
-        let v = blk.call(
-            I32,
-            "js_typed_array_read_int32",
-            &[(I64, &raw), (I32, &idx_i32)],
-        );
-        let end = blk.label.clone();
-        blk.br(&merge_label);
-        (v, end)
-    };
+    let slow_val = ctx.block().call(
+        I32,
+        "js_typed_array_read_int32",
+        &[(I64, &raw), (I32, &idx_i32)],
+    );
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
 
     // ---- merge ----
     ctx.current_block = merge_idx;

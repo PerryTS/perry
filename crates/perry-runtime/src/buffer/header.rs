@@ -15,6 +15,8 @@ pub struct BufferHeader {
     pub length: u32,
     /// Capacity (allocated space)
     pub capacity: u32,
+    /// Owner or ordinary shaped property bag; the cell's only traced edge.
+    pub link: usize,
 }
 
 #[inline]
@@ -50,26 +52,134 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-/// The buffer-family GC type of the cell at `addr`, or `None` when `addr` is
-/// not a `BufferHeader` cell. One magnitude/alignment check, then the header
-/// load every other brand probe in the runtime does (`try_read_gc_header`'s
-/// contract: `addr` is a GC allocation's user address or non-pointer bits).
+/// Candidate address of a word offered to a byte-cell probe: a POINTER_TAG
+/// payload or a legacy untagged raw pointer, classified by TAG before any
+/// header is read. Every other tag (a double such as a numeric fd, INT32, SSO
+/// and heap strings, handles, singletons) is a primitive whose low 48 bits
+/// are not an address; stripping its tag and probing the remainder read a
+/// header at an arbitrary address (fs.appendFileSync(fd, ..) segfault). A bare
+/// top-16-clear word is also what a denormal double looks like, so it is an
+/// address only when Perry's memory owns its header word (this thread's
+/// allocator, any thread's arena region, or a process-global
+/// SharedArrayBuffer block) — proven before the header is read.
+#[inline]
+pub(crate) fn byte_word_address(bits: u64) -> Option<usize> {
+    if bits < 0x1000 {
+        return None;
+    }
+    if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+        return Some((bits & crate::value::POINTER_MASK) as usize);
+    }
+    if (bits >> 48) != 0 {
+        return None;
+    }
+    let addr = bits as usize;
+    raw_byte_word_is_owned(addr).then_some(addr)
+}
+
+#[cold]
+fn raw_byte_word_is_owned(addr: usize) -> bool {
+    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.is_some()
+        || addr
+            .checked_sub(GC_HEADER_SIZE)
+            .is_some_and(|header| crate::arena::region_contains(header, GC_HEADER_SIZE))
+        || crate::shared_sab::is_shared_sab(addr)
+}
+
+/// [`byte_cell_type`] for a word that may be any JS value: classified by tag
+/// first ([`byte_word_address`]), then admitted. The address and full type.
+#[inline]
+pub(crate) fn byte_cell_of_word(bits: u64) -> Option<(usize, u8)> {
+    let addr = byte_word_address(bits)?;
+    Some((addr, byte_cell_type(addr)?))
+}
+
+/// The full GC type of the byte cell at `addr` (Buffer, Uint8Array, the
+/// %TypedArray% kinds, ArrayBuffer, SharedArrayBuffer, DataView, key objects;
+/// owners and views), or `None` when `addr` is not one.
+///
+/// This is the one admission every runtime byte-cell recognizer goes through.
+/// A receiver word reaching the runtime need not be a GC cell: a
+/// pointer-tagged native value (a RegExp, a host object) can point just past
+/// a word that starts with a byte-family type byte, and a view's `link` or an
+/// owner's bag read from such a word follows garbage. So the plain header load
+/// only decides the negative, and any other type byte answers `None` with one
+/// load. A byte-family type byte is confirmed by the allocator
+/// ([`byte_cell_is_owned`]) before anything reads the cell.
+#[inline(always)]
+pub(crate) fn byte_cell_type(addr: usize) -> Option<u8> {
+    let obj_type = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?.obj_type;
+    if !crate::gc::is_byte_family_type(obj_type) {
+        return None;
+    }
+    byte_cell_is_owned(addr, obj_type).then_some(obj_type)
+}
+
+/// The ownership proof behind [`byte_cell_type`]: `addr` is a GC cell whose
+/// header names exactly `obj_type`, or a process-global SharedArrayBuffer
+/// block. For a caller that already loaded `obj_type` from a plain header read
+/// of a word that may not be a GC cell.
+///
+/// Every byte cell is an old-arena cell, and the process-wide region registry
+/// (`arena::region_contains`) owns all arena memory whichever thread
+/// allocated it, so the proof holds on any thread. This thread's tracked
+/// header read answers first: it is the cheaper probe for its own cells.
+#[inline]
+pub(crate) fn byte_cell_is_owned(addr: usize, obj_type: u8) -> bool {
+    #[cfg(test)]
+    if byte_cell_proof_sabotaged() {
+        return true;
+    }
+    (crate::gc::gc_type_is_known(obj_type)
+        && unsafe { crate::value::addr_class::try_read_tracked_gc_header_of_type(addr, obj_type) }
+            .is_some())
+        || byte_cell_in_any_region(addr, obj_type)
+}
+
+/// The process-wide arm of [`byte_cell_is_owned`]: a cell of another thread's
+/// arena (its header and extent inside one live region, arena-flagged, of the
+/// type the caller read), or a process-global SharedArrayBuffer block.
+#[cold]
+#[inline(never)]
+fn byte_cell_in_any_region(addr: usize, obj_type: u8) -> bool {
+    if obj_type == GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER && crate::shared_sab::is_shared_sab(addr) {
+        return true;
+    }
+    #[cfg(test)]
+    if super::bytes::b4_sabotage("byte_cell_region") {
+        return false;
+    }
+    let Some(header_addr) = addr.checked_sub(GC_HEADER_SIZE) else {
+        return false;
+    };
+    if !crate::arena::region_contains(header_addr, GC_HEADER_SIZE) {
+        return false;
+    }
+    // SAFETY: the header word lies inside a live arena region.
+    let header = unsafe { &*(header_addr as *const GcHeader) };
+    header.obj_type == obj_type
+        && header.gc_flags & crate::gc::GC_FLAG_ARENA != 0
+        && header.size as usize >= GC_HEADER_SIZE
+        && crate::arena::region_contains(header_addr, header.size as usize)
+}
+
+/// `PERRY_B4_SABOTAGE=byte_cell_proof` admits every byte-family type byte
+/// without the allocator proof; `byte_cell_admission_tests` must go red.
+#[cfg(test)]
+fn byte_cell_proof_sabotaged() -> bool {
+    static SABOTAGED: OnceLock<bool> = OnceLock::new();
+    *SABOTAGED.get_or_init(|| super::bytes::b4_sabotage("byte_cell_proof"))
+}
+
+/// The buffer-family GC type of the cell at `addr` with the view bit cleared,
+/// or `None` when `addr` is not a `BufferHeader` cell ([`byte_cell_type`]).
 #[inline(always)]
 pub(crate) fn buffer_family_type(addr: usize) -> Option<u8> {
-    let obj_type = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?.obj_type;
+    let obj_type = byte_cell_type(addr)?;
     if !is_buffer_family_type(obj_type) {
         return None;
     }
-    // The one POINTER-tagged value with no `GcHeader` is a `Box`-leaked symbol
-    // (`Symbol.for`, the well-knowns): its `addr - 8` is foreign allocator
-    // bytes that can equal any type byte. Every symbol carries `SYMBOL_MAGIC`
-    // in its first word, so a header that claims a buffer is believed unless
-    // that word matches (the #7850 screen); a buffer whose `length` happens to
-    // equal the magic pays one ownership check instead.
-    if unsafe { crate::symbol::may_be_symbol_header(addr as *const u8) } && !header_is_owned(addr) {
-        return None;
-    }
-    Some(obj_type)
+    Some(obj_type & !crate::codegen_abi::BYTES_TYPE_VIEW)
 }
 
 /// [`buffer_family_type`] for a word that may not be an address at all, or may
@@ -84,7 +194,7 @@ pub(crate) fn buffer_family_type_owned(addr: usize) -> Option<u8> {
         None if crate::shared_sab::is_shared_sab(addr) => GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER,
         None => return None,
     };
-    is_buffer_family_type(obj_type).then_some(obj_type)
+    is_buffer_family_type(obj_type).then_some(obj_type & !crate::codegen_abi::BYTES_TYPE_VIEW)
 }
 
 /// Allocator-proven ownership of `addr`'s header: a tracked arena/malloc GC
@@ -109,11 +219,14 @@ fn set_buffer_brand(addr: usize, brand: u8) -> bool {
     if buffer_family_type(addr).is_none() {
         return false;
     }
-    u8_inline_cache_invalidate(addr);
     // SAFETY: `buffer_family_type` just read this header through the same
     // magnitude/alignment gate; every flavor shares one GcTypeInfo, so only
     // the brand changes.
-    unsafe { (*((addr - GC_HEADER_SIZE) as *mut GcHeader)).obj_type = brand };
+    unsafe {
+        (*((addr - GC_HEADER_SIZE) as *mut GcHeader)).obj_type = brand
+            | ((*((addr - GC_HEADER_SIZE) as *mut GcHeader)).obj_type
+                & crate::codegen_abi::BYTES_TYPE_VIEW)
+    };
     true
 }
 
@@ -176,26 +289,6 @@ pub type CryptoKeyMeta = (u8, u8, u8, bool, u32, u32);
 // have the attribute, and each entry is dropped by the cell's finalize hook
 // (`finalize_collected_dead_buffer`).
 crate::perry_thread_local! {
-    /// #10873: `ArrayBuffer addr -> maxByteLength` for RESIZABLE buffers.
-    /// Presence IS the `[[ArrayBufferMaxByteLength]]` internal slot. A plain
-    /// address-keyed attribute of a non-moving buffer, never dereferenced and
-    /// never a root, pruned in `finalize_collected_dead_buffer` (the #6080 ABA
-    /// class). The resize logic lives in `buffer::resizable`.
-    static RESIZABLE_BUFFER_MAX: RefCell<PtrHashMap<usize, ResizableInfo>> =
-        RefCell::new(new_ptr_hash_map());
-    /// Issue #1225: ArrayBuffer-identity alias map for Buffers produced by
-    /// copy paths like `Buffer.from(buf)`.  Node-compatible semantics: the
-    /// new Buffer's `.buffer` returns the same ArrayBuffer object as the
-    /// source's `.buffer` because both views live inside the shared 8 KiB
-    /// pool slab.  Perry allocates fresh inline storage per Buffer, so the
-    /// `.buffer` getter would otherwise return the new BufferHeader pointer
-    /// and `src.buffer === cp.buffer` would be false.  Storing the source's
-    /// resolved alias here lets the getter return a stable identity token.
-    /// Limitation: the bytes are not actually inside the aliased buffer, so
-    /// reads/writes through `.buffer` won't observe the view's data — only
-    /// the `===` identity check matches Node.
-    static BUFFER_AB_ALIAS: RefCell<PtrHashMap<usize, Box<usize>>> =
-        RefCell::new(new_ptr_hash_map());
     /// Metadata of `GC_TYPE_BUFFER_CRYPTO_KEY` cells. Numeric to keep
     /// perry-runtime independent from perry-stdlib enums:
     /// algo: 1 HMAC, 2 AES-GCM, 3 AES-KW, 4 AES-CBC, 5 AES-CTR, 6 HKDF,
@@ -224,9 +317,7 @@ crate::perry_thread_local! {
 
 use crate::registry_latch::RegistryLatch;
 
-static RESIZABLE_BUFFER_EVER_MARKED: RegistryLatch = RegistryLatch::new();
 static ASYMMETRIC_KEY_EVER_MARKED: RegistryLatch = RegistryLatch::new();
-static BUFFER_AB_ALIAS_EVER_SET: RegistryLatch = RegistryLatch::new();
 
 /// Brand the buffer at `addr` as an `ArrayBuffer` (issue #579: a source that
 /// `new Uint8Array(ab)` should ALIAS rather than copy).
@@ -243,54 +334,32 @@ pub fn is_array_buffer(addr: usize) -> bool {
 pub(crate) struct ResizableInfo {
     /// `[[ArrayBufferMaxByteLength]]` — also the payload's reserved capacity.
     pub max_byte_length: u32,
-    /// Every payload byte at or past this offset is known to read as zero, so
-    /// a grow only has to clear `[old byteLength, dirty_end)`. Never below the
-    /// current `byteLength`. See `buffer::resizable`.
-    pub dirty_end: u32,
 }
 
-/// Record `addr` as a resizable ArrayBuffer.
-pub(crate) fn mark_as_resizable_buffer(addr: usize, info: ResizableInfo) {
-    // Arm before the insert — see `crate::registry_latch`.
-    RESIZABLE_BUFFER_EVER_MARKED.arm();
-    RESIZABLE_BUFFER_MAX.with(|r| {
-        r.borrow_mut().insert(addr, info);
-    });
+/// Resizability is an owner-header fact; capacity reserves maxByteLength.
+pub(crate) fn mark_as_resizable_buffer(addr: usize, _info: ResizableInfo) {
+    unsafe {
+        (*super::store::header(addr))._reserved |= crate::codegen_abi::BYTES_RESIZABLE;
+    }
 }
 
-/// The resizable state of `addr`, or `None` for a fixed-length buffer.
 #[inline]
 pub(crate) fn resizable_info(addr: usize) -> Option<ResizableInfo> {
-    if RESIZABLE_BUFFER_EVER_MARKED.is_idle() {
-        return None;
-    }
-    RESIZABLE_BUFFER_MAX.with(|r| r.borrow().get(&addr).copied())
-}
-
-/// Move a resizable buffer's known-zero boundary. A no-op for any other address.
-pub(crate) fn set_resizable_dirty_end(addr: usize, dirty_end: u32) {
-    RESIZABLE_BUFFER_MAX.with(|r| {
-        if let Some(info) = r.borrow_mut().get_mut(&addr) {
-            info.dirty_end = dirty_end;
+    unsafe {
+        let owner = super::store::owner(addr);
+        if (*super::store::header(owner))._reserved & crate::codegen_abi::BYTES_RESIZABLE == 0 {
+            return None;
         }
-    });
+        let cell = &*(owner as *const BufferHeader);
+        Some(ResizableInfo {
+            max_byte_length: cell.capacity,
+        })
+    }
 }
 
-/// True once any resizable ArrayBuffer has existed in this process.
-#[inline]
-pub(crate) fn any_resizable_buffer() -> bool {
-    RESIZABLE_BUFFER_EVER_MARKED.is_armed()
-}
-
-/// `[[ArrayBufferMaxByteLength]]`, or `None` for a fixed-length buffer.
 #[inline]
 pub fn resizable_max_byte_length(addr: usize) -> Option<u32> {
-    resizable_info(addr).map(|info| info.max_byte_length)
-}
-
-#[cfg(test)]
-pub(crate) fn test_resizable_registry_len() -> usize {
-    RESIZABLE_BUFFER_MAX.with(|r| r.borrow().len())
+    resizable_info(addr).map(|i| i.max_byte_length)
 }
 
 /// Brand the buffer at `addr` as a `SharedArrayBuffer`. (A process-global
@@ -328,11 +397,9 @@ pub fn is_data_view(addr: usize) -> bool {
 /// header (`buffer_alloc` births a Node `Buffer`); this only clears what a
 /// previous occupant of the address could have left in the attribute tables
 /// (belt and suspenders: the finalize hook drops them when a cell dies).
-pub fn register_buffer(ptr: *const BufferHeader) {
-    super::own_props::clear_buffer_own_props(ptr as usize);
+pub fn register_buffer(_ptr: *const BufferHeader) {
     // A fresh cell at a reused address must never inherit the previous
     // occupant's inline-admission entry (#9342).
-    u8_inline_cache_invalidate(ptr as usize);
 }
 
 /// Buffers this size or smaller used to come from a bump slab
@@ -348,11 +415,18 @@ pub(crate) fn is_small_buf_slab_addr(_addr: usize) -> bool {
 
 /// Is `addr` a `BufferHeader` cell of any flavor — a Node `Buffer`, a
 /// `Uint8Array`, an `ArrayBuffer`, a `SharedArrayBuffer` (thread-local or
-/// process-global), a `DataView` or a key object? One header load and two
-/// compares; there is no registry behind it.
+/// process-global), a `DataView` or a key object? The byte-cell admission
+/// ([`byte_cell_type`]); there is no registry behind it.
 #[inline]
 pub fn is_registered_buffer(addr: usize) -> bool {
     buffer_family_type(addr).is_some()
+}
+
+/// A byte cell proven by its allocator ([`byte_cell_type`]). Generic object
+/// paths ask this of every receiver; any other type byte answers in one load.
+#[inline]
+pub(crate) fn is_owned_byte_cell(addr: usize) -> bool {
+    byte_cell_type(addr).is_some()
 }
 
 /// Brand the buffer at `addr` as a `Uint8Array` (formatted as
@@ -372,14 +446,7 @@ pub fn mark_as_uint8array(addr: usize) {
 fn release_external_buffer_registries_in_freed_ranges(
     freed: &crate::arena::thread_exit::FreedRanges,
 ) {
-    use std::sync::atomic::Ordering;
     use std::sync::PoisonError;
-    for slot in PERRY_U8_INLINE_CACHE.iter() {
-        let old = slot.load(Ordering::Relaxed);
-        if old != 0 && freed.contains(old as usize) {
-            let _ = slot.compare_exchange(old, 0, Ordering::Relaxed, Ordering::Relaxed);
-        }
-    }
     if let Some(map) = EXTERNAL_CRYPTO_KEY_META_REGISTRY.get() {
         map.lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -535,7 +602,6 @@ fn default_crypto_key_usages(algo: u8, kind: u8) -> u32 {
 /// 4 x25519, 5 ec (P-384), 6 ec (P-521).
 pub fn mark_as_asymmetric_key(addr: usize, kind: u8, asym_type: u8) {
     // A non-byte-view brand revokes inline element admission (#10515).
-    u8_inline_cache_invalidate(addr);
     ASYMMETRIC_KEY_EVER_MARKED.arm();
     ASYMMETRIC_KEY_REGISTRY.with(|r| {
         r.borrow_mut().insert(addr, (kind, asym_type));
@@ -550,161 +616,6 @@ pub fn asymmetric_key_meta(addr: usize) -> Option<(u8, u8)> {
     ASYMMETRIC_KEY_REGISTRY.with(|r| r.borrow().get(&addr).copied())
 }
 
-/// #9342: direct-mapped inline element-access admission cache for byte-view
-/// `BufferHeader`s, exported under a stable link name for the codegen's
-/// guarded inline byte loads and stores (`perry-codegen/src/expr/
-/// u8_buffer_read.rs`) and consulted first by the runtime byte accessors.
-///
-/// An entry holds the full address of a **live, registered byte view — a
-/// `Uint8Array` or a Node `Buffer` (`buffer_brand` says so) — whose
-/// authoritative bytes are inline at `header + 8`** (no foreign backing and no
-/// registered view). Under that contract the emitted code may do
-/// `len = *(u32*)addr; addr + 8 + idx` directly, for a read AND for a write:
-/// a write to an owning buffer is exactly `js_buffer_set`'s store, because
-/// every view over it resolves its bytes through the backing (`buffer/view.rs`)
-/// rather than holding a copy.
-///
-///  * `Buffer` was admitted too in #10515: its element semantics are the
-///    `Uint8Array`'s, and requiring the `mark_as_uint8array` marker sent every
-///    `Buffer.alloc` byte through the registry probes on every access. An
-///    `ArrayBuffer`, `SharedArrayBuffer`, `DataView` or key object shares the
-///    `BufferHeader` storage but is NOT integer-indexed (a DataView even keeps
-///    its data pointer in that payload), so it is never admitted, and every
-///    `mark_as_*` for those brands invalidates the address in case a mark ever
-///    follows a prime;
-///
-///  * shared views (`js_buffer_slice` / `new Uint8Array(arrayBuffer)`) are
-///    excluded — their allocation is only a header. Runtime reads resolve
-///    through `buffer_data` to the ultimate backing plus the view offset;
-///  * foreign-backed wrappers (`buffer_alloc_foreign`, bun:ffi externals) are
-///    excluded at prime time — their payload after `BufferHeader` holds a
-///    native data pointer, not inline bytes;
-///  * ABA is closed the same way as every other buffer identity table:
-///    `finalize_collected_dead_buffer` clears the entry when the buffer dies,
-///    and `register_buffer` clears it again when the address is re-issued
-///    (belt and suspenders, mirroring its own-props clear).
-///
-/// #10515: TWO-WAY set-associative. An address maps to the slot PAIR
-/// `(addr >> 3) & 62` and may live in either of its two slots,
-/// so two hot buffers that hash together (nanoid's pool + its alphabet table)
-/// no longer evict each other on every alternate access — each miss re-ran the
-/// admission probes, which cost more than the access itself. The pair formula
-/// is duplicated by codegen (`u8_buffer_read.rs::emit_u8_cache_admission`) —
-/// keep in sync.
-pub const U8_INLINE_CACHE_SLOTS: usize = 64;
-#[no_mangle]
-pub static PERRY_U8_INLINE_CACHE: [std::sync::atomic::AtomicU64; U8_INLINE_CACHE_SLOTS] =
-    [const { std::sync::atomic::AtomicU64::new(0) }; U8_INLINE_CACHE_SLOTS];
-
-/// The first slot of `addr`'s pair; the pair is `[p, p + 1]`.
-#[inline(always)]
-fn u8_inline_cache_pair(addr: usize) -> usize {
-    (addr >> 3) & (U8_INLINE_CACHE_SLOTS - 2)
-}
-
-/// Test-only: does the admission cache currently hold exactly `addr`?
-/// Reads the pair the way the emitted guard does — full-address compares.
-#[cfg(test)]
-pub(crate) fn test_u8_inline_cache_holds(addr: usize) -> bool {
-    u8_inline_cache_hit(addr)
-}
-
-/// Test probe (#11589): does the admission cache hold exactly `addr`, in
-/// either way of its pair? The public twin of `test_u8_inline_cache_holds`
-/// for out-of-crate tests, so they never re-derive the slot formula. Reads no
-/// thread-local, so a thread-exit range hook may call it.
-#[doc(hidden)]
-pub fn u8_inline_cache_holds_for_test(addr: usize) -> bool {
-    u8_inline_cache_hit(addr)
-}
-
-#[inline]
-pub(crate) fn u8_inline_cache_invalidate(addr: usize) {
-    let pair = u8_inline_cache_pair(addr);
-    for slot in [pair, pair + 1] {
-        if PERRY_U8_INLINE_CACHE[slot].load(std::sync::atomic::Ordering::Relaxed) == addr as u64 {
-            PERRY_U8_INLINE_CACHE[slot].store(0, std::sync::atomic::Ordering::Relaxed);
-        }
-    }
-}
-
-/// `addr` holds an admission in [`PERRY_U8_INLINE_CACHE`]: it is a live
-/// owning byte view whose `length` is the `u32` at offset 0 and whose bytes
-/// are inline at `addr + 8`. Two loads and two compares.
-#[inline(always)]
-pub(crate) fn u8_inline_cache_hit(addr: usize) -> bool {
-    use std::sync::atomic::Ordering::Relaxed;
-    let pair = u8_inline_cache_pair(addr);
-    addr != 0
-        && (PERRY_U8_INLINE_CACHE[pair].load(Relaxed) == addr as u64
-            || PERRY_U8_INLINE_CACHE[pair + 1].load(Relaxed) == addr as u64)
-}
-
-/// Resolve an immutable byte receiver once for generated synchronous code.
-/// Buffer-family cells and their native backing are nonmoving. Length remains
-/// live at each access: detach and resize invalidate bounds, not this pointer.
-/// Foreign wrappers can rebind and therefore never receive this proof.
-#[no_mangle]
-pub extern "C" fn js_u8_resolve_read_data(boxed: f64) -> usize {
-    let value = crate::value::JSValue::from_bits(boxed.to_bits());
-    if !value.is_pointer() {
-        return 0;
-    }
-    let addr = value.as_pointer::<u8>() as usize;
-    if !buffer_family_type_owned(addr)
-        .is_some_and(|kind| kind == crate::gc::GC_TYPE_BUFFER || kind == GC_TYPE_BUFFER_UINT8ARRAY)
-    {
-        return 0;
-    }
-    let header = unsafe { crate::gc::header_from_trusted_user_ptr(addr as *const u8) };
-    if unsafe { (*header)._reserved } & crate::gc::GC_BUFFER_VIEW_DATA != 0 {
-        return unsafe { super::view::cached_data_ptr(addr as *const BufferHeader) } as usize;
-    }
-    u8_inline_cache_try_prime(addr);
-    if u8_inline_cache_hit(addr) {
-        addr + std::mem::size_of::<BufferHeader>()
-    } else {
-        0
-    }
-}
-
-#[cfg(feature = "keepalive-anchors")]
-#[used(compiler)]
-static KEEP_JS_U8_RESOLVE_READ_DATA: extern "C" fn(f64) -> usize = js_u8_resolve_read_data;
-
-/// Admit `addr` to the inline-access cache iff it satisfies the cache
-/// contract above. Called from the codegen slow arms (`js_u8_buffer_read_f64`
-/// and the #10515 i32 get/set twins) and from the runtime byte accessors'
-/// registry arm, so a miss primes the next access. A new admission takes an
-/// empty slot of its pair, else the first slot, demoting that slot's entry to
-/// the second (which drops the older of the two).
-pub(crate) fn u8_inline_cache_try_prime(addr: usize) {
-    use std::sync::atomic::Ordering::Relaxed;
-    if u8_inline_cache_hit(addr) {
-        return;
-    }
-    if super::exotic_view::is_uint8_view_buffer(addr)
-        // View metadata is thread-local; its absence on a different agent
-        // cannot admit a pointer-slot allocation as owning inline storage.
-        && unsafe { (*crate::gc::header_from_trusted_user_ptr(addr as *const u8))._reserved }
-            & crate::gc::GC_BUFFER_VIEW_DATA == 0
-        && foreign_backing(addr).is_none()
-        && super::view::lookup(addr).is_none()
-    {
-        register_thread_exit_hook();
-        let pair = u8_inline_cache_pair(addr);
-        let first = PERRY_U8_INLINE_CACHE[pair].load(Relaxed);
-        if first == 0 {
-            PERRY_U8_INLINE_CACHE[pair].store(addr as u64, Relaxed);
-        } else {
-            // The first way's entry moves to the second (dropping whatever was
-            // older there); the new admission takes the first.
-            PERRY_U8_INLINE_CACHE[pair + 1].store(first, Relaxed);
-            PERRY_U8_INLINE_CACHE[pair].store(addr as u64, Relaxed);
-        }
-    }
-}
-
 /// Is `addr` Uint8Array-backed storage whose JS value is not a Node
 /// `Buffer` — a plain `Uint8Array`, or a secret `KeyObject`'s / `CryptoKey`'s
 /// key bytes? Reached from `typedarray_props::typed_array_owner_kind` for every
@@ -714,71 +625,29 @@ pub fn is_uint8array_buffer(addr: usize) -> bool {
     buffer_family_type(addr).is_some_and(is_uint8array_buffer_type)
 }
 
-/// Record that `buf`'s `.buffer` property should resolve to `alias` instead of
-/// `buf` itself.  Used by copy paths (`Buffer.from(src)`) to propagate the
-/// source's ArrayBuffer identity onto the new buffer — see #1225.
-pub fn set_buffer_ab_alias(buf: usize, alias: usize) {
-    BUFFER_AB_ALIAS_EVER_SET.arm();
-    BUFFER_AB_ALIAS.with(|m| {
-        let mut m = m.borrow_mut();
-        let slot = m.entry(buf).or_insert_with(|| Box::new(0));
-        **slot = alias;
-        crate::gc::runtime_write_barrier_external_slot(
-            buf,
-            &mut **slot as *mut usize as usize,
-            alias as u64,
-        );
-    });
-}
-
-/// Look up the ArrayBuffer-identity alias for a Buffer.  Returns `None` for
-/// buffers that haven't been involved in a copy chain (their `.buffer` just
-/// returns themselves, as before).
-#[inline]
-pub fn buffer_ab_alias(buf: usize) -> Option<usize> {
-    if BUFFER_AB_ALIAS_EVER_SET.is_idle() {
-        return None;
+/// Materialize one real ArrayBuffer view, retained by the owner's shaped bag.
+pub fn ensure_buffer_ab_alias(addr: usize) -> usize {
+    if addr == 0 {
+        return 0;
     }
-    BUFFER_AB_ALIAS.with(|m| m.borrow().get(&buf).map(|alias| **alias))
-}
-
-/// Collapse an alias chain to its root: if `buf` already aliases something,
-/// return that; otherwise return `buf` itself.  Callers use this to seed the
-/// alias on a fresh copy so chained `Buffer.from(Buffer.from(src))` keeps
-/// `===` identity with the original source.
-pub fn resolve_buffer_ab_alias(buf: usize) -> usize {
-    ensure_buffer_ab_alias(buf)
-}
-
-/// Return a stable ArrayBuffer identity for a Buffer's `.buffer` / `.parent`
-/// property. Perry stores Buffer bytes inline in BufferHeader allocations, so
-/// create a BufferHeader-backed ArrayBuffer object lazily and cache it.
-pub fn ensure_buffer_ab_alias(buf: usize) -> usize {
-    if buf < 0x1000 || !is_registered_buffer(buf) {
-        return buf;
-    }
-    if is_array_buffer(buf) || is_shared_array_buffer(buf) {
-        return buf;
-    }
-
-    if let Some(alias) = buffer_ab_alias(buf) {
-        if is_array_buffer(alias) || is_shared_array_buffer(alias) {
-            return alias;
-        }
-        if alias != buf {
-            let resolved = ensure_buffer_ab_alias(alias);
-            set_buffer_ab_alias(buf, resolved);
-            return resolved;
-        }
-    }
-
+    let _suppress = crate::gc::GcSuppressScope::new();
     unsafe {
-        let src = buf as *const BufferHeader;
-        let len = (*src).length;
-        let alias = super::view::alloc(src, 0, len);
-        mark_as_array_buffer(alias as usize);
-        set_buffer_ab_alias(buf, alias as usize);
-        alias as usize
+        let owner = super::store::owner(addr);
+        let ty = (*super::store::header(owner)).obj_type;
+        if ty == GC_TYPE_BUFFER_ARRAY_BUFFER || ty == GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER {
+            return owner;
+        }
+        if let Some(value) = super::store::bag_get(owner, super::store::ARRAY_BUFFER_KEY) {
+            return crate::value::JSValue::from_bits(value.to_bits()).as_pointer::<u8>() as usize;
+        }
+        let view = super::store::new_view(GC_TYPE_BUFFER_ARRAY_BUFFER, owner, 0, 0, true);
+        super::store::bag_set(
+            owner,
+            super::store::ARRAY_BUFFER_KEY,
+            crate::value::js_nanbox_pointer(view as i64),
+            true,
+        );
+        view as usize
     }
 }
 
@@ -827,6 +696,7 @@ pub fn buffer_alloc(capacity: u32) -> *mut BufferHeader {
         (*header).gc_flags |= crate::gc::GC_FLAG_TENURED;
         (*ptr).length = 0;
         (*ptr).capacity = capacity;
+        (*ptr).link = 0;
     }
     register_buffer(ptr);
     ptr
@@ -864,6 +734,7 @@ pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHea
         (*gc)._reserved |= crate::gc::GC_BUFFER_FOREIGN_DATA;
         (*ptr).header.length = length;
         (*ptr).header.capacity = length;
+        (*ptr).header.link = 0;
         (*ptr).data = data;
         // GC_STORE_AUDIT(INIT): the native backing owner of the cell allocated
         // above, before it is published.
@@ -919,13 +790,20 @@ pub(crate) fn has_owned_backing(addr: usize) -> bool {
 
 pub(crate) fn take_owned_backing(addr: usize) -> Option<super::backing::Backing> {
     #[cfg(test)]
-    let defer = !super::bytes::sabotage("detach_free");
+    let defer = !super::bytes::sabotage("detach_free") && !super::bytes::sabotage("arena_free");
     #[cfg(not(test))]
     let defer = true;
     if !is_foreign_backed_buffer(addr) || (defer && super::bytes::has_pins(addr)) {
         return None;
     }
-    let backing = unsafe { (*(addr as *mut ForeignBuffer)).owned.take() };
+    let backing = unsafe {
+        let cell = addr as *mut ForeignBuffer;
+        let backing = (*cell).owned.take();
+        if backing.is_some() {
+            (*cell).data = std::ptr::null_mut();
+        }
+        backing
+    };
     if let Some(ref backing) = backing {
         crate::gc::gc_note_external_side_free(backing.capacity() as usize);
     }
@@ -935,7 +813,8 @@ pub(crate) fn take_owned_backing(addr: usize) -> Option<super::backing::Backing>
 /// TLS destruction cannot consult ownership tables or GC accounting. Both
 /// the normal finalizer and this path take the same in-cell owner exactly once.
 pub(crate) unsafe fn drop_owned_backing_at_thread_exit(header: *mut crate::gc::GcHeader) {
-    if is_buffer_family_type((*header).obj_type)
+    if crate::gc::is_byte_family_type((*header).obj_type)
+        && !crate::gc::is_byte_view_type((*header).obj_type)
         && (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         && (*header)._reserved & crate::gc::GC_BUFFER_FOREIGN_DATA != 0
     {
@@ -1028,26 +907,14 @@ pub(crate) fn rebind_foreign_buffer(addr: usize, data: *mut u8, length: u32) -> 
 }
 
 #[inline]
-fn foreign_backing(addr: usize) -> Option<usize> {
-    // Only buffer_data calls this, with a live BufferHeader. Every producer,
-    // including process-global SAB, now reserves a real preceding GcHeader.
-    // Keep the byte-access hot path to a header-bit load, without a registry
-    // or ownership lookup for each byte read.
-    unsafe {
-        let gc = (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc)._reserved & crate::gc::GC_BUFFER_FOREIGN_DATA == 0 {
-            return None;
-        }
-        Some((*(addr as *const ForeignBuffer)).data as usize)
-    }
-}
 
 pub(crate) fn is_foreign_backed_buffer(addr: usize) -> bool {
     // This public-address probe must prove ownership before reading the header.
     // SAB is a buffer too, but cannot have this per-heap foreign-data layout.
     unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }.is_some_and(|header| {
         let header = unsafe { header.as_ref() };
-        is_buffer_family_type(header.obj_type)
+        crate::gc::is_byte_family_type(header.obj_type)
+            && !crate::gc::is_byte_view_type(header.obj_type)
             && header._reserved & crate::gc::GC_BUFFER_FOREIGN_DATA != 0
     })
 }
@@ -1063,32 +930,6 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     drop(take_owned_backing(addr));
     #[cfg(feature = "node-api-host")]
     enqueue_foreign_finalizer(addr);
-    // #10873: a recycled address must not inherit resizability.
-    if RESIZABLE_BUFFER_EVER_MARKED.is_armed() {
-        RESIZABLE_BUFFER_MAX.with(|r| {
-            r.borrow_mut().remove(&addr);
-        });
-    }
-    BUFFER_AB_ALIAS.with(|r| {
-        r.borrow_mut().remove(&addr);
-    });
-    // The WebCrypto/KeyObject side tables were missing from this list. They are
-    // plain `addr -> metadata` maps that do not root the `BufferHeader`, so a
-    // collected CryptoKey/secret-key buffer left its entries behind forever.
-    // Two consequences, both real:
-    //
-    //  * an unbounded leak — every CryptoKey ever created kept an entry in the
-    //    thread-local map AND in the process-global one (a 60k-key run leaked
-    //    59,998 of them);
-    //  * the #6080 ABA class this very function exists to prevent: the old
-    //    arena resets a fully-empty block's offset to 0 while keeping its base
-    //    pointer (`arena_reset_empty_blocks` + the block-reuse forward scan in
-    //    `Arena::alloc`), so a recycled address inherits CryptoKey identity.
-    //    `crypto_key_meta`/`is_secret_key` gate `instanceof CryptoKey`,
-    //    `util.types.isCryptoKey`/`isKeyObject`, the `[object CryptoKey]` tag,
-    //    the `.algorithm`/`.type`/`.usages` property surface, `KeyObject.from`
-    //    and `.export()` — an unrelated fresh Buffer landing on a dead key's
-    //    address would answer to all of them.
     CRYPTO_KEY_META_REGISTRY.with(|r| {
         r.borrow_mut().remove(&addr);
     });
@@ -1105,66 +946,43 @@ pub(crate) fn finalize_collected_dead_buffer(addr: usize) {
     // through the hook it installs at startup. The callback only removes a
     // HashMap entry — no allocation, so it is safe to run inside the sweep.
     notify_crypto_key_death(addr);
-    // The own-property table (`buf.foo = v`, #6406) was missing from this list.
-    // It is the same shape as every table above — a plain address-keyed map that
-    // does not root the `BufferHeader` — but it had only ONE clear site,
-    // `register_buffer`, so an entry was dropped only when the recycled address
-    // was re-issued to another *buffer*. Two consequences, both real:
-    //
-    //  * an unbounded leak — one permanent entry per property-carrying
-    //    Buffer/DataView ever created — made worse than the registries above by
-    //    the fact that `scan_buffer_own_props_roots_mut` TRACES the stored
-    //    values in every GC phase, so a dead buffer's expando closure (and
-    //    everything it captures) stayed reachable for the life of the process;
-    //  * the #6080 ABA class this function exists to prevent. The surviving
-    //    entry's key is a dead address that the scanner keeps handing to
-    //    `visit_metadata_usize_slot`, which resolves it against whatever now
-    //    occupies those bytes and rewrites the key to the new tenant's address.
-    super::own_props::clear_buffer_own_props(addr);
-    // A BufferHeader-backed Uint8Array keeps ordinary expandos and its
-    // non-extensible marker in the TypedArray side tables. Prune those here as
-    // well as in the typed-array finalizer: this representation is not a
-    // `GC_TYPE_TYPED_ARRAY` cell, so that path never sees it (#9347).
-    crate::typedarray_props::typed_array_clear_own_props(addr);
-    crate::typedarray_props::typed_array_clear_no_extend(addr);
-    super::view::remove_entries_for_dead_buffer(addr);
-    // #9342: drop the dead address from the inline-read admission cache before
-    // its block can be reset and re-issued — a stale hit would read the next
-    // tenant's memory as (length, bytes).
-    u8_inline_cache_invalidate(addr);
-}
-
-/// Trace the cached ArrayBuffer identity only while its owning buffer lives.
-/// The boxed slot remains stable if other buffers populate the map mid-cycle.
-pub(crate) fn visit_ab_alias_slot(addr: usize, mut visit: impl FnMut(*mut u64)) {
-    BUFFER_AB_ALIAS.with(|m| {
-        if let Some(alias) = m.borrow_mut().get_mut(&addr) {
-            visit(&mut **alias as *mut usize as *mut u64);
-        }
-    });
 }
 
 /// Get the canonical data pointer for a buffer or shared view.
 pub fn buffer_data(buf: *const BufferHeader) -> *const u8 {
-    // The cell carries the derived pointer. No TLS lookup on the hot path;
-    // the existing view metadata still owns the GC edge and resize/detach work.
-    let gc = unsafe { &*((buf as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader) };
-    if gc._reserved & crate::gc::GC_BUFFER_VIEW_DATA != 0 {
-        return unsafe { super::view::cached_data_ptr(buf) };
-    }
-    if let Some(info) = super::view::lookup(buf as usize) {
-        // Registration flattens nested views; the owner is retained by the GC
-        // descriptor. Detach zeroes view lengths before releasing any pages.
-        return unsafe {
-            buffer_data(info.backing as *const BufferHeader).add(info.offset as usize)
-        };
-    }
-    foreign_backing(buf as usize)
-        .map(|addr| addr as *const u8)
-        .unwrap_or_else(|| unsafe { (buf as *const u8).add(std::mem::size_of::<BufferHeader>()) })
+    unsafe { super::store::data(buf as usize) }
 }
 
 /// Get the mutable data pointer for a buffer
 pub fn buffer_data_mut(buf: *mut BufferHeader) -> *mut u8 {
-    buffer_data(buf) as *mut u8
+    unsafe { super::store::data(buf as usize) }
+}
+
+/// Test-only recreation of the deleted byte-moving attach transition.
+#[cfg(test)]
+pub(crate) unsafe fn externalize_on_attach_for_test(addr: usize) {
+    if super::store::is_view(addr) || is_foreign_backed_buffer(addr) {
+        return;
+    }
+    let h = super::store::header(addr);
+    assert!((*h).size as usize >= crate::gc::GC_HEADER_SIZE + std::mem::size_of::<ForeignBuffer>());
+    let old = &*(addr as *const BufferHeader);
+    let header = BufferHeader {
+        length: old.length,
+        capacity: old.capacity,
+        link: old.link,
+    };
+    let backing = super::backing::Backing::copy(super::store::owner_data(addr), header.capacity);
+    let data = backing.data();
+    std::ptr::write(
+        addr as *mut ForeignBuffer,
+        ForeignBuffer {
+            header,
+            data,
+            owned: Some(backing),
+            #[cfg(feature = "node-api-host")]
+            finalizer: None,
+        },
+    );
+    (*h)._reserved |= crate::codegen_abi::BYTES_OUT_OF_LINE;
 }

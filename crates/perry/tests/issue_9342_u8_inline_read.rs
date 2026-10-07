@@ -165,8 +165,8 @@ fn u8_inline_read_lane_fires_and_is_correct() {
         "the u8 inline lane's slow arm must be CALLED — the lane did not fire"
     );
     assert!(
-        ir.contains("@PERRY_U8_INLINE_CACHE"),
-        "the emitted guard must probe the admission cache"
+        ir.contains("bytes.header") && !ir.contains("@PERRY_U8_INLINE_CACHE"),
+        "the emitted guard must resolve the common header without an address cache"
     );
     assert_stdout(&run(&bin, dir.path(), false), "plain");
     assert_stdout(&run(&bin, dir.path(), true), "gc-stress");

@@ -11,7 +11,6 @@ fn weak_trace_slot_respects_shape_bounds_and_brands() {
             0,
             CLASS_ID_FINALIZATION_REGISTRY,
             CLASS_ID_WEAKREF,
-            CLASS_ID_WEAK_ENTRY,
             CLASS_ID_FINALIZATION_RECORD,
         ] {
             for live in [0, 1, 2, 4] {
@@ -26,8 +25,7 @@ fn weak_trace_slot_respects_shape_bounds_and_brands() {
                 // Include the one-past-capacity address; never dereference slots.
                 for field in 0..=capacity {
                     let expected = (field as u32) < live
-                        && (matches!(class_id, CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY)
-                            && field == 0
+                        && (class_id == CLASS_ID_WEAKREF && field == 0
                             || class_id == CLASS_ID_FINALIZATION_RECORD && field < 2);
                     assert_eq!(
                         is_weak_target_trace_slot(header, object_field_slot(obj, field)),
@@ -62,11 +60,7 @@ fn weak_trace_slot_rejects_null_nonobject_and_absent_shape() {
             std::ptr::null_mut()
         ));
 
-        for class_id in [
-            CLASS_ID_WEAKREF,
-            CLASS_ID_WEAK_ENTRY,
-            CLASS_ID_FINALIZATION_RECORD,
-        ] {
+        for class_id in [CLASS_ID_WEAKREF, CLASS_ID_FINALIZATION_RECORD] {
             let obj = crate::object::js_object_alloc(class_id, 2);
             let header = (obj as *mut u8)
                 .sub(crate::gc::GC_HEADER_SIZE)
@@ -94,5 +88,36 @@ fn weak_trace_slot_rejects_null_nonobject_and_absent_shape() {
                 assert!(is_weak_target_trace_slot(header, object_field_slot(obj, 1)));
             }
         }
+    }
+}
+
+#[test]
+fn owned_weak_storage_slots_exclude_free_list_and_bucket_words() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    unsafe {
+        let map = js_weakmap_new();
+        let map = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(map.cast()).bits()));
+        let key = crate::object::js_object_alloc(0, 0);
+        js_weakmap_set(
+            map.get_nanbox_f64(),
+            f64::from_bits(JSValue::pointer(key.cast()).bits()),
+            1.0,
+        );
+        let table = storage::owned_storage(
+            js_nanbox_get_pointer(map.get_nanbox_f64()) as *mut ObjectHeader
+        );
+        let header = header_from_user_addr(table as usize);
+        let entry = (*table).entries();
+        assert!(is_weak_target_trace_slot(header, &mut (*entry).key));
+        assert!(is_weak_target_trace_slot(header, &mut (*entry).value));
+        assert!(!is_weak_target_trace_slot(header, std::ptr::null_mut()));
+        assert!(!is_weak_target_trace_slot(
+            header,
+            entry.add((*table).capacity as usize).cast()
+        ));
+        (*table).remove(0);
+        assert!(!is_weak_target_trace_slot(header, &mut (*entry).key));
+        assert!(!is_weak_target_trace_slot(header, &mut (*entry).value));
     }
 }

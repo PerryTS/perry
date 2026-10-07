@@ -4,7 +4,7 @@
 //! used by the rest of the runtime. Manifest lowering calls them before handing
 //! raw scalars, pointers, buffer spans, strings, or promises to native code.
 
-use crate::buffer::{is_registered_buffer, resolve_span_data_ptr, BufferHeader};
+use crate::buffer::{is_registered_buffer, BufferHeader};
 use crate::object::ObjectHeader;
 use crate::promise::Promise;
 use crate::value::{JSValue, POINTER_MASK, TAG_FALSE, TAG_TRUE};
@@ -427,14 +427,18 @@ pub extern "C" fn js_native_abi_check_ptr(value: f64) -> i64 {
 /// bytes the script observes, not the view's stale local copy (#6515).
 #[no_mangle]
 pub extern "C" fn js_native_abi_check_buffer_data_ptr(value: f64) -> *const u8 {
-    unsafe { resolve_span_data_ptr(strict_buffer_from_value(value)) }
+    let buffer = strict_buffer_from_value(value);
+    crate::buffer::bytes::no_gc(|_| {
+        crate::buffer::bytes::span(crate::value::js_nanbox_pointer(buffer as i64), false)
+            .map_or(std::ptr::null(), |span| span.ptr as *const u8)
+    })
 }
 
 /// Validate and lower the byte-length half of a manifest `buffer+len` span.
 #[no_mangle]
 pub extern "C" fn js_native_abi_check_buffer_byte_len(value: f64) -> usize {
     let buffer = strict_buffer_from_value(value);
-    unsafe { (*buffer).length as usize }
+    unsafe { crate::buffer::store::length(buffer as usize) }
 }
 
 /// Validate and unwrap a manifest `promise` parameter.
@@ -631,7 +635,9 @@ mod tests {
         let boxed = boxed_ptr(buf);
         assert_eq!(
             js_native_abi_check_buffer_data_ptr(boxed),
-            crate::buffer::buffer_data(buf)
+            crate::buffer::bytes::no_gc(
+                |_| crate::buffer::bytes::span(boxed, false).unwrap().ptr as *const u8
+            )
         );
         assert_eq!(js_native_abi_check_buffer_byte_len(boxed), 3);
 
@@ -656,10 +662,22 @@ mod tests {
 
         // Both access paths resolve to the same shared storage.
         let resolved = js_native_abi_check_buffer_data_ptr(boxed_ptr(view));
-        assert_eq!(resolved, crate::buffer::buffer_data(ab));
-        assert_eq!(resolved, crate::buffer::buffer_data(view));
+        crate::buffer::bytes::no_gc(|_| {
+            assert_eq!(
+                resolved,
+                crate::buffer::bytes::span(boxed_ptr(ab), false)
+                    .unwrap()
+                    .ptr as *const u8
+            );
+            assert_eq!(
+                resolved,
+                crate::buffer::bytes::span(boxed_ptr(view), false)
+                    .unwrap()
+                    .ptr as *const u8
+            );
+        });
         assert_ne!(resolved, unsafe {
-            (view as *const u8).add(std::mem::size_of::<crate::buffer::BufferHeader>())
+            (view as *const u8).add(crate::codegen_abi::BYTES_STORE)
         });
         assert_eq!(js_native_abi_check_buffer_byte_len(boxed_ptr(view)), 64);
 
@@ -680,7 +698,12 @@ mod tests {
         let with_offset = crate::buffer::js_uint8array_view(boxed_ptr(ab), 16.0, 8.0);
         let resolved_off = js_native_abi_check_buffer_data_ptr(boxed_ptr(with_offset));
         assert_eq!(resolved_off, unsafe {
-            crate::buffer::buffer_data(ab).add(16)
+            crate::buffer::bytes::no_gc(|_| {
+                crate::buffer::bytes::span(boxed_ptr(ab), false)
+                    .unwrap()
+                    .ptr
+                    .add(16) as *const u8
+            })
         });
         assert_eq!(
             js_native_abi_check_buffer_byte_len(boxed_ptr(with_offset)),
@@ -703,7 +726,11 @@ mod tests {
         let standalone = crate::buffer::js_uint8array_alloc(64);
         assert_eq!(
             js_native_abi_check_buffer_data_ptr(boxed_ptr(standalone)),
-            crate::buffer::buffer_data(standalone)
+            crate::buffer::bytes::no_gc(
+                |_| crate::buffer::bytes::span(boxed_ptr(standalone), false)
+                    .unwrap()
+                    .ptr as *const u8
+            )
         );
 
         // Detach invalidates every view's span before releasing backing pages;
@@ -716,7 +743,7 @@ mod tests {
         );
         assert_eq!(
             js_native_abi_check_buffer_data_ptr(boxed_ptr(view)),
-            crate::buffer::buffer_data(view)
+            std::ptr::null()
         );
     }
 

@@ -211,6 +211,11 @@ pub(super) fn verify_accessor_arm(blocks: &Blocks) -> Result<Vec<&str>, String> 
             ));
         }
     }
+    for (_, body) in &guards {
+        if body.iter().any(|line| line.contains(" call ")) {
+            return Err("primary validation must expand guards without a selector call".into());
+        }
+    }
     if predecessors(blocks, call) != [guards[guards.len() - 1].0] {
         return Err("the getter call must be reached only through every guard".into());
     }

@@ -37,16 +37,9 @@ pub(crate) fn note_named_mutation(owner: usize, name: &[u8]) {
         let Some(header) = crate::value::addr_class::try_read_gc_header(owner) else {
             return;
         };
-        let view = matches!(
-            header.obj_type,
-            crate::gc::GC_TYPE_BUFFER
-                | crate::gc::GC_TYPE_BUFFER_UINT8ARRAY
-                | crate::gc::GC_TYPE_TYPED_ARRAY
-                | crate::gc::GC_TYPE_NATIVE_TYPED_VIEW
-        );
         let prototype = header.obj_type == crate::gc::GC_TYPE_OBJECT
             && (crate::object::is_typed_array_prototype(owner) || is_buffer_prototype(owner));
-        if view || prototype {
+        if prototype {
             PERRY_TYPED_NAMED_PROPS_INVALIDATED.store(1, Ordering::Release);
         }
     }
@@ -57,17 +50,7 @@ pub(crate) fn note_prototype_mutation(owner: usize, user_override: bool) {
     // path. That custom prototype must withdraw the default accessor proof.
     // Bootstrap links between builtin prototypes do not change a view's
     // default chain; only a user retarget of those prototypes withdraws it.
-    let view =
-        unsafe { crate::value::addr_class::try_read_gc_header(owner) }.is_some_and(|header| {
-            matches!(
-                header.obj_type,
-                crate::gc::GC_TYPE_BUFFER
-                    | crate::gc::GC_TYPE_BUFFER_UINT8ARRAY
-                    | crate::gc::GC_TYPE_TYPED_ARRAY
-                    | crate::gc::GC_TYPE_NATIVE_TYPED_VIEW
-            )
-        });
-    if view || user_override {
+    if user_override {
         note_named_mutation(owner, b"length");
     }
 }
@@ -86,21 +69,31 @@ pub(crate) unsafe fn try_get(receiver: JSValue, name: &[u8]) -> Option<f64> {
     if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         return None;
     }
-    match header.obj_type {
+    let obj_type = crate::buffer::header::byte_cell_type(addr)?;
+    if crate::buffer::buffer_has_own_prop(addr, std::str::from_utf8(name).unwrap())
+        || crate::buffer::store::bag_get(addr, crate::buffer::store::PROTOTYPE_KEY).is_some()
+    {
+        return None;
+    }
+    match obj_type & !crate::codegen_abi::BYTES_TYPE_VIEW {
         crate::gc::GC_TYPE_BUFFER | crate::gc::GC_TYPE_BUFFER_UINT8ARRAY => {
             let buf = addr as *const crate::buffer::BufferHeader;
             Some(if name == b"byteOffset" {
                 crate::buffer::buffer_byte_offset(addr) as f64
             } else {
-                (*buf).length as f64
+                crate::buffer::store::length(buf as usize) as f64
             })
         }
-        crate::gc::GC_TYPE_TYPED_ARRAY => {
+        t if crate::gc::is_typed_array_type(t) => {
             let ta = addr as *const crate::typedarray::TypedArrayHeader;
             Some(match name {
                 b"byteOffset" => crate::typedarray_view::js_typed_array_byte_offset(ta) as f64,
-                b"byteLength" => (*ta).length as f64 * (*ta).elem_size as f64,
-                _ => (*ta).length as f64,
+                b"byteLength" => {
+                    crate::typedarray::element_length(ta) as f64
+                        * crate::typedarray::elem_size_for_kind(crate::typedarray::element_kind(ta))
+                            as f64
+                }
+                _ => crate::typedarray::element_length(ta) as f64,
             })
         }
         _ => None,
@@ -129,11 +122,11 @@ pub(crate) unsafe fn get(receiver: f64, key: *const crate::StringHeader) -> Opti
     if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         return None;
     }
-    let prototype_name = match header.obj_type {
+    let prototype_name = match header.obj_type & !crate::codegen_abi::BYTES_TYPE_VIEW {
         crate::gc::GC_TYPE_BUFFER => "Buffer",
         crate::gc::GC_TYPE_BUFFER_UINT8ARRAY => "Uint8Array",
-        crate::gc::GC_TYPE_TYPED_ARRAY => crate::typedarray::name_for_kind(
-            (*(addr as *const crate::typedarray::TypedArrayHeader)).kind,
+        t if crate::gc::is_typed_array_type(t) => crate::typedarray::name_for_kind(
+            crate::typedarray::element_kind(addr as *const crate::typedarray::TypedArrayHeader),
         ),
         _ => return None,
     };

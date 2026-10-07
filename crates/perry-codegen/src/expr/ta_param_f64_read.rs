@@ -24,9 +24,9 @@ use perry_hir::Expr;
 
 use super::index_get::numeric_index_has_integer_array_index_proof;
 use super::{lower_expr, lower_expr_as_i32, FnCtx};
-use crate::nanbox::{double_literal, i64_literal, TAG_UNDEFINED};
+use crate::nanbox::{double_literal, TAG_UNDEFINED};
 use crate::native_value::{BoundsState, BufferAccessMode, LoweredValue};
-use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
+use crate::types::{DOUBLE, F32, I16, I32, I64, I8};
 
 /// How a loaded element widens into the f64 result.
 #[derive(Clone, Copy)]
@@ -41,38 +41,8 @@ enum F64Conv {
     F64,
 }
 
-/// Numeric element kind of a statically-typed typed-array receiver eligible for
-/// the inline **checked f64** element read: `(kind_tag, elem_llvm_ty,
-/// elem_size_bytes, conv)`. Covers *every* numeric kind — unlike the i32 sibling
-/// (`checked_typed_array_i32_kind`), which stops at the i32-representable integer
-/// kinds — because an f64 result represents `Uint32Array` and the float kinds
-/// exactly. `None` for the BigInt kinds (BigInt64/BigUint64 are BigInt, not
-/// Number) and any non-typed-array / non-local receiver.
-///
-/// `kind_tag` values MUST match `perry-runtime` `KIND_*`
-/// (`typedarray/mod.rs`): the runtime `PERRY_TA_KIND_CACHE` stores `kind as u64`,
-/// and the entry guard compares against this tag — a mismatch would merely miss
-/// the cache and route every read to the slow helper (correct, but no speedup).
-/// A DECLARED typed-array class on a non-reassigned local or parameter
-/// (#9363/#5525).
-///
-/// `receiver_class_name` answers only from `proven_local_types`, which is
-/// runtime-derived and therefore empty for a PARAMETER — its value comes from
-/// outside the body. That left the shape this machinery was built for on the
-/// slow path: bcryptjs's `_encipher(lr, off, P: Int32Array, S: Int32Array)`
-/// does ~600M `S[i]` reads through parameters and emitted a
-/// `js_typed_array_get` CALL for every one, while the identical loop over a
-/// module-global receiver took the inline checked load. Measured on
-/// `bench_typed_array_untyped_access`: the param body emits zero `ctaf.get`
-/// blocks, the module-global body 66.
-///
-/// A declaration is not a lifetime proof, and this does not treat it as one.
-/// It is an OPTIMISTIC hint whose only consumer is a load whose runtime guard
-/// re-derives the truth: a receiver that is not the expected kind misses the
-/// `PERRY_TA_KIND_CACHE` entry and defers to the memory-safe helper. So a
-/// wrong hint costs a missed speedup, never a wrong answer — the same
-/// reasoning the module-global arm already documents. Reassigned bindings are
-/// still excluded, matching `receiver_class_name`'s own #6906 rule.
+/// Access uses the common cell header and current owner storage. Any derived
+/// data address is consumed without collection, or retained with its owner.
 fn declared_typed_array_class_f64(ctx: &FnCtx<'_>, id: &u32) -> Option<String> {
     if ctx.reassigned_locals.contains(id) {
         return None;
@@ -86,7 +56,6 @@ fn declared_typed_array_class_f64(ctx: &FnCtx<'_>, id: &u32) -> Option<String> {
 /// Byte offset of a typed-array object's inline elements from its header, which
 /// holds the `u32` length at offset 0. The checked load reads exactly this
 /// layout.
-const TA_INLINE_DATA_OFFSET: i32 = 16;
 
 /// Whether a receiver with a tracked buffer view may take the guarded read.
 ///
@@ -122,7 +91,7 @@ fn view_leaves_receiver_to_guarded_read(view: &crate::native_value::BufferViewSl
         && view.native_owned.is_none()
         && view.storage_inline_proven
         && view.pointer_state.is_stable()
-        && view.length_offset_from_data == -TA_INLINE_DATA_OFFSET
+        && view.length_slot.is_some()
 }
 
 fn checked_typed_array_f64_kind(
@@ -288,45 +257,24 @@ fn lower_checked_typed_array_f64_load(
     let slow_label = ctx.block_label(slow_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    let tag_mask = i64_literal(crate::nanbox::TAG_MASK);
-
-    // ---- entry guard: pointer + inline-storage + kind-cache addr/kind ----
-    let raw = {
-        let blk = ctx.block();
-        let obj_bits = blk.bitcast_double_to_i64(&obj_box);
-        let raw = blk.and(I64, &obj_bits, crate::nanbox::POINTER_MASK_I64);
-        let tagged = blk.and(I64, &obj_bits, &tag_mask);
-        let is_ptr = blk.icmp_eq(I64, &tagged, crate::nanbox::POINTER_TAG_I64);
-        // #10516: the kind-cache tag carries the receiver's storage: an
-        // external-storage typed array (a view) caches `kind | 0x80`, so the
-        // kind compare below rejects it. No process-wide view count.
-        let slot = blk.lshr(I64, &raw, "3");
-        let slot = blk.and(I64, &slot, "63");
-        let entry_ptr = blk.gep(
-            "[64 x i64]",
-            "@PERRY_TA_KIND_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let entry_val = blk.load(I64, &entry_ptr);
-        let entry_addr = blk.lshr(I64, &entry_val, "8");
-        let addr_match = blk.icmp_eq(I64, &entry_addr, &raw); // also rejects empty slot 0
-        let kind_bits = blk.and(I64, &entry_val, "255");
-        let kind_ok = blk.icmp_eq(I64, &kind_bits, &kind.to_string());
-        let g = blk.and(I1, &is_ptr, &addr_match);
-        let g = blk.and(I1, &g, &kind_ok);
-        blk.cond_br(&g, &chk_label, &slow_label);
-        raw
-    };
+    let access = super::byte_cell::resolve_read(
+        ctx,
+        object,
+        &obj_box,
+        &[super::byte_cell::brand_for_kind(kind)],
+        &slow_label,
+    );
+    let raw = access.raw;
+    ctx.block().br(&chk_label);
 
     // ---- chk: bounds check against header length (u32 at offset 0) ----
     ctx.current_block = chk_idx;
     {
         let blk = ctx.block();
-        let hdr_ptr = blk.inttoptr(I64, &raw);
-        let len = blk.load(I32, &hdr_ptr);
+        let len = &access.len;
         // `ult` also rejects a negative index (wraps huge unsigned) — JS `S[-1]`
         // is undefined; the oob arm merges `TAG_UNDEFINED`.
-        let in_bounds = blk.icmp_ult(I32, &idx_i32, &len);
+        let in_bounds = blk.icmp_ult(I32, &idx_i32, len);
         blk.cond_br(&in_bounds, &load_label, &oob_label);
     }
 
@@ -334,7 +282,7 @@ fn lower_checked_typed_array_f64_load(
     ctx.current_block = load_idx;
     let (load_val, load_end) = {
         let blk = ctx.block();
-        let data_base = blk.add(I64, &raw, &TA_INLINE_DATA_OFFSET.to_string());
+        let data_base = &access.data;
         let idx_i64 = blk.zext(I32, &idx_i32, I64);
         let shift = elem_size.trailing_zeros().to_string();
         let off = blk.shl(I64, &idx_i64, &shift);
@@ -380,22 +328,19 @@ fn lower_checked_typed_array_f64_load(
 
     // ---- slow: view / detached / wrong-kind / non-TA -> memory-safe helper ---
     ctx.current_block = slow_idx;
-    let (slow_val, slow_end) = {
-        let blk = ctx.block();
-        let value = blk.call(
-            DOUBLE,
-            "js_typed_array_read_f64",
-            &[(I64, &raw), (I32, &idx_i32)],
-        );
-        let value = if number_context {
-            blk.call(DOUBLE, "js_number_coerce", &[(DOUBLE, &value)])
-        } else {
-            value
-        };
-        let end = blk.label.clone();
-        blk.br(&merge_label);
-        (value, end)
+    let slow_val = ctx.block().call(
+        DOUBLE,
+        "js_typed_array_read_f64",
+        &[(I64, &raw), (I32, &idx_i32)],
+    );
+    let slow_val = if number_context {
+        ctx.block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &slow_val)])
+    } else {
+        slow_val
     };
+    let slow_end = ctx.block().label.clone();
+    ctx.block().br(&merge_label);
 
     // ---- merge ----
     ctx.current_block = merge_idx;

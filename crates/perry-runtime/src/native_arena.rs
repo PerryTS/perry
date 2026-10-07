@@ -1,186 +1,75 @@
-//! Hidden runtime intrinsics for native-owned typed-array views.
-//!
-//! These are internal `__perry_native_arena_*` intrinsics, not a public API.
-//! TypeScript receives opaque owner/view handles; the raw byte pointer stays
-//! in runtime-owned GC payloads.
-
-use std::alloc::{alloc_zeroed, dealloc, Layout};
-use std::cell::RefCell;
-use std::ptr;
-use std::sync::atomic::{AtomicUsize, Ordering};
-
+//! NativeArena uses the ordinary out-of-line byte owner and sixteen-byte views.
 use crate::typedarray::{self, TypedArrayHeader};
+use std::ptr;
 
-const NATIVE_ARENA_DISPOSED_MESSAGE: &[u8] = b"NativeArena has been disposed";
-
-#[repr(C)]
-pub struct NativeArenaOwnerHeader {
-    pub byte_length: u64,
-    pub data: *mut u8,
-    pub generation: u32,
-    pub disposed: u8,
-    pub _pad: [u8; 3],
-}
-
-#[repr(C)]
-pub struct NativeTypedViewHeader {
-    // Prefix must match TypedArrayHeader exactly.
-    pub length: u32,
-    pub capacity: u32,
-    pub kind: u8,
-    pub elem_size: u8,
-    /// Always `TA_STORAGE_EXTERNAL`: the elements live in the arena.
-    pub storage: u8,
-    pub flags: u8,
-    pub _pad: [u8; 4],
-
-    pub owner: *mut NativeArenaOwnerHeader,
-    pub data: *mut u8,
-    pub byte_offset: u64,
-    pub byte_length: u64,
-    pub generation: u32,
-    pub _pad2: u32,
-}
+pub type NativeArenaOwnerHeader = crate::buffer::BufferHeader;
+pub type NativeTypedViewHeader = crate::buffer::BufferHeader;
 
 #[repr(C)]
 pub struct NativePodViewHeader {
     pub owner: *mut NativeArenaOwnerHeader,
-    pub data: *mut u8,
     pub byte_offset: u64,
     pub byte_length: u64,
     pub record_count: u64,
     pub stride: u32,
     pub alignment: u32,
     pub layout_id: u64,
-    pub generation: u32,
-    pub _pad: u32,
 }
 
-thread_local! {
-    static OWNER_REGISTRY: RefCell<crate::fast_hash::PtrHashSet<usize>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_set());
-    static VIEW_REGISTRY: RefCell<crate::fast_hash::PtrHashSet<usize>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_set());
-    static POD_VIEW_REGISTRY: RefCell<crate::fast_hash::PtrHashSet<usize>> =
-        RefCell::new(crate::fast_hash::new_ptr_hash_set());
-}
-
-#[inline]
 fn strip_nanbox(raw: u64) -> usize {
-    if (raw >> 48) >= 0x7FF8 {
-        (raw & 0x0000_FFFF_FFFF_FFFF) as usize
+    if raw >> 48 >= 0x7ff8 {
+        (raw & crate::value::POINTER_MASK) as usize
     } else {
         raw as usize
     }
 }
 
-#[inline]
-fn byte_layout(byte_length: u64) -> Layout {
-    let size = (byte_length as usize).max(1);
-    Layout::from_size_align(size, 8).expect("native arena byte layout")
-}
-
 #[cold]
 fn throw_type_error(message: &[u8]) -> ! {
-    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    typedarray::throw_type_error(message)
 }
-
 #[cold]
 fn throw_range_error(message: &[u8]) -> ! {
-    let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    typedarray::throw_range_error(message)
 }
-
 #[cold]
 pub(crate) fn throw_native_arena_disposed() -> ! {
-    throw_type_error(NATIVE_ARENA_DISPOSED_MESSAGE)
+    throw_type_error(b"NativeArena has been disposed")
 }
 
-fn register_owner(owner: *mut NativeArenaOwnerHeader) {
-    OWNER_REGISTRY.with(|r| {
-        r.borrow_mut().insert(owner as usize);
-    });
-}
-
-fn unregister_owner(owner: *mut NativeArenaOwnerHeader) {
-    OWNER_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&(owner as usize));
-    });
-}
-
-/// #5525: process-global count of live native typed views. Native arena views
-/// are an exotic perry/ui feature — an ordinary `Int32Array` is never one — but
-/// `is_native_typed_view` is on the hot per-element read path
-/// (`js_typed_array_get`), where it otherwise pays a thread-local
-/// (`_tlv_get_addr`) `RefCell` borrow + hash probe of an almost-always-empty
-/// set. Gating on this counter lets the common case answer "no" with a single
-/// relaxed atomic load and no thread-local access.
-static NATIVE_VIEW_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-fn register_view(view: *mut NativeTypedViewHeader) {
-    NATIVE_VIEW_COUNT.fetch_add(1, Ordering::Relaxed);
-    VIEW_REGISTRY.with(|r| {
-        r.borrow_mut().insert(view as usize);
-    });
-    typedarray::register_typed_array(view as *const TypedArrayHeader, unsafe { (*view).kind });
-}
-
-fn unregister_view(view: *mut NativeTypedViewHeader) {
-    let removed = VIEW_REGISTRY.with(|r| r.borrow_mut().remove(&(view as usize)));
-    if removed {
-        NATIVE_VIEW_COUNT.fetch_sub(1, Ordering::Relaxed);
-    }
-    typedarray::unregister_typed_array(view as *const TypedArrayHeader);
-}
-
-fn register_pod_view(view: *mut NativePodViewHeader) {
-    POD_VIEW_REGISTRY.with(|r| {
-        r.borrow_mut().insert(view as usize);
-    });
-}
-
-fn unregister_pod_view(view: *mut NativePodViewHeader) {
-    POD_VIEW_REGISTRY.with(|r| {
-        r.borrow_mut().remove(&(view as usize));
-    });
-}
-
-#[inline]
 fn owner_is_registered(owner: *const NativeArenaOwnerHeader) -> bool {
-    OWNER_REGISTRY.with(|r| r.borrow().contains(&(owner as usize)))
+    unsafe { crate::value::addr_class::try_read_tracked_gc_header(owner as usize) }
+        .is_some_and(|h| unsafe { h.as_ref() }.obj_type == crate::gc::GC_TYPE_NATIVE_ARENA_OWNER)
 }
 
 #[inline]
 pub(crate) fn is_native_typed_view(ta: *const TypedArrayHeader) -> bool {
-    // Fast path: no native views exist anywhere → cannot be one, skip the
-    // thread-local set probe entirely (#5525).
-    if NATIVE_VIEW_COUNT.load(Ordering::Relaxed) == 0 {
+    let addr = ta as usize;
+    if !crate::buffer::header::byte_cell_type(addr)
+        .is_some_and(|t| crate::gc::is_byte_view_type(t) && crate::gc::is_typed_array_type(t))
+    {
         return false;
     }
-    VIEW_REGISTRY.with(|r| r.borrow().contains(&(ta as usize)))
+    unsafe {
+        (*crate::buffer::store::header(crate::buffer::store::owner(addr))).obj_type
+            == crate::gc::GC_TYPE_NATIVE_ARENA_OWNER
+    }
 }
 
 #[inline]
 pub(crate) fn is_native_pod_view(view: *const NativePodViewHeader) -> bool {
-    POD_VIEW_REGISTRY.with(|r| r.borrow().contains(&(view as usize)))
+    unsafe { crate::value::addr_class::try_read_tracked_gc_header(view as usize) }
+        .is_some_and(|h| unsafe { h.as_ref() }.obj_type == crate::gc::GC_TYPE_NATIVE_POD_VIEW)
 }
 
-#[inline]
 pub(crate) unsafe fn native_view_from_typed_array(
     ta: *const TypedArrayHeader,
 ) -> *const NativeTypedViewHeader {
-    ta as *const NativeTypedViewHeader
+    ta.cast()
 }
 
 unsafe fn clean_owner_ptr(raw: u64) -> *mut NativeArenaOwnerHeader {
-    let addr = strip_nanbox(raw);
-    if addr < 0x1000 {
-        return ptr::null_mut();
-    }
-    let owner = addr as *mut NativeArenaOwnerHeader;
+    let owner = strip_nanbox(raw) as *mut NativeArenaOwnerHeader;
     if owner_is_registered(owner) {
         owner
     } else {
@@ -189,102 +78,52 @@ unsafe fn clean_owner_ptr(raw: u64) -> *mut NativeArenaOwnerHeader {
 }
 
 pub(crate) unsafe fn validate_owner_alive(owner: *mut NativeArenaOwnerHeader) {
-    if owner.is_null() || !owner_is_registered(owner) {
+    if !owner_is_registered(owner) {
         throw_type_error(b"Invalid NativeArena owner");
     }
-    if (*owner).disposed != 0 {
+    if crate::buffer::is_detached_buffer(owner as usize) {
         throw_native_arena_disposed();
     }
 }
 
 pub(crate) unsafe fn validate_view_alive(view: *const NativeTypedViewHeader) {
-    if view.is_null() || !is_native_typed_view(view as *const TypedArrayHeader) {
-        return;
-    }
-    let owner = (*view).owner;
-    validate_owner_alive(owner);
-    if (*view).generation != (*owner).generation {
-        throw_native_arena_disposed();
+    if is_native_typed_view(view) {
+        validate_owner_alive(
+            crate::buffer::store::owner(view as usize) as *mut NativeArenaOwnerHeader
+        );
     }
 }
 
 pub(crate) unsafe fn validate_pod_view_alive(view: *const NativePodViewHeader) {
-    if view.is_null() || !is_native_pod_view(view) {
+    if !is_native_pod_view(view) {
         throw_type_error(b"Invalid NativePodView");
     }
-    let owner = (*view).owner;
-    validate_owner_alive(owner);
-    if (*view).generation != (*owner).generation {
-        throw_native_arena_disposed();
-    }
-}
-
-#[inline]
-pub(crate) unsafe fn native_view_data_ptr(ta: *const TypedArrayHeader) -> *const u8 {
-    let view = native_view_from_typed_array(ta);
-    validate_view_alive(view);
-    (*view).data as *const u8
+    validate_owner_alive((*view).owner);
 }
 
 unsafe fn dispose_owner(owner: *mut NativeArenaOwnerHeader) {
-    if owner.is_null() || (*owner).disposed != 0 {
+    if owner.is_null() {
         return;
     }
-    let pinned = crate::buffer::bytes::has_pins(owner as usize);
-    #[cfg(test)]
-    let pinned = pinned && !crate::buffer::bytes::sabotage("arena_free");
-    if !pinned {
-        release_owner_bytes(owner);
-    }
-    (*owner).disposed = 1;
-    (*owner).generation = (*owner).generation.wrapping_add(1);
+    crate::buffer::detach_array_buffer(owner as usize);
 }
 
-/// Release an explicitly disposed owner's allocation when native pins finish.
-/// # Safety
-/// owner is a live NativeArena owner on this thread.
 pub(crate) unsafe fn release_disposed_bytes(owner: *mut NativeArenaOwnerHeader) {
-    if (*owner).disposed != 0 && !crate::buffer::bytes::has_pins(owner as usize) {
-        release_owner_bytes(owner);
-    }
-}
-unsafe fn release_owner_bytes(owner: *mut NativeArenaOwnerHeader) {
-    let data = (*owner).data;
-    if !data.is_null() {
-        dealloc(data, byte_layout((*owner).byte_length));
-        (*owner).data = ptr::null_mut();
+    if crate::buffer::is_detached_buffer(owner as usize) {
+        drop(crate::buffer::header::take_owned_backing(owner as usize));
     }
 }
 
 #[no_mangle]
 pub extern "C" fn js_native_arena_alloc(byte_length: i64) -> *mut NativeArenaOwnerHeader {
-    if byte_length < 0 {
+    if byte_length < 0 || byte_length > crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as i64 {
         throw_range_error(b"NativeArena byteLength is out of range");
     }
-    let byte_length = byte_length as u64;
-    let data = if byte_length == 0 {
-        ptr::null_mut()
-    } else {
-        unsafe {
-            let raw = alloc_zeroed(byte_layout(byte_length));
-            if raw.is_null() {
-                panic!("js_native_arena_alloc OOM");
-            }
-            raw
-        }
-    };
-    let owner = crate::gc::gc_malloc(
-        std::mem::size_of::<NativeArenaOwnerHeader>(),
-        crate::gc::GC_TYPE_NATIVE_ARENA_OWNER,
-    ) as *mut NativeArenaOwnerHeader;
+    let owner = crate::buffer::buffer_alloc_owned(byte_length as u32, byte_length as u32);
     unsafe {
-        (*owner).byte_length = byte_length;
-        (*owner).data = data;
-        (*owner).generation = 1;
-        (*owner).disposed = 0;
-        (*owner)._pad = [0; 3];
+        (*crate::buffer::store::header(owner as usize)).obj_type =
+            crate::gc::GC_TYPE_NATIVE_ARENA_OWNER;
     }
-    register_owner(owner);
     owner
 }
 
@@ -299,65 +138,34 @@ pub extern "C" fn js_native_arena_view(
         throw_range_error(b"NativeArena view is out of bounds");
     }
     let kind = kind as u8;
-    if kind > typedarray::KIND_BIGUINT64 {
+    if kind > typedarray::KIND_FLOAT16 {
         throw_range_error(b"NativeArena view kind is invalid");
     }
-    // RULE 3 (`object/shape_rule3.rs`): the element count lands in
-    // `NativeTypedViewHeader::capacity` at payload `+4`, the word the emitted
-    // property-read path compares against a cached ShapeId. Checked HERE,
-    // before the owner is resolved, so the diagnosis is the length rather than
-    // the "out of bounds" every over-range view would also report — and so the
-    // bound is reachable by a test without a 2 GiB arena.
     if length > crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as i64 {
         throw_range_error(b"NativeArena view length exceeds Perry's maximum");
     }
-    let elem_size = typedarray::elem_size_for_kind(kind) as u64;
-    let byte_offset = byte_offset as u64;
-    let length = length as u64;
-    let byte_length = length
-        .checked_mul(elem_size)
-        .unwrap_or_else(|| throw_range_error(b"NativeArena view is out of bounds"));
-    if !byte_offset.is_multiple_of(elem_size) {
+    let size = typedarray::elem_size_for_kind(kind) as u64;
+    let offset = byte_offset as u64;
+    if !offset.is_multiple_of(size) {
         throw_range_error(b"NativeArena view byteOffset is unaligned");
     }
     let owner = unsafe { clean_owner_ptr(owner_raw) };
     unsafe {
         validate_owner_alive(owner);
-        let end = byte_offset
-            .checked_add(byte_length)
+        let end = (length as u64)
+            .checked_mul(size)
+            .and_then(|n| offset.checked_add(n))
             .unwrap_or_else(|| throw_range_error(b"NativeArena view is out of bounds"));
-        if end > (*owner).byte_length {
+        if end > (*owner).length as u64 {
             throw_range_error(b"NativeArena view is out of bounds");
         }
-        let view = crate::gc::gc_malloc(
-            std::mem::size_of::<NativeTypedViewHeader>(),
-            crate::gc::GC_TYPE_NATIVE_TYPED_VIEW,
-        ) as *mut NativeTypedViewHeader;
-        (*view).length = length as u32;
-        crate::object::shape_rule3::debug_assert_not_shape_id_word(
-            "NativeTypedViewHeader::capacity",
+        crate::buffer::store::new_view(
+            typedarray::type_for_kind(kind),
+            owner as usize,
+            offset as u32,
             length as u32,
-        );
-        (*view).capacity = length as u32;
-        (*view).kind = kind;
-        (*view).elem_size = elem_size as u8;
-        // The elements live in the arena: the header's own storage byte
-        // keeps every inline element path off this view (#10516).
-        (*view).storage = typedarray::TA_STORAGE_EXTERNAL;
-        (*view).flags = 0;
-        (*view)._pad = [0; 4];
-        (*view).owner = owner;
-        (*view).data = if byte_length == 0 {
-            (*owner).data
-        } else {
-            (*owner).data.add(byte_offset as usize)
-        };
-        (*view).byte_offset = byte_offset;
-        (*view).byte_length = byte_length;
-        (*view).generation = (*owner).generation;
-        (*view)._pad2 = 0;
-        register_view(view);
-        view
+            false,
+        )
     }
 }
 
@@ -392,28 +200,21 @@ pub extern "C" fn js_native_pod_view(
         let end = byte_offset
             .checked_add(byte_length)
             .unwrap_or_else(|| throw_range_error(b"NativePodView is out of bounds"));
-        if end > (*owner).byte_length {
+        if end > (*owner).length as u64 {
             throw_range_error(b"NativePodView is out of bounds");
         }
-        let view = crate::gc::gc_malloc(
+        let view = crate::arena::arena_alloc_gc_old(
             std::mem::size_of::<NativePodViewHeader>(),
+            8,
             crate::gc::GC_TYPE_NATIVE_POD_VIEW,
         ) as *mut NativePodViewHeader;
         (*view).owner = owner;
-        (*view).data = if byte_length == 0 {
-            (*owner).data
-        } else {
-            (*owner).data.add(byte_offset as usize)
-        };
         (*view).byte_offset = byte_offset;
         (*view).byte_length = byte_length;
         (*view).record_count = record_count;
         (*view).stride = stride as u32;
         (*view).alignment = alignment as u32;
         (*view).layout_id = layout_id as u64;
-        (*view).generation = (*owner).generation;
-        (*view)._pad = 0;
-        register_pod_view(view);
         view
     }
 }
@@ -452,7 +253,10 @@ pub extern "C" fn js_native_abi_check_pod_view_data_ptr(
     expected_layout_id: i64,
 ) -> *const u8 {
     let view = strict_pod_view_from_value(value, expected_layout_id as u64);
-    unsafe { (*view).data as *const u8 }
+    unsafe {
+        crate::buffer::store::owner_data((*view).owner as usize).add((*view).byte_offset as usize)
+            as *const u8
+    }
 }
 
 #[no_mangle]
@@ -475,18 +279,7 @@ pub extern "C" fn js_native_arena_dispose(owner_raw: u64) {
     }
 }
 
-pub(crate) unsafe fn finalize_native_arena_owner_for_gc(owner: *mut NativeArenaOwnerHeader) {
-    dispose_owner(owner);
-    unregister_owner(owner);
-}
-
-pub(crate) unsafe fn finalize_native_typed_view_for_gc(view: *mut NativeTypedViewHeader) {
-    unregister_view(view);
-}
-
-pub(crate) unsafe fn finalize_native_pod_view_for_gc(view: *mut NativePodViewHeader) {
-    unregister_pod_view(view);
-}
+// Byte owner/view finalization is shared with every other byte cell.
 
 #[cfg(test)]
 mod tests {
@@ -539,12 +332,13 @@ mod tests {
         let owner = js_native_arena_alloc(8);
         let view = js_native_arena_view(owner as u64, typedarray::KIND_FLOAT64 as i32, 0, 1);
         unsafe {
-            assert_eq!((*view).owner, owner);
-            assert_eq!((*view).generation, (*owner).generation);
+            assert_eq!(
+                crate::buffer::store::owner(view as usize) as *mut NativeArenaOwnerHeader,
+                owner
+            );
         }
         unsafe {
-            finalize_native_typed_view_for_gc(view);
-            finalize_native_arena_owner_for_gc(owner);
+            dispose_owner(owner);
         }
     }
 
@@ -554,7 +348,10 @@ mod tests {
         let view = js_native_pod_view(owner as u64, 8, 3, 8, 8, 0x1234);
         unsafe {
             assert_eq!((*view).owner, owner);
-            assert_eq!((*view).data, (*owner).data.add(8));
+            assert_eq!(
+                js_native_abi_check_pod_view_data_ptr(boxed_ptr(view.cast()), 0x1234),
+                crate::buffer::store::owner_data(owner as usize).add(8)
+            );
             assert_eq!((*view).byte_offset, 8);
             assert_eq!((*view).byte_length, 24);
             assert_eq!((*view).record_count, 3);
@@ -565,7 +362,7 @@ mod tests {
         let boxed = boxed_ptr(view as *const u8);
         assert_eq!(
             js_native_abi_check_pod_view_data_ptr(boxed, 0x1234),
-            unsafe { (*owner).data.add(8) as *const u8 }
+            unsafe { crate::buffer::store::owner_data(owner as usize).add(8) as *const u8 }
         );
         assert_eq!(js_native_abi_check_pod_view_record_count(boxed, 0x1234), 3);
         assert_eq!(js_native_pod_view_length(boxed), 3.0);
@@ -598,7 +395,6 @@ mod tests {
         let view = js_native_pod_view(owner as u64, 0, 4, 8, 8, 0x1234);
         unsafe {
             assert_eq!((*view).owner, owner);
-            assert_eq!((*view).generation, (*owner).generation);
         }
         assert_eq!(
             crate::gc::test_gc_rewrite_slot_count(view as usize),
@@ -606,8 +402,7 @@ mod tests {
             "NativePodView must expose only its owner slot to the GC"
         );
         unsafe {
-            finalize_native_pod_view_for_gc(view);
-            finalize_native_arena_owner_for_gc(owner);
+            dispose_owner(owner);
         }
     }
 
@@ -617,19 +412,19 @@ mod tests {
         let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT8 as i32, 0, 8);
         let ta = view as *mut TypedArrayHeader;
         unsafe {
-            *(*owner).data.add(3) = 41;
+            *crate::buffer::store::owner_data(owner as usize).add(3) = 41;
         }
         assert_eq!(crate::typedarray::js_uint8array_get(ta, 3), 41);
         assert_eq!(crate::typedarray::js_uint8array_get(ta, 99), 0);
 
         crate::typedarray::js_uint8array_set(ta, 4, 300);
         unsafe {
-            assert_eq!(*(*owner).data.add(4), 44);
-            assert_eq!(*(*owner).data.add(7), 0);
+            assert_eq!(*crate::buffer::store::owner_data(owner as usize).add(4), 44);
+            assert_eq!(*crate::buffer::store::owner_data(owner as usize).add(7), 0);
         }
         crate::typedarray::js_uint8array_set(ta, 99, 11);
         unsafe {
-            assert_eq!(*(*owner).data.add(7), 0);
+            assert_eq!(*crate::buffer::store::owner_data(owner as usize).add(7), 0);
         }
         js_native_arena_dispose(owner as u64);
     }
@@ -649,8 +444,14 @@ mod tests {
         let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT32 as i32, 4, 2);
         crate::typedarray::js_native_memory_fill_u32(view as u64, 7.0);
         unsafe {
-            assert_eq!(*((*owner).data.add(4) as *const u32), 7);
-            assert_eq!(*((*owner).data.add(8) as *const u32), 7);
+            assert_eq!(
+                *(crate::buffer::store::owner_data(owner as usize).add(4) as *const u32),
+                7
+            );
+            assert_eq!(
+                *(crate::buffer::store::owner_data(owner as usize).add(8) as *const u32),
+                7
+            );
         }
         js_native_arena_dispose(owner as u64);
     }
@@ -662,14 +463,15 @@ mod tests {
         let dst = js_native_arena_view(owner as u64, typedarray::KIND_UINT8 as i32, 2, 6);
         unsafe {
             for i in 0..8 {
-                *(*owner).data.add(i) = (i + 1) as u8;
+                *crate::buffer::store::owner_data(owner as usize).add(i) = (i + 1) as u8;
             }
         }
 
         crate::typedarray::js_native_memory_copy(dst as u64, src as u64);
 
         unsafe {
-            let bytes = std::slice::from_raw_parts((*owner).data, 8);
+            let bytes =
+                std::slice::from_raw_parts(crate::buffer::store::owner_data(owner as usize), 8);
             assert_eq!(bytes, &[1, 2, 1, 2, 3, 4, 5, 6]);
         }
         js_native_arena_dispose(owner as u64);
@@ -697,11 +499,10 @@ mod tests {
         let target = boxed_ptr(view as *const u8);
         let before = unsafe {
             (
-                (*view).owner,
-                (*view).data,
-                (*view).byte_offset,
-                (*view).byte_length,
-                (*view).generation,
+                (*view).link,
+                crate::buffer::store::data(view as usize),
+                (*view).capacity,
+                (*view).length,
             )
         };
 
@@ -709,12 +510,14 @@ mod tests {
         assert_eq!(returned.to_bits(), target.to_bits());
 
         unsafe {
-            assert_eq!((*view).owner, before.0);
-            assert_eq!((*view).data, before.1);
-            assert_eq!((*view).byte_offset, before.2);
-            assert_eq!((*view).byte_length, before.3);
-            assert_eq!((*view).generation, before.4);
-            let bytes = std::slice::from_raw_parts((*view).data, (*view).byte_length as usize);
+            assert_eq!((*view).link, before.0);
+            assert_eq!(crate::buffer::store::data(view as usize), before.1);
+            assert_eq!((*view).capacity, before.2);
+            assert_eq!((*view).length, before.3);
+            let bytes = std::slice::from_raw_parts(
+                crate::buffer::store::data(view as usize),
+                (*view).length as usize,
+            );
             assert!(
                 bytes.iter().any(|&byte| byte != 0),
                 "randomFillSync should mutate native view backing bytes"

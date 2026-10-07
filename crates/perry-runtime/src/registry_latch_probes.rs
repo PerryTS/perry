@@ -43,7 +43,6 @@ fn unregistered_address_misses_every_probe() {
     assert!(!crate::buffer::is_detached_buffer(addr));
     assert_eq!(crate::buffer::crypto_key_meta(addr), None);
     assert_eq!(crate::buffer::asymmetric_key_meta(addr), None);
-    assert_eq!(crate::buffer::buffer_ab_alias(addr), None);
     assert!(!crate::symbol::is_registered_symbol(addr));
     assert!(!crate::shared_sab::is_shared_sab(addr));
     assert!(
@@ -54,11 +53,8 @@ fn unregistered_address_misses_every_probe() {
     assert!(!crate::object::is_registered_class_prototype_object(addr));
 }
 
-/// #7474-shape regression: constructing a typed array AFTER the idle fast path
-/// has already answered "not a typed array" must still register. A latch armed
-/// after the registry insert — or a stale negative left in the `PERRY_TA_KIND_CACHE`
-/// by the idle path — would make this array invisible to every `instanceof`,
-/// element-access and formatting path.
+/// Constructing a typed array after a negative header probe must expose its
+/// brand to instanceof, element-access and formatting paths immediately.
 #[test]
 fn typed_array_is_found_after_the_idle_fast_path_ran() {
     let scratch = unregistered_scratch_addr();
@@ -117,8 +113,9 @@ fn array_buffer_and_data_view_marks_are_found_after_the_idle_fast_path_ran() {
 
     let ab = crate::buffer::buffer_alloc(16) as usize;
     crate::buffer::mark_as_array_buffer(ab);
-    let dv = crate::buffer::buffer_alloc(16) as usize;
-    crate::buffer::mark_as_data_view(dv);
+    let dv = (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[0; 16])
+        .to_bits()
+        & crate::value::POINTER_MASK) as usize;
 
     assert!(crate::buffer::is_array_buffer(ab));
     assert!(crate::buffer::is_any_array_buffer(ab));
@@ -152,10 +149,15 @@ fn shared_array_buffer_backing_is_found_after_the_idle_fast_path_ran() {
 /// agent must be recognised here, from the header it was born with.
 #[test]
 fn shared_array_buffer_allocated_on_another_thread_is_found_here() {
-    let sab = std::thread::spawn(|| crate::shared_sab::alloc_shared_sab(32) as usize)
-        .join()
-        .expect("SAB allocation thread");
-
+    let store = std::thread::spawn(|| {
+        let sab = crate::shared_sab::alloc_shared_sab(32) as usize;
+        crate::shared_sab::shared_store_owner(sab).expect("sender store capability")
+    })
+    .join()
+    .expect("SAB allocation thread");
+    // Crossing agents shares the permanent store, then creates an agent-local
+    // owner. The sender's local owner dies with that agent.
+    let sab = crate::shared_sab::wrap_shared_sab(store) as usize;
     assert!(crate::shared_sab::is_shared_sab(sab));
     assert!(crate::buffer::is_registered_buffer(sab));
     assert!(crate::buffer::is_shared_array_buffer(sab));

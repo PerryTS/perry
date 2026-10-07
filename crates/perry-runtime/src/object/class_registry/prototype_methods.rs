@@ -53,31 +53,32 @@ pub unsafe extern "C" fn js_class_register_static_field(
     crate::object::class_value::note_static_field_defined(class_id, name);
 }
 
-/// [`js_class_register_static_field`] for a static PRIVATE field
-/// (`static #x`): the same store, then the storage key becomes an
-/// `ENTRY_PRIVATE` entry of the class function's bag, so no reflection path
-/// sees it (#11791).
+/// Define a static PRIVATE field as an `ENTRY_PRIVATE` slot of the class
+/// function's bag. It never has a corresponding public property or alias.
 #[no_mangle]
 pub unsafe extern "C" fn js_class_register_static_private_field(
     class_id: u32,
     name_ptr: *const u8,
     name_len: usize,
     value: f64,
-    global_slot: *mut f64,
+    _global_slot: *mut f64,
 ) {
-    js_class_register_static_field(class_id, name_ptr, name_len, value, global_slot);
     if class_id == 0 || name_ptr.is_null() || name_len == 0 {
         return;
     }
-    let name = std::slice::from_raw_parts(name_ptr, name_len);
-    crate::object::class_value::class_static_claim_private(class_id, name);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let receiver = scope.root_nanbox_f64(crate::object::class_constructor_ref_value(class_id));
+    let key = crate::string::js_string_from_bytes(name_ptr, name_len as u32);
+    crate::object::field_get_set::define_static_private_field(
+        receiver.get_nanbox_f64(),
+        key,
+        value.get_nanbox_f64(),
+    );
 }
 
 /// Define a static PRIVATE field of a fresh class evaluation on its class
-/// object: an `ENTRY_PRIVATE` entry of the class object's own properties
-/// (#11791) holding `value`. The field is written through its private entry,
-/// never through `[[Set]]`: a set of a private-value spelling is a private
-/// member write, which throws while the field is not yet declared.
+/// object, directly in the private namespace of its own shape.
 #[no_mangle]
 pub unsafe extern "C" fn js_class_object_define_static_private(
     class_object: *mut crate::object::ObjectHeader,
@@ -87,21 +88,11 @@ pub unsafe extern "C" fn js_class_object_define_static_private(
     if key.is_null() {
         return;
     }
-    let addr = (class_object as u64 & crate::value::POINTER_MASK) as usize;
-    let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
-        return;
-    };
-    let name =
-        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
-    // The bag allocation and the claim must not move the class object or
-    // `value` while they are held raw.
-    let _no_move = crate::gc::GcSuppressScope::new();
-    let holder = match header.obj_type {
-        crate::gc::GC_TYPE_CLOSURE => crate::closure::props::bag_ensure(addr),
-        crate::gc::GC_TYPE_OBJECT => addr as *mut crate::object::ObjectHeader,
-        _ => return,
-    };
-    crate::object::field_get_set::define_private_entry(holder, name, value);
+    crate::object::field_get_set::define_static_private_field(
+        crate::value::js_nanbox_pointer(class_object as i64),
+        key,
+        value,
+    );
 }
 
 /// Read a computed instance-field key resolved at ClassDefinitionEvaluation.

@@ -551,7 +551,11 @@ fn received_native_fallback(value: f64) -> Option<*mut StringHeader> {
     if typed && !null_proto && brand != "Buffer" {
         let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
         let length = if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-            unsafe { (*(addr as *const crate::typedarray::TypedArrayHeader)).length }
+            unsafe {
+                crate::typedarray::element_length(
+                    addr as *const crate::typedarray::TypedArrayHeader,
+                )
+            }
         } else {
             crate::buffer::js_buffer_length(addr as *const crate::buffer::BufferHeader) as u32
         };

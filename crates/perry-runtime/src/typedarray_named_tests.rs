@@ -17,8 +17,7 @@ fn boxed(addr: usize) -> JSValue {
 fn byte_owner_and_offset_view_have_a_positive_metadata_leaf() {
     let _reset = pristine();
     unsafe {
-        let b = crate::buffer::buffer_alloc(12);
-        (*b).length = 12;
+        let b = crate::buffer::js_buffer_alloc(12, 0);
         let view = crate::buffer::js_buffer_slice(b, 3, 9);
         assert_eq!(try_get(boxed(b as usize), b"length"), Some(12.0));
         assert_eq!(try_get(boxed(view as usize), b"length"), Some(6.0));
@@ -32,8 +31,7 @@ fn byte_owner_and_offset_view_have_a_positive_metadata_leaf() {
 fn own_metadata_withdraws_the_leaf_before_publication() {
     let _reset = pristine();
     unsafe {
-        let b = crate::buffer::buffer_alloc(12);
-        (*b).length = 12;
+        let b = crate::buffer::js_buffer_alloc(12, 0);
         assert_eq!(try_get(boxed(b as usize), b"length"), Some(12.0));
         crate::buffer::buffer_define_own_data_prop(b as usize, "length", 91.0);
         assert_eq!(try_get(boxed(b as usize), b"length"), None);

@@ -27,15 +27,11 @@ pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
     let raw = bits.to_bits();
     // Buffer? (registry lookup via the canonical extern dispatch)
     if js_buffer_is_buffer(raw as i64) == 1 {
-        let addr = if (raw >> 48) != 0 {
-            raw & 0x0000_FFFF_FFFF_FFFF
-        } else {
-            raw
-        } as usize;
+        let addr = buffer_addr_from_raw(raw as i64).unwrap_or(0);
         let buf = addr as *const BufferHeader;
         if !buf.is_null() {
             if !out_len.is_null() {
-                *out_len = (*buf).length;
+                *out_len = super::store::length(buf as usize) as u32;
             }
             // #6515: resolve a registered view to its backing window so native
             // consumers see the bytes JS reads/writes, not the stale local copy.
@@ -43,19 +39,22 @@ pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
         }
     }
     // TypedArray? (Uint8Array etc. backing bytes)
-    let addr = if (raw >> 48) >= 0x7FF8 {
-        (raw & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
-        raw as usize
+    let Some(addr) = buffer_addr_from_raw(raw as i64) else {
+        return std::ptr::null();
     };
     if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let ta = addr as *const crate::typedarray::TypedArrayHeader;
-        if let Some(bytes) = crate::typedarray::typed_array_bytes(ta) {
-            if !out_len.is_null() {
-                *out_len = bytes.len() as u32;
+        return super::bytes::no_gc(|_| {
+            if let Ok(span) =
+                super::bytes::span(crate::value::js_nanbox_pointer(addr as i64), false)
+            {
+                if !out_len.is_null() {
+                    *out_len = span.len as u32;
+                }
+                span.ptr as *const u8
+            } else {
+                std::ptr::null()
             }
-            return bytes.as_ptr();
-        }
+        });
     }
     std::ptr::null()
 }
@@ -67,14 +66,10 @@ pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
 static KEEP_JS_VALUE_BUFFER_OR_TYPEDARRAY_DATA: unsafe extern "C" fn(f64, *mut u32) -> *const u8 =
     js_value_buffer_or_typedarray_data;
 
+/// [`super::header::byte_word_address`]: the tag decides before any header
+/// is read.
 fn buffer_addr_from_raw(ptr: i64) -> Option<usize> {
-    // The brand probes read the cell's header, so the word is classified by
-    // its tag first: only a POINTER payload or an allocator-owned raw pointer
-    // is an address. If any other tag were stripped to its low 48 bits, a
-    // number such as an fd of 65 (`0x4050_4000_0000_0000`) would decode to a
-    // heap-window address and the header read would fault.
-    let addr = crate::value::addr_class::object_ref_addr(f64::from_bits(ptr as u64));
-    (addr != 0).then_some(addr)
+    super::header::byte_word_address(ptr as u64)
 }
 
 /// Check whether a value uses Perry's shared BufferHeader storage.
@@ -111,31 +106,6 @@ mod buffer_brand_tests {
         assert_eq!(js_buffer_is_node_buffer(buffer as i64), 1);
         assert_eq!(js_buffer_is_buffer(uint8array as i64), 1);
         assert_eq!(js_buffer_is_node_buffer(uint8array as i64), 0);
-    }
-
-    /// The brand probe takes a raw pointer or any NaN-boxed word, and only a
-    /// POINTER payload or an allocator-owned raw word is an address. Numbers
-    /// (an fd of 65 is `0x4050_4000_0000_0000`, whose low 48 bits fall in the
-    /// heap window) and other tags are not buffers and are never read.
-    /// Sabotage: stripping any tag to its low 48 bits faults on the fd.
-    #[test]
-    fn brand_probes_classify_the_word_by_tag_first() {
-        let buffer = buffer_alloc(4);
-        let boxed = crate::value::js_nanbox_pointer(buffer as i64).to_bits() as i64;
-        let words = [
-            (buffer as i64, 1),
-            (boxed, 1),
-            (65.0f64.to_bits() as i64, 0),
-            (3.0f64.to_bits() as i64, 0),
-            ((crate::value::INT32_TAG | 65) as i64, 0),
-            (crate::value::TAG_UNDEFINED as i64, 0),
-            (0, 0),
-        ];
-        let observed: Vec<(i64, i32)> = words
-            .iter()
-            .map(|&(word, _)| (word, js_buffer_is_buffer(word)))
-            .collect();
-        assert_eq!(observed, words.to_vec());
     }
 }
 
@@ -183,28 +153,25 @@ fn raw_addr_from_value(value: f64) -> usize {
     crate::value::addr_class::object_ref_addr(value)
 }
 
-fn native_buffer_from_value(value: f64) -> Option<*const BufferHeader> {
-    let raw_ptr = raw_addr_from_value(value);
-    if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
-        Some(raw_ptr as *const BufferHeader)
-    } else {
-        None
-    }
-}
-
 #[no_mangle]
 pub extern "C" fn js_native_buffer_data_ptr(value: f64) -> *const u8 {
-    // #6515: a Uint8Array view over an ArrayBuffer must expose its backing
-    // window here, not its stale local copy (see `view::resolve_data_ptr`).
-    native_buffer_from_value(value)
-        .map(|buf| unsafe { resolve_span_data_ptr(buf) })
+    let addr = raw_addr_from_value(value);
+    if addr == 0 {
+        return std::ptr::null();
+    }
+    super::bytes::span(crate::value::js_nanbox_pointer(addr as i64), false)
+        .map(|s| s.ptr.cast_const())
         .unwrap_or(std::ptr::null())
 }
 
 #[no_mangle]
 pub extern "C" fn js_native_buffer_byte_len(value: f64) -> usize {
-    native_buffer_from_value(value)
-        .map(|buf| unsafe { (*buf).length as usize })
+    let addr = raw_addr_from_value(value);
+    if addr == 0 {
+        return 0;
+    }
+    super::bytes::span(crate::value::js_nanbox_pointer(addr as i64), false)
+        .map(|s| s.len)
         .unwrap_or(0)
 }
 
@@ -224,33 +191,33 @@ fn throw_invalid_binary_input(value: f64) -> ! {
     crate::fs::validate::throw_type_error_with_code(&msg, "ERR_INVALID_ARG_TYPE")
 }
 
-fn value_bytes(value: f64) -> &'static [u8] {
+fn inspect_binary_input(value: f64, utf8: bool) -> bool {
     let addr = raw_addr_from_value(value);
-    if addr != 0 && is_data_view(addr) {
+    if addr == 0 || is_data_view(addr) {
         throw_invalid_binary_input(value);
     }
-    if let Some(buf) = native_buffer_from_value(value) {
-        return unsafe { std::slice::from_raw_parts(buffer_data(buf), (*buf).length as usize) };
-    }
-    if addr != 0 && crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        return unsafe {
-            crate::typedarray::typed_array_bytes(addr as *const crate::typedarray::TypedArrayHeader)
-                .unwrap_or_else(|| throw_invalid_binary_input(value))
-        };
-    }
-    throw_invalid_binary_input(value)
+    let result = super::bytes::no_gc(|scope| {
+        super::bytes::bytes(crate::value::js_nanbox_pointer(addr as i64), scope)
+            .ok()
+            .map(|bytes| {
+                if utf8 {
+                    std::str::from_utf8(bytes).is_ok()
+                } else {
+                    bytes.iter().all(|b| *b <= 0x7f)
+                }
+            })
+    });
+    result.unwrap_or_else(|| throw_invalid_binary_input(value))
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_is_ascii(value: f64) -> f64 {
-    let ok = value_bytes(value).iter().all(|b| *b <= 0x7f);
-    f64::from_bits(crate::JSValue::bool(ok).bits())
+    f64::from_bits(crate::JSValue::bool(inspect_binary_input(value, false)).bits())
 }
 
 #[no_mangle]
 pub extern "C" fn js_buffer_is_utf8(value: f64) -> f64 {
-    let ok = std::str::from_utf8(value_bytes(value)).is_ok();
-    f64::from_bits(crate::JSValue::bool(ok).bits())
+    f64::from_bits(crate::JSValue::bool(inspect_binary_input(value, true)).bits())
 }
 
 /// Get the byte length of a string (when encoded to UTF-8)
@@ -270,7 +237,11 @@ pub extern "C" fn js_buffer_byte_length_value(value: f64, encoding: f64) -> i32 
     super::validate::validate_byte_length_arg(value);
     let raw_ptr = raw_addr_from_value(value);
     if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
-        return unsafe { (*(raw_ptr as *const BufferHeader)).length as i32 };
+        // Current byte length from the owner: an ArrayBuffer view from
+        // `.buffer` tracks its owner, and a detached view reports 0.
+        return unsafe {
+            (super::store::length(raw_ptr) * super::store::element_size(raw_ptr)) as i32
+        };
     }
 
     let str_ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;

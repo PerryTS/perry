@@ -642,9 +642,6 @@ fn clone_buffer_header(addr: usize, detach_source: bool) -> f64 {
         crate::buffer::mark_as_shared_array_buffer(dst_addr);
     } else if crate::buffer::is_uint8array_buffer(addr) {
         crate::buffer::mark_as_uint8array(dst_addr);
-        crate::buffer::set_buffer_ab_alias(dst_addr, crate::buffer::resolve_buffer_ab_alias(addr));
-    } else {
-        crate::buffer::set_buffer_ab_alias(dst_addr, crate::buffer::resolve_buffer_ab_alias(addr));
     }
 
     if detach_source {

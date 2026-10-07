@@ -730,12 +730,11 @@ fn begin_with(
         for (r, u) in &p.arrays {
             let view = match (u.view, r) {
                 (true, Recv::Local(id)) => {
-                    let v = arrays::view_of(ctx, *id).expect("a view candidate has a view");
+                    let _ = arrays::view_of(ctx, *id).expect("a view candidate has a view");
                     Some(arrays::ViewGuard {
                         end: u.view_end,
                         sym: u.view_sym,
-                        data_slot: v.data_slot.clone(),
-                        length_offset: v.length_offset_from_data,
+                        receiver_id: *id,
                     })
                 }
                 _ => None,
@@ -863,7 +862,7 @@ pub(crate) fn try_lower_view_run(
         .iter()
         .filter_map(|(r, u)| {
             let Recv::Local(id) = r else { return None };
-            let v = arrays::view_of(ctx, *id)?;
+            let _ = arrays::view_of(ctx, *id)?;
             Some(ArrayRecv {
                 recv: *r,
                 max_index: 0,
@@ -876,8 +875,7 @@ pub(crate) fn try_lower_view_run(
                 view: Some(arrays::ViewGuard {
                     end: u.view_end,
                     sym: u.view_sym,
-                    data_slot: v.data_slot.clone(),
-                    length_offset: v.length_offset_from_data,
+                    receiver_id: *id,
                 }),
             })
         })

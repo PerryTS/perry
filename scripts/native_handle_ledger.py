@@ -68,6 +68,7 @@ ADDRESS_KEY = re.compile(
 # caught by --self-test's exclusion validation in the real tree scan.
 NON_HANDLE_TABLES = {
     # GC page/card/diagnostic bookkeeping.
+    ("crates/perry-runtime/src/arena/region.rs", "REGIONS"),
     ("crates/perry-runtime/src/arena/page_meta/mod.rs", "OLD_GEN_PAGE_PROMOTED_RUNS"),
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "DIRTY_OLD_PAGES"),
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "EXTERNAL_DIRTY_SLOT_PAGES"),

@@ -137,3 +137,4 @@ mod buffer_b4;
 
 #[cfg(target_os = "linux")]
 mod census_two_mib;
+mod holder_memo;

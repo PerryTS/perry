@@ -329,13 +329,29 @@ enum ActiveReceiverData {
 
 /// Active materialised receiver descriptors for one function lowering.
 ///
-/// Function-entry proof for an immutable byte parameter. Runtime validation
-/// resolves owning or view storage and excludes rebindable foreign backing; Buffer-family GC cells and their native
-/// backing are non-moving. Current length is deliberately not cached here.
+/// A hoisted byte-cell access proof for one local and one brand set. It holds
+/// the exact receiver bits it was resolved for and is revalidated at its next
+/// use when those bits differ or when an executed call dirtied it (the
+/// call-emission choke point in `LlBlock`). Buffer-family cells and their
+/// native backing are non-moving, so a clean proof's data and length stay
+/// exact until a call can detach, resize or rebind the owner.
 #[derive(Clone, Debug)]
 pub(crate) struct ByteViewParamAccess {
     pub valid_i1: String,
     pub data_i64: String,
+    pub receiver_root_slot: String,
+    pub owner_root_slot: String,
+    pub data_slot: String,
+    pub length_slot: String,
+    /// `i8` proof state: 0 = dirty (every executed call stores it), 1 = valid,
+    /// 2 = resolved but not admitted (the runtime arm serves it).
+    pub valid_slot: String,
+    /// The full NaN-box bits of the receiver the proof was resolved for.
+    pub bits_slot: String,
+    /// A parameter that is never reassigned: one receiver per invocation, so
+    /// the proof needs no receiver comparison.
+    pub fixed_receiver: bool,
+    pub brands: Vec<u8>,
 }
 
 /// Entries are kept in installation order so refresh IR is deterministic.
@@ -343,8 +359,8 @@ pub(crate) struct ByteViewParamAccess {
 /// removes only the entries it installed itself.
 #[derive(Debug, Default)]
 pub(crate) struct ReceiverDescriptorTable {
-    byte_view_params: std::collections::HashMap<u32, ByteViewParamAccess>,
-    typed_read_params: std::collections::HashMap<u32, String>,
+    byte_view_params: std::collections::HashMap<(u32, Vec<u8>), ByteViewParamAccess>,
+    retained_byte_owners: Vec<(String, String)>,
     entries: Vec<ActiveReceiverDescriptor>,
     /// 5L (step5 DESIGN §4.1): the scoped Number-local sets, innermost last.
     /// Each is the set a guarded clone proved for its own body: the locals
@@ -358,12 +374,8 @@ pub(crate) struct ReceiverDescriptorTable {
 }
 
 impl ReceiverDescriptorTable {
-    pub(crate) fn materialize_typed_read_param(&mut self, receiver: u32, valid_i1: String) {
-        self.typed_read_params.insert(receiver, valid_i1);
-    }
-
-    pub(crate) fn typed_read_param(&self, receiver: u32) -> Option<&String> {
-        self.typed_read_params.get(&receiver)
+    pub(crate) fn retain_byte_owner(&mut self, receiver: String, owner: String) {
+        self.retained_byte_owners.push((receiver, owner));
     }
 
     pub(crate) fn materialize_byte_view_param(
@@ -371,11 +383,26 @@ impl ReceiverDescriptorTable {
         receiver: u32,
         access: ByteViewParamAccess,
     ) {
-        self.byte_view_params.insert(receiver, access);
+        self.byte_view_params
+            .insert((receiver, access.brands.clone()), access);
     }
 
+    /// The proof installed for `receiver` with exactly `brands`.
+    pub(crate) fn byte_view_access(
+        &self,
+        receiver: u32,
+        brands: &[u8],
+    ) -> Option<&ByteViewParamAccess> {
+        self.byte_view_params.get(&(receiver, brands.to_vec()))
+    }
+
+    /// A proof installed for `receiver` under any brand set (lowest first).
     pub(crate) fn byte_view_param(&self, receiver: u32) -> Option<&ByteViewParamAccess> {
-        self.byte_view_params.get(&receiver)
+        self.byte_view_params
+            .iter()
+            .filter(|((id, _), _)| *id == receiver)
+            .min_by(|a, b| a.0.cmp(b.0))
+            .map(|(_, access)| access)
     }
 
     /// Whether an active scope has already materialised `receiver`.

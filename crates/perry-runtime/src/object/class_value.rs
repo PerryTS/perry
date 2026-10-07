@@ -1299,17 +1299,6 @@ pub(crate) fn class_static_get(class_id: u32, name: &str) -> Option<f64> {
 /// Define/overwrite class `class_id`'s own static data property `name`: the
 /// value only, the key keeps its attributes. Callers performing a [[Set]]
 /// have checked `writable` (the attributes live with the key).
-/// Make class `class_id`'s own static `name` a private element (#11791): the
-/// compiler calls this where it creates a static private field.
-pub(crate) fn class_static_claim_private(class_id: u32, name: &[u8]) {
-    let ptr = class_value_ptr(class_id) as usize;
-    if ptr == 0 {
-        return;
-    }
-    // SAFETY: this agent's live class closure.
-    unsafe { crate::closure::props::bag_claim_private(ptr, name) }
-}
-
 pub(crate) fn class_static_set(class_id: u32, name: &str, value: f64) {
     let ptr = class_value_ptr(class_id) as usize;
     // SAFETY: as above; the bag writers run under a GcSuppressScope.

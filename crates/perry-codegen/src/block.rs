@@ -66,6 +66,9 @@ pub(crate) const DEFAULT_NULL_GUARD_GLOBAL: &str = "perry_null_guard_zero";
 #[derive(Default)]
 pub struct RegCounter {
     value: Cell<u32>,
+    /// Exact byte-owner root slots retained on the returning edge of actual
+    /// calls. This is compiler state: numeric loads emit no lifetime work.
+    byte_owner_root_slots: RefCell<Vec<String>>,
     /// Invoke-EH (#7302): stack of landing-pad labels for the active
     /// handler scopes, innermost last. While non-empty, every emitted call
     /// that can reach `js_throw` becomes an `invoke` unwinding to the top
@@ -123,18 +126,23 @@ pub struct RegCounter {
     /// path-sensitive: cold IC misses dirty the proof, while their unexecuted
     /// hot siblings do not impose a revalidation on every read.
     stable_packed_revalidation_slots: RefCell<Vec<String>>,
+    /// Dirty flags of the function's hoisted byte-cell access proofs. The same
+    /// call-emission choke point sets them; the next byte access revalidates.
+    byte_access_dirty_slots: RefCell<Vec<String>>,
 }
 
 impl RegCounter {
     pub fn new() -> Self {
         Self {
             value: Cell::new(0),
+            byte_owner_root_slots: RefCell::new(Vec::new()),
             eh_unwind_labels: RefCell::new(Vec::new()),
             shadow_slot_allocas: RefCell::new(HashSet::new()),
             preserve_none_fns: RefCell::new(None),
             fn_infos: RefCell::new(None),
             null_guard_symbol: RefCell::new(None),
             stable_packed_revalidation_slots: RefCell::new(Vec::new()),
+            byte_access_dirty_slots: RefCell::new(Vec::new()),
         }
     }
 
@@ -168,6 +176,18 @@ impl RegCounter {
 
     fn stable_packed_revalidation_slots(&self) -> Vec<String> {
         self.stable_packed_revalidation_slots.borrow().clone()
+    }
+
+    /// Function-scoped: a byte access proof lives until the function ends.
+    pub(crate) fn push_byte_access_dirty_slot(&self, slot: String) {
+        let mut slots = self.byte_access_dirty_slots.borrow_mut();
+        if !slots.contains(&slot) {
+            slots.push(slot);
+        }
+    }
+
+    fn byte_access_dirty_slots(&self) -> Vec<String> {
+        self.byte_access_dirty_slots.borrow().clone()
     }
 
     /// Install the module's `preserve_nonecc` symbol registry (#8175). Called
@@ -288,6 +308,48 @@ pub struct LlBlock {
 }
 
 impl LlBlock {
+    pub(crate) fn retain_byte_owner_root_slot(&mut self, slot: &str) {
+        let mut slots = self.counter.byte_owner_root_slots.borrow_mut();
+        if !slots.iter().any(|existing| existing == slot) {
+            slots.push(slot.to_owned());
+        }
+    }
+
+    fn keep_byte_owners_after_call(&mut self, callee: Option<&str>) {
+        #[cfg(test)]
+        if std::env::var("PERRY_B4_SABOTAGE").ok().as_deref() == Some("owner_call_edge") {
+            return;
+        }
+        if callee.is_some_and(|name| {
+            name.starts_with("llvm.")
+                || name.starts_with("js_shadow_")
+                || name.starts_with("js_write_barrier")
+                || crate::gc_call_effects::classify_direct_callee(name)
+                    == crate::gc_call_effects::GcCallEffect::CannotCollect
+        }) {
+            return;
+        }
+        let slots = self.counter.byte_owner_root_slots.borrow().clone();
+        if slots.is_empty() {
+            return;
+        }
+        // Bound register operands even in a function with many byte locals.
+        // These markers are on call edges, never on a bare element access.
+        for group in slots.chunks(4) {
+            let mut args = Vec::new();
+            for slot in group {
+                let value = self.load(crate::types::DOUBLE, slot);
+                let bits = self.bitcast_double_to_i64(&value);
+                args.push(format!("i64 {bits}"));
+            }
+            let constraints = vec!["r"; args.len()].join(",");
+            self.emit_raw(format!(
+                "call void asm sideeffect \"\", \"{constraints}\"({}) readnone \"gc-leaf-function\"",
+                args.join(", ")
+            ));
+        }
+    }
+
     pub fn new(label: impl Into<String>, counter: Rc<RegCounter>) -> Self {
         Self::new_with_fp_flags(label, counter, FpFlags::default())
     }
@@ -381,7 +443,7 @@ impl LlBlock {
     /// JS-visible shape, prototype, length, or indexed values. Every other
     /// direct call stays conservative, including unknown GC-leaf helpers that
     /// may perform a semantic write without collecting.
-    fn dirty_stable_packed_revalidations_before_call(&mut self, direct_callee: Option<&str>) {
+    fn dirty_revalidations_before_call(&mut self, direct_callee: Option<&str>) {
         if direct_callee.is_some_and(|callee| {
             callee.starts_with("llvm.")
                 || callee.starts_with("js_shadow_")
@@ -391,6 +453,9 @@ impl LlBlock {
         }
         for slot in self.counter.stable_packed_revalidation_slots() {
             self.store(crate::types::I1, "1", &slot);
+        }
+        for slot in self.counter.byte_access_dirty_slots() {
+            self.store(crate::types::I8, "0", &slot);
         }
     }
 
@@ -1464,7 +1529,7 @@ impl LlBlock {
         args: &[(LlvmType, &str)],
         gc_leaf: bool,
     ) -> String {
-        self.dirty_stable_packed_revalidations_before_call(Some(func_name));
+        self.dirty_revalidations_before_call(Some(func_name));
         // #835 + #846: record this emission against the FFI provenance
         // registry. The driver consults the registry after all per-module
         // codegen finishes to auto-link the providing crate.
@@ -1501,11 +1566,12 @@ impl LlBlock {
                 gc_leaf,
             });
         }
+        self.keep_byte_owners_after_call(Some(func_name));
         r
     }
 
     pub fn call_void(&mut self, func_name: &str, args: &[(LlvmType, &str)]) {
-        self.dirty_stable_packed_revalidations_before_call(Some(func_name));
+        self.dirty_revalidations_before_call(Some(func_name));
         // #835 + #846: same registry hook as `call` — see comment there.
         crate::ext_registry::record_ffi_call(func_name);
         self.counter
@@ -1532,6 +1598,7 @@ impl LlBlock {
                 gc_leaf: false,
             });
         }
+        self.keep_byte_owners_after_call(Some(func_name));
     }
 
     /// Empty inline-asm barrier (`call void asm sideeffect "", ""()`).
@@ -1574,7 +1641,7 @@ impl LlBlock {
         args: &[(LlvmType, &str)],
         gc_leaf: bool,
     ) -> String {
-        self.dirty_stable_packed_revalidations_before_call(None);
+        self.dirty_revalidations_before_call(None);
         let r = self.reg();
         // Indirect targets (closures, method pointers) can always throw.
         if let Some(lpad) = self.counter.current_eh_unwind_label() {
@@ -1595,6 +1662,7 @@ impl LlBlock {
                 gc_leaf,
             });
         }
+        self.keep_byte_owners_after_call(None);
         r
     }
 
@@ -1712,261 +1780,5 @@ fn format_args(args: &[(LlvmType, &str)]) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::types::{DOUBLE, I32, I64, PTR};
-    use std::thread;
-
-    fn fresh() -> LlBlock {
-        LlBlock::new("entry.0", Rc::new(RegCounter::new()))
-    }
-
-    fn fresh_with(fast_math: bool, fp_contract_mode: FpContractMode) -> LlBlock {
-        LlBlock::new_with_fp_flags(
-            "entry.0",
-            Rc::new(RegCounter::new()),
-            FpFlags::new(fast_math, fp_contract_mode),
-        )
-    }
-
-    #[test]
-    fn nanbox_bitcast_roundtrip_folds_to_source() {
-        // #5334 lever C: i64 -> double -> i64 collapses to the original i64,
-        // and the reverse collapses to the original double. Only the first
-        // bitcast of each pair is emitted.
-        let mut b = fresh();
-        let dbl = b.bitcast_i64_to_double("%arg"); // %r1 = bitcast i64 %arg to double
-        let back = b.bitcast_double_to_i64(&dbl); // folds -> %arg (no new instr)
-        assert_eq!(back, "%arg");
-
-        let unboxed = b.bitcast_double_to_i64("%v"); // %r2 = bitcast double %v to i64
-        let reboxed = b.bitcast_i64_to_double(&unboxed); // folds -> %v
-        assert_eq!(reboxed, "%v");
-
-        assert_eq!(
-            b.to_ir(),
-            "entry.0:\n  %r1 = bitcast i64 %arg to double\n  %r2 = bitcast double %v to i64"
-        );
-    }
-
-    #[test]
-    fn nanbox_bitcast_non_roundtrip_still_emits() {
-        // A lone unbox with no inverse is untouched, and a fresh unbox of a
-        // different value is not mistakenly folded.
-        let mut b = fresh();
-        let a = b.bitcast_double_to_i64("%a"); // %r1
-        let c = b.bitcast_double_to_i64("%c"); // %r2 (different source, no fold)
-        assert_eq!(a, "%r1");
-        assert_eq!(c, "%r2");
-        assert_eq!(
-            b.to_ir(),
-            "entry.0:\n  %r1 = bitcast double %a to i64\n  %r2 = bitcast double %c to i64"
-        );
-    }
-
-    #[test]
-    fn fadd_emits_expected_ir_default() {
-        // Default mode: no fast-math FMF flags emitted, bit-exact with
-        // Node.
-        let mut b = fresh();
-        let r = b.fadd("1.0", "2.0");
-        assert_eq!(r, "%r1");
-        assert_eq!(b.to_ir(), "entry.0:\n  %r1 = fadd double 1.0, 2.0");
-    }
-
-    #[test]
-    fn fadd_emits_contract_when_fp_contract_on() {
-        let mut b = fresh_with(false, FpContractMode::On);
-        let r = b.fadd("1.0", "2.0");
-        assert_eq!(r, "%r1");
-        assert_eq!(b.to_ir(), "entry.0:\n  %r1 = fadd contract double 1.0, 2.0");
-    }
-
-    #[test]
-    fn fadd_emits_reassoc_when_fast_math_without_contract() {
-        let mut b = fresh_with(true, FpContractMode::Off);
-        let r = b.fadd("1.0", "2.0");
-        assert_eq!(r, "%r1");
-        assert_eq!(b.to_ir(), "entry.0:\n  %r1 = fadd reassoc double 1.0, 2.0");
-    }
-
-    #[test]
-    fn fadd_emits_reassoc_and_contract_when_both_enabled() {
-        let mut b = fresh_with(true, FpContractMode::Fast);
-        let r = b.fadd("1.0", "2.0");
-        assert_eq!(r, "%r1");
-        assert_eq!(
-            b.to_ir(),
-            "entry.0:\n  %r1 = fadd reassoc contract double 1.0, 2.0"
-        );
-    }
-
-    #[test]
-    fn fp_flags_do_not_bleed_between_parallel_blocks() {
-        let strict = thread::spawn(|| {
-            let mut b = fresh_with(false, FpContractMode::Off);
-            b.fmul("1.0", "2.0");
-            b.to_ir()
-        });
-        let relaxed = thread::spawn(|| {
-            let mut b = fresh_with(true, FpContractMode::On);
-            b.fmul("1.0", "2.0");
-            b.to_ir()
-        });
-        assert_eq!(
-            strict.join().unwrap(),
-            "entry.0:\n  %r1 = fmul double 1.0, 2.0"
-        );
-        assert_eq!(
-            relaxed.join().unwrap(),
-            "entry.0:\n  %r1 = fmul reassoc contract double 1.0, 2.0"
-        );
-    }
-
-    #[test]
-    fn call_with_args() {
-        let mut b = fresh();
-        let r = b.call(DOUBLE, "js_nanbox_string", &[(I64, "%handle")]);
-        assert_eq!(r, "%r1");
-        assert!(b
-            .to_ir()
-            .contains("call double @js_nanbox_string(i64 %handle)"));
-    }
-
-    #[test]
-    fn active_stable_packed_proofs_are_dirtied_only_by_executed_non_intrinsic_calls() {
-        let mut b = fresh();
-        b.counter
-            .push_stable_packed_revalidation_slot("%proof_dirty".to_string());
-        b.call(DOUBLE, "llvm.fabs.f64", &[(DOUBLE, "%value")]);
-        b.call_void("js_shadow_slot_bind", &[(I64, "0"), (PTR, "%root")]);
-        b.call_void("js_write_barrier_root_nanbox", &[(I64, "%bits")]);
-        b.call(DOUBLE, "js_dyn_index_get", &[(DOUBLE, "%object")]);
-        b.call_indirect(DOUBLE, "%callback", &[(DOUBLE, "%value")]);
-        b.counter
-            .pop_stable_packed_revalidation_slot("%proof_dirty");
-        b.call(DOUBLE, "js_dyn_index_get", &[(DOUBLE, "%object")]);
-
-        let ir = b.to_ir();
-        assert_eq!(
-            ir.matches("store i1 1, ptr %proof_dirty").count(),
-            2,
-            "{ir}"
-        );
-        assert!(
-            ir.find("call double @llvm.fabs.f64") < ir.find("store i1 1, ptr %proof_dirty"),
-            "proof-preserving calls must not dirty the proof: {ir}"
-        );
-        let first_dirty = ir.find("store i1 1, ptr %proof_dirty").unwrap();
-        assert!(
-            ir.find("@js_shadow_slot_bind").unwrap() < first_dirty
-                && ir.find("@js_write_barrier_root_nanbox").unwrap() < first_dirty,
-            "GC bookkeeping must preserve the proof: {ir}"
-        );
-    }
-
-    #[test]
-    fn direct_gc_leaf_call_places_the_callsite_attribute_after_arguments() {
-        let mut b = fresh();
-        let r = b.call_gc_leaf(DOUBLE, "guarded_reader", &[(I64, "%handle")]);
-        assert_eq!(r, "%r1");
-        assert_eq!(
-            b.to_ir(),
-            "entry.0:\n  %r1 = call double @guarded_reader(i64 %handle) \"gc-leaf-function\""
-        );
-    }
-
-    #[test]
-    fn indirect_call_uses_opaque_pointer_syntax() {
-        let mut b = fresh();
-        let r = b.call_indirect(DOUBLE, "%callback", &[(I64, "%closure"), (DOUBLE, "%arg")]);
-        assert_eq!(r, "%r1");
-        assert_eq!(
-            b.to_ir(),
-            "entry.0:\n  %r1 = call double %callback(i64 %closure, double %arg)"
-        );
-    }
-
-    #[test]
-    fn indirect_gc_leaf_call_places_the_callsite_attribute_after_arguments() {
-        let mut b = fresh();
-        let r =
-            b.call_indirect_gc_leaf(DOUBLE, "%callback", &[(I64, "%closure"), (DOUBLE, "%arg")]);
-        assert_eq!(r, "%r1");
-        assert_eq!(
-            b.to_ir(),
-            "entry.0:\n  %r1 = call double %callback(i64 %closure, double %arg) \"gc-leaf-function\""
-        );
-    }
-
-    #[test]
-    fn indirect_invoke_uses_opaque_pointer_syntax() {
-        let mut b = fresh();
-        b.counter.push_eh_scope("catch.0".to_string());
-        let r = b.call_indirect(DOUBLE, "%callback", &[(I64, "%closure"), (DOUBLE, "%arg")]);
-        assert_eq!(r, "%r1");
-        assert_eq!(
-            b.to_ir(),
-            "entry.0:\n  %r1 = invoke double %callback(i64 %closure, double %arg) to label %eh.cont2 unwind label %catch.0\neh.cont2:"
-        );
-    }
-
-    #[test]
-    fn indirect_gc_leaf_invoke_places_the_attribute_before_the_successor() {
-        let mut b = fresh();
-        b.counter.push_eh_scope("catch.0".to_string());
-        let r =
-            b.call_indirect_gc_leaf(DOUBLE, "%callback", &[(I64, "%closure"), (DOUBLE, "%arg")]);
-        assert_eq!(r, "%r1");
-        assert_eq!(
-            b.to_ir(),
-            "entry.0:\n  %r1 = invoke double %callback(i64 %closure, double %arg) \"gc-leaf-function\" to label %eh.cont2 unwind label %catch.0\neh.cont2:"
-        );
-    }
-
-    #[test]
-    fn cold_property_miss_keeps_the_active_exception_edge() {
-        let mut b = fresh();
-        b.counter.push_eh_scope("catch.0".to_string());
-        b.call(
-            DOUBLE,
-            "js_object_get_field_ic_miss_packed",
-            &[
-                (I64, "%receiver"),
-                (I64, "%key"),
-                (PTR, "%cache"),
-                (PTR, "%packed"),
-            ],
-        );
-        let ir = b.to_ir();
-        assert!(
-            ir.contains("invoke double @js_object_get_field_ic_miss_packed("),
-            "{ir}"
-        );
-        assert!(ir.contains("unwind label %catch.0"), "{ir}");
-        b.call(I32, "js_string_compare", &[(I64, "%a"), (I64, "%b")]);
-        assert!(b.to_ir().contains("call i32 @js_string_compare("));
-    }
-
-    #[test]
-    fn terminator_blocks_further_emits() {
-        let mut b = fresh();
-        b.ret(DOUBLE, "0.0");
-        // This would silently drop; we don't want extra lines after ret.
-        let _ = b.fadd("1.0", "2.0");
-        let ir = b.to_ir();
-        assert!(ir.contains("ret double 0.0"));
-        assert!(!ir.contains("fadd"));
-    }
-
-    #[test]
-    fn regs_are_function_unique_not_block_unique() {
-        let counter = Rc::new(RegCounter::new());
-        let mut b1 = LlBlock::new("a", counter.clone());
-        let mut b2 = LlBlock::new("b", counter);
-        let r1 = b1.fadd("1.0", "2.0");
-        let r2 = b2.fadd("3.0", "4.0");
-        assert_eq!(r1, "%r1");
-        assert_eq!(r2, "%r2");
-    }
-}
+#[path = "block_tests.rs"]
+mod tests;

@@ -108,10 +108,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     // (#10516), so a guard comparing the tag with the expected kind admits
     // only receivers whose `header + 16 + idx*elem_size` is the runtime
     // `data_ptr`.
-    module.add_external_global("PERRY_TA_KIND_CACHE", "[64 x i64]");
     // #9342: Uint8Array inline-read admission cache (buffer/header.rs).
-    module.add_external_global("PERRY_U8_INLINE_CACHE", "[64 x i64]");
-    module.add_external_global("PERRY_TA_OWN_PROPS_PRESENT", I8);
     module.add_external_global("PERRY_TYPED_NAMED_PROPS_INVALIDATED", I8);
     module.declare_function("js_object_alloc", I64, &[I32, I32]);
     module.declare_function("js_event_target_subclass_init", DOUBLE, &[DOUBLE, I32]);
@@ -394,10 +391,15 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_domain", VOID, &[]);
     module.declare_function("js_nm_install_events", VOID, &[]);
     module.declare_function("js_nm_install_fs", VOID, &[]);
-    module.declare_function("js_ext_http_nm_install", VOID, &[]);
+    module.declare_function("js_nm_install_http", VOID, &[]);
     module.declare_function("js_nm_install_inspector", VOID, &[]);
     module.declare_function("js_nm_install_module", VOID, &[]);
-    module.declare_function("js_ext_net_nm_install", VOID, &[]);
+    module.declare_function("js_nm_install_net", VOID, &[]);
+    // Wrapper install hooks (`crate::native_routing` emits the one serving a
+    // routed module in place of its runtime bucket install).
+    for hook in crate::ext_registry::wrapper_install_hooks() {
+        module.declare_function(hook, VOID, &[]);
+    }
     module.declare_function("js_nm_install_node_pty", VOID, &[]);
     module.declare_function("js_nm_install_os", VOID, &[]);
     module.declare_function("js_nm_install_path", VOID, &[]);
@@ -419,7 +421,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_v8", VOID, &[]);
     module.declare_function("js_nm_install_vm", VOID, &[]);
     module.declare_function("js_nm_install_wasi", VOID, &[]);
-    module.declare_function("js_ext_zlib_nm_install", VOID, &[]);
+    module.declare_function("js_nm_install_zlib", VOID, &[]);
     module.declare_function("js_nm_install_worker_threads", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
     module.declare_function("js_nm_enable_install_all", VOID, &[]);

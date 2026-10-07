@@ -321,7 +321,7 @@ pub(crate) use ic_miss::intrinsic_private_add;
 pub(crate) use ic_miss::intrinsic_private_set;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, cannot_be_private_member_name, class_evaluation_of,
-    current_private_lexical_brand_value, is_array_method_value_name,
+    current_private_lexical_brand_value, define_static_private_field, is_array_method_value_name,
     note_private_template_evaluated, private_evaluation_brand_value, private_lexical_brand_pop,
     private_lexical_brand_push, private_lexical_brand_stack_restore,
     private_lexical_brand_stack_savepoint, private_member_access_hints_restore,
@@ -342,7 +342,6 @@ pub use ic_miss::{
 pub(crate) use ic_miss::{get_field_ic_dispatch, pic_outlined_mru_hit};
 // The read path's spill flip, shared with the static-key store IC's ways
 // (`proxy/put_value/packed_set.rs`): one encoding for both compact words.
-pub(crate) use ic_miss::define_private_entry;
 pub(crate) use ic_miss::PACKED_SPILL_FLIP;
 pub(crate) use ic_miss::PRIVATE_FRESH_EVALUATION_BRAND;
 #[cfg(test)]
@@ -389,7 +388,7 @@ mod buffer_ic_miss_tests {
 
     unsafe fn secret_buffer(len: usize) -> *mut crate::buffer::BufferHeader {
         let buf = crate::buffer::buffer_alloc(len as u32);
-        (*buf).length = len as u32;
+        crate::buffer::store::set_length(buf as usize, len as u32);
         crate::buffer::mark_as_uint8array(buf as usize);
         crate::buffer::mark_as_secret_key(buf as usize);
         buf

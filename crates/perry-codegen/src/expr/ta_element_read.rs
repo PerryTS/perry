@@ -5,7 +5,7 @@
 //! disposal-aware runtime path.
 use super::FnCtx;
 use crate::nanbox::{double_literal, TAG_UNDEFINED};
-use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8, PTR};
+use crate::types::{DOUBLE, F32, I1, I16, I32, I64, I8};
 use anyhow::Result;
 use perry_hir::Expr;
 
@@ -51,14 +51,7 @@ pub(crate) fn receiver_kind(ctx: &FnCtx<'_>, object: &Expr) -> Option<u8> {
 }
 
 pub(crate) fn materialize_param(ctx: &mut FnCtx<'_>, id: u32, boxed: &str, kind: u8) {
-    let result = ctx.block().call(
-        I32,
-        "js_ta_read_receiver_is_kind",
-        &[(DOUBLE, boxed), (I32, &kind.to_string())],
-    );
-    let valid_i1 = ctx.block().icmp_ne(I32, &result, "0");
-    ctx.receiver_descriptors
-        .materialize_typed_read_param(id, valid_i1);
+    super::byte_cell::materialize_param(ctx, id, boxed, &[super::byte_cell::brand_for_kind(kind)]);
 }
 
 pub(crate) fn try_lower(
@@ -75,18 +68,16 @@ pub(crate) fn try_lower(
     if super::compare::is_proven_symbol_expr(ctx, index) {
         return Ok(None);
     }
-    let proof = match object {
-        Expr::LocalGet(id) => ctx.receiver_descriptors.typed_read_param(*id).cloned(),
-        _ => None,
-    };
     let integer_index = super::index_get::numeric_index_has_integer_array_index_proof(ctx, index);
     crate::rooting::with_operands_rooted(ctx, &[object, index], |ctx, values| {
+        let brands = [super::byte_cell::brand_for_kind(kind)];
+        let proof = super::u8_buffer_read::byte_view_param_for(ctx, object, &values[0], &brands);
         Ok(Some(emit_get(
             ctx,
             &values[0],
             &values[1],
             kind,
-            proof.as_deref(),
+            proof.as_ref(),
             number_context,
             integer_index,
         )))
@@ -98,7 +89,7 @@ fn emit_get(
     object: &str,
     key: &str,
     kind: u8,
-    proof: Option<&str>,
+    proof: Option<&crate::collectors::ByteViewParamAccess>,
     number_context: bool,
     integer_index: bool,
 ) -> String {
@@ -106,7 +97,6 @@ fn emit_get(
     let index = ctx.new_block("ta.read.index");
     let bounds = ctx.new_block("ta.read.bounds");
     let storage = ctx.new_block("ta.read.storage");
-    let external = ctx.new_block("ta.read.external");
     let load = ctx.new_block("ta.read.load");
     let oob = ctx.new_block("ta.read.oob");
     let slow = ctx.new_block("ta.read.slow");
@@ -115,62 +105,34 @@ fn emit_get(
     let index_l = ctx.block_label(index);
     let bounds_l = ctx.block_label(bounds);
     let storage_l = ctx.block_label(storage);
-    let external_l = ctx.block_label(external);
     let load_l = ctx.block_label(load);
     let oob_l = ctx.block_label(oob);
     let slow_l = ctx.block_label(slow);
     let done_l = ctx.block_label(done);
-    let bits = ctx.block().bitcast_double_to_i64(object);
-    let raw = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
-    let ready = if let Some(proof) = proof {
-        proof.to_owned()
+    let access = if let Some(param) = proof {
+        let admitted = ctx.new_block("ta.read.hoisted");
+        let admitted_l = ctx.block_label(admitted);
+        ctx.block().cond_br(&param.valid_i1, &admitted_l, &slow_l);
+        ctx.current_block = admitted;
+        let len = ctx.block().load(I32, &param.length_slot);
+        super::byte_cell::Access {
+            word: String::new(),
+            raw: String::new(),
+            owner: String::new(),
+            data: param.data_i64.clone(),
+            len,
+        }
     } else {
-        let tag = ctx.block().and(
-            I64,
-            &bits,
-            &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
-        );
-        let ptr = ctx
-            .block()
-            .icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_I64);
-        let slot = ctx.block().lshr(I64, &raw, "3");
-        let slot = ctx.block().and(I64, &slot, "63");
-        let entry = ctx.block().gep(
-            "[64 x i64]",
-            "@PERRY_TA_KIND_CACHE",
-            &[(I64, "0"), (I64, &slot)],
-        );
-        let entry = ctx.block().load(I64, &entry);
-        let populated = ctx.block().icmp_ne(I64, &entry, "0");
-        // Both inline and external cache tags prove kind; the storage guard
-        // below distinguishes resolved ArrayBuffer slots from native arenas.
-        let entry = ctx.block().and(I64, &entry, "-129");
-        let expected = ctx.block().shl(I64, &raw, "8");
-        let expected = ctx.block().or(I64, &expected, &kind.to_string());
-        let hit = ctx.block().icmp_eq(I64, &entry, &expected);
-        let hit = ctx.block().and(I1, &populated, &hit);
-        ctx.block().and(I1, &ptr, &hit)
+        super::byte_cell::resolve(
+            ctx,
+            object,
+            &[super::byte_cell::brand_for_kind(kind)],
+            &slow_l,
+        )
     };
-    ctx.block().cond_br(&ready, &guard_l, &slow_l);
+    let admitted_storage = "true".to_owned();
+    ctx.block().br(&guard_l);
     ctx.current_block = guard;
-    // The entry proof excludes native/foreign storage. A managed receiver
-    // can only transition from inline to resolved on `.buffer` exposure.
-    // Cache-only sites must still reject native storage before bounds, so a
-    // disposed arena reaches its runtime even for an OOB key.
-    let admitted_storage = if proof.is_some() {
-        "true".to_owned()
-    } else {
-        let storage_addr = ctx.block().add(I64, &raw, "10");
-        let storage_ptr = ctx.block().inttoptr(I64, &storage_addr);
-        let storage = ctx.block().load(I8, &storage_ptr);
-        let inline = ctx.block().icmp_eq(I8, &storage, "0");
-        let resolved = ctx.block().icmp_eq(
-            I8,
-            &storage,
-            &crate::runtime_abi::TA_STORAGE_RESOLVED.to_string(),
-        );
-        ctx.block().or(I1, &inline, &resolved)
-    };
     let range = if integer_index {
         "true".to_owned()
     } else {
@@ -190,44 +152,13 @@ fn emit_get(
     };
     ctx.block().cond_br(&exact, &bounds_l, &slow_l);
     ctx.current_block = bounds;
-    let header = ctx.block().inttoptr(I64, &raw);
-    let len = ctx.block().load(I32, &header);
-    let len = ctx.block().zext(I32, &len, I64);
+    let len = ctx.block().zext(I32, &access.len, I64);
     let in_bounds = ctx.block().icmp_ult(I64, &idx, &len);
     ctx.block().cond_br(&in_bounds, &storage_l, &oob_l);
     ctx.current_block = storage;
-    let slot = ctx
-        .block()
-        .add(I64, &raw, &crate::runtime_abi::TA_DATA_OFFSET.to_string());
-    let slot_ptr = ctx.block().inttoptr(I64, &slot);
-    let storage_addr = ctx.block().add(I64, &raw, "10");
-    let storage_ptr = ctx.block().inttoptr(I64, &storage_addr);
-    let storage_byte = ctx.block().load(I8, &storage_ptr);
-    let inline = ctx.block().icmp_eq(I8, &storage_byte, "0");
-    let inline_end = ctx.block().label.clone();
-    ctx.block().cond_br(&inline, &load_l, &external_l);
-    ctx.current_block = external;
-    let resolved = if proof.is_some() {
-        "true".to_owned()
-    } else {
-        ctx.block().icmp_eq(
-            I8,
-            &storage_byte,
-            &crate::runtime_abi::TA_STORAGE_RESOLVED.to_string(),
-        )
-    };
-    let pointer_block = ctx.new_block("ta.read.pointer");
-    let pointer_l = ctx.block_label(pointer_block);
-    ctx.block().cond_br(&resolved, &pointer_l, &slow_l);
-    ctx.current_block = pointer_block;
-    let data = ctx.block().load(PTR, &slot_ptr);
-    let data = ctx.block().ptrtoint(&data, I64);
-    let pointer_end = ctx.block().label.clone();
     ctx.block().br(&load_l);
     ctx.current_block = load;
-    let data = ctx
-        .block()
-        .phi(I64, &[(&slot, &inline_end), (&data, &pointer_end)]);
+    let data = access.data;
     let width: u32 = match kind {
         0 | 1 | 8 => 1,
         2 | 3 | 11 => 2,
@@ -278,8 +209,8 @@ fn emit_get(
     )
 }
 
-/// Relaxed integer lane loads also serve floats by bitcast. Each operation
-/// reads exactly the element width, preserving shared backing semantics.
+/// The header guard excludes shared owners. Read one ordinary lane of the
+/// exact element width; shared storage uses the atomic runtime arm.
 fn emit_element(blk: &mut crate::block::LlBlock, target: &str, ptr: &str, kind: u8) -> String {
     let (ty, width) = match kind {
         0 | 1 | 8 => (I8, 1),
@@ -293,7 +224,7 @@ fn emit_element(blk: &mut crate::block::LlBlock, target: &str, ptr: &str, kind: 
         blk.emit_raw(format!("{reg} = call i32 asm sideeffect \"{instruction} ($1), $0\", \"=r,r,~{{memory}}\"(ptr {ptr}) \"gc-leaf-function\""));
         blk.trunc(I32, &reg, ty)
     } else {
-        blk.load_atomic_monotonic(ty, ptr, width)
+        blk.load(ty, ptr)
     };
     match kind {
         0 | 2 | 4 => blk.sitofp(ty, &lane, DOUBLE),
@@ -419,15 +350,33 @@ mod tests {
                 .collect();
             assert!(!bodies.is_empty());
             for body in bodies {
-                assert_eq!(
-                    body.matches("call i32 @js_ta_read_receiver_is_kind(")
-                        .count(),
-                    1,
-                    "{name}: exactly one proof per normal/specialized body"
-                );
                 assert!(
-                    body.contains("ta.read.pointer") && body.contains("ta.read.oob"),
-                    "{name}: live storage/bounds missing"
+                    !body.contains("@PERRY_TA_KIND_CACHE")
+                        && !body.contains("@PERRY_U8_INLINE_CACHE")
+                );
+                let marker = body
+                    .lines()
+                    .find(|l| l.contains("; bytes.hoist.roots "))
+                    .expect("one owner/receiver hoist");
+                let roots = crate::testing::root_slots::bound_slots(body);
+                for field in ["receiver=", "owner="] {
+                    let slot = marker
+                        .split(field)
+                        .nth(1)
+                        .unwrap()
+                        .split_whitespace()
+                        .next()
+                        .unwrap();
+                    let slot = format!("%{slot}");
+                    assert!(
+                        roots.contains_key(&slot)
+                            || body.contains(&format!("{slot} = alloca ptr addrspace(1)")),
+                        "{name}: {field}{slot} must be a statepoint root"
+                    );
+                }
+                assert!(
+                    body.contains("ta.read.hoisted") && body.contains("ta.read.oob"),
+                    "{name}: hoisted storage/bounds missing"
                 );
                 assert!(
                     !body.contains("tav.width")
@@ -436,6 +385,18 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn dropping_the_hoisted_owner_root_turns_the_root_invariant_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "expr::ta_element_read::tests::typed_loop_reads_resolve_kind_once_and_keep_live_storage", "--nocapture"])
+            .env("PERRY_B4_SABOTAGE", "hoist_owner").output().unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(
+            !child.status.success(),
+            "dropping the owner statepoint root must turn the invariant red"
+        );
     }
 
     #[test]
@@ -462,7 +423,7 @@ mod tests {
                     }));
                     assert!(ir.contains("gc-leaf-function") && ir.contains("~{memory}"));
                 } else {
-                    assert!(ir.contains("load atomic"));
+                    assert!(ir.contains("load ") && !ir.contains("load atomic"));
                 }
             }
         }

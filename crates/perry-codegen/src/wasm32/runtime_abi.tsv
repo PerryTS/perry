@@ -2883,6 +2883,8 @@ js_private_lexical_brand_pop	f64
 js_private_lexical_brand_push	f64	f64
 js_private_method_call	f64	f64,f64,i32u,ptr,i32u,ptr,usize,ptr
 js_private_method_guard	f64	f64,f64,i32u,ptr,i32u,ptr
+js_private_static_field_get	f64	f64,f64,i32u,ptr,i32u
+js_private_static_field_set	f64	f64,f64,i32u,ptr,i32u,f64
 js_process_abort	void	
 js_process_active_resources_info	f64	
 js_process_add_listener	f64	i64,i64
@@ -3931,7 +3933,6 @@ js_typescript_transpile_module	ptr	ptr,f64
 js_u8_buffer_read_f64	f64	ptr,i32s
 js_u8_from_base64	ptr	i64,f64
 js_u8_from_hex	ptr	i64
-js_u8_resolve_read_data	usize	f64
 js_u8_set_from_base64	f64	i64,i64,f64
 js_u8_set_from_hex	f64	i64,i64
 js_u8_to_base64	ptr	i64,f64

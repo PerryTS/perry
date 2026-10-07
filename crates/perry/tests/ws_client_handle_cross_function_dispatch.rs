@@ -14,7 +14,7 @@
 //! These are codegen-dispatch assertions: a WS network round-trip needs a live
 //! socket + client, but the bug is purely *which runtime symbol the call site
 //! lowers to*. So we compile to LLVM IR and assert the helper's `wsId.send`
-//! lowers to a `call` to `js_ws_send_client_i64` (present after the fix, absent
+//! lowers to a `call` to `js_ws_send_value_client_i64` (present after the fix, absent
 //! before — verified by toggling the fix).
 
 use std::path::{Path, PathBuf};
@@ -51,11 +51,15 @@ fn compile_to_ir_impl(dir: &Path, source: &str, link: bool) -> String {
         // automatic well-known binding discovery too.
         command.env("PERRY_FORCE_WELL_KNOWN", "http,ws");
     } else {
-        // IR-only assertions do not need runtime or extension archives.
+        // IR-only assertions do not need runtime or extension archives. The
+        // upgrade handle is seeded by `node:http`'s `createServer`, which only
+        // perry-ext-http implements, so `node:http` stays routed to it: with
+        // PERRY_DISABLE_WELL_KNOWN=1 these programs have no http provider and
+        // do not compile.
         command
             .arg("--no-auto-optimize")
             .arg("--no-link")
-            .env("PERRY_DISABLE_WELL_KNOWN", "1");
+            .env_remove("PERRY_DISABLE_WELL_KNOWN");
     }
     let compile = command.output().expect("run perry compile");
     assert!(
@@ -154,8 +158,8 @@ server.listen(0, () => {});
 "#,
     );
     assert!(
-        ir_has_call(&ir, "js_ws_send_client_i64"),
-        "helper `wsId.send` must dispatch to js_ws_send_client_i64 (the upgrade \
+        ir_has_call(&ir, "js_ws_send_value_client_i64"),
+        "helper `wsId.send` must dispatch to js_ws_send_value_client_i64 (the upgrade \
          Client handle), not a silent generic no-op"
     );
 }
@@ -187,7 +191,7 @@ server.listen(0, () => {});
 "#,
     );
     assert!(
-        ir_has_call(&ir, "js_ws_send_client_i64"),
+        ir_has_call(&ir, "js_ws_send_value_client_i64"),
         "wsId.send two call-hops away from the upgrade callback must still \
          dispatch to the Client runtime"
     );
@@ -222,13 +226,13 @@ server.listen(0, () => {});
         "helper `wsId.on` must dispatch to js_ws_on_client_i64"
     );
     assert!(
-        ir_has_call(&ir, "js_ws_close_client_i64"),
-        "helper `wsId.close` must dispatch to js_ws_close_client_i64"
+        ir_has_call(&ir, "js_ws_close_with_client_i64"),
+        "helper `wsId.close` must dispatch to js_ws_close_with_client_i64"
     );
     assert!(
-        ir_has_call(&ir, "js_ws_send_client_i64"),
+        ir_has_call(&ir, "js_ws_send_value_client_i64"),
         "the nested `wsId.send` (inside the helper's own `.on` callback) must \
-         dispatch to js_ws_send_client_i64"
+         dispatch to js_ws_send_value_client_i64"
     );
 }
 
@@ -266,7 +270,7 @@ deliver(sink, "hi");
 "#,
     );
     assert!(
-        !ir_has_call(&ir, "js_ws_send_client_i64"),
+        !ir_has_call(&ir, "js_ws_send_value_client_i64"),
         "a plain object's `.send` must NOT be mis-dispatched to the ws Client runtime"
     );
 }
@@ -295,7 +299,7 @@ server.listen(0, () => {});
 "#,
     );
     assert!(
-        ir_has_call(&ir, "js_ws_send_client_i64"),
+        ir_has_call(&ir, "js_ws_send_value_client_i64"),
         "wsId after a TS `this:` param must still dispatch to the Client runtime"
     );
 }
@@ -322,7 +326,7 @@ server.on("upgrade", (req: any, wsId: any, _head: any) => {
 "#,
     );
     assert!(
-        !ir_has_call(&ir, "js_ws_send_client_i64"),
+        !ir_has_call(&ir, "js_ws_send_value_client_i64"),
         "a non-http `createServer` must not seed the ws Client dispatch"
     );
 }
@@ -355,7 +359,7 @@ server.listen(0, () => {});
 "#,
     );
     assert!(
-        !ir_has_call(&ir, "js_ws_send_client_i64"),
+        !ir_has_call(&ir, "js_ws_send_value_client_i64"),
         "a shadowing nested param must not propagate the outer Client handle"
     );
 }
@@ -391,7 +395,7 @@ elsewhere();
 "#,
     );
     assert!(
-        ir_has_call(&ir, "js_ws_send_client_i64"),
+        ir_has_call(&ir, "js_ws_send_value_client_i64"),
         "the upgrade-fed top-level `pushFrame` must dispatch to the Client runtime"
     );
     let out = run_compiled(dir.path());
@@ -407,7 +411,7 @@ elsewhere();
 /// A hint tags a function PARAMETER, fixing the dispatch for that param across
 /// EVERY call site. So a helper that is fed the upgrade `wsId` from one caller
 /// AND a plain object from another must NOT be tagged — otherwise the plain
-/// object's `.send(...)` would silently re-route to `js_ws_send_client_i64`
+/// object's `.send(...)` would silently re-route to `js_ws_send_value_client_i64`
 /// (a no-op handle miss) instead of running the object's own method. The pass
 /// must only tag a param it can prove is ALWAYS the ws handle.
 #[test]
@@ -436,7 +440,7 @@ server.listen(0, () => {});
 "#,
     );
     assert!(
-        !ir_has_call(&ir, "js_ws_send_client_i64"),
+        !ir_has_call(&ir, "js_ws_send_value_client_i64"),
         "a helper that is ALSO called with a non-ws value must not be tagged as \
          a ws Client receiver (would silently drop the non-ws caller's frame)"
     );
@@ -474,7 +478,7 @@ server.listen(0, () => {});
 "#,
     );
     assert!(
-        !ir_has_call(&ir, "js_ws_send_client_i64"),
+        !ir_has_call(&ir, "js_ws_send_value_client_i64"),
         "a handle forwarded through a polymorphic intermediate must not tag the \
          downstream helper (transitive demotion)"
     );
@@ -504,7 +508,7 @@ b.listen(0, () => {});
 "#,
     );
     assert!(
-        ir_has_call(&ir, "js_ws_send_client_i64"),
+        ir_has_call(&ir, "js_ws_send_value_client_i64"),
         "a helper fed ONLY ws handles (from multiple upgrade callbacks) must stay tagged"
     );
 }

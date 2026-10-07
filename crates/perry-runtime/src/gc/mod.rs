@@ -1116,11 +1116,6 @@ pub fn gc_init() {
     reg_scanner!(crate::perf_histogram::scan_histogram_roots_mut);
     reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);
     reg_scanner!(crate::typed_feedback::scan_typed_feedback_roots_mut);
-    reg_scanner!(crate::typedarray_props::scan_typed_array_own_props_roots_mut);
-    // A typed array's materialized backing ArrayBuffer lives only as a raw
-    // address in TYPED_ARRAY_VIEW_META — collectable/stale under a live typed
-    // array, which made `subarray` hand back a garbage-length view.
-    reg_scanner!(crate::typedarray_view::scan_typed_array_view_meta_roots_mut);
     reg_scanner!(transition_cache_mutable_root_scanner);
     reg_scanner!(crate::object::scan_object_cache_roots_mut);
     reg_scanner!(crate::object::scan_arguments_object_roots_mut);
@@ -1207,6 +1202,7 @@ pub fn gc_init() {
     // collector cannot see. Found through the block / malloc-registry pin
     // summaries the pin setters maintain (gc/pin.rs, arena/pinned.rs).
     reg_scanner!(pin::scan_pinned_object_roots_mut);
+    reg_scanner!(crate::buffer::pool::scan_pool_roots_mut);
     reg_scanner!(crate::string::trim_cache::scan_trim_cache_roots_mut);
     reg_scanner!(crate::builtins::scan_console_log_singleton_roots_mut);
     reg_scanner!(crate::builtins::scan_structured_clone_memo_roots_mut);
@@ -1222,6 +1218,7 @@ pub fn gc_init() {
     // keeps a dead holder alive. Copied-minor liveness/prune is driven by
     // `process_weak_targets_from_registry`; this covers full-cycle currency.
     reg_scanner!(crate::weakref::scan_weak_holders_roots_mut);
+    reg_scanner!(ephemeron::scan_ephemeron_seeds_roots_mut);
     // Issue #841: GC roots for the per-(submodule, export) function
     // singletons + per-submodule namespace stub objects allocated by
     // `node_submodules.rs`. Without this scanner the next GC cycle
@@ -1247,7 +1244,6 @@ pub fn gc_init() {
     // keep the weak metadata keys aligned with the forwarded addresses so
     // value-called methods still reach the prototype dispatch tower.
     reg_scanner!(crate::object::scan_builtin_closure_metadata_roots_mut);
-    reg_scanner!(crate::buffer::scan_buffer_own_props_roots_mut);
     // Generic per-handle expando properties (`blob.colors = [...]` and other
     // arbitrary own props on native HANDLE values). Keys are stable small handle
     // ids; only the stored VALUES are JS references that must be traced.
@@ -1795,3 +1791,6 @@ pub(crate) use tests::support::{
 pub(crate) fn test_external_side_live_bytes() -> usize {
     policy::external_side_live_bytes()
 }
+
+mod ephemeron;
+pub(crate) use ephemeron::weak_collection_store_barrier;

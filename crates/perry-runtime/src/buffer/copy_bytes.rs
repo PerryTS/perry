@@ -74,60 +74,36 @@ fn throw_invalid_view(value: f64) -> ! {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
-unsafe fn buffer_from_slice(bytes: &[u8]) -> *mut BufferHeader {
-    let len = bytes.len().min(u32::MAX as usize);
-    let buf = buffer_alloc(len as u32);
-    (*buf).length = len as u32;
-    if len > 0 {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_data_mut(buf), len);
-    }
-    buf
-}
-
-unsafe fn copy_registered_buffer(
-    source: *const BufferHeader,
+fn copy_element_range(
+    source: f64,
+    element_size: usize,
     offset_value: f64,
     length_value: f64,
 ) -> *mut BufferHeader {
-    let element_len = (*source).length as usize;
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let source = handles.root_nanbox_f64(source);
+    let element_len = bytes::no_gc(|scope| {
+        bytes::bytes(source.get_nanbox_f64(), scope)
+            .map(|bytes| bytes.len() / element_size)
+            .unwrap_or(0)
+    });
     let offset = optional_index(offset_value, "offset").unwrap_or(0);
     let start = offset.min(element_len);
-    let available = element_len.saturating_sub(start);
+    let available = element_len - start;
     let requested = optional_index(length_value, "length").unwrap_or(available);
     let take = requested.min(available);
-    let out = buffer_alloc(take as u32);
-    (*out).length = take as u32;
-    let dst = buffer_data_mut(out);
-    for i in 0..take {
-        *dst.add(i) = js_buffer_get(source, (start + i) as i32) as u8;
-    }
-    out
-}
-
-unsafe fn copy_typed_array(
-    source: *const crate::typedarray::TypedArrayHeader,
-    offset_value: f64,
-    length_value: f64,
-) -> *mut BufferHeader {
-    let source = crate::typedarray::clean_ta_ptr(source);
-    if source.is_null() {
-        throw_invalid_view(f64::from_bits(JSValue::undefined().bits()));
-    }
-    let element_len = (*source).length as usize;
-    let element_size = (*source).elem_size as usize;
-    let offset = optional_index(offset_value, "offset").unwrap_or(0);
-    let start = offset.min(element_len);
-    let available = element_len.saturating_sub(start);
-    let requested = optional_index(length_value, "length").unwrap_or(available);
-    let take = requested.min(available);
-    let Some(bytes) = crate::typedarray::typed_array_bytes(source) else {
-        return buffer_alloc(0);
-    };
-    let byte_start = start.saturating_mul(element_size).min(bytes.len());
-    let byte_len = take
-        .saturating_mul(element_size)
-        .min(bytes.len().saturating_sub(byte_start));
-    buffer_from_slice(&bytes[byte_start..byte_start + byte_len])
+    // Resolve the source again AFTER allocating and pinning the destination.
+    // Neither a raw source address nor a borrowed slice crosses allocation.
+    let copied = bytes::copy_range(
+        bytes::Brand::Buffer,
+        source.get_nanbox_f64(),
+        start * element_size,
+        take * element_size,
+    )
+    .unwrap_or_else(|_| bytes::from_slice(bytes::Brand::Buffer, &[]));
+    JSValue::from_bits(copied.to_bits())
+        .as_pointer::<BufferHeader>()
+        .cast_mut()
 }
 
 /// `Buffer.copyBytesFrom(view[, offset[, length]])`.
@@ -145,20 +121,17 @@ pub extern "C" fn js_buffer_copy_bytes_from(
         throw_invalid_view(view);
     }
 
-    unsafe {
+    {
         if is_registered_buffer(addr) {
             if is_any_array_buffer(addr) || is_data_view(addr) {
                 throw_invalid_view(view);
             }
-            return copy_registered_buffer(addr as *const BufferHeader, offset_value, length_value);
+            return copy_element_range(view, 1, offset_value, length_value);
         }
 
-        if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-            return copy_typed_array(
-                addr as *const crate::typedarray::TypedArrayHeader,
-                offset_value,
-                length_value,
-            );
+        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
+            let size = crate::typedarray::elem_size_for_kind(kind);
+            return copy_element_range(view, size, offset_value, length_value);
         }
     }
 

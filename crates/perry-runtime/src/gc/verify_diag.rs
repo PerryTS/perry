@@ -115,6 +115,7 @@ fn layout_visitor_name(kind: GcLayoutSlotKind) -> &'static str {
 
 fn rewrite_visitor_name(kind: GcRewriteDescriptorKind) -> &'static str {
     match kind {
+        GcRewriteDescriptorKind::WeakStorage => "WeakStorageEntries",
         GcRewriteDescriptorKind::Box => "BoxValue",
         GcRewriteDescriptorKind::Scope => "ScopeSlots",
         GcRewriteDescriptorKind::Leaf => "GcMutableSlotDescriptor",
@@ -127,7 +128,6 @@ fn rewrite_visitor_name(kind: GcRewriteDescriptorKind) -> &'static str {
         GcRewriteDescriptorKind::Map => "MapEntries",
         GcRewriteDescriptorKind::LazyArray => "LazyArrayFields",
         GcRewriteDescriptorKind::Set => "SetElements",
-        GcRewriteDescriptorKind::NativeTypedView => "NativeTypedViewFields",
         GcRewriteDescriptorKind::NativePodView => "NativePodViewFields",
         GcRewriteDescriptorKind::ObjectMeta => "ObjectMeta",
         GcRewriteDescriptorKind::MetaOnly => "MetaOnlyFields",

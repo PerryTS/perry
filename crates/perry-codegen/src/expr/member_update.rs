@@ -301,6 +301,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // registered root the collector rewrites, and the literal is
             // immutable — so re-loading it below the window is `Reload`,
             // `operand_is_reloadable`'s exact argument, at two instructions.
+            let private_site =
+                super::private_field_site::private_field_site(ctx, object, property, 1)
+                    .filter(|site| site.is_static);
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let field_read = Expr::PropertyGet {
@@ -312,7 +315,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 !crate::type_analysis::is_provably_not_bigint(ctx, &field_read);
             let strict_i32 = if *strict { "1" } else { "0" };
             rooting::with_rooted_group(ctx, 1, |ctx, group| {
-                let obj = group.lower(ctx, object, true)?;
+                let receiver = private_site
+                    .as_ref()
+                    .map_or(object.as_ref(), |site| site.receiver);
+                let obj = group.lower(ctx, receiver, true)?;
                 let derive_handles = |ctx: &mut FnCtx<'_>, obj_box: &str| {
                     let blk = ctx.block();
                     let obj_bits = blk.bitcast_double_to_i64(obj_box);
@@ -324,12 +330,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 };
                 let old = {
                     let obj_box = group.reread(ctx, obj)?;
-                    let (obj_handle, key_handle) = derive_handles(ctx, &obj_box);
-                    ctx.block().call(
-                        DOUBLE,
-                        "js_object_get_field_by_name_f64",
-                        &[(I64, &obj_handle), (I64, &key_handle)],
-                    )
+                    if let Some(site) = &private_site {
+                        super::private_field_site::lower_static_get_operands(ctx, site, &obj_box)?
+                    } else {
+                        let (obj_handle, key_handle) = derive_handles(ctx, &obj_box);
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_object_get_field_by_name_f64",
+                            &[(I64, &obj_handle), (I64, &key_handle)],
+                        )
+                    }
                 };
                 // ToNumeric + Type(old)::add/sub(old, unit): a BigInt field stays a
                 // BigInt (`var x = {y:0n}; ++x.y === 1n`), not the Number `1`. Mirrors
@@ -352,17 +362,28 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let obj_box = group.reread(ctx, obj)?;
                     let key_box = ctx.block().load(DOUBLE, &key_handle_global);
                     let new_arg = group.reread_emitted(ctx, new_root);
-                    ctx.block().call(
-                        DOUBLE,
-                        "js_put_value_set",
-                        &[
-                            (DOUBLE, &obj_box),
-                            (DOUBLE, &key_box),
-                            (DOUBLE, &new_arg),
-                            (DOUBLE, &obj_box),
-                            (I32, strict_i32),
-                        ],
-                    );
+                    if let Some(site) = &private_site {
+                        super::private_field_site::lower_set_operands(
+                            ctx,
+                            site,
+                            property,
+                            &field_read,
+                            &obj_box,
+                            &new_arg,
+                        )?;
+                    } else {
+                        ctx.block().call(
+                            DOUBLE,
+                            "js_put_value_set",
+                            &[
+                                (DOUBLE, &obj_box),
+                                (DOUBLE, &key_box),
+                                (DOUBLE, &new_arg),
+                                (DOUBLE, &obj_box),
+                                (I32, strict_i32),
+                            ],
+                        );
+                    }
                 }
                 Ok(if *prefix {
                     group.reread_emitted(ctx, new_root)

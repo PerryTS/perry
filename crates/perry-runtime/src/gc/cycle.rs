@@ -91,17 +91,32 @@ impl TraceWorklistCycleState {
         &mut self,
         valid_ptrs: &ValidPointerSet,
         budget: usize,
-        sticky: Option<&mut StickyRememberedSet>,
+        mut sticky: Option<&mut StickyRememberedSet>,
+        ephemerons: &mut super::ephemeron::Ephemerons,
     ) -> bool {
         self.absorb_mark_seeds();
-        let done = drain_trace_worklist_step_remembering(
+        let before = self.cursor;
+        let mut done = drain_trace_worklist_step_remembering(
             &mut self.worklist,
             &mut self.cursor,
             valid_ptrs,
             self.minor_only,
             budget,
-            sticky,
+            sticky.as_deref_mut(),
         );
+        let used = self.cursor.saturating_sub(before).min(budget);
+        if self.cursor != before {
+            ephemerons.note_strong_progress();
+        }
+        if done {
+            let (ready, _) = ephemerons.shade_ready_step(
+                valid_ptrs,
+                self.minor_only,
+                sticky,
+                budget.saturating_sub(used),
+            );
+            done = ready;
+        }
         self.absorb_mark_seeds();
         done && self.cursor >= self.worklist.len()
     }
@@ -536,6 +551,7 @@ impl ReclaimCycleState {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AtomicFinalizeSubphase {
     WeakProcessing,
+    EphemeronClear,
     MinorPrelude,
     BarrierSeedDrain,
     /// Budgeted cycles only: the final root re-scan (remark). A budgeted
@@ -560,6 +576,7 @@ struct AtomicFinalizeCycleState {
     subphase: AtomicFinalizeSubphase,
     barrier_drain: Option<TraceWorklistCycleState>,
     weak_processing: Option<crate::weakref::FullWeakProcessingState>,
+    weak_closure: Option<TraceWorklistCycleState>,
     /// Budgeted cycles insert FinalRootRemark after BarrierSeedDrain;
     /// synchronous cycles have no mutator windows and skip it.
     remark: bool,
@@ -579,6 +596,7 @@ impl AtomicFinalizeCycleState {
             subphase: AtomicFinalizeSubphase::BarrierSeedDrain,
             barrier_drain: None,
             weak_processing: None,
+            weak_closure: None,
             remark,
         }
     }
@@ -598,6 +616,7 @@ pub(super) struct GcCycleState {
     valid_ptrs: Option<ValidPointerSet>,
     root_scan: Option<RootScanCycleState>,
     trace_worklist: Option<TraceWorklistCycleState>,
+    ephemerons: super::ephemeron::Ephemerons,
     block_persist: Option<BlockPersistCycleState>,
     atomic_finalize: Option<AtomicFinalizeCycleState>,
     minor: Option<MinorCycleContext>,
@@ -670,6 +689,7 @@ impl GcCycleState {
             valid_ptrs: None,
             root_scan: None,
             trace_worklist: None,
+            ephemerons: super::ephemeron::Ephemerons::default(),
             block_persist: None,
             atomic_finalize: None,
             minor: None,
@@ -717,6 +737,7 @@ impl GcCycleState {
             valid_ptrs: None,
             root_scan: None,
             trace_worklist: None,
+            ephemerons: super::ephemeron::Ephemerons::default(),
             block_persist: None,
             atomic_finalize: None,
             minor: Some(MinorCycleContext {
@@ -758,6 +779,7 @@ impl GcCycleState {
         let subphase = self.atomic_finalize.as_ref()?.subphase;
         Some(match subphase {
             AtomicFinalizeSubphase::WeakProcessing => "weak_processing",
+            AtomicFinalizeSubphase::EphemeronClear => "ephemeron_clear",
             AtomicFinalizeSubphase::MinorPrelude => "minor_prelude",
             AtomicFinalizeSubphase::BarrierSeedDrain => "barrier_seed_drain",
             AtomicFinalizeSubphase::FinalRootRemark => "final_root_remark",
@@ -844,6 +866,17 @@ impl GcCycleState {
             phase: phase_before,
             completed: self.phase == GcCyclePhase::Complete,
         }
+    }
+
+    #[cfg(test)]
+    pub(super) fn set_weak_holder_order_for_tests(&mut self, holders: Vec<usize>) {
+        assert_eq!(self.phase(), GcCyclePhase::AtomicFinalize);
+        let state = self
+            .atomic_finalize
+            .get_or_insert_with(|| AtomicFinalizeCycleState::new(self.collection_kind, true));
+        let mut weak = crate::weakref::FullWeakProcessingState::new();
+        weak.set_holder_order_for_tests(holders);
+        state.weak_processing = Some(weak);
     }
 
     pub(super) fn run_to_completion(mut self) -> GcCollectOutcome {
@@ -1000,6 +1033,7 @@ impl GcCycleState {
             valid_ptrs,
             budget.work_units,
             self.live_old_to_young_sticky.as_mut(),
+            &mut self.ephemerons,
         ) {
             self.trace_worklist = None;
             self.phase = GcCyclePhase::BlockPersistence;
@@ -1134,6 +1168,7 @@ impl GcCycleState {
                 AtomicFinalizeSubphase::BarrierSeedDrain
                     | AtomicFinalizeSubphase::RememberedSetReady
                     | AtomicFinalizeSubphase::WeakProcessing
+                    | AtomicFinalizeSubphase::EphemeronClear
             );
             let sub_budget = if sliced {
                 budget.work_units
@@ -1203,6 +1238,7 @@ impl GcCycleState {
                         valid_ptrs,
                         usize::MAX,
                         self.live_old_to_young_sticky.as_mut(),
+                        &mut self.ephemerons,
                     ) {}
                 }
                 let next = if self.minor.is_some() {
@@ -1215,43 +1251,8 @@ impl GcCycleState {
                     .expect("atomic finalize state exists")
                     .subphase = next;
             }
-            AtomicFinalizeSubphase::WeakProcessing => {
-                if budget == 0 {
-                    return;
-                }
-                let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
-                let minor_only = self.minor.is_some();
-                // Enqueue FinalizationRegistry cleanup jobs on EVERY cycle
-                // kind, not just Manual (2026-07-09 GC audit: callbacks only
-                // ever fired after an explicit `gc()`). Enqueue-once per
-                // record is guaranteed by the record's pending-flag reset;
-                // delivery happens at the explicit-`gc()` tail or the next
-                // microtask-pump drain (`drain_pending_finalization_jobs`).
-                let done = {
-                    let state = self
-                        .atomic_finalize
-                        .as_mut()
-                        .expect("atomic finalize state exists");
-                    let weak = state
-                        .weak_processing
-                        .get_or_insert_with(crate::weakref::FullWeakProcessingState::new);
-                    weak.step(
-                        valid_ptrs, minor_only, /* enqueue_callbacks = */ true, budget,
-                    )
-                };
-                if done {
-                    let state = self
-                        .atomic_finalize
-                        .as_mut()
-                        .expect("atomic finalize state exists");
-                    state.weak_processing = None;
-                    state.subphase = if minor_only {
-                        AtomicFinalizeSubphase::MinorPrelude
-                    } else {
-                        AtomicFinalizeSubphase::DisableBarrier
-                    };
-                }
-            }
+            AtomicFinalizeSubphase::WeakProcessing => self.step_weak_ephemerons(budget, false),
+            AtomicFinalizeSubphase::EphemeronClear => self.step_weak_ephemerons(budget, true),
             AtomicFinalizeSubphase::MinorPrelude => {
                 if budget == 0 {
                     return;
@@ -1273,7 +1274,12 @@ impl GcCycleState {
                     let drain = state
                         .barrier_drain
                         .get_or_insert_with(|| TraceWorklistCycleState::new(minor_only));
-                    drain.step(valid_ptrs, budget, self.live_old_to_young_sticky.as_mut())
+                    drain.step(
+                        valid_ptrs,
+                        budget,
+                        self.live_old_to_young_sticky.as_mut(),
+                        &mut self.ephemerons,
+                    )
                 };
                 if done {
                     let state = self
@@ -1319,6 +1325,7 @@ impl GcCycleState {
                         valid_ptrs,
                         usize::MAX,
                         self.live_old_to_young_sticky.as_mut(),
+                        &mut self.ephemerons,
                     ) {}
                     self.atomic_finalize = None;
                     self.phase = GcCyclePhase::Sweep;
@@ -1349,6 +1356,7 @@ impl GcCycleState {
                         valid_ptrs,
                         usize::MAX,
                         self.live_old_to_young_sticky.as_mut(),
+                        &mut self.ephemerons,
                     ) {}
                 }
                 if let Some(state) = self.atomic_finalize.as_mut() {
@@ -1494,6 +1502,7 @@ impl GcCycleState {
                     valid_ptrs,
                     usize::MAX,
                     self.live_old_to_young_sticky.as_mut(),
+                    &mut self.ephemerons,
                 ) {}
                 incremental_mark_barrier_disable();
             }
@@ -1881,3 +1890,6 @@ const DEAD_STACK_SCRUB_WORDS: usize = 2048;
 
 mod alloc_flag;
 pub(super) use alloc_flag::restore_minor_in_alloc;
+
+#[path = "cycle/weak_ephemerons.rs"]
+mod weak_ephemerons;

@@ -59,12 +59,13 @@ pub const GC_TYPE_MAP: u8 = 8;
 /// force-materializes (mutates the header's `materialized` field so
 /// subsequent accesses hit the tree).
 pub const GC_TYPE_LAZY_ARRAY: u8 = 9;
-pub const GC_TYPE_BUFFER: u8 = 10;
+pub const GC_TYPE_BUFFER: u8 = 0x4c;
 const _: () = assert!(GC_TYPE_BUFFER == crate::codegen_abi::GC_TYPE_BUFFER);
-pub const GC_TYPE_TYPED_ARRAY: u8 = 11;
+/// Representative typed-array tag (Uint8). Admission uses `is_typed_array_type`.
+pub const GC_TYPE_TYPED_ARRAY: u8 = crate::codegen_abi::BYTES_TYPE_BASE;
 pub const GC_TYPE_SET: u8 = 12;
-pub const GC_TYPE_NATIVE_ARENA_OWNER: u8 = 13;
-pub const GC_TYPE_NATIVE_TYPED_VIEW: u8 = 14;
+pub const GC_TYPE_NATIVE_ARENA_OWNER: u8 = 0x52;
+pub const GC_TYPE_NATIVE_TYPED_VIEW: u8 = 0x60;
 pub const GC_TYPE_NATIVE_HANDLE: u8 = 15;
 pub const GC_TYPE_NATIVE_POD_VIEW: u8 = 16;
 /// A 1-slot mutable `Date` cell (`DateCell { ts: f64 }`). Arena-allocated,
@@ -121,31 +122,32 @@ pub const GC_TYPE_SCOPE: u8 = 25;
 // when a producer turns it into another flavor. Keep the block contiguous:
 // `is_buffer_family_type` is one equality and one range compare.
 /// A `Uint8Array` stored as a `BufferHeader` (formats as `Uint8Array(n) [...]`).
-pub const GC_TYPE_BUFFER_UINT8ARRAY: u8 = 26;
+pub const GC_TYPE_BUFFER_UINT8ARRAY: u8 = 0x40;
 const _: () = assert!(GC_TYPE_BUFFER_UINT8ARRAY == crate::codegen_abi::GC_TYPE_BUFFER_UINT8ARRAY);
 /// An `ArrayBuffer`.
-pub const GC_TYPE_BUFFER_ARRAY_BUFFER: u8 = 27;
+pub const GC_TYPE_BUFFER_ARRAY_BUFFER: u8 = 0x4e;
 /// A `SharedArrayBuffer`, thread-local or a process-global `shared_sab` block.
-pub const GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER: u8 = 28;
+pub const GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER: u8 = 0x4f;
 /// A `DataView`.
-pub const GC_TYPE_BUFFER_DATA_VIEW: u8 = 29;
+pub const GC_TYPE_BUFFER_DATA_VIEW: u8 = 0x4d;
 /// A secret `KeyObject` (`crypto.createSecretKey`): Uint8Array storage holding
 /// the raw key bytes.
-pub const GC_TYPE_BUFFER_SECRET_KEY: u8 = 30;
+pub const GC_TYPE_BUFFER_SECRET_KEY: u8 = 0x50;
 /// A WebCrypto `CryptoKey`: Uint8Array storage holding the key material; its
 /// algorithm/usages metadata is `buffer::header::crypto_key_meta`.
-pub const GC_TYPE_BUFFER_CRYPTO_KEY: u8 = 31;
+pub const GC_TYPE_BUFFER_CRYPTO_KEY: u8 = 0x51;
 /// Process-lifetime symbols carry a readable leaf header even though their
 /// allocation is deliberately outside the collecting heap.
 pub const GC_TYPE_SYMBOL: u8 = 32;
-pub const GC_TYPE_MAX: u8 = GC_TYPE_SYMBOL;
+/// Object-owned weak identity table; key/value pairs are conditional edges.
+pub const GC_TYPE_WEAK_STORAGE: u8 = 33;
+pub const GC_TYPE_MAX: u8 = 0x7f;
 
 /// Is `obj_type` a `BufferHeader` cell of any flavor (Buffer, Uint8Array,
 /// ArrayBuffer, SharedArrayBuffer, DataView, KeyObject, CryptoKey)?
 #[inline(always)]
 pub const fn is_buffer_family_type(obj_type: u8) -> bool {
-    obj_type == GC_TYPE_BUFFER
-        || (obj_type >= GC_TYPE_BUFFER_UINT8ARRAY && obj_type <= GC_TYPE_BUFFER_CRYPTO_KEY)
+    matches!(obj_type & !0x20, 0x40 | 0x4c..=0x52)
 }
 
 /// Is `obj_type` a `BufferHeader` cell whose JS value is a `Uint8Array`
@@ -153,9 +155,22 @@ pub const fn is_buffer_family_type(obj_type: u8) -> bool {
 /// `KeyObject`'s or a `CryptoKey`'s storage)?
 #[inline(always)]
 pub const fn is_uint8array_buffer_type(obj_type: u8) -> bool {
-    obj_type == GC_TYPE_BUFFER_UINT8ARRAY
-        || obj_type == GC_TYPE_BUFFER_SECRET_KEY
-        || obj_type == GC_TYPE_BUFFER_CRYPTO_KEY
+    matches!(obj_type & !0x20, 0x40 | 0x50 | 0x51)
+}
+
+#[inline(always)]
+pub const fn is_byte_family_type(obj_type: u8) -> bool {
+    (obj_type & !0x20).wrapping_sub(0x40) <= 18
+}
+
+#[inline(always)]
+pub const fn is_byte_view_type(obj_type: u8) -> bool {
+    obj_type.wrapping_sub(0x60) <= 18
+}
+
+#[inline(always)]
+pub const fn is_typed_array_type(obj_type: u8) -> bool {
+    (obj_type & !0x20).wrapping_sub(0x40) <= 11
 }
 
 pub(super) const MALLOC_KIND_UNKNOWN_INDEX: usize = 0;
@@ -361,6 +376,7 @@ pub(crate) enum GcAllocationPolicy {
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum GcRewriteDescriptorKind {
+    WeakStorage,
     Box,
     Scope,
     Leaf,
@@ -374,8 +390,6 @@ pub(crate) enum GcRewriteDescriptorKind {
     LazyArray,
     Set,
     Buffer,
-    NativeTypedView,
-    NativePodView,
     /// #6759 Phase B: one traced NaN-box slot (`ObjectMeta::prototype`).
     ObjectMeta,
     /// #6759 phase 1: a cell whose ONLY traced edge is its metadata record.
@@ -383,6 +397,7 @@ pub(crate) enum GcRewriteDescriptorKind {
     MetaOnly,
     /// The optional NaN-boxed back-edge from a payload cell to its owner.
     NativeHandle,
+    NativePodView,
 }
 
 #[allow(dead_code)]
@@ -454,6 +469,7 @@ pub(crate) enum GcRewriteHookKind {
     /// indexed by their pointer bits (identity) or pointee content (bigints),
     /// both of which go stale when the referenced allocation is evacuated.
     MapIndex,
+    WeakStorageIndex,
 }
 
 #[allow(dead_code)]
@@ -463,18 +479,7 @@ pub(crate) enum GcFinalizeHookKind {
     MapSideAllocation,
     SetSideAllocation,
     PromiseCleanup,
-    NativeArenaOwner,
-    NativeTypedView,
     NativeHandle,
-    NativePodView,
-    /// Unregister a dead typed array: its `TYPED_ARRAY_VIEW_META` entry (keyed
-    /// by the header address, recording the materialized backing ArrayBuffer;
-    /// leaving it behind keeps that buffer rooted forever and lets whatever is
-    /// allocated at the reused address inherit a backing that is not its own),
-    /// its own-property / no-extend entries, its buffer-view entries and its
-    /// emitted-code kind-cache admissions (#10694: this hook replaced the
-    /// post-trace scan of `TYPED_ARRAY_REGISTRY`).
-    TypedArraySideTables,
     /// Drop the embedded `temporal_rs` value in a `GC_TYPE_TEMPORAL` cell so a
     /// heap-owning variant (e.g. a `ZonedDateTime` IANA timezone string) is
     /// released when the cell is swept. POD variants drop to a no-op.
@@ -485,13 +490,8 @@ pub(crate) enum GcFinalizeHookKind {
     /// #7539: free a dead lazy JSON array's tape bytes, which
     /// `json_tape_store` owns outside the GC heap.
     LazyArrayTape,
-    /// #10694: drop a dead buffer-family cell's address-keyed attributes (view
-    /// record, ArrayBuffer alias, resizable max, own properties, CryptoKey
-    /// metadata, detach record, the emitted-code admission cache slot) and run
-    /// a foreign-backed buffer's finalizer. This used to be driven by a
-    /// post-trace scan of `BUFFER_REGISTRY`, which no longer exists: the brand
-    /// is the type byte, so the sweep that frees the cell is what finds it.
-    BufferSideTables,
+    /// Release in-cell native backing, addon finalizers and crypto material.
+    ByteStore,
 }
 
 #[allow(dead_code)]
@@ -544,7 +544,7 @@ pub(super) const fn gc_type_info_entry(
     }
 }
 
-pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_COUNT] = [
+const CORE_TYPE_INFOS: &[Option<GcTypeInfo>] = &[
     None,
     Some(gc_type_info_entry(
         GC_TYPE_ARRAY,
@@ -707,21 +707,6 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
     )),
     Some(buffer_family_type_info(GC_TYPE_BUFFER, "buffer")),
     Some(gc_type_info_entry(
-        GC_TYPE_TYPED_ARRAY,
-        "typed_array",
-        GcAllocationPolicy::RawOrLargeOldArena,
-        true,
-        GcRewriteDescriptorKind::Leaf,
-        GcLayoutSlotKind::None,
-        false,
-        GcExternalBytePolicy::InlinePayload,
-        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
-        true,
-        GcMoveHookKind::None,
-        GcRewriteHookKind::None,
-        GcFinalizeHookKind::TypedArraySideTables,
-    )),
-    Some(gc_type_info_entry(
         GC_TYPE_SET,
         "set",
         GcAllocationPolicy::Arena,
@@ -735,36 +720,6 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcMoveHookKind::SetSideTables,
         GcRewriteHookKind::None,
         GcFinalizeHookKind::SetSideAllocation,
-    )),
-    Some(gc_type_info_entry(
-        GC_TYPE_NATIVE_ARENA_OWNER,
-        "native_arena_owner",
-        GcAllocationPolicy::Malloc,
-        false,
-        GcRewriteDescriptorKind::Leaf,
-        GcLayoutSlotKind::None,
-        false,
-        GcExternalBytePolicy::SideAllocation,
-        GcLargeObjectPolicy::MallocTracked,
-        true,
-        GcMoveHookKind::None,
-        GcRewriteHookKind::None,
-        GcFinalizeHookKind::NativeArenaOwner,
-    )),
-    Some(gc_type_info_entry(
-        GC_TYPE_NATIVE_TYPED_VIEW,
-        "native_typed_view",
-        GcAllocationPolicy::Malloc,
-        false,
-        GcRewriteDescriptorKind::NativeTypedView,
-        GcLayoutSlotKind::None,
-        false,
-        GcExternalBytePolicy::None,
-        GcLargeObjectPolicy::MallocTracked,
-        false,
-        GcMoveHookKind::None,
-        GcRewriteHookKind::None,
-        GcFinalizeHookKind::NativeTypedView,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_NATIVE_HANDLE,
@@ -786,17 +741,17 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
     Some(gc_type_info_entry(
         GC_TYPE_NATIVE_POD_VIEW,
         "native_pod_view",
-        GcAllocationPolicy::Malloc,
-        false,
+        GcAllocationPolicy::Arena,
+        true,
         GcRewriteDescriptorKind::NativePodView,
         GcLayoutSlotKind::None,
         false,
         GcExternalBytePolicy::None,
-        GcLargeObjectPolicy::MallocTracked,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
-        GcFinalizeHookKind::NativePodView,
+        GcFinalizeHookKind::None,
     )),
     Some(gc_type_info_entry(
         GC_TYPE_DATE_CELL,
@@ -1016,7 +971,64 @@ pub(super) static GC_TYPE_INFO_BY_ID: [Option<GcTypeInfo>; MALLOC_KIND_BUCKET_CO
         GcRewriteHookKind::None,
         GcFinalizeHookKind::None,
     )),
+    Some(gc_type_info_entry(
+        GC_TYPE_WEAK_STORAGE,
+        "weak_storage",
+        GcAllocationPolicy::Arena,
+        true,
+        GcRewriteDescriptorKind::WeakStorage,
+        GcLayoutSlotKind::None,
+        true,
+        GcExternalBytePolicy::InlinePayload,
+        GcLargeObjectPolicy::OldArenaWhenOverThreshold,
+        false,
+        GcMoveHookKind::None,
+        GcRewriteHookKind::WeakStorageIndex,
+        GcFinalizeHookKind::None,
+    )),
 ];
+
+const INERT_TYPE_INFO: GcTypeInfo = gc_type_info_entry(
+    0,
+    "unused",
+    GcAllocationPolicy::Arena,
+    false,
+    GcRewriteDescriptorKind::Leaf,
+    GcLayoutSlotKind::None,
+    false,
+    GcExternalBytePolicy::None,
+    GcLargeObjectPolicy::NotApplicable,
+    true,
+    GcMoveHookKind::None,
+    GcRewriteHookKind::None,
+    GcFinalizeHookKind::None,
+);
+
+const fn byte_type_infos() -> [GcTypeInfo; MALLOC_KIND_BUCKET_COUNT] {
+    // Unused ids have fully initialized inert fields. A layout note can read
+    // its field directly from the sole descriptor authority; admission still
+    // rejects the zero type id. No separate layout-kind cache is needed.
+    let mut result = [INERT_TYPE_INFO; MALLOC_KIND_BUCKET_COUNT];
+    let mut i = 0;
+    while i < CORE_TYPE_INFOS.len() {
+        if let Some(info) = CORE_TYPE_INFOS[i] {
+            if !is_byte_family_type(info.type_id) {
+                result[info.type_id as usize] = info;
+            }
+        }
+        i += 1;
+    }
+    i = 0x40;
+    while i <= 0x7f {
+        if is_byte_family_type(i as u8) {
+            result[i] = buffer_family_type_info(i as u8, "bytes");
+        }
+        i += 1;
+    }
+    result
+}
+
+pub(super) static GC_TYPE_INFO_BY_ID: [GcTypeInfo; MALLOC_KIND_BUCKET_COUNT] = byte_type_infos();
 
 /// One `GcTypeInfo` for every buffer-family flavor: the flavors differ only in
 /// the brand the type byte carries, never in layout, tracing or lifetime.
@@ -1034,19 +1046,54 @@ const fn buffer_family_type_info(type_id: u8, name: &'static str) -> GcTypeInfo 
         false,
         GcMoveHookKind::None,
         GcRewriteHookKind::None,
-        GcFinalizeHookKind::BufferSideTables,
+        GcFinalizeHookKind::ByteStore,
     )
+}
+
+/// One bit per type id that has a `GcTypeInfo`, derived at compile time from
+/// the same descriptor table tracing uses. The type ids are no longer one
+/// dense run (core kinds, then the byte-family block at 0x40), so header
+/// admission tests a constant bit instead of loading a descriptor. 32 bytes
+/// cover every `u8`, so the index needs no bounds check.
+static GC_TYPE_KNOWN_BITS: [u8; 32] = {
+    let infos = byte_type_infos();
+    let mut bits = [0u8; 32];
+    let mut kind = 0usize;
+    while kind < infos.len() {
+        if infos[kind].type_id != 0 {
+            bits[kind >> 3] |= 1 << (kind & 7);
+        }
+        kind += 1;
+    }
+    bits
+};
+
+/// Header admission uses the same metadata as tracing: a type id is known
+/// exactly when it has a descriptor.
+#[inline(always)]
+pub(crate) fn gc_type_is_known(obj_type: u8) -> bool {
+    #[cfg(test)]
+    if obj_type == 10 && crate::buffer::bytes::b4_sabotage("retired_type_admission") {
+        return true;
+    }
+    GC_TYPE_KNOWN_BITS[(obj_type >> 3) as usize] >> (obj_type & 7) & 1 != 0
 }
 
 #[inline]
 pub(crate) fn gc_type_info(obj_type: u8) -> Option<&'static GcTypeInfo> {
+    #[cfg(test)]
+    if obj_type == GC_TYPE_ARRAY
+        && header_admission_tests::DENSE_DESCRIPTOR_FAULT.with(std::cell::Cell::get)
+    {
+        return Some(&GC_TYPE_INFO_BY_ID[GC_TYPE_OBJECT as usize]);
+    }
     GC_TYPE_INFO_BY_ID
         .get(obj_type as usize)
-        .and_then(Option::as_ref)
+        .filter(|info| info.type_id != 0)
 }
 
 pub(crate) fn gc_type_infos() -> impl Iterator<Item = &'static GcTypeInfo> {
-    GC_TYPE_INFO_BY_ID.iter().filter_map(Option::as_ref)
+    GC_TYPE_INFO_BY_ID.iter().filter(|info| info.type_id != 0)
 }
 
 #[inline]
@@ -1063,7 +1110,13 @@ pub(crate) fn gc_type_rewrite_descriptor_kind(obj_type: u8) -> GcRewriteDescript
 
 #[inline]
 pub(crate) fn gc_type_layout_slot_kind(obj_type: u8) -> GcLayoutSlotKind {
-    gc_type_info(obj_type).map_or(GcLayoutSlotKind::None, |info| info.layout_slot_kind)
+    #[cfg(test)]
+    if obj_type == 10 && header_admission_tests::INERT_LAYOUT_FAULT.with(std::cell::Cell::get) {
+        return GcLayoutSlotKind::ArrayElements;
+    }
+    GC_TYPE_INFO_BY_ID
+        .get(obj_type as usize)
+        .map_or(GcLayoutSlotKind::None, |info| info.layout_slot_kind)
 }
 
 #[inline]
@@ -1106,6 +1159,9 @@ pub(crate) fn gc_type_rewrite_hook_kind(obj_type: u8) -> GcRewriteHookKind {
 pub(crate) fn run_gc_rewrite_hook(obj_type: u8, user_ptr: usize) {
     match gc_type_rewrite_hook_kind(obj_type) {
         GcRewriteHookKind::None => {}
+        GcRewriteHookKind::WeakStorageIndex => unsafe {
+            (*(user_ptr as *mut crate::weakref::storage::WeakStorage)).rebuild();
+        },
         GcRewriteHookKind::MapIndex => {
             crate::map::rebuild_map_ptr_index_for_gc(user_ptr as *mut crate::map::MapHeader);
         }
@@ -1194,26 +1250,13 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
             crate::async_hooks::enqueue_gc_destroy((*promise).async_id);
             crate::promise::clear_promise_context_for_gc(promise);
         }
-        GcFinalizeHookKind::NativeArenaOwner => {
-            crate::native_arena::finalize_native_arena_owner_for_gc(
-                user_ptr as *mut crate::native_arena::NativeArenaOwnerHeader,
-            );
-        }
-        GcFinalizeHookKind::NativeTypedView => {
-            crate::native_arena::finalize_native_typed_view_for_gc(
-                user_ptr as *mut crate::native_arena::NativeTypedViewHeader,
-            );
-        }
+
         GcFinalizeHookKind::NativeHandle => {
             crate::native_handle::finalize_native_handle_for_gc(
                 user_ptr as *mut crate::native_handle::NativeHandleHeader,
             );
         }
-        GcFinalizeHookKind::NativePodView => {
-            crate::native_arena::finalize_native_pod_view_for_gc(
-                user_ptr as *mut crate::native_arena::NativePodViewHeader,
-            );
-        }
+
         GcFinalizeHookKind::TemporalCleanup => {
             crate::temporal::finalize_temporal_cell_for_gc(
                 user_ptr as *mut crate::temporal::TemporalCell,
@@ -1222,13 +1265,11 @@ pub(crate) unsafe fn gc_type_finalize_unmarked_payload(obj_type: u8, user_ptr: *
         GcFinalizeHookKind::ErrorSideTables => {
             crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(user_ptr as usize);
         }
-        GcFinalizeHookKind::TypedArraySideTables => {
-            crate::typedarray::finalize_collected_dead_typed_array(user_ptr as usize);
-        }
+
         GcFinalizeHookKind::LazyArrayTape => {
             crate::json_tape_store::release(user_ptr as usize);
         }
-        GcFinalizeHookKind::BufferSideTables => {
+        GcFinalizeHookKind::ByteStore => {
             crate::buffer::finalize_collected_dead_buffer(user_ptr as usize);
         }
     }
@@ -1279,7 +1320,8 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
                 return Err("closure rewrite descriptor must expose closure capture slots");
             }
         }
-        GcRewriteDescriptorKind::Box
+        GcRewriteDescriptorKind::WeakStorage
+        | GcRewriteDescriptorKind::Box
         | GcRewriteDescriptorKind::Scope
         | GcRewriteDescriptorKind::Buffer
         | GcRewriteDescriptorKind::MetaOnly
@@ -1302,7 +1344,7 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
                 return Err("object-meta descriptor must expose its child edges to marking");
             }
         }
-        GcRewriteDescriptorKind::NativeTypedView | GcRewriteDescriptorKind::NativePodView => {
+        GcRewriteDescriptorKind::NativePodView => {
             if info.layout_slot_kind != GcLayoutSlotKind::None {
                 return Err("native view rewrite descriptor must use fixed slots only");
             }
@@ -1442,7 +1484,6 @@ pub(crate) const GC_BUFFER_FOREIGN_DATA: u16 = 0x80;
 /// A Buffer-family view contains a resolved native data pointer at +8.
 /// Kind-disjoint from the Object typed-array-prototype bit. The view's
 /// backing edge is traced and the derived pointer is refreshed on rewrite.
-pub(crate) const GC_BUFFER_VIEW_DATA: u16 = crate::codegen_abi::GC_BUFFER_VIEW_DATA;
 // Array carries properties outside its ordinary dense-element representation:
 // per-index descriptors (accessors or custom attrs installed via
 // `Object.defineProperty`), a non-writable `length`, or named properties in
@@ -1601,8 +1642,8 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = 0x200;
 /// | 0..2 | `OBJ_FLAG_FROZEN` / `SEALED` / `NO_EXTEND` | same | |
 /// | 3..5 | | | `GC_COPY_SURVIVAL_AGE_MASK` |
 /// | 6 | `OBJ_FLAG_NULL_PROTO` | `GC_ARRAY_CUSTOM_PROTO` (alias) | `GC_RESIDUAL_PROTO_OWNER` (non-object) |
-/// | 7 | available | `GC_ARRAY_RAW_F64_LAYOUT` | BUFFER: `GC_BUFFER_FOREIGN_DATA` |
-/// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_NAMED_PROPS` | BUFFER: `GC_BUFFER_VIEW_DATA` |
+/// | 7 | available | `GC_ARRAY_RAW_F64_LAYOUT` | byte owner: `GC_BUFFER_FOREIGN_DATA` (out-of-line); byte view: `BYTES_LENGTH_TRACKING` |
+/// | 8 | `OBJ_FLAG_TYPED_ARRAY_PROTO` | `GC_ARRAY_NAMED_PROPS` | byte owner: `BYTES_RESIZABLE` |
 /// | 9 | `OBJ_FLAG_PLAIN_ORDINARY` | `GC_ARRAY_ARGUMENTS_OBJECT` | |
 /// | 10 | `OBJ_FLAG_STABLE_TOMBSTONES` | `OBJ_FLAG_ARRAY_DESCRIPTORS` | |
 /// | 11 | `OBJ_FLAG_HAS_DESCRIPTORS` | element shape (#7480) | |
@@ -1670,7 +1711,7 @@ mod buffer_family_type_tests {
         let mut flavors = 0;
         for t in 0..=u8::MAX {
             let Some(info) = gc_type_info(t) else {
-                assert!(!is_buffer_family_type(t), "flavor {t} has no type info");
+                assert!(!is_byte_family_type(t), "flavor {t} has no type info");
                 continue;
             };
             assert_eq!(info.type_id, t, "GC_TYPE_INFO_BY_ID is indexed by type id");
@@ -1680,14 +1721,14 @@ mod buffer_family_type_tests {
                 ..*info
             } == base;
             assert_eq!(
-                is_buffer_family_type(t),
+                is_byte_family_type(t),
                 same_kind,
                 "type {t} ({}) must be a buffer flavor exactly when it is GC_TYPE_BUFFER's kind",
                 info.name
             );
-            flavors += usize::from(is_buffer_family_type(t));
+            flavors += usize::from(is_byte_family_type(t));
         }
-        assert_eq!(flavors, 7);
+        assert_eq!(flavors, 38);
         for t in [
             GC_TYPE_BUFFER_UINT8ARRAY,
             GC_TYPE_BUFFER_SECRET_KEY,
@@ -1697,5 +1738,92 @@ mod buffer_family_type_tests {
         }
         assert!(!is_uint8array_buffer_type(GC_TYPE_BUFFER));
         assert!(!is_uint8array_buffer_type(GC_TYPE_BUFFER_ARRAY_BUFFER));
+    }
+}
+
+#[cfg(test)]
+mod header_admission_tests {
+    // Only the independent descriptor witness selects this test fault. Do
+    // not query the environment in each runtime lookup during GC sweeping.
+    std::thread_local! {
+        pub(super) static DENSE_DESCRIPTOR_FAULT: std::cell::Cell<bool> = const {
+            std::cell::Cell::new(false)
+        };
+        pub(super) static INERT_LAYOUT_FAULT: std::cell::Cell<bool> = const {
+            std::cell::Cell::new(false)
+        };
+    }
+
+    #[test]
+    fn sparse_header_admission_agrees_with_all_type_descriptors() {
+        DENSE_DESCRIPTOR_FAULT.set(crate::buffer::bytes::b4_sabotage("dense_core_descriptor"));
+        INERT_LAYOUT_FAULT.set(crate::buffer::bytes::b4_sabotage("inert_layout_descriptor"));
+        for kind in 0..=u8::MAX {
+            assert_eq!(
+                super::gc_type_info(kind),
+                super::GC_TYPE_INFO_BY_ID
+                    .get(kind as usize)
+                    .filter(|info| info.type_id != 0),
+                "descriptor lookup must preserve the authoritative metadata for {kind:#x}"
+            );
+            assert_eq!(
+                super::gc_type_layout_slot_kind(kind),
+                super::GC_TYPE_INFO_BY_ID
+                    .get(kind as usize)
+                    .filter(|info| info.type_id != 0)
+                    .map_or(super::GcLayoutSlotKind::None, |info| info.layout_slot_kind),
+                "unused ids must have inert layout fields for {kind:#x}"
+            );
+            assert_eq!(
+                super::gc_type_is_known(kind),
+                super::gc_type_info(kind).is_some(),
+                "header kind {kind:#x}"
+            );
+            // Exhaust the whole type-byte domain against the declarative
+            // brand/role contract, independently of the masked-range form.
+            let brand = kind & 0x1f;
+            let bytes = kind & 0xc0 == 0x40 && brand <= 18;
+            assert_eq!(super::is_byte_family_type(kind), bytes);
+            assert_eq!(super::is_byte_view_type(kind), bytes && kind & 0x20 != 0);
+            assert_eq!(super::is_typed_array_type(kind), bytes && brand <= 11);
+            assert_eq!(
+                super::is_buffer_family_type(kind),
+                bytes && (brand == 0 || brand >= 12)
+            );
+            assert_eq!(
+                super::is_uint8array_buffer_type(kind),
+                bytes && matches!(brand, 0 | 16 | 17)
+            );
+        }
+    }
+    #[test]
+    fn changing_dense_core_descriptor_turns_metadata_agreement_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "gc::types::header_admission_tests::sparse_header_admission_agrees_with_all_type_descriptors", "--nocapture"])
+            .env("PERRY_B4_SABOTAGE", "dense_core_descriptor").output().unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(
+            !child.status.success(),
+            "metadata substitution must be detected"
+        );
+    }
+    #[test]
+    fn changing_inert_layout_turns_layout_agreement_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "gc::types::header_admission_tests::sparse_header_admission_agrees_with_all_type_descriptors", "--nocapture"])
+            .env("PERRY_B4_SABOTAGE", "inert_layout_descriptor").output().unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(
+            !child.status.success(),
+            "an active retired layout must be detected"
+        );
+    }
+    #[test]
+    fn admitting_a_retired_kind_turns_header_admission_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "gc::types::header_admission_tests::sparse_header_admission_agrees_with_all_type_descriptors", "--nocapture"])
+            .env("PERRY_B4_SABOTAGE", "retired_type_admission").output().unwrap();
+        assert!(String::from_utf8_lossy(&child.stdout).contains("running 1 test"));
+        assert!(!child.status.success(), "retired kind must be rejected");
     }
 }

@@ -272,8 +272,13 @@ pub(crate) fn lower_uint8array_get_i32(
     let a = lower_expr(ctx, array)?;
     // #10515: admitted owning byte views load inline; misses (and priming)
     // stay on the runtime accessor.
-    let byte_i32 =
-        super::u8_buffer_read::emit_u8_cached_get_i32(ctx, &a, &idx_i32, "js_uint8array_get");
+    let byte_i32 = super::u8_buffer_read::emit_u8_cached_get_i32(
+        ctx,
+        array,
+        &a,
+        &idx_i32,
+        "js_uint8array_get",
+    );
     let slow = LoweredValue {
         semantic: SemanticKind::JsNumber,
         rep: NativeRep::I32,
@@ -383,7 +388,7 @@ pub(crate) fn lower_buffer_index_get_i32(
     let idx_i32 = lower_index_i32(ctx, index)?;
     let a = lower_expr(ctx, buffer)?;
     let byte_i32 =
-        super::u8_buffer_read::emit_u8_cached_get_i32(ctx, &a, &idx_i32, "js_buffer_get");
+        super::u8_buffer_read::emit_u8_cached_get_i32(ctx, buffer, &a, &idx_i32, "js_buffer_get");
     let slow = LoweredValue {
         semantic: SemanticKind::JsNumber,
         rep: NativeRep::I32,
@@ -968,14 +973,17 @@ pub(crate) fn lower(
                 return Ok(value);
             }
             if !numeric_index_has_integer_array_index_proof(ctx, index) {
-                if let Some(access) = super::u8_buffer_read::byte_view_param_for(ctx, array) {
-                    return rooting::with_operands_rooted(ctx, &[array, index], |ctx, vals| {
-                        Ok(super::index_get::inline_dyn_typed_array::lower_inline_dyn_typed_array_get_with_byte_view_param(
-                            ctx, &vals[0], &vals[1], false, Some(&access),
-                        ))
-                    });
-                }
                 return rooting::with_operands_rooted(ctx, &[array, index], |ctx, vals| {
+                    if let Some(access) = super::u8_buffer_read::byte_view_param_for(
+                        ctx,
+                        array,
+                        &vals[0],
+                        &super::u8_buffer_read::U8_BRANDS,
+                    ) {
+                        return Ok(super::index_get::inline_dyn_typed_array::lower_inline_dyn_typed_array_get_with_byte_view_param(
+                            ctx, &vals[0], &vals[1], false, Some(&access),
+                        ));
+                    }
                     let a = vals[0].clone();
                     let key = vals[1].clone();
                     let blk = ctx.block();
@@ -1142,6 +1150,7 @@ pub(crate) fn lower(
             // #10515: admitted owning byte views store inline.
             super::u8_buffer_read::emit_u8_cached_set_i32(
                 ctx,
+                array,
                 &a,
                 &idx_i32,
                 &val_i32,
@@ -1236,6 +1245,7 @@ pub(crate) fn lower(
             let a = lower_expr(ctx, buffer)?;
             super::u8_buffer_read::emit_u8_cached_set_i32(
                 ctx,
+                buffer,
                 &a,
                 &idx_i32,
                 &val_i32,

@@ -664,7 +664,13 @@ pub(crate) fn get_property_attrs(obj: usize, key: &str) -> Option<PropertyAttrs>
             let entry = unsafe { super::key_attrs::object_key_entry(keys_owner, key.as_bytes()) };
             if entry != 0
                 || (keys_owner as usize != obj
-                    && unsafe { crate::closure::props::bag_has_own(obj, key.as_bytes()) })
+                    && unsafe {
+                        if crate::closure::is_closure_ptr(obj) {
+                            crate::closure::props::bag_has_own(obj, key.as_bytes())
+                        } else {
+                            crate::buffer::buffer_has_own_prop(obj, key)
+                        }
+                    })
             {
                 return Some(PropertyAttrs {
                     bits: super::key_attrs::entry_to_attr_bits(entry),
@@ -1132,6 +1138,8 @@ pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, 
 
 /// Store a property descriptor for (obj, key).
 pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) {
+    let byte_edit = FunctionBagEdit::new(obj);
+    let obj = byte_edit.as_ref().map_or(obj, |edit| edit.bag as usize);
     crate::typedarray_named::note_named_mutation(obj, key.as_bytes());
     super::prop_plan::prop_plan_epoch_bump_for_owner(obj);
     note_data_descriptor_target(obj, &key, attrs);
@@ -1313,6 +1321,10 @@ pub(crate) fn handle_accessor_descriptor_keys(handle: usize) -> Vec<String> {
 /// descriptors in the program) walk, per enumeration, to decide whether a
 /// per-index `enumerable` check was needed at all.
 pub(crate) fn owner_has_property_descriptors(owner: usize) -> bool {
+    if crate::buffer::header::is_owned_byte_cell(owner) {
+        let bag = unsafe { crate::buffer::store::bag(owner) };
+        return !bag.is_null() && owner_has_property_descriptors(bag as usize);
+    }
     if crate::closure::is_closure_ptr(owner) {
         let bag = unsafe { crate::closure::props::bag_of(owner) };
         return if bag.is_null() {
@@ -1342,6 +1354,14 @@ pub(crate) fn owner_has_property_descriptors(owner: usize) -> bool {
 }
 
 pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
+    if crate::buffer::header::is_owned_byte_cell(obj) {
+        let bag = unsafe { crate::buffer::store::bag(obj) };
+        return if bag.is_null() {
+            Vec::new()
+        } else {
+            accessor_descriptor_keys_for_obj(bag as usize)
+        };
+    }
     if crate::closure::is_closure_ptr(obj) {
         let bag = unsafe { crate::closure::props::bag_of(obj) };
         return if bag.is_null() {

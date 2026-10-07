@@ -14,10 +14,17 @@ pub extern "C" fn js_buffer_copy(
         return 0;
     }
 
-    unsafe {
-        let src_len = (*src_ptr).length as i32;
-        let dst_len = (*dst_ptr).length as i32;
-
+    super::bytes::no_gc(|_scope| unsafe {
+        let Ok(source) = super::bytes::span(crate::value::js_nanbox_pointer(src_ptr as i64), false)
+        else {
+            return 0;
+        };
+        let Ok(target) = super::bytes::span(crate::value::js_nanbox_pointer(dst_ptr as i64), true)
+        else {
+            return 0;
+        };
+        let src_len = source.len as i32;
+        let dst_len = target.len as i32;
         let target_start = target_start.max(0).min(dst_len);
         let source_start = source_start.max(0).min(src_len);
         let source_end = if source_end < 0 {
@@ -25,23 +32,17 @@ pub extern "C" fn js_buffer_copy(
         } else {
             source_end.min(src_len)
         };
-
-        if source_start >= source_end {
-            return 0;
-        }
-
-        let copy_len = (source_end - source_start).min(dst_len - target_start);
-        if copy_len <= 0 {
-            return 0;
-        }
-
-        let src_data = buffer_data(src_ptr).add(source_start as usize);
-        let dst_data = buffer_data_mut(dst_ptr).add(target_start as usize);
-        // Source and destination can be overlapping views of one backing.
-        ptr::copy(src_data, dst_data, copy_len as usize);
-
-        copy_len
-    }
+        let count = (source_end - source_start)
+            .min(dst_len - target_start)
+            .max(0);
+        // Raw spans avoid creating aliased Rust references for overlapping JS views.
+        ptr::copy(
+            source.ptr.add(source_start as usize),
+            target.ptr.add(target_start as usize),
+            count as usize,
+        );
+        count
+    })
 }
 
 /// Write a string to a buffer
@@ -58,7 +59,7 @@ pub extern "C" fn js_buffer_write(
     }
 
     unsafe {
-        let buf_len = (*buf_ptr).length as i32;
+        let buf_len = (super::store::length(buf_ptr as usize) as u32) as i32;
         let offset = offset.max(0).min(buf_len);
 
         let str_len = (*str_ptr).byte_len as usize;
@@ -70,8 +71,14 @@ pub extern "C" fn js_buffer_write(
         let available = (buf_len - offset) as usize;
         let write_len = bytes_to_write.len().min(available);
 
-        let dst_data = buffer_data_mut(buf_ptr).add(offset as usize);
-        ptr::copy_nonoverlapping(bytes_to_write.as_ptr(), dst_data, write_len);
+        super::bytes::no_gc(|scope| {
+            if let Ok(dst) =
+                super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf_ptr as i64), scope)
+            {
+                dst[offset as usize..offset as usize + write_len]
+                    .copy_from_slice(&bytes_to_write[..write_len]);
+            }
+        });
 
         write_len as i32
     }
@@ -91,7 +98,7 @@ pub extern "C" fn js_buffer_write_len(
     }
 
     unsafe {
-        let buf_len = (*buf_ptr).length as i32;
+        let buf_len = (super::store::length(buf_ptr as usize) as u32) as i32;
         let offset = offset.max(0).min(buf_len);
 
         let str_len = (*str_ptr).byte_len as usize;
@@ -106,8 +113,14 @@ pub extern "C" fn js_buffer_write_len(
         let cap = max_len.max(0) as usize;
         let write_len = bytes_to_write.len().min(available).min(cap);
 
-        let dst_data = buffer_data_mut(buf_ptr).add(offset as usize);
-        ptr::copy_nonoverlapping(bytes_to_write.as_ptr(), dst_data, write_len);
+        super::bytes::no_gc(|scope| {
+            if let Ok(dst) =
+                super::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf_ptr as i64), scope)
+            {
+                dst[offset as usize..offset as usize + write_len]
+                    .copy_from_slice(&bytes_to_write[..write_len]);
+            }
+        });
 
         write_len as i32
     }
@@ -144,7 +157,11 @@ mod tests {
                     expected.len(),
                     "{name}, with_length={with_length}"
                 );
-                let bytes = unsafe { std::slice::from_raw_parts(buffer_data(buffer), 16) };
+                let bytes = super::bytes::no_gc(|scope| {
+                    super::bytes::bytes(crate::value::js_nanbox_pointer(buffer as i64), scope)
+                        .unwrap()
+                        .to_vec()
+                });
                 assert_eq!(bytes[0], 0x7f, "{name}, with_length={with_length}");
                 assert_eq!(
                     &bytes[1..1 + expected.len()],

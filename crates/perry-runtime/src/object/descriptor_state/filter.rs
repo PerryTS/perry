@@ -32,6 +32,11 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
     {
         return DescriptorRoute::Keys(crate::closure::props::bag_of(owner));
     }
+    if crate::gc::is_byte_family_type(header.obj_type)
+        && crate::buffer::header::byte_cell_is_owned(owner, header.obj_type)
+    {
+        return DescriptorRoute::Keys(crate::buffer::store::bag(owner));
+    }
     match super::cell_meta_slot_for_header(owner, header) {
         Some(slot) => DescriptorRoute::Meta(*slot),
         None => DescriptorRoute::Tables,

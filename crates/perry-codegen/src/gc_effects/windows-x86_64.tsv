@@ -2411,6 +2411,8 @@ js_private_lexical_brand_pop	Leaf
 js_private_lexical_brand_push	Leaf
 js_private_method_call	Reenters
 js_private_method_guard	Reenters
+js_private_static_field_get	Reenters
+js_private_static_field_set	Reenters
 js_process_abort	Leaf
 js_process_active_resources_info	Reenters
 js_process_add_listener	Reenters
@@ -3438,7 +3440,6 @@ js_typeerror_new_with_cause	Reenters
 js_u8_buffer_read_f64	Reenters
 js_u8_from_base64	Reenters
 js_u8_from_hex	Reenters
-js_u8_resolve_read_data	Leaf
 js_u8_set_from_base64	Reenters
 js_u8_set_from_hex	Reenters
 js_u8_to_base64	Reenters

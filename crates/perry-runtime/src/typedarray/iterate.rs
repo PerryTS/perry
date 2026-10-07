@@ -26,8 +26,8 @@ pub extern "C" fn js_typed_array_map(
         return typed_array_alloc(KIND_FLOAT64, 0);
     }
     unsafe {
-        let kind = (*ta).kind;
-        let len = (*ta).length as usize;
+        let kind = crate::typedarray::element_kind(ta);
+        let len = crate::typedarray::element_length(ta) as usize;
         let recv = ta_receiver_value(ta);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
@@ -68,8 +68,8 @@ pub extern "C" fn js_typed_array_filter(
         return typed_array_alloc(KIND_FLOAT64, 0);
     }
     unsafe {
-        let kind = (*ta).kind;
-        let len = (*ta).length as usize;
+        let kind = crate::typedarray::element_kind(ta);
+        let len = crate::typedarray::element_length(ta) as usize;
         let recv = ta_receiver_value(ta);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
@@ -115,7 +115,7 @@ pub extern "C" fn js_typed_array_every(
         return f64::from_bits(crate::value::TAG_TRUE);
     }
     unsafe {
-        let len = (*ta).length as usize;
+        let len = crate::typedarray::element_length(ta) as usize;
         let recv = ta_receiver_value(ta);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
@@ -149,7 +149,7 @@ pub extern "C" fn js_typed_array_some(
         return f64::from_bits(crate::value::TAG_FALSE);
     }
     unsafe {
-        let len = (*ta).length as usize;
+        let len = crate::typedarray::element_length(ta) as usize;
         let recv = ta_receiver_value(ta);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
@@ -181,7 +181,7 @@ pub extern "C" fn js_typed_array_for_each(
     let ta = clean_ta_ptr(ta);
     if !ta.is_null() {
         unsafe {
-            let len = (*ta).length as usize;
+            let len = crate::typedarray::element_length(ta) as usize;
             let recv = ta_receiver_value(ta);
             // #8180: resolve the callback's dispatch ONCE. It is invariant for a
             // fixed closure (see closure/dispatch/direct.rs), and this loop calls
@@ -213,7 +213,7 @@ pub extern "C" fn js_typed_array_find(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     unsafe {
-        let len = (*ta).length as usize;
+        let len = crate::typedarray::element_length(ta) as usize;
         let recv = ta_receiver_value(ta);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
@@ -247,7 +247,7 @@ pub extern "C" fn js_typed_array_find_index(
         return -1.0;
     }
     unsafe {
-        let len = (*ta).length as usize;
+        let len = crate::typedarray::element_length(ta) as usize;
         let recv = ta_receiver_value(ta);
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
@@ -292,7 +292,7 @@ pub extern "C" fn js_typed_array_reduce(
         crate::array::throw_reduce_of_empty();
     }
     unsafe {
-        let len = (*ta).length as usize;
+        let len = crate::typedarray::element_length(ta) as usize;
         if len == 0 {
             if has_initial != 0 {
                 return initial;
@@ -357,7 +357,7 @@ pub extern "C" fn js_typed_array_reduce_right(
         crate::array::throw_reduce_of_empty();
     }
     unsafe {
-        let len = (*ta).length as usize;
+        let len = crate::typedarray::element_length(ta) as usize;
         if len == 0 {
             if has_initial != 0 {
                 return initial;

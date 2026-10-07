@@ -107,6 +107,12 @@ pub(crate) struct FullWeakProcessingState {
     cursor: usize,
     /// Set when a step ran out of budget partway through a registry's records.
     registry: Option<RegistryCursor>,
+    // A conditional value may revive an initially white weak holder between
+    // slices. Resolve these again after the live holders, in bounded waves.
+    deferred: Vec<usize>,
+    deferred_cursor: usize,
+    next_deferred: Vec<usize>,
+    revived: bool,
 }
 
 impl FullWeakProcessingState {
@@ -118,11 +124,57 @@ impl FullWeakProcessingState {
             holders,
             cursor: 0,
             registry: None,
+            deferred: Vec::new(),
+            deferred_cursor: 0,
+            next_deferred: Vec::new(),
+            revived: false,
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_holder_order_for_tests(&mut self, holders: Vec<usize>) {
+        assert_eq!(self.cursor, 0);
+        self.holders = holders;
+    }
+
     fn holders_drained(&self) -> bool {
-        self.cursor == self.holders.len() && self.registry.is_none()
+        self.cursor == self.holders.len() && self.registry.is_none() && self.deferred.is_empty()
+    }
+
+    /// Observe registry restructuring even while conditional closure consumes
+    /// the slice. Otherwise a mutator can outpace that closure forever and
+    /// prevent the existing record-restart cap from ever being reached.
+    /// Returns true when that same bounded atomic fallback is now due.
+    pub(crate) fn registry_closure_requires_atomic_finish(
+        &mut self,
+        valid_ptrs: &crate::gc::ValidPointerSet,
+        minor_only: bool,
+    ) -> bool {
+        let Some(cursor) = self.registry.as_mut() else {
+            return false;
+        };
+        let liveness = FullCycleLiveness {
+            valid_ptrs,
+            minor_only,
+        };
+        let Some(identity) = (unsafe {
+            super::finreg_entries_identity(cursor.holder as *mut ObjectHeader, &liveness)
+        }) else {
+            return false;
+        };
+        if identity == cursor.identity {
+            return false;
+        }
+        if cursor.restarts >= MAX_REGISTRY_RESTARTS {
+            // Leave this mismatch for advance_registry, which accounts and
+            // performs its existing atomic finish after closure is complete.
+            return true;
+        }
+        crate::gc::instruments::note_weak_registry_restart();
+        cursor.restarts += 1;
+        cursor.identity = identity;
+        cursor.next = 0;
+        false
     }
 
     /// Process up to `budget` work units. Returns true when this cycle's weak
@@ -162,20 +214,60 @@ impl FullWeakProcessingState {
             }
         }
 
-        while remaining > 0 && self.cursor < self.holders.len() {
-            let addr = self.holders[self.cursor];
-            self.cursor += 1;
+        while remaining > 0 {
+            let (addr, reconsidering) = if self.cursor < self.holders.len() {
+                let addr = self.holders[self.cursor];
+                self.cursor += 1;
+                (addr, false)
+            } else if self.deferred_cursor < self.deferred.len() {
+                let addr = self.deferred[self.deferred_cursor];
+                self.deferred_cursor += 1;
+                (addr, true)
+            } else if !self.deferred.is_empty() {
+                if !self.revived {
+                    // No live holder remains undecided. Dead-owner pruning
+                    // removes these white holders before sweep.
+                    self.deferred.clear();
+                    self.next_deferred.clear();
+                    break;
+                }
+                self.deferred = std::mem::take(&mut self.next_deferred);
+                self.deferred_cursor = 0;
+                self.revived = false;
+                continue;
+            } else {
+                break;
+            };
             remaining -= 1;
             #[cfg(test)]
             super::test_support::note_full_weak_processing_work_unit();
             match unsafe { resolve_weak_holder_full(valid_ptrs, addr, minor_only) } {
                 HolderDisposition::Drop => {
-                    WEAK_HOLDERS.with(|holders| {
-                        holders.borrow_mut().remove(&addr);
-                    });
+                    // Stale/non-holder addresses need no deferred decision.
+                    let candidate = valid_ptrs.contains(&addr)
+                        && unsafe {
+                            let header = super::header_from_user_addr(addr);
+                            (*header).obj_type == crate::gc::GC_TYPE_OBJECT
+                                && matches!(
+                                    (*(addr as *const ObjectHeader)).class_id,
+                                    super::CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_REGISTRY
+                                )
+                        };
+                    if candidate {
+                        if reconsidering {
+                            self.next_deferred.push(addr);
+                        } else {
+                            self.deferred.push(addr);
+                        }
+                    } else {
+                        WEAK_HOLDERS.with(|holders| {
+                            holders.borrow_mut().remove(&addr);
+                        });
+                    }
                 }
                 HolderDisposition::Keep => {}
                 HolderDisposition::Process(current) => {
+                    self.revived |= reconsidering;
                     let obj = current as *mut ObjectHeader;
                     if unsafe { (*obj).class_id } == CLASS_ID_FINALIZATION_REGISTRY {
                         let Some(identity) =

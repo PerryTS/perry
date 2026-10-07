@@ -57,16 +57,11 @@ fn typed(kind: u8, values: &[f64]) -> f64 {
 }
 
 fn buffer(bytes: &[u8]) -> *mut crate::buffer::BufferHeader {
-    let buf = crate::buffer::buffer_alloc(bytes.len() as u32);
-    unsafe {
-        (*buf).length = bytes.len() as u32;
-        std::ptr::copy_nonoverlapping(
-            bytes.as_ptr(),
-            crate::buffer::buffer_data_mut(buf),
-            bytes.len(),
-        );
-    }
-    buf
+    crate::JSValue::from_bits(
+        crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::Buffer, bytes).to_bits(),
+    )
+    .as_pointer::<crate::buffer::BufferHeader>()
+    .cast_mut()
 }
 
 // ---------------------------------------------------------------------------
@@ -150,8 +145,9 @@ fn an_array_buffer_and_data_view_keep_the_object_tag() {
     let ab = buffer(&[104, 105]) as usize;
     crate::buffer::mark_as_array_buffer(ab);
     assert_ne!(locale_string(boxed(ab)), "hi");
-    let dv = buffer(&[104, 105]) as usize;
-    crate::buffer::mark_as_data_view(dv);
+    let dv = (crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, &[104, 105])
+        .to_bits()
+        & crate::value::POINTER_MASK) as usize;
     assert_ne!(locale_string(boxed(dv)), "hi");
 }
 

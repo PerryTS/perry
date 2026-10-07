@@ -935,30 +935,21 @@ mod tests {
             64,
         );
         let target = boxed_ptr(view as *const u8);
-        let before = unsafe {
-            (
-                (*view).owner,
-                (*view).data,
-                (*view).byte_offset,
-                (*view).byte_length,
-                (*view).generation,
-            )
-        };
-
+        let before = unsafe { ((*view).link, (*view).capacity, (*view).length) };
         let returned = js_crypto_random_fill_sync(target, undefined(), undefined());
         assert_eq!(returned.to_bits(), target.to_bits());
         unsafe {
-            assert_eq!((*view).owner, before.0);
-            assert_eq!((*view).data, before.1);
-            assert_eq!((*view).byte_offset, before.2);
-            assert_eq!((*view).byte_length, before.3);
-            assert_eq!((*view).generation, before.4);
-            let bytes = std::slice::from_raw_parts((*view).data, (*view).byte_length as usize);
+            assert_eq!((*view).link, before.0);
+            assert_eq!((*view).capacity, before.1);
+            assert_eq!((*view).length, before.2);
+        }
+        perry_runtime::buffer::bytes::no_gc(|scope| {
+            let bytes = perry_runtime::buffer::bytes::bytes(target, scope).unwrap();
             assert!(
                 bytes.iter().any(|&byte| byte != 0),
                 "randomFillSync should mutate native view backing bytes"
             );
-        }
+        });
         perry_runtime::native_arena::js_native_arena_dispose(owner as u64);
     }
 

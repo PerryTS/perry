@@ -12,6 +12,14 @@ impl FunctionBagEdit {
     #[inline]
     pub(crate) fn new(owner: usize) -> Option<Self> {
         if !crate::closure::is_closure_ptr(owner) {
+            if crate::buffer::header::is_owned_byte_cell(owner) {
+                let no_move = crate::gc::GcSuppressScope::new();
+                return Some(Self {
+                    owner,
+                    bag: unsafe { crate::buffer::store::bag_ensure(owner) },
+                    _no_move: no_move,
+                });
+            }
             return None;
         }
         Some(Self::for_closure(owner))
@@ -31,6 +39,9 @@ impl FunctionBagEdit {
     }
     #[inline(never)]
     pub(super) fn materialize_data_keys(&self, edits: &[super::AttrsEdit<'_>]) {
+        if !crate::closure::is_closure_ptr(self.owner) {
+            return;
+        }
         for edit in edits {
             let super::AttrsEdit::Data(key, _) = edit else {
                 continue;
@@ -52,7 +63,9 @@ impl FunctionBagEdit {
 
 impl Drop for FunctionBagEdit {
     fn drop(&mut self) {
-        crate::closure::shape::refresh_closure_shape(self.owner);
+        if crate::closure::is_closure_ptr(self.owner) {
+            crate::closure::shape::refresh_closure_shape(self.owner);
+        }
     }
 }
 

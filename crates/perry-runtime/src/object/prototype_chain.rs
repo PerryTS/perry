@@ -371,20 +371,23 @@ fn get_object_prototypes() -> &'static Mutex<HashMap<usize, u64>> {
 /// The classification is a pure function of the allocation, so an owner is
 /// always on exactly one of the two storages.
 pub(crate) unsafe fn meta_capable_object(obj_ptr: usize) -> Option<*mut crate::ObjectHeader> {
+    (receiver_header_type(obj_ptr)? == crate::gc::GC_TYPE_OBJECT)
+        .then_some(obj_ptr as *mut crate::ObjectHeader)
+}
+
+/// The type byte of a receiver word that can own a prototype record, or
+/// `None` for handles and non-heap bits. The type byte alone decides between
+/// a shaped object (GC_TYPE_OBJECT) and a byte cell (Buffer, TypedArray,
+/// ArrayBuffer, DataView carry byte-family ids), so one header load serves
+/// both.
+#[inline]
+unsafe fn receiver_header_type(obj_ptr: usize) -> Option<u8> {
     if !crate::value::addr_class::is_above_handle_band(obj_ptr)
-        // ArrayBuffer / SharedArrayBuffer / DataView use BufferHeader storage.
-        // Some of those headers pass the legacy ObjectHeader validity probe,
-        // but they do not have an ObjectMeta slot at the ObjectHeader offset.
-        || crate::buffer::is_registered_buffer(obj_ptr)
         || !crate::object::is_valid_obj_ptr(obj_ptr as *const u8)
     {
         return None;
     }
-    let header = crate::value::addr_class::try_read_gc_header(obj_ptr)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
-        return None;
-    }
-    Some(obj_ptr as *mut crate::ObjectHeader)
+    Some(crate::value::addr_class::try_read_gc_header(obj_ptr)?.obj_type)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -535,6 +538,15 @@ fn object_set_static_prototype_impl(obj_ptr: usize, proto_bits: u64, link_kind: 
     // receiver) records it in its meta record. Non-object owners fall through
     // to the residual registry.
     unsafe {
+        if crate::buffer::header::is_owned_byte_cell(obj_ptr) {
+            crate::buffer::store::bag_set(
+                obj_ptr,
+                crate::buffer::store::PROTOTYPE_KEY,
+                f64::from_bits(proto_bits),
+                true,
+            );
+            return;
+        }
         if let Some(obj) = meta_capable_object(obj_ptr) {
             let scope = crate::gc::RuntimeHandleScope::new();
             let obj_handle = scope.root_raw_mut_ptr(obj);
@@ -649,9 +661,24 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
     // a residual registry entry (the write path classifies identically), so
     // a miss for a shaped object is authoritative.
     unsafe {
-        if let Some(obj) = meta_capable_object(obj_ptr) {
-            let bits = crate::object::shapes::object_prototype_word(obj);
-            return (bits != 0).then_some(bits);
+        match receiver_header_type(obj_ptr) {
+            Some(crate::gc::GC_TYPE_OBJECT) => {
+                let obj = obj_ptr as *mut crate::ObjectHeader;
+                let bits = crate::object::shapes::object_prototype_word(obj);
+                return (bits != 0).then_some(bits);
+            }
+            // A byte cell keeps a custom prototype in its bag. The words this
+            // reads come from arbitrary receivers, and a byte-family type byte
+            // also appears at the start of non-GC memory, so the bag is read
+            // only for an allocator-proven cell. Ordinary objects never get here.
+            Some(obj_type)
+                if crate::gc::is_byte_family_type(obj_type)
+                    && crate::buffer::header::byte_cell_is_owned(obj_ptr, obj_type) =>
+            {
+                return crate::buffer::store::bag_get(obj_ptr, crate::buffer::store::PROTOTYPE_KEY)
+                    .map(f64::to_bits);
+            }
+            _ => {}
         }
     }
     if !OBJECT_PROTOTYPES_NONEMPTY.load(Ordering::Acquire) {
@@ -1040,13 +1067,14 @@ pub(crate) fn object_static_prototypes_maybe_nonempty() -> bool {
 /// value traced or rewritten.
 #[inline]
 pub(crate) fn residual_prototype_owner_type(obj_type: u8) -> bool {
-    !matches!(
-        obj_type,
-        crate::gc::GC_TYPE_STRING
-            | crate::gc::GC_TYPE_BIGINT
-            | crate::gc::GC_TYPE_OBJECT_META
-            | crate::gc::GC_TYPE_REGEX_PROGRAM
-    )
+    !crate::gc::is_byte_family_type(obj_type)
+        && !matches!(
+            obj_type,
+            crate::gc::GC_TYPE_STRING
+                | crate::gc::GC_TYPE_BIGINT
+                | crate::gc::GC_TYPE_OBJECT_META
+                | crate::gc::GC_TYPE_REGEX_PROGRAM
+        )
 }
 
 /// Migrate the residual side-table entry when an owner's allocation address

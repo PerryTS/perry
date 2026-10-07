@@ -150,7 +150,7 @@ pub(super) struct OldYoungEdgeMissing {
     pub(super) parent_marked: bool,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct OldYoungEdgeVerifyStats {
     pub(super) checked_old_objects: usize,
     pub(super) checked_remembered_pages: usize,
@@ -158,10 +158,26 @@ pub(super) struct OldYoungEdgeVerifyStats {
     pub(super) missing_edges: usize,
     pub(super) first_missing: Option<OldYoungEdgeMissing>,
     // gh #6206: per-type histograms of missing edges
-    pub(super) missing_by_parent_type: [u32; 32],
-    pub(super) missing_by_child_type: [u32; 32],
+    pub(super) missing_by_parent_type: [u32; GC_TYPE_MAX as usize + 1],
+    pub(super) missing_by_child_type: [u32; GC_TYPE_MAX as usize + 1],
     pub(super) missing_parent_malloc: u32,
     pub(super) missing_parent_unmarked: u32,
+}
+
+impl Default for OldYoungEdgeVerifyStats {
+    fn default() -> Self {
+        Self {
+            checked_old_objects: 0,
+            checked_remembered_pages: 0,
+            checked_old_to_young_edges: 0,
+            missing_edges: 0,
+            first_missing: None,
+            missing_by_parent_type: [0; GC_TYPE_MAX as usize + 1],
+            missing_by_child_type: [0; GC_TYPE_MAX as usize + 1],
+            missing_parent_malloc: 0,
+            missing_parent_unmarked: 0,
+        }
+    }
 }
 
 impl OldYoungEdgeVerifyStats {
@@ -185,8 +201,8 @@ impl OldYoungEdgeVerifyStats {
         parent_marked: bool,
     ) {
         self.missing_edges = self.missing_edges.saturating_add(1);
-        self.missing_by_parent_type[(parent_obj_type as usize) & 31] += 1;
-        self.missing_by_child_type[(child_obj_type as usize) & 31] += 1;
+        self.missing_by_parent_type[(parent_obj_type.min(GC_TYPE_MAX)) as usize] += 1;
+        self.missing_by_child_type[(child_obj_type.min(GC_TYPE_MAX)) as usize] += 1;
         if !parent_is_old_arena {
             self.missing_parent_malloc += 1;
         }

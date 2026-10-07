@@ -2,44 +2,10 @@
 //! `ArrayBuffer.prototype.resize`, and the `resizable` / `maxByteLength`
 //! getters (#10873).
 //!
-//! # Storage model
-//!
-//! Buffer bytes live INLINE after the `BufferHeader`, and every view aliases
-//! its backing by RAW ADDRESS (`view::ViewInfo`, `typedarray_view::ViewMeta`,
-//! the DataView's cached data pointer). A resize therefore must never move the
-//! payload. So a resizable buffer reserves `maxByteLength` bytes ONCE — its
-//! `BufferHeader::capacity` — and `resize(n)` only rewrites
-//! `BufferHeader::length`. Nothing is reallocated, and no address a view holds
-//! can go stale.
-//!
-//! Bytes past `length` are never observable: a grow clears what it exposes. It
-//! clears only what might be dirty, though — each buffer carries a `dirty_end`
-//! boundary past which every byte is known to read as zero (`ResizableInfo`).
-//! Construction touches only the initial `length` bytes, so a
-//! `new ArrayBuffer(0, { maxByteLength: 64 MiB })` reserves address space, not
-//! resident memory. A large shrink hands the dropped pages back to the OS (the
-//! same `madvise` detach uses), so RSS follows `byteLength`, not the high-water
-//! mark — and on Linux, where `MADV_DONTNEED` zero-fills on the next touch, it
-//! also moves `dirty_end` back down, so regrowing costs nothing until the pages
-//! are actually written. (macOS gives no such guarantee; there a regrow clears.)
-//!
-//! # Views
-//!
-//! A view's observable length is a function of its buffer's current
-//! `byteLength` (ES2024 `IsTypedArrayOutOfBounds` / `TypedArrayLength`):
-//! a *length-tracking* view (constructed without an explicit length) spans to
-//! the end of the buffer, a *fixed-length* view keeps its length while it fits
-//! and reads as length 0 / byteOffset 0 while it does not — and comes back when
-//! the buffer grows again. Rather than teach every length read about that,
-//! `resize` recomputes the header `length` of every registered view EAGERLY,
-//! the way `detach` zeroes them. Every fast tier that reads a view's length
-//! keeps working unchanged, and a program with no resizable buffer pays nothing:
-//! the only probes on shared paths are gated on `header::any_resizable_buffer`.
-//!
-//! Codegen's inline element tiers are unaffected by construction: a resizable
-//! buffer's bytes are only ever reachable through a VIEW, and every inline tier
-//! already declines views (`u8_inline_cache` admits non-view buffers only;
-//! the typed-array tiers require the receiver's `TA_STORAGE_INLINE`).
+//! The owner reserves its maximum byte capacity at birth. Resize changes
+//! only the owner length and zeroes each newly exposed range. Views compute
+//! their current window from their owner's header; no reverse index or dirty
+//! boundary metadata is retained.
 
 use super::*;
 
@@ -68,33 +34,24 @@ pub(crate) fn alloc_resizable_array_buffer(len: i32, max: i32) -> *mut BufferHea
     let len = len.max(0) as u32;
     let max = (max.max(0) as u32).max(len);
     let buf = buffer_alloc(max);
-    let dirty_end = unsafe {
-        (*buf).length = len;
-        let data = buffer_data_mut(buf);
-        // Only the visible prefix needs zeroing: `resize` clears whatever a
-        // later grow exposes, so the reserved tail is never observable.
+    unsafe {
+        super::store::set_length(buf as usize, len);
+    }
+    super::bytes::no_gc(|_| unsafe {
+        let data = super::store::owner_data(buf as usize);
         if len > 0 {
             std::ptr::write_bytes(data, 0, len as usize);
         }
-        // The old arena can hand back a recycled hole, so the reserved tail is
-        // not known-zero yet. For a large reservation make it so up front —
-        // releasing pages that were never touched is nearly free — so growing
-        // into it never has to clear (touch) it.
         let tail = (max - len) as usize;
-        if tail >= DECOMMIT_MIN_BYTES
-            && super::detach::decommit_payload_pages_zeroed(data.add(len as usize), tail)
-        {
-            len
-        } else {
-            max
+        if tail >= DECOMMIT_MIN_BYTES {
+            super::detach::decommit_payload_pages_zeroed(data.add(len as usize), tail);
         }
-    };
+    });
     mark_as_array_buffer(buf as usize);
     mark_as_resizable_buffer(
         buf as usize,
         ResizableInfo {
             max_byte_length: max,
-            dirty_end,
         },
     );
     buf
@@ -152,6 +109,8 @@ pub extern "C" fn js_array_buffer_new_with_options(
 /// `ArrayBuffer.prototype.resize(newLength)`.
 pub(crate) fn array_buffer_resize(addr: usize, args: &[f64]) -> f64 {
     let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let receiver = handles.root_nanbox_f64(crate::value::js_nanbox_pointer(addr as i64));
     // RequireInternalSlot(O, [[ArrayBufferMaxByteLength]]) precedes ToIndex.
     let Some(info) = resizable_info(addr) else {
         throw_type_error("Method ArrayBuffer.prototype.resize called on incompatible receiver");
@@ -167,41 +126,26 @@ pub(crate) fn array_buffer_resize(addr: usize, args: &[f64]) -> f64 {
     if new_len > max {
         throw_invalid_length("ArrayBuffer.prototype.resize: Invalid length parameter");
     }
-    let buf = addr as *mut BufferHeader;
-    let old_len = unsafe { (*buf).length };
+    let buf = unsafe {
+        super::store::owner(crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize)
+    } as *mut BufferHeader;
+    let old_len = unsafe { super::store::length(buf as usize) as u32 };
     if new_len == old_len {
         return undefined;
     }
-    // `dirty_end`: every byte at or past it already reads as zero. A grow
-    // clears only what lies below it; a large shrink releases the dropped
-    // pages and, where the OS then guarantees zero-fill, pulls it back down.
-    let mut dirty_end = info.dirty_end.max(old_len);
-    unsafe {
-        let data = buffer_data_mut(buf);
+    super::bytes::no_gc(|_| unsafe {
+        let data = super::store::owner_data(buf as usize);
         if new_len > old_len {
-            let clear_to = new_len.min(dirty_end);
-            if clear_to > old_len {
-                std::ptr::write_bytes(data.add(old_len as usize), 0, (clear_to - old_len) as usize);
-            }
-            dirty_end = dirty_end.max(new_len);
+            std::ptr::write_bytes(data.add(old_len as usize), 0, (new_len - old_len) as usize);
         }
-        (*buf).length = new_len;
+        super::store::set_length(buf as usize, new_len);
         if new_len < old_len && (old_len - new_len) as usize >= DECOMMIT_MIN_BYTES {
-            let zeroed = super::detach::decommit_payload_pages_zeroed(
+            super::detach::decommit_payload_pages_zeroed(
                 data.add(new_len as usize),
                 (old_len - new_len) as usize,
             );
-            // Only when nothing dirty lies beyond the range just released.
-            if zeroed && dirty_end <= old_len {
-                dirty_end = new_len;
-            }
         }
-    }
-    if dirty_end != info.dirty_end {
-        set_resizable_dirty_end(addr, dirty_end);
-    }
-    super::view::relength_views_of_resized_backing(addr, new_len);
-    crate::typedarray_view::relength_views_of_resized_backing(addr, new_len);
+    });
     undefined
 }
 
@@ -211,6 +155,7 @@ pub(crate) fn array_buffer_resize(addr: usize, args: &[f64]) -> f64 {
 /// `fixed_len` is the construction-time element count of a fixed-length view
 /// and is ignored for a length-tracking one.
 #[inline]
+#[cfg(test)]
 pub(crate) fn view_length_after_resize(
     buffer_len: u32,
     byte_offset: u32,
@@ -237,5 +182,5 @@ pub(crate) fn view_length_after_resize(
 /// array in the same state merely reads as empty.
 #[inline]
 pub fn is_out_of_bounds_data_view(addr: usize) -> bool {
-    any_resizable_buffer() && is_data_view(addr) && super::view::is_out_of_bounds_view(addr)
+    is_data_view(addr) && super::view::is_out_of_bounds_view(addr)
 }

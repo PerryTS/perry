@@ -14,8 +14,11 @@ fn boxed(ptr: *mut crate::buffer::BufferHeader) -> f64 {
 
 fn with_printable_bytes(ptr: *mut crate::buffer::BufferHeader) -> f64 {
     unsafe {
-        (*ptr).length = 2;
-        std::ptr::copy_nonoverlapping(b"hi".as_ptr(), crate::buffer::buffer_data_mut(ptr), 2);
+        crate::buffer::bytes::no_gc(|scope| {
+            crate::buffer::bytes::bytes_mut(crate::value::js_nanbox_pointer(ptr as i64), scope)
+                .unwrap()
+                .copy_from_slice(b"hi")
+        });
     }
     boxed(ptr)
 }
@@ -24,8 +27,10 @@ fn with_printable_bytes(ptr: *mut crate::buffer::BufferHeader) -> f64 {
 fn array_buffer_backed_values_use_their_object_tags() {
     let ab = with_printable_bytes(crate::buffer::js_array_buffer_new(2));
     let sab = with_printable_bytes(crate::buffer::js_shared_array_buffer_new(2));
-    let dv = crate::buffer::buffer_alloc(2);
-    crate::buffer::mark_as_data_view(dv as usize);
+    let value = crate::buffer::bytes::from_slice(crate::buffer::bytes::Brand::DataView, b"hi");
+    let dv = JSValue::from_bits(value.to_bits())
+        .as_pointer::<crate::buffer::BufferHeader>()
+        .cast_mut();
     let dv = with_printable_bytes(dv);
 
     for (value, expected) in [
@@ -41,7 +46,7 @@ fn array_buffer_backed_values_use_their_object_tags() {
         );
     }
 
-    let buffer = with_printable_bytes(crate::buffer::buffer_alloc(2));
+    let buffer = with_printable_bytes(crate::buffer::js_buffer_alloc(2, 0));
     assert_eq!(text(js_jsvalue_to_string(buffer)), "hi");
     assert_eq!(
         text(crate::buffer::js_value_to_string_with_encoding(buffer, 1)),

@@ -21,6 +21,13 @@ use crate::types::DOUBLE;
 /// here is a dispatch table; each module's `lower(ctx, expr)` contains the
 /// original arm bodies verbatim.
 pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // Hoisted byte-access proofs are dirtied by every executed call at the
+    // call-emission choke point and revalidated at their next use; no
+    // expression boundary refreshes them.
+    lower_expr_inner(ctx, expr)
+}
+
+fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // #7590: TAKE the "this expression's value is discarded" flag before doing
     // anything else. `lower_stmt` set it for the statement's own expression;
     // taking it here means every operand lowered below reads `false`, so a

@@ -100,9 +100,9 @@ pub(crate) struct ViewGuard {
     pub(super) end: u32,
     /// The symbolic end `B + c` of the bare accesses indexed below `B`.
     pub(super) sym: Option<(Symbol, i64)>,
-    /// The view's data-pointer slot and the header length's offset from it.
-    pub(super) data_slot: String,
-    pub(super) length_offset: i32,
+    /// The rooted receiver whose live length the guard reads independently
+    /// of its hoisted data address.
+    pub(super) receiver_id: u32,
 }
 
 impl ArrayRecv {
@@ -912,7 +912,7 @@ pub(super) fn view_of(ctx: &FnCtx<'_>, id: u32) -> Option<crate::native_value::B
         return None;
     }
     let (_, view) = crate::expr::proven_view_receiver(ctx, &Expr::LocalGet(id))?;
-    (view.length_slot.is_none()
+    (view.length_slot.is_some()
         && view.view_byte_offset.unwrap_or(0) == 0
         && view.element_width_bytes.is_power_of_two())
     .then_some(view)
@@ -1283,20 +1283,37 @@ pub(crate) fn note_view_access(ctx: &mut FnCtx<'_>) {
     stat(2, 1);
 }
 
+/// Region admission consumes the current cell length. The data address never
+/// serves as a header address, including for a view over another owner's store.
+fn live_byte_length(ctx: &mut FnCtx<'_>, id: u32) -> Result<String> {
+    // Sealed view proofs already carry the canonical length slot. Read that
+    // word independently of data; a helper call would prevent LLVM from
+    // hoisting the unchanged bounds through the inner loop.
+    if let Some(view) = view_of(ctx, id).filter(|view| view.length_fixed) {
+        if let Some(slot) = view.length_slot {
+            return Ok(ctx.block().load(I32, &slot));
+        }
+    }
+    let value = lower_expr(ctx, &Expr::LocalGet(id))?;
+    let raw = crate::expr::unbox_to_i64(ctx.block(), &value);
+    let receiver = ctx.block().inttoptr(I64, &raw);
+    Ok(ctx
+        .block()
+        .call(I32, "js_buffer_length", &[(crate::types::PTR, &receiver)]))
+}
+
 /// Load a symbolic bound at every guard/re-check. Even a sealed view's
 /// guard uses a plain load; only its ordinary length reads may be invariant.
 fn emit_symbol(ctx: &mut FnCtx<'_>, s: Symbol) -> Result<String> {
     match s {
         Symbol::Local(id) => lower_expr(ctx, &Expr::LocalGet(id)),
         Symbol::ViewLength(id, sub) => {
-            let v = view_of(ctx, id).expect("a length bound has a proven view");
+            let _ = view_of(ctx, id).expect("a length bound has a proven view");
             let subtract = sub
                 .map(|k| lower_expr(ctx, &Expr::LocalGet(k)))
                 .transpose()?;
+            let len = live_byte_length(ctx, id)?;
             let blk = ctx.block();
-            let data = blk.load(crate::types::PTR, &v.data_slot);
-            let ptr = blk.gep(I8, &data, &[(I32, &v.length_offset_from_data.to_string())]);
-            let len = blk.load(I32, &ptr);
             // Match .length's unsigned u32 interpretation. A signed source
             // could compare equal to a negative target length and admit a
             // view larger than the signed index domain.
@@ -1316,11 +1333,8 @@ fn emit_view_guard(ctx: &mut FnCtx<'_>, v: &ViewGuard, counter_ok: &str) -> Resu
         Some((b, c)) => Some((emit_symbol(ctx, b)?, c)),
         None => None,
     };
+    let len = live_byte_length(ctx, v.receiver_id)?;
     let blk = ctx.block();
-    let data = blk.load(crate::types::PTR, &v.data_slot);
-    let len_ptr = blk.gep(I8, &data, &[(I32, &v.length_offset.to_string())]);
-    // A plain load: the length changes when the buffer is detached.
-    let len = blk.load(I32, &len_ptr);
     let mut ok = counter_ok.to_string();
     if v.end > 0 {
         let c = blk.icmp_ule(I32, &v.end.to_string(), &len);
@@ -1590,11 +1604,15 @@ pub(crate) fn emit_poll_refresh(ctx: &mut FnCtx<'_>) -> Result<()> {
         let mut base = blk.array_elements_addr(&h);
         if a.typed {
             // A Float64Array (never moved) keeps its inline base.
-            let ty_addr = blk.sub(I64, &h, "8");
+            let ty_addr = blk.sub(I64, &h, &crate::runtime_abi::GC_HEADER_SIZE.to_string());
             let ty_ptr = blk.inttoptr(I64, &ty_addr);
             let ty = blk.load(I8, &ty_ptr);
-            let is_ta = blk.icmp_eq(I8, &ty, "11"); // GC_TYPE_TYPED_ARRAY
-            let ta_base = blk.add(I64, &h, "16");
+            let is_ta = blk.icmp_eq(
+                I8,
+                &ty,
+                &crate::expr::byte_cell::brand_for_kind(7).to_string(),
+            );
+            let ta_base = blk.add(I64, &h, &crate::runtime_abi::BYTES_STORE.to_string());
             base = blk.select(I1, &is_ta, I64, &ta_base, &base);
         }
         blk.store(I64, &base, &a.base_slot);

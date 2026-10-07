@@ -19,7 +19,7 @@ pub extern "C" fn js_typed_array_length(ta: *const TypedArrayHeader) -> i32 {
                 crate::native_arena::native_view_from_typed_array(ta),
             );
         }
-        (*ta).length as i32
+        crate::typedarray::element_length(ta) as i32
     }
 }
 
@@ -52,7 +52,7 @@ pub extern "C" fn js_typed_array_get(ta: *const TypedArrayHeader, index: i32) ->
                 crate::native_arena::native_view_from_typed_array(ta),
             );
         }
-        if index < 0 || index as u32 >= (*ta).length {
+        if index < 0 || index as u32 >= crate::typedarray::element_length(ta) {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
         load_at(ta, index as usize)
@@ -76,10 +76,19 @@ pub fn bigint_lane_bits(ta: *const TypedArrayHeader, index: i32) -> Option<u64> 
                 crate::native_arena::native_view_from_typed_array(ta),
             );
         }
-        if index as u32 >= (*ta).length || !matches!((*ta).kind, KIND_BIGINT64 | KIND_BIGUINT64) {
+        if index as u32 >= crate::typedarray::element_length(ta)
+            || !matches!(
+                crate::typedarray::element_kind(ta),
+                KIND_BIGINT64 | KIND_BIGUINT64
+            )
+        {
             return None;
         }
-        let slot = data_ptr(ta).add(index as usize * (*ta).elem_size as usize);
+        let slot = data_ptr(ta).add(
+            index as usize
+                * crate::typedarray::elem_size_for_kind(crate::typedarray::element_kind(ta))
+                    as usize,
+        );
         Some(*(slot as *const u64))
     }
 }
@@ -96,10 +105,19 @@ pub fn set_bigint_lane_bits(ta: *mut TypedArrayHeader, index: i32, bits: u64) ->
                 crate::native_arena::native_view_from_typed_array(ta as *const TypedArrayHeader),
             );
         }
-        if index as u32 >= (*ta).length || !matches!((*ta).kind, KIND_BIGINT64 | KIND_BIGUINT64) {
+        if index as u32 >= crate::typedarray::element_length(ta)
+            || !matches!(
+                crate::typedarray::element_kind(ta),
+                KIND_BIGINT64 | KIND_BIGUINT64
+            )
+        {
             return false;
         }
-        let slot = data_ptr(ta).add(index as usize * (*ta).elem_size as usize);
+        let slot = data_ptr(ta).add(
+            index as usize
+                * crate::typedarray::elem_size_for_kind(crate::typedarray::element_kind(ta))
+                    as usize,
+        );
         *(slot as *mut u64) = bits;
         true
     }
@@ -125,7 +143,7 @@ pub extern "C" fn js_typed_array_read_int32(ta: *const TypedArrayHeader, index: 
     // runtime kind, which INCLUDES a receiver that is not actually a typed array
     // — TS types are erased, so `function f(S: Int32Array){ S[i] }` compiles the
     // statically-emitted checked path but may be called with an arbitrary value.
-    // `js_typed_array_get` would read `(*ta).length` (a `TypedArrayHeader` field)
+    // `js_typed_array_get` would read `crate::typedarray::element_length(ta)` (a `TypedArrayHeader` field)
     // before classifying the pointer, type-confusing the first GC-header read.
     // Validate the raw pointer is a registered typed array first (the same gate
     // `strict_typed_array_from_raw` uses — it covers native/inline views); a
@@ -144,7 +162,7 @@ pub extern "C" fn js_typed_array_read_int32(ta: *const TypedArrayHeader, index: 
         // (`ToInt32(undefined) == 0` for OOB); everything else falls through
         // to `js_typed_array_get`, which classifies the receiver BEFORE any
         // header deref (`classify_element_read_receiver`, #8109) — the
-        // "would read `(*ta).length` before classifying" hazard in the doc
+        // "would read `crate::typedarray::element_length(ta)` before classifying" hazard in the doc
         // above predates that classifier.
         let addr = ta as usize;
         if crate::buffer::is_registered_buffer(addr) {
@@ -228,21 +246,11 @@ pub extern "C" fn js_typed_array_read_f64(ta: *const TypedArrayHeader, index: i3
 static KEEP_JS_TYPED_ARRAY_READ_F64: extern "C" fn(*const TypedArrayHeader, i32) -> f64 =
     js_typed_array_read_f64;
 
-/// #9342 — slow arm of the codegen inline `Uint8Array` byte read
-/// (`perry-codegen/src/expr/u8_buffer_read.rs`). Primes the
-/// `PERRY_U8_INLINE_CACHE` admission cache when the receiver satisfies its
-/// contract (live u8-marked owning inline-storage `BufferHeader`), then
-/// delegates to [`js_uint8array_index_get_value`] for bug-exact element semantics —
-/// including the #8111 stale-static-hint recovery for rebound receivers.
+/// Access uses the common cell header and current owner storage. Any derived
+/// data address is consumed without collection, or retained with its owner.
 #[no_mangle]
 pub extern "C" fn js_u8_buffer_read_f64(target: *const TypedArrayHeader, index: i32) -> f64 {
     let addr = strip_nanbox(target as u64);
-    // Pointer-tagged registry handles share this ABI with heap receivers but
-    // are never dereferenceable. Keep them out of the admission probe; the
-    // delegated getter below owns their ordinary JS-value semantics.
-    if crate::value::addr_class::is_above_handle_band(addr) {
-        crate::buffer::u8_inline_cache_try_prime(addr);
-    }
     js_uint8array_index_get_value(addr as *const TypedArrayHeader, index)
 }
 
@@ -296,7 +304,7 @@ pub extern "C" fn js_typed_array_at(ta: *const TypedArrayHeader, index: f64) -> 
                 crate::native_arena::native_view_from_typed_array(ta),
             );
         }
-        let len = (*ta).length as i64;
+        let len = crate::typedarray::element_length(ta) as i64;
         let mut idx = index as i64;
         if idx < 0 {
             idx += len;
@@ -346,8 +354,8 @@ pub extern "C" fn js_typed_array_set(ta: *mut TypedArrayHeader, index: i32, valu
                 crate::native_arena::native_view_from_typed_array(ta as *const TypedArrayHeader),
             );
         }
-        let kind = (*ta).kind;
-        if index < 0 || index as u32 >= (*ta).length {
+        let kind = crate::typedarray::element_kind(ta);
+        if index < 0 || index as u32 >= crate::typedarray::element_length(ta) {
             // TypedArraySetElement (§10.4.5.16) runs `ToNumber`/`ToBigInt` on
             // the value BEFORE the IsValidIntegerIndex bounds check, then drops
             // the store for an invalid index. The coercion is only observable
@@ -452,8 +460,8 @@ unsafe fn classify_set_source(source_value: f64, dst_kind: u8) -> Option<SetSour
     // Source is another typed array (coercion-free; buffered for overlap safety).
     if lookup_typed_array_kind(addr).is_some() {
         let src = addr as *const TypedArrayHeader;
-        bigint::validate_copy_kinds(dst_kind, (*src).kind);
-        let len = (*src).length as usize;
+        bigint::validate_copy_kinds(dst_kind, crate::typedarray::element_kind(src));
+        let len = crate::typedarray::element_length(src) as usize;
         let mut out = Vec::with_capacity(len);
         for i in 0..len {
             out.push(load_at(src, i));
@@ -471,7 +479,7 @@ unsafe fn classify_set_source(source_value: f64, dst_kind: u8) -> Option<SetSour
             bigint::throw_bigint_number_mix();
         }
         let src = addr as *const crate::buffer::BufferHeader;
-        let len = (*src).length as usize;
+        let len = crate::typedarray::element_length(src) as usize;
         let mut out = Vec::with_capacity(len);
         for i in 0..len {
             out.push(crate::buffer::js_buffer_get(src, i as i32) as f64);
@@ -528,11 +536,11 @@ pub extern "C" fn js_typed_array_set_from(
         offset_num.trunc()
     };
     unsafe {
-        let source = match classify_set_source(source_value, (*ta).kind) {
+        let source = match classify_set_source(source_value, crate::typedarray::element_kind(ta)) {
             Some(s) => s,
             None => throw_type_error(b"Cannot convert undefined or null to object"),
         };
-        let target_len = (*ta).length as f64;
+        let target_len = crate::typedarray::element_length(ta) as f64;
         let src_len = match &source {
             SetSource::Buffered(v) => v.len(),
             SetSource::Array(_, n) | SetSource::ArrayLike(_, n) => *n,
@@ -544,7 +552,7 @@ pub extern "C" fn js_typed_array_set_from(
             throw_range_error(b"offset is out of bounds");
         }
         let base = offset as usize;
-        let is_bigint = bigint::is_bigint_kind((*ta).kind);
+        let is_bigint = bigint::is_bigint_kind(crate::typedarray::element_kind(ta));
         match source {
             // Coercion-free numeric source: bulk store (already overlap-buffered).
             SetSource::Buffered(elems) => {
@@ -604,7 +612,7 @@ pub extern "C" fn js_typed_array_copy_within(
         return ta;
     }
     unsafe {
-        let len = (*ta).length as i64;
+        let len = crate::typedarray::element_length(ta) as i64;
         let rel = |v: f64| -> i64 {
             let n = jsvalue_to_f64(v);
             if n.is_nan() {
@@ -657,7 +665,7 @@ pub extern "C" fn js_uint8array_get(target: *const TypedArrayHeader, index: i32)
     // #10515: an admitted owning byte view answers before the typed-array and
     // buffer registry probes (`is_registered_buffer_slow` was ~48% of a
     // `Uint8Array`-parameter loop).
-    if let Some(byte) = crate::buffer::cached_u8_read(addr, index) {
+    if let Some(byte) = crate::buffer::admitted_u8_read(addr, index) {
         return i32::from(byte);
     }
     let value = if lookup_typed_array_kind(addr).is_some() {
@@ -712,7 +720,7 @@ pub extern "C" fn js_uint8array_index_get_value(
     if addr < 0x1000 || index < 0 {
         return undefined;
     }
-    if let Some(byte) = crate::buffer::cached_u8_read(addr, index) {
+    if let Some(byte) = crate::buffer::admitted_u8_read(addr, index) {
         return f64::from(byte);
     }
     if lookup_typed_array_kind(addr).is_some() {
@@ -748,7 +756,7 @@ pub extern "C" fn js_uint8array_set(target: *mut TypedArrayHeader, index: i32, v
     if addr < 0x1000 || index < 0 {
         return;
     }
-    if crate::buffer::cached_u8_write(addr, index, (value & 0xFF) as u8) {
+    if crate::buffer::admitted_u8_write(addr, index, (value & 0xFF) as u8) {
         return;
     }
     if lookup_typed_array_kind(addr).is_some() {
@@ -766,7 +774,7 @@ pub extern "C" fn js_uint8array_set(target: *mut TypedArrayHeader, index: i32, v
         //
         // * `TypedArray` — a `GC_TYPE_TYPED_ARRAY` / `GC_TYPE_NATIVE_TYPED_
         //   VIEW` header the registry missed; `js_typed_array_set` is
-        //   kind-generic (it reads `(*ta).kind`).
+        //   kind-generic (it reads `crate::typedarray::element_kind(ta)`).
         // * `Ordinary` — a plain array, object, or anything else indexable.
         //   `js_dyn_index_set` is the `[[Set]]` this access would have taken
         //   if the stale static hint had never existed.
@@ -806,17 +814,10 @@ pub extern "C" fn js_ta_read_receiver_is_kind(boxed: f64, kind: i32) -> i32 {
     if !crate::buffer::header_is_owned(addr) {
         return 0;
     }
-    let header = unsafe { crate::gc::header_from_trusted_user_ptr(addr as *const u8) };
-    if unsafe { (*header).obj_type } != crate::gc::GC_TYPE_TYPED_ARRAY {
-        return 0;
-    }
-    let ta = addr as *const TypedArrayHeader;
-    unsafe {
-        i32::from(
-            (*ta).kind == kind as u8
-                && matches!((*ta).storage, TA_STORAGE_INLINE | TA_STORAGE_RESOLVED),
-        )
-    }
+    i32::from(
+        lookup_typed_array_kind(addr) == Some(kind as u8)
+            && !crate::native_arena::is_native_typed_view(addr as *const TypedArrayHeader),
+    )
 }
 
 #[cfg(feature = "keepalive-anchors")]

@@ -454,7 +454,7 @@ fn hooked_vtable<T: StreamPayload>() -> &'static PayloadVTable {
 
 /// Is `word` (an `ObjectMeta.native_state`) a payload cell reference? The
 /// one predicate the meta record's GC arm uses to decide whether the word is
-/// an edge. Only payload families store a POINTER_TAG-boxed word there.
+/// an edge. Native payloads and weak collections use this same GC-edge encoding.
 #[inline(always)]
 pub(crate) fn is_payload_state_word(word: u64) -> bool {
     word & crate::value::TAG_MASK == crate::value::POINTER_TAG

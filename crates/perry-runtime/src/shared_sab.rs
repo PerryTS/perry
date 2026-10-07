@@ -70,7 +70,7 @@ fn registry() -> &'static Mutex<HashSet<usize>> {
 /// `GC_TYPE_BUFFER` header. 8-byte alignment keeps the data region 8-aligned for
 /// `BigInt64Array` / `Float64` atomic slots.
 fn sab_layout(size: u32) -> Layout {
-    let total = GC_HEADER_SIZE + std::mem::size_of::<BufferHeader>() + size as usize;
+    let total = GC_HEADER_SIZE + crate::codegen_abi::BYTES_STORE + size as usize;
     Layout::from_size_align(total, 8).expect("shared SAB layout")
 }
 
@@ -78,7 +78,7 @@ fn sab_layout(size: u32) -> Layout {
 /// `SharedArrayBuffer`. The returned address is stable for the life of the
 /// process and valid (readable / writable) from every thread, so views built
 /// over it on different agents alias the same physical bytes.
-pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
+fn alloc_shared_block(size: u32) -> *mut BufferHeader {
     // RULE 3 (`object/shape_rule3.rs`): a SAB's bytes are `alloc_zeroed`, so
     // unlike an arena buffer a 2 GiB request really can succeed — and it would
     // write `0x8000_0000` into `capacity` at payload `+4`, which the emitted
@@ -117,8 +117,14 @@ pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
         (*header)._reserved = 0;
         // Total block size, for honesty; a non-arena object is never block-walked.
         (*header).size = total.min(u32::MAX as usize) as u32;
-        (*buf).length = size;
-        (*buf).capacity = size;
+        std::ptr::write(
+            buf,
+            BufferHeader {
+                length: size,
+                capacity: size,
+                link: 0,
+            },
+        );
         // #7645 custody: the PIN goes through `gc::pin`, not a raw flag write.
         // `pin_object_non_young` is the right variant and its safety contract
         // is met by construction — this block is a process-global
@@ -141,18 +147,66 @@ pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
     buf
 }
 
+/// Each agent owns its metadata while sharing only the process store.
+pub fn alloc_shared_sab(size: u32) -> *mut BufferHeader {
+    let block = alloc_shared_block(size);
+    wrap_shared_sab(block as usize)
+}
+
+pub(crate) fn wrap_shared_sab(block: usize) -> *mut BufferHeader {
+    assert!(registry()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&block));
+    unsafe {
+        let owner = crate::buffer::header::buffer_alloc_foreign(
+            crate::buffer::store::owner_data(block),
+            (*(block as *const BufferHeader)).length,
+        );
+        crate::buffer::mark_as_shared_array_buffer(owner as usize);
+        owner
+    }
+}
+
+/// Proven process capability, never an agent's own mutable cell address.
+pub(crate) fn shared_store_owner(addr: usize) -> Option<usize> {
+    if !SHARED_SAB_NONEMPTY.load(Ordering::Acquire) {
+        return None;
+    }
+    if registry()
+        .lock()
+        .map(|r| r.contains(&addr))
+        .unwrap_or(false)
+    {
+        return Some(addr);
+    }
+    unsafe {
+        let h = crate::value::addr_class::try_read_tracked_gc_header(addr)?.as_ref();
+        if h.obj_type != GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER
+            || h._reserved & crate::codegen_abi::BYTES_OUT_OF_LINE == 0
+        {
+            return None;
+        }
+        let block = (crate::buffer::store::owner_data(addr) as usize)
+            .checked_sub(crate::codegen_abi::BYTES_STORE)?;
+        registry().lock().ok()?.contains(&block).then_some(block)
+    }
+}
+
 /// True if `addr` is a process-global `SharedArrayBuffer` backing store, as
 /// opposed to a thread-local SharedArrayBuffer copy (`slice`, structuredClone)
 /// that carries the same brand: the cross-thread serializer passes the former
 /// by reference and must deep-copy the latter.
+pub(crate) fn is_shared_block(addr: usize) -> bool {
+    SHARED_SAB_NONEMPTY.load(Ordering::Acquire)
+        && registry()
+            .lock()
+            .map(|r| r.contains(&addr))
+            .unwrap_or(false)
+}
+
 pub fn is_shared_sab(addr: usize) -> bool {
-    if !SHARED_SAB_NONEMPTY.load(Ordering::Acquire) {
-        return false;
-    }
-    registry()
-        .lock()
-        .map(|r| r.contains(&addr))
-        .unwrap_or(false)
+    shared_store_owner(addr).is_some()
 }
 
 #[cfg(test)]
@@ -178,7 +232,7 @@ mod header_survival_tests {
     /// this word.
     #[test]
     fn no_collector_writes_a_shared_sab_header() {
-        let buf = alloc_shared_sab(64);
+        let buf = alloc_shared_block(64);
         let header_addr = (buf as usize) - GC_HEADER_SIZE;
         // Read as one 64-bit word: obj_type, gc_flags, _reserved and size
         // together, so a write to ANY of them is caught.
@@ -229,10 +283,15 @@ mod header_survival_tests {
                 std::thread::spawn(move || {
                     // Touch the shared bytes the way an Atomics user would,
                     // so the SAB is live across this thread's collections.
-                    let data = crate::buffer::buffer_data(addr as *const BufferHeader);
-                    for i in 0..64u8 {
-                        unsafe { std::ptr::write_volatile((data as *mut u8).add(i as usize), i) };
-                    }
+                    crate::buffer::bytes::no_gc(|_| {
+                        let data = unsafe { crate::buffer::store::owner_data(addr) };
+                        for i in 0..64u8 {
+                            unsafe {
+                                (*(data.add(i as usize) as *const std::sync::atomic::AtomicU8))
+                                    .store(i, Ordering::Relaxed)
+                            };
+                        }
+                    });
                     churn();
                 })
             })

@@ -601,15 +601,8 @@ fn erased_symbol_annotation_does_not_bypass_runtime_validation() {
     );
 }
 
-/// #T2: a typed-array receiver behind an erased type leaves through the
-/// site's single exit instead of the eight inline element-kind arms.
-///
-/// This replaces `unknown_numeric_read_brands_typed_arrays_off_the_header_
-/// not_the_kind_cache`, which pinned that inlined ladder. The brand is still
-/// read off the managed `GcHeader` and never from the 64-slot direct-mapped
-/// `PERRY_TA_KIND_CACHE` — the runtime exit reads the `TypedArrayHeader`
-/// itself, exactly as the inline arms did — so the #5525 property that made
-/// them worth inlining is intact; only their per-site code is gone.
+/// An erased typed-array receiver uses one runtime exit. Its element kind
+/// comes from the common header type byte.
 #[test]
 fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
     let ir = ir_for(
@@ -675,7 +668,7 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
     let ta_brand = super::class_field_barrier_tests::block_body(&ir, "tav.brand.")
         .expect("the typed-array brand block exists");
     assert!(
-        ta_brand.contains(", 11") && ta_brand.contains("arrlike.elem.kind"),
+        ta_brand.contains(", 64") && ta_brand.contains("arrlike.elem.kind"),
         "the arm must test GC_TYPE_TYPED_ARRAY and decline to the object arm:\n{ta_brand}"
     );
     assert_eq!(
@@ -684,21 +677,17 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
             ta_brand.matches("load ").count(),
             ta_brand.matches("and i1").count()
         ),
-        (1, 0, 0),
-        "the brand test must be ONE compare on the already-loaded tag — no kind \
+        (2, 0, 1),
+        "the brand test must be a type-byte family guard on the already-loaded tag — no kind \
          load, no view-guard load, no AND-reduction:\n{ta_brand}"
     );
     let ta_kind_guard = super::class_field_barrier_tests::block_body(&ir, "tav.kind_guard.")
         .expect("the typed-array kind/bounds guard exists");
+    assert!(ta_kind_guard.contains("bytes.header") && ta_kind_guard.contains("arrlike.ic.miss"),
+        "canonical header resolution must stay behind the type proof and retain the single miss exit: {ta_kind_guard}");
     assert!(
-        ta_kind_guard
-            .lines()
-            .any(|l| l.contains("add i64") && l.trim_end().ends_with(", 10"))
-            && ta_kind_guard.matches("load i8").count() >= 2
-            && ta_kind_guard.contains("arrlike.ic.miss"),
-        "inline storage (the receiver's storage byte at header + 10, #10516), the \
-         element kind and the bounds check belong behind the tag, and their miss \
-         leaves through the single exit:\n{ta_kind_guard}"
+        !ta_kind_guard.contains("load i8"),
+        "no separate storage/kind payload loads: {ta_kind_guard}"
     );
     let w4 = super::class_field_barrier_tests::block_body(&ir, "tav.w4.")
         .expect("the 4-byte width block exists");
@@ -834,16 +823,15 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 ", {}",
                 crate::runtime_abi::GC_TYPE_BUFFER_UINT8ARRAY
             ))
-            && u8_brand.contains("@PERRY_U8_INLINE_CACHE")
+            && !u8_brand.contains("@PERRY_U8_INLINE_CACHE")
             && u8_brand.contains("arrlike.u8.view"),
         "the byte-view arm must test both byte-view brands and the admission \
          cache, and offer a miss to the pointer-layout arm:\n{u8_brand}"
     );
-    let view = super::class_field_barrier_tests::block_body(&ir, "u8v.header.")
+    let view = super::class_field_barrier_tests::block_body(&ir, "bytes.view.owner.")
         .expect("the pointer-layout guard exists");
     assert!(
-        view.contains(&format!(", {}", crate::runtime_abi::GC_BUFFER_VIEW_DATA))
-            && view.contains("arrlike.ic.miss"),
+        view.contains("load i64") && view.contains("arrlike.ic.miss"),
         "view misses must guard the pointer layout before reaching the load: {view}"
     );
     let load = super::class_field_barrier_tests::block_body(&ir, "arrlike.u8.view_load.")

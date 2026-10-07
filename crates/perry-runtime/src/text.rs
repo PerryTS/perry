@@ -1092,14 +1092,14 @@ mod tests {
         // "ABCD" on a little-endian host, "DCBA" on a big-endian one — the
         // assertion compares against the backing rather than a fixed literal.
         crate::typedarray::js_typed_array_set(words, 0, 0x4443_4241u32 as f64);
-        let expected = unsafe {
-            std::str::from_utf8(std::slice::from_raw_parts(
-                crate::buffer::buffer_data(ab),
-                4,
-            ))
+        let expected = crate::buffer::bytes::no_gc(|scope| {
+            std::str::from_utf8(
+                &crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(ab as i64), scope)
+                    .unwrap()[..4],
+            )
             .expect("ASCII bytes")
             .to_string()
-        };
+        });
         assert_ne!(
             expected, "\0\0\0\0",
             "the typed-array store must have reached the ArrayBuffer"

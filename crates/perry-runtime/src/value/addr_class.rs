@@ -394,6 +394,27 @@ pub(crate) fn tracked_header_probe_count_for_tests() -> u64 {
 pub(crate) unsafe fn try_read_tracked_gc_header(
     addr: usize,
 ) -> Option<std::ptr::NonNull<GcHeader>> {
+    tracked_gc_header_admitting(addr, crate::gc::gc_type_is_known)
+}
+
+/// [`try_read_tracked_gc_header`] for a caller that only accepts one type id:
+/// the type admission is `obj_type == kind` instead of the generic known-type
+/// test, with the same allocator proof and size/arena checks. `kind` must be a
+/// known type id.
+#[inline]
+pub(crate) unsafe fn try_read_tracked_gc_header_of_type(
+    addr: usize,
+    kind: u8,
+) -> Option<std::ptr::NonNull<GcHeader>> {
+    debug_assert!(crate::gc::gc_type_is_known(kind));
+    tracked_gc_header_admitting(addr, |obj_type| obj_type == kind)
+}
+
+#[inline(always)]
+unsafe fn tracked_gc_header_admitting(
+    addr: usize,
+    admit: impl Fn(u8) -> bool,
+) -> Option<std::ptr::NonNull<GcHeader>> {
     #[cfg(test)]
     TRACKED_HEADER_PROBES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let (header_addr, storage) = classify_tracked_gc_header_with(
@@ -406,7 +427,7 @@ pub(crate) unsafe fn try_read_tracked_gc_header(
     }
     let header = std::ptr::NonNull::new(header_addr as *mut GcHeader)?;
     let header_ptr = header.as_ptr();
-    if crate::gc::gc_type_info((*header_ptr).obj_type).is_none() {
+    if !admit((*header_ptr).obj_type) {
         return None;
     }
     if ((*header_ptr).size as usize) < GC_HEADER_SIZE {

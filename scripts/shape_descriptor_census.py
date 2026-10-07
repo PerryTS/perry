@@ -260,14 +260,16 @@ def assert_rule3_licenses_the_kind_fence_removal(rule3: str, gc_types: str) -> N
     # #7024/#7025's failure mode, a green gate whose subject never ran. The
     # table only licenses anything while it still classifies every kind the
     # collector knows about, so re-derive that set from `gc/types.rs` instead
-    # of trusting a count. (`GC_TYPE_MAX` is an alias, not a kind, and is
-    # excluded by requiring a literal discriminant.)
+    # of trusting a count. A kind's discriminant is a decimal or hex literal or
+    # a codegen ABI constant; `GC_TYPE_MAX` is the id bound, not a kind.
     declared = {
         name
         for name, _ in re.findall(
-            r"pub\s+const\s+(GC_TYPE_\w+)\s*:\s*u8\s*=\s*(\d+)\s*;", gc_types
+            r"pub\s+const\s+(GC_TYPE_\w+)\s*:\s*u8\s*=\s*"
+            r"(0x[0-9A-Fa-f]+|\d+|crate::codegen_abi::\w+)\s*;",
+            gc_types,
         )
-    }
+    } - {"GC_TYPE_MAX"}
     if not declared:
         raise CensusError("gc/types.rs declares no GC kinds: rule-3 coverage is unknowable")
     classified = {kind for kind, _ in verdicts}

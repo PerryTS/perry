@@ -14,16 +14,22 @@ fn external_buffer_producer_returns_headered_distinct_cells_and_exact_bytes() {
         let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(ptr as usize) }
             .expect("external-buffer producer must return an allocator-owned cell");
         assert_eq!(unsafe { header.as_ref().obj_type }, GC_TYPE_BUFFER);
-        let payload_size =
-            std::mem::size_of::<crate::buffer::BufferHeader>() + std::mem::size_of::<*mut u8>();
+        let payload_size = crate::codegen_abi::BYTES_STORE + std::mem::size_of::<*mut u8>();
         assert!(unsafe { header.as_ref().size as usize } >= GC_HEADER_SIZE + payload_size);
         assert_eq!(
-            unsafe { *((ptr as *const u8).add(8) as *const *mut u8) },
+            unsafe { *((ptr as *const u8).add(crate::codegen_abi::BYTES_STORE) as *const *mut u8) },
             bytes.as_mut_ptr(),
             "the native address must live in this cell, not a side table"
         );
         assert!(crate::buffer::is_foreign_backed_buffer(ptr as usize));
-        assert_eq!(crate::buffer::buffer_data(ptr), bytes.as_ptr());
+        crate::buffer::bytes::no_gc(|_| {
+            assert_eq!(
+                crate::buffer::bytes::span(crate::value::js_nanbox_pointer(ptr as i64), false)
+                    .unwrap()
+                    .ptr as *const u8,
+                bytes.as_ptr()
+            )
+        });
         assert_eq!(unsafe { (*ptr).length }, 4);
     }
     assert_ne!(first, second, "two wrappers must have distinct identity");
@@ -51,7 +57,14 @@ fn external_buffer_cell_survives_gc_then_releases_its_registration() {
     );
     assert!(crate::buffer::is_registered_buffer(addr));
     assert!(crate::buffer::is_foreign_backed_buffer(addr));
-    assert_eq!(crate::buffer::buffer_data(ptr), bytes.as_ptr());
+    crate::buffer::bytes::no_gc(|_| {
+        assert_eq!(
+            crate::buffer::bytes::span(crate::value::js_nanbox_pointer(ptr as i64), false)
+                .unwrap()
+                .ptr as *const u8,
+            bytes.as_ptr()
+        )
+    });
     assert_eq!(crate::buffer::js_buffer_get(ptr, 1), 29);
     js_shadow_slot_set(0, crate::value::TAG_UNDEFINED);
     let _ =

@@ -276,7 +276,7 @@ pub unsafe extern "C" fn node_api_create_buffer_from_arraybuffer(
         Ok(owner) if crate::buffer::is_array_buffer(owner) => owner,
         _ => return set_status(env, NapiStatus::InvalidArg, "value must be an ArrayBuffer"),
     };
-    let available = (*(owner as *const BufferHeader)).length as usize;
+    let available = crate::buffer::store::length(owner);
     let window = byte_offset
         .checked_add(byte_length)
         .filter(|end| *end <= available)
@@ -438,9 +438,20 @@ pub unsafe extern "C" fn napi_get_typedarray_info(
             let refreshed_owner = pointer_owner(env, typedarray).unwrap_or(owner);
             let refreshed = refreshed_owner as *mut TypedArrayHeader;
             (
-                std::mem::transmute::<i32, NapiTypedarrayType>((*refreshed).kind as i32),
-                (*refreshed).length as usize,
-                crate::typedarray::data_ptr_mut(refreshed).cast::<c_void>(),
+                std::mem::transmute::<i32, NapiTypedarrayType>(
+                    crate::typedarray::lookup_typed_array_kind(refreshed as usize)
+                        .expect("admitted typed-array kind") as i32,
+                ),
+                crate::buffer::store::length(refreshed as usize),
+                crate::buffer::bytes::no_gc(|_| {
+                    crate::buffer::bytes::span(
+                        crate::value::js_nanbox_pointer(refreshed as i64),
+                        false,
+                    )
+                    .expect("admitted typed-array span")
+                    .ptr
+                    .cast::<c_void>()
+                }),
                 backing,
                 crate::typedarray_view::js_typed_array_byte_offset(refreshed) as usize,
             )

@@ -1,13 +1,13 @@
 //! ArrayBuffer detach state and `ArrayBuffer.prototype.transfer` /
 //! `transferToFixedLength` / `detached` (ES2024).
 //!
-//! Owned native bytes are freed (or taken by the transfer message). Legacy
-//! buffer bytes live INLINE after the `BufferHeader` in a GC old-arena
+//! Owned native bytes are freed (or taken by the transfer message). Inline
+//! bytes live after the common 16-byte cell in a GC old-arena
 //! allocation, so a detached buffer's storage cannot be individually freed
 //! while the JS object is alive. Detach therefore (1) zeroes the header —
-//! the pre-existing structuredClone-transfer convention, which makes
-//! `byteLength` read 0 — (2) zeroes every registered view's length so views
-//! over the detached buffer report length 0 like Node, and (3) hands the
+//! the structuredClone-transfer convention, which makes `byteLength` read 0 —
+//! (2) marks the owner detached, which its views check on access, and
+//! (3) hands the
 //! page-aligned interior of the payload back to the OS with `madvise`, so a
 //! large detached buffer stops costing RSS immediately even while the
 //! ArrayBuffer object itself is still reachable. The GcHeader `size` field
@@ -22,12 +22,10 @@ pub(crate) const DETACHED: u16 = 1 << 14;
 /// Detached state is born and dies with the store owner, never its address.
 #[inline]
 pub fn is_detached_buffer(addr: usize) -> bool {
-    if !super::is_registered_buffer(addr) {
+    if super::header::byte_cell_type(addr).is_none() {
         return false;
     }
-    unsafe {
-        (*crate::gc::header_from_trusted_user_ptr(addr as *const u8))._reserved & DETACHED != 0
-    }
+    unsafe { (*super::store::header(super::store::owner(addr)))._reserved & DETACHED != 0 }
 }
 
 /// DetachArrayBuffer(buffer): idempotent.
@@ -39,8 +37,7 @@ pub fn detach_array_buffer(addr: usize) {
     let buf = backing as *mut BufferHeader;
     let capacity = unsafe { (*buf).capacity };
     unsafe {
-        (*buf).length = 0;
-        (*buf).capacity = 0;
+        super::store::clear_owner_extent(buf as usize);
     }
     #[cfg(test)]
     let mark_detached = !super::bytes::b4_sabotage("detach_mark");
@@ -54,26 +51,21 @@ pub fn detach_array_buffer(addr: usize) {
                 DETACHED;
         }
     }
-    // Buffer-shaped views (`new Uint8Array(ab)`, DataView slices): zero their
-    // own header lengths so `.length`/`.byteLength` report 0 and every indexed
-    // access is out-of-bounds, matching Node's view-over-detached semantics.
-    // Independent ArrayBuffer.slice copies are never in the view table.
-    super::view::for_each_view(backing, |view_ptr, _info| unsafe {
-        (*(view_ptr as *mut BufferHeader)).length = 0;
-    });
-    // Typed-array views (`new Float32Array(ab, ...)`) record their backing in
-    // a separate side table; zero those lengths too.
-    crate::typedarray_view::zero_views_of_detached_backing(addr);
-    if backing != addr {
-        crate::typedarray_view::zero_views_of_detached_backing(backing);
-    }
     // Native-owned bytes are released on detach unless the message took them.
     drop(super::header::take_owned_backing(backing));
     // External ArrayBuffers borrow addon-owned memory. Detaching severs the
     // JavaScript view but must never decommit pages which Perry did not
     // allocate; the registered finalizer still receives the original pointer.
-    if !super::is_foreign_backed_buffer(backing) {
-        decommit_payload_pages(buffer_data_mut(buf), capacity as usize);
+    #[cfg(test)]
+    let retain_pinned_inline = !super::bytes::b4_sabotage("inline_detach_decommit");
+    #[cfg(not(test))]
+    let retain_pinned_inline = true;
+    if !super::is_foreign_backed_buffer(backing)
+        && (!super::bytes::has_pins(backing) || !retain_pinned_inline)
+    {
+        super::bytes::no_gc(|_| unsafe {
+            decommit_payload_pages(super::store::owner_data(backing), capacity as usize);
+        });
     }
 }
 
@@ -172,6 +164,8 @@ fn throw_type_error(message: &str) -> ! {
 /// a RangeError) — while `transferToFixedLength` always yields a fixed-length
 /// one. Over a fixed-length source the two are identical.
 pub(crate) fn array_buffer_transfer(addr: usize, args: &[f64], preserve_resizability: bool) -> f64 {
+    let handles = crate::gc::RuntimeHandleScope::new();
+    let source = handles.root_raw_mut_ptr(addr as *mut BufferHeader);
     // ES2024 ArrayBufferCopyAndDetach ordering: ToIndex(newLength) runs FIRST
     // — it can execute user code (`valueOf`) that detaches this very buffer —
     // and IsDetachedBuffer is checked after, so a mid-coercion detach is
@@ -186,7 +180,7 @@ pub(crate) fn array_buffer_transfer(addr: usize, args: &[f64], preserve_resizabi
         throw_type_error("Cannot perform ArrayBuffer.prototype.transfer on a detached ArrayBuffer");
     }
     let src = addr as *mut BufferHeader;
-    let old_len = unsafe { (*src).length } as i32;
+    let old_len = unsafe { super::store::length(src as usize) } as i32;
     let new_len = requested_len.unwrap_or(old_len);
     let preserved_max = if preserve_resizability {
         super::resizable_max_byte_length(addr)
@@ -210,13 +204,16 @@ pub(crate) fn array_buffer_transfer(addr: usize, args: &[f64], preserve_resizabi
     };
     let copy_len = old_len.min(new_len);
     if copy_len > 0 {
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                buffer_data(src),
-                buffer_data_mut(dst),
-                copy_len as usize,
-            );
-        }
+        super::bytes::no_gc(|scope| unsafe {
+            let src = super::bytes::bytes(
+                crate::value::js_nanbox_pointer(source.get_raw_mut_ptr::<BufferHeader>() as i64),
+                scope,
+            )
+            .unwrap();
+            let dst = super::bytes::bytes_mut(crate::value::js_nanbox_pointer(dst as i64), scope)
+                .unwrap();
+            dst[..copy_len as usize].copy_from_slice(&src[..copy_len as usize]);
+        });
     }
     detach_array_buffer(addr);
     f64::from_bits(crate::value::JSValue::pointer(dst as *mut u8).bits())

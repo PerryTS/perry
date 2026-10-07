@@ -131,7 +131,7 @@ fn test_plausible_gc_header_still_accepts_variable_size_types() {
 #[test]
 fn test_plausible_gc_header_rejects_malloc_only_type_in_arena() {
     let mut fabricated = GcHeader {
-        obj_type: GC_TYPE_NATIVE_POD_VIEW,
+        obj_type: crate::gc::GC_TYPE_NATIVE_HANDLE,
         gc_flags: GC_FLAG_ARENA,
         _reserved: 0,
         size: 32,

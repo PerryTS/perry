@@ -2876,7 +2876,7 @@ fn typed_array_alloc_always_carries_a_real_typed_array_gc_header() {
         };
         assert_eq!(
             header.obj_type,
-            crate::gc::GC_TYPE_TYPED_ARRAY,
+            crate::typedarray::type_for_kind(kind),
             "a typed array must be a GC-heap object tagged GC_TYPE_TYPED_ARRAY \
              (kind={kind}, length={length}); an off-GC-heap tier makes the \
              plain-array index guard sniff unrelated bytes at addr-8 (#6136)",
@@ -2891,7 +2891,7 @@ fn typed_array_alloc_always_carries_a_real_typed_array_gc_header() {
         // The header's size must cover the elements, not just the header: a
         // relocation that copied only the header would leave the elements zeroed.
         let min_total = crate::gc::GC_HEADER_SIZE
-            + std::mem::size_of::<crate::typedarray::TypedArrayHeader>()
+            + crate::codegen_abi::BYTES_STORE
             + (length as usize) * elem_size;
         assert!(
             header.size as usize >= min_total,

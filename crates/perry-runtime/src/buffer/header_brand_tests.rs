@@ -96,41 +96,30 @@ fn a_uint8array_mark_does_not_demote_a_key_brand() {
     assert!(!is_uint8array_buffer(plain));
 }
 
-/// The one POINTER-tagged value with no `GcHeader` is a `Box`-leaked symbol,
-/// whose `addr - 8` can hold any byte. Forge exactly that: a non-GC block whose
-/// "header" says Uint8Array and whose first word is `SYMBOL_MAGIC`. The header
-/// read alone would call it a buffer; the symbol screen plus the ownership
-/// check must not. Delete either and this fails.
+/// Persistent symbols have an honest GC_TYPE_SYMBOL prefix. Brand probes
+/// consult that prefix even when payload bytes resemble a BufferHeader.
 #[test]
-fn a_headerless_symbol_whose_preceding_byte_looks_like_a_brand_is_not_a_buffer() {
-    let block: Box<[u64; 4]> = Box::new([
-        GC_TYPE_BUFFER_UINT8ARRAY as u64,
-        crate::symbol::SYMBOL_MAGIC as u64,
-        0,
-        0,
-    ]);
-    let base = Box::into_raw(block) as usize;
-    let addr = base + crate::gc::GC_HEADER_SIZE;
-    assert_eq!(
-        unsafe { crate::value::addr_class::try_read_gc_header(addr) }.map(|h| h.obj_type),
-        Some(GC_TYPE_BUFFER_UINT8ARRAY),
-        "fixture premise: the bare header read sees a buffer brand"
-    );
+fn a_persistent_symbol_is_rejected_by_its_header_brand() {
+    let symbol = crate::symbol::well_known_symbol("iterator");
+    let addr = symbol as usize;
+    let header = unsafe { crate::gc::header_from_trusted_user_ptr(symbol.cast()) };
+    assert_eq!(unsafe { (*header).obj_type }, crate::gc::GC_TYPE_SYMBOL);
     assert!(!is_registered_buffer(addr));
     assert!(!is_uint8array_buffer(addr));
     assert_eq!(crate::typedarray::lookup_typed_array_kind(addr), None);
-    drop(unsafe { Box::from_raw(base as *mut [u64; 4]) });
 }
 
-/// A real buffer whose `length` equals `SYMBOL_MAGIC` passes the screen's
-/// "maybe a symbol" arm and must still be recognised through the ownership
-/// check (only the length word is set; no bytes are touched).
+/// A real buffer's payload is never used to screen its header brand.
 #[test]
 fn a_buffer_whose_length_word_equals_the_symbol_magic_is_still_a_buffer() {
     let buf = buffer_alloc(8);
-    let saved = unsafe { (*buf).length };
-    unsafe { (*buf).length = crate::symbol::SYMBOL_MAGIC };
+    let saved = unsafe { super::store::length(buf as usize) as u32 };
+    unsafe {
+        super::store::set_length(buf as usize, crate::symbol::SYMBOL_MAGIC);
+    }
     let seen = is_registered_buffer(buf as usize);
-    unsafe { (*buf).length = saved };
+    unsafe {
+        super::store::set_length(buf as usize, saved);
+    }
     assert!(seen);
 }

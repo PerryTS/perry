@@ -3,8 +3,8 @@
 
 use super::*;
 use crate::buffer::{
-    buffer_data_mut, js_array_buffer_new, js_buffer_alloc, js_buffer_slice, js_data_view_new,
-    js_uint8array_alloc, BufferHeader,
+    js_array_buffer_new, js_buffer_alloc, js_buffer_slice, js_data_view_new, js_uint8array_alloc,
+    BufferHeader,
 };
 
 const UNDEFINED: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -20,7 +20,11 @@ fn heap_string(text: &[u8]) -> f64 {
 
 fn fill(buf: *mut BufferHeader, bytes: &[u8]) {
     // GC_STORE_AUDIT(POINTER_FREE): raw test bytes into a byte payload.
-    unsafe { std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer_data_mut(buf), bytes.len()) };
+    crate::buffer::bytes::no_gc(|scope| unsafe {
+        crate::buffer::bytes::bytes_mut(crate::value::js_nanbox_pointer(buf as i64), scope)
+            .unwrap()
+            .copy_from_slice(bytes)
+    });
 }
 
 fn written(chunk: f64, encoding: f64) -> Vec<u8> {

@@ -10,23 +10,20 @@
 //! next microtask-pump drain for automatic cycles.
 
 use crate::array::{
-    js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64, js_array_set_f64,
-    ArrayHeader,
+    js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64, ArrayHeader,
 };
 use crate::object::{
-    js_object_alloc_with_shape, js_object_get_field_by_name, js_object_set_field,
-    js_object_set_field_by_name, ObjectHeader,
+    js_object_alloc_with_shape, js_object_get_field_by_name, js_object_set_field, ObjectHeader,
 };
 use crate::value::{
     js_nanbox_get_pointer, JSValue, BIGINT_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK,
 };
 use std::cell::RefCell;
 
-mod index;
 mod operations;
 /// #7900: weak-to-strong READ barrier. See the module for the full argument.
 mod read_barrier;
-pub(crate) use index::clear_weak_collection_indexes;
+pub(crate) mod storage;
 pub use operations::{js_weakmap_delete, js_weakmap_get, js_weakmap_has, js_weakmap_set};
 pub(crate) mod sliced;
 #[cfg(test)]
@@ -48,13 +45,6 @@ const FINREG_RECORD_SHAPE_ID: u32 = 0x7FFF_FE14;
 pub const CLASS_ID_WEAKREF: u32 = 0xFFFF_0064;
 pub const CLASS_ID_FINALIZATION_REGISTRY: u32 = 0xFFFF_0065;
 pub const CLASS_ID_FINALIZATION_RECORD: u32 = 0xFFFF_002B;
-/// A single WeakMap/WeakSet entry. Field 0 holds the key — a *weak* slot,
-/// skipped by the GC's strong-edge scanners exactly like a WeakRef target or a
-/// finalization record's target (see `is_weak_target_trace_slot`). Field 1
-/// holds the value (strong; for a WeakSet it is `undefined`). When the key is
-/// collected the post-mark pass tombstones both fields to `undefined`, which
-/// the lookups treat as an empty slot. Issue #2656.
-pub const CLASS_ID_WEAK_ENTRY: u32 = 0xFFFF_002C;
 
 const WEAKREF_TARGET_FIELD: usize = 0;
 const FINREG_CALLBACK_FIELD: usize = 0;
@@ -76,15 +66,13 @@ thread_local! {
     static PENDING_FINALIZATION_JOBS: RefCell<Vec<PendingFinalizationJob>> =
         const { RefCell::new(Vec::new()) };
     /// Registry of every live weak-target HOLDER object on this thread — a
-    /// WeakRef (`CLASS_ID_WEAKREF`), a FinalizationRegistry
-    /// (`CLASS_ID_FINALIZATION_REGISTRY`), or a WeakMap/WeakSet entry
-    /// (`CLASS_ID_WEAK_ENTRY`) — keyed by the holder's `ObjectHeader` USER
+    /// WeakRef (`CLASS_ID_WEAKREF`) or FinalizationRegistry
+    /// (`CLASS_ID_FINALIZATION_REGISTRY`) — keyed by the holder's `ObjectHeader` USER
     /// address (the same address the copied-minor pointer classifier and the
     /// arena walk observe). Replaces the old one-way `bool` latch (#6182):
     ///
-    /// * `weak_target_holders_allocated()` = "registry non-empty", so a
-    ///   program whose only WeakMap died stops paying the copied-minor weak
-    ///   cost once its entries are pruned (the bool latched forever).
+    /// * `weak_target_holders_allocated()` = "registry non-empty", so a program whose
+    ///   weak wrappers died stops paying this cost after they are pruned.
     /// * `process_weak_targets_from_registry` iterates ONLY these holders
     ///   instead of walking every object in the arena, and classifies weak
     ///   targets with the copy's O(1) page-metadata classifier instead of a
@@ -105,8 +93,7 @@ pub(crate) fn weak_target_holders_allocated() -> bool {
 }
 
 /// Register a freshly-allocated weak-target holder by its `ObjectHeader` user
-/// address (called at the WeakRef / FinalizationRegistry / WeakMap-WeakSet
-/// entry alloc sites, after the holder's `class_id` is stamped).
+/// address (called at WeakRef / FinalizationRegistry allocation sites).
 fn weak_holder_register(holder: *const ObjectHeader) {
     WEAK_HOLDERS.with(|holders| {
         holders.borrow_mut().insert(holder as usize);
@@ -128,8 +115,12 @@ pub(crate) fn weak_wrapper_kind(obj: *const ObjectHeader) -> Option<WeakWrapperK
     match unsafe { (*obj).class_id } {
         CLASS_ID_WEAKREF => Some(WeakWrapperKind::WeakRef),
         CLASS_ID_FINALIZATION_REGISTRY => Some(WeakWrapperKind::FinalizationRegistry),
-        CLASS_ID_WEAKMAP => Some(WeakWrapperKind::WeakMap),
-        CLASS_ID_WEAKSET => Some(WeakWrapperKind::WeakSet),
+        CLASS_ID_WEAKMAP if unsafe { storage::collection_brand(obj) } == Some(CLASS_ID_WEAKMAP) => {
+            Some(WeakWrapperKind::WeakMap)
+        }
+        CLASS_ID_WEAKSET if unsafe { storage::collection_brand(obj) } == Some(CLASS_ID_WEAKSET) => {
+            Some(WeakWrapperKind::WeakSet)
+        }
         _ => None,
     }
 }
@@ -156,27 +147,17 @@ pub(crate) fn weak_collection_entries(obj: *const ObjectHeader) -> Vec<(f64, f64
     }
 
     unsafe {
-        let entries_ptr = entries_array(obj as *mut ObjectHeader);
-        if entries_ptr.is_null() {
+        let store = storage::owned_storage(obj);
+        if store.is_null() {
             return Vec::new();
         }
-        let len = js_array_length(entries_ptr) as usize;
-        let mut entries = Vec::with_capacity(len);
-        for i in 0..len {
-            let entry = weak_entry_at(entries_ptr, i);
-            if entry.is_null() {
-                continue;
-            }
-            let key_bits = object_field_bits(entry, WEAK_ENTRY_KEY_FIELD);
-            if key_bits == TAG_UNDEFINED {
-                continue; // tombstoned (key collected)
-            }
-            entries.push((
-                f64::from_bits(key_bits),
-                f64::from_bits(object_field_bits(entry, WEAK_ENTRY_VALUE_FIELD)),
-            ));
-        }
-        entries
+        (0..(*store).len)
+            .filter_map(|i| {
+                let entry = &*(*store).entries().add(i as usize);
+                (entry.key != TAG_UNDEFINED)
+                    .then(|| (f64::from_bits(entry.key), f64::from_bits(entry.value)))
+            })
+            .collect()
     }
 }
 
@@ -187,7 +168,15 @@ fn weakref_type_error(message: &str) -> ! {
     crate::exception::js_throw(f64::from_bits(err_val.bits()))
 }
 
+#[inline]
 fn is_valid_weak_target(value: f64) -> bool {
+    // Every pointer identity is weakly holdable except a registered Symbol.
+    // Class references need their registry proof only in the immediate lane.
+    let bits = value.to_bits();
+    if bits & TAG_MASK == POINTER_TAG {
+        let ptr = (bits & POINTER_MASK) as usize;
+        return ptr != 0 && !crate::symbol::is_global_registered_symbol(ptr);
+    }
     if crate::value::is_js_handle(value) {
         return true;
     }
@@ -228,13 +217,7 @@ fn is_valid_weak_target(value: f64) -> bool {
         }
     }
 
-    let jv = JSValue::from_bits(value.to_bits());
-    if !jv.is_pointer() {
-        return false;
-    }
-
-    let ptr = (jv.bits() & POINTER_MASK) as usize;
-    ptr != 0 && !crate::symbol::is_global_registered_symbol(ptr)
+    false
 }
 
 fn is_undefined_value(value: f64) -> bool {
@@ -326,7 +309,7 @@ unsafe fn header_is_live(header: *mut crate::gc::GcHeader) -> bool {
     (*header).gc_flags & (crate::gc::GC_FLAG_MARKED | crate::gc::GC_FLAG_PINNED) != 0
 }
 
-fn weak_target_should_clear(
+pub(crate) fn weak_target_should_clear(
     target_bits: u64,
     valid_ptrs: &crate::gc::ValidPointerSet,
     minor_only: bool,
@@ -341,8 +324,11 @@ fn weak_target_should_clear(
     let Some(ptr) = heap_ptr_from_tagged_bits(target_bits) else {
         return false;
     };
+    if crate::value::addr_class::is_proxy_id_band(ptr) {
+        return !crate::proxy::gc_weak_key_is_live(target_bits, minor_only);
+    }
     if !valid_ptrs.contains(&ptr) {
-        return true;
+        return !crate::symbol::is_well_known_symbol(ptr);
     }
     if minor_only && !crate::arena::pointer_in_nursery(ptr) {
         return false;
@@ -356,19 +342,22 @@ fn weak_target_should_clear(
 /// Parent-only half of [`is_weak_target_trace_slot`]: can `header` own a weak
 /// target slot at all?
 ///
-/// Exactly the three classes the slot predicate recognises. A `false` here
+/// Exactly the classes and owned storage the slot predicate recognises. A `false` here
 /// proves `is_weak_target_trace_slot` is `false` for EVERY slot of this
 /// object, which lets a scan that walks hundreds of slots per parent decide it
 /// once instead of per slot.
 #[inline]
 pub(crate) unsafe fn header_may_hold_weak_target_slots(header: *mut crate::gc::GcHeader) -> bool {
+    if !header.is_null() && (*header).obj_type == crate::gc::GC_TYPE_WEAK_STORAGE {
+        return true;
+    }
     if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
         return false;
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
     matches!(
         (*obj).class_id,
-        CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY | CLASS_ID_FINALIZATION_RECORD
+        CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_RECORD
     )
 }
 
@@ -384,13 +373,16 @@ pub(crate) unsafe fn header_may_hold_weak_target_slots(header: *mut crate::gc::G
 /// `header` is null or a readable GC header.
 #[inline]
 pub(crate) unsafe fn is_weak_holder_header(header: *mut crate::gc::GcHeader) -> bool {
+    if !header.is_null() && (*header).obj_type == crate::gc::GC_TYPE_WEAK_STORAGE {
+        return true;
+    }
     if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
         return false;
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
     matches!(
         (*obj).class_id,
-        CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY | CLASS_ID_FINALIZATION_RECORD
+        CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_RECORD
     )
 }
 
@@ -399,15 +391,24 @@ pub(crate) unsafe fn is_weak_target_trace_slot(
     header: *mut crate::gc::GcHeader,
     slot: *mut u64,
 ) -> bool {
+    if !header.is_null() && (*header).obj_type == crate::gc::GC_TYPE_WEAK_STORAGE {
+        let table = (header as *mut u8)
+            .add(crate::gc::GC_HEADER_SIZE)
+            .cast::<storage::WeakStorage>();
+        let offset = (slot as usize).wrapping_sub((*table).entries() as usize);
+        return offset < (*table).len as usize * std::mem::size_of::<storage::Entry>()
+            && offset % std::mem::size_of::<u64>() == 0
+            && (*(*table)
+                .entries()
+                .add(offset / std::mem::size_of::<storage::Entry>()))
+            .key != TAG_UNDEFINED;
+    }
     if header.is_null() || (*header).obj_type != crate::gc::GC_TYPE_OBJECT {
         return false;
     }
     let obj = (header as *mut u8).add(crate::gc::GC_HEADER_SIZE) as *mut ObjectHeader;
     let class_id = (*obj).class_id;
-    if !matches!(
-        class_id,
-        CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY | CLASS_ID_FINALIZATION_RECORD
-    ) {
+    if !matches!(class_id, CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_RECORD) {
         return false;
     }
     is_weak_branded_target_trace_slot(obj, class_id, slot)
@@ -431,11 +432,8 @@ unsafe fn is_weak_branded_target_trace_slot(
     // reads the arms below used to make were three probes.
     let live_slots = crate::object::object_live_slot_count(obj);
     match class_id {
-        // Field 0 is the weak target for both: WeakRef's referent and a
-        // WeakMap/WeakSet entry's key.
-        CLASS_ID_WEAKREF | CLASS_ID_WEAK_ENTRY => {
-            live_slots > 0 && slot == object_field_slot(obj, 0)
-        }
+        // Field 0 is the WeakRef referent.
+        CLASS_ID_WEAKREF => live_slots > 0 && slot == object_field_slot(obj, 0),
         // A finalization record's target (field 0) AND its unregister token
         // (field 1) are both weak. The spec's [[UnregisterToken]] is an
         // ephemeron-style weak slot; tracing it strongly made the canonical
@@ -864,7 +862,10 @@ impl WeakLiveness for CopiedMinorLiveness<'_> {
 ///   to old-gen would be silently dropped from the map on the next copied minor.
 ///   Only nursery/survivor targets — which this minor DID trace — may be judged
 ///   dead by their mark bit.
-fn weak_target_should_clear_copied(target_bits: u64, ptrs: &crate::gc::CopyingPointerSet) -> bool {
+pub(crate) fn weak_target_should_clear_copied(
+    target_bits: u64,
+    ptrs: &crate::gc::CopyingPointerSet,
+) -> bool {
     if target_bits == TAG_UNDEFINED {
         return false;
     }
@@ -986,7 +987,7 @@ unsafe fn resolve_weak_holder_full(
     let obj = addr as *mut ObjectHeader;
     if !matches!(
         (*obj).class_id,
-        CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_REGISTRY | CLASS_ID_WEAK_ENTRY
+        CLASS_ID_WEAKREF | CLASS_ID_FINALIZATION_REGISTRY
     ) {
         return HolderDisposition::Drop;
     }
@@ -1050,7 +1051,7 @@ pub(crate) fn process_weak_targets_from_registry(
 }
 
 /// Dispatch a single live weak holder (WeakRef / FinalizationRegistry /
-/// WeakMap-WeakSet entry) to its tombstone helper. Shared by both passes; the
+/// FinalizationRegistry) to its tombstone helper. Shared by both passes; the
 /// liveness strategy is the only thing that differs.
 #[inline]
 unsafe fn dispatch_weak_holder(
@@ -1063,10 +1064,6 @@ unsafe fn dispatch_weak_holder(
         CLASS_ID_FINALIZATION_REGISTRY => {
             process_finreg_after_mark(obj, liveness, enqueue_callbacks)
         }
-        // Each WeakMap/WeakSet entry is its own GcHeader-backed object; the
-        // weak key slot's address is repaired by the copy/rewrite pass before
-        // this pass reads it.
-        CLASS_ID_WEAK_ENTRY => process_weak_entry_after_mark(obj, liveness),
         _ => {}
     }
 }
@@ -1083,7 +1080,6 @@ pub(crate) fn scan_weak_holders_roots_mut(visitor: &mut crate::gc::RuntimeRootVi
         return;
     }
     // Derived key bits cannot survive relocation and must never be traced.
-    index::clear_weak_collection_indexes();
     WEAK_HOLDERS.with(|holders| {
         let mut holders = holders.borrow_mut();
         if holders.is_empty() {
@@ -1116,7 +1112,7 @@ fn rewritten_holder_addr(visitor: &mut crate::gc::RuntimeRootVisitor<'_>, addr: 
 /// fallback (non-copying) cycles via `dead_owner::prune_dead_owner_side_tables_post_trace`;
 /// the copied-minor path prunes inline in `process_weak_targets_from_registry`.
 /// Keeping the registry pruned lets `weak_target_holders_allocated()` return to
-/// zero once a transient WeakMap and its entries die.
+/// zero once its WeakRef and FinalizationRegistry holders die.
 pub(crate) fn prune_dead_weak_holders(is_dead: &dyn Fn(usize) -> bool) {
     WEAK_HOLDERS.with(|holders| {
         let mut holders = holders.borrow_mut();
@@ -1131,19 +1127,6 @@ unsafe fn process_weakref_after_mark(obj: *mut ObjectHeader, liveness: &dyn Weak
     let target_bits = object_field_bits(obj, WEAKREF_TARGET_FIELD);
     if liveness.target_should_clear(target_bits) {
         write_object_field_bits_raw(obj, WEAKREF_TARGET_FIELD, TAG_UNDEFINED);
-    }
-}
-
-/// A live WeakMap/WeakSet entry whose key was collected is tombstoned: both the
-/// key and the value slots are set to `undefined` so the value becomes
-/// collectible (next cycle) and the lookups skip the slot. The entry object
-/// itself is reclaimed when `set` reuses its array slot (or when the whole
-/// collection dies). Mirrors `process_weakref_after_mark`.
-unsafe fn process_weak_entry_after_mark(entry: *mut ObjectHeader, liveness: &dyn WeakLiveness) {
-    let key_bits = object_field_bits(entry, WEAK_ENTRY_KEY_FIELD);
-    if liveness.target_should_clear(key_bits) {
-        write_object_field_bits_raw(entry, WEAK_ENTRY_KEY_FIELD, TAG_UNDEFINED);
-        write_object_field_bits_raw(entry, WEAK_ENTRY_VALUE_FIELD, TAG_UNDEFINED);
     }
 }
 
@@ -1340,58 +1323,12 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) {
 // because the existing `js_map_set` does *content-based* equality on string-like
 // pointer keys, which incorrectly collapses two distinct empty objects (`{}`)
 // onto the same slot. WeakMap/WeakSet require *reference* equality, so we use
-// our own GC-managed weak-entry array with an identity hash index. A WeakSet
+// an object-owned GC cell with entries and identity buckets. A WeakSet
 // stores an undefined value, so only its weak key represents the member.
 // =============================================================================
 
 const WEAKMAP_SHAPE_ID: u32 = 0x7FFF_FE12;
 const WEAKSET_SHAPE_ID: u32 = 0x7FFF_FE13;
-const WEAK_ENTRY_SHAPE_ID: u32 = 0x7FFF_FE15;
-
-const WEAK_ENTRY_KEY_FIELD: usize = 0;
-const WEAK_ENTRY_VALUE_FIELD: usize = 1;
-
-/// Allocate a WeakMap/WeakSet entry object (`CLASS_ID_WEAK_ENTRY`). Field 0 is
-/// the key — a weak slot the GC's strong scanners skip (see
-/// `is_weak_target_trace_slot`), so a key reachable only through the collection
-/// is collectible. Field 1 is the value, traced strongly while the key is live.
-fn weak_entry_new(key: f64, value: f64) -> *mut ObjectHeader {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let key = scope.root_nanbox_f64(key);
-    let value = scope.root_nanbox_f64(value);
-    let packed = b"__perry_we_key\0__perry_we_value\0";
-    let entry =
-        js_object_alloc_with_shape(WEAK_ENTRY_SHAPE_ID, 2, packed.as_ptr(), packed.len() as u32);
-    // The by-index field stores and holder registration cannot collect.
-    // Reload key/value after allocation, then initialize the fresh entry.
-    js_object_set_field(
-        entry,
-        WEAK_ENTRY_KEY_FIELD as u32,
-        JSValue::from_bits(key.get_nanbox_f64().to_bits()),
-    );
-    js_object_set_field(
-        entry,
-        WEAK_ENTRY_VALUE_FIELD as u32,
-        JSValue::from_bits(value.get_nanbox_f64().to_bits()),
-    );
-    unsafe {
-        (*entry).class_id = CLASS_ID_WEAK_ENTRY;
-        crate::object::shapes::restamp_object_proto_id(entry);
-    }
-    weak_holder_register(entry);
-    entry
-}
-
-/// Read the entry-object pointer stored at `entries[i]`, or null. Entries hold
-/// `CLASS_ID_WEAK_ENTRY` object pointers (POINTER_TAG); the low 48 bits are the
-/// address regardless of tag.
-#[inline]
-unsafe fn weak_entry_at(entries: *mut ArrayHeader, i: usize) -> *mut ObjectHeader {
-    #[cfg(test)]
-    test_support::note_weak_entry_visit();
-    let v = js_array_get_f64(entries, i as u32);
-    (v.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ObjectHeader
-}
 
 // Reserved `ObjectHeader.class_id` markers for WeakMap/WeakSet instances.
 // These follow the same `0xFFFF00xx` reserved-builtin convention as
@@ -1407,47 +1344,19 @@ unsafe fn weak_entry_at(entries: *mut ArrayHeader, i: usize) -> *mut ObjectHeade
 pub const CLASS_ID_WEAKMAP: u32 = 0xFFFF_0027;
 pub const CLASS_ID_WEAKSET: u32 = 0xFFFF_0028;
 
-/// Sentinel name of the internal slot-0 field that backs a `WeakMap`/`WeakSet`
-/// with its `[k, v]`-pair entry array (`js_weakmap_new` / `js_weakset_new`).
-/// `WeakMap`/`WeakSet` are `GC_TYPE_OBJECT`s, so this is an own enumerable
-/// string key — it must NEVER surface through any enumeration surface
-/// (`Object.keys` / `Object.assign` / spread / `JSON.stringify` / `for…in` /
-/// `hasOwnProperty`). Hidden via `is_internal_runtime_key_bytes`, exactly like
-/// the `class … extends Map/Set` backing key. Internal reads go through
-/// `entries_array` by direct name lookup, so hiding it from enumeration is
-/// safe. Refs #6120.
-pub(crate) const WEAK_ENTRIES_KEY: &[u8] = b"__perry_wk_entries";
-
-unsafe fn entries_array(reg: *mut ObjectHeader) -> *mut ArrayHeader {
-    // Ordinary wrappers have a fixed internal slot. Avoid allocating a key
-    // string on every indexed operation; subclasses retain the by-name path.
-    if matches!((*reg).class_id, CLASS_ID_WEAKMAP | CLASS_ID_WEAKSET) {
-        return (object_field_bits(reg, 0) & POINTER_MASK) as *mut ArrayHeader;
-    }
-    // #6136: `js_string_from_bytes` allocates and can fire a moving minor GC,
-    // which relocates the (movable, GcHeader-backed) WeakMap/WeakSet `reg`.
-    // Root it across the allocation and re-derive before dereferencing.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let reg_handle = scope.root_raw_mut_ptr(reg);
-    let (entries_key, reg) = reg_handle.across_mut::<ObjectHeader, _>(|| {
-        crate::string::js_string_from_bytes(b"__perry_wk_entries".as_ptr(), 18)
-    });
-    let entries_val = js_object_get_field_by_name(reg, entries_key);
-    (entries_val.bits() & 0x0000_FFFF_FFFF_FFFF) as *mut ArrayHeader
-}
-
 fn weak_collection_new(shape: u32, class: u32) -> *mut ObjectHeader {
-    let packed = b"__perry_wk_entries\0";
-    let obj = js_object_alloc_with_shape(shape, 1, packed.as_ptr(), packed.len() as u32);
+    let obj = js_object_alloc_with_shape(shape, 0, std::ptr::null(), 0);
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_mut_ptr(obj);
-    let (entries, obj) = obj.across_mut::<ObjectHeader, _>(|| js_array_alloc(0));
-    js_object_set_field(obj, 0, JSValue::array_ptr(entries));
     unsafe {
-        (*obj).class_id = class;
-        crate::object::shapes::restamp_object_proto_id(obj);
+        (*obj.get_raw_mut_ptr::<ObjectHeader>()).class_id = class;
+        crate::object::shapes::restamp_object_proto_id(obj.get_raw_mut_ptr());
     }
-    obj
+    storage::initialize(
+        f64::from_bits(JSValue::pointer(obj.get_raw_mut_ptr::<ObjectHeader>().cast()).bits()),
+        class,
+    );
+    obj.get_raw_mut_ptr()
 }
 
 #[no_mangle]
@@ -1648,29 +1557,7 @@ pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_weakset_add(set: f64, value: f64) -> f64 {
-    // #7948: brand-check the receiver — the HIR fold that reaches here is keyed
-    // by BARE LOCAL NAME with no scope discrimination, so `set` may be an
-    // unrelated object (a literal, a user class instance, a parameter) whose own
-    // `add` the program meant. Reading the weak entries array by name off a
-    // foreign object answered `undefined`/`false` — a wrong answer with exit
-    // code 0. Hand it back to ordinary dynamic dispatch instead.
-    if let Some(v) = crate::object::delegate_if_not_weak_collection(set, "add", &[value]) {
-        return v;
-    }
-    // #2772: WeakSet members must "CanBeHeldWeakly" (ES2023): objects/handles
-    // AND non-registered Symbols. Throw the WeakSet-specific message *before*
-    // delegating (js_weakmap_set throws the weak-map-key message, which is wrong
-    // for a Set). Use `is_valid_weak_target` (not the Map/Set entry-object
-    // predicate, which wrongly rejected every Symbol). Validate at runtime so a
-    // value arriving through a variable/dynamic expression still throws.
-    if !is_valid_weak_target(value) {
-        throw_invalid_weakset_value();
-    }
-    // Store the member as the entry KEY (weak) with an `undefined` value. Using
-    // the member as the value too would pin it through the strong value slot and
-    // defeat weakness (#2656); a WeakSet only needs key presence, so the value
-    // is unused. `has`/`delete` match on the key alone.
-    js_weakmap_set(set, value, f64::from_bits(TAG_UNDEFINED))
+    operations::set(set, value, f64::from_bits(TAG_UNDEFINED), true)
 }
 
 #[no_mangle]

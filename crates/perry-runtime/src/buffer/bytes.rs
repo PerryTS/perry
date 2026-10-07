@@ -12,7 +12,6 @@ pub enum NotBytes {
     Foreign,
     Detached,
     Frozen,
-    PinLimit,
     UnstableForeign,
 }
 
@@ -97,52 +96,21 @@ pub(crate) fn span(value: f64, writable: bool) -> Result<Span, NotBytes> {
         return Err(NotBytes::Foreign);
     }
     let addr = value.as_pointer::<u8>() as usize;
-    let (ptr, len, owner) = if super::is_registered_buffer(addr) {
-        let owner = super::view::backing_of(addr);
-        #[cfg(test)]
-        let skip_owner_check = b4_sabotage("owner_check");
-        #[cfg(not(test))]
-        let skip_owner_check = false;
-        if !skip_owner_check
-            && (super::is_detached_buffer(owner) || super::view::is_out_of_bounds_view(addr))
-        {
-            return Err(NotBytes::Detached);
-        }
-        let b = addr as *const super::BufferHeader;
-        (
-            super::buffer_data(b) as *mut u8,
-            unsafe { (*b).length as usize },
-            owner,
-        )
-    } else if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let ta = addr as *const crate::typedarray::TypedArrayHeader;
-        let owner = if let Some(meta) = crate::typedarray_view::view_meta_of(addr) {
-            #[cfg(test)]
-            let skip_owner_check = b4_sabotage("owner_check");
-            #[cfg(not(test))]
-            let skip_owner_check = false;
-            if !skip_owner_check
-                && (super::is_detached_buffer(meta.backing)
-                    || crate::typedarray_view::is_view_out_of_bounds(addr))
-            {
-                return Err(NotBytes::Detached);
-            }
-            super::view::backing_of(meta.backing)
-        } else if crate::native_arena::is_native_typed_view(ta) {
-            let view = unsafe { &*crate::native_arena::native_view_from_typed_array(ta) };
-            let owner = unsafe { &*view.owner };
-            if owner.disposed != 0 || view.generation != owner.generation {
-                return Err(NotBytes::Detached);
-            }
-            view.owner as usize
-        } else {
-            addr
-        };
-        let bytes = unsafe { crate::typedarray::typed_array_bytes(ta) }.ok_or(NotBytes::Foreign)?;
-        (bytes.as_ptr() as *mut u8, bytes.len(), owner)
-    } else {
+    if super::header::byte_cell_type(addr).is_none() {
         return Err(NotBytes::Foreign);
-    };
+    }
+    let owner = unsafe { super::store::owner(addr) };
+    #[cfg(test)]
+    let skip_owner_check = b4_sabotage("owner_check");
+    #[cfg(not(test))]
+    let skip_owner_check = false;
+    if !skip_owner_check
+        && (super::is_detached_buffer(owner) || unsafe { super::store::out_of_bounds(addr) })
+    {
+        return Err(NotBytes::Detached);
+    }
+    let len = unsafe { super::store::length(addr) * super::store::element_size(addr) };
+    let ptr = unsafe { super::store::data(addr) };
     if writable {
         let h = unsafe { &*crate::gc::header_from_trusted_user_ptr(addr as *const u8) };
         if h._reserved & crate::gc::OBJ_FLAG_FROZEN != 0 {
@@ -156,7 +124,9 @@ pub(crate) fn span(value: f64, writable: bool) -> Result<Span, NotBytes> {
         ptr
     };
     Ok(Span {
-        ptr: if len == 0 {
+        // Empty reserved owners still have a stable address for future growth.
+        // Only a truly null external zero-length store needs a slice sentinel.
+        ptr: if ptr.is_null() {
             NonNull::<u8>::dangling().as_ptr()
         } else {
             ptr
@@ -178,27 +148,10 @@ pub unsafe fn bytes_mut<'s>(value: f64, _: &'s NoGc<'s>) -> Result<&'s mut [u8],
     Ok(std::slice::from_raw_parts_mut(span.ptr, span.len))
 }
 
-/// Preserve the existing inline-cache admission proof on the element hot path.
-/// This moves its current-layout address calculation into the access API; it
-/// adds no probe, cache, or alternative admission rule.
-///
-/// # Safety
-/// The existing u8 inline cache admitted this live owning cell, and index is
-/// in bounds. The caller holds exclusive byte access until this store ends.
-#[inline(always)]
-pub(crate) unsafe fn write_admitted_inline_byte(addr: usize, index: usize, byte: u8) {
-    no_gc(|_| {
-        *((addr as *mut super::BufferHeader)
-            .add(1)
-            .cast::<u8>()
-            .add(index)) = byte;
-    });
-}
-
 // Bits 9..13 hold up to 31 nested byte pins. Bit 14 is detached state for
 // byte-family cells (unused by NativeArena owners). Bit 15
 // preserves a pre-existing permanent GC pin. Nested byte pins share the owner;
-// no address registry or latch is introduced. Overflow is refused, never wraps.
+// overflow uses the owner bag; the header count never wraps.
 const PIN_ONE: u16 = 1 << 9;
 const PIN_MASK: u16 = 0x3e00;
 const WAS_PINNED: u16 = 0x8000;
@@ -236,7 +189,11 @@ impl Pinned {
 }
 
 pub fn pin(value: f64) -> Result<Pinned, NotBytes> {
-    let span = span(value, true)?;
+    pin_access(value, true)
+}
+
+fn pin_access(value: f64, writable: bool) -> Result<Pinned, NotBytes> {
+    let span = span(value, writable)?;
     // Process-global SAB blocks are permanently rooted and never freed. Their
     // headers are shared between agents and must remain read-only. Recording
     // per-thread pin counts there would introduce a cross-thread data race.
@@ -244,7 +201,7 @@ pub fn pin(value: f64) -> Result<Pinned, NotBytes> {
         unsafe { crate::gc::header_from_trusted_user_ptr(span.owner as *const u8).cast_mut() };
     let process_shared =
         unsafe { (*owner_header).obj_type == crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER }
-            && crate::shared_sab::is_shared_sab(span.owner);
+            && crate::shared_sab::is_shared_block(span.owner);
     #[cfg(test)]
     let process_shared = process_shared && !sabotage("shared_pin_write");
     if process_shared {
@@ -260,7 +217,9 @@ pub fn pin(value: f64) -> Result<Pinned, NotBytes> {
     }
     // Rooting a wrapper cannot retain memory that an external engine can
     // reallocate. Refuse that guarantee until its owner has a retain protocol.
-    if super::is_foreign_backed_buffer(span.owner) && !super::header::has_owned_backing(span.owner)
+    if super::is_foreign_backed_buffer(span.owner)
+        && !super::header::has_owned_backing(span.owner)
+        && !super::is_shared_array_buffer(span.owner)
     {
         return Err(NotBytes::UnstableForeign);
     }
@@ -268,7 +227,25 @@ pub fn pin(value: f64) -> Result<Pinned, NotBytes> {
     unsafe {
         let h = owner_header;
         if (*h)._reserved & PIN_MASK == PIN_MASK {
-            return Err(NotBytes::PinLimit);
+            #[cfg(test)]
+            if b4_sabotage("pin_overflow") {
+                return Err(NotBytes::UnstableForeign);
+            }
+            let overflow =
+                super::store::bag_get(span.owner, super::store::PIN_OVERFLOW_KEY).unwrap_or(0.0);
+            super::store::bag_set(
+                span.owner,
+                super::store::PIN_OVERFLOW_KEY,
+                overflow + 1.0,
+                true,
+            );
+            return Ok(Pinned {
+                ptr: span.ptr,
+                len: span.len,
+                owner: span.owner,
+                thread: std::thread::current().id(),
+                _not_send: PhantomData,
+            });
         }
         if !has_pins(span.owner) {
             if (*h).gc_flags & crate::gc::GC_FLAG_PINNED != 0 {
@@ -293,6 +270,35 @@ pub fn pin(value: f64) -> Result<Pinned, NotBytes> {
         _not_send: PhantomData,
     })
 }
+
+/// Read bytes across runtime allocation. Borrowed engine memory is copied
+/// inside an allocation-free scope because it has no native retain protocol.
+pub(crate) enum ReadLease {
+    Pinned(Pinned),
+    Snapshot(Vec<u8>),
+}
+
+impl ReadLease {
+    pub(crate) fn new(value: f64) -> Result<Self, NotBytes> {
+        match pin_access(value, false) {
+            Ok(pin) => Ok(Self::Pinned(pin)),
+            Err(NotBytes::UnstableForeign) => {
+                no_gc(|scope| bytes(value, scope).map(|bytes| Self::Snapshot(bytes.to_vec())))
+            }
+            Err(error) => Err(error),
+        }
+    }
+}
+
+impl std::ops::Deref for ReadLease {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        match self {
+            Self::Pinned(pin) => unsafe { std::slice::from_raw_parts(pin.as_ptr(), pin.len()) },
+            Self::Snapshot(bytes) => bytes,
+        }
+    }
+}
 impl Drop for Pinned {
     fn drop(&mut self) {
         assert_eq!(
@@ -306,6 +312,17 @@ impl Drop for Pinned {
         unsafe {
             let h = crate::gc::header_from_trusted_user_ptr(self.owner as *const u8).cast_mut();
             assert!(has_pins(self.owner));
+            let overflow =
+                super::store::bag_get(self.owner, super::store::PIN_OVERFLOW_KEY).unwrap_or(0.0);
+            if overflow > 0.0 {
+                super::store::bag_set(
+                    self.owner,
+                    super::store::PIN_OVERFLOW_KEY,
+                    overflow - 1.0,
+                    true,
+                );
+                return;
+            }
             (*h)._reserved -= PIN_ONE;
             if !has_pins(self.owner) {
                 if (*h)._reserved & WAS_PINNED == 0 {
@@ -314,6 +331,15 @@ impl Drop for Pinned {
                 (*h)._reserved &= !WAS_PINNED;
                 if super::is_detached_buffer(self.owner) {
                     drop(super::header::take_owned_backing(self.owner));
+                    if (*h)._reserved & crate::codegen_abi::BYTES_OUT_OF_LINE == 0 {
+                        let capacity = (*h).size as usize
+                            - crate::gc::GC_HEADER_SIZE
+                            - crate::codegen_abi::BYTES_STORE;
+                        super::detach::decommit_payload_pages(
+                            super::store::owner_data(self.owner),
+                            capacity,
+                        );
+                    }
                 }
                 if (*h).obj_type == crate::gc::GC_TYPE_NATIVE_ARENA_OWNER {
                     crate::native_arena::release_disposed_bytes(
@@ -350,7 +376,14 @@ fn allocate(brand: Brand, len: usize, init: Init) -> f64 {
     let ptr = if native_fixture {
         // Test the future B3 placement through EXACTLY the same consumer.
         super::buffer_alloc_owned(len as u32, len as u32)
-    } else if matches!(brand, Brand::ArrayBuffer) {
+    } else if matches!(brand, Brand::Uint8Array) {
+        // Typed-array allocation does not participate in Buffer's pool.
+        let ptr = super::buffer_alloc(len as u32);
+        unsafe {
+            (*ptr).length = len as u32;
+        }
+        ptr
+    } else if matches!(brand, Brand::ArrayBuffer | Brand::DataView) {
         // ArrayBuffer already uses native storage on main. Keep that rule.
         super::js_array_buffer_new(len)
     } else {
@@ -363,7 +396,18 @@ fn allocate(brand: Brand, len: usize, init: Init) -> f64 {
         Brand::Buffer => (),
         Brand::Uint8Array => super::mark_as_uint8array(ptr as usize),
         Brand::ArrayBuffer => super::mark_as_array_buffer(ptr as usize),
-        Brand::DataView => super::mark_as_data_view(ptr as usize),
+        Brand::DataView => {
+            // DataView is always a view; the store itself is an ArrayBuffer.
+            super::mark_as_array_buffer(ptr as usize);
+            let view = super::store::new_view(
+                crate::gc::GC_TYPE_BUFFER_DATA_VIEW,
+                ptr as usize,
+                0,
+                len as u32,
+                false,
+            );
+            return crate::value::js_nanbox_pointer(view as i64);
+        }
     }
     f64::from_bits(JSValue::pointer(ptr.cast()).bits())
 }
@@ -371,6 +415,108 @@ fn allocate(brand: Brand, len: usize, init: Init) -> f64 {
 pub fn new_bytes(brand: Brand, len: usize, init: Init) -> (f64, Pinned) {
     let value = allocate(brand, len, init);
     (value, pin(value).expect("fresh bytes must be pinnable"))
+}
+
+/// Typed allocation through the same retained-byte capability. `length` is
+/// an element count; consumers access the result as bytes within `no_gc`.
+pub(crate) fn new_typed_bytes(kind: u8, length: u32) -> (f64, Pinned) {
+    let ptr = crate::typedarray::typed_array_alloc(kind, length);
+    let value = crate::value::js_nanbox_pointer(ptr as i64);
+    (
+        value,
+        pin(value).unwrap_or_else(|error| unsafe {
+            panic!("fresh typed bytes must be pinnable: {error:?}; kind={kind} length={length} type={} flags={} cell_len={} capacity={}",
+                (*super::store::header(ptr as usize)).obj_type,
+                (*super::store::header(ptr as usize))._reserved, (*ptr).length, (*ptr).capacity)
+        }),
+    )
+}
+
+pub(crate) fn copy_typed_range(
+    input: f64,
+    start: usize,
+    length: usize,
+    reverse: bool,
+) -> Result<f64, NotBytes> {
+    copy_typed_range_inner(input, start, length, reverse, |_| {})
+}
+
+fn copy_typed_range_inner(
+    input: f64,
+    start: usize,
+    length: usize,
+    reverse: bool,
+    after_allocation: impl FnOnce(f64),
+) -> Result<f64, NotBytes> {
+    let handles = crate::gc::RuntimeHandleScope::new();
+    #[cfg(test)]
+    let root = (!b4_sabotage("typed_copy_root")).then(|| handles.root_nanbox_f64(input));
+    #[cfg(not(test))]
+    let root = Some(handles.root_nanbox_f64(input));
+    let current = || root.as_ref().map_or(input, |root| root.get_nanbox_f64());
+    let addr = JSValue::from_bits(current().to_bits());
+    if !addr.is_pointer() {
+        return Err(NotBytes::Foreign);
+    }
+    let kind = crate::typedarray::lookup_typed_array_kind(addr.as_pointer::<u8>() as usize)
+        .ok_or(NotBytes::Foreign)?;
+    let shared = crate::typedarray::typed_array_has_shared_backing(
+        addr.as_pointer::<crate::typedarray::TypedArrayHeader>(),
+    );
+    let size = crate::typedarray::elem_size_for_kind(kind);
+    let source_len = no_gc(|scope| bytes(current(), scope).map(|bytes| bytes.len() / size))?;
+    let start = start.min(source_len);
+    let length = length.min(source_len - start);
+    let (output, pin) = new_typed_bytes(kind, length as u32);
+    after_allocation(current());
+    no_gc(|scope| {
+        if shared {
+            let source = span(current(), false)?;
+            for i in 0..length {
+                let index = start + if reverse { length - 1 - i } else { i };
+                #[cfg(test)]
+                let index = if b4_sabotage("shared_lane_copy") {
+                    0
+                } else {
+                    index
+                };
+                unsafe {
+                    crate::typedarray::copy_shared_lane(
+                        source.ptr.add(index * size),
+                        pin.as_mut_ptr().add(i * size),
+                        size,
+                        scope,
+                    );
+                }
+            }
+            return Ok(output);
+        }
+        let source = bytes(current(), scope)?;
+        let source = &source[start * size..(start + length) * size];
+        let dest = unsafe { std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()) };
+        if reverse {
+            for (dest, source) in dest
+                .chunks_exact_mut(size)
+                .zip(source.chunks_exact(size).rev())
+            {
+                dest.copy_from_slice(source);
+            }
+        } else {
+            dest.copy_from_slice(source);
+        }
+        Ok(output)
+    })
+}
+
+#[cfg(test)]
+pub(crate) fn copy_typed_range_with_collection(
+    input: f64,
+    start: usize,
+    length: usize,
+    reverse: bool,
+    collect: impl FnOnce(f64),
+) -> Result<f64, NotBytes> {
+    copy_typed_range_inner(input, start, length, reverse, collect)
 }
 
 pub fn from_slice(brand: Brand, input: &[u8]) -> f64 {
@@ -403,14 +549,64 @@ pub fn from_slice(brand: Brand, input: &[u8]) -> f64 {
 /// Copy a byte value into a new store. Root the input before allocating;
 /// resolve its span after allocation so no derived pointer crosses GC.
 pub fn copy_value(brand: Brand, input: f64) -> Result<f64, NotBytes> {
+    copy_value_inner(brand, input, 0, usize::MAX, |_| {})
+}
+
+/// Copy a clamped byte range without retaining an interior pointer across
+/// destination allocation. The source and the destination remain retained
+/// until the callback-free copy has finished.
+pub(crate) fn copy_range(
+    brand: Brand,
+    input: f64,
+    start: usize,
+    length: usize,
+) -> Result<f64, NotBytes> {
+    copy_value_inner(brand, input, start, length, |_| {})
+}
+
+fn copy_value_inner(
+    brand: Brand,
+    input: f64,
+    start: usize,
+    length: usize,
+    after_allocation: impl FnOnce(f64),
+) -> Result<f64, NotBytes> {
     let handles = crate::gc::RuntimeHandleScope::new();
-    let input = handles.root_nanbox_f64(input);
-    let len = no_gc(|scope| bytes(input.get_nanbox_f64(), scope).map(<[u8]>::len))?;
+    #[cfg(test)]
+    let root = (!b4_sabotage("copy_root")).then(|| handles.root_nanbox_f64(input));
+    #[cfg(not(test))]
+    let root = Some(handles.root_nanbox_f64(input));
+    let current = || root.as_ref().map_or(input, |root| root.get_nanbox_f64());
+    let source_len = no_gc(|scope| bytes(current(), scope).map(<[u8]>::len))?;
+    let start = start.min(source_len);
+    let len = length.min(source_len - start);
     let (output, pin) = new_bytes(brand, len, Init::Uninit);
+    let output = handles.root_nanbox_f64(output);
+    after_allocation(current());
     no_gc(|scope| {
-        let source = bytes(input.get_nanbox_f64(), scope)?;
+        let source = bytes(current(), scope)?;
         unsafe { std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()) }
-            .copy_from_slice(source);
-        Ok(output)
+            .copy_from_slice(&source[start..start + len]);
+        Ok(output.get_nanbox_f64())
     })
+}
+
+#[cfg(test)]
+pub(crate) fn copy_with_collection(
+    brand: Brand,
+    input: f64,
+    collect: impl FnOnce(f64),
+) -> Result<f64, NotBytes> {
+    copy_value_inner(brand, input, 0, usize::MAX, collect)
+}
+
+#[cfg(test)]
+pub(crate) fn copy_range_with_collection(
+    brand: Brand,
+    input: f64,
+    start: usize,
+    length: usize,
+    collect: impl FnOnce(f64),
+) -> Result<f64, NotBytes> {
+    copy_value_inner(brand, input, start, length, collect)
 }

@@ -7,13 +7,12 @@ use crate::native_value::{
     AliasState, BufferElem, BufferIndexUnit, BufferViewPointerState, BufferViewSlot, LengthSource,
     NativeOwnedViewSlot,
 };
-use crate::types::{I32, I64, I8, PTR};
+use crate::types::{I32, I64, PTR};
 
 pub(super) struct BufferViewInit {
     elem: BufferElem,
     element_width_bytes: u32,
     index_unit: BufferIndexUnit,
-    data_offset_bytes: i32,
     length_offset_from_data: i32,
     length_source: LengthSource,
     native_owner_local_id: Option<u32>,
@@ -21,7 +20,6 @@ pub(super) struct BufferViewInit {
     native_byte_length: Option<i64>,
     /// Resolve element zero through the runtime's buffer-view registry instead
     /// of assuming bytes start inline at `header + data_offset_bytes`.
-    resolve_buffer_backing: bool,
     /// See `BufferViewSlot::storage_inline_proven` — true only when the
     /// construction form proves fresh inline (non-view) storage.
     storage_inline_proven: bool,
@@ -56,43 +54,20 @@ pub(super) fn register_noalias_buffer_view(
     let blk = ctx.block();
     let handle = crate::expr::unbox_to_i64(blk, value);
     let handle_ptr = blk.inttoptr(I64, &handle);
-    let data_ptr = if init.native_owner_local_id.is_some() {
-        // Arena views store a POINTER at `data_offset_bytes` (24) rather than
-        // inline data — load through it instead of gep-ing past it.
-        let data_field = blk.gep(
-            I8,
-            &handle_ptr,
-            &[(I32, &init.data_offset_bytes.to_string())],
-        );
-        blk.load(PTR, &data_field)
-    } else if init.resolve_buffer_backing {
-        // `new Uint8Array(arrayBuffer)` has a local snapshot after its header,
-        // but reads and writes belong to the ArrayBuffer's real backing. This
-        // also covers bun:ffi external ArrayBuffers, whose bytes are not inline
-        // in the wrapper at all (#6562). Resolve once at construction and cache
-        // the stable backing pointer in the normal view slot.
-        blk.call(
-            PTR,
-            "js_native_buffer_data_ptr",
-            &[(crate::types::DOUBLE, value)],
-        )
-    } else {
-        blk.gep(
-            I8,
-            &handle_ptr,
-            &[(I32, &init.data_offset_bytes.to_string())],
-        )
-    };
+    let data_ptr = blk.call(
+        PTR,
+        "js_native_buffer_data_ptr",
+        &[(crate::types::DOUBLE, value)],
+    );
     let data_slot = ctx.func.alloca_entry(PTR);
     ctx.block().store(PTR, &data_ptr, &data_slot);
-    let length_slot = if init.native_owner_local_id.is_some() {
-        let len_field = ctx.block().gep(I8, &handle_ptr, &[(I32, "0")]);
-        let len_value = ctx.block().load(I32, &len_field);
+    let length_slot = {
+        let len_value = ctx
+            .block()
+            .call(I32, "js_buffer_length", &[(PTR, &handle_ptr)]);
         let slot = ctx.func.alloca_entry(I32);
         ctx.block().store(I32, &len_value, &slot);
         Some(slot)
-    } else {
-        None
     };
     let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
     ctx.buffer_data_slots
@@ -133,6 +108,9 @@ pub(super) fn register_noalias_buffer_view(
             length_fixed: sealed && init.native_owner_local_id.is_none(),
         },
     );
+    if ctx.native_facts.interior_byte_locals().contains(&id) {
+        crate::expr::byte_cell::retain_fresh_local_owner(ctx, value);
+    }
     if !sealed && !late && init.native_owner_local_id.is_none() {
         // Exposed from elsewhere (a closure, another function): the view
         // never serves a native access.
@@ -244,13 +222,11 @@ fn buffer_view_init_for_expr(
             elem: BufferElem::U8,
             element_width_bytes: 1,
             index_unit: BufferIndexUnit::Byte,
-            data_offset_bytes: 8,
-            length_offset_from_data: -8,
+            length_offset_from_data: 0,
             length_source: buffer_alloc_length_source(ctx, expr),
             native_owner_local_id: None,
             native_byte_offset: None,
             native_byte_length: None,
-            resolve_buffer_backing: false,
             // copyBytesFrom always allocates a fresh inline buffer.
             storage_inline_proven: true,
         }),
@@ -259,13 +235,11 @@ fn buffer_view_init_for_expr(
                 elem: BufferElem::U8,
                 element_width_bytes: 1,
                 index_unit: BufferIndexUnit::Byte,
-                data_offset_bytes: 8,
-                length_offset_from_data: -8,
+                length_offset_from_data: 0,
                 length_source: buffer_alloc_length_source(ctx, expr),
                 native_owner_local_id: None,
                 native_byte_offset: None,
                 native_byte_length: None,
-                resolve_buffer_backing: false,
                 // Buffer.alloc/allocUnsafe always allocate fresh inline bytes.
                 storage_inline_proven: true,
             })
@@ -274,13 +248,11 @@ fn buffer_view_init_for_expr(
             elem: BufferElem::U8,
             element_width_bytes: 1,
             index_unit: BufferIndexUnit::Byte,
-            data_offset_bytes: 8,
-            length_offset_from_data: -8,
+            length_offset_from_data: 0,
             length_source: buffer_alloc_length_source(ctx, expr),
             native_owner_local_id: None,
             native_byte_offset: None,
             native_byte_length: None,
-            resolve_buffer_backing: true,
             // `new Uint8Array(buffer)` is the VIEW form — only a literal
             // length (or no argument) proves inline storage.
             storage_inline_proven: ctor_arg_is_literal_length(arg.as_deref()),
@@ -291,13 +263,11 @@ fn buffer_view_init_for_expr(
                 elem,
                 element_width_bytes: width,
                 index_unit: BufferIndexUnit::Element,
-                data_offset_bytes: 16,
-                length_offset_from_data: -16,
+                length_offset_from_data: 0,
                 length_source: buffer_alloc_length_source(ctx, expr),
                 native_owner_local_id: None,
                 native_byte_offset: None,
                 native_byte_length: None,
-                resolve_buffer_backing: false,
                 // The view form (`new TA(arrayBuffer)`) and the copy forms
                 // (`new TA(typedArray)`, `new TA(arrayLike)`) all need an
                 // Object argument. A literal length is never one, and an owned
@@ -327,14 +297,12 @@ fn buffer_view_init_for_expr(
                 elem,
                 element_width_bytes: width,
                 index_unit: BufferIndexUnit::Element,
-                data_offset_bytes: 24,
                 length_offset_from_data: 0,
                 length_source: length_source_from_expr(ctx, length)
                     .unwrap_or(LengthSource::Unknown),
                 native_owner_local_id: Some(owner_local_id),
                 native_byte_offset: byte_offset_const,
                 native_byte_length,
-                resolve_buffer_backing: false,
                 // Arena views have their own owner/dispose lifecycle — never
                 // eligible for the proven checked tier.
                 storage_inline_proven: false,

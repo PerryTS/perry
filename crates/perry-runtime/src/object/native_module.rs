@@ -489,12 +489,27 @@ pub(crate) fn call_worker_threads_getter(
 }
 
 pub(crate) fn buffer_pool_size() -> f64 {
+    let constructor = BUFFER_CONSTRUCTOR_VALUE.with(Cell::get);
+    if constructor != 0 {
+        // The ordinary function property is the authority once Buffer has
+        // been materialized. Its bag also receives normal JS assignments.
+        let ptr = (constructor & crate::value::POINTER_MASK) as usize;
+        return crate::closure::closure_get_dynamic_prop(ptr, "poolSize");
+    }
     f64::from_bits(BUFFER_POOL_SIZE_BITS.with(Cell::get))
 }
 
 pub(crate) fn set_buffer_pool_size(value: f64) {
     BUFFER_POOL_SIZE_BITS.with(|slot| slot.set(value.to_bits()));
     crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
+    let constructor = BUFFER_CONSTRUCTOR_VALUE.with(Cell::get);
+    if constructor != 0 {
+        crate::closure::closure_set_dynamic_prop(
+            (constructor & crate::value::POINTER_MASK) as usize,
+            "poolSize",
+            value,
+        );
+    }
 }
 
 /// Linker-strippability vtable for every native-module behavior reachable
