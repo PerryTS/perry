@@ -1,0 +1,1 @@
+Preserve the stream chunk’s final Uint8Array brand before placement on B4. Small chunks remain independent owners and large chunks may use Native backing. Add a placement witness and a test-only wrong-brand negative control; the pre-B4 Inline-only expectation is removed.

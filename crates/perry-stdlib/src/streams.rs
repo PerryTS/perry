@@ -860,8 +860,19 @@ unsafe fn build_iter_result(value_bits: u64, done: bool) -> u64 {
 }
 
 pub(crate) unsafe fn alloc_uint8array_from_bytes(bytes: &[u8]) -> u64 {
-    perry_runtime::buffer::bytes::from_slice(perry_runtime::buffer::bytes::Brand::Uint8Array, bytes)
-        .to_bits()
+    use perry_runtime::buffer::bytes::{self, Brand};
+    // Placement sees the final brand before applying Buffer pooling policy.
+    #[cfg(test)]
+    if std::env::var("PERRY_B3_STREAM_SABOTAGE").ok().as_deref() == Some("brand") {
+        // Reproduce the old copying Buffer birth followed by rebranding.
+        let (value, pin) = bytes::new_bytes(Brand::Buffer, bytes.len(), bytes::Init::PoolCopy);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), pin.as_mut_ptr(), bytes.len());
+        perry_runtime::buffer::mark_as_uint8array(
+            JSValue::from_bits(value.to_bits()).as_pointer::<u8>() as usize,
+        );
+        return value.to_bits();
+    }
+    bytes::from_slice(Brand::Uint8Array, bytes).to_bits()
 }
 
 unsafe fn read_bytes_from_chunk(chunk_bits: u64) -> Option<Vec<u8>> {
