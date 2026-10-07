@@ -63,7 +63,7 @@ serde_json.workspace = true
 # official Windows LLVM archive does not build.
 [target.'cfg(not(windows))'.dependencies]
 inkwell = { version = "0.10.0", default-features = false, features = ["llvm22-1", "target-x86", "target-aarch64"], optional = true }
-llvm-sys = { version = "231", optional = true }
+llvm-sys = { version = "221", optional = true }
 
 # LLVM's official Windows static archives use a private /MT CRT and bundle
 # rpmalloc, while Rust's MSVC target uses /MD. Passing LLVM-owned allocations
