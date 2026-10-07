@@ -15,7 +15,8 @@
 //! value-form call returned `undefined`. It now lives with the implementations
 //! it routes to and is registered by `js_ext_http_nm_install`, the install
 //! symbol codegen emits wherever it materializes an http/https/http2 namespace
-//! or bound export — in every compile mode.
+//! or bound export, in every compile mode that routes the module to this crate
+//! (`perry_codegen::NativeRouting`).
 
 use perry_ffi::{ArrayHeader, JsValue, TransientRootScope};
 

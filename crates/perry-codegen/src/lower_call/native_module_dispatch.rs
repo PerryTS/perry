@@ -19,7 +19,9 @@ use super::{NativeArgKind, NativeModSig, NativeRetKind, NATIVE_MODULE_TABLE};
 /// Entries with `class_filter: Some("Pool")` only match when
 /// `class_name == Some("Pool")`; entries with `class_filter: None`
 /// match any class_name. More-specific entries (with class_filter)
-/// are checked first.
+/// are checked first. A row whose runtime symbol belongs to a wrapper the
+/// compile does not route (`NativeRouting::serves`) does not match: its
+/// archive is not linked, so the call takes the runtime's by-name dispatch.
 #[allow(private_interfaces)]
 pub fn native_module_lookup(
     module: &str,
@@ -41,23 +43,27 @@ pub fn native_module_lookup(
         "perry/container-compose" => "perry/compose",
         m => m,
     };
-    // First pass: look for an exact class_filter match.
-    let exact = NATIVE_MODULE_TABLE.iter().find(|sig| {
-        sig.module == normalized
-            && sig.has_receiver == has_receiver
-            && sig.method == method
-            && sig.class_filter.is_some()
-            && sig.class_filter == class_name
-    });
-    if exact.is_some() {
-        return exact;
-    }
-    // Second pass: generic (class_filter == None) entries.
-    NATIVE_MODULE_TABLE.iter().find(|sig| {
-        sig.module == normalized
-            && sig.has_receiver == has_receiver
-            && sig.method == method
-            && sig.class_filter.is_none()
+    crate::native_routing::with_program_routing(|routing| {
+        // First pass: look for an exact class_filter match.
+        let exact = NATIVE_MODULE_TABLE.iter().find(|sig| {
+            sig.module == normalized
+                && sig.has_receiver == has_receiver
+                && sig.method == method
+                && sig.class_filter.is_some()
+                && sig.class_filter == class_name
+                && routing.serves(sig.runtime)
+        });
+        if exact.is_some() {
+            return exact;
+        }
+        // Second pass: generic (class_filter == None) entries.
+        NATIVE_MODULE_TABLE.iter().find(|sig| {
+            sig.module == normalized
+                && sig.has_receiver == has_receiver
+                && sig.method == method
+                && sig.class_filter.is_none()
+                && routing.serves(sig.runtime)
+        })
     })
 }
 

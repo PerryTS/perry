@@ -125,21 +125,41 @@ pub(crate) fn well_known_flip_enabled() -> bool {
 /// perry-stdlib's copies, and these have none. perry-stdlib's bundled `net`
 /// (the other `js_net_socket_*` / `js_tls_connect`) and `ws` copies ran on
 /// tokio sockets and were strict subsets of perry-ext-net / perry-ext-ws;
-/// tokio lane L4 deleted them. A `tls` import is covered through `net`:
-/// `tls.connect` is perry-ext-net's, and its symbols route to `net`
-/// (`perry_codegen::ext_registry`).
+/// tokio lane L4 deleted them. perry-stdlib's `zlib.rs` is gone too (#12143):
+/// its compression features link perry-ext-zlib itself. A `tls` import is
+/// covered through `net`: `tls.connect` is perry-ext-net's, and its symbols
+/// route to `net` (`perry_codegen::ext_registry`).
 pub(crate) fn wrapper_is_sole_provider(module: &str) -> bool {
-    matches!(module.strip_prefix("node:").unwrap_or(module), "net" | "ws")
+    matches!(
+        module.strip_prefix("node:").unwrap_or(module),
+        "net" | "ws" | "zlib"
+    )
 }
 
-/// The modules of an iteration set the well-known flip routes to a wrapper
-/// archive: every well-known import normally, only the
-/// [`wrapper_is_sole_provider`] ones when PERRY_DISABLE_WELL_KNOWN=1.
-pub(crate) fn retain_routed(mut set: BTreeSet<String>) -> BTreeSet<String> {
-    if !well_known_flip_enabled() {
-        set.retain(|module| wrapper_is_sole_provider(module));
-    }
-    set
+/// THE routing decision: which library serves each well-known native module
+/// in this compile. Every binding in `well_known_bindings.toml` routes to its
+/// wrapper crate normally; with PERRY_DISABLE_WELL_KNOWN=1 only the
+/// [`wrapper_is_sole_provider`] ones do, and the rest are served by the
+/// bundled runtime / stdlib. Computed once per compile
+/// (`CompilationContext::native_routing`); codegen reads it for the install
+/// symbols and wrapper calls it emits, and the linker for the stdlib features
+/// and wrapper archives it links.
+pub(crate) fn native_routing() -> perry_codegen::NativeRouting {
+    let flip = well_known_flip_enabled();
+    perry_codegen::NativeRouting::new(super::well_known::iter_well_known().map(|binding| {
+        let provider = if flip || wrapper_is_sole_provider(&binding.package) {
+            perry_codegen::NativeProvider::Wrapper(binding.lib.clone())
+        } else {
+            perry_codegen::NativeProvider::Bundled
+        };
+        (binding.package.clone(), provider)
+    }))
+}
+
+/// The program's native modules ([`well_known_iteration_set`]) that the
+/// routing decision serves from a wrapper archive.
+pub(crate) fn routed_modules(ctx: &CompilationContext) -> BTreeSet<String> {
+    ctx.native_routing.routed(&well_known_iteration_set(ctx))
 }
 
 /// Name wrapper archives needed by emitted object-file symbols but absent from

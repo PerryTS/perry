@@ -989,7 +989,7 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
         ctx.native_module_imports.insert(module.to_string());
     }
     let libs = resolve_no_auto_optimized_libs(&ctx, None, OutputFormat::Json, 0);
-    let routed = super::retain_routed(well_known_iteration_set(&ctx));
+    let routed = super::routed_modules(&ctx);
 
     for (key, value) in &saved {
         set_env_var(key, value.as_deref());
@@ -1601,3 +1601,144 @@ fn hot_diag_knobs_match_the_runtime() {
 }
 
 mod no_auto_http_graph;
+
+/// Decision 69: codegen and the linker read ONE routing decision. For each
+/// representative import, in both modes and with the flip on and off, the
+/// install symbol codegen emits for the module's namespace, the entry
+/// prologue's wrapper hooks and the wrapper calls codegen may emit must name
+/// exactly the wrapper archives the linker links: auto mode links the
+/// archives of `routed_modules` (driver.rs), no-auto mode what
+/// `resolve_prebuilt_ext_libs` finds for them.
+#[test]
+fn codegen_install_symbols_match_the_linked_wrappers() {
+    let _guard = env_lock();
+    let saved: Vec<_> = [
+        "PERRY_LIB_DIR",
+        "PERRY_RUNTIME_DIR",
+        "PERRY_DISABLE_WELL_KNOWN",
+        "PERRY_NO_AUTO_OPTIMIZE",
+        "PERRY_FORCE_WELL_KNOWN",
+    ]
+    .iter()
+    .map(|k| (*k, std::env::var(k).ok()))
+    .collect();
+
+    let modules = ["http", "node:https", "net", "zlib", "ws"];
+    let dir = tempfile::tempdir().expect("tempdir");
+    for module in modules {
+        let binding = super::super::well_known::lookup_well_known(module).expect("binding");
+        let lib = dir
+            .path()
+            .join(super::super::well_known::ext_staticlib_filename(
+                &binding.lib,
+                rust_target_triple(None),
+            ));
+        std::fs::write(&lib, b"!<arch>\n").expect("write fake archive");
+    }
+    set_env_var("PERRY_LIB_DIR", dir.path().to_str());
+    set_env_var("PERRY_RUNTIME_DIR", None);
+    set_env_var("PERRY_FORCE_WELL_KNOWN", None);
+
+    // Wrapper symbols codegen emits for each module beyond its install.
+    let wrapper_calls = [
+        ("http", "js_node_http_create_server_with_options"),
+        ("net", "js_ext_net_nm_install"),
+    ];
+    let mut rows = Vec::new();
+    for no_auto in [false, true] {
+        for flip in [true, false] {
+            set_env_var("PERRY_NO_AUTO_OPTIMIZE", no_auto.then_some("1"));
+            set_env_var("PERRY_DISABLE_WELL_KNOWN", (!flip).then_some("1"));
+            let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+            for module in modules {
+                ctx.native_module_imports.insert(module.to_string());
+            }
+            let routing = &ctx.native_routing;
+            let routed = routed_modules(&ctx);
+            // The linker's wrapper archives, by lib stem.
+            let linked: std::collections::BTreeSet<String> = if no_auto {
+                resolve_prebuilt_ext_libs(&routed, None, OutputFormat::Json, 0)
+                    .iter()
+                    .map(|p| {
+                        let name = p.file_name().unwrap().to_str().unwrap();
+                        name.trim_start_matches("lib")
+                            .trim_end_matches(".a")
+                            .to_string()
+                    })
+                    .collect()
+            } else {
+                routed
+                    .iter()
+                    .map(|m| {
+                        super::super::well_known::lookup_well_known(m)
+                            .unwrap()
+                            .lib
+                            .clone()
+                    })
+                    .collect()
+            };
+            let lib_of = |m: &str| {
+                super::super::well_known::lookup_well_known(m)
+                    .unwrap()
+                    .lib
+                    .clone()
+            };
+            for module in modules {
+                let install = routing.install_symbol(module);
+                let hook = perry_codegen::ext_registry::wrapper_install_hook(&lib_of(module));
+                if linked.contains(&lib_of(module)) && hook.is_some() {
+                    assert_eq!(
+                        install, hook,
+                        "{module} (no_auto={no_auto}, flip={flip}): its wrapper is linked, \
+                         so its namespace must install the wrapper's hook"
+                    );
+                } else {
+                    assert!(
+                        install.is_none_or(|s| !s.starts_with("js_ext_")),
+                        "{module} (no_auto={no_auto}, flip={flip}): wrapper hook {install:?} \
+                         emitted, but the linker links {linked:?}"
+                    );
+                }
+                rows.push(format!("{no_auto} {flip} {module} {install:?}"));
+            }
+            for (module, symbol) in wrapper_calls {
+                assert_eq!(
+                    routing.serves(symbol),
+                    linked.contains(&lib_of(module)),
+                    "{symbol} (no_auto={no_auto}, flip={flip}): linked {linked:?}"
+                );
+            }
+            let hooks = routing
+                .wrapper_install_hooks(well_known_iteration_set(&ctx).iter().map(String::as_str));
+            let expected_hooks: Vec<String> = linked
+                .iter()
+                .filter_map(|lib| perry_codegen::ext_registry::wrapper_install_hook(lib))
+                .map(str::to_string)
+                .collect();
+            assert_eq!(hooks, expected_hooks, "no_auto={no_auto}, flip={flip}");
+        }
+    }
+
+    for (key, value) in &saved {
+        set_env_var(key, value.as_deref());
+    }
+
+    // The concrete answer, so a change to the decision itself is visible.
+    let expect = |no_auto: bool, flip: bool, module: &str| {
+        rows.iter()
+            .find(|r| r.starts_with(&format!("{no_auto} {flip} {module} ")))
+            .unwrap()
+            .clone()
+    };
+    for no_auto in [false, true] {
+        assert!(expect(no_auto, true, "http").ends_with("Some(\"js_ext_http_nm_install\")"));
+        assert!(expect(no_auto, true, "node:https").ends_with("Some(\"js_ext_http_nm_install\")"));
+        assert!(expect(no_auto, false, "http").ends_with("Some(\"js_nm_install_http\")"));
+        assert!(expect(no_auto, false, "node:https").ends_with("Some(\"js_nm_install_http\")"));
+        for flip in [true, false] {
+            assert!(expect(no_auto, flip, "zlib").ends_with("Some(\"js_ext_zlib_nm_install\")"));
+            assert!(expect(no_auto, flip, "net").ends_with("Some(\"js_ext_net_nm_install\")"));
+            assert!(expect(no_auto, flip, "ws").ends_with("None"));
+        }
+    }
+}

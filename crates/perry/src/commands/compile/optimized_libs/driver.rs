@@ -124,7 +124,7 @@ pub(crate) fn build_optimized_libs(
     // that gated the introductory cycle is now inverted:
     // `PERRY_DISABLE_WELL_KNOWN=1` reverts to perry-stdlib's
     // copies for bisection — except for the bindings that no longer have
-    // one (`net`, `ws`: `wrapper_is_sole_provider`), which route to their
+    // one (`net`, `ws`, `zlib`: `wrapper_is_sole_provider`), which route to their
     // wrapper either way. If a bundled `.a` is missing on disk,
     // each entry falls back to the perry-stdlib copy individually
     // (logged with `well-known: skipping` when verbose), so a
@@ -145,10 +145,10 @@ pub(crate) fn build_optimized_libs(
     let mut external_net_transport = false;
     // Web Fetch is selected independently from the external node:http
     // binding. `uses_fetch` adds `web-fetch` in compute_required_features.
-    // Was `if use_well_known { … }`; the gate is now per module
-    // (`retain_routed`), and the block is kept to leave the body's
+    // Was `if use_well_known { … }`; the gate is now the compile's routing
+    // decision (`routed_modules`), and the block is kept to leave the body's
     // indentation — and its blame — as it was.
-    let routed_set = retain_routed(iteration_set.clone());
+    let routed_set = routed_modules(ctx);
     {
         for module in &routed_set {
             let module_normalized = module.strip_prefix("node:").unwrap_or(module);
