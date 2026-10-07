@@ -6,8 +6,6 @@
   "crates/perry-runtime/src/node_stream_tests_extra.rs|let data = crate::buffer::js_native_buffer_data_ptr(value);": 1,
   "crates/perry-stdlib/src/fetch/body_metadata.rs|(*buf).length = body.len() as u32;": 1,
   "crates/perry-stdlib/src/fetch/body_metadata.rs|perry_runtime::buffer::buffer_data_mut(buf),": 1,
-  "crates/perry-stdlib/src/fetch/body_read.rs|(*buf).length = body.len() as u32;": 1,
-  "crates/perry-stdlib/src/fetch/body_read.rs|perry_runtime::buffer::buffer_data_mut(buf),": 1,
   "crates/perry-stdlib/src/fetch/dispatch.rs|let data = perry_runtime::buffer::buffer_data(ptr);": 1,
   "crates/perry-stdlib/src/fetch/dispatch.rs|return perry_runtime::typedarray::typed_array_bytes(ta).map(|b| b.to_vec());": 1,
   "crates/perry-stdlib/src/fetch/mod.rs|(*buf).length = body.len() as u32;": 2,

@@ -669,3 +669,6 @@ mod tests {
 
 #[cfg(feature = "node-api-host")]
 pub(crate) use header::{enqueue_all_foreign_finalizers, set_foreign_finalizer};
+
+#[cfg(test)]
+mod adopted_backing_tests;

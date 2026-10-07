@@ -1,0 +1,1 @@
+Fetch Response.arrayBuffer() now returns a real ArrayBuffer and adopts the collected native body instead of copying it. Response.bytes() uses the same byte factory; Blob bodies already retain their Vec directly. External storage accounting defers collection to safepoints.

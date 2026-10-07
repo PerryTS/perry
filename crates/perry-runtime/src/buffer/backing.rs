@@ -8,6 +8,7 @@ use std::sync::Mutex;
 pub(crate) struct Backing {
     data: *mut u8,
     capacity: u32,
+    alignment: u32,
 }
 
 // Exclusive ownership crosses the queue; no JS access remains after detach.
@@ -22,7 +23,31 @@ impl Backing {
         }
         #[cfg(test)]
         LIVE_BACKINGS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        Self { data, capacity }
+        Self {
+            data,
+            capacity,
+            alignment: 8,
+        }
+    }
+
+    /// Preserve Vec's allocator layout and spare capacity when taking custody.
+    pub(crate) fn from_vec(mut bytes: Vec<u8>) -> Self {
+        if bytes.capacity() == 0
+            || bytes.capacity() > crate::object::shape_rule3::MAX_PLUS_FOUR_WORD as usize
+            || bytes.as_ptr().align_offset(8) != 0
+        {
+            return unsafe { Self::copy(bytes.as_ptr(), bytes.len() as u32) };
+        }
+        let data = bytes.as_mut_ptr();
+        let capacity = bytes.capacity() as u32;
+        std::mem::forget(bytes);
+        #[cfg(test)]
+        LIVE_BACKINGS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Self {
+            data,
+            capacity,
+            alignment: 1,
+        }
     }
 
     fn layout(capacity: u32) -> Layout {
@@ -47,7 +72,10 @@ impl Backing {
 
 impl Drop for Backing {
     fn drop(&mut self) {
-        unsafe { dealloc(self.data, Self::layout(self.capacity)) };
+        let layout =
+            Layout::from_size_align((self.capacity as usize).max(1), self.alignment as usize)
+                .expect("buffer backing layout");
+        unsafe { dealloc(self.data, layout) };
         #[cfg(test)]
         LIVE_BACKINGS.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
     }
