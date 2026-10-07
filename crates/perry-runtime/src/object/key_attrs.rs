@@ -699,15 +699,9 @@ pub(crate) unsafe fn copy_entries(
 // Object-level readers: what a receiver's own key's attributes are.
 // ---------------------------------------------------------------------------
 
-/// Is `addr` a heap object whose attributes live with its keys? The ONE
-/// predicate that routes a descriptor LOOKUP to the keys instead of the
-/// owner-keyed tables. Every other cell kind (arrays, closures, exotic cells,
-/// typed arrays) keeps the tables for now.
-///
-/// Reads the header through the same reader the meta summary probe uses.
-/// Handle owners never reach it (they probe the tables through
-/// `get_handle_*`); anything that WRITES must use
-/// [`attrs_live_in_keys_for_install`] instead.
+/// Is `addr` an ordinary property holder whose attributes live in its keys?
+/// Every receiver kind normalizes its descriptor storage to such a holder.
+/// Reads classify known cells; installs prove allocator ownership separately.
 ///
 /// # Safety
 /// `addr` is a descriptor owner.

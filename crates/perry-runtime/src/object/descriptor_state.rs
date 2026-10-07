@@ -1047,6 +1047,7 @@ pub(crate) unsafe fn holder_key_names(bag: *const ObjectHeader, enumerable: bool
 }
 
 /// Bulk reset uses the same shape and slot edits as an individual redefine.
+#[cfg(test)]
 pub(crate) fn clear_object_descriptors(obj: usize) {
     unsafe {
         let DescriptorRoute::Keys(bag) = descriptor_route(obj);
