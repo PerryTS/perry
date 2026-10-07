@@ -2802,10 +2802,11 @@ pub(super) fn gc_bump_malloc_trigger_with_snapshot(current: usize, bytes_now: us
     // Only raise — never lower — so this can't accidentally trip a
     // pending collection that the existing trigger had already armed.
     GC_NEXT_TRIGGER_BYTES.with(|c| {
-        // Compare against the effective (budget-clamped) trigger, not the
-        // raw cell: on a small-budget device the cell's un-armed default
-        // (128 MB) would otherwise swallow every legitimate parse bump.
-        if bytes_trigger > effective_next_arena_trigger() {
+        // Compare whole-arena bytes with their own threshold. The effective
+        // trigger also clamps to the young-generation cap; comparing with
+        // that smaller value could LOWER an armed whole-arena threshold.
+        // Keep the device-budget clamp for an unarmed initializer.
+        if bytes_trigger > next_arena_trigger_base() {
             c.set(bytes_trigger);
             GC_TRIGGER_ARMED.with(|a| a.set(true));
             if !is_tiny_parse {
