@@ -189,8 +189,8 @@ pub extern "C" fn js_object_define_accessor(
         // grows the keys array and `clone_closure_rebind_this` allocates the
         // bound copies — every one of them can GC and evacuate. The receiver
         // AND the two accessor closures being installed were raw locals across
-        // all of that, so a stale getter/setter would be recorded in the
-        // descriptor table under the object's (possibly also stale) address.
+        // all of that, so a stale getter/setter would be stored in the
+        // object's (possibly also stale) holder slot.
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_value_handle = scope.root_heap_word_u64(obj_value.to_bits());
         let getter_handle = scope.root_nanbox_f64(getter);

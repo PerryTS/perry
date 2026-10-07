@@ -867,9 +867,7 @@ unsafe fn cell_chain_has_accessor(recv: f64, kind: Option<u8>, name: &[u8]) -> b
 ///   the accessor bit;
 /// * an array exotic (`Array.prototype` is one) inherits the realm default
 ///   unless the array-prototype latch is set (checked by the caller); its
-///   header's `OBJ_FLAG_ARRAY_DESCRIPTORS` or, when that is set, the
-///   descriptor owner index says it owns no accessor, and only an owner with
-///   one has its descriptor record probed for `name`.
+///   named-property holder shape answers whether `name` is an accessor.
 unsafe fn builtin_prototype_has_accessor(proto: usize, object: usize, name: &[u8]) -> Option<bool> {
     if proto == 0 {
         return None;

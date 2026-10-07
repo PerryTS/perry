@@ -566,7 +566,7 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
 /// Install a group of data descriptors without exposing intermediate states.
 /// No JS runs between entries, so one plan invalidation and semantic shape
 /// transition retire all prior observations just as repeated installs would.
-/// The per-key guard, owner index, and GC bookkeeping still run for every key.
+/// Each key updates the holder shape and the existing prototype guards.
 #[cfg(test)]
 pub(crate) fn set_property_attrs_batch(obj: usize, entries: &[(&str, PropertyAttrs)]) {
     for (key, _) in entries {
@@ -657,11 +657,8 @@ pub(crate) fn get_handle_property_attrs(handle: usize, key: &str) -> Option<Prop
 
 /// Does `owner` hold ANY property (data) descriptor?
 ///
-/// O(1) via the owner index. Callers on the `Object.keys` / `for…in` array
-/// path used to answer this with
-/// `property_descriptors.keys().any(|(ptr, _)| *ptr == owner)` — an O(total
-/// descriptors in the program) walk, per enumeration, to decide whether a
-/// per-index `enumerable` check was needed at all.
+/// Read the holder shape summary to decide whether enumeration needs
+/// per-index attribute checks. No owner index or descriptor-map scan exists.
 pub(crate) fn owner_has_property_descriptors(owner: usize) -> bool {
     unsafe {
         let DescriptorRoute::Keys(bag) = descriptor_route(owner);
