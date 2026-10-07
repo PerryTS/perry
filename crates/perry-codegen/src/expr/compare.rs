@@ -4,6 +4,10 @@
 //! Pure mechanical move — match arm bodies are verbatim copies, called from
 //! `lower_expr`'s outer dispatch.
 
+#[path = "compare_chain.rs"]
+mod chain;
+pub(crate) use chain::try_lower as try_lower_chain;
+
 #[path = "compare_short_string.rs"]
 mod short_string;
 

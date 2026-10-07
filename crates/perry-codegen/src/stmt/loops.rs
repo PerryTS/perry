@@ -10,7 +10,7 @@ use crate::expr::{
     PackedF64LoopFact, PackedNumericLoopKind, TypedFeedbackContract, TypedFeedbackKind,
 };
 use crate::loop_purity::body_needs_asm_barrier;
-use crate::lower_conditional::lower_truthy;
+use crate::lower_conditional::lower_test;
 use crate::native_value::{
     BoundedBufferIndex, BoundsProof, BoundsState, BufferAccessMode, LengthSource, LoweredValue,
     MaterializationReason,
@@ -7517,8 +7517,7 @@ fn lower_for_after_init_impl(
         // Slow path: generic per-iteration comparison (full coercion).
         ctx.current_block = slow_idx;
         if let Some(cond_expr) = condition {
-            let cv = lower_expr(ctx, cond_expr)?;
-            let i1 = lower_truthy(ctx, &cv, cond_expr);
+            let i1 = lower_test(ctx, cond_expr)?;
             emit_gc_loop_safepoint(ctx, &[], &[cond_expr]);
             ctx.block().cond_br(&i1, &body_label, &exit_label);
         } else {
@@ -7530,8 +7529,7 @@ fn lower_for_after_init_impl(
     };
     if !used_i32_cond {
         if let Some(cond_expr) = condition {
-            let cv = lower_expr(ctx, cond_expr)?;
-            let i1 = lower_truthy(ctx, &cv, cond_expr);
+            let i1 = lower_test(ctx, cond_expr)?;
             emit_gc_loop_safepoint(ctx, &[], &[cond_expr]);
             ctx.block().cond_br(&i1, &body_label, &exit_label);
         } else {
@@ -9715,8 +9713,7 @@ fn lower_while_impl(ctx: &mut FnCtx<'_>, condition: &perry_hir::Expr, body: &[St
     ctx.block().br(&cond_label);
 
     ctx.current_block = cond_idx;
-    let cv = lower_expr(ctx, condition)?;
-    let i1 = lower_truthy(ctx, &cv, condition);
+    let i1 = lower_test(ctx, condition)?;
     emit_gc_loop_safepoint(ctx, &[], &[condition]);
     ctx.block().cond_br(&i1, &body_label, &exit_label);
 
@@ -9831,8 +9828,7 @@ fn lower_do_while_impl(
     }
 
     ctx.current_block = cond_idx;
-    let cv = lower_expr(ctx, condition)?;
-    let i1 = lower_truthy(ctx, &cv, condition);
+    let i1 = lower_test(ctx, condition)?;
     emit_gc_loop_safepoint(ctx, &[], &[condition]);
     ctx.block().cond_br(&i1, &body_label, &exit_label);
     ctx.active_region_id = previous_region_id;
