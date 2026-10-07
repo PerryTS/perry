@@ -27,11 +27,7 @@ pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
     let raw = bits.to_bits();
     // Buffer? (registry lookup via the canonical extern dispatch)
     if js_buffer_is_buffer(raw as i64) == 1 {
-        let addr = if (raw >> 48) != 0 {
-            raw & 0x0000_FFFF_FFFF_FFFF
-        } else {
-            raw
-        } as usize;
+        let addr = buffer_addr_from_raw(raw as i64).unwrap_or(0);
         let buf = addr as *const BufferHeader;
         if !buf.is_null() {
             if !out_len.is_null() {
@@ -43,10 +39,8 @@ pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
         }
     }
     // TypedArray? (Uint8Array etc. backing bytes)
-    let addr = if (raw >> 48) >= 0x7FF8 {
-        (raw & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else {
-        raw as usize
+    let Some(addr) = buffer_addr_from_raw(raw as i64) else {
+        return std::ptr::null();
     };
     if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
         let ta = addr as *const crate::typedarray::TypedArrayHeader;
@@ -67,15 +61,23 @@ pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
 static KEEP_JS_VALUE_BUFFER_OR_TYPEDARRAY_DATA: unsafe extern "C" fn(f64, *mut u32) -> *const u8 =
     js_value_buffer_or_typedarray_data;
 
+/// Candidate address of a word offered to a buffer probe: a POINTER_TAG
+/// payload or a legacy untagged raw pointer, classified by TAG before any
+/// header is read. Every other tag (a double such as a numeric fd, INT32, SSO
+/// and heap strings, handles, singletons) is a primitive whose low 48 bits
+/// are not an address; stripping its tag and probing the remainder read a
+/// header at an arbitrary address (fs.appendFileSync(fd, ..) segfault).
 fn buffer_addr_from_raw(ptr: i64) -> Option<usize> {
-    if ptr == 0 || (ptr as u64) < 0x1000 {
+    let bits = ptr as u64;
+    if bits == 0 || bits < 0x1000 {
         return None;
     }
-    // Strip NaN-boxing tags if present
-    let addr = if ((ptr as u64) >> 48) != 0 {
-        (ptr as u64) & 0x0000_FFFF_FFFF_FFFF
+    let addr = if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
+        bits & crate::value::POINTER_MASK
+    } else if (bits >> 48) == 0 {
+        bits
     } else {
-        ptr as u64
+        return None;
     };
     Some(addr as usize)
 }
