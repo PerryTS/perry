@@ -66,6 +66,7 @@ def main() -> int:
             retired.append((workflow["id"], path))
     print(f"Retired workflow files eligible for cleanup: {len(retired)}")
     deleted = 0
+    complete = True
     reset_at = int(headers.get("X-RateLimit-Reset", "0") or 0)
     remaining = int(headers.get("X-RateLimit-Remaining", "0") or 0)
     deadline = time.monotonic() + 5.7 * 60 * 60
@@ -96,6 +97,7 @@ def main() -> int:
                     deleted += status == 204
                 elif status in (403, 429):
                     print(f"Rate limit or permission boundary reached after {deleted} deletions")
+                    complete = False
                     break
                 else:
                     print(f"Failed deleting run {run['id']} ({workflow_path}): HTTP {status}: {payload[:300]!r}", file=sys.stderr)
@@ -104,9 +106,15 @@ def main() -> int:
                 continue
             break
         if remaining < 25 or time.monotonic() >= deadline:
+            complete = False
+            break
+        if not complete:
             break
 
     print(f"Deleted {deleted} completed retired-workflow runs in this pass")
+    if complete:
+        print("No completed runs remain for retired workflows")
+        return 0
     if remaining < 10 and reset_at:
         delay = max(1, reset_at - int(time.time()) + 5)
         if time.monotonic() + delay < deadline:
