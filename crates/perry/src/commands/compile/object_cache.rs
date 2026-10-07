@@ -376,6 +376,12 @@ fn compute_object_cache_key_with_env(
         "patched_proto_methods",
         &perry_codegen::program_patched_proto_methods().join("|"),
     );
+    // A module's native-module namespaces and wrapper calls lower differently
+    // depending on which library the compile routes each module to.
+    h.field(
+        "native_routing",
+        &perry_codegen::program_native_routing_key(),
+    );
     // #5247: `--debug-symbols` flips per-call `js_set_call_location` emission,
     // which changes the emitted IR (and `.o` bytes). Without this in the key,
     // toggling the flag would serve the previously-cached object and the

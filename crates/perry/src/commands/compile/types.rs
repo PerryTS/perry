@@ -824,6 +824,10 @@ pub struct CompilationContext {
     /// (e.g. "mysql2", "fastify", "ws"). Used by `--minimal-stdlib` to
     /// compute the smallest perry-stdlib feature set that satisfies them.
     pub native_module_imports: BTreeSet<String>,
+    /// Which library serves each well-known native module in this compile
+    /// (`optimized_libs::native_routing`). Codegen and the linker both read
+    /// this one decision.
+    pub native_routing: perry_codegen::NativeRouting,
     /// Whether a dynamic import can resolve to a JavaScript `data:` URL.
     /// The runtime evaluates these modules through the dyn-eval interpreter,
     /// so auto-optimized archives must retain that otherwise optional feature.
@@ -1310,6 +1314,7 @@ impl CompilationContext {
             needs_geisterhand: false,
             geisterhand_port: 7676,
             native_module_imports: BTreeSet::new(),
+            native_routing: super::optimized_libs::native_routing(),
             uses_data_url_dynamic_import: false,
             uses_dynamic_import_options: false,
             uses_fetch: false,

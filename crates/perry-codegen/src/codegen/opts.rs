@@ -33,7 +33,7 @@ pub struct AppMetadata {
     /// It is compiler metadata rather than a user-configurable manifest field.
     pub entry_source_path: Option<String>,
     /// Install wrappers of the well-known native providers this program links
-    /// (`js_ext_net_nm_install`, …; see `native_provider_install_symbols`).
+    /// (`js_ext_net_nm_install`, …; see `NativeRouting::wrapper_install_hooks`).
     /// Set only on the entry module, whose `main` / dylib initializer calls
     /// each one before any module initializer runs, so module objects the
     /// runtime creates itself — a CommonJS `require('net')` resolves through

@@ -42,21 +42,16 @@ pub(crate) fn resolve_no_auto_optimized_libs(
     if matches!(format, OutputFormat::Text) && verbose > 0 {
         eprintln!("  auto-optimize: skipped; using prebuilt target/release/libperry_*.a");
     }
-    let iteration_set = well_known_iteration_set(ctx);
     // PERRY_DISABLE_WELL_KNOWN=1 keeps only the wrappers that have no
-    // perry-stdlib copy to revert to (`net`, `ws`).
-    let mut well_known_libs = resolve_prebuilt_ext_libs(
-        &retain_routed(iteration_set.clone()),
-        target,
-        format,
-        verbose,
-    );
+    // perry-stdlib copy to revert to (`net`, `ws`, `zlib`).
+    let routed = routed_modules(ctx);
+    let mut well_known_libs = resolve_prebuilt_ext_libs(&routed, target, format, verbose);
     // #10458: native addons need every runtime-bearing archive rebuilt
     // together with the host feature.
     if !ctx.native_addons.is_empty() {
         return resolve_native_addon_libs(
             ctx,
-            &iteration_set,
+            &routed,
             well_known_libs,
             find_perry_workspace_root(),
             target,
@@ -70,7 +65,7 @@ pub(crate) fn resolve_no_auto_optimized_libs(
     // `js_webassembly_*` symbols are defined. Windows also rebuilds stdlib in
     // that Cargo invocation so its bundled runtime shares the same global
     // registries as the wasm-enabled runtime.
-    let stream_features = stream_dispatch_features(&iteration_set);
+    let stream_features = stream_dispatch_features(&routed);
     let (mut runtime, stdlib) = if ctx.needs_wasm_runtime && stream_features.is_empty() {
         match build_optional_runtime(ctx, target, format, verbose) {
             Some((runtime, stdlib)) => (Some(runtime), stdlib),
@@ -88,7 +83,7 @@ pub(crate) fn resolve_no_auto_optimized_libs(
         if stream_features.is_empty() {
             return None;
         }
-        let ext_crates = linked_ext_crates(&iteration_set, target);
+        let ext_crates = linked_ext_crates(&routed, target);
         let runtime_features = if ctx.needs_wasm_runtime {
             vec!["perry-runtime/wasm-host"]
         } else {
@@ -126,19 +121,19 @@ pub(crate) fn resolve_no_auto_optimized_libs(
 /// that concurrently running tests read.
 pub(super) fn resolve_native_addon_libs(
     ctx: &CompilationContext,
-    iteration_set: &std::collections::BTreeSet<String>,
+    routed: &std::collections::BTreeSet<String>,
     mut well_known_libs: Vec<PathBuf>,
     workspace_root: Option<PathBuf>,
     target: Option<&str>,
     format: OutputFormat,
     verbose: u8,
 ) -> OptimizedLibs {
-    let stdlib_features = stream_dispatch_features(iteration_set);
+    let stdlib_features = stream_dispatch_features(routed);
     let mut features = vec!["perry-runtime/node-api-host"];
     if ctx.needs_wasm_runtime {
         features.push("perry-runtime/wasm-host");
     }
-    let ext_crates = linked_ext_crates(iteration_set, target);
+    let ext_crates = linked_ext_crates(routed, target);
     let built = workspace_root.and_then(|root| {
         build_coherent_stdlib(
             root,
@@ -175,14 +170,15 @@ fn replace_rebuilt_wrappers(prebuilt: &mut Vec<PathBuf>, rebuilt: Vec<PathBuf>) 
 }
 
 /// Workspace crate and archive filename of every well-known wrapper the
-/// program links, deduplicated by archive (http / https / http2 share one).
+/// program links (its [`routed_modules`]), deduplicated by archive
+/// (http / https / http2 share one).
 pub(super) fn linked_ext_crates(
-    iteration_set: &std::collections::BTreeSet<String>,
+    routed: &std::collections::BTreeSet<String>,
     target: Option<&str>,
 ) -> Vec<(String, String)> {
     let mut seen = std::collections::BTreeSet::new();
     let mut crates = Vec::new();
-    for module in &retain_routed(iteration_set.clone()) {
+    for module in routed {
         let Some(binding) = super::super::well_known::lookup_well_known(module) else {
             continue;
         };
@@ -208,10 +204,8 @@ pub(super) struct CoherentLibraryBuild {
     pub(super) ext_libs: Vec<PathBuf>,
 }
 
-fn stream_dispatch_features(
-    iteration_set: &std::collections::BTreeSet<String>,
-) -> Vec<&'static str> {
-    retain_routed(iteration_set.clone())
+fn stream_dispatch_features(routed: &std::collections::BTreeSet<String>) -> Vec<&'static str> {
+    routed
         .iter()
         .flat_map(|module| {
             crate::commands::stdlib_features::routed_stream_dispatch_features(module)

@@ -52,8 +52,11 @@ mod native_root_coverage;
 pub(crate) mod native_value;
 /// The runtime layout facts generated code bakes in (`perry-abi`).
 pub(crate) use perry_abi as runtime_abi;
+pub mod native_routing;
 pub(crate) mod nm_install;
-pub use nm_install::native_provider_install_symbols;
+pub use native_routing::{
+    program_native_routing_key, set_program_native_routing, NativeProvider, NativeRouting,
+};
 pub mod opt_report;
 pub(crate) mod root_reload;
 pub mod rooting;
