@@ -52,8 +52,7 @@
 2 0 crates/perry-runtime/src/array/header.rs
 1 0 crates/perry-runtime/src/array/named_props.rs
 3 0 crates/perry-runtime/src/async_hooks.rs
-6 0 crates/perry-runtime/src/buffer/header.rs
-2 0 crates/perry-runtime/src/buffer/view.rs
+4 0 crates/perry-runtime/src/buffer/header.rs
 1 0 crates/perry-runtime/src/builtins/console.rs
 1 0 crates/perry-runtime/src/builtins/formatting/boxed_primitives.rs
 1 0 crates/perry-runtime/src/child_process/reactor.rs
@@ -72,7 +71,6 @@
 1 0 crates/perry-runtime/src/map.rs
 1 1 crates/perry-runtime/src/media_playback.rs
 1 0 crates/perry-runtime/src/messaging.rs
-3 0 crates/perry-runtime/src/native_arena.rs
 1 0 crates/perry-runtime/src/node_api_host/metadata.rs
 1 0 crates/perry-runtime/src/node_api_host/tsfn.rs
 1 0 crates/perry-runtime/src/node_repl.rs
@@ -99,8 +97,6 @@
 1 0 crates/perry-runtime/src/tui/hooks.rs
 1 0 crates/perry-runtime/src/tui/state.rs
 1 0 crates/perry-runtime/src/tui/tree.rs
-2 0 crates/perry-runtime/src/typedarray_props.rs
-1 0 crates/perry-runtime/src/typedarray_view.rs
 1 0 crates/perry-runtime/src/weakref.rs
 1 0 crates/perry-runtime/src/weakref/index.rs
 2 0 crates/perry-runtime/src/webassembly.rs
