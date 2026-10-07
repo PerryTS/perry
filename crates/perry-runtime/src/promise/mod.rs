@@ -1127,6 +1127,9 @@ pub(crate) fn copied_minor_promise_key_fate(key: usize) -> CopiedMinorPromiseKey
             }
             return CopiedMinorPromiseKeyFate::Keep;
         }
+        if !crate::gc::minor_side_owner_is_dead(&*header, space) {
+            return CopiedMinorPromiseKeyFate::Keep;
+        }
     }
     CopiedMinorPromiseKeyFate::Drop
 }
