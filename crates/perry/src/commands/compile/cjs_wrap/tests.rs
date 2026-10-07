@@ -443,6 +443,27 @@ fn wrap_does_not_shadow_global_this_named_export() {
 }
 
 #[test]
+fn wrap_does_not_shadow_global_value_properties_named_as_exports() {
+    // `exports.undefined = …` (and `NaN` / `Infinity`): an
+    // `export const undefined = _cjs.undefined;` binding would put every bare
+    // `undefined` in the body in its dead zone until the IIFE returns.
+    for name in ["undefined", "NaN", "Infinity"] {
+        let src = format!(
+            "function f(x) {{ return x === {name}; }}\n\
+             exports.{name} = () => {name};\n\
+             exports.f = f;"
+        );
+        let wrapped = wrap_commonjs(&src, &PathBuf::from("/tmp/pkg/values.js"));
+        assert!(
+            !wrapped.contains(&format!("export const {name} = _cjs.{name};"))
+                && wrapped.contains(&format!("const __cjsexp_{name} = _cjs.{name};"))
+                && wrapped.contains(&format!("export {{ __cjsexp_{name} as {name} }};")),
+            "expected a mangled re-export of `{name}`, got:\n{wrapped}"
+        );
+    }
+}
+
+#[test]
 fn wrap_keeps_export_const_for_builtin_name_declared_in_body() {
     // A name that collides with a builtin but IS a real module binding
     // (`function Error() {}`) is a genuine local export — keep the ordinary

@@ -237,8 +237,15 @@ pub extern "C" fn js_object_delete_field(
                         return 0;
                     }
                 }
-                crate::closure::closure_delete_own_dynamic_prop(obj as usize, name);
-                crate::closure::closure_mark_key_deleted(obj as usize, name);
+                let removed = crate::closure::closure_delete_own_dynamic_prop(obj as usize, name);
+                // The marker stops a synthesized own key (`name`, `length`,
+                // `prototype`) from reappearing. A user property removed from
+                // the bag needs none: if it were marked, every later read
+                // would answer `undefined` instead of the inherited
+                // `Function.prototype` member, a getter included.
+                if !removed || matches!(name, "name" | "length" | "prototype") {
+                    crate::closure::closure_mark_key_deleted(obj as usize, name);
+                }
             }
             return 1;
         }
@@ -1478,6 +1485,37 @@ mod sso_tests_1781 {
 #[cfg(test)]
 mod descriptor_delete_tests_10840 {
     use super::*;
+
+    /// Deleting a function's own user property leaves the inherited member
+    /// visible, while deleting a synthesized `name` keeps it gone. Sabotage:
+    /// marking every deleted key hides `Function.prototype`'s member of that
+    /// name for good.
+    #[test]
+    fn deleting_a_function_own_property_marks_only_synthesized_keys() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let closure = crate::closure::js_closure_alloc(&crate::closure::BOUND_METHOD_INFO, 0);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let closure = scope.root_raw_mut_ptr(closure);
+        let delete = |name: &str| {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+                js_object_delete_field(c as *mut ObjectHeader, key)
+            })
+        };
+        let marked = |name: &str| {
+            closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+                crate::closure::closure_is_key_deleted(c as usize, name)
+            })
+        };
+        closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+            crate::closure::closure_set_dynamic_prop(c as usize, "call", 1.0)
+        });
+        let deleted = (delete("call"), delete("name"));
+        assert_eq!(
+            (deleted, marked("call"), marked("name")),
+            ((1, 1), false, true)
+        );
+    }
 
     #[test]
     fn deleting_configurable_read_only_data_allows_readding_the_key() {

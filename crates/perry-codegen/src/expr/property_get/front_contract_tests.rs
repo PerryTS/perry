@@ -332,7 +332,9 @@ pub(super) fn verify_front_directory(blocks: &Blocks) -> Result<(), String> {
             .strip_prefix("and i64 ")
             .and_then(|s| s.strip_suffix(", -8"))
             .ok_or("Apple TSD base mask")?;
-        if def(blocks, tsd)? != "call i64 asm sideeffect \"mrs $0, tpidrro_el0\", \"=r\"()" {
+        if def(blocks, tsd)?
+            != "call i64 asm sideeffect \"mrs $0, tpidrro_el0\", \"=r\"() \"gc-leaf-function\""
+        {
             return Err("Apple directory must derive from the current thread pointer".into());
         }
         let key = def(blocks, offset)?

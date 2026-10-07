@@ -512,6 +512,13 @@ pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
     let max_depth = unsafe { crate::builtins::console::decode_dir_depth_option(options) }
         .or_else(|| unsafe { crate::builtins::console::decode_dir_depth_option(default_options) })
         .unwrap_or(2);
+    // A negative depth puts the value itself past the limit: node prints an
+    // object as its collapsed `[Ctor]` form. Formatting it one level down
+    // against a limit of 0 takes the same collapse the nested values take.
+    let below_zero = unsafe { crate::builtins::console::decode_dir_depth_number(options) }
+        .or_else(|| unsafe { crate::builtins::console::decode_dir_depth_number(default_options) })
+        .is_some_and(|depth| depth < 0.0);
+    let (max_depth, start_depth) = if below_zero { (0, 1) } else { (max_depth, 0) };
     let show_hidden = inspect_bool_option(options, default_options, "showHidden").unwrap_or(false);
     let show_proxy = inspect_bool_option(options, default_options, "showProxy").unwrap_or(false);
     // `util.inspect` defaults to `customInspect: true`; an explicit
@@ -534,7 +541,7 @@ pub extern "C" fn js_util_inspect(value: f64, options: f64) -> f64 {
         let s = jsvalue_string_content(value).unwrap_or_default();
         format!("'{}'", escape_string(&s))
     } else {
-        format_jsvalue(value, 0)
+        format_jsvalue(value, start_depth)
     };
     let ptr = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
     f64::from_bits(crate::value::JSValue::string_ptr(ptr).bits())
@@ -616,5 +623,49 @@ mod s_placeholder_policy_tests {
                 "an own non-builtin `toString` must keep String(value)"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod negative_depth_tests {
+    use super::*;
+
+    /// `util.inspect(v, { depth: -1 })` puts `v` itself past the limit: an
+    /// object or array with entries collapses to node's `[Ctor]` form, an
+    /// empty one prints in full, and a primitive is unaffected. Sabotage:
+    /// clamping a negative depth to 0 prints the top-level body.
+    #[test]
+    fn a_negative_depth_collapses_the_value_itself() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let key = |s: &str| crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+        let object = |entries: &[(&str, f64)]| {
+            let obj = crate::object::js_object_alloc(0, entries.len() as u32 + 1);
+            for &(name, value) in entries {
+                crate::object::js_object_set_field_by_name(obj, key(name), value);
+            }
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(obj as i64))
+        };
+        let options = object(&[("depth", -1.0)]);
+        let full = object(&[("a", 1.0)]);
+        let empty = object(&[]);
+        let array = {
+            let arr = crate::array::js_array_push_f64(crate::array::js_array_alloc(1), 1.0);
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(arr as i64))
+        };
+        let empty_array = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::array::js_array_alloc(0) as i64,
+        ));
+        let shown = |value: f64| {
+            jsvalue_string_content(js_util_inspect(value, options.get_nanbox_f64())).unwrap()
+        };
+        let observed = [
+            shown(full.get_nanbox_f64()),
+            shown(empty.get_nanbox_f64()),
+            shown(array.get_nanbox_f64()),
+            shown(empty_array.get_nanbox_f64()),
+            shown(5.0),
+        ];
+        assert_eq!(observed, ["[Object]", "{}", "[Array]", "[]", "5"]);
     }
 }

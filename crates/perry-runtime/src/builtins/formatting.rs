@@ -251,6 +251,54 @@ impl Drop for InspectDepthLimitGuard {
     }
 }
 
+/// The form of an object past the inspect depth limit: node's `[Ctor]`,
+/// named by the class, else by the `constructor` its prototype holds, or
+/// `[Object: null prototype]`. `None` for an object with no own keys, which
+/// node prints in full (`{}`) at any depth.
+///
+/// # Safety
+/// `obj_ptr` is a live ordinary object.
+unsafe fn collapsed_object_label(obj_ptr: *const crate::object::ObjectHeader) -> Option<String> {
+    let keys = crate::object::object_keys(obj_ptr);
+    if keys.is_null() || keys.count() == 0 {
+        return None;
+    }
+    let gc = (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+    if (*gc)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+        return Some("[Object: null prototype]".to_string());
+    }
+    let class_id = (*obj_ptr).class_id;
+    if class_id != 0 {
+        if let Some(name) = crate::object::class_name_for_id(class_id).filter(|n| !n.is_empty()) {
+            return Some(format!("[{name}]"));
+        }
+    }
+    let proto = crate::object::object_ops::get_prototype_of_resolved(
+        crate::value::js_nanbox_pointer(obj_ptr as i64),
+    );
+    let proto_value = JSValue::from_bits(proto.to_bits());
+    if proto_value.is_pointer()
+        && proto_value.as_pointer::<u8>() as usize
+            != crate::array::object_prototype_addr_if_resolved()
+    {
+        let constructor = crate::object::js_object_get_field_by_name_f64(
+            proto_value.as_pointer::<crate::object::ObjectHeader>(),
+            crate::string::canonical_key(b"constructor"),
+        );
+        let constructor = JSValue::from_bits(constructor.to_bits());
+        if constructor.is_pointer() {
+            let name = crate::object::js_object_get_field_by_name_f64(
+                constructor.as_pointer::<crate::object::ObjectHeader>(),
+                crate::string::canonical_key(b"name"),
+            );
+            if let Some(name) = jsvalue_string_content(name).filter(|n| !n.is_empty()) {
+                return Some(format!("[{name}]"));
+            }
+        }
+    }
+    Some("[Object]".to_string())
+}
+
 /// Format a JS function/closure for `console.log` / `util.inspect`. Returns
 /// `[Function: <name>]` when codegen has registered a name for the
 /// function pointer, otherwise `[Function (anonymous)]` (matching Node's
@@ -733,7 +781,8 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     if let Err(id) = inspect_enter_circular(ptr as usize) {
                         return format!("[Circular *{}]", id);
                     }
-                    if depth > inspect_depth_limit() {
+                    // Node prints an empty array in full at any depth.
+                    if depth > inspect_depth_limit() && (*ptr).length != 0 {
                         // We just pushed; finish to keep the stack balanced.
                         return inspect_finish_circular(ptr as usize, "[Array]".to_string());
                     }
@@ -793,7 +842,9 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                         return format!("[Circular *{}]", id);
                     }
                     if depth > inspect_depth_limit() {
-                        return inspect_finish_circular(ptr as usize, "[Object]".to_string());
+                        if let Some(label) = collapsed_object_label(obj_ptr) {
+                            return inspect_finish_circular(ptr as usize, label);
+                        }
                     }
                     let _keys_array_view = crate::object::object_keys(obj_ptr);
                     let _keys_array = _keys_array_view.arr();

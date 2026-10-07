@@ -527,6 +527,22 @@ pub unsafe extern "C" fn js_super_accessor_get(home_class_id: u32, key: f64, rec
         let target = crate::value::js_nanbox_pointer(proto as i64);
         return js_object_get_property_key(target, key_handle.get_nanbox_f64());
     }
+    // A parent with no prototype object of its own here (`class M extends
+    // Map`, a function value): `super` is the home prototype's own
+    // [[Prototype]], which construction linked to the parent's prototype.
+    if home_class_id != 0 {
+        let home = crate::object::class_registry::class_decl_prototype_value(home_class_id);
+        if crate::value::JSValue::from_bits(home.to_bits()).is_pointer() {
+            let base = super::object_ops::get_prototype_of_resolved(home);
+            if crate::value::JSValue::from_bits(base.to_bits()).is_pointer() {
+                return crate::proxy::js_reflect_get(
+                    base,
+                    key_handle.get_nanbox_f64(),
+                    f64::from_bits(receiver_handle.get_heap_word_u64()),
+                );
+            }
+        }
+    }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 

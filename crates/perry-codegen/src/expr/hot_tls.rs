@@ -69,8 +69,11 @@ pub(crate) fn emit_hot_tls_lookup(ctx: &mut FnCtx<'_>, stem: &str) -> HotTlsLook
     let hot = {
         let blk = ctx.block();
         let tsd = blk.next_reg();
+        // A register read never reaches a safepoint. Every function marks
+        // it: if LLVM inlined an unmarked read into a statepoint function,
+        // RS4GC would wrap the asm and the verifier would reject the module.
         blk.emit_raw(format!(
-            "  {tsd} = call i64 asm sideeffect \"mrs $0, tpidrro_el0\", \"=r\"()"
+            "  {tsd} = call i64 asm sideeffect \"mrs $0, tpidrro_el0\", \"=r\"() \"gc-leaf-function\""
         ));
         let base = blk.and(I64, &tsd, "-8");
         let offset = blk.shl(I64, &key, "3");
