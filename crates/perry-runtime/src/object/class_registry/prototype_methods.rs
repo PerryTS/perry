@@ -74,15 +74,16 @@ pub unsafe extern "C" fn js_class_register_static_private_field(
 }
 
 /// Define a static PRIVATE field of a fresh class evaluation on its class
-/// object: the ordinary store, then the key becomes an `ENTRY_PRIVATE` entry
-/// of the class object's own properties (#11791).
+/// object: an `ENTRY_PRIVATE` entry of the class object's own properties
+/// (#11791) holding `value`. The field is written through its private entry,
+/// never through `[[Set]]`: a set of a private-value spelling is a private
+/// member write, which throws while the field is not yet declared.
 #[no_mangle]
 pub unsafe extern "C" fn js_class_object_define_static_private(
     class_object: *mut crate::object::ObjectHeader,
     key: *const crate::StringHeader,
     value: f64,
 ) {
-    crate::object::js_object_set_field_by_name(class_object, key, value);
     if key.is_null() {
         return;
     }
@@ -92,18 +93,15 @@ pub unsafe extern "C" fn js_class_object_define_static_private(
     };
     let name =
         std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
-    if header.obj_type == crate::gc::GC_TYPE_CLOSURE {
-        crate::closure::props::bag_claim_private(addr, name);
-    } else if header.obj_type == crate::gc::GC_TYPE_OBJECT {
-        let _no_move = crate::gc::GcSuppressScope::new();
-        let obj = addr as *mut crate::object::ObjectHeader;
-        if !crate::object::key_attrs::object_key_is_private(obj, name) {
-            crate::object::key_attrs::apply_edits(
-                obj,
-                &[crate::object::key_attrs::AttrsEdit::Private(name)],
-            );
-        }
-    }
+    // The bag allocation and the claim must not move the class object or
+    // `value` while they are held raw.
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let holder = match header.obj_type {
+        crate::gc::GC_TYPE_CLOSURE => crate::closure::props::bag_ensure(addr),
+        crate::gc::GC_TYPE_OBJECT => addr as *mut crate::object::ObjectHeader,
+        _ => return,
+    };
+    crate::object::field_get_set::define_private_entry(holder, name, value);
 }
 
 /// Read a computed instance-field key resolved at ClassDefinitionEvaluation.

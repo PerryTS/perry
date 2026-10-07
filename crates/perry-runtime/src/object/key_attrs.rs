@@ -933,6 +933,11 @@ pub(crate) enum AttrsEdit<'a> {
     ClearAll,
     /// `key` is claimed as a private field ([`PRIVATE_FIELD_ENTRY`]).
     Private(&'a [u8]),
+    /// The own data property `key` becomes the private field of that
+    /// spelling in place, keeping its slot and value; an absent key is
+    /// claimed as by [`AttrsEdit::Private`]. Use it through
+    /// [`claim_own_property_private`].
+    ClaimPrivate(&'a [u8]),
 }
 
 impl AttrsEdit<'_> {
@@ -944,7 +949,8 @@ impl AttrsEdit<'_> {
             | AttrsEdit::ClearData(k)
             | AttrsEdit::Accessor(k, _, _)
             | AttrsEdit::ClearAccessor(k)
-            | AttrsEdit::Private(k) => Some(k),
+            | AttrsEdit::Private(k)
+            | AttrsEdit::ClaimPrivate(k) => Some(k),
             AttrsEdit::Integrity { .. } | AttrsEdit::ClearAll => None,
         }
     }
@@ -957,7 +963,7 @@ impl AttrsEdit<'_> {
             return old;
         }
         match self {
-            AttrsEdit::Private(_) => PRIVATE_FIELD_ENTRY,
+            AttrsEdit::Private(_) | AttrsEdit::ClaimPrivate(_) => PRIVATE_FIELD_ENTRY,
             AttrsEdit::Data(_, bits) => (old & ENTRY_ACCESSOR_MASK) | attr_bits_to_entry(bits),
             AttrsEdit::ClearData(_) => old & ENTRY_ACCESSOR_MASK,
             AttrsEdit::Accessor(_, get, set) => {
@@ -1124,6 +1130,26 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
             fold_edits(edits, slot, old)
         });
     crate::object::set_object_keys(obj, rebuilt.view());
+}
+
+/// Make `obj`'s own data property `key` the private field of that spelling,
+/// in place: the slot and its value become the field's. The runtime defines
+/// a static private field as an own property and then claims it, so the
+/// claim must convert that property: if it appended a separate private
+/// entry, the field would read `undefined` and the defined property would
+/// stay visible to reflection. A key that already has a private entry is
+/// left as it is.
+///
+/// # Safety
+/// As [`apply_edits`].
+pub(crate) unsafe fn claim_own_property_private(obj: *mut crate::object::ObjectHeader, key: &[u8]) {
+    let keys = crate::object::object_keys(obj);
+    if !keys.is_null()
+        && crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key).is_some()
+    {
+        return;
+    }
+    apply_edits(obj, &[AttrsEdit::ClaimPrivate(key)]);
 }
 
 /// Edit a dictionary receiver's PRIVATE list in place from position `from`.

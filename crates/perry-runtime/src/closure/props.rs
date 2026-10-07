@@ -240,16 +240,10 @@ unsafe fn object_own_set(obj: *mut ObjectHeader, key: &str, value: f64) {
 pub(crate) unsafe fn bag_claim_private(ptr: usize, key: &[u8]) {
     let _no_move = crate::gc::GcSuppressScope::new();
     let bag = bag_of(ptr);
-    if bag.is_null()
-        || !bag_has_own(ptr, key)
-        || crate::object::key_attrs::object_key_is_private(bag, key)
-    {
+    if bag.is_null() || !bag_has_own(ptr, key) {
         return;
     }
-    crate::object::key_attrs::apply_edits(
-        bag,
-        &[crate::object::key_attrs::AttrsEdit::Private(key)],
-    );
+    crate::object::key_attrs::claim_own_property_private(bag, key);
 }
 
 /// Define/overwrite the function's own data property `key` (plain `[[Set]]`

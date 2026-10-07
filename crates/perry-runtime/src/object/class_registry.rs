@@ -78,6 +78,7 @@ pub use state::async_local_storage_prototype_value;
 pub(crate) use state::async_resource_prototype_value;
 #[cfg(test)]
 pub(crate) use state::class_decl_prototype_object_root_store;
+pub(crate) use state::install_evaluation_prototype_symbol_members;
 pub(crate) use state::retire_displaced_decl_prototype;
 pub(crate) use state::stashed_dynamic_parent_value;
 pub(crate) use state::{

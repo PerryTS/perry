@@ -52,7 +52,13 @@ impl PrivateStorageKey {
         {
             return None;
         }
-        if unsafe { crate::object::dictionary::is_dictionary(object) } {
+        // A dictionary keeps its own key list, and a class object (the holder
+        // of a fresh evaluation's static private fields) is not an ordinary
+        // layout: both find the slot in the key list, uncached.
+        if unsafe { crate::object::dictionary::is_dictionary(object) }
+            || crate::object::shapes::shape_object_kind_by_id(shape)
+                == Some(crate::object::shapes::ShapeObjectKind::Class)
+        {
             let keys = unsafe { crate::object::object_keys(object) };
             let index = unsafe { crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), self.as_bytes()) }?;
             return Some((object, index, unsafe { crate::object::object_live_slot_count(object) }));
@@ -144,6 +150,27 @@ impl PrivateStorageKey {
         };
         unsafe { crate::object::key_attrs::object_key_has_private_entry(holder, self.as_bytes()) }
     }
+}
+
+/// Add the private field `spelling` to `holder` and store `value` in it. A
+/// field `holder` already carries keeps its slot and takes the new value.
+///
+/// # Safety
+/// `holder` is a live `GC_TYPE_OBJECT`; the caller runs in a no-move window.
+pub(crate) unsafe fn define_private_entry(holder: *mut ObjectHeader, spelling: &[u8], value: f64) {
+    crate::object::key_attrs::apply_edits(
+        holder,
+        &[crate::object::key_attrs::AttrsEdit::Private(spelling)],
+    );
+    let Ok(spelling) = std::str::from_utf8(spelling) else {
+        return;
+    };
+    let key = PrivateStorageKey {
+        spelling: spelling.to_owned(),
+        slot: std::cell::Cell::new(None),
+    };
+    let receiver = crate::value::js_nanbox_pointer(holder as i64);
+    key.set_cached(receiver, value);
 }
 
 struct PrivateStorageEntry {
@@ -267,6 +294,68 @@ mod private_storage_cache_tests {
     /// A field added past twenty public keys spills to overflow storage; both
     /// storage kinds read and write through the cached slot, and no property
     /// edit of the holder (a define, `freeze`) changes the field.
+    /// A static private field lives on a class object, or in a compiled
+    /// class function object's property bag; an instance field on an
+    /// ordinary object. Each is defined through its private entry and read
+    /// and written through the template spelling, and none of them is a
+    /// property of that spelling. Sabotage: a `locate` that accepts only
+    /// ordinary layouts misses the class object, and a template access that
+    /// does not resolve a closure to its bag misses the function object.
+    #[test]
+    fn a_template_private_field_reads_and_writes_on_every_holder() {
+        // One template per holder: marking a class object registers its id.
+        for (cid, holder_kind) in
+            [(62_643, "ordinary"), (62_645, "class object"), (62_646, "function object")]
+        {
+            assert!(!private_template_may_be_evaluated(cid));
+            let name = intern_private_name(b"#held").unwrap();
+            let storage = private_storage_key_by_id(cid, PRIVATE_TEMPLATE_EVALUATION_ID, name);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let (receiver, holder) = match holder_kind {
+                "ordinary" | "class object" => {
+                    let obj = crate::object::js_object_alloc(cid, 2);
+                    if holder_kind == "class object" {
+                        crate::object::class_registry::js_object_mark_class(obj as i64);
+                    }
+                    (obj as usize, obj)
+                }
+                _ => {
+                    let closure =
+                        crate::closure::js_closure_alloc(&crate::closure::BOUND_METHOD_INFO, 0);
+                    (closure as usize, unsafe { crate::closure::props::bag_ensure(closure as usize) })
+                }
+            };
+            let receiver = scope.root_raw_mut_ptr(receiver as *mut ObjectHeader);
+            let holder = scope.root_raw_mut_ptr(holder);
+            holder.with_mut_ptr(|holder: *mut ObjectHeader| unsafe {
+                let _no_move = crate::gc::GcSuppressScope::new();
+                define_private_entry(holder, storage.as_bytes(), 5.0)
+            });
+            let key = scope.root_string_ptr(crate::string::intern_ascii_literal(storage.as_bytes()));
+            let read = || {
+                receiver.with_mut_ptr(|obj: *mut ObjectHeader| {
+                    key.with_const_ptr(|key| private_evaluation_field_get(obj, key))
+                })
+            };
+            let write = |value| {
+                receiver.with_mut_ptr(|obj: *mut ObjectHeader| {
+                    key.with_const_ptr(|key| private_evaluation_field_set(obj, key, value))
+                })
+            };
+            let property = holder.with_mut_ptr(|holder: *mut ObjectHeader| unsafe {
+                let keys = crate::object::object_keys(holder);
+                crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), storage.as_bytes())
+            });
+            let before = read();
+            let wrote = write(9.0);
+            assert_eq!(
+                (before, wrote, read(), property),
+                (Some(5.0), true, Some(9.0), None),
+                "{holder_kind}"
+            );
+        }
+    }
+
     #[test]
     fn template_slots_write_inline_and_overflow_and_ignore_property_edits() {
         const CID: u32 = 62_642;

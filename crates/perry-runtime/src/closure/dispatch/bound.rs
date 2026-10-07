@@ -275,6 +275,19 @@ unsafe fn dispatch_symbol_bound_method(
     } else {
         // Computed symbol methods never synthesize an `arguments` object but
         // DO carry `has_rest` — mirrors the direct-call path.
+        if crate::closure::real_capture_count((*closure).capture_count) >= 6 {
+            let brand = js_closure_get_capture_f64(closure, 5);
+            return crate::object::call_vtable_method_with_private_brand(
+                func_ptr,
+                receiver.to_bits() as i64,
+                args.as_ptr(),
+                args.len(),
+                param_count,
+                false,
+                has_rest,
+                brand,
+            );
+        }
         crate::object::call_vtable_method(
             func_ptr,
             receiver.to_bits() as i64,

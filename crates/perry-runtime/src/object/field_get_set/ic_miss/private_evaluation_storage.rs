@@ -74,6 +74,42 @@ unsafe fn private_value_request<'a>(key: *const crate::StringHeader) -> Option<(
     Some((class_id.parse().ok()?, name))
 }
 
+/// The value whose own entries hold `receiver`'s private fields: a compiled
+/// class's function object keeps its static fields, the private ones
+/// included, in its own-property bag (`closure::props::bag_claim_private`).
+/// Any other receiver holds its own.
+fn private_storage_holder_value(receiver: f64) -> f64 {
+    let value = JSValue::from_bits(receiver.to_bits());
+    if !value.is_pointer() {
+        return receiver;
+    }
+    let addr = value.as_pointer::<u8>() as usize;
+    unsafe {
+        let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
+            return receiver;
+        };
+        if header.obj_type != crate::gc::GC_TYPE_CLOSURE
+            || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        {
+            return receiver;
+        }
+        let bag = crate::closure::props::bag_of(addr);
+        if bag.is_null() {
+            return receiver;
+        }
+        crate::value::js_nanbox_pointer(bag as i64)
+    }
+}
+
+/// The storage of static private field `name` on a class object of template
+/// `class_id`: each evaluation's class object holds its own entry under the
+/// template spelling (`js_class_object_define_static_private`). A miss — a
+/// class object without the field — falls back to the generic path.
+fn class_object_static_private(class_id: u32, name: &str) -> std::rc::Rc<PrivateStorageKey> {
+    let name = intern_private_name(name.as_bytes()).unwrap();
+    private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name)
+}
+
 fn private_evaluation_field_get(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
@@ -82,14 +118,16 @@ fn private_evaluation_field_get(
     if !private_template_may_be_evaluated(class_id) {
         let receiver = private_member_receiver(obj);
         let name = intern_private_name(name.as_bytes()).unwrap();
-        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name).get_cached(receiver);
+        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name)
+            .get_cached(private_storage_holder_value(receiver));
     }
     let owner = take_private_field_owner(class_id, name, false);
     let _owner = PrivateHintBrandScope::new(owner);
     let receiver = private_member_receiver(obj);
-    if super::super::class_registry::is_class_object_value(receiver)
-        || super::super::native_module::class_ref_id(receiver).is_some()
-    {
+    if super::super::class_registry::is_class_object_value(receiver) {
+        return class_object_static_private(class_id, name).get_cached(receiver);
+    }
+    if super::super::native_module::class_ref_id(receiver).is_some() {
         return None;
     }
     let name = intern_private_name(name.as_bytes()).unwrap();
@@ -110,14 +148,16 @@ fn private_evaluation_field_set(
     if !private_template_may_be_evaluated(class_id) {
         let receiver = private_member_receiver(obj);
         let name = intern_private_name(name.as_bytes()).unwrap();
-        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name).set_cached(receiver, value);
+        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name)
+            .set_cached(private_storage_holder_value(receiver), value);
     }
     let owner = take_private_field_owner(class_id, name, true);
     let _owner = PrivateHintBrandScope::new(owner);
     let receiver = private_member_receiver(obj);
-    if super::super::class_registry::is_class_object_value(receiver)
-        || super::super::native_module::class_ref_id(receiver).is_some()
-    {
+    if super::super::class_registry::is_class_object_value(receiver) {
+        return class_object_static_private(class_id, name).set_cached(receiver, value);
+    }
+    if super::super::native_module::class_ref_id(receiver).is_some() {
         return false;
     }
     let name = intern_private_name(name.as_bytes()).unwrap();
