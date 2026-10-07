@@ -69,13 +69,13 @@ pub(crate) unsafe fn try_get(receiver: JSValue, name: &[u8]) -> Option<f64> {
     if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
         return None;
     }
-    if crate::gc::is_byte_family_type(header.obj_type)
-        && (crate::buffer::buffer_has_own_prop(addr, std::str::from_utf8(name).unwrap())
-            || crate::buffer::store::bag_get(addr, crate::buffer::store::PROTOTYPE_KEY).is_some())
+    let obj_type = crate::buffer::header::byte_cell_type(addr)?;
+    if crate::buffer::buffer_has_own_prop(addr, std::str::from_utf8(name).unwrap())
+        || crate::buffer::store::bag_get(addr, crate::buffer::store::PROTOTYPE_KEY).is_some()
     {
         return None;
     }
-    match header.obj_type & !crate::codegen_abi::BYTES_TYPE_VIEW {
+    match obj_type & !crate::codegen_abi::BYTES_TYPE_VIEW {
         crate::gc::GC_TYPE_BUFFER | crate::gc::GC_TYPE_BUFFER_UINT8ARRAY => {
             let buf = addr as *const crate::buffer::BufferHeader;
             Some(if name == b"byteOffset" {

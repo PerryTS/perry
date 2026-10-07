@@ -96,9 +96,7 @@ pub(crate) fn span(value: f64, writable: bool) -> Result<Span, NotBytes> {
         return Err(NotBytes::Foreign);
     }
     let addr = value.as_pointer::<u8>() as usize;
-    let h =
-        unsafe { crate::value::addr_class::try_read_gc_header(addr) }.ok_or(NotBytes::Foreign)?;
-    if !crate::gc::is_byte_family_type(h.obj_type) {
+    if super::header::byte_cell_type(addr).is_none() {
         return Err(NotBytes::Foreign);
     }
     let owner = unsafe { super::store::owner(addr) };

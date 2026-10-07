@@ -52,13 +52,88 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-/// The buffer-family GC type of the cell at `addr`, or `None` when `addr` is
-/// not a `BufferHeader` cell. One magnitude/alignment check, then the header
-/// load every other brand probe in the runtime does (`try_read_gc_header`'s
-/// contract: `addr` is a GC allocation's user address or non-pointer bits).
+/// The full GC type of the byte cell at `addr` (Buffer, Uint8Array, the
+/// %TypedArray% kinds, ArrayBuffer, SharedArrayBuffer, DataView, key objects;
+/// owners and views), or `None` when `addr` is not one.
+///
+/// This is the one admission every runtime byte-cell recognizer goes through.
+/// A receiver word reaching the runtime need not be a GC cell: a
+/// pointer-tagged native value (a RegExp, a host object) can point just past
+/// a word that starts with a byte-family type byte, and a view's `link` or an
+/// owner's bag read from such a word follows garbage. So the plain header load
+/// only decides the negative, and any other type byte answers `None` with one
+/// load. A byte-family type byte is confirmed by the allocator
+/// ([`byte_cell_is_owned`]) before anything reads the cell.
+#[inline(always)]
+pub(crate) fn byte_cell_type(addr: usize) -> Option<u8> {
+    let obj_type = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?.obj_type;
+    if !crate::gc::is_byte_family_type(obj_type) {
+        return None;
+    }
+    byte_cell_is_owned(addr, obj_type).then_some(obj_type)
+}
+
+/// The ownership proof behind [`byte_cell_type`]: `addr` is a GC cell whose
+/// header names exactly `obj_type`, or a process-global SharedArrayBuffer
+/// block. For a caller that already loaded `obj_type` from a plain header read
+/// of a word that may not be a GC cell.
+///
+/// Every byte cell is an old-arena cell, and the process-wide region registry
+/// (`arena::region_contains`) owns all arena memory whichever thread
+/// allocated it, so the proof holds on any thread. This thread's tracked
+/// header read answers first: it is the cheaper probe for its own cells.
+#[inline]
+pub(crate) fn byte_cell_is_owned(addr: usize, obj_type: u8) -> bool {
+    #[cfg(test)]
+    if byte_cell_proof_sabotaged() {
+        return true;
+    }
+    (crate::gc::gc_type_is_known(obj_type)
+        && unsafe { crate::value::addr_class::try_read_tracked_gc_header_of_type(addr, obj_type) }
+            .is_some())
+        || byte_cell_in_any_region(addr, obj_type)
+}
+
+/// The process-wide arm of [`byte_cell_is_owned`]: a cell of another thread's
+/// arena (its header and extent inside one live region, arena-flagged, of the
+/// type the caller read), or a process-global SharedArrayBuffer block.
+#[cold]
+#[inline(never)]
+fn byte_cell_in_any_region(addr: usize, obj_type: u8) -> bool {
+    if obj_type == GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER && crate::shared_sab::is_shared_sab(addr) {
+        return true;
+    }
+    #[cfg(test)]
+    if super::bytes::b4_sabotage("byte_cell_region") {
+        return false;
+    }
+    let Some(header_addr) = addr.checked_sub(GC_HEADER_SIZE) else {
+        return false;
+    };
+    if !crate::arena::region_contains(header_addr, GC_HEADER_SIZE) {
+        return false;
+    }
+    // SAFETY: the header word lies inside a live arena region.
+    let header = unsafe { &*(header_addr as *const GcHeader) };
+    header.obj_type == obj_type
+        && header.gc_flags & crate::gc::GC_FLAG_ARENA != 0
+        && header.size as usize >= GC_HEADER_SIZE
+        && crate::arena::region_contains(header_addr, header.size as usize)
+}
+
+/// `PERRY_B4_SABOTAGE=byte_cell_proof` admits every byte-family type byte
+/// without the allocator proof; `byte_cell_admission_tests` must go red.
+#[cfg(test)]
+fn byte_cell_proof_sabotaged() -> bool {
+    static SABOTAGED: OnceLock<bool> = OnceLock::new();
+    *SABOTAGED.get_or_init(|| super::bytes::b4_sabotage("byte_cell_proof"))
+}
+
+/// The buffer-family GC type of the cell at `addr` with the view bit cleared,
+/// or `None` when `addr` is not a `BufferHeader` cell ([`byte_cell_type`]).
 #[inline(always)]
 pub(crate) fn buffer_family_type(addr: usize) -> Option<u8> {
-    let obj_type = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?.obj_type;
+    let obj_type = byte_cell_type(addr)?;
     if !is_buffer_family_type(obj_type) {
         return None;
     }
@@ -298,25 +373,18 @@ pub(crate) fn is_small_buf_slab_addr(_addr: usize) -> bool {
 
 /// Is `addr` a `BufferHeader` cell of any flavor — a Node `Buffer`, a
 /// `Uint8Array`, an `ArrayBuffer`, a `SharedArrayBuffer` (thread-local or
-/// process-global), a `DataView` or a key object? One header load and two
-/// compares; there is no registry behind it.
+/// process-global), a `DataView` or a key object? The byte-cell admission
+/// ([`byte_cell_type`]); there is no registry behind it.
 #[inline]
 pub fn is_registered_buffer(addr: usize) -> bool {
     buffer_family_type(addr).is_some()
 }
 
-/// A byte cell proven by its allocator. Generic object paths ask this of every
-/// receiver. A readable header that names another kind answers with one load;
-/// anything else takes the allocator-proven read, whose answer this is.
+/// A byte cell proven by its allocator ([`byte_cell_type`]). Generic object
+/// paths ask this of every receiver; any other type byte answers in one load.
 #[inline]
 pub(crate) fn is_owned_byte_cell(addr: usize) -> bool {
-    if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-        if !crate::gc::is_byte_family_type(header.obj_type) {
-            return false;
-        }
-    }
-    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }
-        .is_some_and(|h| crate::gc::is_byte_family_type(unsafe { h.as_ref() }.obj_type))
+    byte_cell_type(addr).is_some()
 }
 
 /// Brand the buffer at `addr` as a `Uint8Array` (formatted as

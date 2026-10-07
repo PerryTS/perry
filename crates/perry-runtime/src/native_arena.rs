@@ -45,9 +45,9 @@ fn owner_is_registered(owner: *const NativeArenaOwnerHeader) -> bool {
 #[inline]
 pub(crate) fn is_native_typed_view(ta: *const TypedArrayHeader) -> bool {
     let addr = ta as usize;
-    if !unsafe { crate::value::addr_class::try_read_gc_header(addr) }.is_some_and(|h| {
-        crate::gc::is_byte_view_type(h.obj_type) && crate::gc::is_typed_array_type(h.obj_type)
-    }) {
+    if !crate::buffer::header::byte_cell_type(addr)
+        .is_some_and(|t| crate::gc::is_byte_view_type(t) && crate::gc::is_typed_array_type(t))
+    {
         return false;
     }
     unsafe {
