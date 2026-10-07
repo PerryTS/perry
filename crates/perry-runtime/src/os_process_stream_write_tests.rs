@@ -3,8 +3,8 @@
 
 use super::*;
 use crate::buffer::{
-    js_array_buffer_new, js_buffer_alloc, js_buffer_slice, js_data_view_new,
-    js_uint8array_alloc, BufferHeader,
+    js_array_buffer_new, js_buffer_alloc, js_buffer_slice, js_data_view_new, js_uint8array_alloc,
+    BufferHeader,
 };
 
 const UNDEFINED: f64 = f64::from_bits(crate::value::TAG_UNDEFINED);

@@ -1613,6 +1613,9 @@ POLL_CAPABLE_RUNTIME = {
     "js_array_sort_default", "js_array_sort_with_comparator",
     "js_array_map", "js_array_filter", "js_typed_array_for_each",
     "js_array_reduce", "js_json_stringify",
+    # Array.prototype.with on a typed receiver delegates to TypedArray.prototype.with,
+    # whose element store runs ToNumber/ToBigInt on the value (user valueOf).
+    "js_array_with",
     # Buffer / typed-array construction FROM another collection. Each of these
     # is matched by ALLOC_RE (its result is a heap value the checker tracks)
     # AND reaches an element read that is already poll-capable, so `--audit-
