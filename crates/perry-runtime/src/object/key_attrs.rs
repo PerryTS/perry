@@ -924,6 +924,7 @@ pub(crate) enum AttrsEdit<'a> {
     /// non-writable (`Object.freeze` / `Object.seal`).
     Integrity { freeze: bool },
     /// Every key returns to the default.
+    #[cfg(test)]
     ClearAll,
     /// `key` is claimed as a private field ([`PRIVATE_FIELD_ENTRY`]).
     Private(&'a [u8]),
@@ -939,7 +940,9 @@ impl AttrsEdit<'_> {
             | AttrsEdit::Accessor(k, _, _)
             | AttrsEdit::ClearAccessor(k)
             | AttrsEdit::Private(k) => Some(k),
-            AttrsEdit::Integrity { .. } | AttrsEdit::ClearAll => None,
+            AttrsEdit::Integrity { .. } => None,
+            #[cfg(test)]
+            AttrsEdit::ClearAll => None,
         }
     }
 
@@ -968,6 +971,7 @@ impl AttrsEdit<'_> {
             AttrsEdit::Integrity { freeze } => {
                 old | ENTRY_NON_CONFIGURABLE | if freeze { ENTRY_NON_WRITABLE } else { 0 }
             }
+            #[cfg(test)]
             AttrsEdit::ClearAll => 0,
         }
     }
