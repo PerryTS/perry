@@ -336,7 +336,7 @@ pub(crate) fn lower_jsx_child(
 ) -> Result<Option<Expr>> {
     match child {
         ast::JSXElementChild::JSXText(text) => {
-            let normalized = normalize_jsx_text(text.value.as_ref());
+            let normalized = normalize_jsx_text(&text.value.to_string_lossy());
             if normalized.is_empty() {
                 Ok(None)
             } else {

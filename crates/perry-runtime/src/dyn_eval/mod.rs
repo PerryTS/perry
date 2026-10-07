@@ -721,7 +721,7 @@ fn prepare_source(source: &str) -> u32 {
     // failing on first invocation.
     interp::scan_function_supported(&func);
     let interp_fn = interp::build_interp_fn(
-        func.params.into_iter().map(|p| p.pat).collect(),
+        perry_parser::into_function_parameter_patterns(func.this_param, func.params).collect(),
         InterpBody::Block(func.body.map(|b| b.stmts).unwrap_or_default()),
         false,
     );

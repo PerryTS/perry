@@ -342,11 +342,11 @@ fn expr_has_violation(expr: &ast::Expr, strict: bool) -> bool {
                 return true;
             }
             match arrow.body.as_ref() {
-                ast::BlockStmtOrExpr::BlockStmt(b) => {
+                ast::ArrowFunctionBody::FunctionBody(b) => {
                     let body_strict = strict || stmts_start_with_use_strict(&b.stmts);
                     b.stmts.iter().any(|s| stmt_has_violation(s, body_strict))
                 }
-                ast::BlockStmtOrExpr::Expr(e) => expr_has_violation(e, strict),
+                ast::ArrowFunctionBody::Expr(e) => expr_has_violation(e, strict),
             }
         }
         E::Call(call) => {

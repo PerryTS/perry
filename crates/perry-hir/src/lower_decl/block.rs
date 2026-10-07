@@ -23,8 +23,16 @@ pub(crate) use var_names::{
 };
 
 pub fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Result<Vec<Stmt>> {
-    let interfaces = enter_interface_scope(ctx, &block.stmts)?;
-    let tdz_boxes = rebind_nested_forward_scope_lets(ctx, &block.stmts);
+    lower_block_contents(ctx, block.span, &block.stmts)
+}
+
+fn lower_block_contents(
+    ctx: &mut LoweringContext,
+    span: swc_common::Span,
+    stmts: &[ast::Stmt],
+) -> Result<Vec<Stmt>> {
+    let interfaces = enter_interface_scope(ctx, stmts)?;
+    let tdz_boxes = rebind_nested_forward_scope_lets(ctx, stmts);
     // #9466: `class` is block-scoped, so a `class X` here is a DISTINCT class
     // from any enclosing/prior `class X` and needs its own registration key.
     // This is the funnel every `{}`-shaped scope shares — bare block, `if` /
@@ -37,9 +45,9 @@ pub fn lower_block_stmt(ctx: &mut LoweringContext, block: &ast::BlockStmt) -> Re
     // block, and the matching key makes this call a no-op rather than a second
     // alias — which would strand that function's end-of-body capture
     // re-registration on the now-stale key.
-    let saved_class_renames = enter_class_rename_scope(ctx, block.span.lo.0, &block.stmts);
-    let saved_forward_classes = enter_forward_class_scope(ctx, &block.stmts);
-    let lowered = lower_stmts_using_aware(ctx, &block.stmts);
+    let saved_class_renames = enter_class_rename_scope(ctx, span.lo.0, stmts);
+    let saved_forward_classes = enter_forward_class_scope(ctx, stmts);
+    let lowered = lower_stmts_using_aware(ctx, stmts);
     exit_forward_class_scope(ctx, saved_forward_classes);
     exit_class_rename_scope(ctx, saved_class_renames);
     exit_interface_scope(ctx, interfaces);
@@ -188,7 +196,7 @@ fn pre_register_forward_captured_lets_in_scope(ctx: &mut LoweringContext, stmts:
 /// X } = …`).
 pub(crate) fn pre_register_forward_captured_lets(
     ctx: &mut LoweringContext,
-    block: &ast::BlockStmt,
+    stmts: &[ast::Stmt],
     body_entry_locals_len: usize,
 ) -> Vec<LocalId> {
     let mut forward_boxed_ids: Vec<LocalId> = Vec::new();
@@ -225,12 +233,12 @@ pub(crate) fn pre_register_forward_captured_lets(
     // in a nested block: the block's own seen-set never contains `n`).
     let mut fn_wide_closure_refs: std::collections::HashSet<String> =
         std::collections::HashSet::new();
-    for stmt in &block.stmts {
+    for stmt in stmts {
         cic_stmt(stmt, false, &mut fn_wide_closure_refs);
     }
     let mut fwd_worklist: std::collections::VecDeque<(&[ast::Stmt], bool)> =
         std::collections::VecDeque::new();
-    fwd_worklist.push_back((&block.stmts[..], false));
+    fwd_worklist.push_back((stmts, false));
     while let Some((scope_stmts, is_nested)) = fwd_worklist.pop_front() {
         for stmt in scope_stmts {
             push_nested_block_stmt_lists(stmt, &mut fwd_worklist);
@@ -440,10 +448,10 @@ fn collect_pat_forward_idents(pat: &ast::Pat, out: &mut Vec<(String, u32)>) {
 /// `undefined` constant and never observe the later write.
 fn predefine_var_bindings_in_function_body(
     ctx: &mut LoweringContext,
-    block: &ast::BlockStmt,
+    stmts: &[ast::Stmt],
 ) -> Vec<(String, LocalId)> {
     let mut names = Vec::new();
-    for stmt in &block.stmts {
+    for stmt in stmts {
         collect_var_binding_names_from_stmt(stmt, &mut names);
     }
     names.sort();
@@ -481,17 +489,12 @@ fn predefine_var_bindings_in_function_body(
         // this scope — a `var`-hoisted binding is reusable, a non-hoisted one is
         // a parameter and yields to it).
         let mut forbidden = std::collections::HashSet::new();
-        collect_lexical_decl_names(&block.stmts, &mut forbidden);
+        collect_lexical_decl_names(stmts, &mut forbidden);
         forbidden.insert("arguments".to_string());
 
         let mut all_names = Vec::new();
         let mut annexb_names = Vec::new();
-        collect_annexb_block_fn_decl_names(
-            &block.stmts,
-            &forbidden,
-            &mut all_names,
-            &mut annexb_names,
-        );
+        collect_annexb_block_fn_decl_names(stmts, &forbidden, &mut all_names, &mut annexb_names);
         ctx.annexb_block_fn_names_all.extend(all_names);
         annexb_names.sort();
         annexb_names.dedup();
@@ -540,13 +543,14 @@ fn predefine_var_bindings_in_function_body(
 /// to alloca a slot+box for each id before any user statement runs.
 pub fn lower_fn_body_block_stmt(
     ctx: &mut LoweringContext,
-    block: &ast::BlockStmt,
+    span: swc_common::Span,
+    stmts: &[ast::Stmt],
 ) -> Result<Vec<Stmt>> {
     use std::collections::HashSet;
 
     let parent_strict = ctx.current_strict;
     ctx.current_strict =
-        parent_strict || crate::lower::stmt_list_starts_with_use_strict_directive(&block.stmts);
+        parent_strict || crate::lower::stmt_list_starts_with_use_strict_directive(stmts);
     // Annex B B.3.3 (#5297): this body's block-nested function declarations get
     // their own enclosing-scope `var` map; nested function bodies lowered while
     // we are inside this one save/restore their own, so take ours aside now and
@@ -559,7 +563,7 @@ pub fn lower_fn_body_block_stmt(
     // FnDecl arm). Scope the set to this body and restore on every exit.
     let saved_nested_gen_fwd = std::mem::take(&mut ctx.nested_generator_forward_referenced);
     ctx.nested_generator_forward_referenced =
-        crate::lower_decl::forward_referenced_nested_generators(&block.stmts)
+        crate::lower_decl::forward_referenced_nested_generators(stmts)
             .into_iter()
             .collect();
     // Boundary between outer-scope locals (+ this function's params, defined by
@@ -571,7 +575,7 @@ pub fn lower_fn_body_block_stmt(
     // capture-refresh pass (their ids are this function's locals); drain the
     // suffix at body end, truncate on the error path so nothing leaks upward.
     let body_class_expr_captures_mark = ctx.body_class_expr_captures.len();
-    let hoisted_var_slots = predefine_var_bindings_in_function_body(ctx, block);
+    let hoisted_var_slots = predefine_var_bindings_in_function_body(ctx, stmts);
 
     // Phase 1: pre-define hoisted FnDecl locals so forward references in
     // any earlier statement resolve via `lookup_local`. Generator and
@@ -586,7 +590,7 @@ pub fn lower_fn_body_block_stmt(
     // initialized before that reference runs). The FuncRef value is pure, so
     // reordering it ahead of other statements is safe.
     let mut hoisted_id_set: HashSet<LocalId> = HashSet::new();
-    for stmt in &block.stmts {
+    for stmt in stmts {
         if let ast::Stmt::Decl(ast::Decl::Fn(fn_decl)) = stmt {
             if fn_decl.function.body.is_none() {
                 continue;
@@ -616,12 +620,12 @@ pub fn lower_fn_body_block_stmt(
     let saved_forward_class_decl_depth = ctx.forward_class_decl_depth.clone();
     let saved_class_renames = ctx.class_renames.clone();
     let cur_scope_depth = ctx.scope_depth;
-    for stmt in &block.stmts {
+    for stmt in stmts {
         if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
             // Disambiguate a distinct same-named class declared in this body so
             // its references don't bind to a colliding `class X` elsewhere in
             // the bundled module (see `class_renames`).
-            ctx.maybe_rename_colliding_class(class_decl.ident.sym.as_str(), block.span.lo.0);
+            ctx.maybe_rename_colliding_class(class_decl.ident.sym.as_str(), span.lo.0);
             let cname = class_decl.ident.sym.to_string();
             // Record the (shallowest) scope depth this class is declared at so a
             // later bare-ident reference can compare it against a same-named
@@ -662,11 +666,11 @@ pub fn lower_fn_body_block_stmt(
     // function-expression body path (`lower_fn_expr`) via
     // `pre_register_forward_captured_lets`; also handles destructuring leaves
     // (`const { SpanKind } = api`).
-    let forward_boxed_ids = pre_register_forward_captured_lets(ctx, block, body_entry_locals_len);
+    let forward_boxed_ids = pre_register_forward_captured_lets(ctx, stmts, body_entry_locals_len);
 
     // Phase 2: lower the body. The inner FnDecl arm in `lower_body_stmt`
     // calls `lookup_local(name)` and reuses our pre-defined id.
-    let mut body = match lower_block_stmt(ctx, block) {
+    let mut body = match lower_block_contents(ctx, span, stmts) {
         Ok(body) => body,
         Err(err) => {
             ctx.body_class_expr_captures
@@ -702,7 +706,7 @@ pub fn lower_fn_body_block_stmt(
         let mut re_regs: Vec<Stmt> = Vec::new();
         let mut re_reg_capsets: Vec<(Stmt, std::collections::HashSet<crate::types::LocalId>)> =
             Vec::new();
-        for stmt in &block.stmts {
+        for stmt in stmts {
             if let ast::Stmt::Decl(ast::Decl::Class(class_decl)) = stmt {
                 let cname = ctx.resolve_class_name(class_decl.ident.sym.as_str());
                 if let Some(captured) = ctx.lookup_class_captures(&cname) {

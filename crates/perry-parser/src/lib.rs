@@ -12,6 +12,8 @@ use swc_ecma_parser::{lexer::Lexer, EsSyntax, Parser, Syntax, TsSyntax};
 use swc_ecma_visit::{VisitMut, VisitMutWith};
 
 pub mod defines;
+mod function_params;
+pub use function_params::{function_parameter_patterns, into_function_parameter_patterns};
 
 // Re-export AST types for consumers that need to inspect the AST
 pub use swc_ecma_ast;

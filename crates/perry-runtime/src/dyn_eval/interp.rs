@@ -513,7 +513,9 @@ fn hoist_fn_decls(ctx: &Ctx, stmts: &[ast::Stmt], env_idx: usize, declare: bool)
             let name = f.ident.sym.to_string();
             let value = make_function_value(
                 ctx,
-                f.function.params.iter().map(|p| p.pat.clone()).collect(),
+                perry_parser::function_parameter_patterns(&f.function)
+                    .map(std::borrow::Cow::into_owned)
+                    .collect(),
                 InterpBody::Block(
                     f.function
                         .body
@@ -1240,7 +1242,9 @@ pub(crate) fn eval_class_expr(ctx: &Ctx, class_expr: &ast::ClassExpr, env_idx: u
                 }
                 let value = make_function_value(
                     ctx,
-                    m.function.params.iter().map(|p| p.pat.clone()).collect(),
+                    perry_parser::function_parameter_patterns(&m.function)
+                        .map(std::borrow::Cow::into_owned)
+                        .collect(),
                     InterpBody::Block(
                         m.function
                             .body

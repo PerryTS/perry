@@ -31,7 +31,7 @@ pub(crate) use weakref_locals::pre_scan_weakref_locals;
 /// like `const Mixed = Foo(BaseClass)` can synthesize a real class.
 pub(crate) fn pre_scan_mixin_functions(ast_module: &ast::Module, ctx: &mut LoweringContext) {
     fn try_record_fn(fn_decl: &ast::FnDecl, ctx: &mut LoweringContext) {
-        if fn_decl.function.params.len() != 1 {
+        if fn_decl.function.this_param.is_some() || fn_decl.function.params.len() != 1 {
             return;
         }
         let param_name = match &fn_decl.function.params[0].pat {
@@ -124,7 +124,7 @@ pub(crate) fn pre_scan_cross_fn_native_params(ast_module: &ast::Module, ctx: &mu
     // destructuring/rest param that can't be a simple handle binding), and
     // name -> body block to follow the handle into.
     let mut fn_params: HashMap<String, Vec<Option<String>>> = HashMap::new();
-    let mut fn_bodies: HashMap<String, &ast::BlockStmt> = HashMap::new();
+    let mut fn_bodies: HashMap<String, &ast::FunctionBody> = HashMap::new();
     // name -> identifier span `lo` (stable AST identity) for keying hints, so a
     // hint never leaks onto an unrelated same-named declaration.
     let mut fn_spans: HashMap<String, u32> = HashMap::new();
@@ -577,10 +577,10 @@ fn shadow_scan_expr(
             }
         }
         ast::Expr::Arrow(a) => match a.body.as_ref() {
-            ast::BlockStmtOrExpr::BlockStmt(b) => {
+            ast::ArrowFunctionBody::FunctionBody(b) => {
                 into_body!(a.params.iter(), &b.stmts);
             }
-            ast::BlockStmtOrExpr::Expr(x) => {
+            ast::ArrowFunctionBody::Expr(x) => {
                 let mut sh = shadowed.clone();
                 for p in &a.params {
                     if let Some(n) = cross_fn_pat_name(p) {
@@ -621,7 +621,7 @@ fn shadow_scan_expr(
 /// Immutable top-level-function tables shared by the scope-aware taint walk.
 struct TaintCtx<'a> {
     fn_params: &'a HashMap<String, Vec<Option<String>>>,
-    fn_bodies: &'a HashMap<String, &'a ast::BlockStmt>,
+    fn_bodies: &'a HashMap<String, &'a ast::FunctionBody>,
     fn_spans: &'a HashMap<String, u32>,
 }
 
@@ -682,8 +682,8 @@ fn prune_for_fn(taint: &Taint, func: &ast::Function) -> Taint {
 fn walk_taint_callback_body(handler: &ast::Expr, taint: &Taint, acc: &mut TaintAcc) {
     match handler {
         ast::Expr::Arrow(a) => match a.body.as_ref() {
-            ast::BlockStmtOrExpr::BlockStmt(b) => walk_taint_stmts(&b.stmts, taint, acc),
-            ast::BlockStmtOrExpr::Expr(e) => walk_taint_expr(e, taint, acc),
+            ast::ArrowFunctionBody::FunctionBody(b) => walk_taint_stmts(&b.stmts, taint, acc),
+            ast::ArrowFunctionBody::Expr(e) => walk_taint_expr(e, taint, acc),
         },
         ast::Expr::Fn(f) => {
             if let Some(b) = &f.function.body {
@@ -948,8 +948,8 @@ fn walk_taint_expr(expr: &ast::Expr, taint: &Taint, acc: &mut TaintAcc) {
         ast::Expr::Arrow(a) => {
             let pruned = prune_for_arrow(taint, a);
             match a.body.as_ref() {
-                ast::BlockStmtOrExpr::BlockStmt(b) => walk_taint_stmts(&b.stmts, &pruned, acc),
-                ast::BlockStmtOrExpr::Expr(x) => walk_taint_expr(x, &pruned, acc),
+                ast::ArrowFunctionBody::FunctionBody(b) => walk_taint_stmts(&b.stmts, &pruned, acc),
+                ast::ArrowFunctionBody::Expr(x) => walk_taint_expr(x, &pruned, acc),
             }
         }
         ast::Expr::Fn(f) => {
@@ -1093,11 +1093,10 @@ fn upgrade_handler_ws_id<'a>(
     }
     let ws_id = match handler.expr.as_ref() {
         ast::Expr::Arrow(a) => a.params.get(1).and_then(cross_fn_pat_name),
-        ast::Expr::Fn(f) => f
-            .function
-            .params
-            .get(1)
-            .and_then(|p| cross_fn_pat_name(&p.pat)),
+        ast::Expr::Fn(f) => perry_parser::function_parameter_patterns(&f.function)
+            .nth(1)
+            .as_deref()
+            .and_then(cross_fn_pat_name),
         _ => None,
     }?;
     Some((ws_id, handler.expr.as_ref()))
@@ -1346,12 +1345,12 @@ fn collect_server_idents_in_module(ast_module: &ast::Module, out: &mut HashSet<S
                 }
             }
             ast::Expr::Arrow(a) => match a.body.as_ref() {
-                ast::BlockStmtOrExpr::BlockStmt(b) => {
+                ast::ArrowFunctionBody::FunctionBody(b) => {
                     for s in &b.stmts {
                         walk_stmt(s, refs, out);
                     }
                 }
-                ast::BlockStmtOrExpr::Expr(e) => walk_expr(e, refs, out),
+                ast::ArrowFunctionBody::Expr(e) => walk_expr(e, refs, out),
             },
             ast::Expr::Fn(f) => {
                 if let Some(b) = &f.function.body {
@@ -1586,8 +1585,8 @@ fn collect_calls_in_expr<'a>(expr: &'a ast::Expr, out: &mut Vec<&'a ast::CallExp
             }
         }
         ast::Expr::Arrow(a) => match a.body.as_ref() {
-            ast::BlockStmtOrExpr::BlockStmt(b) => collect_calls_in_stmts(&b.stmts, out),
-            ast::BlockStmtOrExpr::Expr(e) => collect_calls_in_expr(e, out),
+            ast::ArrowFunctionBody::FunctionBody(b) => collect_calls_in_stmts(&b.stmts, out),
+            ast::ArrowFunctionBody::Expr(e) => collect_calls_in_expr(e, out),
         },
         ast::Expr::Fn(f) => {
             if let Some(b) = &f.function.body {

@@ -449,7 +449,7 @@ fn indirect_eval_factory_shape(expr: &ast::Expr) -> Option<(String, bool)> {
     if function.function.is_async || function.function.is_generator {
         return None;
     }
-    if function.function.params.len() != 1 {
+    if function.function.this_param.is_some() || function.function.params.len() != 1 {
         return None;
     }
     let ast::Pat::Ident(eval_param) = &function.function.params[0].pat else {
@@ -619,7 +619,7 @@ pub(crate) fn object_tostring_body(expr: &ast::Expr) -> Option<ToStringBody> {
         }
         _ => return None,
     };
-    if !key_is_tostring || !function.params.is_empty() {
+    if !key_is_tostring || function.this_param.is_some() || !function.params.is_empty() {
         return None;
     }
     let body = function.body.as_ref()?;
@@ -1317,14 +1317,24 @@ fn scan_expr_writes(expr: &ast::Expr, writes: &mut HashMap<String, usize>, shado
                         }
                         ast::Prop::Method(m) => scan_function_writes(&m.function, writes, shadow),
                         ast::Prop::Getter(g) => {
-                            let stmts: &[ast::Stmt] =
-                                g.body.as_ref().map(|b| b.stmts.as_slice()).unwrap_or(&[]);
+                            let stmts: &[ast::Stmt] = g
+                                .function
+                                .body
+                                .as_ref()
+                                .map(|b| b.stmts.as_slice())
+                                .unwrap_or(&[]);
                             scan_fn_body_writes(&[], stmts, writes, shadow);
                         }
                         ast::Prop::Setter(st) => {
-                            let stmts: &[ast::Stmt] =
-                                st.body.as_ref().map(|b| b.stmts.as_slice()).unwrap_or(&[]);
-                            scan_fn_body_writes(&[&st.param], stmts, writes, shadow);
+                            let stmts: &[ast::Stmt] = st
+                                .function
+                                .body
+                                .as_ref()
+                                .map(|b| b.stmts.as_slice())
+                                .unwrap_or(&[]);
+                            let params: Vec<&ast::Pat> =
+                                st.function.params.iter().map(|param| &param.pat).collect();
+                            scan_fn_body_writes(&params, stmts, writes, shadow);
                         }
                         ast::Prop::Shorthand(_) => {}
                         ast::Prop::Assign(a) => scan_expr_writes(&a.value, writes, shadow),
@@ -1336,10 +1346,10 @@ fn scan_expr_writes(expr: &ast::Expr, writes: &mut HashMap<String, usize>, shado
         ast::Expr::Arrow(a) => {
             let params: Vec<&ast::Pat> = a.params.iter().collect();
             match &*a.body {
-                ast::BlockStmtOrExpr::BlockStmt(b) => {
+                ast::ArrowFunctionBody::FunctionBody(b) => {
                     scan_fn_body_writes(&params, &b.stmts, writes, shadow);
                 }
-                ast::BlockStmtOrExpr::Expr(e) => {
+                ast::ArrowFunctionBody::Expr(e) => {
                     // Arrow expression body: push the params, scan, then pop —
                     // mirrors `scan_fn_body_writes` so we don't clone the whole
                     // enclosing shadow per arrow.

@@ -41,7 +41,9 @@ pub(crate) fn eval_expr(ctx: &Ctx, expr: &ast::Expr, env_idx: usize) -> f64 {
             }
             make_function_value(
                 ctx,
-                f.function.params.iter().map(|p| p.pat.clone()).collect(),
+                perry_parser::function_parameter_patterns(&f.function)
+                    .map(std::borrow::Cow::into_owned)
+                    .collect(),
                 InterpBody::Block(
                     f.function
                         .body
@@ -60,8 +62,8 @@ pub(crate) fn eval_expr(ctx: &Ctx, expr: &ast::Expr, env_idx: usize) -> f64 {
                 throw_unsupported("generator/async arrow function");
             }
             let body = match a.body.as_ref() {
-                ast::BlockStmtOrExpr::BlockStmt(b) => InterpBody::Block(b.stmts.clone()),
-                ast::BlockStmtOrExpr::Expr(e) => InterpBody::Expr(e.clone()),
+                ast::ArrowFunctionBody::FunctionBody(b) => InterpBody::Block(b.stmts.clone()),
+                ast::ArrowFunctionBody::Expr(e) => InterpBody::Expr(e.clone()),
             };
             make_function_value(
                 ctx,
@@ -270,7 +272,9 @@ fn eval_object_lit(ctx: &Ctx, o: &ast::ObjectLit, env_idx: usize) -> f64 {
                     }
                     let value = make_function_value(
                         ctx,
-                        m.function.params.iter().map(|p| p.pat.clone()).collect(),
+                        perry_parser::function_parameter_patterns(&m.function)
+                            .map(std::borrow::Cow::into_owned)
+                            .collect(),
                         InterpBody::Block(
                             m.function
                                 .body

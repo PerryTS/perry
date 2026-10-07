@@ -266,12 +266,12 @@ fn collect_idents_nested_callable(expr: &ast::Expr, out: &mut Vec<String>) {
             }
         }
         ast::Expr::Arrow(a) => match &*a.body {
-            ast::BlockStmtOrExpr::BlockStmt(b) => {
+            ast::ArrowFunctionBody::FunctionBody(b) => {
                 for s in &b.stmts {
                     collect_idents_stmt(s, out);
                 }
             }
-            ast::BlockStmtOrExpr::Expr(e) => collect_idents_expr(e, out),
+            ast::ArrowFunctionBody::Expr(e) => collect_idents_expr(e, out),
         },
         _ => {}
     }
