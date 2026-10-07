@@ -1203,12 +1203,7 @@ unsafe fn ordinary_has_property(
         }
         // Own accessor property (also mirrored into `keys_array`, but check the
         // side table directly so a get-only accessor is never missed).
-        // #6748 follow-up: gate on the thread flag + the per-object
-        // `OBJ_FLAG_HAS_DESCRIPTORS` header bit (the same address-reuse-safe
-        // gate the [[Set]] path uses) — `get_accessor_descriptor` allocates a
-        // `String` map key per probe, and this ran per prototype level on
-        // EVERY `in`, dominating its profile (~60% of samples on a
-        // descriptor-less receiver).
+        // Accessor membership comes from the holder shape.
         if let Some(name) = key_name {
             if crate::object::descriptor_state::object_has_descriptors(cur as usize)
                 && get_accessor_descriptor(cur as usize, name).is_some()
