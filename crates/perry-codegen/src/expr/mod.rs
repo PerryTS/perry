@@ -4509,6 +4509,10 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             );
             Ok(Some(lowered))
         }
+        Expr::Logical {
+            op: perry_hir::LogicalOp::And | perry_hir::LogicalOp::Or,
+            ..
+        } => binary::lower_boolean_logical_value(ctx, expr),
         Expr::Compare { op, left, right } => lower_compare_value(ctx, *op, left, right),
         Expr::Unary {
             op: UnaryOp::Not,
@@ -4608,3 +4612,8 @@ mod virtual_getter_tests;
 
 #[cfg(test)]
 mod call_spread_function_method_tests;
+
+pub(crate) use compare::try_lower_chain as try_lower_compare_chain;
+
+#[cfg(test)]
+mod compare_chain_tests;
