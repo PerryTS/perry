@@ -82,10 +82,6 @@ jobs:
           fi
           args+=(--suite "${SUITE:-}")
           python3 scripts/actions_plan.py "${args[@]}"
-          pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
-          \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
-          \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
-          \ \"${args[@]}\"\n"
   docs-check__build-and-validation:
     runs-on: ubuntu-latest
     steps:
