@@ -338,7 +338,7 @@ pub extern "C" fn js_put_value_set_packed_fast(
     // With typed feedback on, the store's layout note can retire feedback
     // through the registry lock — a `GcRootRegistryGuard` whose release can
     // flush a deferred collection (#11523). Decline; the miss entry stores.
-    if crate::typed_feedback::typed_feedback_active() {
+    if crate::typed_feedback::typed_feedback_trace_requested() {
         return f64::from_bits(crate::value::TAG_HOLE);
     }
     unsafe {

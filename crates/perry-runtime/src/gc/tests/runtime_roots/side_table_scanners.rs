@@ -146,7 +146,7 @@ fn test_symbol_side_table_scanner_marks_keys_and_values_without_marking_owner() 
     clear_mark_seeds();
     crate::symbol::test_clear_symbol_side_table_roots();
 
-    // Ordinary-object symbols are shape slots; arrays still use this scanner.
+    // Seed the retained fallback store explicitly; public array installs use shape slots.
     let owner = crate::array::js_array_alloc(0) as usize;
     let sym_key = unsafe { alloc_nursery_test_symbol() };
     let value = young_leaf();
@@ -184,7 +184,7 @@ fn test_symbol_side_table_registered_scanner_rewrites_roots_and_metadata() {
     crate::symbol::test_clear_symbol_side_table_roots();
     gc_register_mutable_root_scanner(crate::symbol::scan_symbol_side_table_roots_mut);
 
-    // Ordinary-object symbols are shape slots; arrays still use this scanner.
+    // Seed the retained fallback store explicitly; public array installs use shape slots.
     let owner = crate::array::js_array_alloc(0) as usize;
     let sym_key = unsafe { alloc_nursery_test_symbol() };
     let value = young_leaf();
@@ -267,7 +267,7 @@ fn test_symbol_side_table_budgeted_scanner_heals_entries_after_owner_rekey() {
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     crate::symbol::test_clear_symbol_side_table_roots();
 
-    // Ordinary-object symbols are shape slots; arrays still use this scanner.
+    // Seed the retained fallback store explicitly; public array installs use shape slots.
     let owner = crate::array::js_array_alloc(0) as usize;
     let sym_key = unsafe { alloc_nursery_test_symbol() };
     let value = young_leaf();

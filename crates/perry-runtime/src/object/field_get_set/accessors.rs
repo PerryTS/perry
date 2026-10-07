@@ -898,6 +898,19 @@ pub(crate) unsafe fn array_prototype_property_value(
         crate::value::js_nanbox_get_pointer(key_h.get_nanbox_f64()) as *const crate::StringHeader
     };
 
+    // An accessor has a holder slot too. Its pair must be read before the
+    // data-property probe, and an absent getter still shadows the next holder.
+    if let Some(acc) = get_accessor_descriptor(proto_ptr(), name) {
+        let value = if acc.get == 0 {
+            JSValue::undefined()
+        } else {
+            invoke_accessor_getter(
+                acc.get,
+                crate::value::js_nanbox_pointer(receiver_addr() as i64),
+            )
+        };
+        return Some(value);
+    }
     if let Some(v) = own_data_field_by_name(proto_ptr() as *const ObjectHeader, key()) {
         return Some(v);
     }
