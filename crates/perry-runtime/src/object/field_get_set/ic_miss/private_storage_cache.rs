@@ -46,7 +46,8 @@ impl PrivateStorageKey {
 
     #[inline(never)]
     fn locate_miss(&self, receiver: f64) -> Option<(*const ObjectHeader, u32, u32)> {
-        let (object, shape) = unsafe { private_plain_receiver_shape(receiver) }?;
+        let object = unsafe { private_element_holder(receiver) }?;
+        let shape = unsafe { crate::object::shapes::object_shape_stamp(object) };
         if unsafe { crate::object::key_attrs::object_summary(object) }
             & crate::object::key_attrs::SUMMARY_PRIVATE == 0
         {
@@ -59,7 +60,10 @@ impl PrivateStorageKey {
         }
         let slot = self.slot.get().filter(|slot| slot.0 == shape).or_else(|| {
             if !crate::object::shapes::shape_object_kind_by_id(shape)
-                .is_some_and(|kind| kind.is_ordinary_layout())
+                .is_some_and(|kind| {
+                    kind.is_ordinary_layout()
+                        || kind == crate::object::shapes::ShapeObjectKind::Class
+                })
             {
                 return None;
             }

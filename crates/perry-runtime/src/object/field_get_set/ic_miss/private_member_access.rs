@@ -371,7 +371,10 @@ pub extern "C" fn js_private_brand_check(
             "Cannot use 'in' operator to search for '{name}' in {rhs}"
         ));
     }
-    if is_static != 0 && crate::proxy::js_proxy_is_proxy(obj) != 0 {
+    if is_static != 0
+        && (crate::proxy::js_proxy_is_proxy(obj) != 0
+            || !private_static_receiver_is_constructor(obj))
+    {
         return false_value;
     }
 
@@ -423,6 +426,14 @@ pub extern "C" fn js_private_brand_check(
         );
     if !has_declaring_brand {
         return false_value;
+    }
+    if is_static != 0 && kind == 0 {
+        let name = interned.unwrap_or("");
+        if !static_private_field_key(declaring_class_id, name)
+            .is_present(obj_root.get_nanbox_f64())
+        {
+            return false_value;
+        }
     }
 
     // Without an evaluation verdict the brand above WAS this check.

@@ -10,6 +10,107 @@ static NEXT_PRIVATE_EVALUATION_ID: std::sync::atomic::AtomicU64 =
 
 include!("private_storage_cache.rs");
 
+// Static fields belong to the constructor itself. The lexical brand guard
+// distinguishes evaluations, so their own storage key needs no evaluation id.
+fn static_private_field_key(class_id: u32, name: &str) -> std::rc::Rc<PrivateStorageKey> {
+    private_storage_key_by_id(
+        class_id,
+        PRIVATE_TEMPLATE_EVALUATION_ID,
+        intern_private_name(name.as_bytes()).unwrap(),
+    )
+}
+
+/// Define the private entry directly, without first creating a public property
+/// of the same spelling. Namespace-aware attribute edits cannot convert one
+/// namespace into the other.
+pub(crate) unsafe fn define_static_private_field(
+    receiver: f64,
+    key: *const crate::StringHeader,
+    value: f64,
+) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let value = scope.root_nanbox_f64(value);
+    let spelling = super::super::has_own_helpers::str_from_string_header(key)
+        .expect("static private storage key")
+        .to_owned();
+    let storage = PrivateStorageKey {
+        spelling,
+        slot: std::cell::Cell::new(None),
+    };
+    let addr = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
+    if crate::closure::is_closure_ptr(addr) {
+        crate::closure::props::bag_ensure(addr);
+    }
+    let holder = private_element_holder(receiver.get_nanbox_f64()).expect("private field holder");
+    let holder = scope.root_raw_mut_ptr(holder);
+    holder.with_mut_ptr::<ObjectHeader, _>(|holder| {
+        crate::object::key_attrs::apply_edits(
+            holder,
+            &[crate::object::key_attrs::AttrsEdit::Private(
+                storage.as_bytes(),
+            )],
+        );
+    });
+    assert!(storage.set_cached(receiver.get_nanbox_f64(), value.get_nanbox_f64()));
+}
+
+/// A compiled static PrivateGet, with its identity and initialization checks.
+#[no_mangle]
+pub extern "C" fn js_private_static_field_get(
+    receiver: f64,
+    brand_owner: f64,
+    class_id: u32,
+    name_ptr: *const u8,
+    name_len: u32,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let brand_owner = scope.root_nanbox_f64(brand_owner);
+    let name = unsafe { std::slice::from_raw_parts(name_ptr, name_len as usize) };
+    private_guard_checked(
+        receiver.get_nanbox_f64(),
+        brand_owner.get_nanbox_f64(),
+        class_id,
+        name,
+        0,
+        2,
+        false,
+    );
+    let name = intern_private_name(name).unwrap();
+    static_private_field_key(class_id, name).get(receiver.get_nanbox_f64())
+}
+
+/// A compiled static PrivateSet: called after evaluating the right-hand side.
+#[no_mangle]
+pub extern "C" fn js_private_static_field_set(
+    receiver: f64,
+    brand_owner: f64,
+    class_id: u32,
+    name_ptr: *const u8,
+    name_len: u32,
+    value: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let brand_owner = scope.root_nanbox_f64(brand_owner);
+    let value = scope.root_nanbox_f64(value);
+    let name = unsafe { std::slice::from_raw_parts(name_ptr, name_len as usize) };
+    private_guard_checked(
+        receiver.get_nanbox_f64(),
+        brand_owner.get_nanbox_f64(),
+        class_id,
+        name,
+        0,
+        3,
+        false,
+    );
+    let name = intern_private_name(name).unwrap();
+    assert!(static_private_field_key(class_id, name)
+        .set_cached(receiver.get_nanbox_f64(), value.get_nanbox_f64()));
+    value.get_nanbox_f64()
+}
+
 fn private_storage_evaluation_id(class_id: u32, receiver: Option<f64>, owner: Option<u64>) -> u64 {
     let Some(brand) = owner
         .or_else(|| current_private_lexical_brand(class_id))
@@ -79,6 +180,11 @@ fn private_evaluation_field_get(
     key: *const crate::StringHeader,
 ) -> Option<f64> {
     let (class_id, name) = unsafe { private_value_request(key) }?;
+    let receiver = private_member_receiver(obj);
+    if private_static_receiver_is_constructor(receiver) {
+        // Static fields use explicit PrivateGet, never a property string.
+        return None;
+    }
     if !private_template_may_be_evaluated(class_id) {
         let receiver = private_member_receiver(obj);
         let name = intern_private_name(name.as_bytes()).unwrap();
@@ -107,6 +213,11 @@ fn private_evaluation_field_set(
     let Some((class_id, name)) = (unsafe { private_value_request(key) }) else {
         return false;
     };
+    let receiver = private_member_receiver(obj);
+    if private_static_receiver_is_constructor(receiver) {
+        // Static fields use explicit PrivateSet, never a property string.
+        return false;
+    }
     if !private_template_may_be_evaluated(class_id) {
         let receiver = private_member_receiver(obj);
         let name = intern_private_name(name.as_bytes()).unwrap();

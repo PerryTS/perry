@@ -321,7 +321,7 @@ pub(crate) use ic_miss::intrinsic_private_add;
 pub(crate) use ic_miss::intrinsic_private_set;
 pub(crate) use ic_miss::{
     bind_primitive_proto_method_static, cannot_be_private_member_name, class_evaluation_of,
-    current_private_lexical_brand_value, is_array_method_value_name,
+    current_private_lexical_brand_value, define_static_private_field, is_array_method_value_name,
     note_private_template_evaluated, private_evaluation_brand_value, private_lexical_brand_pop,
     private_lexical_brand_push, private_lexical_brand_stack_restore,
     private_lexical_brand_stack_savepoint, private_member_access_hints_restore,
