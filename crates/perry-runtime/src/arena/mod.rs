@@ -4,7 +4,6 @@
 //! Objects allocated here are not individually freed - the entire arena
 //! can be reset at once (e.g., at end of program or during GC).
 
-pub(crate) use std::alloc::{alloc, Layout};
 pub(crate) use std::cell::{Cell, RefCell, UnsafeCell};
 pub(crate) use std::collections::hash_map::Entry;
 
@@ -13,6 +12,7 @@ mod allocators;
 mod block;
 mod construction;
 mod from_space;
+mod region;
 pub(crate) use construction::ConstructionBatch;
 mod inline;
 mod map_allocations;

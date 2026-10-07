@@ -4,7 +4,7 @@ use super::*;
 fn reused_blocks_restart_the_window_and_cold_blocks_are_advised_once() {
     crate::arena::tests::run_with_fresh_arenas(|| unsafe {
         let size = BLOCK_SIZE;
-        let raw = alloc(Layout::from_size_align(size, 16).unwrap());
+        let raw = crate::arena::region::map(crate::arena::region::Kind::NurseryBlock, size);
         assert!(!raw.is_null());
         assert!(block_pool_put(raw, size));
         assert_eq!(advance_block_pool_reuse_window(), 0);
@@ -23,7 +23,7 @@ fn reused_blocks_restart_the_window_and_cold_blocks_are_advised_once() {
 }
 
 unsafe fn dealloc_for_test(raw: *mut u8, size: usize) {
-    std::alloc::dealloc(raw, Layout::from_size_align(size, 16).unwrap());
+    crate::arena::region::unmap(raw, size);
 }
 
 #[cfg(target_os = "linux")]
@@ -48,7 +48,7 @@ fn real_collection_publication_keeps_warm_pages_and_releases_unused_pages() {
         // size: unrelated initial 1 MiB arenas cannot consume this 2 MiB entry.
         crate::gc::js_gc_collect();
         let size = 2 * BLOCK_SIZE;
-        let raw = alloc(Layout::from_size_align(size, 16).unwrap());
+        let raw = crate::arena::region::map(crate::arena::region::Kind::NurseryBlock, size);
         assert!(!raw.is_null());
         std::ptr::write_bytes(raw, 0xa5, size);
         let resident = resident_pages(raw, size);

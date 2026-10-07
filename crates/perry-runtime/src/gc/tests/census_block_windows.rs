@@ -5,7 +5,8 @@
 //! is queried at every block edge, inside every block, between blocks and far
 //! outside the heap, and each answer is compared with the binary search it
 //! replaces. The sabotaged twin ignores the base inside a window and the
-//! comparison notices. A fabricated set whose bases share a window keeps the
+//! comparison notices on deliberately unaligned input. A fabricated set whose
+//! bases share a window keeps the
 //! binary search.
 
 use super::super::*;
@@ -99,8 +100,16 @@ fn the_block_window_index_answers_exactly_like_the_fence_search() {
 #[test]
 fn sabotaged_block_window_lookup_is_caught_by_the_comparison() {
     run_isolated(|| {
-        unsafe { plant() };
-        let valid = ValidPointerSetBuilder::new().finish();
+        // OS regions start on a window boundary, where ignoring the base
+        // offset is equivalent. Keep this adversarial input independent of
+        // allocator placement; the preceding test covers the real heap.
+        let mut valid = ValidPointerSet::new();
+        let base = 0x7000_0000_1000usize;
+        valid.begin_arena_block(0, base, 64 * 1024);
+        valid.push_arena(base + GC_HEADER_SIZE);
+        valid.build_block_windows();
+        assert!(!valid.block_windows.is_empty());
+        assert_eq!(mismatches(&valid).1, 0, "unaltered lookup must agree");
         let (_, wrong) = {
             let _sabotage = block_window_sabotage::Guard::arm();
             mismatches(&valid)
