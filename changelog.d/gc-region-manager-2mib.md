@@ -7,3 +7,8 @@ This unifies usable block geometry with the OS huge-page unit without adding
 a pointer registry or changing object layouts or marking. Preserve whole-arena
 GC headroom after small parses by comparing with that arena threshold instead
 of the nursery cap; block rounding no longer rearms an already satisfied minor.
+
+Restore the stream churn test's payload-prototype, runtime-handle, shape and
+queue scanners inside its isolated copying-GC setup so batch collections
+retain the roots the workload uses. Keep the release, drop, finalization and
+anonymous-RSS assertions unchanged.

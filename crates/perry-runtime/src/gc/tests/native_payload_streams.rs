@@ -79,6 +79,16 @@ fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
     // Isolate scanner/cache roots just like the other copying-GC witnesses.
     let _gc = super::support::CopyingNurseryTestGuard::new(0);
     let _reset = FamilyReset::new();
+    // The isolation guard suppresses automatic scanner registration. Restore
+    // the roots used by this stream workload, including its cached prototype
+    // and handles, before a batch collection can sweep or move them.
+    super::support::register_runtime_handle_root_scanner_for_tests();
+    crate::gc::gc_register_mutable_root_scanner(
+        crate::native_payload::scan_payload_prototype_roots_mut,
+    );
+    crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    crate::gc::gc_register_mutable_root_scanner(crate::promise::scan_promise_roots_mut);
+    crate::gc::gc_register_mutable_root_scanner(crate::timer::scan_timer_roots_mut);
     // Warm the larger backing before measuring six complete churn batches.
     // Keep the RSS bound and all release/drop/finalization checks unchanged.
     const BLOCK_SCALE: usize = crate::arena::BLOCK_SIZE / (1024 * 1024);
