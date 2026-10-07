@@ -68,16 +68,13 @@ static KEEP_JS_VALUE_BUFFER_OR_TYPEDARRAY_DATA: unsafe extern "C" fn(f64, *mut u
     js_value_buffer_or_typedarray_data;
 
 fn buffer_addr_from_raw(ptr: i64) -> Option<usize> {
-    if ptr == 0 || (ptr as u64) < 0x1000 {
-        return None;
-    }
-    // Strip NaN-boxing tags if present
-    let addr = if ((ptr as u64) >> 48) != 0 {
-        (ptr as u64) & 0x0000_FFFF_FFFF_FFFF
-    } else {
-        ptr as u64
-    };
-    Some(addr as usize)
+    // The brand probes read the cell's header, so the word is classified by
+    // its tag first: only a POINTER payload or an allocator-owned raw pointer
+    // is an address. If any other tag were stripped to its low 48 bits, a
+    // number such as an fd of 65 (`0x4050_4000_0000_0000`) would decode to a
+    // heap-window address and the header read would fault.
+    let addr = crate::value::addr_class::object_ref_addr(f64::from_bits(ptr as u64));
+    (addr != 0).then_some(addr)
 }
 
 /// Check whether a value uses Perry's shared BufferHeader storage.
@@ -114,6 +111,31 @@ mod buffer_brand_tests {
         assert_eq!(js_buffer_is_node_buffer(buffer as i64), 1);
         assert_eq!(js_buffer_is_buffer(uint8array as i64), 1);
         assert_eq!(js_buffer_is_node_buffer(uint8array as i64), 0);
+    }
+
+    /// The brand probe takes a raw pointer or any NaN-boxed word, and only a
+    /// POINTER payload or an allocator-owned raw word is an address. Numbers
+    /// (an fd of 65 is `0x4050_4000_0000_0000`, whose low 48 bits fall in the
+    /// heap window) and other tags are not buffers and are never read.
+    /// Sabotage: stripping any tag to its low 48 bits faults on the fd.
+    #[test]
+    fn brand_probes_classify_the_word_by_tag_first() {
+        let buffer = buffer_alloc(4);
+        let boxed = crate::value::js_nanbox_pointer(buffer as i64).to_bits() as i64;
+        let words = [
+            (buffer as i64, 1),
+            (boxed, 1),
+            (65.0f64.to_bits() as i64, 0),
+            (3.0f64.to_bits() as i64, 0),
+            ((crate::value::INT32_TAG | 65) as i64, 0),
+            (crate::value::TAG_UNDEFINED as i64, 0),
+            (0, 0),
+        ];
+        let observed: Vec<(i64, i32)> = words
+            .iter()
+            .map(|&(word, _)| (word, js_buffer_is_buffer(word)))
+            .collect();
+        assert_eq!(observed, words.to_vec());
     }
 }
 
