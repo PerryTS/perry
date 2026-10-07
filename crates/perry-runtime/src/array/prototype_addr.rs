@@ -158,7 +158,7 @@ static PROTOTYPE_ADDR_BUILTINS: [&[u8]; PROTOTYPE_ADDR_CACHE_COUNT] = [
 ///
 /// The cells hold raw addresses of movable objects, so a relocating cycle must
 /// REWRITE them exactly like the other address-holding side tables
-/// (`CLASS_PROTOTYPE_OBJECTS`, `TYPED_ARRAY_VIEW_META`, …). Forwarding-chain
+/// (`CLASS_PROTOTYPE_OBJECTS`, …). Forwarding-chain
 /// healing alone is not sufficient: once the from-space stub is swept and its
 /// block recycled the `GC_FLAG_FORWARDED` bit is gone, and the cache would then
 /// name an unrelated live object. Both intrinsics are reachable from
