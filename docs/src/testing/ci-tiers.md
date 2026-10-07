@@ -77,7 +77,7 @@ Within the **pr** tier the changed-file list narrows the plan further:
 - **core** (anything that can change the compiler, the runtime, or a test outcome)
   → the whole PR tier.
 - **deps** (a lockfile, manifest, `deny.toml`, `package.json`, `.claude/`, `skills/`,
-  …) → additionally the `security-audit` reusable workflow.
+  …) → additionally the inlined `security-audit` suite.
 
 Within `cargo-test`, runtime changes also select `perry-stdlib` unit tests:
 those tests exercise runtime GC, arenas, closures, promises and the event loop.

@@ -1,5 +1,7 @@
 # GitHub Actions consolidation implementation plan
 
+> **Follow-up status (2026-10):** the initial rollout below retained reusable child workflow files. The follow-up now inlines those suite jobs into the ten entrypoints and removes the child YAML files. Instructions below that require `workflow_call` or retained child files describe the original rollout and are superseded by that follow-up.
+
 Implement 10 category entrypoints with related suites shown as nested jobs. This is a handoff for `gpt-6-luna` with low reasoning and the user's Fast setting. Follow the numbered phases in order. The plan supplies the architecture, filenames, routing rules, exceptions, validation cases, and completion criteria; do not redesign these during implementation.
 
 Read `CLAUDE.md` in full before work. This plan covers workflow implementation and preparation for review. Its rollout section describes a later operator task; implementing the plan does not itself authorize publishing packages, merging, cancelling runs, or deleting run history.

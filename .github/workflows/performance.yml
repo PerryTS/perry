@@ -3,35 +3,34 @@ run-name: ${{ format('Performance / {0} / {1}', inputs.suite || 'scheduled', git
 on:
   pull_request:
     types:
-    - labeled
-    - opened
-    - reopened
-    - synchronize
+      - labeled
+      - opened
+      - reopened
+      - synchronize
   push:
     tags:
-    - v*
+      - v*
   release:
     types:
-    - published
+      - published
   schedule:
-  - cron: 0 3 * * *
-  - cron: 27 */6 * * *
-  - cron: 30 4 * * *
+    - cron: 0 3 * * *
+    - cron: 27 */6 * * *
+    - cron: 30 4 * * *
   workflow_dispatch:
     inputs:
       suite:
         description: Performance suite or all suites.
         type: choice
         options:
-        - all
-        - benchmark
-        - tak-performance
-        - tls-budget
+          - all
+          - benchmark
+          - tak-performance
+          - tls-budget
         default: all
 permissions: {}
 concurrency:
-  group: performance-${{ github.event_name == 'pull_request' && github.ref || github.run_id
-    }}
+  group: performance-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   route:
@@ -45,60 +44,912 @@ jobs:
       selection: ${{ steps.route.outputs.selection }}
       module_inputs: ${{ steps.route.outputs.module_inputs }}
     steps:
-    - uses: ./.github/actions/perry/actions/checkout
-      with:
-        ref: ${{ github.sha }}
-        fetch-depth: '1'
-        persist-credentials: 'false'
-    - name: Route suites
-      id: route
-      env:
-        SUITE: ${{ inputs.suite }}
-        GH_TOKEN: ${{ github.token }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        EVENT_NAME: ${{ github.event_name }}
-        EVENT_PATH: ${{ github.event_path }}
-        REF: ${{ github.ref }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        args=(--category performance --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
-        if [[ "$EVENT_NAME" == "pull_request" ]]; then
-          python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
-          args+=(--changed-files changed-files.txt)
-        fi
-        args+=(--suite "${SUITE:-}")
-        python3 scripts/actions_plan.py "${args[@]}"
-        pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
-        \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
-        \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
-        \ \"${args[@]}\"\n"
-  benchmark:
-    name: benchmark
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['benchmark']
+      - uses: ./.github/actions/perry/actions/checkout
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: '1'
+          persist-credentials: 'false'
+      - name: Route suites
+        id: route
+        env:
+          SUITE: ${{ inputs.suite }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          REF: ${{ github.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--category performance --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+            args+=(--changed-files changed-files.txt)
+          fi
+          args+=(--suite "${SUITE:-}")
+          python3 scripts/actions_plan.py "${args[@]}"
+          pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
+          \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
+          \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
+          \ \"${args[@]}\"\n"
+  benchmark__performance:
+    runs-on: macos-14
+    timeout-minutes: 100
+    outputs:
+      status: ${{ steps.compare.outputs.status }}
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "2"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - name: Cache cargo
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Setup Node.js (for perf comparison)
+        uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - name: Setup Bun (for perf comparison)
+        uses: ./.github/actions/perry/oven-sh/setup-bun
+        with:
+          bun-version: '1.3.14'
+      - name: Install pinned HTTP load generator
+        run: cargo install oha --version 1.15.0 --locked
+      - name: Build release perry
+        run: cargo build --release
+      - name: Run benchmarks (median of 5 runs)
+        id: compare
+        run: |
+          # The default runner shell is `bash -e` WITHOUT pipefail, so the
+          # `compare.sh | tee` pipeline below would otherwise report tee's
+          # exit status and swallow a hard-fail regression exit.
+          set -o pipefail
+
+          # Release tags: hard-fail. Everything else: warn-only.
+          if [[ "$IS_RELEASE" == "true" ]]; then
+            WARN_FLAG=""
+            echo "Mode: RELEASE GATE (hard-fail on regressions)"
+          else
+            WARN_FLAG="--warn-only"
+            echo "Mode: warn-only (non-blocking)"
+          fi
+
+          mkdir -p .bench-results
+
+          # Run full suite (15 base benchmarks + 9 regression-probe benchmarks)
+          ./benchmarks/compare.sh \
+            --full \
+            --runs 5 \
+            --json-out .bench-results/current.json \
+            --speed-threshold 20 \
+            --memory-threshold 30 \
+            $WARN_FLAG \
+            | tee .bench-results/output.txt
+
+          # Capture status for the summary job
+          if python3 - <<'PY'
+          import json
+          cur = json.load(open(".bench-results/current.json"))
+          raise SystemExit(0 if any(
+              entry.get("correctness", {}).get("status") == "fail"
+              for entry in cur.get("benchmarks", {}).values()
+          ) else 1)
+          PY
+          then
+            echo "status=invalid" >> "$GITHUB_OUTPUT"
+          elif grep -q "REGRESSION" .bench-results/output.txt; then
+            echo "status=regression" >> "$GITHUB_OUTPUT"
+          elif grep -q "improvement" .bench-results/output.txt; then
+            echo "status=improved" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=ok" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Track deterministic Fastify HTTP signals
+        if: always()
+        env:
+          HONEST_BENCH_ONLY: '4'
+          HONEST_BENCH_WARMUP: '1'
+          HONEST_BENCH_MEASURED: '5'
+          HONEST_BENCH_HTTP_WARMUP_DUR: '5s'
+          HONEST_BENCH_HTTP_DURATION: '15s'
+          HONEST_BENCH_HTTP_CONC: '10'
+        run: |
+          test -x target/release/perry
+          export HONEST_BENCH_OHA="$(command -v oha)"
+          ./benchmarks/honest_bench/run.sh
+          cp benchmarks/honest_bench/results/results.json .bench-results/http-fastify-raw.json
+          cp benchmarks/honest_bench/results/metadata.json .bench-results/http-fastify-metadata.json
+          python3 benchmarks/benchmark_gate.py http-summary \
+            --input .bench-results/http-fastify-raw.json \
+            --metadata .bench-results/http-fastify-metadata.json \
+            --samples 5 \
+            --output .bench-results/http-fastify.json
+      - name: Generate GitHub Actions summary
+        if: always()
+        run: |
+          python3 <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          cur_path = ".bench-results/current.json"
+          base_path = "benchmarks/baseline.json"
+          if not os.path.exists(cur_path):
+              print("## Benchmark run failed")
+              print("No current results JSON produced.")
+              exit(0)
+          from benchmarks.benchmark_gate import evaluate_regressions, load_artifact
+
+          cur = load_artifact(cur_path)
+          base = load_artifact(base_path) if os.path.exists(base_path) else {"benchmarks": {}}
+          gate = evaluate_regressions(base, cur, speed_threshold_pct=20, memory_threshold_pct=30)
+          gate_rows = {row.name: row for row in gate.rows}
+          mode = "RELEASE GATE" if os.environ.get("IS_RELEASE") == "true" else "tracking (warn-only)"
+
+          print(f"## Performance Regression Check — {mode}")
+          print()
+          print(f"- Baseline commit: `{base.get('commit','?')}`")
+          print(f"- Current commit:  `{cur.get('commit','?')}`")
+          print(f"- Runner: macos-14 / median of 5 runs")
+          for runtime, metadata in cur.get("runtimes", {}).items():
+              availability = metadata.get("version") if metadata.get("available") else "unavailable"
+              command = " ".join(metadata.get("command", []))
+              print(f"- {runtime.title()}: `{availability}` via `{command}`")
+          print()
+          def md(value):
+              return str(value).replace("|", "\\|")
+
+          def evidence(correctness):
+              status = correctness.get("status", "unchecked")
+              if status == "fail":
+                  parts = []
+                  expected = correctness.get("expected_lines") or []
+                  actual = correctness.get("actual_lines") or []
+                  if expected:
+                      parts.append("expected " + ", ".join(f"`{md(line)}`" for line in expected))
+                  if actual:
+                      parts.append("actual " + ", ".join(f"`{md(line)}`" for line in actual))
+                  reason = correctness.get("reason")
+                  if reason:
+                      parts.append(md(reason))
+                  return "<br>".join(parts)
+              lines = correctness.get("expected_lines") or correctness.get("actual_lines") or []
+              if lines:
+                  return "<br>".join(f"`{md(line)}`" for line in lines)
+              return md(correctness.get("reason", ""))
+
+          def dist(entry, runtime, metric="wall_ms"):
+              values = entry.get("runtimes", {}).get(runtime, {}).get(metric)
+              if not values:
+                  return "-"
+              return f"{values['median']} [{values['min']}–{values['p95']}]"
+
+          def ratio(entry, peer):
+              values = entry.get("ratios", {}).get(f"perry_to_{peer}")
+              return "-" if not values else values.get("wall_time", "-")
+
+          print("| Benchmark | Correctness | Evidence | Perry ms med [min–p95] | Node | Bun | P/Node | P/Bun | Noise | Δ Speed | Perry RAM KB |")
+          print("|-----------|-------------|----------|------------------------:|-----:|----:|-------:|------:|------:|--------:|-------------:|")
+          for name, c in cur["benchmarks"].items():
+              correctness = c.get("correctness", {
+                  "status": "unchecked",
+                  "reference": "none",
+                  "actual_lines": [],
+                  "expected_lines": [],
+                  "reason": "no correctness report",
+              })
+              correctness_status = correctness.get("status", "unchecked")
+              correctness_evidence = evidence(correctness)
+              row = gate_rows[name]
+              d_speed = "-" if row.speed_delta_pct is None else f"{row.speed_delta_pct:+.1f}% ({row.status})"
+              if correctness_status == "fail":
+                  d_speed = "invalid"
+              print(f"| `{name}` | {correctness_status} | {correctness_evidence} | {dist(c, 'perry')} | {dist(c, 'node')} | {dist(c, 'bun')} | {ratio(c, 'node')} | {ratio(c, 'bun')} | {row.speed_noise_ms:.1f} ms | {d_speed} | {dist(c, 'perry', 'rss_kb')} |")
+
+          http_path = ".bench-results/http-fastify.json"
+          if os.path.exists(http_path):
+              http = json.load(open(http_path))
+              print()
+              print("## Fastify HTTP tracking")
+              print()
+              print("Fixed loopback load: 1 warmup, 5 × 15s samples, concurrency 10. No HTTP performance threshold is applied; missing or unhealthy samples still fail collection.")
+              print()
+              print("| Kernel | Runtime | RPS med [min–p95] | p50 ms | p95 ms | p99 ms |")
+              print("|--------|---------|------------------:|-------:|-------:|-------:|")
+              for workload, workload_data in http["workloads"].items():
+                  kernel = workload.removeprefix("http_fastify_")
+                  for runtime, runtime_data in workload_data["runtimes"].items():
+                      rps = runtime_data["rps"]
+                      print(f"| `{kernel}` | {runtime} | {rps['median']} [{rps['min']}–{rps['p95']}] | {runtime_data['p50_ms']['median']} | {runtime_data['p95_ms']['median']} | {runtime_data['p99_ms']['median']} |")
+          PY
+      - name: Upload benchmark results
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: |
+            .bench-results/current.json
+            .bench-results/output.txt
+            .bench-results/http-fastify.json
+            .bench-results/http-fastify-raw.json
+            .bench-results/http-fastify-metadata.json
+            benchmarks/baseline.json
+          retention-days: 90
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['benchmark'] }}
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+  # Release gate: hard-fail on any regression
+  # Nightly / workflow_dispatch: just warn, don't block (noisy CI runners produce false positives)
+      IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' }}
+
     permissions:
       contents: write
-    secrets:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    uses: ./.github/workflows/benchmark.yml
-  tak-performance:
-    name: tak-performance
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['tak-performance']
+    name: Regression Check / performance
+  benchmark__binary-size:
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - name: Cache cargo
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Build release binaries
+        run: cargo build --release
+      - name: Measure and compare binary sizes
+        run: |
+          mkdir -p .bench-results
+          python3 <<'PY'
+          import json, os, subprocess
+          targets = {
+              "perry": "target/release/perry",
+              "libperry_runtime": "target/release/libperry_runtime.a",
+              "libperry_stdlib": "target/release/libperry_stdlib.a",
+          }
+          sizes = {}
+          for name, path in targets.items():
+              if os.path.exists(path):
+                  sizes[name] = os.path.getsize(path)
+          commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                                  capture_output=True, text=True).stdout.strip()
+          current = {"commit": commit, "sizes": sizes}
+          with open(".bench-results/binary-sizes.json", "w") as f:
+              json.dump(current, f, indent=2)
+
+          baseline_path = "benchmarks/binary-size-baseline.json"
+          baseline = json.load(open(baseline_path)) if os.path.exists(baseline_path) else {"sizes": {}}
+
+          is_release = os.environ.get("IS_RELEASE") == "true"
+          fail_threshold = 15  # percent
+          warn_threshold = 5
+
+          summary = ["## Binary Size Check\n",
+                     f"- Commit: `{commit}`",
+                     f"- Baseline commit: `{baseline.get('commit','?')}`\n",
+                     "| Binary | Current | Baseline | Change |",
+                     "|--------|--------:|---------:|-------:|"]
+          regressions = []
+          for name, size in sizes.items():
+              base = baseline.get("sizes", {}).get(name)
+              if base and base > 0:
+                  pct = (size - base) / base * 100
+                  if pct > fail_threshold:
+                      emoji = "🔴"
+                      regressions.append(f"{name}: +{pct:.1f}% ({base} → {size} bytes)")
+                  elif pct > warn_threshold:
+                      emoji = "🟡"
+                  elif pct < -warn_threshold:
+                      emoji = "🟢"
+                  else:
+                      emoji = ""
+                  change = f"{emoji} {pct:+.1f}% ({size - base:+d} B)"
+              else:
+                  change = "new"
+              base_str = f"{base:,}" if base else "-"
+              summary.append(f"| `{name}` | {size:,} | {base_str} | {change} |")
+
+          step_sum = os.environ.get("GITHUB_STEP_SUMMARY")
+          if step_sum:
+              with open(step_sum, "a") as f:
+                  f.write("\n".join(summary) + "\n")
+          print("\n".join(summary))
+
+          if is_release and regressions:
+              print("\n❌ Binary size regressions exceed threshold:", flush=True)
+              for r in regressions:
+                  print(f"  - {r}")
+              raise SystemExit(1)
+          PY
+      - name: Upload binary size results
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: binary-sizes-${{ github.sha }}
+          path: .bench-results/binary-sizes.json
+          retention-days: 90
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['benchmark'] }}
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+  # Release gate: hard-fail on any regression
+  # Nightly / workflow_dispatch: just warn, don't block (noisy CI runners produce false positives)
+      IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' }}
+
+    permissions:
+      contents: write
+    name: Regression Check / binary-size
+  benchmark__compile-time:
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - name: Measure clean-build time
+        run: |
+          mkdir -p .bench-results
+          # Three clean builds, report median
+          TIMES=()
+          for i in 1 2 3; do
+            cargo clean -q
+            START=$(date +%s)
+            cargo build --release -q
+            END=$(date +%s)
+            ELAPSED=$((END - START))
+            echo "run $i: ${ELAPSED}s"
+            TIMES+=("$ELAPSED")
+          done
+          python3 <<PY > .bench-results/compile-time.json
+          import json, subprocess
+          times = sorted([$(IFS=,; echo "${TIMES[*]}")])
+          median = times[1]
+          commit = subprocess.run(["git","rev-parse","--short","HEAD"],capture_output=True,text=True).stdout.strip()
+          print(json.dumps({"commit": commit, "clean_build_seconds_median": median, "samples": times}))
+          PY
+          cat .bench-results/compile-time.json
+
+          # Emit summary
+          MEDIAN=$(python3 -c "import json; print(json.load(open('.bench-results/compile-time.json'))['clean_build_seconds_median'])")
+          {
+            echo "## Compile-Time Check"
+            echo ""
+            echo "Clean \`cargo build --release\` (median of 3): **${MEDIAN}s**"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload compile-time results
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: compile-time-${{ github.sha }}
+          path: .bench-results/compile-time.json
+          retention-days: 90
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['benchmark'] }}
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+  # Release gate: hard-fail on any regression
+  # Nightly / workflow_dispatch: just warn, don't block (noisy CI runners produce false positives)
+      IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' }}
+
+    permissions:
+      contents: write
+    name: Regression Check / compile-time
+  benchmark__update-baseline:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['benchmark'] && (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AUTO_UPDATE_BASELINE == 'true') }}
+    runs-on: macos-14
+    needs:
+      - route
+      - benchmark__performance
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Download benchmark results
+        uses: ./.github/actions/perry/actions/download-artifact
+        with:
+          name: benchmark-results-${{ github.sha }}
+          path: .bench-results
+      - name: Update baseline if improvements
+        run: |
+          if [[ "${{ needs.benchmark__performance.outputs.status }}" != "improved" ]]; then
+            echo "No improvements to commit"
+            exit 0
+          fi
+          cp .bench-results/current.json benchmarks/baseline.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add benchmarks/baseline.json
+          if git diff --staged --quiet; then
+            echo "No baseline changes"
+            exit 0
+          fi
+          git commit -m "chore: update performance baseline [skip ci]"
+          git push
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+  # Release gate: hard-fail on any regression
+  # Nightly / workflow_dispatch: just warn, don't block (noisy CI runners produce false positives)
+      IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' }}
+
+    name: Regression Check / update-baseline
+  benchmark:
+    name: Regression Check / suite result
+    needs:
+      - route
+      - benchmark__performance
+      - benchmark__binary-size
+      - benchmark__compile-time
+      - benchmark__update-baseline
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['benchmark']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["benchmark__performance","benchmark__binary-size","benchmark__compile-time","benchmark__update-baseline"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  tak-performance__report:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - name: Cache cargo and Perry build
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-tak-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Cache pinned tak binary
+        id: tak-cache
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: ~/.cargo/bin/tak
+          key: tak-ubuntu-24.04-x64-cli-0.0.14
+      - name: Install Valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y 'valgrind=1:3.22.0-0ubuntu3'
+          valgrind --version | grep -F 'valgrind-3.22.0'
+      - name: Install tak
+        if: steps.tak-cache.outputs.cache-hit != 'true'
+        run: cargo install tak-cli@0.0.14 --locked
+      - name: Build Perry
+        run: |
+          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          test -s target/release/perry
+          test -s target/release/libperry_runtime.a
+          test -s target/release/libperry_stdlib.a
+      - name: Record tak CLI report
+        run: |
+          mkdir -p .tak-results
+          set +e
+          tak run --no-progress --record --export-json .tak-results/tak-cli.json \
+            > .tak-results/summary.txt 2>&1
+          status=$?
+          set -e
+          {
+            echo '## Perry CLI performance (tak)'
+            echo
+            echo 'Report-only: wall-clock samples are informational. Instruction counts are retained for review; no regression threshold is applied yet.'
+            echo
+            echo '```text'
+            cat .tak-results/summary.txt
+            echo '```'
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          tak artifact export --output .tak-results/tak-measurement.json
+          exit "$status"
+      - name: Include tak binary for history publisher
+        if: always() && hashFiles('.tak-results/tak-measurement.json') != ''
+        run: cp "$(command -v tak)" .tak-results/tak
+      - name: Upload tak report
+        if: always() && hashFiles('.tak-results/tak-measurement.json') != ''
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: tak-performance-${{ github.sha }}
+          path: .tak-results/
+          if-no-files-found: warn
+          retention-days: 90
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['tak-performance'] }}
     permissions:
       contents: write
       actions: read
-    secrets:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-    uses: ./.github/workflows/tak-performance.yml
-  tls-budget:
-    name: tls-budget
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['tls-budget']
+    name: tak Performance Report / report
+  tak-performance__publish:
+    needs:
+      - route
+      - tak-performance__report
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['tak-performance'] && (always() && needs.tak-performance__report.result == 'success' && (github.event_name == 'schedule' || startsWith(github.ref, 'refs/tags/v'))) }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - name: Download measurement artifact
+        uses: ./.github/actions/perry/actions/download-artifact
+        with:
+          name: tak-performance-${{ github.sha }}
+          path: .tak-results
+      - name: Restore tak binary
+        run: |
+          install -m 0755 .tak-results/tak "$RUNNER_TEMP/tak"
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Publish measurements and identify regression commits
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tak artifact publish .tak-results/tak-measurement.json --expect "$GITHUB_SHA"
+          tak log --limit 10 > .tak-results/history.txt 2>&1
+          tak detect --no-gate --allow-empty > .tak-results/detect.txt 2>&1
+          {
+            echo '## Perry performance history by commit (tak)'
+            echo
+            cat .tak-results/history.txt
+            echo
+            echo '## Instruction-count steps and introducing commits'
+            echo
+            cat .tak-results/detect.txt
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload commit history and detected steps
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: tak-performance-history-${{ github.sha }}
+          path: |
+            .tak-results/history.txt
+            .tak-results/detect.txt
+          if-no-files-found: warn
+          retention-days: 90
+    name: tak Performance Report / publish
+  tak-performance:
+    name: tak Performance Report / suite result
+    needs:
+      - route
+      - tak-performance__report
+      - tak-performance__publish
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['tak-performance']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["tak-performance__report","tak-performance__publish"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  tls-budget__self-test-checkers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Self-test the budget verdict logic
+        run: python3 scripts/tls_budget_check.py --self-test
+      - name: Self-test the pre-attach liveness check
+        run: bash scripts/tls_budget_gate.sh --self-test
+      - name: Self-test the thread-local policy checker
+        run: python3 scripts/check_thread_locals.py --self-test
+      - name: Enforce the thread-local policy ratchet
+        run: python3 scripts/check_thread_locals.py
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['tls-budget'] }}
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/tls-budget.yml
+    name: TLS Budget / self-test-checkers
+  tls-budget__tls-budget:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['tls-budget'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    runs-on: macos-14
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Decide whether this change can affect thread-local access cost
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request; running the gate."
+            exit 0
+          fi
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed.txt
+          # Deliberately broad: any runtime change can add a thread-local to a
+          # hot path, and the whole point of this gate is that such a change
+          # does not announce itself. The filter exists only to spare docs-only
+          # PRs a compiler build.
+          if grep -qE '^(crates/|benchmarks/tls-budget/|scripts/tls_budget_(gate\.sh|check\.py)$|scripts/check_thread_locals\.py$|Cargo\.(toml|lock)$|\.github/workflows/(tls-budget|performance)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Change touches a path that can move thread-local access cost."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No relevant paths changed."
+          fi
+      - name: Install Rust toolchain
+        if: steps.relevance.outputs.run == 'true'
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+        if: steps.relevance.outputs.run == 'true'
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        if: steps.relevance.outputs.run == 'true'
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build perry and the runtime archives
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          # perry-runtime and perry-stdlib are rlib-only; libperry_runtime.a
+          # and libperry_stdlib.a come from the -static wrapper crates. Building
+          # without them links a stale archive and makes the measurement
+          # vacuous (CLAUDE.md, "Verifying a runtime change").
+          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+      - name: Measure the `_tlv_get_addr` budget
+        if: steps.relevance.outputs.run == 'true'
+        env:
+          PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
+          PERRY_NO_AUTO_OPTIMIZE: "1"
+        run: scripts/tls_budget_gate.sh target/release/perry "${{ runner.temp }}/tls-budget"
+      - name: Attach the profiles
+        if: always() && steps.relevance.outputs.run == 'true'
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: tls-budget-profiles
+          path: ${{ runner.temp }}/tls-budget/*.sample
+          if-no-files-found: warn
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+    name: TLS Budget / tls-budget
+  tls-budget:
+    name: TLS Budget / suite result
+    needs:
+      - route
+      - tls-budget__self-test-checkers
+      - tls-budget__tls-budget
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['tls-budget']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["tls-budget__self-test-checkers","tls-budget__tls-budget"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY

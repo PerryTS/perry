@@ -1,31 +1,30 @@
 name: Compiler and Runtime
-run-name: ${{ format('Compiler and Runtime / {0} / {1}', inputs.suite || 'scheduled',
-  github.ref_name) }}
+run-name: ${{ format('Compiler and Runtime / {0} / {1}', inputs.suite || 'scheduled', github.ref_name) }}
 on:
   pull_request:
     types:
-    - labeled
-    - opened
-    - reopened
-    - synchronize
+      - labeled
+      - opened
+      - reopened
+      - synchronize
   push:
     tags:
-    - v*
+      - v*
   schedule:
-  - cron: 32 */6 * * *
-  - cron: 42 */6 * * *
-  - cron: 52 4 * * *
+    - cron: 32 */6 * * *
+    - cron: 42 */6 * * *
+    - cron: 52 4 * * *
   workflow_dispatch:
     inputs:
       suite:
         description: Compiler/runtime suite or all suites.
         type: choice
         options:
-        - all
-        - llvm-inprocess
-        - cc-parity
-        - eh-transport
-        - ext-link
+          - all
+          - llvm-inprocess
+          - cc-parity
+          - eh-transport
+          - ext-link
         default: all
 permissions: {}
 concurrency:
@@ -43,65 +42,881 @@ jobs:
       selection: ${{ steps.route.outputs.selection }}
       module_inputs: ${{ steps.route.outputs.module_inputs }}
     steps:
-    - uses: ./.github/actions/perry/actions/checkout
-      with:
-        ref: ${{ github.sha }}
-        fetch-depth: '1'
-        persist-credentials: 'false'
-    - name: Route suites
-      id: route
-      env:
-        SUITE: ${{ inputs.suite }}
-        GH_TOKEN: ${{ github.token }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        EVENT_NAME: ${{ github.event_name }}
-        EVENT_PATH: ${{ github.event_path }}
-        REF: ${{ github.ref }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        args=(--category compiler-runtime --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
-        if [[ "$EVENT_NAME" == "pull_request" ]]; then
-          python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
-          args+=(--changed-files changed-files.txt)
-        fi
-        args+=(--suite "${SUITE:-}")
-        python3 scripts/actions_plan.py "${args[@]}"
-        pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
-        \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
-        \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
-        \ \"${args[@]}\"\n"
+      - uses: ./.github/actions/perry/actions/checkout
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: '1'
+          persist-credentials: 'false'
+      - name: Route suites
+        id: route
+        env:
+          SUITE: ${{ inputs.suite }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          REF: ${{ github.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--category compiler-runtime --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+            args+=(--changed-files changed-files.txt)
+          fi
+          args+=(--suite "${SUITE:-}")
+          python3 scripts/actions_plan.py "${args[@]}"
+          pull_request\" ]]; then\n  python3 scripts/ci_pr_files.py \"$GITHUB_REPOSITORY\"\
+          \ \"$PR_NUMBER\" --expected-head \"$PR_HEAD_SHA\" > changed-files.txt\n  args+=(--changed-files\
+          \ changed-files.txt)\nfi\nargs+=(--suite \"${SUITE:-}\")\npython3 scripts/actions_plan.py\
+          \ \"${args[@]}\"\n"
+  llvm-inprocess__changes:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['llvm-inprocess'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Anything that is not a pull request (the scheduled `main` sweep, a
+          # release tag, a manual dispatch) measures unconditionally: there is no
+          # PR file list to filter on, and #7856's starvation is precisely what
+          # happens when a post-merge arm quietly declines to run. Testing for
+          # `= "push"` here was correct only while `push: branches: [main]` was
+          # the post-merge trigger; under the schedule it would fall through to
+          # the PR branch, dereference an empty PR number and fail the step.
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files"             --paginate --jq '.[].filename')
+          if echo "$files" | grep -qE '^(crates/perry-codegen/|crates/perry/src/commands/compile/|experiments/llvm-inprocess-spike/|benchmarks/app-patterns/kernels/batch\.ts$|\.github/workflows/(llvm-inprocess|compiler-runtime)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+    needs:
+      - route
+    name: llvm-inprocess / changes
+  llvm-inprocess__native-backend:
+    needs:
+      - route
+      - llvm-inprocess__changes
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['llvm-inprocess'] && (needs.llvm-inprocess__changes.outputs.relevant == 'true') }}
+    runs-on: macos-15
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "0"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install LLVM 22 (pinned major — fail loudly on drift)
+        run: |
+          set -euo pipefail
+          brew install llvm@22 2>/dev/null || brew install llvm
+          PREFIX="$(brew --prefix llvm@22 2>/dev/null || brew --prefix llvm)"
+          # llvm-sys 221 requires major 22. If the runner's formula moves on,
+          # this must go red, not quietly build something else.
+          "$PREFIX/bin/llvm-config" --version | grep -q '^22\.'
+          echo "LLVM_SYS_221_PREFIX=$PREFIX" >> "$GITHUB_ENV"
+      - name: Build with the llvm-inprocess feature
+        run: |
+          cargo build --profile perry-dev -p perry -p perry-runtime-static \
+            -p perry-stdlib-static --features perry/llvm-inprocess
+      - name: Unit gates (including corpus construction + RS4GC pin)
+        run: |
+          set -euo pipefail
+          out=$(cargo test --profile perry-dev -p perry-codegen \
+            --features llvm-inprocess --lib 2>&1) || { echo "$out"; exit 1; }
+          # The corpus gates must have RUN, not skipped: a checkout missing
+          # the tracked .ll corpora would otherwise green vacuously.
+          grep -q "dialect::tests::corpus_spike ... ok" <<<"$out"
+          grep -q "dialect::tests::corpus_batch_kernel ... ok" <<<"$out"
+          grep -q "dialect::tests::corpus_exception_handling ... ok" <<<"$out"
+          # The implementation may move between inprocess submodules; the
+          # unique test name is the stable contract that proves this pin ran.
+          grep -Eq '^test .*::rs4gc_schedules_in_process \.\.\. ok$' <<<"$out"
+      - name: Corpus currency (diagnostic; the gate is `lint`'s form census)
+        if: ${{ !cancelled() }}
+        run: |
+          set -uo pipefail
+          python3 scripts/check_llvm_corpus_currency.py
+          newest=$(git log -1 --format=%ct -- experiments/llvm-inprocess-spike/*.ll)
+          if [ -z "${newest}" ]; then
+            echo "::error::corpus currency could not read git history — is this a"\
+                 "shallow checkout again? (#7982: depth 1 made this print 0 forever)"
+            exit 1
+          fi
+          behind=$(git log --oneline --since="@${newest}" -- crates/perry-codegen/src \
+            crates/perry-hir/src crates/perry-transform/src | wc -l | tr -d ' ')
+          echo "tracked .ll corpora last refreshed: $(git log -1 --format='%h %ad' \
+            --date=short -- experiments/llvm-inprocess-spike/*.ll)"
+          echo "IR-affecting commits since then (codegen+hir+transform): ${behind}"
+          {
+            echo "### llvm-inprocess corpus currency"
+            echo ""
+            echo "- corpora refreshed: \`$(git log -1 --format='%h %ad' --date=short \
+              -- experiments/llvm-inprocess-spike/*.ll)\`"
+            echo "- IR-affecting commits since: **${behind}**"
+            echo ""
+            echo "The unit corpus gates assert the reader handles that snapshot."
+            echo "Only the end-to-end smoke below exercises the IR this commit emits."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Native-mode smoke — liveness, behavior parity, object-byte verdicts
+        run: |
+          # NOTE: deliberately NOT `set -e`. Every check below reports what it
+          # was doing and dumps the captured output before exiting. The previous
+          # version used bare `grep -q` / `cmp` under `set -euo pipefail`, so the
+          # 2026-08-11 `main` failures ended at "Generating code..." with a naked
+          # `exit 1` and no diagnostic at all — three runs, untriageable (#7971).
+          # The compiler's own message was fine and named the offending IR line;
+          # it went to a captured file that nothing ever printed. That is #7982.
+          # The compilers' stderr carries the liveness banner, so it is captured
+          # to a file; that file is what went unread. It is now always dumped on
+          # failure, and the failing COMMAND is named.
+          set -uo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          BIN=target/perry-dev/perry
+          SRC=experiments/llvm-inprocess-spike/spike.ts
+          EH=test-files/test_gap_7302_invoke_eh_paths.ts
+          W=/tmp/inproc; mkdir -p "$W"
+
+          dump() {
+            for f in "$@"; do
+              [ -s "$f" ] || continue
+              echo "--- $f (last 80 lines) ---"
+              tail -80 "$f"
+            done
+          }
+
+          # run <label> -- <command...>   ; stdout/stderr captured per label
+          run() {
+            local label="$1"; shift; [ "$1" = "--" ] && shift
+            echo "==> ${label}: $*"
+            # Capture the status BEFORE any other command runs. `if ! cmd; then
+            # rc=$?` would record the NEGATED status (always 0) — the failing
+            # exit code is the one thing this whole step exists to report.
+            "$@" > "${W}/${label}.out" 2> "${W}/${label}.err"
+            local rc=$?
+            if [ "${rc}" -ne 0 ]; then
+              echo "::error::${label} FAILED (exit ${rc}): $*"
+              dump "${W}/${label}.out" "${W}/${label}.err"
+              exit 1
+            fi
+          }
+
+          # assert_grep <pattern> <file> <why this matters>
+          assert_grep() {
+            if ! grep -q "$1" "$2"; then
+              echo "::error::liveness assert failed — expected /$1/ in $2. $3"
+              dump "$2"
+              exit 1
+            fi
+            echo "    ok: /$1/ present in $(basename "$2")"
+          }
+
+          # assert_same <a> <b> <why>
+          assert_same() {
+            if ! cmp -s "$1" "$2"; then
+              echo "::error::behavior parity failed: $3"
+              echo "--- diff $1 vs $2 ---"
+              diff -u "$1" "$2" | head -60 || true
+              exit 1
+            fi
+            echo "    ok: $(basename "$1") == $(basename "$2")"
+          }
+
+          echo "::group::spike.ts — textual baseline"
+          run spike_text -- "$BIN" "$SRC" -o "${W}/spike_text"
+          run spike_text_exec -- "${W}/spike_text"
+          cp "${W}/spike_text_exec.out" "${W}/text.out"
+          echo "::endgroup::"
+
+          echo "::group::spike.ts — PERRY_LLVM_INPROCESS=native"
+          run spike_native -- env PERRY_LLVM_INPROCESS=native "$BIN" "$SRC" -o "${W}/spike_native"
+          assert_grep "in-process LLVM backend active" "${W}/spike_native.err" \
+            "The native path must announce itself; without the banner this arm would pass while silently serving the textual backend."
+          run spike_native_exec -- "${W}/spike_native"
+          assert_same "${W}/text.out" "${W}/spike_native_exec.out" \
+            "the natively-constructed module behaves differently from the textual one"
+          echo "::endgroup::"
+
+          echo "::group::spike.ts — PERRY_LLVM_INPROCESS=diff"
+          run spike_diff -- env PERRY_LLVM_INPROCESS=diff "$BIN" "$SRC" -o "${W}/spike_diff"
+          assert_grep "ir-diff. OK" "${W}/spike_diff.err" \
+            "The object-byte verdict is the whole point of diff mode; no verdict means nothing was compared."
+          echo "::endgroup::"
+
+          echo "::group::batch.ts — diff mode across 3 codegen units"
+          run batch_diff -- env PERRY_LLVM_INPROCESS=diff PERRY_CODEGEN_UNITS=3 \
+            "$BIN" benchmarks/app-patterns/kernels/batch.ts -o "${W}/batch_diff"
+          assert_grep "ir-diff. OK.*3 units" "${W}/batch_diff.err" \
+            "The multi-unit split must be exercised; a single-unit verdict here would be a narrower test wearing the same name."
+          echo "::endgroup::"
+
+          # #7302: exception handling. try/catch lowers to invoke/landingpad
+          # with a personality on the define, so a reader that cannot build
+          # those forms silently loses every try-containing module to the
+          # textual path — which is exactly how this arm went red once the
+          # EH migration landed. Assert the EH program takes the native path
+          # AND behaves identically.
+          echo "::group::EH program — textual, native, diff"
+          run eh_text -- "$BIN" "$EH" -o "${W}/eh_text"
+          run eh_text_exec -- "${W}/eh_text"
+          run eh_native -- env PERRY_LLVM_INPROCESS=native "$BIN" "$EH" -o "${W}/eh_native"
+          assert_grep "in-process LLVM backend active" "${W}/eh_native.err" \
+            "A try-containing module must take the native path, not fall back to text (#7302)."
+          run eh_native_exec -- "${W}/eh_native"
+          assert_same "${W}/eh_text_exec.out" "${W}/eh_native_exec.out" \
+            "exception-handling behavior differs between the textual and native backends"
+          run eh_diff -- env PERRY_LLVM_INPROCESS=diff "$BIN" "$EH" -o "${W}/eh_diff"
+          assert_grep "ir-diff. OK" "${W}/eh_diff.err" \
+            "The EH module must reach a byte verdict, not be skipped by the differ."
+          echo "::endgroup::"
+
+          echo "native-mode smoke: all arms exercised and green"
+    permissions:
+      contents: read
+      pull-requests: read
+    name: llvm-inprocess / native-backend
+  llvm-inprocess__llvm-inprocess-complete:
+    needs:
+      - route
+      - llvm-inprocess__changes
+      - llvm-inprocess__native-backend
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['llvm-inprocess'] && ((always()) && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Verdict
+        env:
+          CHANGES: ${{ needs.llvm-inprocess__changes.result }}
+          BACKEND: ${{ needs.llvm-inprocess__native-backend.result }}
+          RELEVANT: ${{ needs.llvm-inprocess__changes.outputs.relevant }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -uo pipefail
+          echo "changes=${CHANGES} relevant=${RELEVANT} native-backend=${BACKEND} event=${EVENT}"
+
+          if [ "${CHANGES}" != "success" ]; then
+            echo "::error::the relevance filter itself did not succeed (${CHANGES});"\
+                 "no statement can be made about the in-process backend."
+            exit 1
+          fi
+
+          case "${BACKEND}" in
+            success)
+              echo "EXERCISED: the in-process LLVM backend ran and passed."
+              echo "✅ **EXERCISED** — in-process LLVM backend ran and passed." \
+                >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            skipped)
+              if [ "${EVENT}" != "pull_request" ]; then
+                echo "::error::native-backend was SKIPPED on a ${EVENT} run."\
+                     "Every non-PR event sets relevant=true unconditionally, so this"\
+                     "means the post-merge anchor has stopped anchoring (#7856/#7971)."
+                exit 1
+              fi
+              echo "NOT EXERCISED: no IR-affecting path changed, so the backend did not run."
+              echo "This run asserts NOTHING about the in-process LLVM backend."
+              {
+                echo "⚠️ **NOT EXERCISED** — no IR-affecting path changed in this PR."
+                echo ""
+                echo "The in-process LLVM backend did **not** run. This green result"
+                echo "is a statement about relevance, not about the backend."
+                echo "The post-merge sweep of \`main\` is what anchors this gate."
+              } >> "$GITHUB_STEP_SUMMARY"
+              ;;
+            *)
+              echo "::error::native-backend concluded '${BACKEND}'."
+              echo "❌ **${BACKEND}** — in-process LLVM backend did not pass." \
+                >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+              ;;
+          esac
+    permissions:
+      contents: read
+      pull-requests: read
+    name: llvm-inprocess / llvm-inprocess-complete
   llvm-inprocess:
-    name: llvm-inprocess
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['llvm-inprocess']
+    name: llvm-inprocess / suite result
+    needs:
+      - route
+      - llvm-inprocess__changes
+      - llvm-inprocess__native-backend
+      - llvm-inprocess__llvm-inprocess-complete
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['llvm-inprocess']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["llvm-inprocess__changes","llvm-inprocess__native-backend","llvm-inprocess__llvm-inprocess-complete"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  cc-parity__changes:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['cc-parity'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-cc-parity')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/llvm-inprocess.yml
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != pull_request ]; then
+            echo 'relevant=true' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cc_files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename')
+          # An empty listing must not quietly turn a requested gate green.
+          if [ -z "$cc_files" ] || grep -E '^(crates/|Cargo\.(toml|lock)$|rust-toolchain|\.cargo/|\.github/workflows/cc-parity\.yml$|scripts/cc_parity_gate\.py$|tests/(test_cc_parity_gate\.py$|cc-parity/))' <<< "$cc_files" > /dev/null; then
+            echo 'relevant=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'relevant=false' >> "$GITHUB_OUTPUT"
+          fi
+    needs:
+      - route
+    name: cc-parity / changes
+  cc-parity__cc-parity:
+    needs:
+      - route
+      - cc-parity__changes
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['cc-parity'] && (needs.cc-parity__changes.outputs.relevant == 'true') }}
+    runs-on: macos-15-intel
+    timeout-minutes: 90
+    env:
+      CARGO_BUILD_JOBS: '4'
+      CARGO_INCREMENTAL: '0'
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Test the gate's failure paths
+        run: python3 -m unittest discover -s tests -p test_cc_parity_gate.py -v
+      - name: Set scratch work directory
+        run: echo "CC_PARITY_WORK=$RUNNER_TEMP/cc-parity" >> "$GITHUB_ENV"
+      - name: Free simulator runtime disk space
+        run: |
+          sudo xcrun simctl runtime delete all
+          df -h /
+      - name: Fetch and verify the pinned bundle
+        run: python3 scripts/cc_parity_gate.py prepare --work-dir "$CC_PARITY_WORK"
+      - name: Install LLVM 22
+        run: |
+          set -euo pipefail
+          brew install llvm@22 2>/dev/null || brew install llvm
+          cc_llvm_prefix="$(brew --prefix llvm@22 2>/dev/null || brew --prefix llvm)"
+          "$cc_llvm_prefix/bin/llvm-config" --version | grep -q '^22\.'
+          echo "LLVM_SYS_221_PREFIX=$cc_llvm_prefix" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        with:
+          shared-key: cc-parity-wasm-host
+          save-if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+      - name: Build compiler, then all runtime archives together
+        run: python3 scripts/cc_parity_gate.py build --work-dir "$CC_PARITY_WORK"
+      - name: Compile the pinned bundle natively
+        run: python3 scripts/cc_parity_gate.py compile --timeout 4500 --work-dir "$CC_PARITY_WORK" --perry "$GITHUB_WORKSPACE/target/perry-dev/perry"
+      - name: Check help and version offline against golden bytes
+        run: python3 scripts/cc_parity_gate.py check --work-dir "$CC_PARITY_WORK"
+      - name: Upload compiler logs and parity results
+        if: always()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: cc-parity-results
+          path: ${{ runner.temp }}/cc-parity/logs/
+          if-no-files-found: warn
+          retention-days: 7
+    permissions:
+      contents: read
+      pull-requests: read
+    name: cc-parity / cc-parity
   cc-parity:
-    name: cc-parity
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['cc-parity']
+    name: cc-parity / suite result
+    needs:
+      - route
+      - cc-parity__changes
+      - cc-parity__cc-parity
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['cc-parity']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["cc-parity__changes","cc-parity__cc-parity"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  eh-transport__changes:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['eh-transport'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/cc-parity.yml
+    outputs:
+      relevant: ${{ steps.filter.outputs.relevant }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Anything that is not a pull request (the scheduled `main` sweep, a
+          # release tag, a manual dispatch) measures unconditionally: there is no
+          # PR file list to filter on, and #7856's starvation is precisely what
+          # happens when a post-merge arm quietly declines to run. Testing for
+          # `= "push"` here was correct only while `push: branches: [main]` was
+          # the post-merge trigger; under the schedule it would fall through to
+          # the PR branch, dereference an empty PR number and fail the step.
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --paginate --jq '.[].filename')
+          if echo "$files" | grep -qE '^(crates/perry-runtime/src/(eh|eh_walker|eh_windows|exception)\.rs$|crates/perry-codegen/src/stmt/|test-files/test_(gap|issue)_7302_|\.cargo/config\.toml$|Cargo\.toml$|\.github/workflows/(eh-transport|compiler-runtime)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+    needs:
+      - route
+    name: eh-transport / changes
+  eh-transport__eh-transport:
+    needs:
+      - route
+      - eh-transport__changes
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['eh-transport'] && (needs.eh-transport__changes.outputs.relevant == 'true') }}
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - name: Setup Node.js
+        uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Build compiler + runtime archives
+        run: |
+          cargo build --profile perry-dev -p perry -p perry-runtime-static \
+            -p perry-stdlib-static
+      - name: Owned transport — liveness, agreement, fallback, parity
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          BIN=target/perry-dev/perry
+
+          # Two subjects: the structural try/catch matrix (nesting, finally
+          # on both edges, return-in-try, rethrow) and the GC probe that
+          # throws across a collection point.
+          for SRC in test-files/test_gap_7302_invoke_eh_paths.ts \
+                     test-files/test_gap_7302_gc_throw_across_collection.ts; do
+            NAME=$(basename "$SRC" .ts)
+            "$BIN" "$SRC" -o "/tmp/$NAME"
+
+            # Oracle parity first: a fast path that is wrong is worse than
+            # no fast path, so nothing below is meaningful without this.
+            node --experimental-strip-types --no-warnings "$SRC" > "/tmp/$NAME.node"
+            "/tmp/$NAME" > "/tmp/$NAME.perry"
+            diff "/tmp/$NAME.node" "/tmp/$NAME.perry"
+
+            # LIVENESS: the walker carried every throw. `fallback=0` alone
+            # would pass vacuously on a program that never threw, so require
+            # a nonzero fast count too.
+            stats=$(PERRY_EH_WALKER=stats "/tmp/$NAME" 2>&1 >/dev/null | grep "eh-walker: fast=")
+            echo "$NAME: $stats"
+            fast=$(echo "$stats" | sed -E 's/.*fast=([0-9]+).*/\1/')
+            fb=$(echo "$stats" | sed -E 's/.*fallback=([0-9]+).*/\1/')
+            [ "$fast" -gt 0 ] || { echo "walker never took the fast path"; exit 1; }
+            [ "$fb" -eq 0 ] || { echo "walker fell back $fb time(s)"; exit 1; }
+
+            # AGREEMENT: re-prove the prediction against the system
+            # unwinder on this build, rather than trusting the bring-up run.
+            # The personality aborts on mismatch; the tally must show real
+            # verifications and no declines.
+            diffout=$(PERRY_EH_WALKER=diff "/tmp/$NAME" 2>&1 >/dev/null | grep "eh-walker diff:")
+            echo "$NAME: $diffout"
+            ver=$(echo "$diffout" | sed -E 's/.*verified=([0-9]+).*/\1/')
+            dec=$(echo "$diffout" | sed -E 's/.*declined=([0-9]+).*/\1/')
+            [ "$ver" -gt 0 ] || { echo "diff mode verified nothing"; exit 1; }
+            [ "$dec" -eq 0 ] || { echo "walk declined $dec throw(s)"; exit 1; }
+
+            # FALLBACK: the escape hatch must still produce correct output —
+            # it is the bisection knob and the every-other-platform path.
+            PERRY_EH_WALKER=off "/tmp/$NAME" > "/tmp/$NAME.off"
+            diff "/tmp/$NAME.node" "/tmp/$NAME.off"
+          done
+      - name: Throws on perry/thread workers
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          # Each worker walks ITS OWN stack while the row cache and image
+          # index are process-global behind a mutex. node cannot run
+          # perry/thread, so the oracle here is the system unwinder itself:
+          # walker-on must equal walker-off, and diff mode must agree on
+          # every worker throw.
+          SRC=test-files/test_issue_7302_thread_throws.ts
+          target/perry-dev/perry "$SRC" -o /tmp/eh_threads
+          /tmp/eh_threads > /tmp/eh_threads.on
+          PERRY_EH_WALKER=off /tmp/eh_threads > /tmp/eh_threads.off
+          diff /tmp/eh_threads.on /tmp/eh_threads.off
+
+          stats=$(PERRY_EH_WALKER=stats /tmp/eh_threads 2>&1 >/dev/null | grep "eh-walker: fast=")
+          echo "threads: $stats"
+          fast=$(echo "$stats" | sed -E 's/.*fast=([0-9]+).*/\1/')
+          fb=$(echo "$stats" | sed -E 's/.*fallback=([0-9]+).*/\1/')
+          [ "$fast" -gt 0 ] || { echo "walker never took the fast path on workers"; exit 1; }
+          [ "$fb" -eq 0 ] || { echo "walker fell back $fb time(s) on workers"; exit 1; }
+
+          diffout=$(PERRY_EH_WALKER=diff /tmp/eh_threads 2>&1 >/dev/null | grep "eh-walker diff:")
+          echo "threads: $diffout"
+          dec=$(echo "$diffout" | sed -E 's/.*declined=([0-9]+).*/\1/')
+          ver=$(echo "$diffout" | sed -E 's/.*verified=([0-9]+).*/\1/')
+          [ "$ver" -gt 0 ] || { echo "diff mode verified nothing on workers"; exit 1; }
+          [ "$dec" -eq 0 ] || { echo "walk declined $dec worker throw(s)"; exit 1; }
+      - name: Cross-helper throws + unwind-table self-check
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          # Throws crossing runtime Rust frames (throwing getter, throwing
+          # toString, JSON.parse, map callback, deep recursion). These are
+          # the frames the panic=abort + force-unwind-tables contract exists
+          # for; a runtime built without the tables aborts here with the
+          # self-check's message instead of stranding the throw silently.
+          SRC=test-files/test_gap_7302_throw_across_helper_frames.ts
+          target/perry-dev/perry "$SRC" -o /tmp/eh_helpers
+          node --experimental-strip-types --no-warnings "$SRC" > /tmp/eh_helpers.node
+          /tmp/eh_helpers > /tmp/eh_helpers.perry
+          diff /tmp/eh_helpers.node /tmp/eh_helpers.perry
+    permissions:
+      contents: read
+      pull-requests: read
+    name: eh-transport / eh-transport
   eh-transport:
-    name: eh-transport
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['eh-transport']
+    name: eh-transport / suite result
+    needs:
+      - route
+      - eh-transport__changes
+      - eh-transport__eh-transport
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['eh-transport']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["eh-transport__changes","eh-transport__eh-transport"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  ext-link__ext-link:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['ext-link'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      RUSTC_WRAPPER: sccache
+      SCCACHE_GHA_ENABLED: "false"
+      SCCACHE_DIR: ${{ github.workspace }}/.sccache
+      SCCACHE_CACHE_SIZE: "8G"
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Compute ext-link scope
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 scripts/ci_ext_link_scope.py --self-test
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            changed_files="$(gh pr view "${{ github.event.pull_request.number }}" \
+              --json files --jq '.files[].path')"
+          else
+            # Manual dispatch: check everything.
+            changed_files="crates/perry-runtime/src/lib.rs"
+          fi
+          if printf '%s\n' "$changed_files" | grep -qE '^(scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$|\.github/workflows/(ext-link|compiler-runtime)\.yml$)'; then
+            # Router and caller changes can alter which ext-link suites execute.
+            changed_files="crates/perry-runtime/src/lib.rs"
+          fi
+          pkgs="$(printf '%s\n' "$changed_files" | python3 scripts/ci_ext_link_scope.py)"
+          if [ -z "$pkgs" ]; then
+            echo "Diff cannot change what the ext archives link — nothing to do."
+            echo "pkgs=" >> "$GITHUB_OUTPUT"
+          else
+            echo "Linking $(printf '%s\n' "$pkgs" | wc -l) perry-ext-* crates:"
+            printf '%s\n' "$pkgs"
+            {
+              echo 'pkgs<<PERRY_EOF'
+              printf '%s\n' "$pkgs"
+              echo 'PERRY_EOF'
+            } >> "$GITHUB_OUTPUT"
+          fi
+      - name: Install Rust toolchain
+        if: steps.scope.outputs.pkgs != ''
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - if: steps.scope.outputs.pkgs != ''
+        uses: ./.github/actions/setup-llvm22
+      - name: Install sccache
+        if: steps.scope.outputs.pkgs != ''
+        uses: ./.github/actions/perry/mozilla-actions/sccache-action
+      - name: Cache sccache objects
+        if: steps.scope.outputs.pkgs != ''
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: ${{ github.workspace }}/.sccache
+          key: sccache-${{ runner.os }}-perry-${{ github.job }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ runner.os }}-perry-
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        if: steps.scope.outputs.pkgs != ''
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Link the ext crates
+        if: steps.scope.outputs.pkgs != ''
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+          CARGO_PROFILE_TEST_DEBUG: "0"
+          CARGO_BUILD_JOBS: "1"
+          PKGS: ${{ steps.scope.outputs.pkgs }}
+        run: |
+          # Explicit rather than relying on the runner's default `bash -e`: a
+          # failing `cargo test --no-run` IS the regression this job exists to
+          # catch, so its exit status must abort the step under any shell.
+          set -euo pipefail
+          # `--message-format=json` so the count below comes from cargo rather
+          # than being inferred from exit status. The counting lives in the
+          # script (`--count-linked`) so this file carries no inline Python —
+          # a heredoc at column 0 silently breaks the YAML block scalar.
+          #
+          # First check each package independently. This catches undeclared
+          # feature dependencies (for example Argon2 relying on another package
+          # to enable rand_core/getrandom) without paying for a full release
+          # link per package.
+          default_args=()
+          ws_args=()
+          while read -r pkg; do
+            [ -n "$pkg" ] || continue
+            echo "Checking ${pkg}'s independent feature graph..."
+            cargo check --release -p "$pkg"
+            case "$pkg" in
+              perry-ext-fastify|perry-ext-ws)
+                ws_args+=(-p "$pkg")
+                ;;
+              *)
+                default_args+=(-p "$pkg")
+                ;;
+            esac
+          done <<< "$PKGS"
+
+          # Release-link packages in two feature-compatible groups. A single
+          # all-package command lets the WS providers' provider mode leak into
+          # unrelated test binaries, which then expect provider symbols they
+          # correctly do not link. Two groups preserve the real feature boundary
+          # while compiling the expensive runtime only a few times, keeping the
+          # gate inside its measured 120-minute backstop.
+          #
+          # There was a third group until P11: perry-ext-fetch, whose
+          # `external-fetch-symbols` mode had the same leak. That crate is gone
+          # — `node-fetch` routes to perry-stdlib's WHATWG fetch, which defined
+          # a superset of the same symbols (docs/turnloop/p11-report.md).
+          : > /tmp/ext-link.json
+          run_link_group() {
+            local group="$1"
+            shift
+            [ "$#" -gt 0 ] || return 0
+            local group_json="/tmp/ext-link-${group}.json"
+            echo "Linking ${group} feature group..."
+            set +e
+            cargo test --release --no-run --message-format=json "$@" > "$group_json"
+            local cargo_status=$?
+            set -e
+            cat "$group_json" >> /tmp/ext-link.json
+            if [ "$cargo_status" -ne 0 ]; then
+              jq -r 'select(.reason == "compiler-message") | .message.rendered // empty' \
+                "$group_json" >&2
+              exit "$cargo_status"
+            fi
+          }
+          run_link_group default "${default_args[@]}"
+          run_link_group ws "${ws_args[@]}"
+
+          linked="$(python3 scripts/ci_ext_link_scope.py --count-linked /tmp/ext-link.json)"
+          echo "linked test binaries: $linked"
+          if [ "$linked" -eq 0 ]; then
+            echo "::error::ext-link linked ZERO test binaries. The gate ran but had no subject — either the scope selected no packages or cargo built nothing. Fix the scope rather than trusting this green."
+            exit 1
+          fi
+    needs:
+      - route
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/eh-transport.yml
-  ext-link:
     name: ext-link
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['ext-link']
-    permissions:
-      contents: read
-      pull-requests: read
-    uses: ./.github/workflows/ext-link.yml
+  ext-link:
+    name: ext-link / suite result
+    needs:
+      - route
+      - ext-link__ext-link
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['ext-link']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["ext-link__ext-link"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY

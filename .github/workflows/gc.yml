@@ -3,38 +3,37 @@ run-name: ${{ format('GC / {0} / {1}', inputs.suite || 'scheduled', github.ref_n
 on:
   pull_request:
     types:
-    - labeled
-    - opened
-    - reopened
-    - synchronize
+      - labeled
+      - opened
+      - reopened
+      - synchronize
   push:
     tags:
-    - v*
+      - v*
   schedule:
-  - cron: 12 */6 * * *
-  - cron: 17 */6 * * *
-  - cron: 37 */6 * * *
-  - cron: 47 */6 * * *
-  - cron: 57 */6 * * *
-  - cron: 7 */6 * * *
+    - cron: 12 */6 * * *
+    - cron: 17 */6 * * *
+    - cron: 37 */6 * * *
+    - cron: 47 */6 * * *
+    - cron: 57 */6 * * *
+    - cron: 7 */6 * * *
   workflow_dispatch:
     inputs:
       suite:
         description: GC suite or all suites.
         type: choice
         options:
-        - all
-        - gc-ratchet
-        - gc-moving-witnesses
-        - gc-native-roots
-        - gc-root-dominance
-        - gc-parse-churn-gate
-        - gc-ptr-shape-off-witness
+          - all
+          - gc-ratchet
+          - gc-moving-witnesses
+          - gc-native-roots
+          - gc-root-dominance
+          - gc-parse-churn-gate
+          - gc-ptr-shape-off-witness
         default: all
 permissions: {}
 concurrency:
-  group: gc-${{ github.event_name == 'pull_request' && github.ref || github.run_id
-    }}
+  group: gc-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   route:
@@ -48,77 +47,1745 @@ jobs:
       selection: ${{ steps.route.outputs.selection }}
       module_inputs: ${{ steps.route.outputs.module_inputs }}
     steps:
-    - uses: ./.github/actions/perry/actions/checkout
-      with:
-        ref: ${{ github.sha }}
-        fetch-depth: '1'
-        persist-credentials: 'false'
-    - name: Route suites
-      id: route
-      env:
-        SUITE: ${{ inputs.suite }}
-        GH_TOKEN: ${{ github.token }}
-        GITHUB_REPOSITORY: ${{ github.repository }}
-        EVENT_NAME: ${{ github.event_name }}
-        EVENT_PATH: ${{ github.event_path }}
-        REF: ${{ github.ref }}
-        PR_NUMBER: ${{ github.event.pull_request.number }}
-        PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        args=(--category gc --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
-        if [[ "$EVENT_NAME" == "pull_request" ]]; then
-          python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
-          args+=(--changed-files changed-files.txt)
-        fi
-        args+=(--suite "${SUITE:-}")
-        python3 scripts/actions_plan.py "${args[@]}"
+      - uses: ./.github/actions/perry/actions/checkout
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: '1'
+          persist-credentials: 'false'
+      - name: Route suites
+        id: route
+        env:
+          SUITE: ${{ inputs.suite }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          REF: ${{ github.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--category gc --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+            args+=(--changed-files changed-files.txt)
+          fi
+          args+=(--suite "${SUITE:-}")
+          python3 scripts/actions_plan.py "${args[@]}"
+  gc-ratchet__gc-ratchet:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-ratchet'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    runs-on: macos-14
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Harness unit tests and artifact validation
+        run: |
+          python3 -m unittest discover -s tests -p 'test*gc_ratchet.py' -v
+          python3 benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
+      - name: Decide whether this change can affect the collector
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request; measuring."
+            exit 0
+          fi
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed.txt
+          # Anything under crates/ can move the collector: a codegen change
+          # alters what is allocated, a transform change alters what escapes,
+          # and a dependency bump can change allocator behaviour. The filter is
+          # deliberately broad; it exists only to spare docs-only PRs a build.
+          # If the listing is empty or the API failed, `set -e` already aborted
+          # — the job does not silently fall through to "not relevant".
+          if grep -qE '^(crates/|benchmarks/gc_ratchet/|Cargo\.(toml|lock)$|\.github/workflows/(gc-ratchet|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$|tests/(test_gc_ratchet|test_large_eden_gc_ratchet)\.py$)' changed.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Change touches collector-relevant paths; measuring."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No collector-relevant paths changed; the pinned baseline still holds."
+          fi
+      - name: Install Rust toolchain
+        if: steps.relevance.outputs.run == 'true'
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - name: Cache cargo
+        if: steps.relevance.outputs.run == 'true'
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-bench-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Setup Node oracle
+        if: steps.relevance.outputs.run == 'true'
+        uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - name: Build perry and the runtime archives
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          # perry-runtime and perry-stdlib are rlib-only. libperry_runtime.a and
+          # libperry_stdlib.a come from the -static wrapper crates; building
+          # without them links a stale archive and makes the whole measurement
+          # vacuous. The package set is fixed here so cargo feature unification
+          # is identical to the set used to capture the baseline.
+          cargo build --release -p perry -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+      - name: Verify the Node oracle version
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          set -euo pipefail
+          expected="v$(tr -d 'v \n' < .node-version)"
+          actual="$(node --version)"
+          test "$expected" = "$actual" \
+            || { echo "::error::expected Node $expected, found $actual"; exit 1; }
+      - name: Measure
+        id: measurement
+        if: steps.relevance.outputs.run == 'true'
+        env:
+          PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
+          PERRY_NO_AUTO_OPTIMIZE: "1"
+        run: |
+          set -euo pipefail
+          mkdir -p .bench-results
+          # Load is recorded inside the measurement JSON too; printing it here
+          # keeps it in the log next to the numbers.
+          uptime
+          # Pass the oracle explicitly rather than letting the harness search.
+          # A run that cannot reach the oracle now fails the gate — "we did not
+          # verify" must not look like "verified" — so resolution must not be
+          # left to chance.
+          python3 benchmarks/gc_ratchet/gc_ratchet.py measure \
+            --perry target/release/perry \
+            --repeats 7 \
+            --node "$(command -v node)" \
+            --output .bench-results/gc-ratchet-current.json
+      - name: Check against the pinned baseline
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          python3 benchmarks/gc_ratchet/gc_ratchet.py check \
+            --current .bench-results/gc-ratchet-current.json \
+            --profile shared_ci
+      - name: Check large-Eden relocation separately
+        if: always() && steps.measurement.outcome == 'success'
+        env:
+          PERRY_RUNTIME_DIR: ${{ github.workspace }}/target/release
+          PERRY_NO_AUTO_OPTIMIZE: "1"
+        run: |
+          python3 benchmarks/gc_ratchet/check_large_eden_relocation.py \
+            --perry target/release/perry \
+            --node "$(command -v node)" \
+            --output .bench-results/gc-ratchet-relocation.json
+      - name: Upload measurement
+        if: always() && steps.relevance.outputs.run == 'true'
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: gc-ratchet-${{ github.sha }}
+          path: |
+            .bench-results/gc-ratchet-current.json
+            .bench-results/gc-ratchet-relocation.json
+            benchmarks/gc_ratchet/baseline/gc-ratchet-v1.json
+          retention-days: 90
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+    name: GC Ratchet / gc-ratchet
+  gc-ratchet__report-main-result:
+    needs:
+      - route
+      - gc-ratchet__gc-ratchet
+    if: >-
+      ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-ratchet'] && (always() && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && (needs.gc-ratchet__gc-ratchet.result == 'failure' || needs.gc-ratchet__gc-ratchet.result == 'success')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    concurrency:
+      group: gc-ratchet-main-alert
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Update the main GC ratchet incident
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+          RESULT: ${{ needs.gc-ratchet__gc-ratchet.result }}
+        run: >-
+          python3 scripts/report_gc_ratchet.py --repository "$REPOSITORY" --run-id "$RUN_ID" --result "$RESULT"
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+    name: GC Ratchet / report-main-result
   gc-ratchet:
-    name: gc-ratchet
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-ratchet']
+    name: GC Ratchet / suite result
+    needs:
+      - route
+      - gc-ratchet__gc-ratchet
+      - gc-ratchet__report-main-result
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-ratchet']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["gc-ratchet__gc-ratchet","gc-ratchet__report-main-result"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  gc-moving-witnesses__gc-moving-witnesses:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-moving-witnesses'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/gc-ratchet.yml
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Decide whether this change can affect the moving collector
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request; running the witnesses."
+            exit 0
+          fi
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed.txt
+          # Deliberately broad: anything under crates/ can move the collector —
+          # a codegen change alters which roots are stored, a transform change
+          # alters what escapes, a runtime change alters when a cycle fires.
+          # The filter exists only to spare docs-only PRs a compiler build. If
+          # the listing is empty or the API failed, `set -e` already aborted, so
+          # the job cannot silently fall through to "not relevant".
+          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|scripts/gc_matrix_fixture_env(_test)?\.py$|test-files/test_gap_gc_|test-parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/(gc-moving-witnesses|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Change touches collector-relevant paths; running the witnesses."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No collector-relevant paths changed."
+          fi
+      - name: Install Rust toolchain
+        if: steps.relevance.outputs.run == 'true'
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        if: steps.relevance.outputs.run == 'true'
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install clang
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+      - name: Setup Node oracle
+        if: steps.relevance.outputs.run == 'true'
+        uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - name: Check witness settings reach compilation and execution
+        if: steps.relevance.outputs.run == 'true'
+        run: bash scripts/gc_repsel_matrix.sh --self-test-fixture-env
+      - name: Build perry and the runtime archives
+        if: steps.relevance.outputs.run == 'true'
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+        run: |
+          set -euo pipefail
+          # perry-runtime and perry-stdlib are rlib-only; libperry_runtime.a and
+          # libperry_stdlib.a come from the -static wrapper crates. Building
+          # without them links a stale archive and makes the whole measurement
+          # vacuous. The package set matches gc-stress exactly so cargo feature
+          # unification — and therefore the cache — is identical.
+          cargo build --release \
+            -p perry -p perry-runtime -p perry-stdlib \
+            -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+      - name: Run the stale-root witnesses on the moving collector
+        id: matrix
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          ./scripts/gc_repsel_matrix.sh \
+            --no-build \
+            --arms loop_polls \
+            --filter test_gap_gc_ \
+            --json gc-moving-witnesses.json
+      - name: Assert the witnesses actually ran under a moving collector
+        if: always() && steps.relevance.outputs.run == 'true'
+        run: |
+          python3 - <<'PY'
+          import glob, json, os, sys
+
+          REPORT = "gc-moving-witnesses.json"
+          if not os.path.exists(REPORT):
+              sys.exit("::error::%s was not produced — the matrix step never "
+                       "reported; see its log above." % REPORT)
+
+          report = json.load(open(REPORT))
+          arms = report.get("arms", [])
+          if [(a["id"], a["requires"]) for a in arms] != [("loop_polls", "move")]:
+              sys.exit("::error::expected exactly the loop_polls/move arm, got %r"
+                       % (arms,))
+
+          cells = report.get("cells", [])
+          seen = {c["test"] for c in cells}
+          on_disk = {os.path.basename(p)[:-3]
+                     for p in glob.glob("test-files/test_gap_gc_*.ts")}
+
+          problems = []
+
+          unregistered = sorted(on_disk - seen)
+          for name in unregistered:
+              problems.append(
+                  "%s exists but was not run: register it in "
+                  "test-parity/gc_repsel_corpus.txt. The matrix only "
+                  "auto-detects the test_gap_repsel_*/test_gap_specabi_* "
+                  "prefixes, so a test_gap_gc_* witness that is not registered "
+                  "is silently dark (#6925 is the precedent)." % name)
+
+          for c in sorted(cells, key=lambda c: c["test"]):
+              name, result, ev = c["test"], c["result"], c.get("evidence", "")
+              print("%-8s %-46s %s" % (result, name, ev))
+              if result == "PASS":
+                  continue
+              if result == "XFAIL":
+                  # Triaged in test-parity/gc_repsel_triage.txt, which requires
+                  # an issue number and a written reason. Loud, but not fatal.
+                  print("::warning::%s is a triaged expected-red on this arm: %s"
+                        % (name, ev))
+                  continue
+              if result == "UNVER":
+                  problems.append(
+                      "%s matched the oracle but NOTHING MOVED (%s). On a "
+                      "requires=move arm that means the moving collector never "
+                      "relocated anything, so this witness could not have "
+                      "failed however broken its rooting is. Re-tune its churn "
+                      "budget or fix the collector — do not read it as green."
+                      % (name, ev))
+              else:
+                  problems.append("%s: %s (%s)" % (name, result, ev))
+
+          if not cells:
+              problems.append("no cells at all — the filter matched nothing.")
+
+          if problems:
+              for p in problems:
+                  print("::error::%s" % p)
+              sys.exit(1)
+
+          print("\nOK: %d witnesses, every one relocated under "
+                "PERRY_GC_MOVING_LOOP_POLLS=1." % len(cells))
+          PY
+      - name: Install the npm dependency the dependency-scale witness runs
+        if: steps.relevance.outputs.run == 'true'
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Run the dependency-scale runtime witness
+        if: steps.relevance.outputs.run == 'true'
+        run: ./scripts/gc_dep_scale_witness.sh
+      - name: Upload the witness report
+        if: always() && steps.relevance.outputs.run == 'true'
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: gc-moving-witnesses-${{ github.sha }}
+          path: gc-moving-witnesses.json
+          if-no-files-found: ignore
+          retention-days: 30
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+  # NOTE the absence of `PERRY_NO_AUTO_OPTIMIZE`. gc-ratchet sets it for a
+  # deterministic link; scripts/gc_repsel_matrix.sh deliberately does NOT, and
+  # says why in its own header: the auto-optimizer decides whether the linked
+  # runtime carries the `diagnostics` feature, which changes the GC trace
+  # format the harness parses for its liveness evidence. Setting it here would
+  # override that choice from outside and could silently turn every cell UNVER.
+  #
+  # #7183: `PERRY_GC_MOVING_LOOP_POLLS` became a compile-time gate in #7161 but
+  # is still missing from `build_cache.rs`'s env key list, so the build-level
+  # no-op probe cannot tell a binary built with the flag from one built without
+  # it. Today nothing bites — the per-object cache DOES key it, the build
+  # manifest is keyed on the output path, and the matrix compiles into a fresh
+  # mktemp directory every run — but "safe by three accidents" is not a property
+  # this arm should depend on, since it is the one arm that must not go dark.
+  # Disabling the build cache costs nothing here (each witness is compiled once)
+  # and leaves the object cache, which keys the flag correctly, in place.
+      PERRY_DISABLE_BUILD_CACHE: "1"
+
+    name: GC Moving Witnesses
   gc-moving-witnesses:
-    name: gc-moving-witnesses
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-moving-witnesses']
+    name: GC Moving Witnesses / suite result
+    needs:
+      - route
+      - gc-moving-witnesses__gc-moving-witnesses
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-moving-witnesses']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["gc-moving-witnesses__gc-moving-witnesses"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  gc-native-roots__native-roots-rs4gc:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-native-roots'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            arch: aarch64
+            format: Mach-O
+          - os: ubuntu-latest
+            arch: x86-64
+            format: ELF
+          - os: windows-latest
+            arch: x86-64
+            format: PE
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+            format: ELF
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 120
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        with:
+          shared-key: gc-native-roots
+      - name: Build compiler and static runtime (perry-dev profile)
+        run: |
+          export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
+          cargo build --profile perry-dev -p perry -p perry-runtime-static -p perry-stdlib-static
+      - name: Provider dylib host-boundary GC and Response
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        run: scripts/gc_provider_dylib_gate.sh
+      - name: Walker agreement (aarch64 hosts)
+        if: ${{ !cancelled() && matrix.arch == 'aarch64' && runner.os != 'Windows' }}
+        run: |
+          set -euo pipefail
+          export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
+          cargo test --profile perry-dev -p perry-runtime --lib gc::roots::stack_maps \
+            -- --test-threads=1 | tee /tmp/walker-agreement.log
+          # `--lib <filter>` is a substring match, so a rename makes it select
+          # nothing and `cargo test` still exits 0 having run zero tests — a
+          # gate that cannot fail. Require each test by name, including the
+          # sabotage arm that proves the sentinel check discriminates.
+          for name in both_walkers_resolve_an_sp_root_in_an_elf_shaped_frame \
+                      both_walkers_resolve_an_sp_root_in_a_darwin_shaped_frame \
+                      a_wrong_frame_offset_is_caught; do
+            grep -q "walker_agreement::$name ... ok" /tmp/walker-agreement.log \
+              || { echo "::error::$name did not run — the filter matched nothing"; exit 1; }
+          done
+      - name: Probe matrix, RS4GC mode, forced evacuation
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+
+          # `opt` and `clang` MUST come from the same LLVM install. RS4GC pipes
+          # each module through `opt` and hands the result to `clang`, so a
+          # newer `opt` emits attributes an older `clang` rejects — measured
+          # locally as `error: unterminated attribute group` on
+          # `nocreateundeforpoison`, Homebrew opt 22 feeding Apple clang, which
+          # is the pairing Perry's own independent discovery picks by default on
+          # a Mac. Anyone enabling this knob hits that; pin both here.
+          exe=""
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            brew list llvm >/dev/null 2>&1 || brew install llvm
+            llvm_bin="$(brew --prefix llvm)/bin"
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            # windows-latest ships clang (the NSIS LLVM build) but NOT `opt`;
+            # the matched pair comes from the official clang+llvm release
+            # archive — one directory, so opt and clang cannot skew.
+            exe=".exe"
+            llvm_ver=22.1.3
+            # Git Bash exposes RUNNER_TEMP as a native `D:\...` path. Convert
+            # it before any Unix tool sees it: the runner's bsdtar still treats
+            # `D:` as a remote host even when passed GNU tar's --force-local.
+            runner_temp_posix="$(cygpath -u "$RUNNER_TEMP")"
+            llvm_root="$runner_temp_posix/clang+llvm-$llvm_ver-x86_64-pc-windows-msvc"
+            if [ ! -x "$llvm_root/bin/opt.exe" ]; then
+              curl -sSL --retry 3 -o "$runner_temp_posix/llvm.tar.xz" \
+                "https://github.com/llvm/llvm-project/releases/download/llvmorg-$llvm_ver/clang+llvm-$llvm_ver-x86_64-pc-windows-msvc.tar.xz"
+              # The old --force-local workaround was ineffective because the
+              # Windows runner supplies bsdtar, not GNU tar. Passing the
+              # cygpath-normalized archive and destination avoids the remote
+              # `host:path` grammar entirely. The previous failure was:
+              #     tar (child): Cannot connect to D: resolve failed
+              #     xz: (stdin): File format not recognized
+              #     tar: Error is not recoverable: exiting now      (exit 2)
+              # Verify extraction rather than trusting it: a half-extracted
+              # tree otherwise becomes a misleading tool-pair error below.
+              tar -xJf "$runner_temp_posix/llvm.tar.xz" -C "$runner_temp_posix"
+              if [ ! -x "$llvm_root/bin/opt.exe" ]; then
+                echo "::error::extracted $runner_temp_posix/llvm.tar.xz but $llvm_root/bin/opt.exe is still missing — the archive layout changed, or the download was truncated"
+                ls -la "$runner_temp_posix" | head -20
+                exit 1
+              fi
+            fi
+            llvm_bin="$llvm_root/bin"
+          else
+            # The setup-llvm22 action (uses: above) installs, co-locates, and
+            # verifies the matched LLVM 22 opt+clang pair under
+            # $LLVM_SYS_221_PREFIX. Consume that prefix directly — hand-rediscovery
+            # could resolve an unversioned /usr/bin/opt and run RS4GC on the
+            # distro's LLVM 18, a green gate on the wrong LLVM. The pair-check
+            # below stays as the assertion.
+            llvm_bin="${LLVM_SYS_221_PREFIX:-/usr/lib/llvm-22}/bin"
+          fi
+          if [ ! -x "$llvm_bin/opt$exe" ] || [ ! -x "$llvm_bin/clang$exe" ]; then
+            echo "::error::no matched opt+clang pair under $llvm_bin — RS4GC cannot run, and silently skipping it is exactly the gate that cannot fail"
+            exit 1
+          fi
+          llvm_opt="$llvm_bin/opt$exe"
+          llvm_clang="$llvm_bin/clang$exe"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Shell tools need the POSIX path above, while native perry.exe
+            # reads these environment values directly as Windows PathBufs.
+            export PERRY_LLVM_OPT="$(cygpath -w "$llvm_opt")"
+            export PERRY_LLVM_CLANG="$(cygpath -w "$llvm_clang")"
+          else
+            export PERRY_LLVM_OPT="$llvm_opt"
+            export PERRY_LLVM_CLANG="$llvm_clang"
+          fi
+          echo "RS4GC toolchain: $llvm_bin"
+          "$llvm_opt" --version | head -2
+          "$llvm_clang" --version | head -2
+
+          pass=0
+          total=0
+          errs=""
+          for probe in benchmarks/gc_ratchet/probes/*.ts; do
+            total=$((total+1))
+            name=$(basename "$probe" .ts)
+            # #10385 replaced Windows funclets with Perry's landing-pad
+            # personality. Probe 09 must now execute with precise roots on
+            # Windows too. Actual funclet IR remains refused by linker.rs's
+            # rs4gc_funclet_refusal and its unit test (#7354).
+            node --expose-gc --experimental-strip-types "$probe" > "/tmp/rs4gc-$name.oracle"
+            ./target/perry-dev/perry "$probe" -o "/tmp/rs4gc-$name"
+            # perry appends the platform default extension to an -o with none.
+            out="/tmp/rs4gc-$name$exe"
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              otool -l "$out" | grep -q "sectname __perry_gcmap" \
+                || { echo "::error::$name has no __perry_gcmap section — RS4GC produced no native root map"; exit 1; }
+              otool -l "$out" | grep -q "sectname __llvm_stackmaps" \
+                && { echo "::error::$name still carries __llvm_stackmaps — the compact rewrite did not run"; exit 1; }
+            elif [ "$RUNNER_OS" = "Windows" ]; then
+              # PE: an image section header holds 8 name bytes — which is why
+              # the section is `.pgcmap` (gc_map.rs) — and a surviving LLVM
+              # stackmap section would appear truncated, so match the prefix.
+              "$llvm_bin/llvm-readobj$exe" --sections "$out" | grep -q "Name: .pgcmap" \
+                || { echo "::error::$name has no .pgcmap section — RS4GC produced no native root map"; exit 1; }
+              "$llvm_bin/llvm-readobj$exe" --sections "$out" | grep -q "llvm_st" \
+                && { echo "::error::$name still carries an llvm_stackmaps section — the compact rewrite did not run"; exit 1; }
+            else
+              readelf -S "$out" | grep -q "\.perry_gcmap" \
+                || { echo "::error::$name has no .perry_gcmap section — RS4GC produced no native root map"; exit 1; }
+              readelf -S "$out" | grep -q "\.llvm_stackmaps" \
+                && { echo "::error::$name still carries .llvm_stackmaps — the compact rewrite did not run"; exit 1; }
+            fi
+            PERRY_GC_DIAG=1 \
+            PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+            PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+              "$out" > "/tmp/rs4gc-$name.out" 2> "/tmp/rs4gc-$name.err"
+            diff "/tmp/rs4gc-$name.oracle" "/tmp/rs4gc-$name.out" \
+              || { echo "::error::$name diverged from the pinned oracle under RS4GC"; exit 1; }
+            if [ "$name" = "09_try_catch_roots" ]; then
+              py=python3; command -v python3 >/dev/null 2>&1 || py=python
+              "$py" scripts/gc_evacuation_liveness_assert.py "/tmp/rs4gc-$name.err" \
+                --probe "$name ($RUNNER_OS RS4GC)"
+            fi
+            errs="$errs /tmp/rs4gc-$name.err"
+            pass=$((pass+1))
+          done
+          echo "RS4GC forced-evacuation matrix: $pass/$total"
+          [ "$total" -gt 0 ] \
+            || { echo "::error::no probes matched — the matrix ran on nothing"; exit 1; }
+          [ "$pass" -eq "$total" ]
+          grep -l "#gcmetric" $errs >/dev/null \
+            || { echo "::error::no probe emitted gc metrics — the collector never ran"; exit 1; }
+
+          # Liveness assert: RS4GC bails PER FUNCTION to the explicit statepoint
+          # bridge on any unrecognised root-alloca shape. The matrix above could
+          # therefore be 9/9 green with RS4GC having rewritten nothing at all —
+          # every function quietly lowered by the other backend, the arm
+          # measuring the mode it was not testing. `--only-backend rs4gc`
+          # rejects a single such fallback.
+          # windows-latest exposes the toolcache python as `python`, not python3.
+          py=python3; command -v python3 >/dev/null 2>&1 || py=python
+
+          # The recursive-depth assertion, on every arm. This probe carries
+          # live roots across a deep stack; the separate try probe below
+          # covers roots across normal and unwinding exception edges.
+          #
+          # --only-backend proves the lowering ran on every function; the two
+          # --require-positive checks prove it PRODUCED something. Those counts
+          # come from the compact-map rewrite parsing the assembly LLVM
+          # emitted, which is the only honest source now that RS4GC decides
+          # what becomes a safepoint. Until #7368 the report counted at
+          # IR-emission time, #7348 deleted those writers with the bridge, and
+          # every compile printed `0 statepoints emitted` while its binary
+          # carried hundreds. A label check could not see that; these can.
+          ./target/perry-dev/perry \
+            benchmarks/gc_ratchet/probes/11_collect_at_depth.ts \
+            -o /tmp/rs4gc-report-probe --statepoint-report=json 2> /tmp/rs4gc-report.json
+          "$py" scripts/statepoint_report_assert.py /tmp/rs4gc-report.json \
+            --only-backend rs4gc \
+            --require-positive records \
+            --require-positive roots
+
+          # The try-specific arm on every target, including Windows since
+          # #10385 replaced funclets with Perry's landing-pad personality. This is
+          # the coverage the probe above cannot give: 128 of 479 gap tests
+          # contain `try {}`, and RS4GC being the only backend that handles them
+          # is the reason the bridge could be deleted (#7339, #7348).
+          ./target/perry-dev/perry \
+            benchmarks/gc_ratchet/probes/09_try_catch_roots.ts \
+            -o /tmp/rs4gc-try-probe --statepoint-report=json 2> /tmp/rs4gc-try.json
+          "$py" scripts/statepoint_report_assert.py /tmp/rs4gc-try.json \
+            --only-backend rs4gc \
+            --require-positive records \
+            --require-positive roots
+
+          # Walker liveness, on EVERY arm. A walker that visits zero frames
+          # still lets most probes print the right answer, because other root
+          # sources cover them — so a green matrix is not evidence the walker
+          # ran. Only non-zero frames/records/locations telemetry is.
+          #
+          # This used to be Windows-only (#7354) for a good reason: it was the
+          # only arm that could pass it. Measured on `04_dead_after_deep_stack`,
+          # macOS and Linux reported 7 frames and ZERO locations, because every
+          # probe in the suite collected from a shallow stack at exit. Windows
+          # only walked deep by accident of heap sizing.
+          #
+          # `11_collect_at_depth` collects at maximum recursion depth with a
+          # live root in every frame, so all three arms now walk a real stack —
+          # 228 frames and 221 locations on macOS, where the old best was 0.
+          PERRY_GC_TRACE=1 \
+          PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+          PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+            "/tmp/rs4gc-11_collect_at_depth$exe" > /dev/null 2> /tmp/rs4gc-trace.err
+          "$py" scripts/gc_walker_trace_assert.py /tmp/rs4gc-trace.err \
+            --require-locations
+      - name: Both non-default walkers
+        if: ${{ !cancelled() && runner.os != 'Windows' }}
+        run: |
+          set -euo pipefail
+          modes="unwind"
+          if [ "${{ matrix.arch }}" = "aarch64" ]; then
+            modes="unwind verify"
+          fi
+          echo "walkers under test: $modes"
+          checked=0
+          for probe in benchmarks/gc_ratchet/probes/*.ts; do
+            name=$(basename "$probe" .ts)
+            # Binaries and oracles come from the matrix step above, same job and
+            # same runner — as the walker-liveness assert already does. Missing
+            # ones are a hard error: silently checking nothing is the failure
+            # mode this whole step exists to close.
+            [ -x "/tmp/rs4gc-$name" ] \
+              || { echo "::error::$name has no binary from the probe matrix step"; exit 1; }
+            [ -s "/tmp/rs4gc-$name.oracle" ] \
+              || { echo "::error::$name has no pinned oracle from the probe matrix step"; exit 1; }
+            for mode in $modes; do
+              PERRY_STACKMAP_WALKER="$mode" \
+              PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+              PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+                "/tmp/rs4gc-$name" > "/tmp/walker-$name-$mode.out" \
+                                  2> "/tmp/walker-$name-$mode.err" \
+                || { echo "::error::$name crashed under PERRY_STACKMAP_WALKER=$mode"; \
+                     tail -120 "/tmp/walker-$name-$mode.err"; exit 1; }
+              diff "/tmp/rs4gc-$name.oracle" "/tmp/walker-$name-$mode.out" \
+                || { echo "::error::$name diverged from the pinned oracle under PERRY_STACKMAP_WALKER=$mode"; exit 1; }
+              checked=$((checked+1))
+            done
+          done
+          echo "non-default walker runs, all oracle-diffed: $checked"
+          [ "$checked" -gt 0 ] \
+            || { echo "::error::no probe ran under a non-default walker — the step measured nothing"; exit 1; }
+
+          # Everything above proves a process exited zero and printed what the
+          # oracle printed. It does NOT prove `PERRY_STACKMAP_WALKER=$mode`
+          # selected that walker, that the walker reached a mapped frame, or
+          # that anything was evacuated — and all three modes are supposed to
+          # produce identical output, so program output cannot tell them apart.
+          # That is CLAUDE.md's fourth hazard, and the very shape of #7392: the
+          # walker under test read the wrong words for months while every probe
+          # stayed green.
+          #
+          # So assert the subject was live, per mode, off one traced run of
+          # `11_collect_at_depth` (deep stack, a live root in every frame, so
+          # the telemetry is non-trivial on every arm):
+          #
+          #   fp_walks == 0  proves `unwind` took effect — nonzero means the
+          #                  chain walk ran anyway and the mode did nothing.
+          #   fp_walks > 0   proves `verify` cross-checked something rather
+          #                  than quietly not running the chain walk.
+          #   --require-locations   the walker stepped frames, matched
+          #                  safepoints and enumerated roots, rather than
+          #                  visiting nothing while other root sources covered.
+          #   evacuation liveness   a copying minor ran and MOVED an object, so
+          #                  the roots being enumerated were roots that had to
+          #                  be rewritten (#6942/#6946, #7336).
+          #
+          # python3 unqualified: this step never runs on Windows, which is the
+          # only runner where the toolcache spells it `python`.
+          for mode in $modes; do
+            case "$mode" in
+              unwind) fp_flag="--forbid-fp-walks" ;;
+              verify) fp_flag="--require-fp-walks" ;;
+              *) echo "::error::no liveness assert defined for walker $mode"; exit 1 ;;
+            esac
+            PERRY_GC_TRACE=1 PERRY_GC_DIAG=1 PERRY_STACKMAP_WALKER="$mode" \
+            PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+            PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+              /tmp/rs4gc-11_collect_at_depth > /dev/null 2> "/tmp/walker-trace-$mode.err"
+            python3 scripts/gc_walker_trace_assert.py "/tmp/walker-trace-$mode.err" \
+              --require-locations $fp_flag
+            python3 scripts/gc_evacuation_liveness_assert.py "/tmp/walker-trace-$mode.err" \
+              --probe "11_collect_at_depth (PERRY_STACKMAP_WALKER=$mode)"
+          done
+      - name: RS4GC works on a stock toolchain via the in-process backend
+        if: ${{ !cancelled() && runner.os == 'macOS' }}
+        run: |
+          set -euo pipefail
+          export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
+          export PERRY_NO_AUTO_OPTIMIZE=1
+          unset PERRY_LLVM_OPT PERRY_LLVM_CLANG
+          # Keep LLVM_SYS_221_PREFIX from setup-llvm22. The stock-toolchain
+          # assertion removes the external opt/clang overrides; the in-process
+          # backend itself still has to link the LLVM 22 ABI used by llvm-sys.
+          export RUSTFLAGS="-C force-frame-pointers=yes -C force-unwind-tables=yes"
+          cargo build --profile perry-dev -p perry -p perry-runtime-static \
+            -p perry-stdlib-static --features perry-codegen/llvm-inprocess
+
+          # Probe 09 is the whole point: it carries `try`, so every call in it
+          # is an `invoke`, which the explicit bridge refuses outright (#7330).
+          probe=benchmarks/gc_ratchet/probes/09_try_catch_roots.ts
+          PERRY_LLVM_INPROCESS=1 \
+            ./target/perry-dev/perry "$probe" -o /tmp/inproc-09
+
+          otool -l /tmp/inproc-09 | grep -q "sectname __perry_gcmap" \
+            || { echo "::error::no __perry_gcmap — the in-process route produced no native root map"; exit 1; }
+          otool -l /tmp/inproc-09 | grep -q "sectname __llvm_stackmaps" \
+            && { echo "::error::__llvm_stackmaps survived — the compact rewrite did not run on the in-process path"; exit 1; }
+
+          # Same answer as the shadow stack, and a collection that actually
+          # moved something. Without the movement assert this passes with the
+          # conservative scan doing all the rooting (#7336, #7338).
+          ./target/perry-dev/perry "$probe" -o /tmp/inproc-09-control
+          PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+            /tmp/inproc-09-control > /tmp/inproc-09.control.out 2>/dev/null
+          # PERRY_GC_DIAG=1 is LOAD-BEARING, not decoration: `[gc-copy-minor]`
+          # is emitted only under it, and that line is the entire input to
+          # `gc_evacuation_liveness_assert.py`. Without it the assert reads an
+          # empty trace and reports "evacuated NOTHING (0 copying minors, 0
+          # objects copied)" no matter what the collector actually did — so
+          # this arm could never pass, which is a large part of why
+          # `gc-native-roots` has never had a green run (#7970).
+          #
+          # Measured on macOS aarch64 at this commit: with the flag, the same
+          # binary under the same GC env reports 75 copying minors and 16277
+          # objects copied. The collector was evacuating the whole time; the
+          # gate was asserting on telemetry it had not switched on. The sibling
+          # call site in the walker-trace step above always set it — this one
+          # was missed.
+          #
+          # `--probe` likewise: without it the failure message says the literal
+          # `<probe>`, which is what the 2026-08-11 logs show.
+          PERRY_GC_DIAG=1 \
+          PERRY_GC_FORCE_EVACUATE=1 PERRY_GC_VERIFY_EVACUATION=1 \
+          PERRY_GC_HEAP_LIMIT=8 PERRY_GC_INCREMENTAL=0 PERRY_CONSERVATIVE_STACK_SCAN=off \
+            /tmp/inproc-09 > /tmp/inproc-09.out 2> /tmp/inproc-09.err
+          diff /tmp/inproc-09.control.out /tmp/inproc-09.out \
+            || { echo "::error::in-process RS4GC diverged from the shadow-stack control"; exit 1; }
+          python3 scripts/gc_evacuation_liveness_assert.py /tmp/inproc-09.err \
+            --probe "09_try_catch_roots (in-process RS4GC)"
+
+          # And it must be RS4GC doing the lowering, not a per-function bail to
+          # the bridge -- which would make this arm green while testing the
+          # backend it is not named after.
+          PERRY_LLVM_INPROCESS=1 ./target/perry-dev/perry "$probe" \
+            -o /tmp/inproc-09-report --statepoint-report=json 2> /tmp/inproc-09-report.json
+          python3 scripts/statepoint_report_assert.py /tmp/inproc-09-report.json \
+            --only-backend rs4gc
+    needs:
+      - route
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/gc-moving-witnesses.yml
+    name: gc-native-roots / native-roots-rs4gc
+  gc-native-roots__gc-native-roots-complete:
+    needs:
+      - route
+      - gc-native-roots__native-roots-rs4gc
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-native-roots'] && ((always()) && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every native-root arm to pass
+        run: |
+          set -euo pipefail
+          failed=0
+          for arm in \
+            "native-roots-rs4gc=${{ needs.gc-native-roots__native-roots-rs4gc.result }}" \
+            ; do
+            echo "$arm"
+            case "$arm" in
+              *=success) ;;
+              *) failed=1 ;;
+            esac
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "::error::a native-root arm failed, was cancelled, or was skipped"
+            exit 1
+          fi
+          echo "All native-root arms passed."
+    permissions:
+      contents: read
+      pull-requests: read
+    name: gc-native-roots / gc-native-roots-complete
   gc-native-roots:
-    name: gc-native-roots
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-native-roots']
+    name: gc-native-roots / suite result
+    needs:
+      - route
+      - gc-native-roots__native-roots-rs4gc
+      - gc-native-roots__gc-native-roots-complete
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-native-roots']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["gc-native-roots__native-roots-rs4gc","gc-native-roots__gc-native-roots-complete"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  gc-root-dominance__gc-root-dominance:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-root-dominance'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Checker self-test (can this gate still fail?)
+        run: python3 scripts/gc_root_dominance_check.py --self-test
+      - name: ALLOC_RE alternatives must match real runtime symbols
+        run: python3 scripts/gc_root_dominance_check.py --audit-alloc-re
+      - name: POLL_CAPABLE_RUNTIME entries must name real runtime symbols
+        run: python3 scripts/gc_root_dominance_check.py --audit-poll-capable
+      - name: ALLOC_RE symbols that reach a poll-capable one must be listed
+        run: python3 scripts/gc_root_dominance_check.py --audit-poll-reach
+      - name: Immovable-source exemptions must still hold
+        run: python3 scripts/gc_root_dominance_check.py --audit-immovable-sources
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - name: Install the npm dependencies the dep corpus compiles
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Cache cargo
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-gcdom-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Build perry and the runtime archives
+        run: |
+          set -euo pipefail
+          # perry-runtime and perry-stdlib are rlib-only; the .a files come from
+          # the -static wrapper crates. The package set is fixed so cargo
+          # feature unification matches every other job that builds the
+          # compiler.
+          cargo build --release --features target-wasi -p perry -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+      - name: Verify the scanner sees every symbol the archives define
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_root_dominance_check.py --verify-symbols \
+            target/release/libperry_runtime.a target/release/libperry_stdlib.a
+      - name: Emit the IR corpus
+        run: ./scripts/gc_root_dominance_corpus.sh ir-corpus
+      - name: Check root-store dominance
+        run: |
+          set -euo pipefail
+          # No pipe: the checker's own exit status is the job's.
+          #
+          # The floors are asserted, not hoped for. On the corpus as of this
+          # commit the run reports ~1993 functions / 117 modules / 2501 root
+          # stores, so these sit below that with room for churn and well above
+          # "something compiled". Raise them when the corpus grows; never lower
+          # one to make a run pass -- a shrinking corpus is the finding.
+          #
+          # --seeded-violations plants 40 collection points into this very IR
+          # and requires all 40 to be reported. That is the arm that fails if
+          # the checker has stopped understanding perry's output, which is the
+          # only way a green verdict here could be a lie.
+          python3 scripts/gc_root_dominance_check.py ir-corpus \
+            --moving-only \
+            --min-files 90 --min-binds 1500 --min-funcs 1200 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            --seeded-violations 40 \
+            -v
+      - name: Check that every GC value in an alloca has a root store
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_root_dominance_check.py ir-corpus \
+            --unrooted-allocas \
+            --moving-only \
+            --min-files 90 --min-binds 1500 --min-funcs 1200 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            -v
+      - name: Emit the dependency-scale IR corpus
+        run: ./scripts/gc_root_dominance_dep_corpus.sh ir-corpus-dep
+      - name: Check root-store dominance (dependency-scale)
+        run: |
+          set -euo pipefail
+          # The corpus retained 81 modules and ~14,000 root stores while
+          # compiler pruning reduced its function count from 12,909 to a
+          # stable 5,615-5,920. Keep the breadth floor below that measured
+          # population; module and root-store floors independently reject a
+          # compile that silently loses the dependency or the gate's subject.
+          python3 scripts/gc_root_dominance_check.py ir-corpus-dep \
+            --moving-only \
+            --min-files 60 --min-binds 4000 --min-funcs 5000 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            --seeded-violations 40 \
+            -v
+      - name: Check that every GC value in an alloca has a root store (dependency-scale)
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_root_dominance_check.py ir-corpus-dep \
+            --unrooted-allocas \
+            --moving-only \
+            --min-files 60 --min-binds 4000 --min-funcs 5000 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            -v
+      - name: Stale-register budget (curated)
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_root_dominance_check.py ir-corpus \
+            --stale-registers --moving-only \
+            --min-files 90 --min-binds 1500 --min-funcs 1200 \
+            --max-stale 0
+      - name: Stale-register budget (dependency-scale)
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_root_dominance_check.py ir-corpus-dep \
+            --stale-registers --moving-only \
+            --min-files 60 --min-binds 4000 --min-funcs 5000 \
+            --max-stale 10
+      - name: Upload the IR corpus on failure
+        if: failure()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: gc-root-dominance-ir
+          path: |
+            ir-corpus
+            ir-corpus-dep
+          retention-days: 7
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/gc-native-roots.yml
+    name: GC Root Dominance / gc-root-dominance
+  gc-root-dominance__gc-root-dominance-statepoints:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-root-dominance'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    runs-on: macos-14
+    timeout-minutes: 90
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Checker self-test (can this gate still fail?)
+        run: python3 scripts/gc_root_dominance_check.py --self-test
+      - name: ALLOC_RE alternatives must match real runtime symbols
+        run: python3 scripts/gc_root_dominance_check.py --audit-alloc-re
+      - name: POLL_CAPABLE_RUNTIME entries must name real runtime symbols
+        run: python3 scripts/gc_root_dominance_check.py --audit-poll-capable
+      - name: ALLOC_RE symbols that reach a poll-capable one must be listed
+        run: python3 scripts/gc_root_dominance_check.py --audit-poll-reach
+      - name: Immovable-source exemptions must still hold
+        run: python3 scripts/gc_root_dominance_check.py --audit-immovable-sources
+      - uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - name: Install the npm dependencies the dep corpus compiles
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Install Rust toolchain
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+      - name: Cache cargo
+        uses: ./.github/actions/perry/actions/cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-gcdom-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-
+      - name: Build perry and the runtime archives
+        run: |
+          set -euo pipefail
+          cargo build --release --features target-wasi -p perry -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+      - name: Emit the NATIVE (statepoint) IR corpus
+        run: ./scripts/gc_root_dominance_corpus.sh ir-corpus-native --lowering native
+      - name: Check GC values across safepoints (native roots)
+        run: |
+          set -euo pipefail
+          # No pipe: the checker's own exit status is the job's.
+          #
+          # FLOORS, from the corpus as of this commit — 149 modules, 2452
+          # functions, 30033 safepoints, 17478 with a live bundle, 40759
+          # relocations — set below that with room for churn and far above
+          # "something compiled". Three separate floors because they fail for
+          # three different reasons and the message has to say which:
+          #   --min-statepoints  this is the shadow corpus, or codegen stopped
+          #                      marking functions gc "statepoint-example"
+          #   --min-relocates    the corpus was copied through un-rewritten
+          #                      (`opt` exits 0 on a module with nothing to do)
+          #   --min-live-bundles safepoints that record NO roots, which is what
+          #                      an unrooted build looks like
+          #
+          # BUDGETS. `unrooted` (the object is in NO live bundle at all, so
+          # nothing marks or rewrites it) is the serious class, and it is a
+          # RATCHET rather than a calibrated zero: this is a young instrument
+          # pointed at a lowering nothing had ever checked statically, and the
+          # remainder is a population under triage rather than a number anyone
+          # has adjudicated. It is a budget rather than allowlist entries for
+          # the reason `--stale-registers` records — tombstones with no issue
+          # numbers would be worse documentation than one number that can only
+          # go down. Lower it as sites are fixed.
+          #
+          # 21 at #7663. #7664 fixed 14 of them in `root_reload.rs` and
+          # `lower_call/new.rs` — the whole `strhandle` population (10), the
+          # `js_new_target_get` save/restore (1), and 3 of the 7 unmasked
+          # receivers — so the budget is 7. #7616 (widening POLL_CAPABLE_RUNTIME)
+          # and #7690 (rooting the spread argument-bundle accumulator) moved it
+          # 7 -> 11 -> 8, tracked in the two changelog fragments for those PRs.
+          #
+          # ★ RE-VERIFIED AT #7664's SECOND PASS: the 8 above was already stale
+          # by the time this ran. A fresh corpus read 9, not 8 — a static-method
+          # receiver hazard in `test_gap_static_method_value_name_collision`
+          # (added after the "8" snapshot, by the #7689/#7691 fix that armed a
+          # receiver-sensitive static `this`) had joined the population without
+          # anyone lowering — er, RAISING — the budget to match. That in itself
+          # is the thing CLAUDE.md's hazard-4 corollary warns about: a budget
+          # nobody re-measures silently absorbs the next hazard.
+          #
+          # Of the 9: 4 were CHECKER FALSE POSITIVES, not real hits. `chain`
+          # (the untracked cast-closure a stale use is searched in) treated
+          # `phi` as unconditionally transparent — one tainted incoming edge
+          # blanket-tainted the phi's RESULT, and a downstream use of that
+          # result was checked against ANY CFG path from source to use
+          # (`between_blocks` is deliberately path-insensitive, which is sound
+          # for an ordinary register but not a phi, whose dynamic value depends
+          # on which edge was actually taken). All four were the identical
+          # shape, e.g. `readCtx`:
+          #
+          #     entry.0:            %r2 = <unmask of the receiver>
+          #                         br i1 %r4, label %then, label %merge
+          #     merge:              %r87 = phi double [ %r2, %entry.0 ],
+          #                                           [ %r86, %pget.recv_merge ]
+          #                         ret double %r87
+          #
+          # The safepoints are all on the `%then` path, where the phi selects
+          # `%r86`. On the edge that carries `%r2` nothing collects between its
+          # definition and the join — the checker was reporting the OTHER
+          # edge's safepoint against THIS edge's value. Verified register-by-
+          # register on all four (`readCtx`, `__closure_5`, `Readable`,
+          # `__obj_method_toLocaleString_3` — every one a `logical.merge` join
+          # of an `&&`).
+          #
+          # Fixed: `_cast_closure` gained `phi_all_edges` — a phi joins `chain`
+          # only once EVERY incoming edge is independently in it, closing the
+          # false positive. That deliberately gives up the case of a SINGLE
+          # tainted edge with its own intervening safepoint before its own
+          # predecessor's terminator; `_phi_edge_hazard` covers that separately,
+          # checking each edge's window on its own. Two sabotage-tested
+          # self-test fixtures (`phi_safe_edge` / `phi_hazard_edge`) pin both
+          # directions.
+          #
+          # The remaining 5 were real, and split two ways:
+          #
+          #   3  unrooted:global. `test_gap_arraybuffer_transfer::main` (2,
+          #      `new DataView`/`new Uint8Array` reading a module-global
+          #      receiver, then holding it across a sibling `{ valueOf() {...} }`
+          #      argument's allocation) — fixed upstream by #7719, which covers
+          #      the identical shape across all 30 `lower_call/builtin.rs` ctor
+          #      arms via a shared `RootedGroup`. `test_gap_static_method_value_
+          #      name_collision::main` (1, `(Lexer as any).lex(...)`'s receiver
+          #      held across arg-bundling that always allocates for a rest
+          #      param) — fixed here, in
+          #      `lower_call/property_get/static_dispatch.rs`, the same
+          #      `RootedGroup::adopt`/`reread` shape on the receiver instead of
+          #      a constructor argument.
+          #   2  unrooted:capture. `js_closure_get_capture_bits` returns a raw
+          #      `i64` that may be a NaN-boxed heap value, and unlike
+          #      `%this_closure` itself (which codegen already re-enters into
+          #      the `ptr addrspace(1)` tracked domain), its generic "read a
+          #      captured value" call sites never re-enter it into either that
+          #      domain or a temp root.
+          #      `test_gap_class_expr_dynamic_parent_ctor::__closure_21`: a
+          #      captured dynamic-parent-class reference read at the top of the
+          #      synthesized implicit ctor closure, used ~60 lines later as
+          #      `js_new_function_construct`'s callee, across
+          #      `js_object_alloc_class_inline_keys` AND the class's own user
+          #      constructor.
+          #      `test_gap_computed_key_method_nested_this::__closure_9`: a
+          #      captured numeric local read, then `total + x`-style `fadd`
+          #      after `js_number_coerce` (which can run a user
+          #      `Symbol.toPrimitive`) intervenes. NOT reloadable the way a
+          #      strhandle global is (re-deriving from `%this_closure` reads
+          #      the pre-move closure — RS4GC does not relocate a raw `i64`
+          #      parameter) — but IS reloadable the way OTHER root-derived
+          #      values are: re-calling `js_closure_get_capture_bits` with the
+          #      same closure pointer and index re-reads the same slot, sound
+          #      under the identical store side-condition
+          #      (`js_closure_set_capture_bits` to that index) `root_reload.rs`
+          #      already tracks for shadow slots and handle globals.
+          #
+          # ★ #7725 CLOSED both `unrooted:capture` hits, and the budget is
+          # deleted rather than set to 0 — `--max-unrooted` already defaults
+          # to 0, and a budget nobody re-measures is exactly the silently-
+          # absorbing-the-next-hazard failure mode CLAUDE.md's hazard-4
+          # corollary warns about (the "8 was already stale, a fresh corpus
+          # read 9" paragraph above is that failure mode, once). The fix:
+          # `root_reload.rs`'s `Facts` gained `capture_get_key`, so a
+          # `js_closure_get_capture_bits` call whose ptr operand already
+          # belongs to a reloadable recipe (the closure-ptr shadow-slot load
+          # chain #7055 already protects) extends that recipe like a
+          # transparent bit op — the whole chain (slot load, mask, a FRESH
+          # call to `js_closure_get_capture_bits` with the same index, and
+          # any further cast) re-materialises at every reload point. The
+          # store side-condition switches from "was the closure-ptr slot
+          # reassigned" (never, in generated code) to "was THIS INDEX set" —
+          # a synthetic per-index key a `js_closure_set_capture_bits` call
+          # populates via the same `stores_to` field a plain store uses,
+          # which needed the `recipe[0]`-only group key widened to
+          # `(recipe[0], root_ptr)` so the two conditions don't get
+          # conflated under one reachability walk. Verified: native corpus
+          # 2 -> 0 (`stale` held at 0), `--lowering shadow` corpus clean,
+          # `--self-test` still proves the checker can fail.
+          #
+          # --seeded-violations plants 40 safepoints into this very IR, between
+          # a `ptrtoint ptr addrspace(1)` and its use, and requires all 40 to be
+          # reported. It runs even when the budgets are already red, because
+          # the run whose "can it still fail" arm you most want is the one that
+          # is already telling you something. That is the arm that fails if the
+          # mode has stopped understanding LLVM's output — the only way a green
+          # verdict here could be a lie.
+          python3 scripts/gc_root_dominance_check.py ir-corpus-native \
+            --statepoints \
+            --moving-only \
+            --min-files 90 --min-funcs 1200 \
+            --min-statepoints 15000 \
+            --min-live-bundles 8000 \
+            --min-relocates 20000 \
+            --max-stale 0 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            --seeded-violations 40 \
+            -v
+      - name: Emit the dependency-scale NATIVE (statepoint) IR corpus
+        run: ./scripts/gc_root_dominance_dep_native_corpus.sh ir-corpus-dep-native
+      - name: Check GC values across safepoints (dependency-scale, native roots)
+        run: |
+          set -euo pipefail
+          python3 scripts/gc_root_dominance_check.py ir-corpus-dep-native \
+            --statepoints \
+            --moving-only \
+            --min-files 60 --min-funcs 1200 \
+            --min-statepoints 15000 \
+            --min-live-bundles 8000 \
+            --min-relocates 20000 \
+            --max-unrooted 3 \
+            --max-stale 0 \
+            --allowlist scripts/gc_root_dominance_allowlist.json \
+            --seeded-violations 40 \
+            -v
+      - name: Unfiltered hazard census (diagnostic, not a gate)
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          python3 scripts/gc_root_dominance_check.py ir-corpus-native \
+            --statepoints \
+            --min-files 90 --min-funcs 1200 \
+            --min-statepoints 15000 --min-live-bundles 8000 \
+            --min-relocates 20000 \
+            --max-unrooted 100000 --max-stale 100000 || true
+      - name: Upload the IR corpus on failure
+        if: failure()
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: gc-root-dominance-statepoint-ir
+          path: ir-corpus-native
+          retention-days: 7
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+
+    permissions:
+      contents: read
+      pull-requests: read
+    name: GC Root Dominance / gc-root-dominance-statepoints
   gc-root-dominance:
-    name: gc-root-dominance
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-root-dominance']
+    name: GC Root Dominance / suite result
+    needs:
+      - route
+      - gc-root-dominance__gc-root-dominance
+      - gc-root-dominance__gc-root-dominance-statepoints
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-root-dominance']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["gc-root-dominance__gc-root-dominance","gc-root-dominance__gc-root-dominance-statepoints"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  gc-parse-churn-gate__self-test-checker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Self-test the verdict logic
+        run: python3 scripts/gc_parse_churn_layout_check.py --self-test
+    needs:
+      - route
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-parse-churn-gate'] }}
+    env:
+      CARGO_TERM_COLOR: always
+
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/gc-root-dominance.yml
+    name: GC Parse-Churn Layout Gate / self-test-checker
+  gc-parse-churn-gate__gc-parse-churn-gate:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-parse-churn-gate'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Decide whether this change can affect the layout-state / parse-churn path
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request; running the gate."
+            exit 0
+          fi
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed.txt
+          # Deliberately broad, same rationale as gc-moving-witnesses.yml:
+          # anything under crates/ can move the collector or change how JSON
+          # parses, and the filter exists only to spare docs-only PRs a
+          # compiler build.
+          if grep -qE '^(crates/|scripts/gc_parse_churn_layout_(gate\.sh|check\.py)$|scripts/fixtures/gc_parse_churn_layout_state\.ts$|Cargo\.(toml|lock)$|\.github/workflows/(gc-parse-churn-gate|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Change touches a collector- or JSON-parse-relevant path; running the gate."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No relevant paths changed."
+          fi
+      - name: Install Rust toolchain
+        if: steps.relevance.outputs.run == 'true'
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+        if: steps.relevance.outputs.run == 'true'
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        if: steps.relevance.outputs.run == 'true'
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install clang
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+      - name: Build perry and the runtime archives
+        if: steps.relevance.outputs.run == 'true'
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+        run: |
+          set -euo pipefail
+          # perry-runtime/perry-stdlib are rlib-only; libperry_{runtime,stdlib}.a
+          # come from the *-static wrapper crates. Building without them links
+          # a stale archive and makes this whole gate vacuous in a way nothing
+          # downstream can detect (CLAUDE.md's "Verifying a runtime change").
+          cargo build --release \
+            -p perry -p perry-runtime -p perry-stdlib \
+            -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+      - name: Run the parse-then-churn layout-state gate
+        if: steps.relevance.outputs.run == 'true'
+        run: scripts/gc_parse_churn_layout_gate.sh target/release/perry
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+
+    name: GC Parse-Churn Layout Gate / gc-parse-churn-gate
   gc-parse-churn-gate:
-    name: gc-parse-churn-gate
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-parse-churn-gate']
+    name: GC Parse-Churn Layout Gate / suite result
+    needs:
+      - route
+      - gc-parse-churn-gate__self-test-checker
+      - gc-parse-churn-gate__gc-parse-churn-gate
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-parse-churn-gate']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["gc-parse-churn-gate__self-test-checker","gc-parse-churn-gate__gc-parse-churn-gate"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  gc-ptr-shape-off-witness__gc-ptr-shape-off-witness:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-ptr-shape-off-witness'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/gc-parse-churn-gate.yml
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Decide whether this change can affect Ptr<Shape> lowering
+        id: relevance
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Not a pull request; running the witness."
+            exit 0
+          fi
+          gh api "repos/$REPOSITORY/pulls/$PR_NUMBER/files" --paginate --jq '.[].filename' > changed.txt
+          # Deliberately broad, same rationale as gc-moving-witnesses.yml:
+          # anything under crates/ can move what a scalar-replaced receiver's
+          # method-call lowering resolves to, not just the Ptr<Shape>
+          # collectors themselves — #6984's defect lived in
+          # lower_call/scalar_method.rs, three files away from ptr_shape.rs.
+          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|test-files/test_gap_repsel_|test-parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/(gc-ptr-shape-off-witness|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Change touches representation-selection-relevant paths; running the witness."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "No representation-selection-relevant paths changed."
+          fi
+      - name: Install Rust toolchain
+        if: steps.relevance.outputs.run == 'true'
+        run: rustup toolchain install nightly-2026-10-04 --profile minimal
+      - uses: ./.github/actions/setup-llvm22
+        if: steps.relevance.outputs.run == 'true'
+      - uses: ./.github/actions/perry/Swatinem/rust-cache
+        if: steps.relevance.outputs.run == 'true'
+        with:
+          shared-key: "${{ runner.os }}-perry"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: Install clang
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang
+      - name: Setup Node oracle
+        if: steps.relevance.outputs.run == 'true'
+        uses: ./.github/actions/perry/actions/setup-node
+        with:
+          node-version-file: .node-version
+      - name: Build perry and the runtime archives
+        if: steps.relevance.outputs.run == 'true'
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS: "-C linker-features=-lld"
+        run: |
+          set -euo pipefail
+          # perry-runtime / perry-stdlib are rlib-only; libperry_runtime.a and
+          # libperry_stdlib.a come from the -static wrapper crates. Building
+          # without them links a stale archive and makes the whole run
+          # vacuous (CLAUDE.md, "Verifying a runtime change"). Package set
+          # matches gc-stress exactly so the cache is shared.
+          cargo build --release \
+            -p perry -p perry-runtime -p perry-stdlib \
+            -p perry-runtime-static -p perry-stdlib-static
+          for artifact in perry libperry_runtime.a libperry_stdlib.a; do
+            test -s "target/release/$artifact" \
+              || { echo "::error::target/release/$artifact was not produced"; exit 1; }
+          done
+      - name: Run the PERRY_PTR_SHAPE_LOCALS=0 witness across the repsel corpus
+        if: steps.relevance.outputs.run == 'true'
+        run: |
+          ./scripts/gc_repsel_matrix.sh \
+            --no-build \
+            --arms rep_ptr_shape_off \
+            --filter test_gap_repsel_ \
+            --json gc-ptr-shape-off-witness.json
+      - name: Upload the witness report
+        if: always() && steps.relevance.outputs.run == 'true'
+        uses: ./.github/actions/perry/actions/upload-artifact
+        with:
+          name: gc-ptr-shape-off-witness-${{ github.sha }}
+          path: gc-ptr-shape-off-witness.json
+          if-no-files-found: ignore
+          retention-days: 30
+    needs:
+      - route
+    env:
+      CARGO_TERM_COLOR: always
+  # scripts/gc_repsel_matrix.sh deliberately does NOT set
+  # PERRY_NO_AUTO_OPTIMIZE (see its own header): the auto-optimizer decides
+  # whether the linked runtime carries the `diagnostics` feature, which
+  # changes the GC trace format the harness parses for its liveness evidence.
+  # Setting it here from outside could silently turn every cell UNVER.
+
+    name: GC Ptr<Shape> OFF-arm witness
   gc-ptr-shape-off-witness:
-    name: gc-ptr-shape-off-witness
-    needs: route
-    if: needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-ptr-shape-off-witness']
-    permissions:
-      contents: read
-      pull-requests: read
-    uses: ./.github/workflows/gc-ptr-shape-off-witness.yml
+    name: GC Ptr<Shape> OFF-arm witness / suite result
+    needs:
+      - route
+      - gc-ptr-shape-off-witness__gc-ptr-shape-off-witness
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-ptr-shape-off-witness']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["gc-ptr-shape-off-witness__gc-ptr-shape-off-witness"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
