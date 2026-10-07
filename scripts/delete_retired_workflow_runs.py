@@ -66,6 +66,7 @@ def main() -> int:
             retired.append((workflow["id"], path))
     print(f"Retired workflow files eligible for cleanup: {len(retired)}")
     deleted = 0
+    unavailable = 0
     complete = True
     reset_at = int(headers.get("X-RateLimit-Reset", "0") or 0)
     remaining = int(headers.get("X-RateLimit-Remaining", "0") or 0)
@@ -81,6 +82,10 @@ def main() -> int:
                 "GET", f"/actions/workflows/{workflow_id}/runs?per_page=100&status=completed")
             remaining = int(headers.get("X-RateLimit-Remaining", remaining) or remaining)
             reset_at = int(headers.get("X-RateLimit-Reset", reset_at) or reset_at)
+            if status == 404:
+                unavailable += 1
+                print(f"Skipping {workflow_path}: GitHub no longer exposes its run-list endpoint")
+                break
             if status != 200:
                 print(f"Unable to list runs for {workflow_path}: HTTP {status}: {payload[:300]!r}", file=sys.stderr)
                 return 1
@@ -113,7 +118,7 @@ def main() -> int:
 
     print(f"Deleted {deleted} completed retired-workflow runs in this pass")
     if complete:
-        print("No completed runs remain for retired workflows")
+        print(f"No completed runs remain for addressable retired workflows; {unavailable} workflow run-list endpoint(s) were unavailable")
         return 0
     if remaining < 10 and reset_at:
         delay = max(1, reset_at - int(time.time()) + 5)
