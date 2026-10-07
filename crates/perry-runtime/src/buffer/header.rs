@@ -124,7 +124,14 @@ pub(crate) fn byte_cell_type(addr: usize) -> Option<u8> {
 /// (`arena::region_contains`) owns all arena memory whichever thread
 /// allocated it, so the proof holds on any thread. This thread's tracked
 /// header read answers first: it is the cheaper probe for its own cells.
-#[inline]
+///
+/// Out of line: [`byte_cell_type`] is inlined into every generic receiver
+/// probe (`lookup_typed_array_kind` on each dynamic index get and set,
+/// `is_registered_buffer`), and only a byte-family type byte reaches the
+/// proof. Inlined there, the allocator walk grew those probes past LLVM's
+/// inlining budget, so every non-byte receiver paid an out-of-line call for
+/// a test it answers with one load.
+#[inline(never)]
 pub(crate) fn byte_cell_is_owned(addr: usize, obj_type: u8) -> bool {
     #[cfg(test)]
     if byte_cell_proof_sabotaged() {
