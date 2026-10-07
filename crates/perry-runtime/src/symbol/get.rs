@@ -472,28 +472,47 @@ unsafe fn resolve_explicit_object_prototype_symbol(
     explicit_prototype_symbol_slot(obj_f64, sym_f64).map(|slot| slot.read(receiver))
 }
 
-/// The explicit-static-prototype walk behind
+/// The recorded and intrinsic-array prototype walk behind
 /// [`resolve_explicit_object_prototype_symbol`], stopping at the nearest
 /// holder without invoking it.
 unsafe fn explicit_prototype_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSymbolSlot> {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
-    // #9192: the receiver may be a real ARRAY with a retargeted `[[Prototype]]`
-    // (`Object.setPrototypeOf(arr, {[S]: v})`). Its address is only a lookup
-    // key here, so accept it; every chain HOP below still demands a real
-    // `GC_TYPE_OBJECT` before dereferencing.
     let mut owner = receiver_ptr_from_value_bits(obj_f64.to_bits())?;
     let mut visited_buf = [0usize; 16];
     let mut visited_len = 0usize;
     let mut visited_overflow: Option<std::collections::HashSet<usize>> = None;
     loop {
-        let proto_bits = crate::object::prototype_chain::object_static_prototype(owner)?;
+        let proto_bits = match crate::object::prototype_chain::object_static_prototype(owner) {
+            Some(bits) => bits,
+            None => {
+                let (_, kind) = heap_ptr_and_type_from_value_bits(owner as u64)?;
+                if kind != crate::gc::GC_TYPE_ARRAY {
+                    return None;
+                }
+                // Resolving an intrinsic can allocate; keep the current
+                // chain address stable while obtaining its parent.
+                let _no_move = crate::gc::GcSuppressScope::new();
+                // Use the intrinsic root, independent of globalThis.Array.
+                // Array.prototype itself inherits from Object.prototype.
+                let array_proto = crate::array::array_prototype_addr();
+                let proto = if array_proto == owner {
+                    crate::array::object_prototype_addr()
+                } else {
+                    array_proto
+                };
+                if proto == 0 {
+                    return None;
+                }
+                crate::value::js_nanbox_pointer(proto as i64).to_bits()
+            }
+        };
         if proto_bits == TAG_NULL {
             return None;
         }
         if let Some(slot) = own_symbol_slot(f64::from_bits(proto_bits), sym_f64) {
             return Some(slot);
         }
-        let proto_ptr = object_header_ptr_from_value_bits(proto_bits)?;
+        let proto_ptr = receiver_ptr_from_value_bits(proto_bits)?;
         // Cycle detection.
         let cycle = if visited_len < visited_buf.len() {
             visited_buf[..visited_len].contains(&proto_ptr)
@@ -510,9 +529,11 @@ unsafe fn explicit_prototype_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<O
         } else if let Some(set) = &mut visited_overflow {
             set.insert(owner);
         }
-        let proto_obj = proto_ptr as *const crate::object::ObjectHeader;
-        if let Some(slot) = crate::object::object_proto_chain_symbol_slot(proto_obj, sym_f64) {
-            return Some(slot);
+        if object_header_ptr_from_value_bits(proto_bits).is_some() {
+            let proto_obj = proto_ptr as *const crate::object::ObjectHeader;
+            if let Some(slot) = crate::object::object_proto_chain_symbol_slot(proto_obj, sym_f64) {
+                return Some(slot);
+            }
         }
         owner = proto_ptr;
     }
