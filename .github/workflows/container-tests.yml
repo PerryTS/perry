@@ -108,51 +108,41 @@ jobs:
           key: ${{ runner.os }}-cargo-container-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-cargo-container-
 
-      # ── Layer A.0: lib unit + protocol arg tests ──────────────────────
-      - name: A.0 — perry-container-compose lib + protocol args
-        run: |
-          cargo test -p perry-container-compose --lib
-
-      # ── Layer A.1: functional tests with MockBackend ──────────────────
-      - name: A.1 — Functional tests (MockBackend, hermetic)
-        run: |
-          cargo test -p perry-container-compose \
-            --features test-utils \
-            --test functional_orchestration \
-            -- --test-threads=2
-
-      # ── Layer A.2: fixture + property tests ───────────────────────────
-      - name: A.2 — Fixture + property tests
-        run: |
-          cargo test -p perry-container-compose \
-            --test fixtures_tests \
-            --test round_trip \
-            -- --test-threads=2
-
-      # ── Layer A.3: workspace invariants ───────────────────────────────
-      - name: A.3 — Workspace invariants
-        run: |
-          cargo test -p perry-stdlib \
-            --features container \
-            --test container_workspace_invariants
-
-      # ── Layer B: FFI bug regressions ──────────────────────────────────
-      - name: B — FFI bug regressions
-        run: |
-          cargo test -p perry-stdlib \
-            --features container \
-            --test container_capability_tests \
-            --test container_extra_tests \
-            --test container_ffi_tests \
-            --test container_props \
-            --test container_verification_tests
-
-      # ── Smoke tests on perry-stdlib's container module ────────────────
-      - name: stdlib container::smoke_tests
-        run: |
-          cargo test -p perry-stdlib \
-            --features container \
-            --lib container::smoke_tests
+      # These suites are hermetic and use disjoint test processes. Cargo may
+      # serialize compilation through its lock, but test execution overlaps.
+      - parallel:
+          - name: A.0 — perry-container-compose lib + protocol args
+            run: cargo test -p perry-container-compose --lib
+          - name: A.1 — Functional tests (MockBackend, hermetic)
+            run: |
+              cargo test -p perry-container-compose \
+                --features test-utils \
+                --test functional_orchestration \
+                -- --test-threads=2
+          - name: A.2 — Fixture + property tests
+            run: |
+              cargo test -p perry-container-compose \
+                --test fixtures_tests \
+                --test round_trip \
+                -- --test-threads=2
+          - name: A.3 — Workspace invariants
+            run: |
+              cargo test -p perry-stdlib \
+                --features container \
+                --test container_workspace_invariants
+          - name: B — FFI bug regressions
+            run: |
+              cargo test -p perry-stdlib \
+                --features container \
+                --test container_capability_tests \
+                --test container_extra_tests \
+                --test container_ffi_tests \
+                --test container_props \
+                --test container_verification_tests
+          - name: stdlib container::smoke_tests
+            run: cargo test -p perry-stdlib --features container --lib container::smoke_tests
+      - name: Wait for hermetic container suites
+        wait-all: true
 
   # ===========================================================================
   # Layer C: Live-runtime integration tests. PR + main.
