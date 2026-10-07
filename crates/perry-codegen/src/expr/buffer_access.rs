@@ -330,10 +330,10 @@ pub(crate) fn lower_buffer_access_proof(
         return Ok(None);
     }
 
-    // A tracked ArrayBuffer/native-arena view caches a raw backing pointer in
-    // `data_slot`. Moving GC rewrites `TYPED_ARRAY_VIEW_META.backing`, not that
-    // compiler-created alloca, and native-arena disposal can invalidate it
-    // outright. If evaluating the index can collect or re-enter user code,
+    // A view over an ArrayBuffer or NativeArena owner holds a raw data pointer
+    // in `data_slot` that was resolved from its owner. Detach, resize and
+    // native-arena disposal change the owner, not that compiler-created
+    // alloca. If evaluating the index can collect or re-enter user code,
     // decline before evaluating anything; the caller's dynamic path keeps the
     // receiver rooted and resolves its current backing at the consuming call.
     // Fresh inline Buffer/TypedArray storage is explicitly non-movable, so its

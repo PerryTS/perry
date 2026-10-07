@@ -262,9 +262,9 @@ fn test_buffer_property_bags_die_with_their_owners() {
 /// Nothing pinned this before, and a great deal rests on it: `bun:ffi`'s
 /// pointer-lifetime contract hands `ptr(view)` to native code and documents
 /// the address as stable for the lifetime of the JS object
-/// (`bun_ffi/mod.rs`); `VIEW_REGISTRY`,
-/// `BACKING_TO_VIEWS` and the remaining identity registries
-/// above are all keyed by that address; and #9611 publishes
+/// (`bun_ffi/mod.rs`); the remaining identity registries
+/// above are keyed by that address; hoisted emitted data pointers into
+/// inline bytes assume it; and #9611 publishes
 /// `WebAssembly.Memory.prototype.buffer` as a foreign-backed wrapper whose
 /// address the wasm binding table keys. Flipping either type to `movable`
 /// invalidates all of them at once, silently — this test is where that shows

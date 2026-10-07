@@ -371,8 +371,8 @@ pub fn js_data_view_set(
 ) -> f64 {
     // Both inputs are already Numbers and ToIndex is already resolved: no call
     // below can allocate, invoke JavaScript, collect, or move/reclaim `buf`.
-    // Avoid publishing a transient GC root and use the construction-time data
-    // pointer cache instead of probing VIEW_REGISTRY on every numeric write.
+    // Avoid publishing a transient GC root; the write resolves the data
+    // pointer from the view cell and its current owner.
     if !kind.is_bigint() && crate::value::JSValue::from_bits(value.to_bits()).is_number() {
         if let Some(offset) = numeric_byte_offset(offset_value) {
             let buf = unbox_buffer_ptr(buf_f64.to_bits()) as *mut BufferHeader;
