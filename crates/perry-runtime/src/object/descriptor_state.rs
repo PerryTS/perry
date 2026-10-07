@@ -80,22 +80,24 @@ pub(crate) fn invalidate_prototype_descriptor_guards(obj: usize, key: &str) {
 /// data) and must therefore take the slow [[Set]] walk.
 
 pub(crate) fn object_proto_may_intercept_key(key: f64) -> bool {
-    // #6828: `%Object.prototype%` always owns the Annex-B `__proto__`
-    // accessor, even though Perry implements that intrinsic in the ordinary
-    // [[Set]] walk rather than materializing a closure-backed descriptor.
-    // Treat it as an interceptor so the plain-object direct-store lane cannot
-    // create an own enumerable `"__proto__"` property before the walk gets a
-    // chance to invoke the intrinsic setter.
-    if unsafe { reflect_support::key_to_rust_string(key) }.as_deref() == Some("__proto__") {
+    let mut scratch = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(bytes) = (unsafe {
+        crate::string::js_string_key_bytes(
+            crate::value::JSValue::from_bits(key.to_bits()),
+            &mut scratch,
+        )
+    }) else {
+        return true;
+    };
+    // The intrinsic Annex-B setter is implemented by the ordinary Set walk.
+    if bytes == b"__proto__" {
         return true;
     }
-    let proto_addr = crate::array::object_prototype_addr();
-    if proto_addr == 0 {
-        return false;
-    }
-    let proto_value =
-        f64::from_bits(crate::value::JSValue::pointer(proto_addr as *const u8).bits());
-    reflect_support::obj_value_has_own_key(proto_value, key)
+    let proto = crate::array::object_prototype_addr_if_resolved();
+    proto != 0
+        && unsafe {
+            super::key_attrs::object_key_blocks_plain_store(proto as *const ObjectHeader, bytes)
+        }
 }
 
 /// Whether a fast plain-data write of `key` to a CLASS INSTANCE (`class_id != 0`)
@@ -459,11 +461,7 @@ pub(crate) unsafe fn plain_custom_prototype_may_intercept(obj_addr: usize, key: 
     }
 }
 
-/// #6759 Phase C2 owner-level verdict: can the tables hold ANY entry owned
-/// by `owner`? Gates the O(table-size) owner scans (`Object.keys` fast
-/// path, `accessor_descriptor_keys_for_obj`). Same trust model as the
-/// per-key form.
-#[inline]
+/// Can this holder shape carry an accessor or customized attribute entry?
 pub(crate) fn owner_may_have_descriptor_entries(owner: usize, accessor: bool) -> bool {
     unsafe {
         let DescriptorRoute::Keys(bag) = descriptor_route(owner);
@@ -510,26 +508,7 @@ pub(crate) fn owner_may_have_descriptor_entries(owner: usize, accessor: bool) ->
 /// `caller` must have already established that `addr` is a `GC_TYPE_OBJECT`
 /// whose frozen/sealed/non-extensible flags are clear.
 pub(crate) unsafe fn plain_data_write_may_intercept(addr: usize, class_id: u32, key: f64) -> bool {
-    // Own accessor / non-writable descriptor on this exact object. #6759
-    // Phase C2: the flag is object-level; the meta summary refines it
-    // per-KEY, so an object with a descriptor on one key (webpack's
-    // `defineProperty(exports, "__esModule", …)`) keeps the fast path for
-    // writes to its other keys. A clear pair of bits proves no own
-    // string-keyed entry covers THIS key (an own symbol-keyed descriptor
-    // cannot intercept a string-keyed write); prototype-level interception
-    // is still vetted below.
-    // The summary is 64 bits wide, so a SET bit is only a maybe: roughly one
-    // key in 64 collides with a descriptor key that is actually present.
-    // `own_descriptors_skip_key` confirms a positive against the descriptor
-    // tables (and stays conservative for keys it cannot decode).
-    //
-    // Confirming matters out of all proportion to the collision rate. A store
-    // sent down the slow path appends to a PRIVATE keys array, which takes the
-    // receiver off the shared transition chain permanently, so every LATER
-    // store on that object misses the lane too. With zod's single `_zod`
-    // descriptor and keys `p0..p39`, `p17` collided — so all 2000 receivers
-    // forked at the same store and ran their remaining 22 properties on
-    // per-object shapes.
+    // The own holder shape first proves whether this key is ordinary data.
     if object_has_descriptors(addr) && !own_descriptors_skip_key(addr, key) {
         return true;
     }
@@ -714,9 +693,7 @@ pub(crate) fn accessor_descriptor_keys_for_obj(obj: usize) -> Vec<String> {
 /// invoking it. Returns `None` (rather than reading the field) when there is no
 /// accessor at all, so the caller falls back to an ordinary field read.
 pub(crate) fn reflect_getter_closure_bits(value: f64, key: f64) -> Option<u64> {
-    // Builtin accessors live in the descriptor table without arming the
-    // user-accessor fast-path gate. Reflect.get with a distinct receiver must
-    // find them too; get_accessor_descriptor uses each owner's key summary.
+    // Builtin and user accessors share the holder shape and pair slot.
     // #6943: `js_string_coerce` allocates for every non-heap-string key and can
     // run a user `toString` / `valueOf` for an object key, so it can trigger a
     // GC that **evacuates**. `value` (the prototype-chain walk's starting
@@ -815,11 +792,6 @@ pub(crate) unsafe fn json_object_getter_value(
     ))
 }
 
-/// Monotonic (#6386): has an accessor descriptor keyed `"constructor"` ever
-/// been installed on ANY object? While false, `ArraySpeciesCreate`'s/// Does the table-route owner `obj` (an array, a native cell: no keys or
-/// meta summary of its own) hold ANY accessor? Every table insert indexes its
-/// owner (`accessor_keys_by_owner`), so one address-keyed probe answers
-/// without building a key string.
 /// A per-key holder shape query; no owner index or string allocation.
 pub(crate) unsafe fn owner_key_is_accessor(owner: usize, key: &[u8]) -> bool {
     let DescriptorRoute::Keys(bag) = descriptor_route(owner);

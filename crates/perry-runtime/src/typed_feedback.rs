@@ -49,6 +49,20 @@ pub(crate) fn typed_feedback_active() -> bool {
     typed_feedback_enabled()
 }
 
+/// Numeric loop guards only decline when tracing was requested. Unit tests
+/// collect site observations unconditionally, without enabling trace mode.
+pub(crate) fn typed_feedback_trace_requested() -> bool {
+    #[cfg(test)]
+    {
+        std::env::var_os("PERRY_TYPED_FEEDBACK_TRACE").is_some()
+            || std::env::var_os("PERRY_TYPED_FEEDBACK").is_some()
+    }
+    #[cfg(not(test))]
+    {
+        typed_feedback_enabled()
+    }
+}
+
 #[cfg(test)]
 static TYPED_FEEDBACK_TEST_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 

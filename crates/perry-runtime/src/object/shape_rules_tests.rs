@@ -200,9 +200,8 @@ fn rule1_set_builtin_property_attrs_transitions() {
 /// while the object was frozen kept serving the frozen answer.
 ///
 /// Its only production caller hands it a handle-band id (see
-/// [`rule1_clear_object_descriptors_on_a_handle_id_is_a_no_op`]), which has no
-/// shape — but nothing in the signature says so, and the function is reachable
-/// from anywhere in the crate.
+/// [`rule1_clear_object_descriptors_on_a_handle_transitions_its_bag`]); its
+/// property bag now follows the same shape-transition contract.
 #[test]
 fn rule1_clear_object_descriptors_transitions() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -229,25 +228,25 @@ fn rule1_clear_object_descriptors_transitions() {
     }
 }
 
-/// The handle path this function exists for: a recycled perry-ffi handle id.
-/// It is not a heap cell, so there is nothing to transition — and the clear
-/// must still empty the tables.
+/// A native handle's descriptor reset transitions its ordinary holder.
+/// Recycling the handle then drops the owned bag entirely.
 #[test]
-fn rule1_clear_object_descriptors_on_a_handle_id_is_a_no_op() {
+fn rule1_clear_object_descriptors_on_a_handle_transitions_its_bag() {
     let _lock = crate::gc::global_side_table_test_lock();
-    // A handle-band id: small integer, no GcHeader, never a shaped object.
     let handle: usize = 0x41;
-    assert!(
-        crate::value::addr_class::is_handle_band(handle),
-        "test premise: the id used by handle_expando_clear is handle-band"
-    );
+    assert!(crate::value::addr_class::is_handle_band(handle));
     set_property_attrs(handle, "hid".to_string(), FROZEN_ATTRS);
-    assert!(super::descriptor_state::get_property_attrs(handle, "hid").is_some());
-    clear_object_descriptors(handle);
-    assert!(
-        super::descriptor_state::get_property_attrs(handle, "hid").is_none(),
-        "a recycled handle id must not inherit the previous tenant's descriptors"
-    );
+    unsafe {
+        let bag = super::descriptor_state::descriptor_holder(handle);
+        assert!(!bag.is_null());
+        let before = shapes::object_shape_stamp(bag);
+        clear_object_descriptors(handle);
+        assert_ne!(before, shapes::object_shape_stamp(bag));
+        let attrs = super::descriptor_state::get_property_attrs(handle, "hid").unwrap();
+        assert!(attrs.writable() && attrs.enumerable() && attrs.configurable());
+    }
+    super::handle_expando::handle_expando_clear(handle as i64);
+    assert!(super::descriptor_state::get_property_attrs(handle, "hid").is_none());
 }
 
 /// `transfer_descriptor_owner` is NOT a descriptor change: it re-keys one

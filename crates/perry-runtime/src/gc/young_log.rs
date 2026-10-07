@@ -251,19 +251,6 @@ pub(crate) fn bits_are_minor_collectible(bits: u64) -> bool {
     }
 }
 
-/// [`addr_is_minor_relevant`] for a NaN-boxed value: only the three
-/// pointer-carrying tags decode to an address; numbers, booleans, short
-/// strings and `undefined` are never relevant.
-#[inline]
-pub(crate) fn bits_are_minor_relevant(bits: u64) -> bool {
-    let tag = bits & TAG_MASK;
-    if tag == POINTER_TAG || tag == STRING_TAG || tag == BIGINT_TAG {
-        addr_is_minor_relevant((bits & POINTER_MASK) as usize)
-    } else {
-        false
-    }
-}
-
 /// One scanner walk's accounting (rule 3).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct YoungLogWalk {

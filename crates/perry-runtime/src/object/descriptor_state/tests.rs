@@ -112,3 +112,28 @@ fn array_descriptor_holder_survives_growth_without_rekeying() {
         );
     }
 }
+
+#[test]
+fn freezing_an_array_snapshots_indices_before_the_holder_reserve_grows() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let mut array = crate::array::js_array_alloc(2);
+        let len = (*array).capacity;
+        for i in 0..len {
+            array = crate::array::js_array_push(array, crate::JSValue::number(i as f64));
+        }
+        assert_eq!((*array).length, (*array).capacity);
+        crate::object::js_object_freeze(crate::value::js_nanbox_pointer(array as i64));
+        let live = crate::array::clean_arr_ptr_mut(array);
+        assert_ne!(
+            array, live,
+            "subject: the holder reserve must grow the full array"
+        );
+        assert_eq!((*live).length, len);
+        for key in ["0", "1", "length"] {
+            let attrs = get_property_attrs(live as usize, key).unwrap();
+            assert!(!attrs.writable() && !attrs.configurable());
+        }
+    }
+}

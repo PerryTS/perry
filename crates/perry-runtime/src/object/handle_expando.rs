@@ -263,10 +263,13 @@ mod tests {
     }
 
     #[test]
-    fn scanner_visits_stored_values() {
+    fn scanner_visits_the_owned_property_bag() {
         let h = 0x4_2425i64;
         let v_bits = 0x7FFD_1234_5678_9ABCu64;
         handle_expando_set(h, "x", f64::from_bits(v_bits));
+        let bag = handle_property_bag(h);
+        assert_eq!(handle_expando_get(h, "x").unwrap().to_bits(), v_bits);
+        let bag_bits = crate::value::js_nanbox_pointer(bag as i64).to_bits();
         let mut seen: Vec<u64> = Vec::new();
         {
             let mut mark = |v: f64| seen.push(v.to_bits());
@@ -274,8 +277,8 @@ mod tests {
             scan_handle_expando_roots_mut(&mut visitor);
         }
         assert!(
-            seen.contains(&v_bits),
-            "scanner must trace stored value, seen={seen:x?}"
+            seen.contains(&bag_bits),
+            "scanner must trace the holder owning the value slots, seen={seen:x?}"
         );
         HANDLE_EXPANDO_PROPS.with(|cell| {
             cell.borrow_mut().remove(&h);
