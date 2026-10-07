@@ -284,3 +284,81 @@ SWC dependency set builds; the historical program table must not be used to
 ship against the newer dependency baseline. The canonical bundle is rebased
 and refreshed against the final origin/main. Owned targets are deleted after
 preserving the receipts.
+
+## Landing blockers (2026-10-07, main `75c38e93ff`)
+
+Two blockers remained after the SWC dependency set built on main.
+
+**Thread-exit timers.** `external_native_dispatch_routes_async_gzip_callback`
+threw `TypeError: value is not a function` when it ran right after
+`external_dispatch_accepts_options_and_honors_level_zero` on a new test
+thread. A libtest thread is not a worker, so it acts for the primary agent
+while allocating in its own arena. The first test's callback queued an
+async-hooks destroy immediate that the test never ran. The entry stayed in
+the process-global timer store after the thread exited, and the next
+thread's check phase called it. Before #12132 the freed arena still held a
+dead closure, which ran. After #12132 the next thread reused the
+addresses, so the entry named some other object. `timer/store.rs` now
+releases such entries through the thread-exit range hook, like the other
+process-global tables that hold arena addresses. The zlib runtime tests run
+as their own agents (#11417's pattern), so concurrent tests no longer share
+one event loop. A plain-thread regression test turns red when the hook is
+removed: the dead thread's callback runs, 2 instead of 1. Workers were
+never affected, since `retire_agent` purges their partition. The
+Worker one-shot gap test agrees with Node in both arms.
+
+**buffer_heavy.** The default build measured 14.94G instructions against
+main's 10.43G. Profiles of both arms attribute the +4.52G as follows:
+
+| Cause | Delta |
+|---|---:|
+| C zlib deflate (`deflate_slow`, `fill_window`, `longest_match`) vs miniz | +2.05G |
+| crc32fast without runtime CPU detection (flate2's `zlib` feature dropped `runtime_detection`) | +0.57G |
+| Inherited [[Get]] misses on private `__perry…` keys walking the zlib Transform's prototype chain (~60K instructions per data event) | +1.1G |
+| Remaining stream-state property traffic | +0.8G |
+
+The C encoder did not buy Node byte parity either. For a 10 MB tar-like
+input, Node, C zlib and miniz produce three different gzip outputs at levels
+1, 6 and 9. Only repetitive text matched. The stream encoder now drives the
+same pinned miniz_oxide backend as the one-shots and writes the gzip and
+zlib wrappers itself. `params()` continues with a fresh compressor after the
+runtime's sync flush. Private stream state is read as an own property.
+
+| Program (n=3 medians, instructions:u) | Main | Head | Delta |
+|---|---:|---:|---:|
+| tsc transpileModule | 9,950,473,517 | 9,948,963,910 | −0.02% |
+| Zod ×5000 | 14,647,195,385 | 14,651,398,876 | +0.03% |
+| qs parse | 23,445,458,387 | 23,439,335,735 | −0.03% |
+| qs stringify | 59,859,550,584 | 59,858,313,454 | −0.00% |
+| commander | 7,558,102,085 | 7,559,707,742 | +0.02% |
+| hello | 1,208,327 | 1,210,026 | +0.14% |
+| fastify inject | 112,770,470,939 | 104,023,302,520 | −7.76% |
+| buffer_heavy (default build) | 10,428,514,816 | 11,206,978,973 | +7.46% |
+| buffer_heavy (no auto-optimize) | fails (`value is not iterable`) | output = Node | — |
+| worker_heavy | 2,095,100,814 | 2,100,664,577 | +0.27% (same-binary range 1.3%) |
+
+All outputs equal Node's. A plain JS `Transform` driven by `for await`
+(7,488 16 KiB chunks) falls from 4.36G to 3.36G instructions (−23%).
+
+The remaining +0.78G on buffer_heavy is the runtime stream's per-chunk state
+traffic. Main's stdlib zlib handle bypassed this machinery. Profiles put
+about 90% of it in named-property access to the stream's private state:
+`hidden_key` interning through a SipHash map, own-key lookups on a wide
+instance, and stores. That is the same machinery every JS Readable and
+Transform uses. The fix-forward is to keep runtime stream state in a native
+record reached from the object's descriptor, not in `__perry…` properties.
+This is above the 0.5% bound, so it goes to the owner.
+
+| Suite (release) | Main passed / failed / ignored | Head passed / failed / ignored |
+|---|---|---|
+| ext-zlib, default threading | 17 / 0 / 0 | 24 / 0 / 1 |
+| runtime, `--test-threads=1` | 5208 / 0 / 5 | 5213 / 0 / 5 |
+| stdlib | 257 / 2 / 0 | 250 / 2 / 0 |
+| codegen | 2042 / 0 / 1 | 2042 / 0 / 1 |
+
+The two stdlib failures are the same thread-exit side-table assertions in
+both arms. The gap union is 59 cases: 39 pass on main and 53 on head, with
+zero main-pass→head-fail regressions. The stream sabotage meta-test (13
+children), the codec sabotage test and the worker-finalize sabotage pass,
+so every child turns red. The Buffer layout ratchet has zero new sites. The
+thread-exit gate reports only main's existing problem.
