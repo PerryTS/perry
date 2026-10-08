@@ -42,6 +42,10 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     // lane from the emitted code, so an object built with the lane must not be
     // served from cache to a build that turned it off (and vice versa).
     "PERRY_U8_INLINE_READ",
+    // B4 byte-access sabotages (`owner_call_edge`, `spec_owner`, `spec_extent`,
+    // `asm_memory_effect`) remove proof edges or memory effects from the
+    // emitted code. A sabotaged object must never be served to a normal build.
+    "PERRY_B4_SABOTAGE",
     // `-Os` vs `-O3` for every native module.
     "PERRY_LL_SIZE_OPT",
     // Explicit application-module LLVM optimization level. This overrides the
