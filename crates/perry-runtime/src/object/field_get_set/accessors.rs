@@ -89,6 +89,27 @@ pub(crate) unsafe fn own_data_field_by_name(
     if key.is_null() {
         return None;
     }
+    own_data_field_with(obj, |keys, key_count| {
+        crate::object::keys_find_slot_by_key_ptr(keys, key_count, key)
+    })
+}
+
+/// [`own_data_field_by_name`] for a key the caller holds as bytes (a method
+/// name from rodata): the lookup reads the keys array directly, so no key
+/// string is built for it.
+pub(crate) unsafe fn own_data_field_by_bytes(
+    obj: *const ObjectHeader,
+    key: &[u8],
+) -> Option<JSValue> {
+    own_data_field_with(obj, |keys, key_count| {
+        crate::object::keys_find_slot_by_bytes(keys, key_count, key)
+    })
+}
+
+unsafe fn own_data_field_with(
+    obj: *const ObjectHeader,
+    find_slot: impl FnOnce(*const crate::array::ArrayHeader, u32) -> Option<u32>,
+) -> Option<JSValue> {
     if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
         return None;
     }
@@ -121,7 +142,7 @@ pub(crate) unsafe fn own_data_field_by_name(
     // isolated overwrite-loop profile still showed `js_array_get_f64` at 23.5%
     // self time, and the caller graph attributed it here. The shared helper
     // preserves #1781's SSO-key acceptance (its byte resolver is SSO-aware).
-    if let Some(islot) = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key) {
+    if let Some(islot) = find_slot(keys, key_count as u32) {
         let i = islot as usize;
         // An accessor key's slot holds its accessor pair, never a data value.
         if crate::object::key_attrs::key_is_accessor_at(keys, islot) {
