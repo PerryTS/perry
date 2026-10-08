@@ -527,6 +527,24 @@ mod tests {
     }
 
     #[test]
+    fn a_disposed_view_hidden_by_bounds_turns_the_witness_red() {
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "native_arena::tests::disposed_native_uint8_views_throw_in_fallback_paths",
+                "--nocapture",
+            ])
+            .env("PERRY_B4_SABOTAGE", "native_bounds")
+            .output()
+            .unwrap();
+        let output = String::from_utf8_lossy(&child.stdout).to_string()
+            + &String::from_utf8_lossy(&child.stderr);
+        assert_eq!(child.status.code(), Some(101));
+        assert!(output.contains("running 1 test"));
+        assert!(output.contains("dynamic native indexed read must validate disposal before bounds"));
+    }
+
+    #[test]
     fn disposed_native_uint8_views_throw_in_fallback_paths() {
         let owner = js_native_arena_alloc(16);
         let view = js_native_arena_view(owner as u64, typedarray::KIND_UINT8 as i32, 0, 16);
@@ -539,6 +557,14 @@ mod tests {
         assert!(catch_runtime_throw(|| {
             crate::typedarray::js_uint8array_set(ta, 0, 1);
         }));
+        for index in [0.0, 1.0, 16.0] {
+            assert!(
+                catch_runtime_throw(|| {
+                    crate::value::js_dyn_index_get(boxed_ptr(ta.cast()), index);
+                }),
+                "dynamic native indexed read must validate disposal before bounds"
+            );
+        }
         assert!(catch_runtime_throw(|| unsafe {
             let _ = dispatch_random_fill_sync(view);
         }));

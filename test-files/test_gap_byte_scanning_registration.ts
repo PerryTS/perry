@@ -30,23 +30,55 @@ function localIntrinsic(owner: ArrayBuffer, cb: (i: number) => void, count: numb
   }
   return String(s);
 }
+// A literal key also exercises the cached i32 write/intrinsic path when
+// an unconstrained runtime counter keeps the variable-key path generic.
+function writeSlot(b: Uint8Array, cb: (i: number) => void, count: number): void {
+  for (let i = 0; i < count; i++) { cb(i); b[1] = i + 19; }
+}
+function localSlot(owner: ArrayBuffer, cb: (i: number) => void, count: number): void {
+  const b = new Uint8Array(owner, 16, 4);
+  for (let i = 0; i < count; i++) { cb(i); b[1] = i + 19; }
+}
+function localIntrinsicSlot(owner: ArrayBuffer, cb: (i: number) => void, count: number): string {
+  const b: Buffer = Buffer.from(owner, 16, 8);
+  let s = 0;
+  for (let i = 0; i < count; i++) {
+    try { cb(i); s += b.readUInt32LE(0); }
+    catch { return s + ":throws:" + i; }
+  }
+  return String(s);
+}
 for (const local of [false, true]) {
-  const owner = new ArrayBuffer(24);
+  const owner = new ArrayBuffer(4096);
   const b = new Uint8Array(owner, 16, 4);
   b.fill(3);
   let moved: ArrayBuffer | undefined;
-  const cb = (i: number) => { if (i === 1) { moved = owner.transfer(); gc(); } };
+  const cb = (i: number) => { if (i === 1) { moved = owner.transfer(); } };
   if (local) localWrite(owner, cb, 4); else writeOnly(b, cb, 4);
   const copy = new Uint8Array(moved!);
   console.log("write-detach", local, b.length, String(b[1]), copy[16], copy[17], copy[18]);
 }
 for (const local of [false, true]) {
-  const owner = new ArrayBuffer(24);
+  const owner = new ArrayBuffer(4096);
   new Uint8Array(owner).fill(1);
   const b = Buffer.from(owner, 16, 8);
-  const cb = (i: number) => { if (i === 1) { owner.transfer(); gc(); } };
+  const cb = (i: number) => { if (i === 1) { owner.transfer(); } };
   console.log("intrinsic-detach", local, local ? localIntrinsic(owner, cb, 3) : intrinsicOnly(b, cb, 3));
 }
+
+for (const local of [false, true]) {
+  const owner = new ArrayBuffer(4096);
+  const b = new Uint8Array(owner, 16, 4);
+  b.fill(3);
+  let moved: ArrayBuffer | undefined;
+  const cb = (i: number) => { if (i === 1) { moved = owner.transfer(); } };
+  if (local) localSlot(owner, cb, 4); else writeSlot(b, cb, 4);
+  console.log("write-slot-detach", local, b.length, new Uint8Array(moved!)[17]);
+}
+const slotOwner = new ArrayBuffer(4096);
+new Uint8Array(slotOwner).fill(1);
+console.log("intrinsic-slot-detach", localIntrinsicSlot(slotOwner,
+  (i) => { if (i === 1) { slotOwner.transfer(); } }, 3));
 
 function scan(b: Uint8Array, cb: (i: number) => void, count: number): string {
   let out = "";
@@ -84,4 +116,4 @@ export function fastLength(b: Uint8Array, i: number, end: number, cb: (i: number
 }
 const lengthOwner = new ArrayBuffer(4);
 console.log("fast-length-detach", fastLength(new Uint8Array(lengthOwner), 0, 4,
-  (i) => { if (i === 1) { lengthOwner.transfer(); gc(); } }));
+  (i) => { if (i === 1) { lengthOwner.transfer(); } }));
