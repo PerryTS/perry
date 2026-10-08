@@ -36,7 +36,6 @@ inputs:
     deprecationMessage: "Use 'registries' input instead."
   no-cache:
     required: false
-    type: boolean
     default: false
     description: Disable caching of bun executable.
   token:

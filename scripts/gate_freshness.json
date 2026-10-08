@@ -45,7 +45,7 @@
       "workflow": "tls-budget.yml",
       "max_age_hours": 12,
       "why": "_tlv_get_addr call-count ratchet. macOS-only by nature; cannot be relieved by moving pools.",
-      "source_workflow": "performance.yml",
+      "source_workflow": "compiler-runtime.yml",
       "job_names": [
         "tls-budget / tls-budget"
       ]
@@ -90,7 +90,7 @@
       "workflow": "auto-opt-app-patterns.yml",
       "max_age_hours": 12,
       "why": "Auto-optimize app-pattern regression sweep.",
-      "source_workflow": "integration.yml",
+      "source_workflow": "compiler-runtime.yml",
       "job_names": [
         "auto-opt-app-patterns / auto-opt-app-patterns"
       ]

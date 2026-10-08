@@ -12,8 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / '.github/workflows'
 CATALOG = json.loads((ROOT / 'scripts/actions_catalog.json').read_text())
 EXPECTED = {
-    'test.yml', 'gc.yml', 'compiler-runtime.yml', 'compatibility.yml',
-    'integration.yml', 'performance.yml', 'documentation.yml',
+    'test.yml', 'gc.yml', 'compiler-runtime.yml',
     'release-packages.yml', 'release-hono-server.yml', 'maintenance.yml',
 }
 
@@ -51,6 +50,9 @@ def main() -> int:
         workflow = workflows[parent]
         triggers = trigger_set(workflow)
         jobs = workflow.get('jobs') or {}
+        route_job = category.get('route_job', 'route')
+        if category.get('route_job') and route_job not in jobs:
+            errors.append(f'{parent}/{category_id}: missing category router {route_job}')
         concurrency = workflow.get('concurrency') or {}
         parent_group = str(concurrency.get('group') or '')
         if category_id not in {'ci', 'release-packages', 'release-hono-server'}:
@@ -86,6 +88,8 @@ def main() -> int:
                 errors.append(f'{parent}/{module_id}: result job must run after failed or skipped jobs')
             if not str(summary.get('name') or '').endswith('/ suite result'):
                 errors.append(f'{parent}/{module_id}: result job needs a distinct display name')
+            if category.get('route_job') and f'needs.{route_job}.outputs.plan' not in str(summary.get('if') or ''):
+                errors.append(f'{parent}/{module_id}: result job must use its category router')
 
             for job_id, job in jobs.items():
                 if isinstance(job, dict) and str(job.get('uses') or '').startswith('./.github/workflows/'):
@@ -110,7 +114,9 @@ def main() -> int:
         }
         expected_schedules = {
             row['cron']
-            for module in category['modules']
+            for sibling in CATALOG['categories'].values()
+            if sibling['entrypoint'] == parent
+            for module in sibling['modules']
             for row in module.get('original_events', {}).get('schedule', [])
         }
         if actual_schedules != expected_schedules:
@@ -118,6 +124,19 @@ def main() -> int:
                 f'{parent}: schedule mismatch missing={sorted(expected_schedules - actual_schedules)} '
                 f'extra={sorted(actual_schedules - expected_schedules)}'
             )
+
+    for parent, spec in CATALOG.get('entrypoints', {}).items():
+        workflow = workflows.get(parent) or {}
+        inputs = (workflow.get('on') or {}).get('workflow_dispatch', {}).get('inputs', {})
+        expected_inputs = yaml.load(yaml.safe_dump(spec['dispatch_inputs']), Loader=yaml.BaseLoader)
+        if inputs != expected_inputs:
+            errors.append(f'{parent}: manual inputs differ from parent routing contract')
+        if workflow.get('name') != spec['name']:
+            errors.append(f'{parent}: display name differs from parent routing contract')
+        if set(spec['categories']) != {
+            key for key, category in CATALOG['categories'].items() if category['entrypoint'] == parent
+        }:
+            errors.append(f'{parent}: parent category membership differs from routing contract')
 
     release = workflows.get('release-packages.yml') or {}
     cross = ((release.get('jobs') or {}).get('build-cross') or {})

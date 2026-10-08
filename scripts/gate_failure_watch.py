@@ -411,7 +411,7 @@ def check_config() -> int:
 
     observer = yaml.load((WORKFLOW_DIR / "maintenance.yml").read_text(), Loader=yaml.BaseLoader)
     trigger_names = set(observer["on"]["workflow_run"]["workflows"])
-    configured_names = {"CI", "GC", "Compiler and Runtime", "Integration", "Performance"}
+    configured_names = {"CI", "GC", "Extended Tests"}
     if trigger_names != configured_names:
         failures.append(
             "workflow_run trigger/config mismatch: "

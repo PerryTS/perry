@@ -353,7 +353,7 @@ jobs:
             # nightly. The /release skill dispatches cut_release runs on a
             # pinned release/vX.Y.Z branch for exactly that reason.
             export GITHUB_REPOSITORY="$REPO"
-            for wf_file in "test.yml" "integration.yml"; do
+            for wf_file in "test.yml" "compiler-runtime.yml"; do
               # Only test.yml may reuse the ancestor. Simulator tests still
               # run on the candidate, which is where dispatch below runs them.
               WF_SHA="$SHA"
@@ -410,7 +410,7 @@ jobs:
           # skips the lookup, and we no longer swallow gh's stderr — a real
           # API error now gets one retry then fails the gate loudly instead
           # of burning the 45-min budget.
-          for wf_file in "test.yml" "integration.yml"; do
+          for wf_file in "test.yml" "compiler-runtime.yml"; do
             WF_SHA="$SHA"
             [ "$wf_file" = "test.yml" ] && WF_SHA="$GATE_SHA"
             echo "::group::Waiting for $wf_file"
@@ -459,7 +459,7 @@ jobs:
               # run carries the release-grade suites (parity, compile-smoke,
               # doc-tests, ...). Its fan-in job is NAMED `full-suite-gate` for
               # exactly this check: keep only successful runs that have it.
-              if [ "$wf_file" = "integration.yml" ]; then
+              if [ "$wf_file" = "compiler-runtime.yml" ]; then
                 runs_file=$(mktemp)
                 jobs_dir=$(mktemp -d)
                 echo "$api_out" > "$runs_file"
@@ -489,7 +489,7 @@ jobs:
               # FAIL signal — but only if there's NO successful run for
               # this SHA. This way a flaky run that someone reran to green
               # doesn't block the release.
-              if [ "$wf_file" != "integration.yml" ]; then
+              if [ "$wf_file" != "compiler-runtime.yml" ]; then
                 fail_url=$(echo "$api_out" | jq -r '.workflow_runs[] | select(.head_sha == "'"$WF_SHA"'" and .status == "completed" and .conclusion != "success") | .html_url' | head -1)
               fi
               # Newest run for the "still running" status line.
@@ -1886,10 +1886,11 @@ jobs:
           # `startsWith(github.ref, 'refs/tags/v')`, which holds when
           # dispatched with --ref <tag>. Best-effort: a failed dispatch must
           # not fail the release itself.
-          for wf in documentation.yml performance.yml integration.yml; do
-            suite="docs"; [ "$wf" = "performance.yml" ] && suite="benchmark"; [ "$wf" = "integration.yml" ] && suite="container-tests"
+          for rider in maintenance.yml:docs compiler-runtime.yml:benchmark compiler-runtime.yml:container-tests; do
+            wf="${rider%%:*}"
+            suite="${rider#*:}"
             gh workflow run "$wf" --ref "$TAG" -R "$REPO" -f "suite=$suite" \
-              || echo "::warning::could not dispatch $wf on $TAG — run it manually"
+              || echo "::warning::could not dispatch $wf / $suite on $TAG — run it manually"
           done
 
   # Fast preview lane: the package matrices still build the real release

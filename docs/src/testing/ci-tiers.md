@@ -261,4 +261,19 @@ shrinking the suite).
 
 The **CI** Actions workflow defaults to `suite=core`, preserving the tiered `pr-gate`, `main-gate`, and `full-suite-gate`. Select `suite=coverage`, `suite=security-audit`, or another auxiliary ID to run that nested workflow independently; `suite=all` adds all auxiliary workflows to core CI. The `tier` selector continues to control core CI.
 
-Related scheduled suites appear under **GC**, **Compiler and Runtime**, **Compatibility**, **Integration**, **Performance**, **Documentation**, and **Maintenance**. Each parent offers `suite=all` or one child suite ID for a focused run. Schedules still select only their original suite. Maintenance defaults to offline workflow and monitor validation; use a named live suite only for the intended maintenance action.
+The Actions sidebar has six repository workflows. GitHub also registers four independent entries for Dependabot Updates, Dependency Graph, Copilot, and Pages, making ten entries once retired workflow history is cleaned up.
+
+| Workflow | Categories and suite selection |
+| --- | --- |
+| **CI** | Required core CI and auxiliary security/coverage checks; defaults to `suite=core` |
+| **Extended Tests** (`compiler-runtime.yml`) | Compiler/runtime, compatibility, integration, and performance; choose a category such as `suite=compatibility`, one suite such as `suite=simctl-tests`, or `suite=all` |
+| **GC** | Six collector suites; choose an individual suite or `suite=all` |
+| **Repository** (`maintenance.yml`) | Documentation and repository maintenance; defaults to offline `suite=validate`; select `suite=docs-check` for docs checks or `suite=docs` for deployment |
+| **Publish to npm / GitHub Release** | Compiler packages, platform archives, and GitHub releases |
+| **Publish to npm / @perryts/hono-server** | Independent adapter package publication |
+
+All 38 original suites remain represented. Schedules select their original suites even when several categories share a parent. Category and `all` dispatches use the original suite input defaults; individual suite dispatches accept their custom inputs. Live maintenance tasks must be selected explicitly and dispatched from `main`. Documentation deployment can still be dispatched on a release tag. The release workflows retain their filenames for npm trusted publisher authorization.
+
+For example, `gh workflow run compiler-runtime.yml -f suite=performance` runs the performance category; `gh workflow run compiler-runtime.yml -f suite=benchmark` runs only the benchmark suite. Release orchestration dispatches the simulator suite on the exact candidate SHA and checks its actual job result, independently of other Extended Tests jobs.
+
+After a consolidation lands, Repository automatically deletes completed runs whose repository workflow file no longer exists. It allows queued/running jobs to finish before deleting their history and leaves GitHub's dynamic registrations alone. This removes retired entries from the sidebar as their last runs are cleaned up.

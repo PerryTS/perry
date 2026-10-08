@@ -34,9 +34,10 @@ class PathPatternTests(unittest.TestCase):
 
 
 class CategoryRoutingTests(unittest.TestCase):
-    def test_workflow_contract_has_38_owned_modules_and_ten_parents(self):
+    def test_workflow_contract_has_38_owned_modules_and_six_parents(self):
         categories = CATALOG["categories"]
         self.assertEqual(len(categories), 10)
+        self.assertEqual(len({category['entrypoint'] for category in categories.values()}), 6)
         files = [module["file"] for c in categories.values() for module in c["modules"]]
         self.assertEqual(len(files), 38)
         self.assertEqual(len(set(files)), 38)
@@ -159,9 +160,79 @@ class CategoryRoutingTests(unittest.TestCase):
         self.assertEqual(json.loads(node_core["module_inputs"])["node-core-subset"]["max_per_api"], "0")
 
     def test_documentation_default_does_not_deploy(self):
+        self.assertEqual(selected('documentation', 'workflow_dispatch', {}), [])
         self.assertEqual(selected("documentation", "workflow_dispatch", {}, suite="docs-check"), ["docs-check"])
         self.assertEqual(selected("documentation", "workflow_dispatch", {}, suite="docs"), ["docs"])
-        self.assertEqual(selected("documentation","workflow_dispatch",{},suite="all"),["docs-check"])
+        with self.assertRaises(ValueError):
+            selected('documentation', 'workflow_dispatch', {}, suite='all')
+
+    def test_shared_parent_dispatch_selects_only_requested_suite_or_category(self):
+        keys = CATALOG['entrypoints']['compiler-runtime.yml']['categories']
+        for owner in keys:
+            owned = [module['id'] for module in CATALOG['categories'][owner]['modules']]
+            for requested in [owner, *owned]:
+                for category in keys:
+                    with self.subTest(requested=requested, category=category):
+                        expected = owned if requested == owner else [requested]
+                        self.assertEqual(selected(category, 'workflow_dispatch', {}, suite=requested),
+                                         expected if category == owner else [])
+        for category in keys:
+            self.assertEqual(selected(category, 'workflow_dispatch', {}, suite='all'),
+                             [module['id'] for module in CATALOG['categories'][category]['modules']])
+
+    def test_shared_parent_schedules_allow_inactive_sibling_routes(self):
+        for parent in CATALOG['entrypoints'].values():
+            for owner in parent['categories']:
+                for module in CATALOG['categories'][owner]['modules']:
+                    for row in module['original_events'].get('schedule', []):
+                        for category in parent['categories']:
+                            expected = [m['id'] for m in CATALOG['categories'][category]['modules']
+                                        if row in m['original_events'].get('schedule', [])]
+                            with self.subTest(category=category, cron=row['cron']):
+                                self.assertEqual(selected(category, 'schedule', {'schedule':row['cron']}), expected)
+
+    def test_repository_dispatch_preserves_live_task_boundaries(self):
+        for suite in ('validate', 'delete-retired-runs', 'gate-freshness'):
+            self.assertEqual(selected('documentation', 'workflow_dispatch', {}, suite=suite), [])
+        for suite in ('docs-check', 'docs'):
+            result = select('maintenance', 'workflow_dispatch', {}, ref='refs/tags/v1.2.3', suite=suite)
+            self.assertEqual(result['selection'], '')
+            self.assertEqual(result['validate'], 'false')
+
+    def test_documentation_push_does_not_start_retired_run_cleanup(self):
+        for paths, want in [(['docs/src/index.md'], 'false'),
+                            (['.github/workflows/maintenance.yml'], 'true'),
+                            (['scripts/delete_retired_workflow_runs.py'], 'true')]:
+            result = select('maintenance', 'push', {'ref':'refs/heads/main'}, changed_paths=paths)
+            self.assertEqual(result['cleanup'], want)
+        self.assertEqual(select('maintenance', 'push', {'ref':'refs/tags/v1.2.3'},
+                                ref='refs/tags/v1.2.3')['cleanup'], 'false')
+
+    def test_hermetic_container_step_waits_for_every_suite_and_reports_failure(self):
+        import os
+        import subprocess
+        import tempfile
+        from pathlib import Path
+        import yaml
+
+        workflow = yaml.load(Path('.github/workflows/compiler-runtime.yml').read_text(), Loader=yaml.BaseLoader)
+        steps = workflow['jobs']['container-tests__hermetic']['steps']
+        script = next(step['run'] for step in steps
+                      if step.get('name') == 'Run and await all hermetic container suites')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            cargo = root / 'cargo'
+            cargo.write_text('#!/bin/bash\nprintf "cargo %s\\n" "$*"\n'
+                             'case "$*" in *container_extra_tests*) exit "${STUB_FFI_EXIT:-0}" ;; esac\n')
+            cargo.chmod(0o755)
+            for fail in ('0', '1'):
+                result = subprocess.run(['bash', '-c', script], text=True, capture_output=True,
+                                        env={**os.environ, 'PATH': str(root) + os.pathsep + os.defpath,
+                                             'RUNNER_TEMP': str(root), 'STUB_FFI_EXIT': fail}, timeout=10)
+                self.assertEqual(result.returncode, int(fail), result.stderr)
+                self.assertEqual(result.stdout.count('cargo test '), 6)
+                self.assertEqual(result.stdout.count('::endgroup::'), 6)
+                self.assertEqual('::error::ffi-regressions failed' in result.stdout, fail == '1')
 
     def test_manual_all_forwards_original_module_defaults(self):
         compat=select("compatibility","workflow_dispatch",{},suite="all",catalog=CATALOG)
@@ -218,9 +289,11 @@ class CategoryRoutingTests(unittest.TestCase):
         def event(name, branch="main", trigger="schedule"):
             return {"workflow_run":{"name":name,"head_branch":branch,"event":trigger}}
         self.assertEqual(selected("maintenance","workflow_run",event("GC")),["gate-failure-watch"])
+        self.assertEqual(selected("maintenance","workflow_run",event("Extended Tests")),["gate-failure-watch"])
         self.assertEqual(selected("maintenance","workflow_run",event("GC","fork","pull_request")),[])
         self.assertEqual(selected("maintenance","workflow_run",event("GC","topic","workflow_dispatch")),[])
         self.assertEqual(selected("maintenance","workflow_run",event("Maintenance")),[])
+        self.assertEqual(selected("maintenance","workflow_run",event("Repository")),[])
 
     def test_monitor_subject_job_contracts_include_strict_fanins(self):
         by_file={m['file']:m for c in CATALOG['categories'].values() for m in c['modules']}
