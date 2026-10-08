@@ -466,8 +466,9 @@ pub(crate) fn is_payload_state_word(word: u64) -> bool {
 /// for a runtime stream, the cell its state record holds
 /// (`node_stream::state_record`: `native_state` -> record -> cell). A weak
 /// collection's storage uses the same edge encoding and names no cell.
+/// Public for binding crates' tests that inspect a cell.
 #[inline(always)]
-pub(crate) fn payload_cell_of_word(word: u64) -> Option<*mut NativeHandleHeader> {
+pub fn payload_cell_of_word(word: u64) -> Option<*mut NativeHandleHeader> {
     if !is_payload_state_word(word) {
         return None;
     }
