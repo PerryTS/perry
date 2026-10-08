@@ -247,6 +247,8 @@ fn build_eligibility(
         || args.bunfs_root.is_some()
         || args.features.is_some()
         || args.minimal_stdlib
+        || args.record_function_order
+        || args.function_order.is_some()
         || args.enable_geisterhand
         || args.geisterhand_port.is_some()
         || ctx.needs_ui

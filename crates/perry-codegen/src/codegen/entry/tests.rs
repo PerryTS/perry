@@ -38,6 +38,7 @@ fn entry_opts(output_type: &str) -> CompileOptions {
         imported_func_return_types: std::collections::HashMap::new(),
         imported_vars: std::collections::HashSet::new(),
         output_type: output_type.to_string(),
+        disable_constfn_shapes: false,
         needs_stdlib: false,
         program_is_synchronous: false,
         needs_ui: false,

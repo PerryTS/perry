@@ -15,10 +15,7 @@ mod common_methods;
 mod direct_site;
 mod disposal;
 mod function_shape;
-pub(crate) use function_shape::{
-    call_function_intrinsic, function_intrinsic_facts, function_prototype_built,
-    run_function_intrinsic, FunctionIntrinsicFacts,
-};
+pub(crate) use function_shape::run_function_intrinsic;
 mod handle_methods;
 mod memo_entries;
 mod namespace_override;
@@ -1754,7 +1751,7 @@ pub(crate) unsafe fn native_call_method_tower(
     // yield-star-* with `get next()`). `get_accessor_descriptor` is a cheap
     // keyed HashMap lookup (no deref), gated on the accessor hot-path flag so
     // non-accessor programs skip it entirely.
-    if jsval().is_pointer() && crate::state::state().descriptors.accessors_in_use.get() {
+    if jsval().is_pointer() {
         let obj_usize = crate::value::js_nanbox_get_pointer(object()) as usize;
         if crate::value::addr_class::is_above_handle_band(obj_usize) {
             if let Some(acc) = crate::object::get_accessor_descriptor(obj_usize, method_name) {
@@ -2742,3 +2739,5 @@ mod receiver_repr_guard_tests {
         );
     }
 }
+
+mod compiled_target;

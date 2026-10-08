@@ -242,6 +242,8 @@ mod index_set_barrier_tests;
 #[cfg(test)]
 mod instanceof_imported_rhs_tests;
 #[cfg(test)]
+mod method_value_shape_tests;
+#[cfg(test)]
 mod proven_view_guarded_tests;
 mod record_value;
 #[cfg(test)]

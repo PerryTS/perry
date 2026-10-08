@@ -56,6 +56,7 @@ mod birth;
 pub use birth::{BirthMemo, OwnAccessor};
 #[path = "native_payload_slots.rs"]
 mod callback_slots;
+pub use crate::native_payload_buffer::{PayloadBuffer, PayloadBufferOwner};
 pub use callback_slots::{call_callback, callback_at, callback_from_link};
 pub(crate) use callback_slots::{callback_slot_address, NativeCallbackCell};
 use callback_slots::{store_callbacks, sync_callbacks};
@@ -280,13 +281,6 @@ fn slot_index_if_payload(class_id: u32) -> Option<usize> {
     (index < PROTOTYPE_SLOTS).then_some(index)
 }
 
-/// An existing family prototype, without creating a second prototype object.
-pub(crate) fn materialized_prototype(class_id: u32) -> Option<*mut ObjectHeader> {
-    let index = slot_index_if_payload(class_id)?;
-    let ptr = PAYLOAD_PROTOTYPES.with(|slots| slots[index].load(Ordering::Acquire));
-    (ptr != 0).then_some(ptr as *mut ObjectHeader)
-}
-
 /// GC roots for the payload prototypes. Called from
 /// `object::scan_object_cache_roots_mut`, beside the timer prototypes.
 pub(crate) fn scan_payload_prototype_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
@@ -459,6 +453,30 @@ fn hooked_vtable<T: StreamPayload>() -> &'static PayloadVTable {
 pub(crate) fn is_payload_state_word(word: u64) -> bool {
     word & crate::value::TAG_MASK == crate::value::POINTER_TAG
         && word & crate::value::POINTER_MASK != 0
+}
+
+/// The payload cell a `native_state` word leads to: the cell itself, or,
+/// for a runtime stream, the cell its state record holds
+/// (`node_stream::state_record`: `native_state` -> record -> cell). A weak
+/// collection's storage uses the same edge encoding and names no cell.
+/// Public for binding crates' tests that inspect a cell.
+#[inline(always)]
+pub fn payload_cell_of_word(word: u64) -> Option<*mut NativeHandleHeader> {
+    if !is_payload_state_word(word) {
+        return None;
+    }
+    let target = word & crate::value::POINTER_MASK;
+    // SAFETY: a pointer-tagged `native_state` word is a traced edge to a live
+    // GC cell.
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(target as usize) }?;
+    match header.obj_type {
+        crate::gc::GC_TYPE_NATIVE_HANDLE => Some(target as *mut NativeHandleHeader),
+        crate::gc::GC_TYPE_ARRAY => {
+            let cell = crate::node_stream::record_payload_cell(word);
+            (cell != 0).then(|| (cell & crate::value::POINTER_MASK) as *mut NativeHandleHeader)
+        }
+        _ => None,
+    }
 }
 
 /// Allocate an instance of `family` owning `payload`.
@@ -685,11 +703,7 @@ fn payload_cell(value: f64, class_id: u32) -> Result<*mut NativeHandleHeader, Pa
     if meta.is_null() {
         return Err(PayloadMiss::Foreign);
     }
-    let word = unsafe { (*meta).native_state };
-    if !is_payload_state_word(word) {
-        return Err(PayloadMiss::Foreign);
-    }
-    Ok((word & crate::value::POINTER_MASK) as *mut NativeHandleHeader)
+    payload_cell_of_word(unsafe { (*meta).native_state }).ok_or(PayloadMiss::Foreign)
 }
 
 /// The stream hooks of `value`'s attached payload, and its cell, when its
@@ -708,11 +722,7 @@ pub(crate) fn stream_hooks_of(
         return None;
     }
     // SAFETY: the meta record of a live object.
-    let word = unsafe { (*meta).native_state };
-    if !is_payload_state_word(word) {
-        return None;
-    }
-    let cell = (word & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
+    let cell = payload_cell_of_word(unsafe { (*meta).native_state })?;
     // SAFETY: a payload state word names the object's live payload cell.
     let vtable = unsafe { crate::native_handle::cell_vtable(cell)? };
     Some((vtable.stream?, cell))
@@ -757,10 +767,10 @@ pub unsafe fn payload_mut_attached<'a, T: 'static>(
 ) -> Result<&'a mut T, PayloadMiss> {
     let obj = any_object(value).ok_or(PayloadMiss::Foreign)?;
     let meta = (*obj).meta;
-    if meta.is_null() || !is_payload_state_word((*meta).native_state) {
+    if meta.is_null() {
         return Err(PayloadMiss::Foreign);
     }
-    let cell = ((*meta).native_state & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
+    let cell = payload_cell_of_word((*meta).native_state).ok_or(PayloadMiss::Foreign)?;
     if (*cell).type_id != type_tag::<T>(family.class_id) {
         return Err(PayloadMiss::Foreign);
     }
@@ -1648,11 +1658,12 @@ pub fn close_attached<T: 'static>(value: f64, family: &NativePayloadFamily) -> b
         return false;
     };
     let meta = unsafe { (*obj).meta };
-    if meta.is_null() || !is_payload_state_word(unsafe { (*meta).native_state }) {
+    if meta.is_null() {
         return false;
     }
-    let cell =
-        (unsafe { (*meta).native_state } & crate::value::POINTER_MASK) as *mut NativeHandleHeader;
+    let Some(cell) = payload_cell_of_word(unsafe { (*meta).native_state }) else {
+        return false;
+    };
     unsafe { crate::native_handle::native_handle_release_rust_payload(cell) }
 }
 
@@ -1800,6 +1811,7 @@ fn js_state_for_class(value: f64, class_id: u32, create: bool) -> f64 {
 pub(crate) fn export_class_id(module: &str, export: &str) -> Option<u32> {
     use crate::native_class_ids as ids;
     Some(match (module, export) {
+        ("http", "ServerResponse") => ids::HTTP_SERVER_RESPONSE,
         ("crypto", "Hash") => ids::CRYPTO_HASH,
         ("crypto", "Hmac") => ids::CRYPTO_HMAC,
         ("crypto", "Cipheriv") => ids::CRYPTO_CIPHERIV,

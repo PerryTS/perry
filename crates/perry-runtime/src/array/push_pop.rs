@@ -252,7 +252,6 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // accessor/property descriptor already owned by the old array before
         // turning it into a forwarding stub (reduceRight getter-order cases
         // commonly install index 1, then grow again while installing index 2).
-        crate::object::transfer_descriptor_owner(arr as usize, new_ptr as usize);
         // #7742-adjacent: the copy above is verbatim at offset 0, so the old
         // store's dirty-page coverage can be TRANSLATED to the new address
         // instead of re-derived from 3 M slot values. Falls back to the full

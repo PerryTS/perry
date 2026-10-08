@@ -1595,11 +1595,14 @@ mod tests {
     /// A site whose cache slot has not been resolved yet reads as a null
     /// cache, and the named-prefix arm must not dereference it.
     ///
-    /// The read is of a key the receiver does NOT own, so the miss handler
-    /// answers from the prototype chain without priming — which is what keeps
-    /// this test on the arm it is about. (Codegen always passes the address of
-    /// a real `@perry_ic_N` global; a genuinely null slot only ever reaches a
-    /// runtime entry from a test or from the write PIC's poly tail.)
+    /// The read is of a key the receiver does NOT own. The miss handler may
+    /// publish the site's holder entry for that absent key (A1, #11681), which
+    /// resolves the slot. That is allowed: the entry is validated on every use
+    /// against the receiver and hop shapes. What this test requires is that the
+    /// named-prefix arm never dereferences the null slot it starts with, and
+    /// that the own-key ways stay unprimed. (Codegen always passes the address
+    /// of a real `@perry_ic_N` global; a genuinely null slot only ever reaches
+    /// a runtime entry from a test or from the write PIC's poly tail.)
     #[test]
     fn an_unresolved_cache_slot_is_never_dereferenced() {
         let _lock = crate::gc::global_side_table_test_lock();
@@ -1617,7 +1620,12 @@ mod tests {
             absent.with_const_ptr(|k| js_object_get_field_ic_slow(handle(o), k, &mut slot, &packed))
         });
         assert_eq!(v.to_bits(), crate::value::TAG_UNDEFINED);
-        assert!(slot.is_null(), "an absent key must not resolve a cache");
         assert_eq!(packed.load(Ordering::Relaxed), 0, "and must not prime");
+        // Whatever the first read published, a second read through the same
+        // slot still answers undefined.
+        let again = obj.with_mut_ptr(|o: *mut ObjectHeader| {
+            absent.with_const_ptr(|k| js_object_get_field_ic_slow(handle(o), k, &mut slot, &packed))
+        });
+        assert_eq!(again.to_bits(), crate::value::TAG_UNDEFINED);
     }
 }

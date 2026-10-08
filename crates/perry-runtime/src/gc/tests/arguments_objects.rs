@@ -32,7 +32,6 @@ fn get(obj: *const ObjectHeader, name: &str) -> JSValue {
 
 fn register_scanners() {
     gc_register_mutable_root_scanner(scan_arguments_object_roots_mut);
-    gc_register_mutable_root_scanner(descriptor_state::scan_descriptor_roots_mut);
 }
 
 #[test]
@@ -100,23 +99,6 @@ fn arguments_bulk_construction_handles_empty_and_uncached_arities() {
         let accessor = get_accessor_descriptor(args as usize, "callee").unwrap();
         assert_eq!(accessor.get, accessor.set);
         assert_ne!(accessor.get, 0);
-        let descriptors = &crate::state::state().descriptors;
-        assert!(
-            !descriptors
-                .property_descriptors
-                .borrow()
-                .keys()
-                .any(|(owner, _)| *owner == args as usize),
-            "an arguments object must not have address-keyed attributes"
-        );
-        assert!(
-            !descriptors
-                .accessor_descriptors
-                .borrow()
-                .keys()
-                .any(|(owner, _)| *owner == args as usize),
-            "the restricted callee must live in its own slot"
-        );
     }
 }
 
@@ -154,12 +136,6 @@ fn restricted_callee_accessor_survives_moving_gc_without_descriptor_entries() {
     let accessor = get_accessor_descriptor(moved as usize, "callee").unwrap();
     assert_eq!(accessor.get, accessor.set);
     assert_ne!(accessor.get, 0);
-    assert!(!crate::state::state()
-        .descriptors
-        .accessor_descriptors
-        .borrow()
-        .keys()
-        .any(|(owner, _)| *owner == moved as usize));
 }
 
 #[test]

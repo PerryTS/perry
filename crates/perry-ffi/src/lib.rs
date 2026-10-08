@@ -396,4 +396,4 @@ mod tests {
 }
 
 /// Class ids shared by runtime and binding crates.
-pub use perry_abi::native_class_ids;
+pub use perry_abi::{native_class_ids, RECEIVER_HANDLE_FLOOR};

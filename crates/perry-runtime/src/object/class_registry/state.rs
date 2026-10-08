@@ -942,7 +942,7 @@ pub(crate) fn builtin_parent_ctor_in_chain(class_id: u32) -> Option<f64> {
 /// Reverse lookup: which declared class's `.prototype` is this heap object?
 /// Used by `Object.getOwnPropertyDescriptor(C.prototype, name)` to surface
 /// vtable accessors as own properties of the prototype object, and by
-/// `descriptor_state::disable_inline_guards_for_descriptor_target` on every
+/// `descriptor_state::invalidate_prototype_descriptor_guards` on every
 /// `Object.defineProperty`.
 ///
 /// Callers ask about arbitrary objects (#9180: on a bundled application most
@@ -1524,6 +1524,43 @@ pub(crate) fn class_decl_prototype_value(class_id: u32) -> f64 {
     crate::value::js_nanbox_pointer(proto as i64)
 }
 
+/// Read and validate one evaluation's superclass prototype with ordinary Get.
+/// No template prototype, memo or first-evaluation state can answer this read.
+pub(crate) fn evaluated_superclass_prototype(parent: f64) -> f64 {
+    if parent.to_bits() == crate::value::TAG_NULL {
+        return parent;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let parent = scope.root_nanbox_f64(parent);
+    let key = crate::string::canonical_key(b"prototype");
+    let parent_value = parent.get_nanbox_f64();
+    let value = if let Some(cid) = super::super::class_ref_id(parent_value) {
+        class_decl_prototype_value(cid)
+    } else {
+        super::super::field_get_set::js_object_get_field_by_name_f64(
+            crate::value::js_nanbox_get_pointer(parent_value) as *const ObjectHeader,
+            key,
+        )
+    };
+    class_parent_prototype_bits(value)
+        .map(f64::from_bits)
+        .unwrap_or_else(|| {
+            super::super::object_ops::throw_object_type_error(
+                b"Class extends value does not have valid prototype property",
+            )
+        })
+}
+
+/// Definition-time preparation for a fresh class evaluation. The resolved
+/// prototype travels through rooted generated operands into the new object.
+#[no_mangle]
+pub extern "C" fn js_class_evaluation_parent_prototype(class_id: u32, parent: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let parent = scope.root_nanbox_f64(parent);
+    super::parent_static::register_class_parent_dynamic(class_id, parent.get_nanbox_f64(), false);
+    evaluated_superclass_prototype(parent.get_nanbox_f64())
+}
+
 /// The [[Prototype]] of declared class `class_id`'s prototype object: its
 /// parent class's prototype, the evaluated parent's, a runtime function
 /// parent's `.prototype`, `null` for `extends null`, or `Object.prototype`.
@@ -1554,7 +1591,14 @@ fn decl_prototype_parent_bits(class_id: u32) -> Option<u64> {
                 };
                 class_parent_prototype_bits(f64::from_bits(parent_proto.bits()))
             } else {
-                None
+                let parent = JSValue::from_bits(parent_value.to_bits());
+                if parent.is_pointer()
+                    && crate::closure::is_closure_ptr(parent.as_pointer::<u8>() as usize)
+                {
+                    Some(evaluated_superclass_prototype(parent_value).to_bits())
+                } else {
+                    None
+                }
             }
         };
         let parent_proto = evaluated_parent_proto.or_else(|| {
@@ -1581,41 +1625,7 @@ fn decl_prototype_parent_bits(class_id: u32) -> Option<u64> {
                     reserved_native_parent_prototype_bits(parent_id)
                 })
         });
-        if parent_proto.is_some() {
-            parent_proto
-        } else {
-            // A runtime function-valued superclass (including Intl service
-            // constructors) has no class-id edge. Link the declared prototype
-            // to the parent's own `.prototype` exactly once, while this fresh
-            // class prototype is initialized. Construction must never rewrite
-            // this edge after user code mutates it.
-            let parent = JSValue::from_bits(dynamic_parent.get_nanbox_f64().to_bits());
-            if parent.is_pointer() {
-                let parent_addr = parent.as_pointer::<u8>() as usize;
-                if crate::closure::is_closure_ptr(parent_addr) {
-                    // Use the same observable `.prototype` read as ordinary
-                    // property access. Plain functions and bound native-module
-                    // constructor exports materialize this object lazily, while
-                    // explicit, deleted, and generator prototypes must retain
-                    // their own semantics.
-                    let parent_proto =
-                        super::function_prototype::js_function_prototype_value_for_read(
-                            dynamic_parent.get_nanbox_f64(),
-                        );
-                    if let Some(bits) = class_parent_prototype_bits(parent_proto) {
-                        Some(bits)
-                    } else {
-                        super::super::object_ops::throw_object_type_error(
-                            b"Class extends value does not have valid prototype property",
-                        );
-                    }
-                } else {
-                    global_object_prototype_bits()
-                }
-            } else {
-                global_object_prototype_bits()
-            }
-        }
+        parent_proto.or_else(global_object_prototype_bits)
     }
 }
 

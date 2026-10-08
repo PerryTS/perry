@@ -105,6 +105,7 @@ fn module_ir() -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     String::from_utf8(compile_module(&module, opts).expect("module compiles"))

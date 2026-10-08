@@ -12,8 +12,6 @@ pub(crate) unsafe fn mark_all_keys(
     // freeze/seal rebuilds them ONCE, from the first key.
     if super::key_attrs::attrs_live_in_keys_for_install(obj as usize) {
         super::prop_plan::prop_plan_epoch_bump_for_owner(obj as usize);
-        state().descriptors.property_attrs_in_use.set(true);
-        GLOBAL_DESCRIPTORS_IN_USE.store(true, Ordering::Relaxed);
         note_descriptor_target_edits(
             obj as usize,
             &[AttrsEdit::Integrity {

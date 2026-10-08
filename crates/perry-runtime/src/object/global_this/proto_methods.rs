@@ -233,14 +233,8 @@ fn install_builtin_iterator_symbol(proto_obj: *mut ObjectHeader, value: f64) {
 /// `ACCESSOR_DESCRIPTORS`/`PROPERTY_DESCRIPTORS` unconditionally, so a real
 /// entry here is what makes them agree with Node.
 ///
-/// Uses `set_builtin_accessor_descriptor` (gate-neutral): it does not flip
-/// `GLOBAL_DESCRIPTORS_IN_USE` / `ACCESSORS_IN_USE`, so ordinary property
-/// read/write fast paths are unaffected for every OTHER key. `__proto__`
-/// itself was already treated as unconditionally interceptable by
-/// `object_proto_may_intercept_key` / `plain_custom_prototype_may_intercept`
-/// (see `object/descriptor_state.rs`) before this change, so installing a
-/// real descriptor for it changes no hot-path gate this key didn't already
-/// trip — only what reflection sees.
+/// The holder shape records the accessor and its ordinary slot owns the pair.
+/// Every read and reflection query observes those same shape facts.
 ///
 /// The getter delegates to `js_object_get_prototype_of`, which already
 /// implements the getter's exact spec shape (ToObject-style wrapper
@@ -326,18 +320,9 @@ extern "C" fn object_prototype_dunder_proto_setter_thunk(
 /// and brand-checks it, so `Object.getOwnPropertyDescriptor(P, k).get.call({})`
 /// throws like node's.
 ///
-/// Two things this must NOT do, both learned rather than assumed:
-///
-/// * it must not use `install_fresh_accessor_property`, which flips the
-///   process-wide `GLOBAL_DESCRIPTORS_IN_USE` gate (#6809) and would push every
-///   later dynamic property write in ANY program that merely constructs a
-///   `TextDecoder` onto the descriptor-interception slow walk;
-/// * it must put the key in the prototype's keys array, or
-///   `Object.getOwnPropertyNames(TextDecoder.prototype)` and `for...in` on an
-///   instance would not see it.
-///
-/// `install_builtin_getter` does both. It records the ECMA-262 builtin shape
-/// (`enumerable: false`), which is right for its other callers
+/// The key belongs to the prototype shape, so reflection and enumeration
+/// observe the same accessor facts as ordinary reads. Native builtins use
+/// non-enumerable attributes by default
 /// (`ArrayBuffer.prototype.byteLength`), so the WebIDL flags are restated on
 /// the same entry afterwards: interface members are
 /// `{ enumerable: true, configurable: true }`, and node prints
@@ -821,7 +806,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method_rest(
                 proto_obj,
                 "bind",
-                crate::fn_info!(function_prototype_bind_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(native_args function_prototype_bind_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // #4101: dedicated toString thunk (source reconstruction + brand
@@ -835,7 +820,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method_rest(
                 proto_obj,
                 "call",
-                crate::fn_info!(function_prototype_call_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(native_args function_prototype_call_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);

@@ -220,6 +220,8 @@ pub fn run(args: RunArgs, format: OutputFormat, use_color: bool, verbose: u8) ->
         no_auto_optimize: false,
         debug_symbols: false,
         report_size: false,
+        record_function_order: false,
+        function_order: None,
         function_source: None,
         no_cache: false,
         // `perry run` has no `--cache-dir` flag; the resolver still honors

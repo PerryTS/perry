@@ -1720,6 +1720,31 @@ pub extern "C" fn js_array_note_numeric_write(arr: *mut ArrayHeader, value_bits:
     }
 }
 
+/// The whole F64-kind cold arm of a generated element store
+/// (perry-codegen `index_set_guarded::emit_array_store_kind_value`), one call
+/// where the arm made two and re-read the kind between them.
+///
+/// The note comes first, exactly as before: a non-Number clears the array's
+/// raw-f64 kind before its bits can land in a slot a raw-f64 reader trusts.
+/// Then the answer is what the store must write: the value as its raw double
+/// while the kind still holds (a Number: an `INT32` box), the value itself once
+/// the note has cleared it. `arr` is the store's validated array handle; the
+/// kind is the same `_reserved` half-word the emitted fast test reads.
+#[no_mangle]
+pub extern "C" fn js_array_note_numeric_write_value(arr: *mut ArrayHeader, value: f64) -> f64 {
+    js_array_note_numeric_write(arr, value.to_bits());
+    let raw_bits = crate::gc::GC_ARRAY_RAW_F64_LAYOUT | crate::gc::GC_ARRAY_RAW_F64_HOLES;
+    let reserved = unsafe {
+        (*((arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader))
+            ._reserved
+    };
+    if reserved & raw_bits != 0 {
+        js_array_numeric_value_to_raw_f64(value)
+    } else {
+        value
+    }
+}
+
 /// #7469 — declare ONCE, at allocation, that every element this array will
 /// hold is a heap pointer, so the per-store pointer-mask bookkeeping
 /// (`layout_note_slot` and the header payload kind) is not
@@ -1867,6 +1892,10 @@ static KEEP_JS_ARRAY_CLEAR_NUMERIC_LAYOUT: extern "C" fn(*mut ArrayHeader) =
 #[used(compiler)]
 static KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE: extern "C" fn(*mut ArrayHeader, u64) =
     js_array_note_numeric_write;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ARRAY_NOTE_NUMERIC_WRITE_VALUE: extern "C" fn(*mut ArrayHeader, f64) -> f64 =
+    js_array_note_numeric_write_value;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_ARRAY_DECLARE_ALL_POINTER_ELEMENTS: extern "C" fn(*mut ArrayHeader) =

@@ -278,9 +278,9 @@ mod zlib_payloads {
             // is freed by its original vtable; no GC address leaves the worker.
             let obj = perry_runtime::JSValue::from_bits(owner.get_nanbox_u64())
                 .as_pointer::<perry_runtime::object::ObjectHeader>();
-            let cell = perry_runtime::JSValue::from_bits((*(*obj).meta).native_state)
-                .as_pointer::<perry_runtime::native_handle::NativeHandleHeader>()
-                .cast_mut();
+            // `native_state` -> the stream's state record -> its payload cell.
+            let cell = perry_runtime::native_payload::payload_cell_of_word((*(*obj).meta).native_state)
+                .expect("a zlib stream has a payload cell");
             assert!((*cell).external_bytes > 100000);
             let original =
                 &*((*cell).finalizer as *const perry_runtime::native_payload::PayloadVTable);

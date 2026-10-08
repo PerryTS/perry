@@ -46,7 +46,7 @@ mod tests {
         // The thread isolates thread-local state only. `js_gc_init` also
         // disables the process-wide class-field inline gate in test builds;
         // restore it so later tests do not inherit this test's init.
-        crate::object::descriptor_state::test_reset_class_field_inline_guard();
+
         result.unwrap();
     }
 

@@ -83,8 +83,13 @@ pub(crate) fn function_prototype_intrinsic_of(func: *const u8) -> Option<&'stati
 }
 
 #[cfg(test)]
+pub(crate) fn function_prototype_call_thunk_for_test() -> *const crate::closure::JsFunctionInfo {
+    crate::fn_info!(native_args array_error::function_prototype_call_thunk, 1; with_flags(crate::closure::FN_BUILTIN))
+}
+
+#[cfg(test)]
 pub(crate) fn function_prototype_bind_thunk_for_test() -> *const crate::closure::JsFunctionInfo {
-    crate::fn_info!(array_error::function_prototype_bind_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN))
+    crate::fn_info!(native_args array_error::function_prototype_bind_thunk, 1; with_flags(crate::closure::FN_BUILTIN))
 }
 
 pub(crate) use array_error::{

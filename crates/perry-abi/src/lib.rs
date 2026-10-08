@@ -73,6 +73,8 @@ pub const CLASS_FIRST_EVALUATION_STATE: u64 = 0x7FFE_0000_0000_0001;
 /// `gc::GC_TYPE_CLOSURE`: the GcHeader type byte (at payload - 8) that makes a
 /// cell a function object. The kind is this byte, never a payload magic.
 pub const GC_TYPE_CLOSURE: u8 = 4;
+/// `gc::GC_TYPE_OBJECT`: an ordinary object, e.g. a byte cell's property bag.
+pub const GC_TYPE_OBJECT: u8 = 2;
 /// `gc::GC_TYPE_BUFFER` and `gc::GC_TYPE_BUFFER_UINT8ARRAY`: the GcHeader type
 /// bytes of the two BYTE-VIEW buffer brands, a Node `Buffer` and a
 /// `BufferHeader`-backed `Uint8Array` (#10694: a buffer's flavor is its type
@@ -344,9 +346,26 @@ pub const FN_REST_USER: u32 = 1 << 0;
 pub const FN_REST_SYNTHETIC_ARGUMENTS: u32 = 1 << 1;
 /// The body takes both a `...rest` array and a synthetic `arguments` array.
 pub const FN_REST_USER_AND_ARGUMENTS: u32 = 1 << 2;
+/// A runtime-native body that takes the call's arguments in place, as
+/// [`JsNativeArgsBody`] `(callee, this, args, len)`: no array is built for
+/// them. `rest_fixed` is its JS-visible declared count.
+pub const FN_REST_NATIVE_ARGS: u32 = 1 << 16;
 /// Any rest kind.
 pub const FN_REST_MASK: u32 =
-    FN_REST_USER | FN_REST_SYNTHETIC_ARGUMENTS | FN_REST_USER_AND_ARGUMENTS;
+    FN_REST_USER | FN_REST_SYNTHETIC_ARGUMENTS | FN_REST_USER_AND_ARGUMENTS | FN_REST_NATIVE_ARGS;
+
+/// The native type of an [`FN_REST_NATIVE_ARGS`] body: the callee, the
+/// receiver, and the call's `len` arguments at `args` (null when `len` is 0),
+/// valid for the duration of the call.
+///
+/// The buffer is the caller's own argument storage (a stack buffer, a
+/// register spill, a `Vec`), never GC-heap array storage, so the collector
+/// neither scans nor rewrites it: the values in it are current only until the
+/// body's first operation that can collect. A body that needs them after such
+/// an operation roots them first (`RuntimeHandleScope::root_nanbox_f64_slice`).
+/// The body must not keep the pointer, store it anywhere, or let it escape the
+/// call.
+pub type JsNativeArgsBody<C> = unsafe extern "C" fn(*const C, JsThis, *const f64, usize) -> f64;
 /// `length` is valid.
 pub const FN_HAS_LENGTH: u32 = 1 << 3;
 /// An arrow function: lexical `this`, not constructable.
@@ -432,6 +451,23 @@ impl JsFunctionInfo {
         let code = unsafe { Code { body }.code };
         // SAFETY: `code` is `body`, a JS body of `F::ARITY` parameters.
         unsafe { Self::from_code(code, F::ARITY as u16) }
+    }
+
+    /// The info of the native-arguments body `body` ([`FN_REST_NATIVE_ARGS`]),
+    /// declaring `declared` JS-visible parameters.
+    pub const fn of_native_args<C>(body: JsNativeArgsBody<C>, declared: u16) -> Self {
+        // SAFETY: `body` is a fn pointer, the same size and bits as a code
+        // pointer; the rest bit routes every call through the runtime's
+        // native-arguments arm, never the `f64`-per-parameter body ABI.
+        union Code<C> {
+            body: JsNativeArgsBody<C>,
+            code: *const u8,
+        }
+        let code = unsafe { Code { body }.code };
+        let mut info = unsafe { Self::from_code(code, 0) };
+        info.rest_fixed = declared;
+        info.flags = FN_REST_NATIVE_ARGS;
+        info
     }
 
     /// With `FN_*` bits set.
@@ -676,6 +712,10 @@ pub const fn method_site_padded_argc(argc: usize) -> usize {
         padded
     }
 }
+/// First exotic shape. Method sites on this band compare only the ShapeId:
+/// the low payload word is exotic state (a function's capture count), not a
+/// class id. Ordinary receivers keep their existing shape/class word.
+pub const METHOD_SITE_SHAPE_ONLY_FROM: u32 = 0xB800_0000;
 /// The entry `slot` bit for an inherited entry (the direct holder's slot).
 /// Combined with [`METHOD_SITE_CONSTFN`] the holder's shape fixes the body.
 pub const METHOD_SITE_INHERITED: u64 = 1 << 63;
@@ -684,12 +724,14 @@ pub const METHOD_SITE_SPILL: u64 = 1 << 62;
 /// The entry `slot` bit for an own key of a function-object receiver: an
 /// inline slot of the object at `ClosureHeader::props`.
 pub const METHOD_SITE_FUNCTION_BAG: u64 = 1 << 61;
+/// A method body using the native argument-list ABI (callee, this, args, argc).
+/// Composes with each storage kind; never with ConstFn.
+pub const METHOD_SITE_NATIVE_ARGS: u64 = 1 << 60;
 /// An own inline method whose ShapeId fixes one static body. The hit loads
 /// the receiver's current closure slot for captures, but needs no closure
 /// kind or info load after the shape compare.
 pub const METHOD_SITE_CONSTFN: u64 = 1 << 59;
-/// The index bits of an entry's `slot` word (bit 60 remains reserved for the
-/// accessor entry kind; bit 59 is ConstFn).
+/// The index bits of an entry's `slot` word (bit 60 is NativeArgs; bit 59 is ConstFn).
 pub const METHOD_SITE_INDEX_MASK: u64 = (1 << 59) - 1;
 /// What `js_method_site_prepare` answers for a call whose method read nothing
 /// can observe: dispatch by name after the arguments (#11910). The array-hole
@@ -736,6 +778,12 @@ pub const BYTES_LEN: usize = 0;
 pub const BYTES_AUX: usize = 4;
 pub const BYTES_LINK: usize = 8;
 pub const BYTES_STORE: usize = 16;
+/// A view whose link is its property bag finds its owner, NaN-boxed, in the
+/// bag's first inline slot: the bag is born holding `#<perry:view-owner>` as
+/// its first key with one inline slot, so the owner sits right after the
+/// 16-byte `ObjectHeader` on every target. Emitted view resolution and
+/// `buffer::store::owner` read it with one load, never a key lookup.
+pub const BYTES_VIEW_BAG_OWNER: usize = 16;
 pub const BYTES_TYPE_BASE: u8 = 0x40;
 pub const BYTES_TYPE_VIEW: u8 = 0x20;
 pub const BYTES_TYPE_BRAND_MASK: u8 = 0x1f;

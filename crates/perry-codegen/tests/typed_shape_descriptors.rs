@@ -41,6 +41,7 @@ fn empty_opts() -> CompileOptions {
         imported_func_return_types: std::collections::HashMap::new(),
         imported_vars: std::collections::HashSet::new(),
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         needs_stdlib: false,
         program_is_synchronous: false,
         needs_ui: false,
@@ -486,8 +487,11 @@ fn c262_array_has_own_property_uses_object_prototype_dispatch() {
     );
 
     let ir = ir_for(module);
+    // The method site's cold call (`js_method_site_miss`) is the universal
+    // dispatch for every receiver its memo cannot describe.
     assert!(
-        ir.contains("call double @js_typed_feedback_native_call_method"),
+        ir.contains("call double @js_typed_feedback_native_call_method")
+            || ir.contains("call double @js_method_site_miss("),
         "array hasOwnProperty should dispatch through Object.prototype semantics"
     );
 }

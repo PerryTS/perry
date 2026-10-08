@@ -51,6 +51,7 @@ pub(crate) fn access_for(
         data_i64: "0".into(),
         receiver_root_slot,
         owner_root_slot,
+        owner_raw_slot: ctx.func.alloca_entry(I64),
         data_slot: ctx.func.alloca_entry(I64),
         length_slot: ctx.func.alloca_entry(I32),
         valid_slot: state_slot,
@@ -58,6 +59,8 @@ pub(crate) fn access_for(
         fixed_receiver: false,
         brands: brands.to_vec(),
     };
+    ctx.func
+        .entry_allocas_push_store(I64, "0", &access.owner_raw_slot);
     ctx.func
         .entry_allocas_push_store(I64, "0", &access.data_slot);
     ctx.func
@@ -113,6 +116,9 @@ fn refresh_param(
     let data = ctx
         .block()
         .phi(I64, &[(&resolved.data, &hit_l), ("0", &miss_l)]);
+    let owner_raw = ctx
+        .block()
+        .phi(I64, &[(&resolved.owner, &hit_l), ("0", &miss_l)]);
     let len = ctx
         .block()
         .phi(I32, &[(&resolved.len, &hit_l), ("0", &miss_l)]);
@@ -124,6 +130,7 @@ fn refresh_param(
         .block()
         .phi(DOUBLE, &[(&owner, &hit_l), (&undef, &miss_l)]);
     ctx.block().store(DOUBLE, &owner, &access.owner_root_slot);
+    ctx.block().store(I64, &owner_raw, &access.owner_raw_slot);
     ctx.block().store(I64, &data, &access.data_slot);
     ctx.block().store(I32, &len, &access.length_slot);
     let state = ctx.block().select(I1, &valid, I8, "1", "2");
@@ -276,29 +283,34 @@ pub(crate) fn resolve(ctx: &mut FnCtx<'_>, boxed: &str, brands: &[u8], miss: &st
         .block()
         .add(I64, &raw, &crate::runtime_abi::BYTES_LINK.to_string());
     let link_ptr = ctx.block().inttoptr(I64, &link);
-    let o = ctx.block().load(PTR, &link_ptr);
-    let o = ctx.block().ptrtoint(&o, I64);
+    let linked = ctx.block().load(PTR, &link_ptr);
+    let linked = ctx.block().ptrtoint(&linked, I64);
+    let linked_word = header_word(ctx.block(), &linked);
+    // A view links its owner or its bag, and a bag holds the owner, boxed, at
+    // its fixed first slot `BYTES_VIEW_BAG_OWNER`. The hop is straight-line:
+    // a bag reads that slot, a direct link re-reads the view's own link word
+    // (always readable, and its untagged pointer survives the mask). No block
+    // or join is added, so the resolution keeps main's CFG and the owner arm
+    // is untouched by views.
+    let linked_type = ctx.block().and(I64, &linked_word, "255");
+    let bagged = ctx.block().icmp_eq(
+        I64,
+        &linked_type,
+        &crate::runtime_abi::GC_TYPE_OBJECT.to_string(),
+    );
+    let bag_slot = ctx.block().add(
+        I64,
+        &linked,
+        &crate::runtime_abi::BYTES_VIEW_BAG_OWNER.to_string(),
+    );
+    let owner_addr = ctx.block().select(I1, &bagged, I64, &bag_slot, &link);
+    let owner_ptr = ctx.block().inttoptr(I64, &owner_addr);
+    let owner_bits = ctx.block().load(I64, &owner_ptr);
+    let o = ctx
+        .block()
+        .and(I64, &owner_bits, crate::nanbox::POINTER_MASK_I64);
     let ho = header_word(ctx.block(), &o);
-    let mask = 0xe0u64 | (1 << 23) | (1 << 24) | (1 << 30);
-    let state = ctx.block().and(I64, &ho, &mask.to_string());
-    let inl = ctx.block().icmp_eq(
-        I64,
-        &state,
-        &crate::runtime_abi::BYTES_TYPE_BASE.to_string(),
-    );
-    let ool = ctx.block().icmp_eq(
-        I64,
-        &state,
-        &(crate::runtime_abi::BYTES_TYPE_BASE as u64 | (1 << 23)).to_string(),
-    );
-    let admitted = ctx.block().or(I1, &inl, &ool);
-    // Shared and NativeArena owners retain their atomic/disposal runtime rules.
-    let owner_brand = ctx.block().and(I64, &ho, "31");
-    let shared = ctx.block().icmp_eq(I64, &owner_brand, "15");
-    let arena = ctx.block().icmp_eq(I64, &owner_brand, "18");
-    let special = ctx.block().or(I1, &shared, &arena);
-    let regular = ctx.block().icmp_eq(I1, &special, "false");
-    let admitted = ctx.block().and(I1, &admitted, &regular);
+    let admitted = plain_owner(ctx.block(), &ho);
     let offset_addr = ctx
         .block()
         .add(I64, &raw, &crate::runtime_abi::BYTES_AUX.to_string());
@@ -342,6 +354,32 @@ pub(crate) fn resolve(ctx: &mut FnCtx<'_>, boxed: &str, brands: &[u8], miss: &st
         data,
         len,
     }
+}
+
+/// A view's owner header admits the emitted path when it is an owner role,
+/// Inline or OutOfLine, neither RESIZABLE nor DETACHED, and not a Shared or
+/// NativeArena owner (those keep their atomic/disposal runtime rules). A bag
+/// header (`GC_TYPE_OBJECT`) never passes.
+fn plain_owner(blk: &mut crate::block::LlBlock, ho: &str) -> String {
+    let mask = 0xe0u64 | (1 << 23) | (1 << 24) | (1 << 30);
+    let state = blk.and(I64, ho, &mask.to_string());
+    let inl = blk.icmp_eq(
+        I64,
+        &state,
+        &crate::runtime_abi::BYTES_TYPE_BASE.to_string(),
+    );
+    let ool = blk.icmp_eq(
+        I64,
+        &state,
+        &(crate::runtime_abi::BYTES_TYPE_BASE as u64 | (1 << 23)).to_string(),
+    );
+    let admitted = blk.or(I1, &inl, &ool);
+    let owner_brand = blk.and(I64, ho, "31");
+    let shared = blk.icmp_eq(I64, &owner_brand, "15");
+    let arena = blk.icmp_eq(I64, &owner_brand, "18");
+    let special = blk.or(I1, &shared, &arena);
+    let regular = blk.icmp_eq(I1, &special, "false");
+    blk.and(I1, &admitted, &regular)
 }
 
 /// Stores additionally reject a frozen receiver before deriving a writable access.

@@ -15,6 +15,7 @@
 //! IR and flags this pipeline produces objects byte-identical to Homebrew
 //! clang 22's `clang -c`.
 
+mod function_layout;
 mod native_homes;
 mod optimize_emit;
 use optimize_emit::optimize_and_emit;

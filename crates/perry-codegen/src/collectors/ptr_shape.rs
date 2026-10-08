@@ -15,10 +15,9 @@
 //!
 //! ## Why it is sound without the runtime invalidators
 //!
-//! Today's guarded fast path is per-SITE and runtime-checked: the process-global
-//! sticky gate (`PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`), the per-object
-//! descriptor flag, and prototype-guard invalidation exist because a receiver
-//! at an arbitrary site can be *any* object. A `Ptr<Shape>` local is instead
+//! The guarded fast path checks the receiver shape and prototype guards
+//! because a receiver at an arbitrary site can be any object. A `Ptr<Shape>`
+//! local is instead
 //! proven by **provenance + containment**:
 //!
 //! 1. **Provenance**: the local is initialized by exactly one `Stmt::Let` whose

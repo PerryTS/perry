@@ -321,7 +321,8 @@ pub(super) struct DeadKeyPrune {
     /// (`gc/young_log.rs`). A MINOR can only find a young owner dead, and a
     /// young owner is always in the log, so on a minor's fan-out this visits
     /// the candidates instead of the whole table. `None` keeps the full walk
-    /// on every cycle.
+    /// on EVERY cycle, including minors; it does not defer pruning to a full
+    /// collection. Both paths receive the current cycle's deadness predicate.
     pub(super) young_prune: Option<DeadKeyPruneFn>,
 }
 
@@ -391,12 +392,6 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         owner: DeadKeyOwner::Any,
         prune: crate::set::prune_dead_set_compaction_log_owners,
         young_prune: None,
-    },
-    DeadKeyPrune {
-        table: "state().descriptors.property_descriptors + .accessor_descriptors",
-        owner: DeadKeyOwner::Any,
-        prune: crate::object::prune_dead_descriptor_owner_entries,
-        young_prune: Some(crate::object::prune_dead_descriptor_owner_entries_young),
     },
     // Re-keyed by the per-object move hook, not by a metadata visitor.
     DeadKeyPrune {
@@ -568,6 +563,13 @@ fn fan_out(
     // them before a copied-minor flip or full/fallback sweep can reuse memory.
     // This is cache cleanup only: no heap walk and no weak-holder latch.
     for entry in DEAD_KEY_PRUNES {
+        #[cfg(test)]
+        if young_only
+            && entry.table == "CANONICAL_KEYS (canonical keys trie)"
+            && super::tests::canonical_keys_minor_prune::skip_minor_prune()
+        {
+            continue;
+        }
         let is_dead: &dyn Fn(usize) -> bool = match entry.owner {
             DeadKeyOwner::Any => is_dead_owner,
             DeadKeyOwner::Closure => is_dead_closure,

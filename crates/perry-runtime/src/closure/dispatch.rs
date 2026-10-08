@@ -6,6 +6,8 @@
 //! The implementation is split across sibling modules under `dispatch/`:
 //! - `bound`: bound-method/bound-function dispatch + `Function.prototype.bind`
 //! - `errors`: the not-callable throw path + #922 circuit breaker
+//! - `explicit_this`: forwarding a call with an explicit `this` (call/apply,
+//!   bound functions, `Reflect.apply`)
 //! - `validate`: closure-pointer validation (`get_valid_func_ptr`, GC stubs)
 //! - `calln`: per-arity `js_closure_callN` FFI entry points
 //! - `direct`: hoisted per-arity dispatch for callback loops (#8180)
@@ -17,18 +19,22 @@ mod bound;
 mod calln;
 mod direct;
 mod errors;
+mod explicit_this;
 mod validate;
 mod value_call;
 
 pub(crate) use bound::{
     bound_function_lazy_name, bound_function_length, bound_method_source_func_ptr,
-    coerce_call_this, rebind_explicit_this, rebind_explicit_this_allocates,
-    reify_function_method_value,
+    callee_boxes_primitive_this, coerce_call_this, rebind_explicit_this,
+    rebind_explicit_this_allocates, reify_function_method_value,
 };
 pub use bound::{dispatch_bound_function, dispatch_bound_method, js_function_bind};
 
 pub(crate) use errors::reset_throw_not_callable_counter;
 pub use errors::throw_not_callable;
+pub(crate) use explicit_this::{
+    call_with_explicit_this, forward_with_explicit_this, receiver_may_box, ReceiverBinding,
+};
 
 pub use validate::{
     clean_closure_ptr, dispatch_proxy_callee_or_throw, get_valid_func_ptr, get_valid_info,

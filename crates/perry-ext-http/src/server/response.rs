@@ -50,7 +50,12 @@ fn http_is_valid_token(s: &str) -> bool {
 /// must fire even when the handle has gone away, so callers check this before
 /// touching state.
 fn response_headers_sent(handle: i64) -> bool {
-    get_handle::<ServerResponse>(handle)
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(v) = super::response_payload::closed_property(response_root.get(), "headersSent") {
+        return v.to_bits() == TAG_TRUE;
+    }
+    response_state(response_root.get())
         .map(|sr| sr.headers_sent)
         .unwrap_or(false)
 }
@@ -79,8 +84,27 @@ fn is_valid_link_header(value: &str) -> bool {
     params.split(';').all(|p| !p.trim().is_empty())
 }
 
-/// Per-request handle backing `ServerResponse` JS-side.
+/// Legacy transport/OutgoingMessage handle. Standalone ServerResponse objects
+/// own a ResponseState payload and keep their JS edges on the object.
 pub struct ServerResponse {
+    pub state: ResponseState,
+    pub listeners: HashMap<String, Vec<i64>>,
+    pub once_listeners: HashMap<String, Vec<i64>>,
+    pub standalone_socket: f64,
+    pub pending_write_callbacks: Vec<i64>,
+}
+impl std::ops::Deref for ServerResponse {
+    type Target = ResponseState;
+    fn deref(&self) -> &ResponseState {
+        &self.state
+    }
+}
+impl std::ops::DerefMut for ServerResponse {
+    fn deref_mut(&mut self) -> &mut ResponseState {
+        &mut self.state
+    }
+}
+pub struct ResponseState {
     pub status_code: u16,
     pub status_message: Option<String>,
     /// Lowercase-keyed header map (the lookup table). For array-valued
@@ -127,30 +151,13 @@ pub struct ServerResponse {
     /// fires `'drain'` (once) when the socket's queued bytes drop below the
     /// HWM.
     pub needs_drain: bool,
-    /// Event-name → list of registered listener closure pointers.
-    pub listeners: HashMap<String, Vec<i64>>,
-    /// Event-name → one-shot (`res.once(event, cb)`) listener closure
-    /// pointers. Drained by every event-consumption site after firing so a
-    /// `once` listener fires exactly once — Node's `EventEmitter.once`
-    /// contract. Kept separate from `listeners` so persistent `on` listeners
-    /// survive the drain. The critical caller is Perry's own `createReadStream`
-    /// → `.pipe(res)` pump, which re-arms `res.once('drain')` after each
-    /// backpressure pause; without one-shot semantics the pump stalls after the
-    /// first 64 KB chunk (static files truncate).
-    pub once_listeners: HashMap<String, Vec<i64>>,
     /// #4904: true for `new http.ServerResponse(req)` instances (and any
     /// response wired through `assignSocket`) — `.end()` flushes through
     /// `standalone_socket` instead of a connection.
     pub standalone: bool,
-    /// #4904: the JS Writable assigned via `res.assignSocket(socket)`.
-    /// `TAG_UNDEFINED` while unassigned.
-    pub standalone_socket: f64,
     /// #4904: `req.method` captured from the standalone constructor's
     /// request argument — `HEAD` suppresses the body on flush.
     pub standalone_req_method: Option<String>,
-    /// #4904: `res.write(chunk, cb)` callbacks, invoked in order when the
-    /// buffered body flushes on `.end()`.
-    pub pending_write_callbacks: Vec<i64>,
     /// #4975: `outgoingMessage.destroy()` state. Node's `OutgoingMessage`
     /// (and its `ServerResponse` subclass) exposes a `destroyed` getter that
     /// flips `true` after `destroy()`, and a post-destroy `write(chunk, cb)`
@@ -187,6 +194,27 @@ pub struct ResponseShape {
 impl ServerResponse {
     pub fn new() -> Self {
         Self {
+            state: ResponseState::new(),
+            listeners: HashMap::new(),
+            once_listeners: HashMap::new(),
+            standalone_socket: f64::from_bits(TAG_UNDEFINED),
+            pending_write_callbacks: Vec::new(),
+        }
+    }
+    pub fn outgoing_message() -> Self {
+        let mut response = Self::new();
+        response.send_date = false;
+        response.outgoing_message_only = true;
+        response
+    }
+    pub fn with_request_handle(mut self, req_handle: i64) -> Self {
+        self.req_handle = req_handle;
+        self
+    }
+}
+impl ResponseState {
+    pub fn new() -> Self {
+        Self {
             status_code: 200,
             status_message: None,
             headers: HashMap::new(),
@@ -206,28 +234,12 @@ impl ServerResponse {
             outgoing_message_only: false,
             buffered_body: Vec::new(),
             needs_drain: false,
-            listeners: HashMap::new(),
-            once_listeners: HashMap::new(),
             standalone: false,
-            standalone_socket: f64::from_bits(TAG_UNDEFINED),
             standalone_req_method: None,
-            pending_write_callbacks: Vec::new(),
             destroyed: false,
             turnloop: None,
             turnloop_streaming: false,
         }
-    }
-
-    pub fn outgoing_message() -> Self {
-        let mut response = Self::new();
-        response.send_date = false;
-        response.outgoing_message_only = true;
-        response
-    }
-
-    pub fn with_request_handle(mut self, req_handle: i64) -> Self {
-        self.req_handle = req_handle;
-        self
     }
 
     /// Snapshot the current header map as `Vec<(orig_name, value)>`
@@ -319,7 +331,9 @@ impl ServerResponse {
 /// `res.statusCode = N` setter.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_set_status(handle: i64, code: f64) {
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(sr) = response_state_mut(response_root.get()) {
         if !sr.headers_sent && code.is_finite() && code > 0.0 {
             sr.status_code = code as u16;
         }
@@ -329,7 +343,12 @@ pub extern "C" fn js_node_http_res_set_status(handle: i64, code: f64) {
 /// `res.statusCode` getter.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_get_status(handle: i64) -> f64 {
-    get_handle::<ServerResponse>(handle)
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(v) = super::response_payload::closed_property(response_root.get(), "statusCode") {
+        return v;
+    }
+    response_state(response_root.get())
         .map(|sr| {
             if sr.outgoing_message_only {
                 f64::from_bits(TAG_UNDEFINED)
@@ -346,11 +365,16 @@ pub unsafe extern "C" fn js_node_http_res_set_status_message(
     handle: i64,
     msg_ptr: *const StringHeader,
 ) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let msg = read_string_header(msg_ptr as *mut _);
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    if let Some(sr) = response_state_mut(response_root.get()) {
         if !sr.headers_sent {
             sr.status_message = msg;
         }
+    }
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::restate(response_root.get());
     }
 }
 
@@ -365,10 +389,12 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
     name_ptr: *const StringHeader,
     value: f64,
 ) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let name = read_string_header(name_ptr as *mut _).unwrap_or_default();
     // #4907 — Node's `OutgoingMessage.setHeader` throws if headers are already
     // sent, then validates the field name, before touching any state.
-    if response_headers_sent(handle) {
+    if response_headers_sent(response_root.get()) {
         perry_ffi::throw_with_code(
             "Cannot set headers after they are sent to the client",
             "ERR_HTTP_HEADERS_SENT",
@@ -415,7 +441,7 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
         None
     };
 
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    if let Some(sr) = response_state_mut(response_root.get()) {
         if !sr.headers_sent {
             sr.remember_header(&lower);
             if let Some(elems) = array_elems {
@@ -431,6 +457,9 @@ pub unsafe extern "C" fn js_node_http_res_set_header(
             sr.raw_header_names.insert(lower, name);
         }
     }
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::restate(response_root.get());
+    }
 }
 
 /// `res.setHeader(name, value)` chainable wrapper for static dispatch.
@@ -440,8 +469,10 @@ pub unsafe extern "C" fn js_node_http_res_set_header_self(
     name_ptr: *const StringHeader,
     value: f64,
 ) -> i64 {
-    js_node_http_res_set_header(handle, name_ptr, value);
-    handle
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    js_node_http_res_set_header(response_root.get(), name_ptr, value);
+    response_root.get()
 }
 
 /// `res.getHeader(name)` — case-insensitive lookup. Returns `null`
@@ -451,11 +482,19 @@ pub unsafe extern "C" fn js_node_http_res_get_header(
     handle: i64,
     name_ptr: *const StringHeader,
 ) -> f64 {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let name = match read_string_header(name_ptr as *mut _) {
         Some(s) => s.to_lowercase(),
         None => return f64::from_bits(TAG_UNDEFINED),
     };
-    if let Some(sr) = get_handle::<ServerResponse>(handle) {
+    if let Some(headers) = super::response_payload::closed_headers(response_root.get()) {
+        return headers
+            .get(&name)
+            .map(|v| f64::from_bits(JsValue::from_string_ptr(alloc_string(v).as_raw()).bits()))
+            .unwrap_or(f64::from_bits(TAG_UNDEFINED));
+    }
+    if let Some(sr) = response_state(response_root.get()) {
         if let Some(v) = sr.headers.get(&name) {
             let header = alloc_string(v);
             return f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK));
@@ -470,9 +509,11 @@ pub unsafe extern "C" fn js_node_http_res_remove_header(
     handle: i64,
     name_ptr: *const StringHeader,
 ) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     // #4907 — Node's `OutgoingMessage.removeHeader` throws once headers are
     // sent (distinct "remove" wording from `setHeader`).
-    if response_headers_sent(handle) {
+    if response_headers_sent(response_root.get()) {
         perry_ffi::throw_with_code(
             "Cannot remove headers after they are sent to the client",
             "ERR_HTTP_HEADERS_SENT",
@@ -483,7 +524,7 @@ pub unsafe extern "C" fn js_node_http_res_remove_header(
         Some(s) => s.to_lowercase(),
         None => return,
     };
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    if let Some(sr) = response_state_mut(response_root.get()) {
         if !sr.headers_sent {
             sr.headers.remove(&name);
             sr.header_value_lists.remove(&name);
@@ -499,11 +540,16 @@ pub unsafe extern "C" fn js_node_http_res_has_header(
     handle: i64,
     name_ptr: *const StringHeader,
 ) -> i32 {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let name = match read_string_header(name_ptr as *mut _) {
         Some(s) => s.to_lowercase(),
         None => return 0,
     };
-    if let Some(sr) = get_handle::<ServerResponse>(handle) {
+    if let Some(headers) = super::response_payload::closed_headers(response_root.get()) {
+        return headers.contains_key(&name) as i32;
+    }
+    if let Some(sr) = response_state(response_root.get()) {
         if sr.headers.contains_key(&name) {
             return 1;
         }
@@ -517,7 +563,11 @@ pub unsafe extern "C" fn js_node_http_res_has_header_value(
     handle: i64,
     name_ptr: *const StringHeader,
 ) -> f64 {
-    f64::from_bits(JsValue::from_bool(js_node_http_res_has_header(handle, name_ptr) != 0).bits())
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    f64::from_bits(
+        JsValue::from_bool(js_node_http_res_has_header(response_root.get(), name_ptr) != 0).bits(),
+    )
 }
 
 /// `res.appendHeader(name, value)` — append another string value to the
@@ -529,13 +579,15 @@ pub unsafe extern "C" fn js_node_http_res_append_header(
     name_ptr: *const StringHeader,
     value_ptr: *const StringHeader,
 ) -> i64 {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let name = read_string_header(name_ptr as *mut _).unwrap_or_default();
     let value = read_string_header(value_ptr as *mut _).unwrap_or_default();
     if name.is_empty() {
-        return handle;
+        return response_root.get();
     }
     let lower = name.to_lowercase();
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    if let Some(sr) = response_state_mut(response_root.get()) {
         if !sr.headers_sent {
             sr.remember_header(&lower);
             if let Some(list) = sr.header_value_lists.get_mut(&lower) {
@@ -556,14 +608,22 @@ pub unsafe extern "C" fn js_node_http_res_append_header(
             sr.raw_header_names.entry(lower).or_insert(name);
         }
     }
-    handle
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::restate(response_root.get());
+    }
+    response_root.get()
 }
 
 /// `res.getHeaders()` — JSON-stringify the lowercase-keyed map.
 /// TS-side parses with `JSON.parse`.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_get_headers_json(handle: i64) -> *mut StringHeader {
-    let s = get_handle::<ServerResponse>(handle)
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(headers) = super::response_payload::closed_headers(response_root.get()) {
+        return alloc_string(&serde_json::to_string(&headers).unwrap()).as_raw();
+    }
+    let s = response_state(response_root.get())
         .map(|sr| serde_json::to_string(&sr.headers).unwrap_or_else(|_| "{}".to_string()))
         .unwrap_or_else(|| "{}".to_string());
     alloc_string(&s).as_raw()
@@ -573,7 +633,14 @@ pub extern "C" fn js_node_http_res_get_headers_json(handle: i64) -> *mut StringH
 /// header names (matches Node — `getHeaderNames` returns lowercase).
 #[no_mangle]
 pub extern "C" fn js_node_http_res_get_header_names_json(handle: i64) -> *mut StringHeader {
-    let s = get_handle::<ServerResponse>(handle)
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(headers) = super::response_payload::closed_headers(response_root.get()) {
+        let mut names = headers.keys().collect::<Vec<_>>();
+        names.sort();
+        return alloc_string(&serde_json::to_string(&names).unwrap()).as_raw();
+    }
+    let s = response_state(response_root.get())
         .map(|sr| {
             let mut names: Vec<&String> = sr.headers.keys().collect();
             names.sort();
@@ -593,10 +660,12 @@ pub extern "C" fn js_node_http_res_get_header_names_json(handle: i64) -> *mut St
 /// `GcHeader` and segfaulting nondeterministically (#4965).
 #[no_mangle]
 pub extern "C" fn js_node_http_res_set_headers(handle: i64, headers_value: f64) -> i64 {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     // Node order: the headers-sent check fires before the argument is
     // validated. `header_committed` covers a prior `writeHead`; `headers_sent`
     // covers an already-flushed body.
-    let committed = get_handle::<ServerResponse>(handle)
+    let committed = response_state(response_root.get())
         .map(|sr| sr.headers_sent || sr.header_committed)
         .unwrap_or(false);
     if committed {
@@ -615,20 +684,23 @@ pub extern "C" fn js_node_http_res_set_headers(handle: i64, headers_value: f64) 
         );
     }
     if let Some(json) = read_string_header(entries_ptr) {
-        if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        if let Some(sr) = response_state_mut(response_root.get()) {
             if !sr.headers_sent {
                 apply_headers_entries(sr, &json);
             }
         }
     }
-    handle
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::restate(response_root.get());
+    }
+    response_root.get()
 }
 
 /// Apply a normalized `setHeaders` entries array: `[[name, value], …]` where
 /// `value` is a string or (for `Set-Cookie`/multi-valued headers) an array of
 /// strings. The pairwise (vs object) shape preserves a `Set-Cookie` array as a
 /// per-element list so the wire layer emits one line each (#4826/#4965).
-fn apply_headers_entries(sr: &mut ServerResponse, json: &str) {
+fn apply_headers_entries(sr: &mut ResponseState, json: &str) {
     let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(json)
     else {
         return;
@@ -675,7 +747,13 @@ fn apply_headers_entries(sr: &mut ServerResponse, json: &str) {
 /// `res.statusMessage` getter.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_get_status_message(handle: i64) -> f64 {
-    if let Some(sr) = get_handle::<ServerResponse>(handle) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(v) = super::response_payload::closed_property(response_root.get(), "statusMessage")
+    {
+        return v;
+    }
+    if let Some(sr) = response_state(response_root.get()) {
         if let Some(message) = &sr.status_message {
             let header = alloc_string(message);
             return f64::from_bits(STRING_TAG | (header.as_raw() as u64 & PTR_MASK));
@@ -687,7 +765,12 @@ pub extern "C" fn js_node_http_res_get_status_message(handle: i64) -> f64 {
 /// `res.finished` getter. Node aliases this to the ended state.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_finished(handle: i64) -> i32 {
-    get_handle::<ServerResponse>(handle)
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(v) = super::response_payload::closed_property(response_root.get(), "finished") {
+        return i32::from(v.to_bits() == TAG_TRUE);
+    }
+    response_state(response_root.get())
         .map(|sr| if sr.writable_ended { 1 } else { 0 })
         .unwrap_or(0)
 }
@@ -695,7 +778,12 @@ pub extern "C" fn js_node_http_res_finished(handle: i64) -> i32 {
 /// `res.sendDate` getter.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_send_date(handle: i64) -> i32 {
-    get_handle::<ServerResponse>(handle)
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(v) = super::response_payload::closed_property(response_root.get(), "sendDate") {
+        return i32::from(v.to_bits() == TAG_TRUE);
+    }
+    response_state(response_root.get())
         .map(|sr| if sr.send_date { 1 } else { 0 })
         .unwrap_or(1)
 }
@@ -703,7 +791,9 @@ pub extern "C" fn js_node_http_res_send_date(handle: i64) -> i32 {
 /// `res.sendDate = bool` setter.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_set_send_date(handle: i64, value: f64) {
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(sr) = response_state_mut(response_root.get()) {
         sr.send_date = jsvalue_truthy(value);
     }
 }
@@ -711,7 +801,14 @@ pub extern "C" fn js_node_http_res_set_send_date(handle: i64, value: f64) {
 /// `res.strictContentLength` getter.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_strict_content_length(handle: i64) -> i32 {
-    get_handle::<ServerResponse>(handle)
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(v) =
+        super::response_payload::closed_property(response_root.get(), "strictContentLength")
+    {
+        return i32::from(v.to_bits() == TAG_TRUE);
+    }
+    response_state(response_root.get())
         .map(|sr| if sr.strict_content_length { 1 } else { 0 })
         .unwrap_or(0)
 }
@@ -719,7 +816,9 @@ pub extern "C" fn js_node_http_res_strict_content_length(handle: i64) -> i32 {
 /// `res.strictContentLength = bool` setter.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_set_strict_content_length(handle: i64, value: f64) {
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(sr) = response_state_mut(response_root.get()) {
         sr.strict_content_length = jsvalue_truthy(value);
     }
 }
@@ -727,7 +826,9 @@ pub extern "C" fn js_node_http_res_set_strict_content_length(handle: i64, value:
 /// Paired request handle for `res.req`.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_req_handle(handle: i64) -> i64 {
-    get_handle::<ServerResponse>(handle)
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    response_state(response_root.get())
         .map(|sr| sr.req_handle)
         .unwrap_or(0)
 }
@@ -735,7 +836,12 @@ pub extern "C" fn js_node_http_res_req_handle(handle: i64) -> i64 {
 /// `res.headersSent` getter.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_headers_sent(handle: i64) -> i32 {
-    get_handle::<ServerResponse>(handle)
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(v) = super::response_payload::closed_property(response_root.get(), "headersSent") {
+        return i32::from(v.to_bits() == TAG_TRUE);
+    }
+    response_state(response_root.get())
         .map(|sr| if sr.headers_sent { 1 } else { 0 })
         .unwrap_or(0)
 }
@@ -743,7 +849,13 @@ pub extern "C" fn js_node_http_res_headers_sent(handle: i64) -> i32 {
 /// `res.writableEnded` getter.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_writable_ended(handle: i64) -> i32 {
-    get_handle::<ServerResponse>(handle)
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(v) = super::response_payload::closed_property(response_root.get(), "writableEnded")
+    {
+        return i32::from(v.to_bits() == TAG_TRUE);
+    }
+    response_state(response_root.get())
         .map(|sr| if sr.writable_ended { 1 } else { 0 })
         .unwrap_or(0)
 }
@@ -751,7 +863,14 @@ pub extern "C" fn js_node_http_res_writable_ended(handle: i64) -> i32 {
 /// `res.writableFinished` getter.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_writable_finished(handle: i64) -> i32 {
-    get_handle::<ServerResponse>(handle)
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if let Some(v) =
+        super::response_payload::closed_property(response_root.get(), "writableFinished")
+    {
+        return i32::from(v.to_bits() == TAG_TRUE);
+    }
+    response_state(response_root.get())
         .map(|sr| if sr.writable_finished { 1 } else { 0 })
         .unwrap_or(0)
 }
@@ -760,7 +879,7 @@ pub extern "C" fn js_node_http_res_writable_finished(handle: i64) -> i32 {
 /// into a `ServerResponse`'s header map, preserving the original case for
 /// `getHeaderNames()` while keying the lookup table lowercase. Shared by
 /// `writeHead`'s bulk-header path.
-fn apply_headers_json(sr: &mut ServerResponse, json: &str) {
+fn apply_headers_json(sr: &mut ResponseState, json: &str) {
     if json.is_empty() || json == "null" || json == "undefined" {
         return;
     }
@@ -813,6 +932,8 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
     arg2: i64,
     arg3: i64,
 ) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let v2 = JsValue::from_bits(arg2 as u64);
     let v3 = JsValue::from_bits(arg3 as u64);
 
@@ -840,7 +961,7 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
         }
     });
 
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    if let Some(sr) = response_state_mut(response_root.get()) {
         if sr.headers_sent {
             return;
         }
@@ -869,13 +990,16 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
         // deferred-send path is unchanged (#4965).
         sr.header_committed = true;
     }
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::restate(response_root.get());
+    }
 }
 
 /// Apply a Node `writeHead` flat-array headers value (`[name, value, …]`).
 /// Even offsets are header names, odd offsets the associated values; an array
 /// element may itself be an array (multi-valued header). Mirrors
 /// `apply_headers_json`'s lowercase-key / original-case / array-list handling.
-fn apply_headers_flat_array(sr: &mut ServerResponse, json: &str) {
+fn apply_headers_flat_array(sr: &mut ResponseState, json: &str) {
     let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(json)
     else {
         return;
@@ -917,25 +1041,30 @@ fn apply_headers_flat_array(sr: &mut ServerResponse, json: &str) {
 /// (`begin_streaming` succeeded now or earlier), `None` when it isn't —
 /// the caller falls back to the legacy buffered path.
 fn stream_write(handle: i64, bytes: &[u8]) -> Option<bool> {
-    stream_write_with_cb(handle, bytes, 0)
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    stream_write_with_cb(response_root.get(), bytes, 0)
 }
 
 /// `stream_write`, but also enqueues `callback` (if non-zero) into
 /// `pending_write_callbacks` for the chunk it belongs to.
 fn stream_write_with_cb(handle: i64, bytes: &[u8], callback: i64) -> Option<bool> {
-    if !begin_streaming(handle) {
+    let callback_scope = perry_ffi::TransientRootScope::enter();
+    let callback_root = callback_scope.root_addr(callback);
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if !begin_streaming(response_root.get()) {
         return None;
     }
-    let (conn, seq) = get_handle::<ServerResponse>(handle).and_then(|sr| sr.turnloop)?;
+    let (conn, seq) = response_state(response_root.get()).and_then(|sr| sr.turnloop)?;
     // A backpressured HTTP/2 write has already accepted these bytes. Preserve
     // its answer instead of falling back to buffering a duplicate chunk.
     let below_hwm = crate::server::turnloop_route::send_body(conn, seq, bytes)?;
-    let sr = get_handle_mut::<ServerResponse>(handle)?;
-    if callback != 0 {
-        sr.pending_write_callbacks.push(callback);
-    }
     if !below_hwm {
-        sr.needs_drain = true;
+        response_state_mut(response_root.get())?.needs_drain = true;
+    }
+    if callback != 0 {
+        push_write_callback(response_root.get(), callback_root.get());
     }
     Some(below_hwm)
 }
@@ -946,24 +1075,29 @@ fn stream_write_with_cb(handle: i64, bytes: &[u8], callback: i64) -> Option<bool
 /// once the queued-but-unsent bytes pass the HWM, else 1.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write(handle: i64, chunk: f64) -> i32 {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let bytes = match jsvalue_to_body_bytes(chunk) {
         Some(b) => b,
         None => return 1,
     };
-    let ended = get_handle::<ServerResponse>(handle)
+    let ended = response_state(response_root.get())
         .map(|sr| sr.writable_ended)
         .unwrap_or(true);
     if ended {
         return 1;
     }
-    if let Some(below_hwm) = stream_write(handle, &bytes) {
+    if let Some(below_hwm) = stream_write(response_root.get(), &bytes) {
         return below_hwm as i32;
     }
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    if let Some(sr) = response_state_mut(response_root.get()) {
         if !sr.writable_ended {
             sr.headers_sent = true;
             sr.buffered_body.extend_from_slice(&bytes);
         }
+    }
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::restate(response_root.get());
     }
     1
 }
@@ -1006,36 +1140,47 @@ pub extern "C" fn js_node_http_res_write_full(
     arg2: i64,
     arg3: i64,
 ) -> f64 {
-    let callback = pick_trailing_callback(arg2, arg3);
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    let callback_scope = perry_ffi::TransientRootScope::enter();
+    let callback_root = callback_scope.root_addr(pick_trailing_callback(arg2, arg3));
+    let callback = callback_root.get();
     let bytes = jsvalue_to_body_bytes(chunk);
-    let ended = get_handle::<ServerResponse>(handle)
+    let ended = response_state(response_root.get())
         .map(|sr| sr.writable_ended)
         .unwrap_or(true);
     if ended {
         return f64::from_bits(TAG_TRUE);
     }
     if let Some(b) = &bytes {
-        if let Some(below_hwm) = stream_write(handle, b) {
+        if let Some(below_hwm) = stream_write(response_root.get(), b) {
             // Streaming: the chunk is on its way to the wire, so the write
             // callback fires now rather than queueing for `.end()`.
             if callback != 0 {
-                call_closure0(callback);
+                call_closure0(callback_root.get());
             }
             return f64::from_bits(if below_hwm { TAG_TRUE } else { TAG_FALSE });
         }
     }
     let mut below_hwm = true;
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    let mut accepted = false;
+    if let Some(sr) = response_state_mut(response_root.get()) {
         if !sr.writable_ended {
+            accepted = true;
             sr.headers_sent = true;
             if let Some(b) = &bytes {
                 sr.buffered_body.extend_from_slice(b);
             }
-            if callback != 0 {
-                sr.pending_write_callbacks.push(callback);
-            }
             below_hwm = sr.buffered_body.len() <= DEFAULT_HIGH_WATER_MARK;
         }
+    }
+    // Object-owned JS state may allocate or invoke a property accessor. End
+    // the native borrow before touching it; reentrant JS may close the payload.
+    if accepted && callback != 0 {
+        push_write_callback(response_root.get(), callback_root.get());
+    }
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::restate(response_root.get());
     }
     f64::from_bits(if below_hwm { TAG_TRUE } else { TAG_FALSE })
 }
@@ -1045,6 +1190,8 @@ pub extern "C" fn js_node_http_res_write_full(
 /// metadata that isn't known until the body has been produced.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_add_trailers(handle: i64, headers_value: f64) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let v = JsValue::from_bits(headers_value.to_bits());
     if v.is_undefined() || v.is_null() {
         return;
@@ -1060,7 +1207,7 @@ pub extern "C" fn js_node_http_res_add_trailers(handle: i64, headers_value: f64)
     let Some(obj) = parsed.as_object() else {
         return;
     };
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    if let Some(sr) = response_state_mut(response_root.get()) {
         if sr.writable_ended {
             return;
         }
@@ -1074,6 +1221,9 @@ pub extern "C" fn js_node_http_res_add_trailers(handle: i64, headers_value: f64)
             sr.raw_trailer_names.insert(lower, k.clone());
         }
     }
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::restate(response_root.get());
+    }
 }
 
 /// Finalize a buffered response: append the final chunk, hand it to the
@@ -1083,6 +1233,8 @@ pub extern "C" fn js_node_http_res_add_trailers(handle: i64, headers_value: f64)
 /// contract, where `'finish'` never precedes the end callback). Returns
 /// `None` if the response was already ended or the handle is gone.
 pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>, Vec<i64>)> {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let v = JsValue::from_bits(chunk.to_bits());
     let final_chunk = if v.is_undefined() || v.is_null() {
         None
@@ -1090,7 +1242,7 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         jsvalue_to_body_bytes(chunk)
     };
 
-    let sr = get_handle_mut::<ServerResponse>(handle)?;
+    let sr = response_state_mut(response_root.get())?;
     if sr.writable_ended {
         return None;
     }
@@ -1104,13 +1256,13 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         sr.writable_ended = true;
         sr.writable_finished = true;
         sr.needs_drain = false;
-        let finish_listeners = take_event_listeners(sr, "finish");
-        let close_listeners = take_event_listeners(sr, "close");
+        let finish_listeners = response_event_listeners(response_root.get(), "finish");
+        let close_listeners = response_event_listeners(response_root.get(), "close");
         if let Some(c) = chunk {
             let _ = crate::server::turnloop_route::send_body(conn, seq, &c);
         }
         crate::server::turnloop_route::finish_body(conn, seq, &trailers);
-        crate::server::request::mark_connection_written(req_handle_of(handle));
+        crate::server::request::mark_connection_written(req_handle_of(response_root.get()));
         return Some((finish_listeners, close_listeners));
     }
 
@@ -1131,8 +1283,8 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
         body,
         auto_content_length,
     };
-    let finish_listeners = take_event_listeners(sr, "finish");
-    let close_listeners = take_event_listeners(sr, "close");
+    let finish_listeners = response_event_listeners(response_root.get(), "finish");
+    let close_listeners = response_event_listeners(response_root.get(), "close");
     let turnloop = sr.turnloop;
     let req_handle = sr.req_handle;
     // P5: the handler, the codec and the socket are on the same thread, so
@@ -1142,7 +1294,7 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
     if let Some((conn, seq)) = turnloop {
         crate::server::turnloop_route::send_response(conn, seq, shape);
     }
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    if let Some(sr) = response_state_mut(response_root.get()) {
         sr.writable_finished = true;
     }
     crate::server::request::mark_connection_written(req_handle);
@@ -1162,7 +1314,9 @@ pub(crate) fn finalize_buffered_end(handle: i64, chunk: f64) -> Option<(Vec<i64>
 /// Standalone (`assignSocket`) and bare `OutgoingMessage` handles keep the
 /// buffered path, as does a response whose connection already died.
 pub(crate) fn begin_streaming(handle: i64) -> bool {
-    let Some(sr) = get_handle_mut::<ServerResponse>(handle) else {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    let Some(sr) = response_state_mut(response_root.get()) else {
         return false;
     };
     if sr.writable_ended {
@@ -1189,7 +1343,7 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
     sr.headers_sent = true;
     sr.turnloop_streaming = true;
     if !crate::server::turnloop_route::begin_stream(conn, seq, shape) {
-        if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+        if let Some(sr) = response_state_mut(response_root.get()) {
             sr.turnloop_streaming = false;
         }
         return false;
@@ -1205,7 +1359,9 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
 /// HWM, clear the flag and return its `'drain'` listeners for the caller
 /// (the pump) to fire. Empty otherwise.
 pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
-    let Some(sr) = get_handle_mut::<ServerResponse>(handle) else {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    let Some(sr) = response_state_mut(response_root.get()) else {
         return Vec::new();
     };
     if !sr.needs_drain || sr.writable_ended {
@@ -1221,7 +1377,7 @@ pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
         return Vec::new();
     }
     sr.needs_drain = false;
-    take_event_listeners(sr, "drain")
+    response_event_listeners(response_root.get(), "drain")
 }
 
 /// `res.flushHeaders()` — Node sends headers immediately even before
@@ -1230,8 +1386,10 @@ pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
 /// can't stream (standalone / bare OutgoingMessage).
 #[no_mangle]
 pub extern "C" fn js_node_http_res_flush_headers(handle: i64) {
-    if !begin_streaming(handle) {
-        if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if !begin_streaming(response_root.get()) {
+        if let Some(sr) = response_state_mut(response_root.get()) {
             sr.headers_sent = true;
         }
     }
@@ -1249,7 +1407,9 @@ pub extern "C" fn js_node_http_res_uncork(_handle: i64) {}
 /// surface; actual transport timeout scheduling is handled at the server.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_set_timeout(handle: i64, _msecs: f64, _callback: i64) -> i64 {
-    handle
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    response_root.get()
 }
 
 /// `res.writeEarlyHints(hints[, cb])` — interim 103 response is not yet sent
@@ -1314,13 +1474,25 @@ pub unsafe extern "C" fn js_node_http_res_on(
     event_name_ptr: *const StringHeader,
     callback: i64,
 ) -> f64 {
+    let callback_scope = perry_ffi::TransientRootScope::enter();
+    let callback_root = callback_scope.root_addr(callback);
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::push(
+            response_root.get(),
+            &format!("on:{event}"),
+            callback_root.get(),
+        );
+        return handle_to_pointer_f64(response_root.get());
+    }
     let mut should_fire_now = false;
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    if let Some(sr) = get_handle_mut::<ServerResponse>(response_root.get()) {
         sr.listeners
             .entry(event.clone())
             .or_default()
-            .push(callback);
+            .push(callback_root.get());
         // If `.end()` already fired, late listeners for `'finish'` /
         // `'close'` should still see them (Node fires them
         // asynchronously, so a late `on` registration is racy but
@@ -1332,14 +1504,14 @@ pub unsafe extern "C" fn js_node_http_res_on(
     } else {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    if should_fire_now && callback != 0 {
-        let raw = callback as *const RawClosureHeader;
+    if should_fire_now && callback_root.get() != 0 {
+        let raw = callback_root.get() as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
             let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
-    handle_to_pointer_f64(handle)
+    handle_to_pointer_f64(response_root.get())
 }
 
 /// `res.once(event, cb)` — register a one-shot listener. Mirrors
@@ -1361,27 +1533,42 @@ pub unsafe extern "C" fn js_node_http_res_once(
     event_name_ptr: *const StringHeader,
     callback: i64,
 ) -> f64 {
+    let callback_scope = perry_ffi::TransientRootScope::enter();
+    let callback_root = callback_scope.root_addr(callback);
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::push(
+            response_root.get(),
+            &format!("once:{event}"),
+            callback_root.get(),
+        );
+        return handle_to_pointer_f64(response_root.get());
+    }
     let mut should_fire_now = false;
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    if let Some(sr) = get_handle_mut::<ServerResponse>(response_root.get()) {
         // `finish`/`close` already fired: run immediately without storing,
         // matching the late-registration behavior of `js_node_http_res_on`.
         if sr.writable_finished && (event == "finish" || event == "close") {
             should_fire_now = true;
         } else {
-            sr.once_listeners.entry(event).or_default().push(callback);
+            sr.once_listeners
+                .entry(event)
+                .or_default()
+                .push(callback_root.get());
         }
     } else {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    if should_fire_now && callback != 0 {
-        let raw = callback as *const RawClosureHeader;
+    if should_fire_now && callback_root.get() != 0 {
+        let raw = callback_root.get() as *const RawClosureHeader;
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
             let _ = closure.call0(perry_ffi::JsThis::UNDEFINED);
         }
     }
-    handle_to_pointer_f64(handle)
+    handle_to_pointer_f64(response_root.get())
 }
 
 /// Listeners to fire for `event`: persistent `on` listeners (cloned, retained)
@@ -1413,11 +1600,15 @@ pub extern "C" fn js_node_http_outgoing_message_new() -> i64 {
 /// flushes through the socket assigned via `res.assignSocket(socket)`.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_server_response_standalone_new(req: f64) -> i64 {
-    crate::server::ensure_gc_scanner_registered();
-    let mut sr = ServerResponse::new();
+    // Dispatch registration is independent of transport roots and pumps.
+    // A response can be the program's first HTTP object.
+    super::dispatch_ext::ensure_dispatch_extensions_registered();
+    let scope = perry_ffi::TransientRootScope::enter();
+    let req = scope.root_nanbox(req);
+    let mut sr = ResponseState::new();
     sr.standalone = true;
     sr.send_date = false;
-    if JsValue::from_bits(req.to_bits()).is_pointer() {
+    if JsValue::from_bits(req.get().to_bits()).is_pointer() {
         extern "C" {
             fn js_object_get_field_by_name(
                 obj: *const perry_ffi::ObjectHeader,
@@ -1426,7 +1617,7 @@ pub unsafe extern "C" fn js_node_http_server_response_standalone_new(req: f64) -
         }
         let key = alloc_string("method");
         let m = js_object_get_field_by_name(
-            (req.to_bits() & PTR_MASK) as *const perry_ffi::ObjectHeader,
+            (req.get().to_bits() & PTR_MASK) as *const perry_ffi::ObjectHeader,
             key.as_raw(),
         );
         // Heap or inline SSO (`"GET"`, `"POST"` built at runtime, #11519).
@@ -1434,15 +1625,18 @@ pub unsafe extern "C" fn js_node_http_server_response_standalone_new(req: f64) -
             sr.standalone_req_method = Some(method);
         }
     }
-    register_handle(sr)
+    super::response_payload::alloc(sr)
 }
 
 /// `res.assignSocket(socket)` — wire a (possibly userland) Writable as the
 /// flush target. Node throws `ERR_HTTP_SOCKET_ASSIGNED` on a second call.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_assign_socket(handle: i64, socket: f64) {
-    let already = get_handle::<ServerResponse>(handle)
-        .map(|sr| !JsValue::from_bits(sr.standalone_socket.to_bits()).is_undefined())
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    let socket = response_scope.root_nanbox(socket);
+    let already = response_state(response_root.get())
+        .map(|_| !JsValue::from_bits(response_socket(response_root.get()).to_bits()).is_undefined())
         .unwrap_or(false);
     if already {
         perry_ffi::throw_with_code(
@@ -1451,18 +1645,18 @@ pub extern "C" fn js_node_http_res_assign_socket(handle: i64, socket: f64) {
             perry_ffi::ErrorKind::Error,
         );
     }
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
-        sr.standalone_socket = socket;
+    if let Some(sr) = response_state_mut(response_root.get()) {
         sr.standalone = true;
     }
+    set_response_socket(response_root.get(), socket.get());
 }
 
 /// `res.detachSocket(socket)` — counterpart of `assignSocket`.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_detach_socket(handle: i64, _socket: f64) {
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
-        sr.standalone_socket = f64::from_bits(TAG_UNDEFINED);
-    }
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    set_response_socket(response_root.get(), f64::from_bits(TAG_UNDEFINED));
 }
 
 /// `res.write(chunk[, encoding][, callback])` — callback-aware variant of
@@ -1470,20 +1664,21 @@ pub extern "C" fn js_node_http_res_detach_socket(handle: i64, _socket: f64) {
 /// flushes on `.end()`, preserving call order (#4904).
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callback: i64) -> i32 {
+    let callback_scope = perry_ffi::TransientRootScope::enter();
+    let callback_root = callback_scope.root_addr(callback);
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
     // #4975: `write()` after `destroy()` must not buffer; Node invokes the
     // callback with an `ERR_STREAM_DESTROYED` error and returns `false` (no
     // `'error'` event is emitted, so an `on('error', …)` listener stays silent).
-    if get_handle::<ServerResponse>(handle)
-        .map(|sr| sr.destroyed)
-        .unwrap_or(false)
-    {
-        if callback != 0 {
+    if response_destroyed(response_root.get()) {
+        if callback_root.get() != 0 {
             let err = perry_ffi::error_value_with_code(
                 "Cannot call write after a stream was destroyed",
                 "ERR_STREAM_DESTROYED",
                 perry_ffi::ErrorKind::Error,
             );
-            crate::server::http2_server::call1(callback, f64::from_bits(err.bits()));
+            crate::server::http2_server::call1(callback_root.get(), f64::from_bits(err.bits()));
         }
         return 0;
     }
@@ -1498,7 +1693,7 @@ pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callba
     // so the JSON API-route body never reached the wire (HTTP 200, 0 bytes).
     // #5437 (Next.js app-route response pipe).
     if let Some(b) = &bytes {
-        let ended = get_handle::<ServerResponse>(handle)
+        let ended = response_state(response_root.get())
             .map(|sr| sr.writable_ended)
             .unwrap_or(true);
         if !ended {
@@ -1507,7 +1702,9 @@ pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callba
             // relative to later writes / `.end()` (Node fires it once the chunk
             // is flushed; queued, it drains in order, #4904). `stream_write_with_cb`
             // enqueues the callback ahead of the `tx.send`.
-            if let Some(below_hwm) = stream_write_with_cb(handle, b, callback) {
+            if let Some(below_hwm) =
+                stream_write_with_cb(response_root.get(), b, callback_root.get())
+            {
                 return below_hwm as i32;
             }
         }
@@ -1516,17 +1713,24 @@ pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callba
     // on the static path): `false` past the 16 KiB high-water mark, so dynamic
     // `while (res.write(buf, cb))` producer loops terminate.
     let mut below_hwm = true;
-    if let Some(sr) = get_handle_mut::<ServerResponse>(handle) {
+    let mut accepted = false;
+    if let Some(sr) = response_state_mut(response_root.get()) {
         if !sr.writable_ended {
+            accepted = true;
             sr.headers_sent = true;
             if let Some(b) = &bytes {
                 sr.buffered_body.extend_from_slice(b);
             }
-            if callback != 0 {
-                sr.pending_write_callbacks.push(callback);
-            }
             below_hwm = sr.buffered_body.len() <= DEFAULT_HIGH_WATER_MARK;
         }
+    }
+    // Object-owned JS state may allocate or invoke a property accessor. End
+    // the native borrow before touching it; reentrant JS may close the payload.
+    if accepted && callback_root.get() != 0 {
+        push_write_callback(response_root.get(), callback_root.get());
+    }
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::restate(response_root.get());
     }
     if below_hwm {
         1
@@ -1538,6 +1742,8 @@ pub extern "C" fn js_node_http_res_write_with_cb(handle: i64, chunk: f64, callba
 /// Invoke `socket.write(chunk)` on an arbitrary JS value through the
 /// runtime's dynamic method-call path.
 pub(crate) unsafe fn socket_write_str(socket: f64, chunk: &str) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_nanbox(socket);
     extern "C" {
         fn js_native_call_method_str_key(
             object: f64,
@@ -1546,10 +1752,10 @@ pub(crate) unsafe fn socket_write_str(socket: f64, chunk: &str) {
             args_len: usize,
         ) -> f64;
     }
-    let name = alloc_string("write");
+    let name = scope.root_addr(alloc_string("write").as_raw() as i64);
     let chunk_val = f64::from_bits(JsValue::from_string_ptr(alloc_string(chunk).as_raw()).bits());
     let args = [chunk_val];
-    let _ = js_native_call_method_str_key(socket, name.as_raw() as i64, args.as_ptr(), 1);
+    let _ = js_native_call_method_str_key(socket.get(), name.get(), args.as_ptr(), 1);
 }
 
 fn jsvalue_truthy(value: f64) -> bool {
@@ -1580,3 +1786,81 @@ pub(crate) use turnloop_shape::{
 #[cfg(test)]
 #[path = "response_tests.rs"]
 mod tests;
+
+// State is owned either by an in-flight transport handle or by an ordinary
+// standalone response's traced payload. The latter is never registered.
+pub(crate) fn response_state(handle: i64) -> Option<&'static ResponseState> {
+    if (handle as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR {
+        get_handle::<ServerResponse>(handle).map(|r| &r.state)
+    } else {
+        unsafe { super::response_payload::state(handle) }.map(|r| &*r)
+    }
+}
+pub(crate) fn response_state_mut(handle: i64) -> Option<&'static mut ResponseState> {
+    if (handle as usize) < perry_ffi::RECEIVER_HANDLE_FLOOR {
+        get_handle_mut::<ServerResponse>(handle).map(|r| &mut r.state)
+    } else {
+        unsafe { super::response_payload::state(handle) }
+    }
+}
+
+pub(crate) fn response_destroyed(handle: i64) -> bool {
+    response_state(handle).map_or_else(
+        || {
+            super::response_payload::closed_property(handle, "destroyed")
+                .is_some_and(|v| v.to_bits() == TAG_TRUE)
+        },
+        |s| s.destroyed,
+    )
+}
+
+pub(crate) fn response_socket(handle: i64) -> f64 {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::get(response_root.get(), "socket")
+    } else {
+        get_handle::<ServerResponse>(response_root.get())
+            .map_or(f64::from_bits(TAG_UNDEFINED), |r| r.standalone_socket)
+    }
+}
+pub(crate) fn set_response_socket(handle: i64, socket: f64) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::set(response_root.get(), "socket", socket);
+    } else if let Some(r) = get_handle_mut::<ServerResponse>(response_root.get()) {
+        r.standalone_socket = socket;
+    }
+}
+pub(crate) fn push_write_callback(handle: i64, cb: i64) {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::push(response_root.get(), "writeCallbacks", cb);
+    } else if let Some(r) = get_handle_mut::<ServerResponse>(response_root.get()) {
+        r.pending_write_callbacks.push(cb);
+    }
+}
+pub(crate) fn take_write_callbacks(handle: i64) -> Vec<i64> {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::callbacks(response_root.get(), "writeCallbacks", true)
+    } else {
+        get_handle_mut::<ServerResponse>(response_root.get())
+            .map(|r| std::mem::take(&mut r.pending_write_callbacks))
+            .unwrap_or_default()
+    }
+}
+pub(crate) fn response_event_listeners(handle: i64, event: &str) -> Vec<i64> {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    if super::response_payload::is_response(response_root.get()) {
+        super::response_payload::listeners(response_root.get(), event)
+    } else {
+        get_handle_mut::<ServerResponse>(response_root.get())
+            .map(|r| take_event_listeners(r, event))
+            .unwrap_or_default()
+    }
+}

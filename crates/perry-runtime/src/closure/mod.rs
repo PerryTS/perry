@@ -63,11 +63,13 @@ pub(crate) use registry::{
 
 pub(crate) use dispatch::{
     bound_function_lazy_name, bound_function_length, bound_method_source_func_ptr,
-    coerce_call_this, rebind_explicit_this, rebind_explicit_this_allocates,
-    reify_function_method_value, reset_throw_not_callable_counter,
+    coerce_call_this, reify_function_method_value, reset_throw_not_callable_counter,
 };
 pub(crate) use dispatch::{
     call_compiled_body_this, call_compiled_closure_this, native_call_value_this,
+};
+pub(crate) use dispatch::{
+    call_with_explicit_this, forward_with_explicit_this, receiver_may_box, ReceiverBinding,
 };
 pub use dispatch::{
     clean_closure_ptr, dispatch_bound_function, dispatch_bound_method, get_valid_func_ptr,

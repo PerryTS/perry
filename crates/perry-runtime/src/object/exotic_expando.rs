@@ -1,27 +1,7 @@
-//! Expando (user-defined own) properties for exotic instances whose heap
-//! representation is NOT an `ObjectHeader`: `Date` (an 8-byte `DateCell`),
-//! `RegExp` (a `RegExpHeader`), and `Error` (an `ErrorHeader`). Plain
-//! property writes on these previously either no-op'd (Date guard in
-//! `js_object_set_field_by_name`) or wrote through garbage field offsets
-//! (RegExp), and reads fell through to cell-as-`ObjectHeader` derefs that
-//! could segfault. test262 exercises both directions heavily: exotic
-//! instances as `Object.defineProperty` targets AND as the *attributes*
-//! object (`dateObj.value = "x"; defineProperty(o, k, dateObj)`).
-//!
-//! Date/RegExp values are stored as NaN-boxed bits keyed by the cell
-//! address, in insertion order (spec OrdinaryOwnPropertyKeys for string
-//! keys). Error values delegate to the pre-existing `ERROR_USER_PROPS`
-//! side table so the dedicated error get/set arms and `assert.throws`
-//! consumers keep seeing one store. Attribute flags and accessor get/set
-//! closures piggyback on the generic side tables (`PROPERTY_DESCRIPTORS` /
-//! `ACCESSOR_DESCRIPTORS`), which are already keyed by raw address.
-//!
-//! GC: address keys are migrated by each movable owner's registered move
-//! hook. Stored values are kept alive via a mutable root scanner. A dead
-//! owner's entry is dropped by the `gc::dead_owner` fan-out
-//! (`prune_dead_exotic_expando_owners`), and Date/RegExp allocation also
-//! clears the table slot (`expando_clear_on_alloc`) as a backstop for an owner
-//! that died pinned.
+//! Exotic own properties use ordinary holder shapes and value slots.
+//! Meta-capable cells reach their bag through ObjectMeta.expando. Temporal
+//! retains its existing expando ownership registry, containing only its bag
+//! edge. Neither path stores descriptors separately from the holder keys.
 
 use std::cell::{Cell, RefCell};
 
@@ -135,7 +115,7 @@ pub(crate) fn exotic_expando_kind_of_value(value: f64) -> Option<(usize, ExoticK
 pub(crate) struct ExoticExpandoTables {
     /// addr -> insertion-ordered (key, nanboxed value bits) pairs for the
     /// non-Error exotic cells handled by this module.
-    entries: RefCell<crate::fast_hash::PtrHashMap<usize, Vec<(String, u64)>>>,
+    entries: RefCell<crate::fast_hash::PtrHashMap<usize, u64>>,
     /// Fast-path gate so hot get/set paths skip the map lookup until the
     /// first expando is installed on this thread.
     in_use: Cell<bool>,
@@ -150,51 +130,49 @@ impl ExoticExpandoTables {
     }
 }
 
-pub(crate) fn expando_in_use() -> bool {
-    crate::state::state().exotic_expando.in_use.get()
-}
-
 fn expando_store(addr: usize, key: &str, bits: u64) {
-    let tables = &crate::state::state().exotic_expando;
-    tables.in_use.set(true);
-    let mut map = tables.entries.borrow_mut();
-    let entries = map.entry(addr).or_default();
-    if let Some(slot) = entries.iter_mut().find(|(k, _)| k == key) {
-        slot.1 = bits;
-    } else {
-        entries.push((key.to_string(), bits));
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let bag = property_bag_ensure(addr);
+        let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        super::object_ops::define_property_force_store_value(bag, key, f64::from_bits(bits));
     }
 }
 
 fn expando_lookup(addr: usize, key: &str) -> Option<u64> {
-    let tables = &crate::state::state().exotic_expando;
-    if !tables.in_use.get() {
-        return None;
+    unsafe {
+        let bag = property_bag(addr);
+        if bag.is_null() {
+            return None;
+        }
+        let keys = super::object_keys(bag);
+        let slot =
+            super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key.as_bytes())?;
+        Some(super::key_attrs::object_slot_data(bag, slot).bits())
     }
-    tables
-        .entries
-        .borrow()
-        .get(&addr)
-        .and_then(|entries| entries.iter().find(|(k, _)| k == key).map(|(_, v)| *v))
 }
 
 fn expando_remove(addr: usize, key: &str) -> bool {
-    let tables = &crate::state::state().exotic_expando;
-    if !tables.in_use.get() {
-        return false;
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let bag = property_bag(addr);
+        if bag.is_null() {
+            return false;
+        }
+        let keys = super::object_keys(bag);
+        if super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), key.as_bytes())
+            .is_none()
+        {
+            return false;
+        }
+        let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        super::js_object_delete_field(bag, key) != 0
     }
-    let mut map = tables.entries.borrow_mut();
-    if let Some(entries) = map.get_mut(&addr) {
-        let before = entries.len();
-        entries.retain(|(k, _)| k != key);
-        return entries.len() != before;
-    }
-    false
 }
 
 /// Kind-dispatched own data-property store: Error delegates to the
 /// pre-existing `ERROR_USER_PROPS` table, Date/RegExp use `EXOTIC_EXPANDO`.
-pub(crate) fn value_store(kind: ExoticKind, addr: usize, key: &str, bits: u64) {
+pub(crate) fn value_store(_kind: ExoticKind, addr: usize, key: &str, bits: u64) {
     // #10943: this is where an exotic cell ACTUALLY takes a named property,
     // whatever lowering asked for it. Arming at `field_set_by_name`'s exotic
     // gauntlet missed the common spelling outright: `m.get = () => 1` on a
@@ -203,49 +181,19 @@ pub(crate) fn value_store(kind: ExoticKind, addr: usize, key: &str, bits: u64) {
     // the builtin still won. Arming at the store itself is the funnel the
     // gauntlet was chosen to approximate.
     crate::object::own_override::note_exotic_named_prop_install(addr);
-    match kind {
-        ExoticKind::Error => {
-            crate::node_submodules::set_error_user_prop(addr, key, f64::from_bits(bits))
-        }
-        _ => expando_store(addr, key, bits),
-    }
+    expando_store(addr, key, bits);
 }
 
-pub(crate) fn value_lookup(kind: ExoticKind, addr: usize, key: &str) -> Option<u64> {
-    match kind {
-        ExoticKind::Error => {
-            crate::node_submodules::error_user_prop(addr, key).map(|v| v.to_bits())
-        }
-        _ => expando_lookup(addr, key),
-    }
+pub(crate) fn value_lookup(_kind: ExoticKind, addr: usize, key: &str) -> Option<u64> {
+    expando_lookup(addr, key)
 }
 
-pub(crate) fn value_remove(kind: ExoticKind, addr: usize, key: &str) -> bool {
-    match kind {
-        ExoticKind::Error => crate::node_submodules::remove_error_user_prop(addr, key),
-        _ => expando_remove(addr, key),
-    }
+pub(crate) fn value_remove(_kind: ExoticKind, addr: usize, key: &str) -> bool {
+    expando_remove(addr, key)
 }
 
-fn value_keys(kind: ExoticKind, addr: usize) -> Vec<String> {
-    match kind {
-        ExoticKind::Error => crate::node_submodules::error_user_props(addr)
-            .into_iter()
-            .map(|(k, _)| k)
-            .collect(),
-        _ => {
-            let tables = &crate::state::state().exotic_expando;
-            if !tables.in_use.get() {
-                return Vec::new();
-            }
-            tables
-                .entries
-                .borrow()
-                .get(&addr)
-                .map(|entries| entries.iter().map(|(k, _)| k.clone()).collect())
-                .unwrap_or_default()
-        }
-    }
+fn value_keys(_kind: ExoticKind, addr: usize) -> Vec<String> {
+    unsafe { super::descriptor_state::holder_key_names(property_bag(addr), false) }
 }
 
 /// Drop any stale expando entries left at `addr` by a previous (collected)
@@ -281,14 +229,7 @@ pub(crate) fn prune_dead_exotic_expando_owners(is_dead_owner: &dyn Fn(usize) -> 
 
 #[cfg(test)]
 pub(crate) fn test_seed_exotic_expando_entry(addr: usize, key: &str, value_bits: u64) {
-    let tables = &crate::state::state().exotic_expando;
-    tables.in_use.set(true);
-    tables
-        .entries
-        .borrow_mut()
-        .entry(addr)
-        .or_default()
-        .push((key.to_string(), value_bits));
+    expando_store(addr, key, value_bits);
 }
 
 #[cfg(test)]
@@ -330,7 +271,7 @@ pub(crate) unsafe fn exotic_set_property(
 ) -> bool {
     // RegExp `lastIndex` is a writable data property living in the header.
 
-    if super::descriptors_in_use() {
+    {
         if let Some(acc) = super::get_accessor_descriptor(addr, name) {
             if acc.set == 0 {
                 return false;
@@ -354,7 +295,7 @@ pub(crate) unsafe fn exotic_set_property(
     // (`Object.defineProperty(Date.prototype, "prop", {set})`) consumes the
     // write — the setter runs with the instance receiver and NO own expando
     // is created (spec OrdinarySetWithOwnDescriptor walking the chain).
-    if super::descriptors_in_use() {
+    {
         // Temporal values have 8 distinct prototypes (resolved via brand
         // dispatch, not a single named builtin prototype), and their built-in
         // accessors are served by the Temporal getter path, not the generic
@@ -410,10 +351,7 @@ pub(crate) unsafe fn exotic_get_own_property(
     name: &str,
     receiver: f64,
 ) -> Option<f64> {
-    if kind != ExoticKind::Error && !expando_in_use() && !super::descriptors_in_use() {
-        return None;
-    }
-    if super::descriptors_in_use() {
+    {
         if let Some(acc) = super::get_accessor_descriptor(addr, name) {
             if acc.get == 0 {
                 return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
@@ -430,7 +368,7 @@ pub(crate) unsafe fn exotic_get_own_property(
 /// installed accessor descriptor (HasOwnProperty for exotic instances).
 pub(crate) fn exotic_has_own_property(kind: ExoticKind, addr: usize, name: &str) -> bool {
     value_lookup(kind, addr, name).is_some()
-        || (super::descriptors_in_use() && super::get_accessor_descriptor(addr, name).is_some())
+        || (super::get_accessor_descriptor(addr, name).is_some())
 }
 
 /// Default enumerability for an exotic instance's own key when no explicit
@@ -446,7 +384,7 @@ pub(crate) fn exotic_default_enumerable(kind: ExoticKind, name: &str) -> bool {
 /// accessor-only keys. Optionally filtered to enumerable ones.
 pub(crate) fn exotic_own_keys(kind: ExoticKind, addr: usize, enumerable_only: bool) -> Vec<String> {
     let mut keys = value_keys(kind, addr);
-    if super::descriptors_in_use() {
+    {
         for key in super::accessor_descriptor_keys_for_obj(addr) {
             if !keys.contains(&key) {
                 keys.push(key);
@@ -478,11 +416,7 @@ pub(crate) unsafe fn exotic_define_own_property(
     // Error instances expose `message`/`stack` as builtin own properties
     // (writable, non-enumerable, configurable) even before any user write.
     let is_error_builtin = kind == ExoticKind::Error && matches!(name, "message" | "stack");
-    let existing_accessor = if super::descriptors_in_use() {
-        super::get_accessor_descriptor(addr, name)
-    } else {
-        None
-    };
+    let existing_accessor = { super::get_accessor_descriptor(addr, name) };
     let existing_value = value_lookup(kind, addr, name);
     let exists = is_error_builtin || existing_accessor.is_some() || existing_value.is_some();
 
@@ -575,8 +509,7 @@ pub(crate) unsafe fn exotic_define_own_property(
             },
         };
         super::set_accessor_descriptor(addr, name.to_string(), merged);
-        // Data → accessor conversion drops the stored value.
-        value_remove(kind, addr, name);
+        // The accessor pair has replaced the data in the same holder slot.
         super::set_property_attrs(
             addr,
             name.to_string(),
@@ -635,10 +568,29 @@ pub(crate) fn exotic_put_value_set(
 /// GC mutable-root scanner: keeps expando values alive (and rewrites them if
 /// the collector relocates the referenced heap objects).
 pub fn scan_exotic_expando_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    let mut map = crate::state::state().exotic_expando.entries.borrow_mut();
-    for (_, entries) in map.iter_mut() {
-        for (_, bits) in entries.iter_mut() {
-            visitor.visit_nanbox_u64_slot(bits);
+    let owners: Vec<_> = crate::state::state()
+        .exotic_expando
+        .entries
+        .borrow()
+        .keys()
+        .copied()
+        .collect();
+    for owner in owners {
+        let bits = crate::state::state()
+            .exotic_expando
+            .entries
+            .borrow()
+            .get(&owner)
+            .copied();
+        if let Some(bits) = bits {
+            let mut value = f64::from_bits(bits);
+            visitor.visit_nanbox_f64_slot(&mut value);
+            let mut entries = crate::state::state().exotic_expando.entries.borrow_mut();
+            if let Some(slot) = entries.get_mut(&owner) {
+                if *slot == bits {
+                    *slot = value.to_bits();
+                }
+            }
         }
     }
 }
@@ -718,8 +670,6 @@ mod tests {
 
         // The crash path itself: with descriptors in use, the `[[Set]]` arm
         // used to probe the descriptor summary through the spoofed `meta`.
-        super::super::descriptor_state::GLOBAL_DESCRIPTORS_IN_USE
-            .store(true, std::sync::atomic::Ordering::Relaxed);
         let name_ptr = crate::string::js_string_from_bytes(b"label".as_ptr(), 5);
         let key = crate::value::js_nanbox_string(name_ptr as i64);
         assert!(exotic_put_value_set(target, key, 42.0, target, 1).is_none());
@@ -748,4 +698,41 @@ mod tests {
             Some((_, ExoticKind::Date))
         ));
     }
+}
+
+/// Reach the existing own-property storage. Meta-capable owners carry their
+/// bag as a child edge; Temporal retains its existing native registry entry.
+pub(crate) unsafe fn property_bag(addr: usize) -> *mut super::ObjectHeader {
+    if crate::value::addr_class::try_read_tracked_gc_header(addr).is_some() {
+        if let Some(bag) = super::cell_expando_get(addr) {
+            return bag;
+        }
+    }
+    crate::state::state()
+        .exotic_expando
+        .entries
+        .borrow()
+        .get(&addr)
+        .copied()
+        .map_or(std::ptr::null_mut(), |bits| {
+            (bits & crate::value::POINTER_MASK) as *mut super::ObjectHeader
+        })
+}
+pub(crate) unsafe fn property_bag_ensure(addr: usize) -> *mut super::ObjectHeader {
+    if crate::value::addr_class::try_read_tracked_gc_header(addr).is_some()
+        && super::cell_meta_slot(addr).is_some()
+    {
+        return super::cell_expando_ensure(addr).expect("cell property storage");
+    }
+    let bag = property_bag(addr);
+    if !bag.is_null() {
+        return bag;
+    }
+    let bag = super::js_object_alloc(0, 0);
+    let bits = crate::value::js_nanbox_pointer(bag as i64).to_bits();
+    let tables = &crate::state::state().exotic_expando;
+    tables.in_use.set(true);
+    tables.entries.borrow_mut().insert(addr, bits);
+    crate::gc::runtime_write_barrier_external_slot(addr, 0, bits);
+    bag
 }

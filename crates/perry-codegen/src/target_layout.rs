@@ -359,6 +359,7 @@ mod tests {
             emit_ir_only: true,
             is_entry_module: true,
             output_type: "executable".into(),
+            disable_constfn_shapes: false,
             ..Default::default()
         };
         let ir = String::from_utf8(crate::compile_module(&module, opts).expect("wasm32 compiles"))

@@ -460,11 +460,10 @@ fn emit_guarded_param_read(
         .byte_view_param(id)
         .unwrap()
         .clone();
-    // A view's direct owner link proves no own props; an owner needs link=0.
-    let owner = ctx.block().load(DOUBLE, &cache.owner_root_slot);
-    let owner_bits = ctx.block().bitcast_double_to_i64(&owner);
-    let receiver_bits = ctx.block().bitcast_double_to_i64(&boxed);
-    let view = ctx.block().icmp_ne(I64, &owner_bits, &receiver_bits);
+    // No bag, no own props: an owner's link is 0 and an unbagged view's link
+    // is its owner. A bagged view (link = bag) takes normal dispatch.
+    // The proof already holds the owner untagged, so this is one compare.
+    let owner_raw = ctx.block().load(I64, &cache.owner_raw_slot);
     let link_addr = ctx.block().add(
         I64,
         &access.raw,
@@ -473,6 +472,7 @@ fn emit_guarded_param_read(
     let link_ptr = ctx.block().inttoptr(I64, &link_addr);
     let link = ctx.block().load(I64, &link_ptr);
     let no_bag = ctx.block().icmp_eq(I64, &link, "0");
+    let view = ctx.block().icmp_eq(I64, &link, &owner_raw);
     let no_shadow = ctx.block().or(I1, &view, &no_bag);
     let width = spec.width_bytes.to_string();
     let enough = ctx.block().icmp_uge(I32, &access.len, &width);

@@ -60,6 +60,7 @@ fn function_ir(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         ..Default::default()
     };
     let ir = String::from_utf8(compile_module(&module, opts).expect("module compiles"))

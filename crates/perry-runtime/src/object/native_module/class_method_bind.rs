@@ -113,36 +113,19 @@ pub extern "C" fn js_class_method_bind(
                     if let Some(owner) = private_owner
                         .or_else(|| super::class_registry::method_owner_class_id(class_id, name))
                     {
-                        // [[Get]] order: an OWN data property of this name
-                        // shadows the prototype method. The ubiquitous
-                        // `this.m = this.m.bind(this)` idiom installs an own `m`
-                        // (a bound function), so `obj.m` must read that own value
-                        // back — not the shared prototype method. Skipping this
-                        // both returned the wrong identity (`obj.m ===
-                        // C.prototype.m` where Node says false) and looped when
-                        // the canonical re-resolved `m` by name. A class
-                        // prototype-ref receiver has no own-property bag, so this
-                        // check is naturally a no-op there.
-                        let recv_jsv = JSValue::from_bits(instance.to_bits());
-                        if private_owner.is_none()
-                            && recv_jsv.is_pointer()
-                            && !super::class_registry::is_registered_class_prototype_object(
-                                crate::value::js_nanbox_get_pointer(instance) as usize,
-                            )
-                        {
-                            let obj = recv_jsv.as_pointer::<ObjectHeader>();
-                            if crate::value::addr_class::is_above_handle_band(obj as usize) {
-                                let key = crate::string::js_string_from_bytes(
-                                    method_name_ptr,
-                                    method_name_len as u32,
-                                );
-                                if let Some(own) =
-                                    unsafe { super::own_data_field_by_name(obj, key) }
-                                {
-                                    if own.bits() != crate::value::TAG_UNDEFINED {
-                                        return f64::from_bits(own.bits());
-                                    }
-                                }
+                        // [[Get]] order: an OWN property of this name shadows
+                        // the prototype method — a data value as stored (an own
+                        // `m = undefined` included), an accessor through its
+                        // getter. The ubiquitous `this.m = this.m.bind(this)`
+                        // idiom installs an own `m` (a bound function), so
+                        // `obj.m` must read that own value back — not the
+                        // shared prototype method. A private name is a separate
+                        // namespace and never consults public own properties.
+                        if private_owner.is_none() {
+                            if let Some(own) =
+                                unsafe { own_property_shadow(instance, name.as_bytes()) }
+                            {
+                                return own;
                             }
                         }
                         let lexical_owner = private_owner
@@ -157,10 +140,42 @@ pub extern "C" fn js_class_method_bind(
                     }
                 }
             }
+        } else if let Some(own) = unsafe {
+            // A name that is not UTF-8 (a lone surrogate) has no canonical
+            // method value, but an own property still shadows it.
+            own_property_shadow(
+                instance,
+                std::slice::from_raw_parts(method_name_ptr, method_name_len),
+            )
+        } {
+            return own;
         }
     }
 
     build_bound_method_closure(instance, method_name_ptr, method_name_len)
+}
+
+/// [[Get]]'s first step for a method value read: the receiver's own property
+/// named `name`, read with `own_property_get_by_bytes` (data as stored,
+/// accessors through their getter, private names excluded). A class
+/// prototype object and a non-object receiver have no own-property bag to
+/// shadow with.
+///
+/// # Safety
+/// `instance` is a live JS value. The getter may run user code; the caller
+/// returns its result without holding other GC values.
+unsafe fn own_property_shadow(instance: f64, name: &[u8]) -> Option<f64> {
+    let receiver = JSValue::from_bits(instance.to_bits());
+    if !receiver.is_pointer() {
+        return None;
+    }
+    let obj = receiver.as_pointer::<ObjectHeader>();
+    if !crate::value::addr_class::is_above_handle_band(obj as usize)
+        || super::class_registry::is_registered_class_prototype_object(obj as usize)
+    {
+        return None;
+    }
+    super::own_property_get_by_bytes(obj, name, instance).map(|own| f64::from_bits(own.bits()))
 }
 
 /// Perry's intentional `this.method` value-read contract: capture the instance
@@ -185,30 +200,14 @@ pub extern "C" fn js_class_method_snapshot_bind(
         return js_class_method_bind(instance, method_name_ptr, method_name_len);
     }
 
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let instance_handle = scope.root_nanbox_f64(instance);
     if !method_name_ptr.is_null() && method_name_len > 0 {
-        let key = crate::string::js_string_from_bytes(method_name_ptr, method_name_len as u32);
-        let key_handle = scope.root_string_ptr(key);
-        let current = instance_handle.get_nanbox_f64();
-        let obj = JSValue::from_bits(current.to_bits()).as_pointer::<ObjectHeader>();
-        if crate::value::addr_class::is_above_handle_band(obj as usize) {
-            let own = key_handle.with_const_ptr::<crate::StringHeader, _>(|key| unsafe {
-                super::own_data_field_by_name(obj, key)
-            });
-            if let Some(own) = own {
-                if own.bits() != crate::value::TAG_UNDEFINED {
-                    return f64::from_bits(own.bits());
-                }
-            }
+        let name = unsafe { std::slice::from_raw_parts(method_name_ptr, method_name_len) };
+        if let Some(own) = unsafe { own_property_shadow(instance, name) } {
+            return own;
         }
     }
 
-    build_bound_method_closure(
-        instance_handle.get_nanbox_f64(),
-        method_name_ptr,
-        method_name_len,
-    )
+    build_bound_method_closure(instance, method_name_ptr, method_name_len)
 }
 
 /// By-ID sibling of `js_class_method_bind` for static-name lowering.
@@ -326,3 +325,7 @@ pub(super) fn build_bound_method_closure_with_private_brand(
         crate::value::js_nanbox_pointer(closure as i64)
     })
 }
+
+#[cfg(test)]
+#[path = "class_method_bind_alloc_tests.rs"]
+mod alloc_tests;

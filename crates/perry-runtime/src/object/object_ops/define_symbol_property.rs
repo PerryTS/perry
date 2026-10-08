@@ -17,7 +17,7 @@ pub(super) unsafe fn define_symbol_property(
     let current_obj = || f64::from_bits(obj_value_handle.get_heap_word_u64());
     let current_key = || key_handle.get_nanbox_f64();
     let current_desc = || desc_handle.get_nanbox_f64();
-    let _function_bag = super::super::descriptor_state::FunctionBagEdit::new(
+    let _holder_edit = super::super::descriptor_state::HolderEdit::new(
         crate::symbol::obj_key_from_f64(current_obj()),
     );
     let current_owner = || crate::symbol::obj_key_from_f64(current_obj());

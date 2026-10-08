@@ -298,7 +298,13 @@ unsafe fn add_class_template_key(
     for value in [crate::value::TAG_UNDEFINED, template_key_bits(cell)] {
         class.with_mut_ptr::<ObjectHeader, _>(|obj| {
             key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                crate::object::js_object_set_field_by_name(obj, key, f64::from_bits(value))
+                crate::object::define_builtin_data_property(
+                    obj,
+                    key,
+                    f64::from_bits(value),
+                    String::from_utf8_lossy(CLASS_TEMPLATE_KEY).into_owned(),
+                    crate::object::PropertyAttrs::new(true, true, true),
+                )
             })
         });
     }
@@ -416,8 +422,67 @@ pub extern "C" fn js_class_evaluation_object(
     } else {
         f64::from_bits(crate::value::TAG_UNDEFINED)
     };
+    class_evaluation_object_impl(
+        template_class_id,
+        field_count,
+        static_field_mask,
+        cell,
+        template,
+        parent,
+    )
+}
+
+/// One evaluation, carrying the prototype value already read and validated
+/// before computed member names. Its own prototype fixes that edge now.
+#[no_mangle]
+pub extern "C" fn js_class_evaluation_object_with_prototype(
+    template_class_id: u32,
+    field_count: u32,
+    static_field_mask: u32,
+    cell: *const u64,
+    parent: f64,
+    parent_proto: f64,
+) -> i64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let parent = scope.root_nanbox_f64(parent);
+    let parent_proto = scope.root_nanbox_f64(parent_proto);
+    let cell = unsafe { TemplateCell::from_ptr(cell) };
+    let template = cell.and_then(|c| unsafe { c.class_template(field_count, static_field_mask) });
+    let obj = class_evaluation_object_impl(
+        template_class_id,
+        field_count,
+        static_field_mask,
+        cell,
+        template,
+        parent.get_nanbox_f64(),
+    );
+    let class = scope.root_raw_mut_ptr(obj as *mut ObjectHeader);
+    let prototype = if parent.get_nanbox_f64().to_bits() == crate::value::TAG_UNDEFINED {
+        None
+    } else {
+        Some(parent_proto.get_nanbox_f64().to_bits())
+    };
+    unsafe {
+        super::class_object_props::finish_class_evaluation_prototype(
+            class.get_raw_mut_ptr(),
+            prototype,
+        );
+    }
+    class.get_raw_mut_ptr::<ObjectHeader>() as i64
+}
+
+fn class_evaluation_object_impl(
+    template_class_id: u32,
+    field_count: u32,
+    static_field_mask: u32,
+    cell: Option<TemplateCell>,
+    template: Option<(u32, usize, bool)>,
+    parent: f64,
+) -> i64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let parent = scope.root_nanbox_f64(parent);
     if let (Some(cell), Some((final_shape, fills, has_parent))) = (cell, template) {
-        if has_parent == (parent.to_bits() != crate::value::TAG_UNDEFINED) {
+        if has_parent == (parent.get_nanbox_f64().to_bits() != crate::value::TAG_UNDEFINED) {
             return unsafe {
                 class_object_in_template_shape(
                     template_class_id,
@@ -425,7 +490,7 @@ pub extern "C" fn js_class_evaluation_object(
                     final_shape,
                     cell,
                     fills,
-                    parent,
+                    parent.get_nanbox_f64(),
                 )
             } as i64;
         }
@@ -433,7 +498,6 @@ pub extern "C" fn js_class_evaluation_object(
     let obj = crate::object::js_object_alloc(template_class_id, field_count);
     // Named while still an ordinary object: an own-key add to a class object
     // consults its static accessors, which mints the class value.
-    let scope = crate::gc::RuntimeHandleScope::new();
     let class = scope.root_raw_mut_ptr(obj);
     if let Some(cell) = cell {
         unsafe { add_class_template_key(&scope, &class, cell) };
@@ -446,7 +510,7 @@ pub extern "C" fn js_class_evaluation_object(
             obj,
             template_class_id,
             static_field_mask,
-            parent,
+            parent.get_nanbox_f64(),
             &|obj, parent| {
                 if let Some(cell) = cell {
                     record_class_object_template(
@@ -679,8 +743,17 @@ pub(crate) unsafe fn class_object_add_internal(
     let value = scope.root_nanbox_f64(value);
     let bytes = key.bytes();
     let key_str = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+    let key_str = scope.root_string_ptr(key_str);
     class.with_mut_ptr::<ObjectHeader, _>(|obj| {
-        crate::object::js_object_set_field_by_name(obj, key_str, value.get_nanbox_f64())
+        key_str.with_const_ptr::<crate::StringHeader, _>(|key| {
+            crate::object::define_builtin_data_property(
+                obj,
+                key,
+                value.get_nanbox_f64(),
+                String::from_utf8_lossy(bytes).into_owned(),
+                crate::object::PropertyAttrs::new(true, true, true),
+            )
+        })
     });
     let (Some(cell), Some((None, Some(free)))) = (cell, edge) else {
         return;

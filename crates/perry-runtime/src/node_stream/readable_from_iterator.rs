@@ -8,7 +8,7 @@ pub(super) fn pull(stream: f64) -> bool {
     let stream = scope.root_nanbox_f64(stream);
     let Some(source) = get_hidden_value(
         stream.get_nanbox_f64(),
-        hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+        READABLE_SOURCE_ITERATOR_KEY,
     ) else {
         return false;
     };

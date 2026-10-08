@@ -36,7 +36,7 @@ use std::cell::{Cell, RefCell};
 /// the stream JSON hook serializes a view as Node's state shape instead of
 /// following it.
 pub(super) const STREAM_STATE_OWNER_KEY: &[u8] = b"__perry_stream_state_owner";
-pub(super) const STREAM_CLOSE_EMITTED_KEY: &[u8] = b"__perryStreamCloseEmitted";
+pub(super) const STREAM_CLOSE_EMITTED_KEY: Slot = Slot::CloseEmitted;
 
 const READABLE_KIND: usize = 0;
 const WRITABLE_KIND: usize = 1;
@@ -126,7 +126,7 @@ fn view_owner(this: crate::closure::JsThis) -> Option<f64> {
     get_hidden_value(this, hidden_key(STREAM_STATE_OWNER_KEY))
 }
 
-fn hidden_array_or_empty(stream: f64, key: *mut crate::string::StringHeader) -> f64 {
+fn hidden_array_or_empty(stream: f64, key: impl StateKey) -> f64 {
     match get_hidden_value(stream, key) {
         Some(value) if is_array_like_value(value) => value,
         _ => box_pointer(crate::array::js_array_alloc(0) as *const u8),
@@ -198,7 +198,7 @@ fn common_field(stream: f64, field: &str) -> f64 {
         "closed" => bool_bits(has_truthy_hidden(stream, hidden_key(b"closed"))),
         "closeEmitted" => bool_bits(has_truthy_hidden(
             stream,
-            hidden_key(STREAM_CLOSE_EMITTED_KEY),
+            STREAM_CLOSE_EMITTED_KEY,
         )),
         "errored" => readable_hidden_error(stream).unwrap_or(f64::from_bits(TAG_NULL)),
         "errorEmitted" => bool_bits(readable_hidden_error(stream).is_some()),
@@ -373,7 +373,7 @@ pub(super) fn install_writable_state_view(stream: f64) {
 pub(super) fn note_close_emitted(stream: f64) {
     set_hidden_value(
         stream,
-        hidden_key(STREAM_CLOSE_EMITTED_KEY),
+        STREAM_CLOSE_EMITTED_KEY,
         bool_bits(true),
     );
 }

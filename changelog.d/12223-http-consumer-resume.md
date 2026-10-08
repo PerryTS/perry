@@ -1,0 +1,1 @@
+Resume only the HTTP response whose callback returned consumer credit. Remove the all-connection resumption sweep, which could read callback-issued requests before DNS or connection establishment completed and trigger application retries.

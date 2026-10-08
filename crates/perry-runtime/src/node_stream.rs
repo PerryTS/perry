@@ -86,70 +86,70 @@ const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 // `Readable/Writable/Duplex.toWeb`. Placed above the Duplex band so it
 // can't collide as method sets grow.
 const WEB_STREAM_SHAPE_ID: u32 = 0x7FFF_FF20;
-const READABLE_CHUNKS_KEY: &[u8] = b"__perryReadableChunks";
-const READABLE_SOURCE_ITERATOR_KEY: &[u8] = b"__perryReadableSourceIterator";
-const READABLE_ERROR_KEY: &[u8] = b"__perryReadableError";
-const READABLE_SIGNAL_KEY: &[u8] = b"__perryReadableSignal";
-const READABLE_READ_KEY: &[u8] = b"__perryReadableRead";
-const READABLE_READ_INVOKED_KEY: &[u8] = b"__perryReadableReadInvoked";
-const READABLE_DEFAULT_READ_ERROR_KEY: &[u8] = b"__perryReadableDefaultReadError";
-const STREAM_DRAIN_SCHEDULED_KEY: &[u8] = b"__perryStreamDrainScheduled";
-const STREAM_READABLE_SCHEDULED_KEY: &[u8] = b"__perryStreamReadableScheduled";
-const STREAM_END_SCHEDULED_KEY: &[u8] = b"__perryStreamEndScheduled";
-const STREAM_END_EMITTED_KEY: &[u8] = b"__perryStreamEndEmitted";
-const STREAM_ENDED_KEY: &[u8] = b"__perryStreamEnded";
-/// An emitter's `captureRejections` flag (node's `this[kCapture]`). Internal:
-/// hidden from own-key enumeration (`is_internal_runtime_key_bytes`).
-pub(crate) const STREAM_CAPTURE_REJECTIONS_KEY: &[u8] = b"__perryStreamCaptureRejections";
+const READABLE_CHUNKS_KEY: Slot = Slot::ReadableChunks;
+const READABLE_SOURCE_ITERATOR_KEY: Slot = Slot::ReadableSourceIterator;
+const READABLE_ERROR_KEY: Slot = Slot::ReadableError;
+const READABLE_SIGNAL_KEY: Slot = Slot::ReadableSignal;
+const READABLE_READ_KEY: Slot = Slot::ReadableRead;
+const READABLE_READ_INVOKED_KEY: Slot = Slot::ReadableReadInvoked;
+const READABLE_DEFAULT_READ_ERROR_KEY: Slot = Slot::ReadableDefaultReadError;
+const STREAM_DRAIN_SCHEDULED_KEY: Slot = Slot::DrainScheduled;
+const STREAM_READABLE_SCHEDULED_KEY: Slot = Slot::ReadableScheduled;
+const STREAM_END_SCHEDULED_KEY: Slot = Slot::EndScheduled;
+const STREAM_END_EMITTED_KEY: Slot = Slot::EndEmitted;
+const STREAM_ENDED_KEY: Slot = Slot::Ended;
+/// An emitter's `captureRejections` flag (node's `this[kCapture]`), in its
+/// state record, so no own key exists to hide.
+const STREAM_CAPTURE_REJECTIONS_KEY: Slot = Slot::CaptureRejections;
 const EVENT_EMITTER_ASYNC_RESOURCE_KEY: &[u8] = b"__perryEventEmitterAsyncResource";
-const WRITABLE_WRITE_KEY: &[u8] = b"__perryWritableWrite";
-const WRITABLE_FINISH_SCHEDULED_KEY: &[u8] = b"__perryWritableFinishScheduled";
-const WRITABLE_FINISH_EMITTED_KEY: &[u8] = b"__perryWritableFinishEmitted";
-const WRITABLE_CORKED_KEY: &[u8] = b"__perryWritableCorked";
-const WRITABLE_BUFFERED_KEY: &[u8] = b"__perryWritableBuffered";
-const WRITABLE_LENGTH_KEY: &[u8] = b"__perryWritableLength";
-const WRITABLE_NEED_DRAIN_KEY: &[u8] = b"__perryWritableNeedDrain";
-const WRITABLE_OBJECT_MODE_KEY: &[u8] = b"__perryWritableObjectMode";
-const WRITABLE_DECODE_STRINGS_KEY: &[u8] = b"__perryWritableDecodeStrings";
-const WRITABLE_DEFAULT_ENCODING_KEY: &[u8] = b"__perryWritableDefaultEncoding";
-const WRITABLE_PENDING_FINISH_CALLBACK_KEY: &[u8] = b"__perryWritablePendingFinishCallback";
-const WRITABLE_WRITEV_KEY: &[u8] = b"__perryWritableWritev";
-const STREAM_CONSTRUCT_KEY: &[u8] = b"__perryStreamConstruct";
-const STREAM_DESTROY_KEY: &[u8] = b"__perryStreamDestroy";
-const WRITABLE_FINAL_KEY: &[u8] = b"__perryWritableFinal";
-const WRITABLE_FINAL_INVOKED_KEY: &[u8] = b"__perryWritableFinalInvoked";
-const WRITABLE_FINAL_PENDING_KEY: &[u8] = b"__perryWritableFinalPending";
-const TRANSFORM_CALLBACK_KEY: &[u8] = b"__perryTransformCallback";
-const TRANSFORM_FLUSH_KEY: &[u8] = b"__perryTransformFlush";
-const TRANSFORM_PASSTHROUGH_KEY: &[u8] = b"__perryTransformPassThrough";
-const TRANSFORM_FINISHING_KEY: &[u8] = b"__perryTransformFinishing";
+const WRITABLE_WRITE_KEY: Slot = Slot::WritableWrite;
+const WRITABLE_FINISH_SCHEDULED_KEY: Slot = Slot::FinishScheduled;
+const WRITABLE_FINISH_EMITTED_KEY: Slot = Slot::FinishEmitted;
+const WRITABLE_CORKED_KEY: Slot = Slot::WritableCorked;
+const WRITABLE_BUFFERED_KEY: Slot = Slot::WritableBuffered;
+const WRITABLE_LENGTH_KEY: Slot = Slot::WritableLength;
+const WRITABLE_NEED_DRAIN_KEY: Slot = Slot::WritableNeedDrain;
+const WRITABLE_OBJECT_MODE_KEY: Slot = Slot::WritableObjectMode;
+const WRITABLE_DECODE_STRINGS_KEY: Slot = Slot::WritableDecodeStrings;
+const WRITABLE_DEFAULT_ENCODING_KEY: Slot = Slot::WritableDefaultEncoding;
+const WRITABLE_PENDING_FINISH_CALLBACK_KEY: Slot = Slot::WritablePendingFinishCallback;
+const WRITABLE_WRITEV_KEY: Slot = Slot::WritableWritev;
+const STREAM_CONSTRUCT_KEY: Slot = Slot::Construct;
+const STREAM_DESTROY_KEY: Slot = Slot::Destroy;
+const WRITABLE_FINAL_KEY: Slot = Slot::WritableFinal;
+const WRITABLE_FINAL_INVOKED_KEY: Slot = Slot::WritableFinalInvoked;
+const WRITABLE_FINAL_PENDING_KEY: Slot = Slot::WritableFinalPending;
+const TRANSFORM_CALLBACK_KEY: Slot = Slot::TransformCallback;
+const TRANSFORM_FLUSH_KEY: Slot = Slot::TransformFlush;
+const TRANSFORM_PASSTHROUGH_KEY: Slot = Slot::TransformPassThrough;
+const TRANSFORM_FINISHING_KEY: Slot = Slot::TransformFinishing;
 /// `end()` ran on a Transform with writes still in flight (node's `ending`).
-const TRANSFORM_END_PENDING_KEY: &[u8] = b"__perryTransformEndPending";
+const TRANSFORM_END_PENDING_KEY: Slot = Slot::TransformEndPending;
 /// A Transform (direct, subclass, PassThrough, or a native-payload family).
-const TRANSFORM_FLAG_KEY: &[u8] = b"__perryIsTransform";
+const TRANSFORM_FLAG_KEY: Slot = Slot::TransformFlag;
 // #1534: direction + disturbed bits so the static introspection helpers
 // (`Readable.isReadable` / `isDisturbed` / `isErrored`) answer per-stream
 // instead of with a uniform stub. Set at construction / on first read.
-const READABLE_FLAG_KEY: &[u8] = b"__perryIsReadable";
-const WRITABLE_FLAG_KEY: &[u8] = b"__perryIsWritable";
-const STREAM_DISTURBED_KEY: &[u8] = b"__perryStreamDisturbed";
+const READABLE_FLAG_KEY: Slot = Slot::ReadableFlag;
+const WRITABLE_FLAG_KEY: Slot = Slot::WritableFlag;
+const STREAM_DISTURBED_KEY: Slot = Slot::Disturbed;
 // #1539: bytes currently buffered (for `push()`'s highWaterMark return) and
 // the effective readable highWaterMark.
-const READABLE_BUFFERED_KEY: &[u8] = b"__perryReadableBuffered";
-const READABLE_HWM_KEY: &[u8] = b"__perryReadableHwm";
-const READABLE_PENDING_KEY: &[u8] = b"__perryReadablePending";
-const READABLE_RESUME_SCHEDULED_KEY: &[u8] = b"__perryReadableResumeScheduled";
-const STREAM_PIPES_KEY: &[u8] = b"__perryStreamPipes";
-const READABLE_BASE64_REMAINDER_KEY: &[u8] = b"__perryReadableBase64Remainder";
+const READABLE_BUFFERED_KEY: Slot = Slot::ReadableBuffered;
+const READABLE_HWM_KEY: Slot = Slot::ReadableHwm;
+const READABLE_PENDING_KEY: Slot = Slot::ReadablePending;
+const READABLE_RESUME_SCHEDULED_KEY: Slot = Slot::ReadableResumeScheduled;
+const STREAM_PIPES_KEY: Slot = Slot::Pipes;
+const READABLE_BASE64_REMAINDER_KEY: Slot = Slot::ReadableBase64Remainder;
 /// #9490: the incomplete trailing UTF-8 sequence held between `push()` calls
 /// on a `setEncoding("utf8")` readable, mirroring the base64 remainder above.
-const READABLE_UTF8_REMAINDER_KEY: &[u8] = b"__perryReadableUtf8Remainder";
-const STREAM_PIPE_NO_END_KEY: &[u8] = b"__perryStreamPipeNoEnd";
-const STREAM_PIPE_END_PENDING_KEY: &[u8] = b"__perryStreamPipeEndPending";
-const STREAM_AUTO_DESTROY_KEY: &[u8] = b"__perryStreamAutoDestroy";
-const STREAM_EMIT_CLOSE_KEY: &[u8] = b"__perryStreamEmitClose";
-const STREAM_PIPELINE_CALLBACK_DONE_KEY: &[u8] = b"__perryStreamPipelineCallbackDone";
-const STREAM_READABLE_LIVE_PUSH_KEY: &[u8] = b"__perryStreamReadableLivePush";
+const READABLE_UTF8_REMAINDER_KEY: Slot = Slot::ReadableUtf8Remainder;
+const STREAM_PIPE_NO_END_KEY: Slot = Slot::PipeNoEnd;
+const STREAM_PIPE_END_PENDING_KEY: Slot = Slot::PipeEndPending;
+const STREAM_AUTO_DESTROY_KEY: Slot = Slot::AutoDestroy;
+const STREAM_EMIT_CLOSE_KEY: Slot = Slot::EmitClose;
+const STREAM_PIPELINE_CALLBACK_DONE_KEY: Slot = Slot::PipelineCallbackDone;
+const STREAM_READABLE_LIVE_PUSH_KEY: Slot = Slot::ReadableLivePush;
 
 use destroy_state::{destroy_stream, ns_destroy1};
 pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_destroyed};
@@ -1341,7 +1341,7 @@ fn writable_chunk_len(stream: f64, chunk: f64) -> f64 {
 fn emit_writable_chunk(stream: f64, chunk: f64) {
     // Custom Duplex sinks own readable output by calling push(); the generic
     // Perry fallback auto-echoes only when there is no user write sink.
-    if has_truthy_hidden(stream, hidden_key(b"writableCustomSink")) {
+    if has_truthy_hidden(stream, Slot::WritableCustomSink) {
         return;
     }
     if has_truthy_hidden(stream, hidden_readable_flag_key()) {
@@ -1354,7 +1354,7 @@ fn emit_writable_chunk(stream: f64, chunk: f64) {
 }
 
 fn finish_stream(stream: f64, callback: Option<f64>) {
-    let pair_peer = get_hidden_value(stream, hidden_key(b"duplexPairPeer"));
+    let pair_peer = get_hidden_value(stream, Slot::DuplexPairPeer);
     if pair_peer.is_none() {
         mark_stream_ended(stream);
         refresh_readable_aborted_flag(stream);
@@ -1839,6 +1839,14 @@ mod destroy_state;
 
 pub(crate) mod native_hooks;
 mod proto_methods;
+mod state_record;
+#[cfg(test)]
+pub(crate) use state_record::{test_read_inert_slot, test_record_slot_bits, test_write_inert_slot};
+pub(crate) use state_record::{
+    is_stream_record_word, record_alias_word, record_payload_cell, store_record_alias_word,
+    store_record_payload_cell,
+};
+use state_record::*;
 pub(crate) use proto_methods::{install_stream_prototype_methods, StreamProto};
 mod write_state;
 pub use constructors::{init_transform_in_place, init_writable_payload_in_place};

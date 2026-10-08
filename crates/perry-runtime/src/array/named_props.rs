@@ -280,6 +280,8 @@ enum Reserve {
     None,
     /// Pairs mode; null while no property has been added.
     Pairs(*mut ArrayHeader),
+    /// Ordinary property storage; shape entries own descriptor facts.
+    Bag(*mut crate::object::ObjectHeader),
     /// Inline mode: the key set and its present-key bitmask.
     Inline(InlineKeySet, u32),
     /// No reserve, but the array may own `FULL_ARRAY_NAMED_PROPS` entries.
@@ -290,7 +292,16 @@ enum Reserve {
 #[inline]
 fn decode_header_word(bits: u64) -> Reserve {
     match bits & TAG_MASK {
-        POINTER_TAG => Reserve::Pairs((bits & POINTER_MASK) as *mut ArrayHeader),
+        POINTER_TAG => {
+            let owner = (bits & POINTER_MASK) as usize;
+            if unsafe { crate::value::addr_class::try_read_gc_header(owner) }
+                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+            {
+                Reserve::Bag(owner as *mut crate::object::ObjectHeader)
+            } else {
+                Reserve::Pairs(owner as *mut ArrayHeader)
+            }
+        }
         INT32_TAG => {
             let low = bits as u32;
             match InlineKeySet::from_id(low & 0xFF) {
@@ -328,7 +339,7 @@ unsafe fn reserve_of(arr: *const ArrayHeader, flags: u16) -> Reserve {
 pub(crate) unsafe fn array_named_props_reserve(arr: *const ArrayHeader) -> usize {
     match reserve_of(arr, array_object_flags_resolved(arr)) {
         Reserve::None | Reserve::Fallback => 0,
-        Reserve::Pairs(_) => 1,
+        Reserve::Pairs(_) | Reserve::Bag(_) => 1,
         Reserve::Inline(set, _) => 1 + set.keys().len(),
     }
 }
@@ -459,6 +470,12 @@ unsafe fn lookup(
     wanted: &[u8],
 ) -> Option<f64> {
     match resolve(arr) {
+        (_, Reserve::Bag(bag)) => {
+            let keys = crate::object::object_keys(bag);
+            let slot =
+                crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), wanted)?;
+            Some(crate::object::key_attrs::object_slot_data_f64(bag, slot))
+        }
         (arr, Reserve::Inline(set, present)) => inline_position(set, present, wanted)
             .map(|i| f64::from_bits(*array_named_props_slot(arr).add(1 + i))),
         (_, Reserve::Pairs(pairs)) if !pairs.is_null() => find_pair(pairs, key_ptr, wanted)
@@ -700,6 +717,10 @@ pub(crate) unsafe fn array_named_property_set(
     let new_key_name = || std::str::from_utf8(wanted).ok();
     let reserve = reserve_of(arr, flags);
     match reserve {
+        Reserve::Bag(bag) => {
+            crate::object::object_ops::define_property_force_store_value(bag, key, value);
+            return arr;
+        }
         Reserve::None => {
             let owner = arr as usize;
             if fallback_possible(flags)
@@ -884,6 +905,7 @@ pub(crate) unsafe fn array_has_named_properties_resolved(arr: *const ArrayHeader
         }
         Reserve::Inline(_, present) => present != 0,
         Reserve::Pairs(pairs) => !pairs.is_null() && (*pairs).length >= 2,
+        Reserve::Bag(bag) => crate::object::object_keys(bag).count() != 0,
     }
 }
 
@@ -898,6 +920,12 @@ pub(crate) unsafe fn array_has_named_properties_resolved(arr: *const ArrayHeader
 pub(crate) unsafe fn array_has_sparse_index_properties_resolved(arr: *const ArrayHeader) -> bool {
     let flags = array_object_flags_resolved(arr);
     let pairs = match reserve_of(arr, flags) {
+        Reserve::Bag(bag) => {
+            return property_bag::names(bag, false).iter().any(|name| {
+                crate::object::canonical_array_index(name)
+                    .is_some_and(|index| index >= (*arr).capacity)
+            })
+        }
         Reserve::Pairs(pairs) => pairs,
         Reserve::None if fallback_possible(flags) => {
             return with_fallback(arr as usize, |props| {
@@ -966,6 +994,7 @@ pub(crate) unsafe fn array_named_property_names(
                 .unwrap_or(true)
     };
     match reserve {
+        Reserve::Bag(bag) => property_bag::names(bag, enumerable_only),
         Reserve::Inline(set, present) => set
             .keys()
             .iter()
@@ -1022,6 +1051,10 @@ pub(crate) unsafe fn array_named_property_delete_by_name(
     name: &str,
 ) -> bool {
     match resolve(arr) {
+        (_, Reserve::Bag(bag)) => {
+            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            crate::object::js_object_delete_field(bag, key) != 0
+        }
         (arr, Reserve::Inline(set, present)) => {
             let Some(i) = inline_position(set, present, name.as_bytes()) else {
                 return false;
@@ -1082,6 +1115,11 @@ pub(crate) unsafe fn test_named_props_state(arr: *const ArrayHeader) -> (bool, u
     let flagged = flags & crate::gc::GC_ARRAY_NAMED_PROPS != 0;
     match reserve_of(arr, flags) {
         Reserve::None | Reserve::Fallback => (flagged, 0, 0),
+        Reserve::Bag(bag) => (
+            flagged,
+            bag as usize,
+            crate::object::object_keys(bag).count() as usize,
+        ),
         Reserve::Inline(_, present) => (flagged, 0, present.count_ones() as usize),
         Reserve::Pairs(pairs) if pairs.is_null() => (flagged, 0, 0),
         Reserve::Pairs(pairs) => (flagged, pairs as usize, (*pairs).length as usize / 2),
@@ -1112,3 +1150,6 @@ pub(crate) fn test_full_array_named_property_owner_exists(owner: usize) -> bool 
 pub(crate) fn test_clear_full_array_named_property_roots() {
     FULL_ARRAY_NAMED_PROPS.with(|m| m.borrow_mut().clear());
 }
+
+mod property_bag;
+pub(crate) use property_bag::{array_property_bag, array_property_bag_ensure};

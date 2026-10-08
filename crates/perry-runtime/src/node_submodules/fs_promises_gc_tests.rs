@@ -41,9 +41,7 @@ fn fs_promise_value_rereads_value_after_collecting_promise_hook() {
     crate::gc::register_runtime_handle_root_scanner_for_tests();
     crate::gc::gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
     crate::gc::gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
-    crate::gc::gc_register_mutable_root_scanner(
-        crate::object::descriptor_state::scan_descriptor_roots_mut,
-    );
+
     HOOK_CALLS.with(|count| count.set(0));
     let scope = RuntimeHandleScope::new();
     // The hook table holds the hook raw: promote it so it cannot move.

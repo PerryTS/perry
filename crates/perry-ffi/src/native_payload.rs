@@ -16,6 +16,9 @@
 
 use std::ffi::c_void;
 
+#[path = "native_payload_buffer.rs"]
+pub mod buffer;
+
 /// Revision of the payload ABI this file is written against.
 const PAYLOAD_ABI_VERSION: u8 = 2;
 

@@ -341,6 +341,10 @@ pub(crate) struct ByteViewParamAccess {
     pub data_i64: String,
     pub receiver_root_slot: String,
     pub owner_root_slot: String,
+    /// The owner's untagged address, written with `data_slot` and read only
+    /// while the proof is clean: a call dirties the proof, so like the data
+    /// address it never outlives a collection.
+    pub owner_raw_slot: String,
     pub data_slot: String,
     pub length_slot: String,
     /// `i8` proof state: 0 = dirty (every executed call stores it), 1 = valid,

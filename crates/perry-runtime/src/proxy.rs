@@ -1016,37 +1016,19 @@ enum MovedElement<'a> {
 /// functions reading `this` observe it.
 fn call_with_this_and_args(f: f64, this_arg: f64, args: &[f64]) -> f64 {
     // A concise/object-literal method reads `this` from a baked capture slot,
-    // not only the `this` parameter; rebind to the explicit `Reflect.apply` receiver so it
-    // is honored (no-op for arrows / plain fns / bound fns).
-    //
-    // That rebind is also the one thing on this path that ALLOCATES, and the
-    // callee, the receiver and the whole argument list are live across it in
-    // plain Rust locals — not GC roots (#10532 review). The clone happens for
-    // exactly one callee shape, so ask first and hand that shape to the rooted
-    // path below; every other callee keeps the allocation-free dispatch.
-    if crate::closure::rebind_explicit_this_allocates(f) {
-        return call_rooted_across_rebind(f, this_arg, args);
+    // not only the `this` parameter; the shared explicit-`this` forwarder
+    // rebinds it to the `Reflect.apply` receiver (no-op for arrows / plain fns
+    // / bound fns) and holds the callee, receiver and arguments in handles
+    // when that rebind clones (#10532 review). The receiver is passed as given.
+    unsafe {
+        crate::closure::forward_with_explicit_this(
+            f,
+            this_arg,
+            args,
+            crate::closure::ReceiverBinding::AsGiven,
+            |call| dispatch_with_explicit_this(call.target, call.this, call.args),
+        )
     }
-    dispatch_with_explicit_this(f, this_arg, args)
-}
-
-/// The `Reflect.apply` slow path: the rebind will clone, so root what the call
-/// still needs and re-read it from the handles below the allocation.
-#[cold]
-#[inline(never)]
-fn call_rooted_across_rebind(f: f64, this_arg: f64, args: &[f64]) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let receiver = scope.root_nanbox_f64(this_arg);
-    let arg_handles: Vec<_> = args
-        .iter()
-        .map(|value| scope.root_nanbox_f64(*value))
-        .collect();
-    crate::gc::collection_point("reflect.apply.rebind");
-    // `rebind_explicit_this` roots the callee and the receiver it is given
-    // (`clone_closure_rebind_this`), so its result is already current.
-    let rebound = crate::closure::rebind_explicit_this(f, receiver.get_nanbox_f64());
-    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    dispatch_with_explicit_this(rebound, receiver.get_nanbox_f64(), &args)
 }
 
 /// Invoke an already-rebound callable with an explicit `this`. Nothing here
@@ -3049,7 +3031,7 @@ mod tests {
         // This proof honours the process-wide class-field inline gate, and any
         // earlier test that ran `js_gc_init` (typed feedback is always on in
         // test builds) leaves that gate disabled. Establish the premise.
-        crate::object::descriptor_state::test_reset_class_field_inline_guard();
+
         let packed = b"a\0b\0c\0d\0";
         let keys = crate::object::js_build_class_keys_array(
             0x6809_01,
@@ -3339,7 +3321,7 @@ mod tests {
         // This proof honours the process-wide class-field inline gate, and any
         // earlier test that ran `js_gc_init` (typed feedback is always on in
         // test builds) leaves that gate disabled. Establish the premise.
-        crate::object::descriptor_state::test_reset_class_field_inline_guard();
+
         let src = br#"{"x":0,"y":0}"#;
         let mut receivers = Vec::new();
         for _ in 0..4 {

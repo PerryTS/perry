@@ -610,8 +610,54 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let is_typed_array = ctx.block().and(I1, &owning_byte, &indexed_byte);
             let byte_header_idx = ctx.new_block("plen.byte_header");
             let byte_header_label = ctx.block_label(byte_header_idx);
+            let view_check_idx = ctx.new_block("plen.view_check");
+            let view_check_label = ctx.block_label(view_check_idx);
             ctx.block()
-                .cond_br(&is_typed_array, &byte_header_label, &slow_label);
+                .cond_br(&is_typed_array, &byte_header_label, &view_check_label);
+
+            // An indexed view keeps its fixed length at payload +0. It is the
+            // live length while the view is not length-tracking and its link
+            // is a plain owner (no bag, so no own `length`) that is neither
+            // RESIZABLE nor DETACHED: only those change an owner's extent.
+            ctx.current_block = view_check_idx;
+            let view_lo = crate::runtime_abi::BYTES_TYPE_BASE | crate::runtime_abi::BYTES_TYPE_VIEW;
+            let view_hi = view_lo | 12;
+            let is_view_lo = ctx.block().icmp_uge(I8, &gc_type, &view_lo.to_string());
+            let is_view_hi = ctx.block().icmp_ule(I8, &gc_type, &view_hi.to_string());
+            let is_view = ctx.block().and(I1, &is_view_lo, &is_view_hi);
+            let view_header_idx = ctx.new_block("plen.view_header");
+            let view_header_label = ctx.block_label(view_header_idx);
+            ctx.block()
+                .cond_br(&is_view, &view_header_label, &slow_label);
+            ctx.current_block = view_header_idx;
+            let h = crate::expr::byte_cell::header_word(ctx.block(), &recv_handle);
+            let tracking = ctx.block().and(I64, &h, &(1u64 << 23).to_string());
+            let fixed = ctx.block().icmp_eq(I64, &tracking, "0");
+            let link_addr = ctx.block().add(
+                I64,
+                &recv_handle,
+                &crate::runtime_abi::BYTES_LINK.to_string(),
+            );
+            let link_ptr = ctx.block().inttoptr(I64, &link_addr);
+            let link = ctx.block().load(PTR, &link_ptr);
+            let link = ctx.block().ptrtoint(&link, I64);
+            let ho = crate::expr::byte_cell::header_word(ctx.block(), &link);
+            let mask = 0xe0u64 | (1 << 24) | (1 << 30);
+            let state = ctx.block().and(I64, &ho, &mask.to_string());
+            let plain_owner = ctx.block().icmp_eq(
+                I64,
+                &state,
+                &crate::runtime_abi::BYTES_TYPE_BASE.to_string(),
+            );
+            let view_ok = ctx.block().and(I1, &fixed, &plain_owner);
+            let view_ok = ctx.block().and(I1, &view_ok, &not_forwarded);
+            let named_invalidated =
+                ctx.block()
+                    .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
+            let named_pristine = ctx.block().icmp_eq(I8, &named_invalidated, "0");
+            let view_ok = ctx.block().and(I1, &view_ok, &named_pristine);
+            ctx.block().cond_br(&view_ok, &fast_label, &slow_label);
+
             ctx.current_block = byte_header_idx;
             let link_addr = ctx.block().add(
                 I64,
@@ -1945,29 +1991,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ));
                     }
                 }
-                // Issue #446: `obj.method` PropertyGet on a known class
-                // instance, where `method` is a method (not a field, not a
-                // getter — those branches return above). Emit a bound-method
-                // closure (`BOUND_METHOD_FUNC_PTR` sentinel + (instance,
-                // name_ptr, name_len) captures) so reads work as JS expects:
-                //   - `typeof obj.method === "function"`
-                //   - `let f = obj.method; f(args)` dispatches to the method
-                //   - `arr.map(obj.method)` passes a callable reference
-                // The closure's call path routes through
-                // `js_native_call_method`, which resolves the symbol via
-                // `CLASS_VTABLE_REGISTRY` (populated at module init by
-                // `js_register_class_method`), so this works for both local
-                // and cross-module classes. Pre-fix, the read fell through
-                // to the generic property-bag lookup which doesn't store
-                // prototype methods — every method reference returned
-                // `undefined`.
-                let method_key = (class_name.clone(), property.clone());
-                if receiver_class_is_proven
-                    && !property.starts_with('#')
-                    && ctx.methods.contains_key(&method_key)
-                {
-                    return lower_class_method_bind(ctx, object, property);
-                }
+                // #12016: declared public methods are function values in
+                // prototype data slots. Read them through the ordinary shape
+                // site below, just like an untyped receiver: an own override
+                // wins (including undefined/null and accessors), and prototype
+                // mutation is checked by the same shape proof on every use.
+                // The former class/name lookup repeated method-owner walks
+                // before checking an own value on every `this.m` read. Native
+                // handle reification and private reads return above.
             }
             lower_generic_property_get(ctx, object, property, *byte_offset)
         }

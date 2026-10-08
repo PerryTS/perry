@@ -5,9 +5,7 @@ use super::*;
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
-use crate::object::{
-    js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
-};
+use crate::object::{js_object_alloc, js_object_get_field_by_name_f64, ObjectHeader};
 
 #[derive(Clone, Copy)]
 pub(super) struct PipelineOptions {
@@ -424,7 +422,7 @@ pub(super) fn collect_pipeline_chunks(value: f64) -> Result<f64, f64> {
     if !readable_chunks_nonempty(value.get_nanbox_f64()) {
         if let Some(source_iterator) = get_hidden_value(
             value.get_nanbox_f64(),
-            hidden_key(READABLE_SOURCE_ITERATOR_KEY),
+            READABLE_SOURCE_ITERATOR_KEY,
         ) {
             let source_iterator = scope.root_nanbox_f64(source_iterator);
             if let Some(chunks) =
@@ -749,7 +747,7 @@ fn compose_stage_list<'s>(
 }
 
 fn compose_source_iterator(value: f64) -> Option<f64> {
-    get_hidden_value(value, hidden_key(READABLE_SOURCE_ITERATOR_KEY))
+    get_hidden_value(value, READABLE_SOURCE_ITERATOR_KEY)
 }
 
 fn compose_first_arg_is_source(value: f64) -> bool {
@@ -923,9 +921,9 @@ fn fail_composed_duplex(composite: f64, source: f64, stages: f64, err: f64) {
     let composite = scope.root_nanbox_f64(composite);
     let source = scope.root_nanbox_f64(source);
     let err = scope.root_nanbox_f64(err);
-    let priming = hidden_key(b"__perryStreamComposePriming");
+    let priming = Slot::ComposePriming;
     if has_truthy_hidden(composite.get_nanbox_f64(), priming) {
-        let pending = hidden_key(b"__perryStreamComposePendingError");
+        let pending = Slot::ComposePendingError;
         set_hidden_value(composite.get_nanbox_f64(), pending, err.get_nanbox_f64());
         return;
     }
@@ -1201,9 +1199,8 @@ fn install_composed_duplex_callbacks(composite: f64, stages: f64, source: f64, w
     js_closure_set_capture_f64(write.get_raw_mut_ptr(), 0, composite.get_nanbox_f64());
     js_closure_set_capture_f64(write.get_raw_mut_ptr(), 1, stages.get_nanbox_f64());
     js_closure_set_capture_f64(write.get_raw_mut_ptr(), 2, source.get_nanbox_f64());
-    let obj = raw_ptr_from_value(composite.get_nanbox_f64()) as *mut ObjectHeader;
-    js_object_set_field_by_name(
-        obj,
+    set_hidden_value(
+        composite.get_nanbox_f64(),
         hidden_write_key(),
         box_pointer(write.get_raw_const_ptr()),
     );
@@ -1216,16 +1213,15 @@ fn install_composed_duplex_callbacks(composite: f64, stages: f64, source: f64, w
     js_closure_set_capture_f64(final_cb.get_raw_mut_ptr(), 0, composite.get_nanbox_f64());
     js_closure_set_capture_f64(final_cb.get_raw_mut_ptr(), 1, stages.get_nanbox_f64());
     js_closure_set_capture_f64(final_cb.get_raw_mut_ptr(), 2, source.get_nanbox_f64());
-    let obj = raw_ptr_from_value(composite.get_nanbox_f64()) as *mut ObjectHeader;
-    js_object_set_field_by_name(
-        obj,
+    set_hidden_value(
+        composite.get_nanbox_f64(),
         hidden_writable_final_key(),
         box_pointer(final_cb.get_raw_const_ptr()),
     );
 
     set_hidden_value(
         composite.get_nanbox_f64(),
-        hidden_key(b"writableCustomSink"),
+        Slot::WritableCustomSink,
         f64::from_bits(TAG_TRUE),
     );
     if !writable {
@@ -1315,7 +1311,7 @@ fn new_composed_duplex(stages: &[f64], source: Option<f64>, writable: bool) -> f
             );
             set_hidden_value(
                 composite.get_nanbox_f64(),
-                hidden_key(b"__perryStreamComposePriming"),
+                Slot::ComposePriming,
                 f64::from_bits(TAG_TRUE),
             );
             let primed = catch_pipeline_throw(|| {
@@ -1337,17 +1333,17 @@ fn new_composed_duplex(stages: &[f64], source: Option<f64>, writable: bool) -> f
             }
             set_hidden_value(
                 composite.get_nanbox_f64(),
-                hidden_key(b"__perryStreamComposePriming"),
+                Slot::ComposePriming,
                 f64::from_bits(TAG_FALSE),
             );
             if let Some(err) = get_hidden_value(
                 composite.get_nanbox_f64(),
-                hidden_key(b"__perryStreamComposePendingError"),
+                Slot::ComposePendingError,
             ) {
                 let err = scope.root_nanbox_f64(err);
                 set_hidden_value(
                     composite.get_nanbox_f64(),
-                    hidden_key(b"__perryStreamComposePendingError"),
+                    Slot::ComposePendingError,
                     f64::from_bits(TAG_UNDEFINED),
                 );
                 fail_composed_duplex(

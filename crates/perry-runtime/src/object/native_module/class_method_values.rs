@@ -38,7 +38,13 @@ pub(crate) fn class_evaluation_method_value_for_name(
     let class_obj = scope.root_raw_mut_ptr(class_obj);
     class_obj.with_mut_ptr::<ObjectHeader, _>(|class_obj| {
         key.with_const_ptr::<crate::StringHeader, _>(|key| {
-            js_object_set_field_by_name(class_obj, key, method.get_nanbox_f64());
+            crate::object::define_builtin_data_property(
+                class_obj,
+                key,
+                method.get_nanbox_f64(),
+                cache_key.clone(),
+                crate::object::PropertyAttrs::new(true, true, true),
+            );
         });
     });
     method.get_nanbox_f64()
@@ -77,7 +83,13 @@ pub(crate) fn class_private_static_method_value_for_name(
         let class_obj = scope.root_raw_mut_ptr(class_obj);
         class_obj.with_mut_ptr::<ObjectHeader, _>(|class_obj| {
             key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                js_object_set_field_by_name(class_obj, key, method.get_nanbox_f64());
+                crate::object::define_builtin_data_property(
+                    class_obj,
+                    key,
+                    method.get_nanbox_f64(),
+                    cache_name.clone(),
+                    crate::object::PropertyAttrs::new(true, true, true),
+                );
             })
         });
         return method.get_nanbox_f64();
@@ -155,10 +167,10 @@ fn evaluation_prototype_method_value(owner_class_id: u32, name: &str, brand: f64
         return None;
     }
     let class = JSValue::from_bits(brand.to_bits()).as_pointer::<ObjectHeader>();
-    let value =
-        class_registry::class_object_own_field_bytes(proto.as_pointer::<ObjectHeader>(), name.as_bytes())?;
-    unsafe {
-        crate::object::field_get_set::static_method_value_runs(value.to_bits(), code, class)
-    }
-    .then_some(value)
+    let value = class_registry::class_object_own_field_bytes(
+        proto.as_pointer::<ObjectHeader>(),
+        name.as_bytes(),
+    )?;
+    unsafe { crate::object::field_get_set::static_method_value_runs(value.to_bits(), code, class) }
+        .then_some(value)
 }

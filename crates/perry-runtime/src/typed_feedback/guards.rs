@@ -162,40 +162,13 @@ fn key_as_str<'a>(key: *const crate::StringHeader) -> Option<&'a str> {
     unsafe { crate::string::header_str_checked(key) }
 }
 
-fn descriptor_blocks_class_field_get(obj_addr: usize, class_id: u32, key_name: &str) -> bool {
-    if !crate::object::descriptors_in_use() {
-        return false;
-    }
-    if crate::object::get_accessor_descriptor(obj_addr, key_name).is_some() {
-        return true;
-    }
-
-    let mut cid = class_id;
-    for _ in 0..32 {
-        let proto = crate::object::class_prototype_object(cid);
-        if !proto.is_null()
-            && crate::object::get_accessor_descriptor(proto as usize, key_name).is_some()
-        {
-            return true;
-        }
-        match crate::object::get_parent_class_id(cid) {
-            Some(parent) if parent != 0 && parent != cid => cid = parent,
-            _ => break,
-        }
-    }
-    false
+fn descriptor_blocks_class_field_get(obj_addr: usize, _class_id: u32, key_name: &str) -> bool {
+    crate::object::get_accessor_descriptor(obj_addr, key_name).is_some()
 }
 
-/// Decide the raw-f64 half of a class-field guard after the caller has proven
-/// the receiver carries `expected_shape_id` and that `field_index` is in bounds.
-///
-/// The shape is the authority (charter step 5): a receiver stamped with
-/// `expected_shape_id` holds a raw double only in an `F64` (or deprecated
-/// `F64`) lane; SPECIAL ConstFn lanes are pointer-bearing. A store that would
-/// break an F64 lane generalizes it
-/// and restamps the receiver first. So "slot K is raw-f64" is the lane of the
-/// expected shape at K; nothing per object is consulted.
-#[inline]
+/// Decide representation after the expected ShapeId and slot bounds match.
+/// F64 lanes are a fact of that shape; stores generalize it before writing
+/// values that would violate its representation.
 fn class_field_raw_f64_layout_contract(
     expected_shape_id: u32,
     field_index: u32,
@@ -324,7 +297,7 @@ pub extern "C" fn js_typed_feedback_class_field_get_guard(
     expected_field_index: u32,
     require_raw_f64: i32,
 ) -> i32 {
-    if !typed_feedback_enabled() && !crate::object::descriptors_in_use() {
+    if !typed_feedback_enabled() {
         return class_field_fast_contract(
             receiver,
             expected_class_id,
@@ -407,41 +380,10 @@ fn class_field_set_fast_contract(
     !require_raw_f64 || is_plain_number_bits(value_bits)
 }
 
-fn descriptor_blocks_class_field_set(obj_addr: usize, class_id: u32, key_name: &str) -> bool {
-    if !crate::object::descriptors_in_use() {
-        return false;
-    }
-    if crate::object::get_accessor_descriptor(obj_addr, key_name).is_some() {
-        return true;
-    }
-    if crate::object::get_property_attrs(obj_addr, key_name)
-        .map(|attrs| !attrs.writable())
-        .unwrap_or(false)
-    {
-        return true;
-    }
-
-    let mut cid = class_id;
-    for _ in 0..32 {
-        let proto = crate::object::class_prototype_object(cid);
-        if !proto.is_null() {
-            let proto_addr = proto as usize;
-            if crate::object::get_accessor_descriptor(proto_addr, key_name).is_some() {
-                return true;
-            }
-            if crate::object::get_property_attrs(proto_addr, key_name)
-                .map(|attrs| !attrs.writable())
-                .unwrap_or(false)
-            {
-                return true;
-            }
-        }
-        match crate::object::get_parent_class_id(cid) {
-            Some(parent) if parent != 0 && parent != cid => cid = parent,
-            _ => break,
-        }
-    }
-    false
+fn descriptor_blocks_class_field_set(obj_addr: usize, _class_id: u32, key_name: &str) -> bool {
+    crate::object::get_accessor_descriptor(obj_addr, key_name).is_some()
+        || crate::object::get_property_attrs(obj_addr, key_name)
+            .is_some_and(|attrs| !attrs.writable())
 }
 
 fn class_field_set_contract(
@@ -530,7 +472,7 @@ pub extern "C" fn js_typed_feedback_class_field_set_guard(
     require_raw_f64: i32,
 ) -> i32 {
     let value_bits = value.to_bits();
-    if !typed_feedback_enabled() && !crate::object::descriptors_in_use() {
+    if !typed_feedback_enabled() {
         return class_field_set_fast_contract(
             receiver,
             expected_class_id,
@@ -889,16 +831,10 @@ fn class_field_get_after_guard_fail(
 // what the full helper does from that point, so the guard's effects happen
 // exactly once.
 //
-// They serve ONLY while typed feedback is off and no property descriptor is in
-// use (`descriptors_in_use`). That is precisely when the class-field guards
-// take `class_field_fast_contract` / `class_field_set_fast_contract`, which
-// neither observe nor walk descriptors. The other arm is not a Perry-GC leaf
-// on today's runtime, per the census call graph: the observe takes the
-// feedback registry lock, a `GcRootRegistryGuard` whose drop can flush a
-// deferred collection request (#11523), and the descriptor walk
-// (`get_accessor_descriptor` / `get_property_attrs`) contains an indirect call.
-// Under either condition the fast entry declines without evaluating anything
-// and the continuation runs the whole helper.
+// Typed-feedback tracing uses the collecting continuation. Otherwise the hit
+// reads the receiver shape and slot directly; unrelated descriptors cannot
+// disable it. An accessor or non-writable own entry changes the ShapeId and
+// makes the existing shape contract miss.
 //
 // What the fast entries do reach (the S1 checker is the authority; this is
 // what it must agree with): two static reads, the fast contract (GC-header and
@@ -927,13 +863,11 @@ pub const CLASS_FIELD_SET_FAST_NOT_ATTEMPTED: i32 = 2;
 /// `js_object_set_field`.
 pub const CLASS_FIELD_SET_FAST_STORE_SLOW: i32 = 3;
 
-/// Whether the class-field guards run their side-effect-free, descriptor-free
-/// contract — the only case the `_fast` entries serve. Both inputs are
-/// set-only latches, so a decline observed by the fast entry is still a
-/// decline when the continuation re-reads them.
+/// The leaf contract serves ordinary own slots while tracing is disabled.
+/// Accessor eligibility belongs to the receiver's holder shape.
 #[inline(always)]
 fn class_field_fast_entries_serve() -> bool {
-    !typed_feedback_enabled() && !crate::object::descriptors_in_use()
+    !typed_feedback_enabled()
 }
 
 /// GC-leaf hit of the full-outline class-field GET: the guard-PASS slot load,
@@ -1554,18 +1488,16 @@ pub unsafe extern "C" fn js_object_own_method_cache_miss(
         return 0;
     }
     let meta = (*object).meta;
-    if !meta.is_null()
-        && ((*meta).attr_key_bits != 0
-            || (*meta).accessor_key_bits != 0
-            || (*meta).flags != 0
-            || (*meta).private_evaluation_brand != 0)
-    {
+    if !meta.is_null() && ((*meta).flags != 0 || (*meta).private_evaluation_brand != 0) {
         return 0;
     }
     let Some(shape) = crate::object::shapes::object_shape_descriptor(object) else {
         return 0;
     };
-    if field_index >= shape.logical_key_count || field_index >= shape.live_inline_slot_count {
+    if shape.summary & crate::object::key_attrs::SUMMARY_KEY_BITS != 0
+        || field_index >= shape.logical_key_count
+        || field_index >= shape.live_inline_slot_count
+    {
         return 0;
     }
     let keys = shape.keys as usize as *const ArrayHeader;

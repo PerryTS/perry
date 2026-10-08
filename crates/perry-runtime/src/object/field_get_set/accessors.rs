@@ -82,6 +82,9 @@ pub(crate) unsafe fn object_field_at_with_live(
     val
 }
 
+/// An own DATA property of `obj` named `key`, private-name entries skipped.
+/// An own accessor reads as `Some(undefined)`: callers that need [[Get]]
+/// semantics use [`own_property_get_by_bytes`].
 pub(crate) unsafe fn own_data_field_by_name(
     obj: *const ObjectHeader,
     key: *const crate::StringHeader,
@@ -89,6 +92,57 @@ pub(crate) unsafe fn own_data_field_by_name(
     if key.is_null() {
         return None;
     }
+    own_property_slot(obj, |keys, key_count| {
+        crate::object::keys_find_property_slot_by_key_ptr(keys, key_count, key)
+    })
+    .map(OwnSlot::data_or_undefined)
+}
+
+/// [[Get]] of an own property of `obj` named by the bytes `key` (a method
+/// name from rodata, so no key string is built): a data value as stored,
+/// `undefined` included; an accessor through its getter, called on
+/// `receiver` (`undefined` without one). Private-name entries are a separate
+/// namespace and never match. `None` when `obj` has no such own property.
+///
+/// The getter runs user code, so the caller must not hold GC values across
+/// this call.
+pub(crate) unsafe fn own_property_get_by_bytes(
+    obj: *const ObjectHeader,
+    key: &[u8],
+    receiver: f64,
+) -> Option<JSValue> {
+    match own_property_slot(obj, |keys, key_count| {
+        crate::object::keys_find_property_slot_by_bytes(keys, key_count, key)
+    })? {
+        OwnSlot::Data(value) => Some(value),
+        OwnSlot::Accessor { getter: 0 } => Some(JSValue::undefined()),
+        OwnSlot::Accessor { getter } => Some(invoke_accessor_getter(getter, receiver)),
+    }
+}
+
+/// What an own-property slot holds.
+enum OwnSlot {
+    Data(JSValue),
+    /// The slot holds an accessor pair, never a data value: its getter
+    /// (0 when it has none), read from the holder's slot.
+    Accessor {
+        getter: u64,
+    },
+}
+
+impl OwnSlot {
+    fn data_or_undefined(self) -> JSValue {
+        match self {
+            OwnSlot::Data(value) => value,
+            OwnSlot::Accessor { .. } => JSValue::undefined(),
+        }
+    }
+}
+
+unsafe fn own_property_slot(
+    obj: *const ObjectHeader,
+    find_slot: impl FnOnce(*const crate::array::ArrayHeader, u32) -> Option<u32>,
+) -> Option<OwnSlot> {
     if obj.is_null() || !is_valid_obj_ptr(obj as *const u8) {
         return None;
     }
@@ -121,21 +175,24 @@ pub(crate) unsafe fn own_data_field_by_name(
     // isolated overwrite-loop profile still showed `js_array_get_f64` at 23.5%
     // self time, and the caller graph attributed it here. The shared helper
     // preserves #1781's SSO-key acceptance (its byte resolver is SSO-aware).
-    if let Some(islot) = crate::object::keys_find_slot_by_key_ptr(keys, key_count as u32, key) {
+    if let Some(islot) = find_slot(keys, key_count as u32) {
         let i = islot as usize;
-        // An accessor key's slot holds its accessor pair, never a data value.
         if crate::object::key_attrs::key_is_accessor_at(keys, islot) {
-            return Some(JSValue::undefined());
-        }
-        {
-            if i < alloc_limit {
-                return Some(js_object_get_field(obj, i as u32));
-            }
-            return Some(match overflow_get(obj as usize, i) {
-                Some(bits) => JSValue::from_bits(bits),
-                None => JSValue::undefined(),
+            // The holder's shape resolved the key to this slot, so its lane
+            // holds the accessor pair (#12015): read it there, no name search.
+            let live = crate::object::object_live_slot_count(obj);
+            let accessor = super::super::accessor_pair::slot_accessor_with_live(obj, islot, live);
+            return Some(OwnSlot::Accessor {
+                getter: accessor.get,
             });
         }
+        if i < alloc_limit {
+            return Some(OwnSlot::Data(js_object_get_field(obj, i as u32)));
+        }
+        return Some(OwnSlot::Data(match overflow_get(obj as usize, i) {
+            Some(bits) => JSValue::from_bits(bits),
+            None => JSValue::undefined(),
+        }));
     }
     None
 }
@@ -559,20 +616,21 @@ pub(crate) unsafe fn invoke_accessor_setter(set_bits: u64, receiver: f64, value:
     );
 }
 
-/// Invoke an accessor owned by a descriptor-marked object before its empty
-/// backing slot is read. Gate-neutral builtin installs deliberately leave the
-/// process-wide `ACCESSORS_IN_USE` flag clear, but stamp their owner with
-/// `OBJ_FLAG_HAS_DESCRIPTORS`; the caller checks that bit before entering this
-/// helper, so ordinary object reads pay only the already-loaded header-bit
-/// test. This also makes direct reads of builtin prototype accessors preserve
-/// their real behavior (`Set.prototype.size` throws, `RegExp.prototype.source`
-/// returns `"(?:)"`, and so on) once startup is descriptor-gate-free.
-pub(crate) unsafe fn builtin_reflection_accessor_read(
+/// The caller has resolved this holder's key to `slot` under its current
+/// shape. Read that lane's attributes directly, including builtin prototype
+/// accessors, without classifying the receiver or searching the name again.
+/// The getter may collect; no raw holder/key view is used after it runs.
+#[inline]
+pub(crate) unsafe fn object_accessor_at_with_live(
     obj: *const ObjectHeader,
-    key_bytes: &[u8],
+    keys: *const ArrayHeader,
+    slot: u32,
+    live: u32,
 ) -> Option<JSValue> {
-    let name = std::str::from_utf8(key_bytes).ok()?;
-    let acc = get_accessor_descriptor(obj as usize, name)?;
+    if !super::super::key_attrs::key_is_accessor_at(keys, slot) {
+        return None;
+    }
+    let acc = super::super::accessor_pair::slot_accessor_with_live(obj, slot, live);
     if acc.get == 0 {
         return Some(JSValue::undefined());
     }
@@ -608,9 +666,6 @@ pub(crate) unsafe fn primitive_object_prototype_accessor(
     name: &str,
     receiver: f64,
 ) -> Option<JSValue> {
-    if !crate::state::state().descriptors.accessors_in_use.get() {
-        return None;
-    }
     let object_ctor = super::super::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
     let ctor_value = JSValue::from_bits(object_ctor.to_bits());
     if !ctor_value.is_pointer() {
@@ -670,7 +725,7 @@ pub(crate) unsafe fn primitive_builtin_prototype_property(
     // with the ORIGINAL primitive receiver — boxed/raw per getter strictness
     // inside `invoke_accessor_getter` — not the prototype object the accessor
     // happens to live on (which a plain field read below would hand it).
-    if crate::state::state().descriptors.accessors_in_use.get() {
+    {
         if let Some(name) = crate::string::header_str_checked(key) {
             if let Some(acc) = get_accessor_descriptor(proto_ptr as usize, name) {
                 if acc.get == 0 {
@@ -738,7 +793,7 @@ pub(crate) unsafe fn primitive_tagged_prototype_property(
         return None;
     }
 
-    if crate::state::state().descriptors.accessors_in_use.get() {
+    {
         let key_ptr = JSValue::from_bits(key_h.get_nanbox_u64()).as_string_ptr();
         if let Some(name) = crate::string::header_str_checked(key_ptr) {
             let proto_ptr =
@@ -901,6 +956,19 @@ pub(crate) unsafe fn array_prototype_property_value(
         crate::value::js_nanbox_get_pointer(key_h.get_nanbox_f64()) as *const crate::StringHeader
     };
 
+    // An accessor has a holder slot too. Its pair must be read before the
+    // data-property probe, and an absent getter still shadows the next holder.
+    if let Some(acc) = get_accessor_descriptor(proto_ptr(), name) {
+        let value = if acc.get == 0 {
+            JSValue::undefined()
+        } else {
+            invoke_accessor_getter(
+                acc.get,
+                crate::value::js_nanbox_pointer(receiver_addr() as i64),
+            )
+        };
+        return Some(value);
+    }
     if let Some(v) = own_data_field_by_name(proto_ptr() as *const ObjectHeader, key()) {
         return Some(v);
     }

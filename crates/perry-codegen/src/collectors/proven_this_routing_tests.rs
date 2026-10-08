@@ -73,6 +73,7 @@ fn ir_opts(is_entry: bool) -> CompileOptions {
         imported_func_return_types: std::collections::HashMap::new(),
         imported_vars: std::collections::HashSet::new(),
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         needs_stdlib: false,
         program_is_synchronous: false,
         needs_ui: false,
@@ -1589,8 +1590,8 @@ fn tower_route_is_guarded_by_the_class_shape_id() {
     assert!(
         guard_body
             .iter()
-            .any(|l| l.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED")),
-        "the routed call must also honour the sticky inline-guard latch:\n{guard_body:#?}"
+            .all(|l| !l.contains("@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED")),
+        "the routed call must use shape facts without a process latch:\n{guard_body:#?}"
     );
 }
 

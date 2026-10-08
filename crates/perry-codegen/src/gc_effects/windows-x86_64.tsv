@@ -133,6 +133,7 @@ js_array_map_discard	Reenters
 js_array_mark_arguments_object	Leaf
 js_array_mark_numeric_f64_layout	Reenters
 js_array_note_numeric_write	Reenters
+js_array_note_numeric_write_value	Reenters
 js_array_numeric_get_f64_unboxed	Reenters
 js_array_numeric_push_f64_unboxed	Reenters
 js_array_numeric_range_add	Reenters
@@ -539,6 +540,7 @@ js_callback_timer_has_pending	Leaf
 js_callback_timer_next_deadline	Reenters
 js_callback_timer_tick	Reenters
 js_cancel_frame	Leaf
+js_catch_enter	Leaf
 js_checkpoint	Reenters
 js_cheerio_load	Reenters
 js_cheerio_load_fragment	Reenters
@@ -590,6 +592,8 @@ js_class_env_register_state	Leaf
 js_class_env_set	Reenters
 js_class_env_stamp	AllocOnly
 js_class_evaluation_object	Reenters
+js_class_evaluation_object_with_prototype	Reenters
+js_class_evaluation_parent_prototype	Reenters
 js_class_field_add	Reenters
 js_class_field_get_ic	Reenters
 js_class_field_get_ic_fast	Leaf
@@ -3159,6 +3163,8 @@ js_super_accessor_get	Reenters
 js_super_construct_apply	Reenters
 js_super_method_call_dynamic	Reenters
 js_super_method_call_dynamic_apply	Reenters
+js_super_method_call_key	Reenters
+js_super_method_call_key_apply	Reenters
 js_super_put_value_set	Reenters
 js_suppressed_error_new	Reenters
 js_switch_strict_equals	Reenters

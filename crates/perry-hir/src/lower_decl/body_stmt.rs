@@ -84,13 +84,27 @@ fn finish_for_with_property_array_hoist(
 /// a handful of ordinary nested blocks can overflow Rust's default 2 MiB test
 /// thread before expression lowering gets a chance to grow the stack (#9196).
 pub fn lower_body_stmt(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Vec<Stmt>> {
+    lower_body_stmt_with_for_of_mode(ctx, stmt, false)
+}
+
+// The guard's forced protocol mode belongs to one statement. Recursive body
+// lowering must let each nested loop choose its own iterable driver.
+fn lower_body_stmt_with_for_of_mode(
+    ctx: &mut LoweringContext,
+    stmt: &ast::Stmt,
+    force_lazy: bool,
+) -> Result<Vec<Stmt>> {
     stacker::maybe_grow(BODY_STMT_STACK_RED_ZONE, BODY_STMT_STACK_SEGMENT, || {
-        lower_body_stmt_impl(ctx, stmt)
+        lower_body_stmt_impl(ctx, stmt, force_lazy)
     })
 }
 
 #[inline(never)]
-fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<Vec<Stmt>> {
+fn lower_body_stmt_impl(
+    ctx: &mut LoweringContext,
+    stmt: &ast::Stmt,
+    force_lazy: bool,
+) -> Result<Vec<Stmt>> {
     let mut result = Vec::new();
 
     match stmt {
@@ -341,19 +355,13 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 || ctx.classes_index.contains_key(&class_name);
             if !already_exists {
                 let (class, decl_self_binding) = lower_body_class_decl(ctx, class_decl)?;
-                if let Some(extends_expr) = &class.extends_expr {
-                    result.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
-                        class_name: class.name.clone(),
-                        parent_expr: extends_expr.clone(),
-                    }));
-                }
                 let (computed_name_evaluations, computed_keys) =
                     crate::lower_decl::prepare_ordered_class_computed_names(
                         &class_decl.class.body,
                         &class,
                         &class.name,
                     );
-                result.extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
+
                 // A function-nested class that captures enclosing locals
                 // (`const n = require('x'); class C { m() { n.f() } }` — the
                 // webpack/zod bundle pattern) snapshots the CURRENT capture
@@ -420,6 +428,19 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     || shares_first_evaluation
                     // #11157: members that captured the self-binding need it.
                     || decl_self_binding.is_some();
+                let dynamic_parent = class.extends_expr.clone();
+                let definition_steps = if fresh_binding && !shares_first_evaluation {
+                    computed_name_evaluations
+                } else {
+                    if let Some(parent_expr) = dynamic_parent.clone() {
+                        result.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
+                            class_name: class.name.clone(),
+                            parent_expr,
+                        }));
+                    }
+                    result.extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
+                    Vec::new()
+                };
                 let named_statics: Vec<(String, Expr)> = if fresh_binding {
                     class
                         .static_fields
@@ -552,10 +573,11 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         ctx.shared_first_class_bindings
                             .insert(class_local, (template_name.clone(), statics));
                     }
-                    let evaluated_parent = ctx
-                        .evaluated_parent_bindings
-                        .get(&template_name)
-                        .map(|id| Box::new(Expr::LocalGet(*id)));
+                    let evaluated_parent = dynamic_parent.or_else(|| {
+                        ctx.evaluated_parent_bindings
+                            .get(&template_name)
+                            .map(|id| Box::new(Expr::LocalGet(*id)))
+                    });
                     result.push(Stmt::Let {
                         id: class_local,
                         name: binding_name,
@@ -572,6 +594,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                 captured_args: captured_exprs,
                                 shared_first_evaluation,
                                 evaluated_parent,
+                                definition_steps,
                             },
                         )),
                         mutable: false,
@@ -1773,10 +1796,10 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             }
             // Lazy iterator protocol for generic iterables (see stmt_loops.rs).
             // #7760: the guard emission below lowers this same statement twice.
-            let use_lazy_iter = needs_runtime_iterator || ctx.for_of_force_lazy;
+            let use_lazy_iter = needs_runtime_iterator || force_lazy;
             // Guarded exactly when this would otherwise be a plain array index
             // loop, which ignores a patched `Array.prototype[Symbol.iterator]`.
-            let guard_with_lazy_arm = !ctx.for_of_force_lazy
+            let guard_with_lazy_arm = !force_lazy
                 && proven_array
                 && !needs_runtime_iterator
                 && !is_string_iter
@@ -2282,9 +2305,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 // runtime flag. Re-lowering rather than cloning keeps the two
                 // arms from drifting and gives the lazy arm its own locals.
                 let index_arm: Vec<Stmt> = result.split_off(result_mark);
-                ctx.for_of_force_lazy = true;
-                let lazy_arm = lower_body_stmt(ctx, stmt);
-                ctx.for_of_force_lazy = false;
+                let lazy_arm = lower_body_stmt_with_for_of_mode(ctx, stmt, true);
                 result.push(Stmt::If {
                     condition: Expr::ArrayIterationPatched,
                     then_branch: lazy_arm?,

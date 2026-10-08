@@ -568,6 +568,10 @@ fn each_compatible_b4_sabotage_turns_its_witness_red() {
             "u32_admission",
             "typedarray::tests::owning_u32_admission_reads_current_header",
         ),
+        (
+            "view_bag_owner_not_first",
+            "gc::tests::buffer_b4::a_bagged_view_holds_its_owner_at_the_fixed_first_slot",
+        ),
     ] {
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", witness, "--nocapture"])
@@ -633,4 +637,43 @@ fn pool_identity_alignment_rollover_and_root_are_real_owner_edges() {
     let last = buffer::pool::copy(3000);
     assert_ne!(unsafe { buffer::store::owner(last as usize) }, owner);
     buffer::pool::reset_for_test();
+}
+
+/// Emitted view resolution reads a bagged view's owner at
+/// `BYTES_VIEW_BAG_OWNER` with one load. The bag is born with the owner in
+/// inline slot 0, and growth, deletes and a moving collection keep it there.
+#[test]
+fn a_bagged_view_holds_its_owner_at_the_fixed_first_slot() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _force = ForcedEvacuationTestGuard::on();
+    let owner = buffer::buffer_alloc(32) as usize;
+    unsafe { buffer::store::set_length(owner, 32) };
+    let view = buffer::store::new_view(GC_TYPE_BUFFER_UINT8ARRAY, owner, 4, 8, false) as usize;
+    for k in 0..40 {
+        buffer::buffer_set_own_prop(view, &format!("p{k}"), k as f64);
+    }
+    assert!(buffer::buffer_delete_own_prop(view, "p3"));
+    let holder = crate::array::js_array_alloc(1);
+    crate::array::js_array_push_f64(holder, bits(view as *const u8));
+    js_shadow_slot_set(0, ptr_bits(holder as usize));
+    let before = gc_total_collection_count();
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+    assert!(gc_total_collection_count() > before);
+    unsafe {
+        let bag = buffer::store::bag(view) as usize;
+        assert_ne!(bag, 0, "the view must be bagged");
+        assert_eq!(
+            buffer::store::view_bag_owner(bag),
+            owner,
+            "the owner must sit at the bag's fixed first slot"
+        );
+        assert_eq!(buffer::store::owner(view), owner);
+        assert_eq!(
+            buffer::store::data(view) as usize,
+            buffer::store::owner_data(owner) as usize + 4
+        );
+        assert_eq!(buffer::store::length(view), 8);
+    }
+    assert_eq!(buffer::buffer_get_own_prop(view, "p39"), Some(39.0));
 }

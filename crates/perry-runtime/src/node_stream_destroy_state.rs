@@ -81,7 +81,7 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
     // queued: the native memory returns at once, not at the next sweep, and
     // a still-queued step finds the stream destroyed (STREAM-PAYLOAD §2).
     super::native_hooks::release_on_destroy(stream);
-    if let Some(destroy) = get_hidden_value(stream, hidden_key(b"__perryStreamDestroy")) {
+    if let Some(destroy) = get_hidden_value(stream, super::STREAM_DESTROY_KEY) {
         if super::is_callable_value(destroy) {
             let cb = js_closure_alloc(
                 crate::fn_info!(ns_destroy_option_done, 1; with_declared(1)),

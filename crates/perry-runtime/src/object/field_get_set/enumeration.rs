@@ -1433,13 +1433,11 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 // Index properties may carry a non-default descriptor
                 // (`Object.defineProperty(arr, i, { enumerable: false })`).
                 // Object.keys / for-in must skip non-enumerable indices — but
-                // the per-index side-table lookup is only needed when this array
+                // the per-index holder-shape query is only needed when this array
                 // actually has descriptor entries, so the common all-default
                 // array stays on the fast path.
                 let owner = stripped as usize;
-                // O(1) via the owner index. This used to walk every descriptor
-                // in the program on every `Object.keys(array)` — profiling
-                // `claude -p` put this scan at the top of self-time by 4×.
+                // The holder shape summary is the constant-time absence proof.
                 let has_idx_descriptors = super::super::owner_has_property_descriptors(owner);
                 let result = crate::array::js_array_alloc(length);
                 for i in 0..length {
@@ -1468,7 +1466,7 @@ fn js_object_keys_shape(obj: *const ObjectHeader) -> *mut ArrayHeader {
                 // Accessor-only named properties (defineProperty {get/set})
                 // live solely in the accessor side table — include the
                 // enumerable ones.
-                if super::super::descriptors_in_use() {
+                {
                     for name in accessor_descriptor_keys_for_obj(owner) {
                         if super::super::canonical_array_index(&name).is_some()
                             || named.contains(&name)
@@ -1696,13 +1694,6 @@ pub(crate) unsafe fn own_key_hidden_bytes(obj: *const ObjectHeader, key: &[u8]) 
 /// never installs it as private object storage. Without a hint, that spelling
 /// is ordinary user data and must remain visible to reflection.
 ///
-/// The one prefix family is `__perry_native_super__<method>` (#6316): the native
-/// base method a subclass override displaced. Its key set is parameterized by
-/// method name, so an exact allowlist cannot enumerate it. The prefix is a
-/// reserved, runtime-only spelling — narrow enough not to be a plausible user
-/// property, unlike a blanket `__perry_*` test. Hiding it also moves enumeration
-/// TOWARD Node: the displaced method previously sat on the instance under its
-/// plain name (`emit`), which `Object.keys` wrongly reported as an own key.
 #[inline]
 pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
     matches!(
@@ -1718,8 +1709,6 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
         || b == b"__perry_ctor_caps"
         || b == crate::native_payload::JS_STATE_KEY
         || is_class_capture_key(b)
-        || b.starts_with(crate::node_stream::NATIVE_BASE_SUPER_PREFIX)
-        || b == crate::node_stream::STREAM_CAPTURE_REJECTIONS_KEY
         || b.starts_with(b"__perry_computed_field_key_")
         || b == b"#<perry:class-evaluation-prototype>"
         || b == super::CLASS_TEMPLATE_KEY

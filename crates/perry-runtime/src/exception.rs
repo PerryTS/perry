@@ -610,6 +610,18 @@ pub extern "C" fn js_clear_exception() {
     });
 }
 
+/// A `catch` clause's entry, whole: end the `try` (pop its handler), take the
+/// pending exception and clear it, in that order. One call where every catch
+/// entry emitted three (perry-codegen `stmt/try_stmt.rs`); each part is the
+/// exported helper itself.
+#[no_mangle]
+pub extern "C" fn js_catch_enter() -> f64 {
+    js_try_end();
+    let exception = js_get_exception();
+    js_clear_exception();
+    exception
+}
+
 /// Mark entering a finally block
 #[no_mangle]
 pub extern "C" fn js_enter_finally() {
@@ -1190,5 +1202,30 @@ mod tests {
                 "the frame tail must survive the code branch; got {frames:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod catch_enter_tests {
+    use super::*;
+
+    /// `js_catch_enter` is the catch entry's three calls in order: the `try`
+    /// depth drops by one, the pending exception is answered, and it is
+    /// cleared.
+    #[test]
+    fn catch_enter_ends_the_try_takes_and_clears_the_exception() {
+        let base = test_try_depth();
+        js_eh_try_push();
+        assert_eq!(test_try_depth(), base + 1);
+        test_set_exception(42.5);
+        assert_eq!(js_has_exception(), 1);
+        assert_eq!(js_catch_enter(), 42.5);
+        assert_eq!(test_try_depth(), base, "the catch entry ends the try");
+        assert_eq!(
+            js_has_exception(),
+            0,
+            "the catch entry clears the exception"
+        );
+        assert_eq!(js_get_exception(), 0.0);
     }
 }

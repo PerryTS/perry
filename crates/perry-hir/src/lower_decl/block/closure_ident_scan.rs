@@ -236,6 +236,13 @@ pub(super) fn cic_expr(e: &ast::Expr, in_cl: bool, out: &mut std::collections::H
             t.tpl.exprs.iter().for_each(|e| cic_expr(e, in_cl, out));
         }
         Paren(p) => cic_expr(&p.expr, in_cl, out),
+        // TypeScript wrappers erase at runtime and preserve lexical references.
+        TsAs(t) => cic_expr(&t.expr, in_cl, out),
+        TsTypeAssertion(t) => cic_expr(&t.expr, in_cl, out),
+        TsNonNull(t) => cic_expr(&t.expr, in_cl, out),
+        TsSatisfies(t) => cic_expr(&t.expr, in_cl, out),
+        TsConstAssertion(t) => cic_expr(&t.expr, in_cl, out),
+        TsInstantiation(t) => cic_expr(&t.expr, in_cl, out),
         Await(a) => cic_expr(&a.arg, in_cl, out),
         Yield(y) => {
             if let Some(a) = &y.arg {
@@ -339,6 +346,33 @@ fn cic_assign_target(
             }
             ast::SimpleAssignTarget::Paren(p) => cic_expr(&p.expr, in_cl, out),
             _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn erased_wrappers_preserve_forward_lexical_capture() {
+        for expression in [
+            "later(7) as number",
+            "<number>later(7)",
+            "later!",
+            "later satisfies Function",
+            "[later] as const",
+            "later<number>",
+        ] {
+            let source = format!(
+                "function identity(x:any) {{ return x; }} function f() {{ \
+                 const read = () => ({expression}); \
+                 const later = identity((x:number) => x + 1); return read; }}"
+            );
+            let parsed = perry_parser::parse_typescript(&source, "capture.ts").unwrap();
+            let hir = crate::lower_module(&parsed, "capture", "capture.ts").unwrap();
+            assert!(
+                !format!("{hir:#?}").contains("js_global_get_or_throw_unresolved"),
+                "erased wrapper must keep the lexical binding: {expression}"
+            );
         }
     }
 }

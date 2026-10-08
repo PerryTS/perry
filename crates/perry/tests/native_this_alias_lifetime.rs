@@ -8,19 +8,25 @@ use std::process::Command;
 const CHURN: &str = r#"
 import * as http from "node:http";
 import * as util from "node:util";
+import { Writable } from "node:stream";
 declare function gc(): void;
 const H: any = http;
 function Response(this: any, req: any) {
   H.ServerResponse.call(this, req);
   this.payload = new Array(256).fill(0);
+  this.once('close', () => { this.payload[0] = 1; });
+  this.once('error', () => { this.payload[0] = 2; });
+  const socket = new Writable({ write(chunk: any, encoding: any, cb: any) { cb(); } });
+  socket.on('error', () => { this.payload[0] = 3; });
+  this.assignSocket(socket);
 }
 util.inherits(Response as any, H.ServerResponse);
 const weak: WeakRef<any>[] = [];
 let kept: any = null;
-for (let i = 0; i < 4000; i++) {
+for (let i = 0; i < 20000; i++) {
   const r = new (Response as any)({ method: "GET" });
   r.setHeader("x-i", String(i));
-  if (i % 40 === 0) weak.push(new WeakRef(r));
+  if (i % 200 === 0) weak.push(new WeakRef(r));
   if (i === 1234) kept = r;
 }
 setTimeout(() => {
@@ -74,11 +80,9 @@ fn a_churn_of_aliased_responses_is_collected() {
     };
     let (tracked, live) = (field("tracked "), field("live "));
     assert_eq!(tracked, 100, "premise: the churn tracked its responses");
-    // The conservative native-stack scan may legitimately keep a stray
-    // response or two; the leak kept all of them.
-    assert!(
-        live * 10 < tracked,
-        "aliased responses must die with their last reference: {live}/{tracked} still live\n{stdout}"
+    assert_eq!(
+        live, 0,
+        "every dropped response must be collected: {live}/{tracked} still live\n{stdout}"
     );
     assert!(
         stdout.contains("kept 1234 true"),

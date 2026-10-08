@@ -399,12 +399,16 @@ pub fn compile_module_units_native(
     //   "TLS definition ... mismatches non-TLS reference".
     // Make the table agree with the definitions before it is handed out.
     let tls_globals = llmod.thread_local_global_names();
+    let tls = llmod.thread_local_specifier();
     let external_declarations: Vec<(String, String)> = llmod
         .declaration_lines()
         .filter(|(name, _)| !llmod.has_function(name))
         .map(|(name, line)| {
-            let line = if tls_globals.contains(name) && !line.contains(" thread_local ") {
-                line.replacen(" = external ", " = external thread_local ", 1)
+            let line = if tls_globals.contains(name)
+                && !line.contains(" thread_local ")
+                && !line.contains(" thread_local(")
+            {
+                line.replacen(" = external ", &format!(" = external {tls} "), 1)
             } else {
                 line.to_string()
             };

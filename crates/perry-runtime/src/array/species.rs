@@ -52,7 +52,7 @@ unsafe fn read_constructor(original: f64) -> f64 {
     // descriptor side table, which the generic property read below does not
     // consult for array receivers — fire it here (its throw propagates;
     // test262 {map,filter,splice,concat}/create-ctor-poisoned).
-    if crate::object::descriptors_in_use() {
+    {
         let raw = crate::value::js_nanbox_get_pointer(original) as usize;
         if raw != 0 {
             if let Some(acc) = crate::object::get_accessor_descriptor(raw, "constructor") {
@@ -95,16 +95,8 @@ unsafe fn resolve_species(original: f64) -> SpeciesChoice {
     if crate::value::js_is_truthy(crate::array::js_array_is_array(original)) == 0 {
         return SpeciesChoice::Default;
     }
-    // #6386 fast path: a plain dense `ArrayHeader` (not a proxy / subclass
-    // instance) whose own-`constructor` cannot exist — no `"constructor"`
-    // accessor was ever installed process-wide and the array's named-props
-    // side table has no `constructor` entry — resolves through the by-name
-    // walk to the intrinsic `Array`, i.e. `Default`. Behavior-identical to
-    // the walk: the array property walk does not model prototype-level
-    // `Array.prototype.constructor` mutation (verified against pre-change
-    // main), and both own-`constructor` stores land in the two tables
-    // consulted here. Skips the per-call key-string allocation and the
-    // full property walk.
+    // Plain arrays without an own constructor or inherited constructor
+    // accessor use the intrinsic constructor without allocating a key.
     {
         let jv = JSValue::from_bits(original.to_bits());
         if jv.is_pointer() {
@@ -118,7 +110,16 @@ unsafe fn resolve_species(original: f64) -> SpeciesChoice {
                 let hdr =
                     (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
                 if (*hdr).obj_type == crate::gc::GC_TYPE_ARRAY
-                    && !crate::object::constructor_accessor_ever_installed()
+                    && crate::object::get_accessor_descriptor(raw, "constructor").is_none()
+                    && crate::object::get_accessor_descriptor(
+                        crate::array::array_prototype_addr(),
+                        "constructor",
+                    )
+                    .is_none()
+                    && !crate::object::descriptor_state::owner_key_is_accessor(
+                        crate::array::object_prototype_addr(),
+                        b"constructor",
+                    )
                     && crate::array::array_named_property_get_by_name(arr, "constructor").is_none()
                 {
                     return SpeciesChoice::Default;

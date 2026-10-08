@@ -138,6 +138,16 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
             }
         }
     };
+    finish_class_evaluation_prototype(class.get_raw_mut_ptr(), parent_proto)
+}
+
+pub(crate) unsafe fn finish_class_evaluation_prototype(
+    obj: *mut ObjectHeader,
+    parent_proto: Option<u64>,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let class = scope.root_raw_mut_ptr(obj);
+    let class_id = class.with_const_ptr::<ObjectHeader, _>(|class| (*class).class_id);
     let parent_proto = parent_proto.map(|bits| scope.root_heap_word_u64(bits));
 
     // Every evaluation after the template's first in this agent is born in
@@ -188,13 +198,14 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
         .with_mut_ptr::<ObjectHeader, _>(|class| crate::value::js_nanbox_pointer(class as i64));
     proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
         constructor_key.with_const_ptr::<crate::StringHeader, _>(|key| {
-            js_object_set_field_by_name(proto, key, class_value)
+            define_builtin_data_property(
+                proto,
+                key,
+                class_value,
+                "constructor".to_string(),
+                PropertyAttrs::new(true, false, true),
+            )
         });
-        set_builtin_property_attrs(
-            proto as usize,
-            "constructor".to_string(),
-            PropertyAttrs::new(true, false, true),
-        );
     });
 
     for (name, is_accessor) in super::super::class_registry::class_prototype_member_names(class_id)
@@ -226,9 +237,14 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
                 });
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
             key.with_const_ptr::<crate::StringHeader, _>(|key| {
-                js_object_set_field_by_name(proto, key, method)
+                define_builtin_data_property(
+                    proto,
+                    key,
+                    method,
+                    name,
+                    PropertyAttrs::new(true, false, true),
+                )
             });
-            set_builtin_property_attrs(proto as usize, name, PropertyAttrs::new(true, false, true));
         });
     }
 

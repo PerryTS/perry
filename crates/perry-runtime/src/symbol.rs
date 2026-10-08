@@ -91,7 +91,7 @@ pub(crate) use gc_roots::{
     test_clear_symbol_side_table_roots, test_seed_class_static_symbol_root,
     test_seed_symbol_pointer_root, test_seed_symbol_property_root,
     test_symbol_pointer_root_contains, test_symbol_property_owner_exists,
-    test_symbol_property_root_bits, test_symbol_property_roots,
+    test_symbol_property_root_bits,
 };
 
 use crate::fast_hash::{
@@ -1278,7 +1278,7 @@ pub(crate) fn store_object_symbol_property_root(
 ) -> bool {
     note_symbol_key_installed(sym_key);
     note_symbol_owner_installed(obj_key);
-    let _function_bag = crate::object::descriptor_state::FunctionBagEdit::new(obj_key);
+    let _holder_edit = crate::object::descriptor_state::HolderEdit::new(obj_key);
     if unsafe { crate::object::shaped_symbols::owner(obj_key).is_some() } {
         let existed = unsafe { crate::object::shaped_symbols::entry(obj_key, sym_key) };
         let entry = existed.unwrap_or(0) & !crate::object::key_attrs::ENTRY_ACCESSOR_MASK;

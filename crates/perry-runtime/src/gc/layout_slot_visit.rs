@@ -530,13 +530,20 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             ));
             // Native payload and weak-collection `native_state` is its
             // POINTER_TAG-boxed owned cell, reachable ONLY through this
-            // record, so it is a child edge exactly like `arguments`. Other
+            // record, so it is a child edge exactly like `arguments`. A plain
+            // stream's state record (an array) is the same kind of edge. Other
             // families pack POD into the same word (text bits, timer/tui ids,
             // a Set's malloc'd index, a class's private-storage serial) and
             // none of those words carries the pointer tag, so they are never
             // visited; `native_payload_cell_survives_a_moving_collection`
             // reddens if this visit is removed.
             if crate::native_payload::is_payload_state_word((*meta).native_state) {
+                #[cfg(test)]
+                if crate::node_stream::native_hooks::stream_sabotage("record_trace")
+                    && crate::node_stream::is_stream_record_word((*meta).native_state)
+                {
+                    return;
+                }
                 visit(fixed_slot(&mut (*meta).native_state as *mut u64));
             }
         }

@@ -6,6 +6,7 @@ thread_local! {
     static OUTPUT: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
     static EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static RELEASE: RefCell<Option<(usize, usize)>> = const { RefCell::new(None) };
+    static RELEASED_BUFFERS: RefCell<Option<(usize, usize)>> = const { RefCell::new(None) };
     static BOMB: std::cell::Cell<(usize, bool, usize)> = const { std::cell::Cell::new((0, true, 0)) };
     static BOMB_CRC: RefCell<flate2::Crc> = RefCell::new(flate2::Crc::new());
     static BOMB_BOUNDS: std::cell::Cell<(usize, usize)> = const { std::cell::Cell::new((0, 0)) };
@@ -93,6 +94,7 @@ fn clear() {
     OUTPUT.with(|v| v.borrow_mut().clear());
     EVENTS.with(|v| v.borrow_mut().clear());
     RELEASE.with(|v| *v.borrow_mut() = None);
+    RELEASED_BUFFERS.with(|v| *v.borrow_mut() = None);
 }
 fn undefined() -> f64 {
     f64::from_bits(UNDEFINED)
@@ -123,9 +125,9 @@ fn native_bytes(owner: f64) -> usize {
     let ptr =
         JsValue::from_bits(owner.to_bits()).as_pointer::<perry_runtime::object::ObjectHeader>();
     unsafe {
-        let state = (*(*ptr).meta).native_state;
-        let cell = JsValue::from_bits(state)
-            .as_pointer::<perry_runtime::native_handle::NativeHandleHeader>();
+        // `native_state` -> the stream's state record -> its payload cell.
+        let cell = perry_runtime::native_payload::payload_cell_of_word((*(*ptr).meta).native_state)
+            .expect("a zlib stream has a payload cell");
         (*cell).external_bytes as usize
     }
 }
@@ -172,8 +174,11 @@ extern "C" fn data(c: *const RawClosureHeader, _: JsThis, chunk: f64) -> f64 {
     }
     if action == 2.0 {
         let before = native_bytes(owner.get());
+        let buffers = ledger(owner.get());
+        let held = buffers.bytes();
         unsafe { method(owner.get(), "destroy", &[]) };
         RELEASE.with(|v| *v.borrow_mut() = Some((before, native_bytes(owner.get()))));
+        RELEASED_BUFFERS.with(|v| *v.borrow_mut() = Some((held, buffers.bytes())));
     }
     undefined()
 }
@@ -472,6 +477,14 @@ fn brotli_destroy_inside_data_releases_before_gc_and_closes_once_later() {
     let (before, after) = RELEASE.with(|v| v.borrow().unwrap());
     assert!(before > 1000000);
     assert_eq!(after, 0);
+    // Destroyed from a data listener while the step runner is mid-record:
+    // the brotli buffers are back inside destroy(), not after the runner.
+    let (held, left) = RELEASED_BUFFERS.with(|v| v.borrow().unwrap());
+    assert!(
+        held > 1_000_000,
+        "premise: brotli state in buffers ({held})"
+    );
+    assert_eq!(left, 0, "buffers freed inside destroy()");
     let events = EVENTS.with(|v| v.borrow().clone());
     assert_eq!(events.iter().filter(|e| *e == "data").count(), 1);
     assert_eq!(events.iter().filter(|e| *e == "close").count(), 1);
@@ -541,6 +554,10 @@ fn codec_sabotages_turn_their_runtime_witnesses_red() {
         (
             "release_in_finalizer_only",
             "brotli_destroy_inside_data_releases_before_gc_and_closes_once_later",
+        ),
+        (
+            "release_in_finalizer_only",
+            "destroy_mid_stream_returns_payload_buffers_before_any_collection",
         ),
         (
             "keep_handle_field",
@@ -709,5 +726,160 @@ fn fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss() {
     assert_eq!(
         driver::PAYLOAD_COUNTS.with(std::cell::Cell::get),
         (expected, expected)
+    );
+}
+
+fn collections() -> u64 {
+    let mut count = 0;
+    perry_runtime::gc::js_gc_stats(&mut count, std::ptr::null_mut(), std::ptr::null_mut());
+    count
+}
+/// Compressible, not trivially so: brotli's and inflate's windows fill.
+fn words(len: usize) -> Vec<u8> {
+    let mut seed = 0x2545_f491_u32;
+    let mut out = Vec::with_capacity(len);
+    while out.len() < len {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+        let word = (seed >> 16) % 4096;
+        out.extend_from_slice(format!("w{word} ").as_bytes());
+    }
+    out.truncate(len);
+    out
+}
+/// Each buffered codec, with the first half of an input it can consume.
+fn mid_stream_inputs() -> Vec<(&'static str, Vec<u8>)> {
+    let plain = words(256 * 1024);
+    let half = |v: Vec<u8>| v[..v.len() / 2].to_vec();
+    vec![
+        ("BrotliCompress", plain.clone()),
+        ("BrotliDecompress", half(brotli_compress_bytes(&plain))),
+        ("Gzip", plain.clone()),
+        ("Gunzip", half(crate::gzip_bytes(&plain).unwrap())),
+        ("Deflate", plain.clone()),
+        ("Inflate", half(crate::deflate_bytes(&plain).unwrap())),
+        (
+            "InflateRaw",
+            half(crate::deflate_raw_bytes_with(&plain, Compression::default()).unwrap()),
+        ),
+        ("Unzip", half(crate::gzip_bytes(&plain).unwrap())),
+    ]
+}
+/// This stream's own buffer ledger. The clone outlives the payload, so it
+/// still reads the count after destroy; nothing here is process-wide.
+fn ledger(owner: f64) -> perry_ffi::native_payload::buffer::BufferOwner {
+    unsafe { payload(owner) }
+        .expect("open payload")
+        .buffer_owner()
+}
+/// Write without end, let the deferred steps run, then destroy: the payload's
+/// buffers (brotli state and blocks, inflate window, scratch) are back before
+/// any collection, and the cell states zero external bytes.
+fn destroy_mid_stream(roots: &TransientRootScope, opts: f64, name: &str, input: &[u8], full: bool) {
+    let owner = roots.root_nanbox(factory(name, opts));
+    let buffers = ledger(owner.get());
+    listen(owner.get(), 0.0);
+    let chunk = roots.root_nanbox(value_bytes(input));
+    unsafe { method(owner.get(), "write", &[chunk.get()]) };
+    pump();
+    let held = buffers.bytes();
+    assert!(
+        held >= 1024,
+        "{name}: premise, buffers held mid-stream ({held})"
+    );
+    if full && (name.starts_with("Brotli") || name.starts_with("Inflate") || name == "Gunzip") {
+        assert!(
+            held > 32 * 1024,
+            "{name}: codec state is in buffers ({held})"
+        );
+    }
+    assert!(
+        native_bytes(owner.get()) >= held,
+        "{name}: buffers are counted"
+    );
+    let gcs = collections();
+    unsafe { method(owner.get(), "destroy", &[]) };
+    assert_eq!(collections(), gcs, "{name}: premise, no collection ran");
+    assert_eq!(
+        native_bytes(owner.get()),
+        0,
+        "{name}: external bytes at destroy"
+    );
+    assert_eq!(buffers.bytes(), 0, "{name}: buffers freed at destroy");
+    pump();
+}
+#[test]
+fn destroy_mid_stream_returns_payload_buffers_before_any_collection() {
+    let _agent = super::OwnAgent::enter();
+    let roots = TransientRootScope::enter();
+    let opts = roots.root_nanbox(options());
+    for (name, input) in mid_stream_inputs() {
+        clear();
+        destroy_mid_stream(&roots, opts.get(), name, &input, true);
+        assert!(
+            EVENTS.with(|v| v.borrow().iter().any(|e| e == "close")),
+            "{name}: closed"
+        );
+    }
+}
+#[test]
+fn mid_stream_destroy_churn_keeps_buffers_and_rss_flat() {
+    let _agent = super::OwnAgent::enter();
+    let roots = TransientRootScope::enter();
+    let opts = roots.root_nanbox(options());
+    let inputs = mid_stream_inputs();
+    let short: Vec<_> = inputs
+        .iter()
+        .map(|(name, input)| (*name, input[..input.len().min(16 * 1024)].to_vec()))
+        .collect();
+    let mut samples = Vec::new();
+    for batch in 0..8 {
+        for _ in 0..40 {
+            for (name, input) in &short {
+                clear();
+                let scope = TransientRootScope::enter();
+                destroy_mid_stream(&scope, opts.get(), name, input, false);
+            }
+        }
+        perry_runtime::gc::js_gc_collect();
+        if batch >= 2 {
+            samples.push(rss());
+        }
+    }
+    // Flat means no upward drift: the later samples stay within 4 MiB of the
+    // early ones (allocator purges may lower RSS; that is not drift).
+    let early = *samples[..3].iter().min().unwrap();
+    let late = *samples[3..].iter().max().unwrap();
+    eprintln!("buffer churn rss samples {samples:?}");
+    assert!(late < early + (4 << 20), "RSS drifted up: {samples:?}");
+}
+
+/// M2: the zlib-side "free only on drop" sabotage. `release` skips the
+/// close-time drop, so the payload's buffers wait for the sweep; the
+/// mid-stream destroy witness must go red.
+#[test]
+fn buffers_on_drop_only_sabotage_turns_the_witness_red() {
+    if std::env::var("PERRY_TEST_ZLIB_SABOTAGE").is_ok() {
+        return;
+    }
+    let witness =
+        "stream::runtime_tests::destroy_mid_stream_returns_payload_buffers_before_any_collection";
+    let result = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", witness, "--nocapture", "--test-threads=1"])
+        .env("PERRY_TEST_ZLIB_SABOTAGE", "buffers_on_drop_only")
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&result.stdout);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stdout.contains("running 1 test"),
+        "missing witness: {stdout}"
+    );
+    assert!(
+        !result.status.success(),
+        "buffers_on_drop_only must turn {witness} red"
+    );
+    assert!(
+        stdout.contains("at destroy") || stderr.contains("at destroy"),
+        "red for the wrong reason: {stdout}{stderr}"
     );
 }

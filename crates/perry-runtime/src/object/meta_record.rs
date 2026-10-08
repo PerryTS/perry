@@ -40,19 +40,9 @@ pub struct ObjectMeta {
     /// `crate::value::TAG_NULL` for an explicit null prototype, or 0 when
     /// unset (fall back to default prototype resolution).
     pub prototype: u64,
-    /// #6759 Phase C2: Bloom summary of the string keys with a customized
-    /// property descriptor (non-default writable/enumerable/configurable)
-    /// installed on THIS object — bit `key_bytes_hash(key) & 63` per key.
-    /// Monotonic (descriptor removal never clears a bit — another key may
-    /// share it; a spurious bit just costs one table probe). A clear bit is
-    /// authoritative: no `property_descriptors` entry `(owner, key)` can
-    /// exist for a key whose bit is clear, so the hot paths skip the
-    /// side-table probe (and its per-call `String` build) entirely. POD —
-    /// the GC trace arm visits the record's three child edges explicitly.
-    pub attr_key_bits: u64,
-    /// Same summary for accessor descriptors (`get`/`set` installs) — the
-    /// `accessor_descriptors` table twin of `attr_key_bits`.
-    pub accessor_key_bits: u64,
+    /// Reserved words preserve the offsets addressed by emitted code.
+    /// Descriptor facts live exclusively in holder shapes.
+    pub reserved_descriptor_words: [u64; 2],
     /// Object-only state and compact scalar proof payloads. Bit 0 records
     /// prototype-semantic divergence (including runtime wiring); bit 3 records
     /// that a user-facing operation chose the prototype. Keeping those signals
@@ -133,28 +123,8 @@ pub struct ObjectMeta {
     /// Installed by `js_array_subclass_init` under
     /// `array_subclass_elements_enabled()`; never present otherwise.
     pub elements: u64,
-    /// #10287 exact identity for the overwhelmingly common case of an object
-    /// carrying descriptors for exactly ONE key. `descriptor_key_count` is 0
-    /// (none recorded), 1 (`descriptor_key_hash` is the full
-    /// `key_bytes_hash` of that single key) or 2 (more than one distinct key
-    /// — consult the Bloom summaries and then the tables).
-    ///
-    /// The 64-bit Bloom above answers "maybe" for about one key in 64, and a
-    /// maybe costs far more than a table probe: the store it rejects takes
-    /// the slow path, which appends to a PRIVATE keys array and drops the
-    /// receiver off the shared transition chain for the rest of its life.
-    /// zod installs exactly one descriptor per schema (`_zod`), so a single
-    /// full-width compare here answers every store on those objects exactly,
-    /// with no table probe and no string rebuild.
-    ///
-    /// Maintained by the same writer as the Bloom bits
-    /// (`note_meta_descriptor_key`), so it inherits that function's
-    /// invariant: every descriptor-table insert for a meta-capable owner
-    /// records its key here first.
-    pub descriptor_key_hash: u64,
-    /// Distinct descriptor-key count, saturating at 2. See
-    /// [`ObjectMeta::descriptor_key_hash`].
-    pub descriptor_key_count: u64,
+    /// Reserved words preserve the metadata layout across this migration.
+    pub reserved_descriptor_identity: [u64; 2],
     /// #10868 step 2.5 stage 1: the ordered own-key list of a DICTIONARY-MODE
     /// receiver — a `GC_TYPE_ARRAY` (`*mut ArrayHeader` bits, 0 = none)
     /// private to this object, holding the same NaN-boxed key strings (and
@@ -233,7 +203,8 @@ pub struct ObjectMeta {
     /// object. Class objects cannot also be native decoders or Sets.
     ///
     /// Native payload families and WeakMap/WeakSet store their object-owned
-    /// GC cell here as a POINTER_TAG word. The GC descriptor traces and
+    /// GC cell here as a POINTER_TAG word, and a plain runtime stream its
+    /// state record (`node_stream::state_record`). The GC descriptor traces and
     /// rewrites that edge. Other families store untagged POD and no edge.
     ///
     /// LAST FIELD ON PURPOSE: this record carries `offset_of!` assertions for

@@ -1556,7 +1556,8 @@ fn object_array_numeric_write_slots(
     // typed-layout verification, and the explicit inline-field escape hatch.
     // This loop bypasses the same observations/checks as the class-field
     // inline clone and therefore must honor the identical gate.
-    if keys.is_empty() || keys.len() > 4 || !crate::object::class_field_inline_guard_enabled() {
+    if keys.is_empty() || keys.len() > 4 || crate::typed_feedback::typed_feedback_trace_requested()
+    {
         trace_object_array_numeric_write_rejection("disabled gate or invalid field/count bound");
         return None;
     }

@@ -513,6 +513,7 @@ NONCOLLECTING = {
     "js_write_barrier",                              # gc/barrier.rs:930
     "js_tdz_suppress_begin", "js_tdz_suppress_end",  # box.rs:242/248 counter
     "js_array_note_numeric_write",                   # array/header.rs:1443
+    "js_array_note_numeric_write_value",             # the note + a header read + a leaf conversion
     # #11522: the `.length` fast lane only. `js_array_length` itself is NOT
     # here: its Proxy arm runs the `get` trap and its object arm runs getters
     # and `valueOf`, so it can collect.
@@ -3237,6 +3238,9 @@ HEAP_SOURCE_CALLS = frozenset({
     "js_gc_temp_root_get", "js_shadow_slot_get", "js_closure_get_capture_bits",
     "js_box_get_bits", "js_new_target_get",
     "js_static_this_resolve", "js_get_exception",
+    # A catch entry's try-end + get + clear in one call: hands back the
+    # exception exactly as js_get_exception does.
+    "js_catch_enter",
 })
 
 

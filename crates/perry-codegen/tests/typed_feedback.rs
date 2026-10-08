@@ -122,6 +122,7 @@ fn empty_opts() -> CompileOptions {
         imported_func_return_types: std::collections::HashMap::new(),
         imported_vars: std::collections::HashSet::new(),
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         needs_stdlib: false,
         program_is_synchronous: false,
         needs_ui: false,
@@ -625,8 +626,12 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
         "dispatching feedback wrappers must still be emitted in a default build \
          (property get):\n{ir}"
     );
+    // A method site's one cold call, `js_method_site_miss`, is that dispatcher
+    // for every receiver its memo cannot describe (a primitive goes straight
+    // to `js_typed_feedback_native_call_method_by_id`).
     assert!(
-        ir.contains("call double @js_typed_feedback_native_call_method"),
+        ir.contains("call double @js_typed_feedback_native_call_method")
+            || ir.contains("call double @js_method_site_miss("),
         "dispatching feedback wrappers must still be emitted in a default build \
          (method call):\n{ir}"
     );

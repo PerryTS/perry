@@ -15,7 +15,7 @@
 //!
 //! Being opaque is the whole cost. Every `this.f = p` inside that symbol emits
 //! the full class-field precheck (`expr/class_field_inline_guard.rs`): a
-//! volatile load of the policy latch, seven header loads, nine compares, and a
+//! receiver shape and header checks, compares, and a
 //! two-block diamond — per field, per object. Measured on `churn_alloc`'s
 //! 20 M-allocation loop that is ~45% of the program
 //! (`gc-handoff/ALLOC-NOTES.md` §6), and the corpus's own size-vs-writes
@@ -51,14 +51,8 @@
 //! their roots by `refresh_rooted_args`, so a collection during the allocation
 //! is already handled).
 //!
-//! Three conditions are **not** static, and all are still emitted — once for the
-//! whole construction rather than once per field:
+//! The value representation is checked once for the whole construction:
 //!
-//! * **The policy latch** `PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED`. It is
-//!   sticky 0 → 1 and flips when a prototype-level accessor/descriptor install
-//!   or typed-feedback tracing arms. Honouring it keeps the escape hatch real —
-//!   a knob whose off-state is not on the path it claims to gate is the failure
-//!   mode `CLAUDE.md`'s kill-policy section is about.
 //! * **The values.** A raw slot may hold only a plain finite double. The
 //!   conjunction of the per-value finite tests decides the whole construction,
 //!   so a single non-number sends *all* fields to the constructor call, which is

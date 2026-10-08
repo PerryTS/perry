@@ -640,6 +640,7 @@ where
             captured_args,
             shared_first_evaluation,
             evaluated_parent,
+            definition_steps,
             ..
         } => {
             if let Some(init) = shared_first_evaluation {
@@ -647,6 +648,9 @@ where
             }
             if let Some(parent) = evaluated_parent {
                 f(parent);
+            }
+            for step in definition_steps.iter_mut() {
+                f(step);
             }
             for (_, v) in named_statics.iter_mut() {
                 f(v);

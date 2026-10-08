@@ -76,7 +76,12 @@ pub(crate) unsafe fn mark_all_array_props(
     if !is_array_object(obj) {
         return false;
     }
+    // The first descriptor can grow the array to reserve its holder edge.
+    // Snapshot the property set before that growth leaves `arr` forwarded.
+    let _no_move = crate::gc::GcSuppressScope::new();
     let arr = array_header_mut(obj);
+    let len = (*arr).length;
+    let names = crate::array::array_named_property_names(arr, false);
     let gc = gc_header_for(arr.cast());
     (*gc)._reserved |= crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS;
     let addr = arr as usize;
@@ -100,11 +105,10 @@ pub(crate) unsafe fn mark_all_array_props(
             PropertyAttrs::new(false, false, false),
         );
     }
-    let len = (*arr).length;
     for i in 0..len {
         apply(i.to_string());
     }
-    for name in crate::array::array_named_property_names(arr, false) {
+    for name in names {
         apply(name);
     }
     true
@@ -643,10 +647,8 @@ pub(crate) unsafe fn define_array_property(
         }
 
         // Redefining an index that was previously an accessor back to a data
-        // property: drop the stale accessor entry. Through the funnel, so the
-        // owner index and (for a shaped receiver) the ShapeId follow — a raw
-        // table `remove` leaves `accessor_descriptor_keys_for_obj` reporting
-        // the key and every shape-keyed cache still claiming an accessor.
+        // property: clear the accessor pair and publish its successor holder
+        // shape, retiring every memo that still claims an accessor.
         clear_accessor_descriptor(current_arr() as usize, key_name);
         // [[DefineOwnProperty]] writes the slot directly — clear any stale
         // attrs first so the extend helper's [[Set]]-side writability check

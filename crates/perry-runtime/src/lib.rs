@@ -133,6 +133,7 @@ pub mod fast_hash;
 pub mod ffi;
 pub mod frame;
 pub mod fs;
+pub mod function_order;
 pub mod gc;
 pub mod hot_diag;
 pub mod intl;
@@ -149,6 +150,7 @@ pub mod native_arena;
 pub mod native_handle;
 pub mod native_payload;
 pub mod native_payload_abi;
+pub mod native_payload_buffer;
 pub mod native_payload_stream_abi;
 #[cfg(target_os = "linux")]
 mod native_stack;

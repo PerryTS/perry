@@ -107,7 +107,7 @@ pub(crate) fn set_symbol_property_attrs(
     if owner == 0 || sym_key == 0 {
         return;
     }
-    let _function_bag = crate::object::descriptor_state::FunctionBagEdit::new(owner);
+    let _holder_edit = crate::object::descriptor_state::HolderEdit::new(owner);
     if unsafe { crate::object::shaped_symbols::owner(owner).is_some() } {
         let old = unsafe { crate::object::shaped_symbols::entry(owner, sym_key) }.unwrap_or(0);
         unsafe {

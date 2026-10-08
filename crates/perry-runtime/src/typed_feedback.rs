@@ -43,11 +43,24 @@ fn typed_feedback_enabled() -> bool {
     }
 }
 
-/// #5093: whether typed-feedback tracing is active. Read once at `js_gc_init`
-/// to disable the codegen-inlined class-field fast path (which would skip the
-/// observation recording the guard does in this mode).
+/// Whether typed-feedback tracing is active. Instrumented runtime guards
+/// record observations through their collecting continuation in this mode.
 pub(crate) fn typed_feedback_active() -> bool {
     typed_feedback_enabled()
+}
+
+/// Numeric loop guards only decline when tracing was requested. Unit tests
+/// collect site observations unconditionally, without enabling trace mode.
+pub(crate) fn typed_feedback_trace_requested() -> bool {
+    #[cfg(test)]
+    {
+        std::env::var_os("PERRY_TYPED_FEEDBACK_TRACE").is_some()
+            || std::env::var_os("PERRY_TYPED_FEEDBACK").is_some()
+    }
+    #[cfg(not(test))]
+    {
+        typed_feedback_enabled()
+    }
 }
 
 #[cfg(test)]
@@ -1307,7 +1320,7 @@ fn plain_array_index_guard_impl(
             return false;
         }
         // Index accessors / custom attribute descriptors divert element
-        // reads and writes through the descriptor tables; the inline
+        // reads and writes through their holder shapes; the inline
         // raw-slot fast path the guard admits would bypass them (test262
         // sort/precise-* read accessor indices after defineProperty).
         if (*header)._reserved & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {

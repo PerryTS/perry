@@ -23,10 +23,8 @@ pub(crate) unsafe fn object_meta_ensure_for_cell(user_ptr: usize) -> Option<*mut
         return Some(*slot);
     }
     (*meta).prototype = 0;
-    (*meta).attr_key_bits = 0;
-    (*meta).accessor_key_bits = 0;
-    (*meta).descriptor_key_hash = 0;
-    (*meta).descriptor_key_count = 0;
+    (*meta).reserved_descriptor_words = [0; 2];
+    (*meta).reserved_descriptor_identity = [0; 2];
     (*meta).flags = 0;
     (*meta).spill = 0;
     (*meta).private_evaluation_brand = 0;
@@ -74,10 +72,8 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
         return (*obj).meta;
     }
     (*meta).prototype = 0;
-    (*meta).attr_key_bits = 0;
-    (*meta).accessor_key_bits = 0;
-    (*meta).descriptor_key_hash = 0;
-    (*meta).descriptor_key_count = 0;
+    (*meta).reserved_descriptor_words = [0; 2];
+    (*meta).reserved_descriptor_identity = [0; 2];
     (*meta).flags = 0;
     (*meta).spill = 0;
     (*meta).private_evaluation_brand = 0;

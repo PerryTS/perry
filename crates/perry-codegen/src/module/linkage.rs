@@ -87,6 +87,22 @@ pub(crate) fn collect_metadata_refs(text: &str, out: &mut HashSet<u32>) {
     }
 }
 
+/// `line` with its default-model (general-dynamic) `thread_local` specifier
+/// replaced by `thread_local(localexec)`, or `None` when it has none (not a
+/// thread-local, or one that already names its model).
+pub(crate) fn with_local_exec_tls(line: &str) -> Option<String> {
+    let (lhs, rhs) = line.split_once(" = ")?;
+    let at = rhs.find("thread_local ")?;
+    if at != 0 && !rhs[..at].ends_with(' ') {
+        return None;
+    }
+    Some(format!(
+        "{lhs} = {}thread_local(localexec) {}",
+        &rhs[..at],
+        &rhs[at + "thread_local ".len()..]
+    ))
+}
+
 /// True when a global definition already carries LOCAL linkage
 /// (`private`/`internal`). Those are the only definitions whose promotion
 /// `codegen_unit_parts` may skip: a local symbol cannot collide with anything

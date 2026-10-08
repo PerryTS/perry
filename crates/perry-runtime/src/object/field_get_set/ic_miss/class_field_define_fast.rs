@@ -78,16 +78,11 @@ pub(super) fn try_define_new_class_field(receiver: f64, key: f64, value: f64) ->
         {
             return false;
         }
-        // No metadata beyond overflow storage, and no possible descriptor entry
-        // for this key (a clear summary bit is authoritative).
+        // Custom prototype and branding require the general define route.
+        // The own shape entry below decides the property attributes.
         let meta = (*obj).meta;
         if !meta.is_null() {
-            let key_bit = 1u64 << (crate::object::key_bytes_hash(key_bytes.as_ptr(), key_len) & 63);
-            if (*meta).prototype != 0
-                || (*meta).flags != 0
-                || (*meta).private_evaluation_brand != 0
-                || (*meta).attr_key_bits & key_bit != 0
-                || (*meta).accessor_key_bits & key_bit != 0
+            if (*meta).prototype != 0 || (*meta).flags != 0 || (*meta).private_evaluation_brand != 0
             {
                 return false;
             }

@@ -180,6 +180,17 @@ pub(crate) struct ShapeDescriptor {
 /// Shape identity is the FACTS, never the storage address. A descriptor value
 /// lifted out of the table compares equal to the record it came from.
 impl ShapeDescriptor {
+    /// Own data keys a receiver kind can synthesize outside its inline bag.
+    /// An absent bag slot cannot prove any of these keys absent. Function
+    /// bodies differ in whether they own `prototype`, so this is a conservative
+    /// set; methods on that key keep the ordinary property read.
+    pub(crate) fn implicit_own_keys(&self) -> &'static [&'static [u8]] {
+        match self.object_kind {
+            ShapeObjectKind::Function => &[b"name", b"length", b"prototype"],
+            _ => &[],
+        }
+    }
+
     #[inline]
     pub(crate) fn constfn_infos(&self) -> &[shapes_store::ConstFnSlotInfo] {
         if self.extras == 0 {

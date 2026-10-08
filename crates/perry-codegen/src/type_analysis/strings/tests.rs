@@ -116,6 +116,7 @@ fn concat_probe_ir(property: &str) -> String {
     let opts = CompileOptions {
         emit_ir_only: true,
         output_type: "executable".to_string(),
+        disable_constfn_shapes: false,
         type_aliases: rec_alias(),
         ..Default::default()
     };

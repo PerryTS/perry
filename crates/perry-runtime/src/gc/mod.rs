@@ -1047,7 +1047,6 @@ pub fn gc_init() {
     // tables (defineProperty accessors/attrs) and the proxy registry +
     // reflect-metadata store were invisible to GC — values swept/moved under
     // live references, owner keys stale after evacuation.
-    reg_scanner!(crate::object::descriptor_state::scan_descriptor_roots_mut);
     // #8067: the descriptor table is weak. Live-object layout scans trace its
     // ordered-keys slot; this scanner only follows existing forwarding records
     // for descriptors and the pointer-keyed slot accelerator after evacuation.
@@ -1402,17 +1401,6 @@ pub extern "C" fn js_gc_init() {
     crate::startup_memory_profile::retain_constructor();
     crate::node_submodules::diagnostics_channel_init_main_thread();
     crate::node_submodules::init_trace_events_runtime();
-    // #5093: force every class-field access back through the full guard call —
-    // i.e. disable the codegen-inlined fast path — when:
-    //   - typed-feedback tracing is on (the guard observes every access), or
-    //   - the explicit escape hatch `PERRY_DISABLE_CLASS_FIELD_INLINE` is set to
-    //     a truthy value (perf bisection / A-B measurement). `=0`/`=false`/`=off`
-    //     leave the fast path enabled.
-    if crate::typed_feedback::typed_feedback_active()
-        || env_flag_enabled("PERRY_DISABLE_CLASS_FIELD_INLINE")
-    {
-        crate::object::disable_class_field_inline_guard();
-    }
     gc_init();
     // Optional runtime features install from the program's generated
     // installer (see `crate::feature_hooks`), before any user code runs.
@@ -1472,6 +1460,12 @@ fn emit_incremental_liveness_diag() {
     if EMITTED.swap(true, std::sync::atomic::Ordering::SeqCst) {
         return;
     }
+    let (edges, published, payload_bytes) = crate::object::canonical_keys::canonical_trie_stats();
+    let (_, backings, slots, _) = crate::object::canonical_keys::canonical_storage_stats();
+    eprintln!(
+        "[gc-canonical-trie] edges={edges} published={published} reserved_payload_bytes={payload_bytes} backings={backings} backing_bytes={}",
+        slots * 8
+    );
     let (reentrant, no_trigger, start_blocked, resume_blocked) = instruments::budgeted_step_skips();
     let (blocked_alloc, blocked_unsafe_zone, blocked_root_lock) =
         instruments::moving_safepoints_blocked_by_other_guards();

@@ -1179,15 +1179,14 @@ unsafe fn format_object_as_json(
 
     // Honor `Object.defineProperty(..., { enumerable: false })`. By default
     // we include every key in the `keys_array` (enumerability is rarely
-    // overridden, so the descriptor table is empty — early-out via the
-    // global flag avoids per-key lookups on the common path). When at
-    // least one descriptor exists, consult it per key:
+    // overridden, so the own holder shape summary usually admits every
+    // key). Customized attributes are read from that same shape per key:
     //   - enumerable + any case → print as `key: value`
     //   - non-enumerable + showHidden → print as `[key]: value` (Node-style)
     //   - non-enumerable + !showHidden → skip
     // See #1200.
     let show_hidden = inspect_show_hidden();
-    let descriptors_in_use = crate::object::descriptors_in_use();
+    let descriptors_in_use = crate::object::owner_has_property_descriptors(obj_ptr as usize);
 
     let mut string_parts: Vec<(String, String)> = Vec::with_capacity(key_count);
 

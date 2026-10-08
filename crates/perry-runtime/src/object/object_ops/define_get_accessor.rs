@@ -340,10 +340,10 @@ mod tests {
         }
     }
 
-    /// #9103 follow-up: the one-call installer's side-table state is
+    /// #9103 follow-up: the one-call installer's holder-shape state is
     /// identical to the two-call `set_accessor_descriptor` +
     /// `set_property_attrs` sequence it replaces — descriptor entry, attrs,
-    /// and the owner index (exactly one entry, so enumeration reports the
+    /// and the holder key list (exactly one entry, so enumeration reports the
     /// key once).
     #[test]
     fn combined_installer_matches_two_call_sequence() {
@@ -380,7 +380,7 @@ mod tests {
             assert_eq!(
                 keys.iter().filter(|k| k.as_str() == "beta").count(),
                 1,
-                "{label}: owner index holds the key exactly once"
+                "{label}: holder key list holds the key exactly once"
             );
         }
     }

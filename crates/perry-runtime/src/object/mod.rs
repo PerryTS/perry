@@ -366,20 +366,16 @@ pub use class_meta_registry::{
 };
 #[cfg(test)]
 pub(crate) use descriptor_state::test_may_have_descriptor_entry;
-pub use descriptor_state::PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED;
 pub(crate) use descriptor_state::{
-    accessor_descriptor_keys_for_obj, class_field_inline_guard_enabled,
-    class_instance_set_may_intercept, clear_accessor_descriptor, clear_property_attrs,
-    constructor_accessor_ever_installed, define_builtin_data_property, descriptors_in_use,
-    disable_class_field_inline_guard, get_accessor_descriptor, get_property_attrs,
-    install_fresh_accessor_property, json_object_getter_value, mark_all_keys,
+    accessor_descriptor_keys_for_obj, class_instance_set_may_intercept, clear_accessor_descriptor,
+    clear_property_attrs, define_builtin_data_property, get_accessor_descriptor,
+    get_property_attrs, install_fresh_accessor_property, json_object_getter_value, mark_all_keys,
     object_has_descriptors, object_proto_may_intercept_key, own_descriptors_skip_key,
     owner_has_property_descriptors, owner_may_have_descriptor_entries,
     plain_custom_prototype_may_intercept, plain_data_write_may_intercept,
-    prune_dead_descriptor_owner_entries, prune_dead_descriptor_owner_entries_young,
     reflect_getter_closure_bits, set_accessor_descriptor, set_builtin_accessor_descriptor,
-    set_builtin_accessor_pair, set_builtin_property_attrs, set_property_attrs,
-    transfer_descriptor_owner, AccessorDescriptor, DescriptorTables, PropertyAttrs,
+    set_builtin_accessor_pair, set_builtin_property_attrs, set_property_attrs, AccessorDescriptor,
+    PropertyAttrs,
 };
 pub(crate) use field_get_set::FieldLookupCaches;
 pub(crate) use field_get_set::{
@@ -1741,25 +1737,29 @@ pub(crate) unsafe fn object_keys_and_live_slot_count(
     let Some(record) = shapes::object_shape_record(obj) else {
         return (ObjectKeys::NONE, 0);
     };
-    let live_slots = record.live_inline_slot_count();
+    (
+        object_keys_from_shape_record(obj, record),
+        record.live_inline_slot_count(),
+    )
+}
+
+/// Ordered keys from the receiver's already borrowed, current shape record.
+/// The caller must keep `obj` and `record` current across this non-collecting read.
+#[inline]
+pub(crate) unsafe fn object_keys_from_shape_record(
+    obj: *const ObjectHeader,
+    record: shapes::ShapeRecordRef,
+) -> ObjectKeys {
     if record.keys() != 0 {
         let keys = ObjectKeys::new(
             record.keys() as usize as *mut ArrayHeader,
             record.logical_key_count(),
         );
-        return (keys, live_slots);
+        return keys;
     }
-    // The shape publishes no keys. Either the receiver genuinely has none, or
-    // it is in DICTIONARY MODE and carries its own ordered list (#10868 step
-    // 2.5 stage 1, `object/dictionary.rs`). This is the single derivation of
-    // "the receiver's keys" in the runtime, which is why one branch here gives
-    // every enumeration walk, `in`/`hasOwn`, `delete` and `JSON.stringify`
-    // node-identical behaviour on a dictionary object with no second
-    // implementation of key order. An ordinary receiver never reaches this
-    // line — the nonzero `keys` word returns above — so the branch costs
-    // nothing on the path that matters. A dictionary list is the receiver's
-    // own, so its header length is its count.
-    (ObjectKeys::owned(dictionary::keys_array(obj)), live_slots)
+    // A dictionary shape's ordered list belongs to its receiver. Its header
+    // supplies the count; normal shapes use their immutable prefix above.
+    ObjectKeys::owned(dictionary::keys_array(obj))
 }
 
 /// Return the two shape facts needed together by callback-free serializers.
@@ -1822,9 +1822,7 @@ const _: () = assert!(
 const _: () = assert!(std::mem::size_of::<crate::array::ArrayHeader>() == 8);
 
 pub(crate) mod cell_meta;
-pub(crate) use cell_meta::{
-    cell_expando_ensure, cell_expando_get, cell_meta_slot, cell_meta_slot_for_header,
-};
+pub(crate) use cell_meta::{cell_expando_ensure, cell_expando_get, cell_meta_slot};
 // `cell_has_meta_edge` is `#[cfg(test)]` in `cell_meta`, so its re-export
 // must be too or the import is unresolved in a non-test build.
 #[cfg(test)]

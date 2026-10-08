@@ -699,15 +699,9 @@ pub(crate) unsafe fn copy_entries(
 // Object-level readers: what a receiver's own key's attributes are.
 // ---------------------------------------------------------------------------
 
-/// Is `addr` a heap object whose attributes live with its keys? The ONE
-/// predicate that routes a descriptor LOOKUP to the keys instead of the
-/// owner-keyed tables. Every other cell kind (arrays, closures, exotic cells,
-/// typed arrays) keeps the tables for now.
-///
-/// Reads the header through the same reader the meta summary probe uses.
-/// Handle owners never reach it (they probe the tables through
-/// `get_handle_*`); anything that WRITES must use
-/// [`attrs_live_in_keys_for_install`] instead.
+/// Is `addr` an ordinary property holder whose attributes live in its keys?
+/// Every receiver kind normalizes its descriptor storage to such a holder.
+/// Reads classify known cells; installs prove allocator ownership separately.
 ///
 /// # Safety
 /// `addr` is a descriptor owner.
@@ -792,10 +786,17 @@ pub(crate) unsafe fn object_key_has_private_entry(
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn object_key_entry(obj: *const crate::object::ObjectHeader, key: &[u8]) -> u8 {
-    if object_summary(obj) & SUMMARY_KEY_BITS == 0 {
+    let Some(record) = crate::object::shapes::object_shape_record(obj) else {
+        return 0;
+    };
+    if record.summary() & SUMMARY_KEY_BITS == 0 {
         return 0;
     }
-    object_key_entry_filtered(obj, key, false)
+    object_key_entry_filtered(
+        crate::object::object_keys_from_shape_record(obj, record),
+        key,
+        false,
+    )
 }
 
 /// Is `obj`'s own key `key` an accessor? The accessor filters answer most
@@ -808,19 +809,26 @@ pub(crate) unsafe fn object_key_is_accessor(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    if object_summary(obj) & SUMMARY_ACCESSOR == 0 {
+    let Some(record) = crate::object::shapes::object_shape_record(obj) else {
+        return false;
+    };
+    if record.summary() & SUMMARY_ACCESSOR == 0 {
         return false;
     }
-    object_key_entry_filtered(obj, key, true) & ENTRY_ACCESSOR != 0
+    object_key_entry_filtered(
+        crate::object::object_keys_from_shape_record(obj, record),
+        key,
+        true,
+    ) & ENTRY_ACCESSOR
+        != 0
 }
 
 #[inline(never)]
 unsafe fn object_key_entry_filtered(
-    obj: *const crate::object::ObjectHeader,
+    keys: crate::object::ObjectKeys,
     key: &[u8],
     accessor: bool,
 ) -> u8 {
-    let keys = crate::object::object_keys(obj);
     if keys.is_null() || !keys_may_carry(keys.arr(), keys.count(), key, accessor) {
         return 0;
     }
@@ -843,7 +851,10 @@ pub(crate) unsafe fn object_key_entry_for_string(
     obj: *const crate::object::ObjectHeader,
     key: *const crate::StringHeader,
 ) -> u8 {
-    if object_summary(obj) & SUMMARY_KEY_BITS == 0 {
+    let Some(record) = crate::object::shapes::object_shape_record(obj) else {
+        return 0;
+    };
+    if record.summary() & SUMMARY_KEY_BITS == 0 {
         return 0;
     }
     if key.is_null() {
@@ -853,7 +864,11 @@ pub(crate) unsafe fn object_key_entry_for_string(
         crate::value::JSValue::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     match crate::string::js_string_key_bytes(boxed, &mut sso) {
-        Some(bytes) => object_key_entry_filtered(obj, bytes, false),
+        Some(bytes) => object_key_entry_filtered(
+            crate::object::object_keys_from_shape_record(obj, record),
+            bytes,
+            false,
+        ),
         None => ENTRY_ACCESSOR,
     }
 }
@@ -898,12 +913,24 @@ pub(crate) unsafe fn object_key_blocks_plain_store(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    if object_summary(obj) & SUMMARY_BLOCKS_STORE == 0 {
+    let Some(record) = crate::object::shapes::object_shape_record(obj) else {
+        return false;
+    };
+    let summary = record.summary();
+    if summary & SUMMARY_BLOCKS_STORE == 0 {
         #[cfg(feature = "attr-census")]
         crate::object::attr_census::note_global("read.store_check_summary_clear");
         return false;
     }
-    !entry_is_plain_writable_data(object_key_entry_filtered(obj, key, false))
+    // If every data property is writable, only an accessor can intercept.
+    // Use the existing accessor filter: non-enumerable prototype methods
+    // need no lookup for a store merely because another key is an accessor.
+    let accessor_only = summary & SUMMARY_NON_WRITABLE == 0;
+    !entry_is_plain_writable_data(object_key_entry_filtered(
+        crate::object::object_keys_from_shape_record(obj, record),
+        key,
+        accessor_only,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -930,6 +957,7 @@ pub(crate) enum AttrsEdit<'a> {
     /// non-writable (`Object.freeze` / `Object.seal`).
     Integrity { freeze: bool },
     /// Every key returns to the default.
+    #[cfg(test)]
     ClearAll,
     /// `key` is claimed as a private field ([`PRIVATE_FIELD_ENTRY`]).
     Private(&'a [u8]),
@@ -945,7 +973,9 @@ impl AttrsEdit<'_> {
             | AttrsEdit::Accessor(k, _, _)
             | AttrsEdit::ClearAccessor(k)
             | AttrsEdit::Private(k) => Some(k),
-            AttrsEdit::Integrity { .. } | AttrsEdit::ClearAll => None,
+            AttrsEdit::Integrity { .. } => None,
+            #[cfg(test)]
+            AttrsEdit::ClearAll => None,
         }
     }
 
@@ -974,6 +1004,7 @@ impl AttrsEdit<'_> {
             AttrsEdit::Integrity { freeze } => {
                 old | ENTRY_NON_CONFIGURABLE | if freeze { ENTRY_NON_WRITABLE } else { 0 }
             }
+            #[cfg(test)]
             AttrsEdit::ClearAll => 0,
         }
     }

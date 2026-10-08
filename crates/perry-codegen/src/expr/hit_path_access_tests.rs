@@ -181,6 +181,83 @@ fn declared_typed_array_unproven_index_access_is_inline() {
     );
 }
 
+/// `probe(a: Float64Array, i, v) { a[i] = v; return a[i] }`: views must not
+/// reshape an owner's resolution. The owner arm is one branch to the store
+/// join, the join has exactly two arms (owner and view), and a bagged view
+/// finds its owner inside the view block (a `select` of the bag's fixed
+/// `BYTES_VIEW_BAG_OWNER` slot), with no block, join or phi operand of its own
+/// in the loop body an owner runs.
+#[test]
+fn owner_element_store_join_has_no_bag_arm() {
+    fn labels<'a>(ir: &'a str, prefix: &str) -> Vec<&'a str> {
+        ir.lines()
+            .filter(|l| l.starts_with(prefix) && l.ends_with(':'))
+            .map(|l| l.trim_end_matches(':'))
+            .collect()
+    }
+    let ir = probe_ir(&module(
+        "ta_owner_store_join",
+        vec![
+            param(1, named("Float64Array")),
+            param(2, Type::Number),
+            param(3, Type::Number),
+        ],
+        vec![
+            Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::LocalGet(2)),
+                value: Box::new(Expr::LocalGet(3)),
+            }),
+            Stmt::Return(Some(Expr::IndexGet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::LocalGet(2)),
+            })),
+        ],
+    ));
+    let stores = labels(&ir, "bytes.store.");
+    let views = labels(&ir, "bytes.view.owner.");
+    assert!(
+        stores.len() >= 2 && views.len() == stores.len() && ir.contains("tav.set.fast"),
+        "the owner store and read must resolve inline, each with its view arm:\n{ir}"
+    );
+    assert!(
+        !ir.lines().any(|l| l.starts_with("bytes.view.bag")),
+        "a bagged view has no block of its own:\n{ir}"
+    );
+    for label in stores {
+        let body = block_body(&ir, label).expect("the store join exists");
+        let phis: Vec<&str> = body.lines().filter(|l| l.contains(" = phi ")).collect();
+        assert_eq!(phis.len(), 3, "owner, word and offset join once:\n{body}");
+        for phi in phis {
+            assert!(
+                phi.matches("[ ").count() == 2
+                    && phi.contains("%bytes.owner.")
+                    && phi.contains("%bytes.view.owner."),
+                "the store join takes the owner and view arms only: {phi}"
+            );
+        }
+    }
+    for label in labels(&ir, "bytes.owner.") {
+        let body = block_body(&ir, label).unwrap();
+        let insts: Vec<&str> = body.lines().filter(|l| !l.trim().is_empty()).collect();
+        assert!(
+            insts.len() == 1 && insts[0].trim_start().starts_with("br label %bytes.store."),
+            "the owner arm is one branch to the store join:\n{body}"
+        );
+    }
+    for label in views {
+        let body = block_body(&ir, label).unwrap();
+        let last = body.lines().last().unwrap().trim_start();
+        assert!(
+            body.contains(&format!(", {}", crate::runtime_abi::BYTES_VIEW_BAG_OWNER))
+                && body.contains("select i1")
+                && last.starts_with("br i1")
+                && last.contains("%bytes.store."),
+            "the view block reads a bag's owner slot in line and admits to the join:\n{body}"
+        );
+    }
+}
+
 /// The inline typed-array store admits only plain doubles (anything NaN-boxed
 /// needs the runtime's ToNumber), and its integer kinds use the exact modular
 /// ToInt32 — the unwrapped conversion is poison for |v| >= 2^63.

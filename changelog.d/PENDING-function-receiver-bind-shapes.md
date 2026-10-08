@@ -1,0 +1,7 @@
+### Function receiver method sites and bind metadata
+
+- Function receivers use their ShapeId and the shared inherited-holder method site for `bind`, `call`, `apply`, and other prototype methods. Capture count no longer fragments receiver identity. Native argument-list bodies enter through their ordinary body ABI. This removes the function-intrinsic site table and its name-specific miss answers.
+- The bind thunk enters `js_function_bind` directly, which owns the callable brand check. `bind` reads untouched compiled-function length directly from body metadata when the birth shape proves its own data properties are unchanged, reuses the receiver root, and roots the fresh bound function only when a subsequent property allocation needs it. Modified metadata keeps observable HasOwnProperty/Get behavior, with length read before name.
+- Added Node parity coverage for functions, arrows, classes, bound functions, prototype and own overrides, metadata getters, construction, and lookup before argument effects; added runtime guard and codegen reachability sabotages.
+
+Zod ×5000 instructions fall by 12.71% (8.627 G → 7.531 G); RSS stays flat. Function-site misses fall from 2,040,014 to 134. A 100k-bind micro pays the existing full-global initialization cost when its first site materializes Function.prototype; at one million binds instructions fall by 12.79%. Shape descriptors also expose implicit own data keys, so a bag miss cannot skip intrinsic function metadata.

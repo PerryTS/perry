@@ -384,6 +384,8 @@ silently regressing to zero.
 | `--no-auto-optimize` | Use the prebuilt full runtime/stdlib instead of rebuilding the smallest reachable feature set. |
 | `--fast-math` | Permit floating-point reassociation; see [Fast-math](fast-math.md). |
 | `--fp-contract off\|on\|fast` | Control fused multiply-add contraction separately from reassociation. |
+| `--record-function-order` | Build a binary that appends each compiled function's name to `$PERRY_FUNCTION_ORDER_OUT` the first time it runs; see [Function Order](function-order.md). |
+| `--function-order <FILE>` | Place the functions a recording listed first and together, in list order, so startup code shares pages; unknown names are ignored. See [Function Order](function-order.md). |
 
 Minification strips comments, collapses whitespace, and mangles local variable/parameter/non-exported function names for smaller output.
 

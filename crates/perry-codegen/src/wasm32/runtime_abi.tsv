@@ -128,6 +128,7 @@ js_array_map_discard	void	ptr,ptr
 js_array_mark_arguments_object	ptr	ptr
 js_array_mark_numeric_f64_layout	i32s	ptr
 js_array_note_numeric_write	void	ptr,i64
+js_array_note_numeric_write_value	f64	ptr,f64
 js_array_numeric_get_f64_unboxed	f64	ptr,i32u
 js_array_numeric_push_f64_unboxed	ptr	ptr,f64
 js_array_numeric_range_add	i64	f64,f64,f64,f64
@@ -547,6 +548,7 @@ js_callback_timer_has_pending	i32s
 js_callback_timer_next_deadline	f64	
 js_callback_timer_tick	i32s	
 js_cancel_frame	void	i64
+js_catch_enter	f64	
 js_checkpoint	void	i32s
 js_cheerio_load	i64	ptr
 js_cheerio_load_fragment	i64	ptr
@@ -598,6 +600,8 @@ js_class_env_register_state	void	i32u,ptr
 js_class_env_set	void	f64,i32u,i32u,f64
 js_class_env_stamp	f64	f64,i32u,f64
 js_class_evaluation_object	i64	i32u,i32u,i32u,ptr
+js_class_evaluation_object_with_prototype	i64	i32u,i32u,i32u,ptr,f64,f64
+js_class_evaluation_parent_prototype	f64	i32u,f64
 js_class_field_add	f64	f64,f64,f64
 js_class_field_get_ic	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
 js_class_field_get_ic_fast	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
@@ -1449,6 +1453,7 @@ js_fs_writev_sync	f64	f64,f64,f64
 js_function_apply_proxy	f64	f64,f64,f64
 js_function_bind	f64	f64,ptr,usize
 js_function_ctor_from_strings	f64	ptr,usize
+js_function_order_first_call	void	ptr
 js_function_prototype_value_for_read	f64	f64
 js_gc_collect	void	
 js_gc_enter_unsafe_zone	void	
@@ -2784,6 +2789,14 @@ js_perry_net_write	i32s	i64,ptr,usize,i64,ptr,ptr
 js_perry_payload_abi_layout	i64	
 js_perry_payload_alloc	f64	ptr,ptr,f64,usize
 js_perry_payload_attach	i32s	f64,ptr,ptr,usize
+js_perry_payload_buffer_abi	i64	
+js_perry_payload_buffer_alloc	ptr	ptr,usize,ptr
+js_perry_payload_buffer_grow	ptr	ptr,ptr,usize,usize,ptr
+js_perry_payload_buffer_hook_alloc	ptr	ptr,usize
+js_perry_payload_buffer_hook_free	void	ptr,ptr
+js_perry_payload_buffer_live_bytes	usize	
+js_perry_payload_buffer_release	void	ptr,ptr,usize
+js_perry_payload_buffer_shrink	ptr	ptr,ptr,usize,usize,ptr
 js_perry_payload_close	i32s	f64,ptr
 js_perry_payload_close_attached	i32s	f64,ptr
 js_perry_payload_external_bytes	void	f64,ptr,usize
@@ -3675,6 +3688,8 @@ js_super_accessor_get	f64	i32u,f64,f64
 js_super_construct_apply	f64	i32u,f64,f64
 js_super_method_call_dynamic	f64	i32u,ptr,usize,f64,ptr,usize
 js_super_method_call_dynamic_apply	f64	i32u,ptr,usize,f64,f64
+js_super_method_call_key	f64	i32u,f64,f64,ptr,usize
+js_super_method_call_key_apply	f64	i32u,f64,f64,f64
 js_super_put_value_set	f64	i32u,f64,f64,f64,i32s
 js_suppressed_error_new	f64	f64,f64,f64
 js_switch_strict_equals	i32s	f64,f64

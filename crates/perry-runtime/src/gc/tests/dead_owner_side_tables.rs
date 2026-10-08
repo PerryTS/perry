@@ -299,11 +299,7 @@ fn test_tenured_owner_descriptor_entries_survive_minor_gc() {
     let _ = gc_collect_minor();
 
     assert!(
-        crate::state::state()
-            .descriptors
-            .accessor_descriptors
-            .borrow()
-            .contains_key(&(addr, "oldKey".to_string())),
+        crate::object::get_accessor_descriptor(addr, "oldKey").is_some(),
         "an old-gen owner's descriptor entry must survive a minor GC — \
          minor-trace deadness is not trustworthy for tenured objects"
     );
@@ -532,7 +528,11 @@ fn test_dead_owner_prototype_vm_expando_and_filehandle_entries_pruned() {
         "status",
         crate::value::TAG_TRUE,
     );
-    assert!(crate::object::exotic_expando::test_exotic_expando_entry_exists(promise));
+    assert!(unsafe { crate::object::cell_expando_get(promise).is_some() });
+    assert!(
+        !crate::object::exotic_expando::test_exotic_expando_entry_exists(promise),
+        "promise properties use its traced child bag, not the owner table"
+    );
 
     // VM_SCRIPTS: retains full source text per vm.Script.
     let (vm_owner, _) = unsafe { alloc_nursery_test_object(0) };
@@ -554,7 +554,7 @@ fn test_dead_owner_prototype_vm_expando_and_filehandle_entries_pruned() {
     );
     assert!(
         !crate::object::exotic_expando::test_exotic_expando_entry_exists(promise),
-        "dead promise's EXOTIC_EXPANDO entry must be pruned"
+        "a dead promise must leave no expando owner-table entry"
     );
     assert!(
         !crate::node_vm::test_vm_script_entry_exists(vm_owner),

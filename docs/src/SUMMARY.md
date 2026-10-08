@@ -170,6 +170,7 @@
 - [Source-level Debugging](cli/debugging.md)
 - [Cache Directory](cli/cache-dir.md)
 - [Fast-math (`--fast-math`)](cli/fast-math.md)
+- [Function Order (`--function-order`)](cli/function-order.md)
 - [Dynamic Stdlib Dispatch](cli/dynamic-dispatch.md)
 - [JS Runtime Opt-In](cli/allow-js-runtime.md)
 - [`PERRY_SANDBOX_BUILDRS`](cli/sandbox-buildrs.md)

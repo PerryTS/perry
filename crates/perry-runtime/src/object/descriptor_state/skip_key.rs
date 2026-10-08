@@ -41,30 +41,5 @@ unsafe fn own_descriptors_skip_key_slow(addr: usize, key: f64) -> bool {
     if super::key_attrs::attrs_live_in_keys(addr) {
         return super::key_attrs::object_key_entry(addr as *const ObjectHeader, bytes) == 0;
     }
-    // Exact when this owner carries descriptors for one key only (zod's
-    // `_zod`): a full-width hash compare, no Bloom, no table probe.
-    if let Some(meta) = descriptor_summary_meta(addr) {
-        if !meta.is_null() && (*meta).descriptor_key_count == 1 {
-            return super::key_bytes_hash(bytes.as_ptr(), bytes.len())
-                != (*meta).descriptor_key_hash;
-        }
-    }
-    if !own_descriptor_may_cover_key(addr, key) {
-        // Clear summary bits are authoritative: no entry can exist.
-        return true;
-    }
-    // A SET bit is a maybe — the summary is 64 bits wide, so roughly one key
-    // in 64 collides with a descriptor key. Confirm against the tables rather
-    // than surrendering the fast path.
-    //
-    // This matters far more than the collision rate suggests: a store that
-    // takes the slow path appends to a PRIVATE keys array, which takes the
-    // receiver off the shared transition chain for good. Every later store on
-    // it then misses the lane too. With one descriptor (`_zod`) and keys
-    // `p0..p39`, `p17` collides — so every receiver derailed at the same
-    // store and lost the chain for its remaining 23 properties.
-    let Ok(name) = std::str::from_utf8(bytes) else {
-        return false;
-    };
-    get_accessor_descriptor(addr, name).is_none() && get_property_attrs(addr, name).is_none()
+    !own_descriptor_may_cover_key(addr, key)
 }

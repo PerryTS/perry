@@ -325,18 +325,12 @@ pub(crate) fn test_clear_symbol_side_table_roots() {
 #[cfg(test)]
 pub(crate) fn test_seed_symbol_property_root(owner: usize, sym_key: usize, value_bits: u64) {
     if owner != 0 && sym_key != 0 {
-        store_object_symbol_property_root(owner, sym_key, value_bits);
+        // Exercise the retained fallback scanner directly. Public installs on
+        // arrays and ordinary cells now publish symbol slots in holder shapes.
+        let mut guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
+        let map = guard.get_or_insert_with(new_ptr_hash_map);
+        merge_symbol_property_entries(map.entry(owner).or_default(), vec![(sym_key, value_bits)]);
     }
-}
-
-#[cfg(test)]
-pub(crate) fn test_symbol_property_roots(owner: usize) -> Vec<(usize, u64)> {
-    let guard = crate::gc::lock_gc_root_registry(&SYMBOL_PROPERTIES);
-    guard
-        .as_ref()
-        .and_then(|map| map.get(&owner))
-        .cloned()
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

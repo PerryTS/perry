@@ -491,9 +491,6 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
             .clone()
             .expect("the shape-keyed arm always emits the runtime query"),
     };
-    let gate = blk.load_volatile(I8, "@PERRY_CLASS_FIELD_INLINE_GUARD_DISABLED");
-    let gate_ok = blk.icmp_eq(I8, &gate, "0");
-
     let mut acc = blk.and(I1, &is_ptr1, &above1);
     acc = blk.and(I1, &acc, &is_array1);
     if let Some(trip_ok) = trip_ok {
@@ -502,7 +499,6 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     if let Some(index_ok) = index_ok {
         acc = blk.and(I1, &acc, &index_ok);
     }
-    acc = blk.and(I1, &acc, &gate_ok);
 
     // No terminator: the caller branches after proving the clone call-free.
     Ok(ElementShapeGuardOutputs {

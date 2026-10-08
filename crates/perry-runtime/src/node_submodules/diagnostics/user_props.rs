@@ -59,30 +59,6 @@ pub fn error_user_prop(error_ptr: usize, key: &str) -> Option<f64> {
     }
 }
 
-/// Remove a user-assigned own property from an Error object. Returns true
-/// when the property existed (used by `delete err.prop` and data↔accessor
-/// descriptor conversions).
-pub fn remove_error_user_prop(error_ptr: usize, key: &str) -> bool {
-    if error_ptr == 0 {
-        return false;
-    }
-    unsafe {
-        let Some(bag) = crate::object::cell_expando_get(error_ptr) else {
-            return false;
-        };
-        let key_ptr = js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        let key_boxed = f64::from_bits(crate::js_nanbox_string(key_ptr as i64).to_bits());
-        if !crate::object::obj_value_has_own_key(
-            crate::value::js_nanbox_pointer(bag as i64),
-            key_boxed,
-        ) {
-            return false;
-        }
-        crate::object::js_object_delete_field(bag, key_ptr);
-        true
-    }
-}
-
 /// Return user-assigned own properties on an Error object as materialized JS
 /// values so util.inspect/console formatting can show them.
 pub fn error_user_props(error_ptr: usize) -> Vec<(String, f64)> {

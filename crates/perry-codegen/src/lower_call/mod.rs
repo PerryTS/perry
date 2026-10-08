@@ -584,6 +584,20 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    // A static field used as a callee remains a property Reference:
+    // P.f() binds P. Read-only StaticFieldGet lowering otherwise loses it.
+    if let Expr::StaticFieldGet {
+        class_name,
+        field_name,
+    } = callee
+    {
+        let reference = Expr::PropertyGet {
+            object: Box::new(Expr::ClassRef(class_name.clone())),
+            property: field_name.clone(),
+            byte_offset: ctx.strings.pending_call_offset(),
+        };
+        return lower_call(ctx, &reference, args);
+    }
     // #11826: a module-level TDZ check is an inline compare, never a call.
     if let Some(v) = crate::expr::tdz_module_check::try_lower(ctx, callee, args)? {
         return Ok(v);

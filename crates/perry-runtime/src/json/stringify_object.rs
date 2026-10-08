@@ -292,7 +292,7 @@ unsafe fn stringify_object_walk(
     if depth > 0
         && num_fields >= 5
         && !has_overflow_fields
-        && !crate::object::descriptors_in_use()
+        && crate::object::key_attrs::object_summary(obj) == 0
         && !inherited_to_json_possible
         // A private field (#11791) is an own key no template may emit.
         && crate::object::key_attrs::object_summary(obj) & crate::object::key_attrs::SUMMARY_PRIVATE
@@ -519,8 +519,7 @@ unsafe fn stringify_object_walk(
         crate::object::key_attrs::object_summary(ptr as *const crate::ObjectHeader)
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0
-            || (crate::object::object_has_descriptors(ptr as usize)
-                && crate::object::descriptors_in_use());
+            || (crate::object::object_has_descriptors(ptr as usize));
     buf.push('{');
     let mut first = true;
     // `pos(j)` maps the j-th enumerated slot to its key/field index: spec

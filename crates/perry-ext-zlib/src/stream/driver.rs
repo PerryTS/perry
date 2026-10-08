@@ -1,6 +1,8 @@
 //! Codec input and readable output belong to the stream, not a global queue.
 //! `WouldBlock` means another write is needed; EOF means the caller ended it.
 use super::*;
+use allocation::Placed;
+use perry_ffi::native_payload::buffer::{BufferOwner, PayloadBuffer};
 use std::io::{self, BufRead, ErrorKind};
 
 /// A step-local borrow, cleared before the step returns. Only the two sniff
@@ -91,22 +93,23 @@ impl Read for Input {
 // WouldBlock would settle a write before all its output had been drained.
 struct Inflate {
     input: Input,
-    engine: Box<miniz_oxide::inflate::stream::InflateState>,
+    engine: Placed<miniz_oxide::inflate::stream::InflateState>,
     finished: bool,
     zlib_header: bool,
 }
 impl Inflate {
-    fn new(input: Input, zlib_header: bool) -> Self {
-        Self {
+    fn new(input: Input, zlib_header: bool, buffers: &BufferOwner) -> io::Result<Self> {
+        let format = if zlib_header {
+            miniz_oxide::DataFormat::Zlib
+        } else {
+            miniz_oxide::DataFormat::Raw
+        };
+        Ok(Self {
             input,
-            engine: miniz_oxide::inflate::stream::InflateState::new_boxed(if zlib_header {
-                miniz_oxide::DataFormat::Zlib
-            } else {
-                miniz_oxide::DataFormat::Raw
-            }),
+            engine: allocation::inflate_state(buffers, format)?,
             finished: false,
             zlib_header,
-        }
+        })
     }
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         if self.finished {
@@ -300,12 +303,14 @@ enum GzipStage {
 struct Gzip {
     stage: GzipStage,
     crc: flate2::Crc,
+    buffers: BufferOwner,
 }
 impl Gzip {
-    fn new(input: Input) -> Self {
+    fn new(input: Input, buffers: &BufferOwner) -> Self {
         Self {
             stage: GzipStage::Header(Header::default(), input),
             crc: flate2::Crc::new(),
+            buffers: buffers.clone(),
         }
     }
     fn input(&mut self) -> &mut Input {
@@ -324,7 +329,7 @@ impl Gzip {
                     header.read(input)?;
                     let old = std::mem::replace(&mut self.stage, GzipStage::Done(Input::default()));
                     if let GzipStage::Header(_, input) = old {
-                        self.stage = GzipStage::Body(Inflate::new(input, false));
+                        self.stage = GzipStage::Body(Inflate::new(input, false, &self.buffers)?);
                     }
                 }
                 GzipStage::Body(body) => {
@@ -380,32 +385,27 @@ impl Gzip {
     }
 }
 
-type BrotliState = brotli::BrotliState<
-    allocation::CountingAlloc,
-    allocation::CountingAlloc,
-    allocation::CountingAlloc,
->;
+type BrotliState =
+    brotli::BrotliState<allocation::BufferAlloc, allocation::BufferAlloc, allocation::BufferAlloc>;
 struct Brotli {
     input: Input,
-    state: Box<BrotliState>,
+    state: Placed<BrotliState>,
     total_out: usize,
-    allocated: allocation::CountingAlloc,
     finished: bool,
 }
 impl Brotli {
-    fn new(input: Input) -> Self {
-        let allocated = allocation::CountingAlloc::default();
-        Self {
+    fn new(input: Input, buffers: &BufferOwner) -> io::Result<Self> {
+        let alloc = allocation::BufferAlloc::new(buffers);
+        Ok(Self {
             input,
-            state: Box::new(BrotliState::new(
-                allocated.clone(),
-                allocated.clone(),
-                allocated.clone(),
-            )),
-            allocated,
+            state: Placed::try_new(
+                buffers,
+                BrotliState::new(alloc.clone(), alloc.clone(), alloc),
+            )
+            .ok_or_else(allocation::out_of_memory)?,
             total_out: 0,
             finished: false,
-        }
+        })
     }
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
         if self.finished {
@@ -526,17 +526,18 @@ enum Decoder {
     Sniff(Input),
 }
 impl Decoder {
-    fn new(codec: Codec) -> Option<Self> {
+    /// `Ok(None)` when `codec` is an encoder.
+    fn new(codec: Codec, buffers: &BufferOwner) -> io::Result<Option<Self>> {
         let input = Input::default();
-        Some(match codec {
-            Codec::Gunzip => Self::Gzip(Gzip::new(input)),
-            Codec::Inflate => Self::Zlib(Inflate::new(input, true)),
-            Codec::InflateRaw => Self::Raw(Inflate::new(input, false)),
-            Codec::BrotliDecompress => Self::Brotli(Brotli::new(input)),
-            Codec::ZstdDecompress => Self::Zstd(Zstd::new(input).ok()?),
+        Ok(Some(match codec {
+            Codec::Gunzip => Self::Gzip(Gzip::new(input, buffers)),
+            Codec::Inflate => Self::Zlib(Inflate::new(input, true, buffers)?),
+            Codec::InflateRaw => Self::Raw(Inflate::new(input, false, buffers)?),
+            Codec::BrotliDecompress => Self::Brotli(Brotli::new(input, buffers)?),
+            Codec::ZstdDecompress => Self::Zstd(Zstd::new(input)?),
             Codec::Unzip => Self::Sniff(input),
-            _ => return None,
-        })
+            _ => return Ok(None),
+        }))
     }
     fn input(&mut self) -> &mut Input {
         match self {
@@ -562,26 +563,14 @@ impl Decoder {
             Self::Zstd(i) => i.input.prefix.capacity(),
             Self::Sniff(i) => i.prefix.capacity(),
         };
+        // Inflate and brotli state live in the payload's buffers.
         prefix
             + match self {
-                Self::Gzip(g) => {
-                    if matches!(g.stage, GzipStage::Body(_)) {
-                        allocation::inflate_bytes()
-                    } else {
-                        0
-                    }
-                }
-                Self::Zlib(_) | Self::Raw(_) => allocation::inflate_bytes(),
-                Self::Brotli(b) => {
-                    std::mem::size_of::<BrotliState>()
-                        + b.allocated.0.get()
-                        + 3 * std::mem::size_of::<usize>()
-                }
                 Self::Zstd(z) => z.engine.sizeof(),
-                Self::Sniff(_) => 0,
+                _ => 0,
             }
     }
-    fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
+    fn read(&mut self, out: &mut [u8], buffers: &BufferOwner) -> io::Result<usize> {
         if let Self::Sniff(input) = self {
             while input.prefix.len() < 2 && input.offset < input.len {
                 input.prefix.push(unsafe { *input.ptr.add(input.offset) });
@@ -594,9 +583,9 @@ impl Decoder {
             let gzip = input.prefix == [0x1f, 0x8b];
             let input = std::mem::take(input);
             *self = if gzip {
-                Self::Gzip(Gzip::new(input))
+                Self::Gzip(Gzip::new(input, buffers))
             } else {
-                Self::Zlib(Inflate::new(input, true))
+                Self::Zlib(Inflate::new(input, true, buffers)?)
             };
         }
         match self {
@@ -619,26 +608,26 @@ fn zstd_error(code: usize) -> io::Error {
 
 enum Encoder {
     Flate(super::zlib_encoder::Encoder),
-    Brotli(
-        Box<brotli::enc::encode::BrotliEncoderStateStruct<allocation::CountingAlloc>>,
-        allocation::CountingAlloc,
-    ),
+    Brotli(Placed<brotli::enc::encode::BrotliEncoderStateStruct<allocation::BufferAlloc>>),
     Zstd(zstd::zstd_safe::CCtx<'static>),
 }
 impl Encoder {
-    fn new(codec: Codec, level: Compression) -> io::Result<Self> {
+    fn new(codec: Codec, level: Compression, buffers: &BufferOwner) -> io::Result<Self> {
         Ok(match codec {
             Codec::Gzip | Codec::Deflate | Codec::DeflateRaw => {
                 Self::Flate(super::zlib_encoder::Encoder::new(codec, level)?)
             }
             Codec::BrotliCompress => {
-                let alloc = allocation::CountingAlloc::default();
-                let mut state = Box::new(brotli::enc::encode::BrotliEncoderStateStruct::new(
-                    alloc.clone(),
-                ));
+                let mut state = Placed::try_new(
+                    buffers,
+                    brotli::enc::encode::BrotliEncoderStateStruct::new(
+                        allocation::BufferAlloc::new(buffers),
+                    ),
+                )
+                .ok_or_else(allocation::out_of_memory)?;
                 state.params.quality = 11;
                 state.params.lgwin = 22;
-                Self::Brotli(state, alloc)
+                Self::Brotli(state)
             }
             Codec::ZstdCompress => {
                 let mut ctx = zstd::zstd_safe::CCtx::create();
@@ -656,9 +645,8 @@ impl Encoder {
     fn native_bytes(&self) -> usize {
         match self {
             Self::Flate(f) => f.native_bytes(),
-            Self::Brotli(state, alloc) => {
-                std::mem::size_of_val(&**state) + alloc.0.get() + 3 * std::mem::size_of::<usize>()
-            }
+            // State and allocations live in the payload's buffers.
+            Self::Brotli(_) => 0,
             Self::Zstd(ctx) => ctx.sizeof(),
         }
     }
@@ -672,7 +660,7 @@ impl Encoder {
         let final_op = op.op == StreamOp::FINAL;
         match self {
             Self::Flate(f) => f.step(op, bytes, output),
-            Self::Brotli(state, _) => {
+            Self::Brotli(state) => {
                 use brotli::enc::encode::BrotliEncoderOperation;
                 let operation = if final_op {
                     BrotliEncoderOperation::BROTLI_OPERATION_FINISH
@@ -755,15 +743,18 @@ impl Drop for Payload {
     }
 }
 /// Only codec state and scratch: the runtime owns all records and queues.
+/// `buffers` is the payload's buffer ledger, which `external_bytes` reads;
+/// every buffer and brotli block keeps its own clone of it.
 pub(super) struct Payload {
     codec: Codec,
     level: Compression,
     decoder: Option<Decoder>,
     encoder: Option<Encoder>,
-    scratch: Vec<u8>,
+    scratch: PayloadBuffer,
     output_offset: usize,
     bytes_written: usize,
     error: Option<String>,
+    buffers: BufferOwner,
 }
 impl Payload {
     pub(super) fn new(codec: Codec, level: Compression, chunk_size: usize) -> io::Result<Self> {
@@ -773,12 +764,15 @@ impl Payload {
         } else {
             chunk_size
         };
-        let decoder = Decoder::new(codec);
+        let buffers = BufferOwner::new();
+        let decoder = Decoder::new(codec, &buffers)?;
         let encoder = if decoder.is_none() {
-            Some(Encoder::new(codec, level)?)
+            Some(Encoder::new(codec, level, &buffers)?)
         } else {
             None
         };
+        let scratch =
+            PayloadBuffer::alloc(&buffers, chunk_size).ok_or_else(allocation::out_of_memory)?;
         #[cfg(test)]
         PAYLOAD_COUNTS.with(|n| {
             let (created, dropped) = n.get();
@@ -789,15 +783,17 @@ impl Payload {
             level,
             decoder,
             encoder,
-            scratch: vec![0; chunk_size],
+            scratch,
             output_offset: 0,
             bytes_written: 0,
             error: None,
+            buffers,
         })
     }
     pub(super) fn external_bytes(&self) -> usize {
         std::mem::size_of::<Self>()
-            + self.scratch.capacity()
+            + BufferOwner::HEAP_BYTES
+            + self.buffers.bytes()
             + self.decoder.as_ref().map_or(0, Decoder::native_bytes)
             + self.encoder.as_ref().map_or(0, Encoder::native_bytes)
             + self.error.as_ref().map_or(0, String::capacity)
@@ -816,7 +812,7 @@ impl Payload {
         let start = self.output_offset;
         let result = if let Some(decoder) = &mut self.decoder {
             decoder.input().borrow(bytes, op.op == StreamOp::FINAL);
-            let result = decoder.read(&mut self.scratch[start..]);
+            let result = decoder.read(&mut self.scratch.as_mut_slice()[start..], &self.buffers);
             let consumed = decoder.input().clear_borrow();
             match result {
                 Ok(n) => Ok((
@@ -836,10 +832,11 @@ impl Payload {
                 Err(e) => Err(e),
             }
         } else {
-            self.encoder
-                .as_mut()
-                .unwrap()
-                .step(op, bytes, &mut self.scratch[start..])
+            self.encoder.as_mut().unwrap().step(
+                op,
+                bytes,
+                &mut self.scratch.as_mut_slice()[start..],
+            )
         };
         match result {
             Ok((consumed, written, status)) => {
@@ -862,9 +859,14 @@ impl Payload {
         }
         #[cfg(test)]
         if sabotage("corrupt_output") && out.out_len > 0 {
-            self.scratch[start] ^= 1;
+            self.scratch.as_mut_slice()[start] ^= 1;
         }
         out.external_bytes = self.external_bytes();
+    }
+    /// This payload's own buffer ledger (tests read its count race-free).
+    #[cfg(test)]
+    pub(super) fn buffer_owner(&self) -> BufferOwner {
+        self.buffers.clone()
     }
     pub(super) fn bytes_written(&self) -> usize {
         self.bytes_written
@@ -915,7 +917,7 @@ impl Payload {
 
 impl Drop for Encoder {
     fn drop(&mut self) {
-        if let Self::Brotli(state, _) = self {
+        if let Self::Brotli(state) = self {
             brotli::enc::encode::BrotliEncoderDestroyInstance(state);
         }
     }
