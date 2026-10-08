@@ -190,6 +190,16 @@ fn hoist_yields_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
         return;
     }
 
+    if crate::suspending_iife::inline(
+        expr,
+        next_id,
+        hoisted,
+        expr_contains_yield,
+        hoist_yields_in_stmts,
+    ) {
+        return;
+    }
+
     // Recurse into children first so inner yields are hoisted before the outer
     // expression's own yield (innermost-first, left-to-right).
     perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
@@ -245,6 +255,16 @@ fn hoist_yields_avoiding_top_level(
         lift_sequence_with_yield(expr, next_id, hoisted);
         return;
     }
+    if crate::suspending_iife::inline(
+        expr,
+        next_id,
+        hoisted,
+        expr_contains_yield,
+        hoist_yields_in_stmts,
+    ) {
+        return;
+    }
+
     // Outer is not a yield: children may hold yields, which are nested — fully
     // hoist them.
     perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
@@ -281,7 +301,7 @@ pub(super) fn expr_contains_yield(expr: &Expr) -> bool {
         return true;
     }
     if matches!(expr, Expr::Closure { .. }) {
-        return false;
+        return crate::suspending_iife::contains(expr, expr_contains_yield);
     }
     let mut found = false;
     perry_hir::walker::walk_expr_children(expr, &mut |child| {
