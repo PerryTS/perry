@@ -788,6 +788,33 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     }
     match expr {
         Expr::IndexGet { object, index } => {
+            // The private record cursor starts at zero, advances only after a
+            // successful read, and is bounded by the array's u32 length here.
+            // Consume that proof in the ordinary guarded indexed backend.
+            if let Expr::NativeMethodCall {
+                module,
+                class_name: None,
+                object: None,
+                method,
+                args,
+            } = index.as_ref()
+            {
+                if module == "__perry_runtime" && method == "arrayRecordIndex" {
+                    let repair_slot = receiver_repair_slot(ctx, object);
+                    return rooting::with_operands_rooted(
+                        ctx,
+                        &[object, &args[0]],
+                        |ctx, values| {
+                            guarded_array::lower_unsigned_array_index_get(
+                                ctx,
+                                &values[0],
+                                &values[1],
+                                repair_slot.as_deref(),
+                            )
+                        },
+                    );
+                }
+            }
             // #10509: must precede every receiver-proof tier below.
             if let Some(v) =
                 crate::codegen::arguments::try_lower_elided_arguments_index_get(ctx, object, index)?
@@ -1692,3 +1719,6 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
 }
+
+#[cfg(test)]
+mod array_record_tests;

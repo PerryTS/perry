@@ -154,20 +154,7 @@ fn lower_array_assignment_from_expr(
                 done_id,
                 Box::new(Expr::Bool(true)),
             )));
-            body.push(Stmt::Let {
-                id: rest_id,
-                name: rest_name,
-                ty: Type::Any,
-                mutable: false,
-                init: Some(runtime_iterator_call(
-                    "iteratorRestToArray",
-                    vec![
-                        Expr::LocalGet(iter_id),
-                        Expr::LocalGet(next_id),
-                        Expr::LocalGet(rest_done_id),
-                    ],
-                )),
-            });
+            body.extend(source.rest(ctx, rest_id, rest_name, iter_id, next_id, rest_done_id));
             body.push(Stmt::Expr(Expr::LocalSet(
                 done_id,
                 Box::new(Expr::Bool(true)),
@@ -620,7 +607,14 @@ fn assign_prepared_target(
             strict: ctx.current_strict,
         })]),
         PreparedTarget::Array(arr) => {
-            lower_array_assignment_from_expr(ctx, &arr, ArraySource::Iterator(value))
+            let mut setup = Vec::new();
+            let plan = array_fast::FastPlan::new(ctx, value, &mut setup);
+            setup.extend(lower_array_assignment_from_expr(
+                ctx,
+                &arr,
+                ArraySource::Guarded(plan),
+            )?);
+            Ok(setup)
         }
         PreparedTarget::Object(obj) => lower_object_assignment_from_expr(ctx, &obj, value),
         PreparedTarget::Skip => Ok(Vec::new()),
@@ -645,10 +639,20 @@ mod iterator_close_tests {
                         ..
                     } => {
                         if let Some(branch) = else_branch {
-                            let next = branch.iter().position(|s| matches!(
-                                s, Stmt::Let { init: Some(Expr::NativeMethodCall { method, .. }), .. }
-                                if method == "iteratorStep"
-                            ));
+                            let next = branch.iter().position(|s| {
+                                let Stmt::Let {
+                                    init: Some(init), ..
+                                } = s
+                                else {
+                                    return false;
+                                };
+                                let protocol = match init {
+                                    Expr::Conditional { then_expr, .. } => then_expr.as_ref(),
+                                    init => init,
+                                };
+                                matches!(protocol, Expr::NativeMethodCall { method, .. }
+                                    if method == "iteratorStep")
+                            });
                             if let Some(next) = next {
                                 assert!(next > 0, "IteratorNext must be preceded by marking done");
                                 assert!(matches!(&branch[next - 1],
@@ -705,6 +709,12 @@ mod iterator_close_tests {
                 matches!(s,
                     Stmt::Let { init: Some(Expr::NativeMethodCall { method, .. }), .. }
                     if method == "iteratorRestToArray"
+                ) || matches!(
+                    s,
+                    Stmt::Let {
+                        init: Some(Expr::Array(_)),
+                        ..
+                    }
                 )
             })
             .unwrap();
@@ -712,6 +722,20 @@ mod iterator_close_tests {
             Stmt::Expr(Expr::LocalSet(id, value)) if matches!(**value, Expr::Bool(true)) => *id,
             _ => panic!("draining must mark done before any iterator step"),
         };
+        if matches!(
+            &body[rest],
+            Stmt::Let {
+                init: Some(Expr::Array(_)),
+                ..
+            }
+        ) {
+            assert!(
+                matches!(&body[rest + 2], Stmt::If {
+                condition: Expr::LocalGet(id), ..
+            } if *id != done_id),
+                "drain must test the saved pre-drain done bit"
+            );
+        }
         if let Stmt::Let {
             init: Some(Expr::NativeMethodCall { args, .. }),
             ..

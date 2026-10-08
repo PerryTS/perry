@@ -456,7 +456,13 @@ fn build_family_proto(
     // configurable:true }` and the closure's `name`/`length` as
     // `{ writable:false, enumerable:false, configurable:true }` — exactly the
     // spec descriptor shape test262 verifies. `.length` 0 (next takes no args).
-    super::global_this::install_proto_method(proto, "next", next_info, 0);
+    super::global_this::install_proto_method_with_key(
+        proto,
+        "next",
+        next_info,
+        0,
+        crate::string::intern_ascii_literal(b"next"),
+    );
     set_to_string_tag(proto, tag);
     chain_to(proto, shared);
     // Populate the existing ConstFn representation after descriptor/symbol
@@ -927,6 +933,33 @@ mod override_probe_allocation_tests {
             );
         }
     }
+}
+
+/// The array record omits the iterator allocation only when the current
+/// family shape still owns the intrinsic next body. Captured at entry;
+/// subsequent next writes cannot change that record.
+pub(crate) unsafe fn array_record_next_is_builtin() -> bool {
+    ensure_iterator_prototypes();
+    let proto = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
+    let Some(shape) = super::shapes::object_shape_record(proto) else {
+        return false;
+    };
+    let keys = shape.keys() as *const crate::array::ArrayHeader;
+    if shape.logical_key_count() == 0 {
+        return false;
+    }
+    // Validate the property key owned by the shape using the ordinary key
+    // equality. The bounded intern table can evict an atom, so re-interning
+    // the same bytes need not reproduce this live shape's string pointer.
+    let slots = crate::array::array_elements_ptr(keys);
+    if !crate::string::js_string_key_matches_bytes(JSValue::from_bits(*slots), b"next") {
+        return false;
+    }
+    let Some(info) = shape.constfn_info(0) else {
+        return false;
+    };
+    (*(info as *const crate::closure::JsFunctionInfo)).code
+        == array_iterator_next_thunk as *const u8
 }
 
 /// Prove a built-in advance using the receiver and prototype shapes.
@@ -1735,4 +1768,65 @@ pub(crate) unsafe fn iterator_step_method_is_builtin(
     (*method).info as usize as u64 == info
         || crate::closure::get_valid_func_ptr(method)
             == (*(info as *const crate::closure::JsFunctionInfo)).code
+}
+
+#[cfg(test)]
+mod array_record_tests;
+
+/// Shape-only absence proof for the optional close method. A named addition,
+/// dictionary conversion or non-ordinary ancestor declines to ordinary Get.
+pub(crate) unsafe fn array_record_close_is_absent() -> bool {
+    // Resolve allocating intrinsic setup before retaining raw shape owners.
+    ensure_iterator_prototypes();
+    let object_proto = crate::array::object_prototype_addr();
+    let mut obj = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
+    for _ in 0..64 {
+        if super::dictionary::is_dictionary(obj) {
+            return false;
+        }
+        let Some(shape) = super::shapes::object_shape_record(obj) else {
+            return false;
+        };
+        let keys = shape.keys() as *const crate::array::ArrayHeader;
+        // This is GetMethod(return)'s ordinary property-key lookup on the
+        // owned shape, before a receiver is needed. An accessor or any own
+        // return value materializes the record and uses shared IteratorClose.
+        if !keys.is_null()
+            && super::keys_find_slot_by_bytes(keys, shape.logical_key_count(), b"return").is_some()
+        {
+            return false;
+        }
+        let parent = super::shapes::object_prototype_word(obj);
+        if parent == crate::value::TAG_NULL {
+            return true;
+        }
+        if parent == 0 {
+            let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
+                return false;
+            };
+            if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0
+                || obj as usize == object_proto
+            {
+                return true;
+            }
+            // Class-zero ordinary owners inherit Object.prototype when their
+            // shape has no explicit link. A class default needs ordinary Get.
+            if (*obj).class_id != 0 || object_proto == 0 {
+                return false;
+            }
+            obj = object_proto as *const ObjectHeader;
+            continue;
+        }
+        if !JSValue::from_bits(parent).is_pointer() {
+            return false;
+        }
+        let raw = crate::value::js_nanbox_get_pointer(f64::from_bits(parent)) as usize;
+        if !crate::value::addr_class::try_read_gc_header(raw)
+            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+        {
+            return false;
+        }
+        obj = raw as *const ObjectHeader;
+    }
+    false
 }

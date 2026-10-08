@@ -18,6 +18,34 @@
                 arg_group.release(ctx);
                 return Ok(result);
             }
+            "arrayRecordClose" => {
+                let (values, roots) = super::lower_call_args_rooted(ctx, args)?;
+                let values = values.iter().map(|v| (DOUBLE, v.as_str())).collect::<Vec<_>>();
+                let result = ctx.block().call(DOUBLE, "js_array_record_close", &values);
+                roots.release(ctx);
+                return Ok(result);
+            }
+            "arrayRecordLength" => {
+                // The record proves an ordinary array; use precisely the
+                // indexed spelling's property lowering, including live length
+                // and forwarding. The contract supplies its numeric result.
+                return lower_expr(ctx, &Expr::PropertyGet {
+                    object: Box::new(args[0].clone()),
+                    property: "length".into(),
+                    byte_offset: 0,
+                });
+            }
+            "arrayRecordIndex" => return lower_expr(ctx, &args[0]),
+            "iteratorRestAppend" => {
+                let (values, roots) = super::lower_call_args_rooted(ctx, args)?;
+                let bits = ctx.block().bitcast_double_to_i64(&values[0]);
+                let array = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+                let next = ctx.block().call(I64, "js_array_push_f64", &[(I64, &array), (DOUBLE, &values[1])]);
+                let tagged = ctx.block().or(I64, &next, crate::nanbox::POINTER_TAG_I64);
+                let boxed = ctx.block().bitcast_i64_to_double(&tagged);
+                roots.release(ctx);
+                return Ok(boxed);
+            }
             "iteratorNextMethod" => {
                 let iter = lower_expr(ctx, &args[0])?;
                 return Ok(ctx.block().call(DOUBLE, "js_iterator_next_method", &[(DOUBLE, &iter)]));
@@ -54,7 +82,7 @@
             // #10524: the runtime guard of array destructuring over a source
             // with no static array proof — a NaN-boxed boolean, the same shape
             // `Expr::ArrayIterationPatched` produces for the proven arm.
-            "arrayDestructureNeedsIterator" => {
+            "arrayDestructureNeedsIterator" | "arrayRecordNeedsIterator" => {
                 let source = args.first().map_or_else(
                     || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
                     |arg| lower_expr(ctx, arg),
@@ -62,7 +90,7 @@
                 let blk = ctx.block();
                 let needs = blk.call(
                     I32,
-                    "js_array_destructure_needs_iterator",
+                    if method == "arrayRecordNeedsIterator" { "js_array_record_needs_iterator" } else { "js_array_destructure_needs_iterator" },
                     &[(DOUBLE, &source)],
                 );
                 return Ok(crate::expr::i32_bool_to_nanbox(blk, &needs));

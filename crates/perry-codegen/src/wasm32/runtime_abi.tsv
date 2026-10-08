@@ -148,6 +148,8 @@ js_array_push_jsvalue	ptr	ptr,i64
 js_array_push_spread_any	ptr	ptr,f64
 js_array_push_spread_f64	ptr	ptr,ptr
 js_array_push_u31_with_length	ptr	ptr,i32u,ptr
+js_array_record_close	f64	f64,f64,f64,f64,f64
+js_array_record_needs_iterator	i32s	f64
 js_array_reduce	f64	ptr,ptr,i32s,f64
 js_array_reduce_right	f64	ptr,ptr,i32s,f64
 js_array_refresh_local_head	f64	f64
