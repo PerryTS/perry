@@ -5618,7 +5618,7 @@ jobs:
     if: ${{ needs.route.result == 'success' && needs.route.outputs.run_core != 'true' && fromJSON(needs.route.outputs.plan)['security-audit'] }}
     permissions:
       contents: read
-    name: weekly security audit / security-audit
+    name: security-weekly / security-audit
   security-weekly__soak-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -5662,7 +5662,7 @@ jobs:
     if: ${{ needs.route.result == 'success' && needs.route.outputs.run_core != 'true' && fromJSON(needs.route.outputs.plan)['security-audit'] }}
     permissions:
       contents: read
-    name: weekly security audit / soak-gate
+    name: security-weekly / soak-gate
   security-weekly__config-scans:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -5752,9 +5752,9 @@ jobs:
     if: ${{ needs.route.result == 'success' && needs.route.outputs.run_core != 'true' && fromJSON(needs.route.outputs.plan)['security-audit'] }}
     permissions:
       contents: read
-    name: weekly security audit / config-scans
+    name: security-weekly / config-scans
   security-weekly:
-    name: weekly security audit / suite result
+    name: security-weekly / suite result
     needs:
       - route
       - security-weekly__security-audit
