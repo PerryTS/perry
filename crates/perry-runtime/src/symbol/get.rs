@@ -482,7 +482,7 @@ unsafe fn explicit_prototype_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<O
     let mut visited_len = 0usize;
     let mut visited_overflow: Option<std::collections::HashSet<usize>> = None;
     loop {
-        let proto_bits = match crate::object::prototype_chain::object_static_prototype(owner) {
+        let proto_bits = match symbol_prototype_word(owner) {
             Some(bits) => bits,
             None => {
                 let (_, kind) = heap_ptr_and_type_from_value_bits(owner as u64)?;
@@ -529,7 +529,9 @@ unsafe fn explicit_prototype_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<O
         } else if let Some(set) = &mut visited_overflow {
             set.insert(owner);
         }
-        if object_header_ptr_from_value_bits(proto_bits).is_some() {
+        if object_header_ptr_from_value_bits(proto_bits).is_some()
+            && !crate::object::is_class_object_ptr(proto_ptr as *const u8)
+        {
             let proto_obj = proto_ptr as *const crate::object::ObjectHeader;
             if let Some(slot) = crate::object::object_proto_chain_symbol_slot(proto_obj, sym_f64) {
                 return Some(slot);
@@ -537,6 +539,40 @@ unsafe fn explicit_prototype_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<O
         }
         owner = proto_ptr;
     }
+}
+
+/// The next symbol-lookup holder is the actual constructor evaluation, not
+/// its template's latest heritage. Functions and fresh class objects share
+/// this walk with ordinary objects; their own traced prototype edges win.
+unsafe fn symbol_prototype_word(owner: usize) -> Option<u64> {
+    if crate::closure::is_closure_ptr(owner) {
+        if let Some(bits) = crate::closure::closure_static_prototype(owner) {
+            return Some(bits);
+        }
+        if let Some(cid) = crate::object::class_value::class_value_id_bits(
+            crate::value::js_nanbox_pointer(owner as i64).to_bits(),
+        ) {
+            // An intrinsic parent may need materializing. The chain walker
+            // holds raw addresses and does not invoke user code here.
+            let _no_move = crate::gc::GcSuppressScope::new();
+            let evaluated = crate::object::class_prototype_object(cid);
+            let parent = if !evaluated.is_null()
+                && crate::object::is_class_object_ptr(evaluated as *const u8)
+            {
+                evaluated as usize
+            } else {
+                crate::object::class_value::class_prototype_addr(cid)
+            };
+            return (parent != 0).then(|| crate::value::js_nanbox_pointer(parent as i64).to_bits());
+        }
+        return None;
+    }
+    crate::object::prototype_chain::object_static_prototype(owner).or_else(|| {
+        crate::object::is_class_object_ptr(owner as *const u8)
+            .then(|| crate::object::class_object_pinned_parent(owner as *const crate::ObjectHeader))
+            .flatten()
+            .map(f64::to_bits)
+    })
 }
 
 unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> {
@@ -799,6 +835,16 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                     !is_proto_ref,
                     &crate::symbol::symbol_function_name(sym_key),
                 );
+            }
+        }
+        // A constructor whose heritage was a runtime value inherits from that
+        // exact value, the same edge `Object.getPrototypeOf(C)` reports. A
+        // fresh class evaluation is not reachable through the template-id
+        // tables below, so continue the ordinary [[Get]] on the actual parent.
+        if !is_proto_ref_receiver {
+            let parent = crate::object::js_get_dynamic_parent_value(class_id);
+            if crate::object::is_class_object_value(parent) {
+                return js_object_get_symbol_property_with_receiver(parent, sym_f64, receiver_f64);
             }
         }
         // #1758: a class ref whose own static symbols miss may inherit the
@@ -1200,52 +1246,6 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             if sym_key_from_f64(sym_f64) == sym_key_from_f64(iter_f64) {
                 let mname = b"values";
                 return crate::object::js_class_method_bind(obj_f64, mname.as_ptr(), mname.len());
-            }
-        }
-    }
-    // #36 / #321: the receiver is a closure whose OWN symbol props miss — walk
-    // its static prototype chain (`Object.setPrototypeOf(closure, protoObj)`).
-    // effect's `TagClass[TagTypeId]` / `isTag(TagClass)` read symbols off
-    // `TagProto`. Bounded depth guards against an accidental cycle.
-    if (bits >> 48) == 0x7FFD {
-        let ptr = crate::value::js_nanbox_get_pointer(obj_f64) as usize;
-        if ptr != 0 && crate::closure::is_closure_ptr(ptr) {
-            let mut cur = ptr;
-            let mut depth = 0usize;
-            while depth < 8 {
-                let Some(proto_bits) = crate::closure::closure_static_prototype(cur) else {
-                    break;
-                };
-                let proto_f64 = f64::from_bits(proto_bits);
-                let proto_ptr = crate::value::js_nanbox_get_pointer(proto_f64) as usize;
-                if proto_ptr == 0 || proto_ptr == cur {
-                    break;
-                }
-                if let Some(v) = own_symbol_property_for_receiver(proto_f64, sym_f64, receiver_f64)
-                {
-                    return v;
-                }
-                // A class-object proto may carry the symbol through ITS own
-                // class_id prototype chain (effect's TagProto spreads
-                // EffectPrototype). Walk that before following the closure link.
-                let proto_obj = crate::value::JSValue::from_bits(proto_bits)
-                    .as_pointer::<crate::object::ObjectHeader>();
-                if !proto_obj.is_null() {
-                    let cid = crate::object::js_object_get_class_id(proto_obj);
-                    if cid != 0 {
-                        if let Some(v) =
-                            crate::object::resolve_proto_chain_symbol(cid, sym_f64, receiver_f64)
-                        {
-                            return v;
-                        }
-                    }
-                }
-                if crate::closure::is_closure_ptr(proto_ptr) {
-                    cur = proto_ptr;
-                    depth += 1;
-                    continue;
-                }
-                break;
             }
         }
     }
