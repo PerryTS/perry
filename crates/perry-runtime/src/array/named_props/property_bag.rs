@@ -3,6 +3,7 @@
 //! attributes and accessors are keys of this bag, just like named properties.
 use super::*;
 
+#[inline]
 pub(crate) unsafe fn array_property_bag(
     arr: *const ArrayHeader,
 ) -> *mut crate::object::ObjectHeader {

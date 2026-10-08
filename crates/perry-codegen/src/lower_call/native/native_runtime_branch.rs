@@ -46,9 +46,10 @@
                 // the live head the proof resolves (bit 1); its loop consumes
                 // that bit instead of classifying the receiver again.
                 let counted = matches!(args.get(1), Some(Expr::Bool(true)));
+                let site = crate::expr::array_record_site(ctx);
                 let verdict = ctx.block().call(I32,
                     if counted { "js_array_record_enter_counted" } else { "js_array_record_enter" },
-                    &[(DOUBLE, &values[0]), (crate::types::PTR, &slot)]);
+                    &[(DOUBLE, &values[0]), (crate::types::PTR, &slot), (crate::types::PTR, &site)]);
                 let needs = if counted {
                     let admission = ctx.record_packed_admissions.get(source_id).cloned()
                         .unwrap_or_else(|| ctx.func.alloca_entry(crate::types::I1));
@@ -160,7 +161,8 @@
             // `Expr::ArrayIterationPatched` produces for the proven arm.
             "arrayDestructureNeedsIterator" | "arrayRecordNeedsIterator" => {
                 if method == "arrayRecordNeedsIterator" && args.is_empty() {
-                    let needs = ctx.block().call(I32, "js_array_record_literal_needs_iterator", &[]);
+                    let site = crate::expr::array_record_site(ctx);
+                    let needs = ctx.block().call(I32, "js_array_record_literal_needs_iterator", &[(crate::types::PTR, &site)]);
                     return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
                 }
                 let source = args.first().map_or_else(

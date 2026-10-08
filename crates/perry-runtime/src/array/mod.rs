@@ -348,3 +348,4 @@ pub use iterator_step::{
 
 #[cfg(test)]
 pub(crate) use iterator_step::js_array_record_iterator_at;
+pub(crate) use iterator_step::ArrayRecordSite;
