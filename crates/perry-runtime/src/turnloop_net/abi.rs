@@ -137,11 +137,7 @@ pub unsafe extern "C" fn js_perry_net_error_from_os(
     let name = unsafe { str_arg(syscall, syscall_len) };
     // The syscall name must outlive the call, and the caller owns the bytes it
     // passed in, so echo their pointer back rather than a borrowed local.
-    let error = turnloop::Error {
-        kind: turnloop::ErrorKind::Other,
-        os: (os != 0).then_some(os),
-    };
-    let mapped = super::map_error(error, "");
+    let mapped = super::errors::from_os(os, "");
     if !out.is_null() {
         let value = PerryNetError {
             code: mapped.code.as_ptr(),
@@ -350,13 +346,7 @@ pub unsafe extern "C" fn js_perry_net_adopt_stream(
     err: *mut PerryNetError,
 ) -> i32 {
     if socket < 0 {
-        return finish(
-            Err(super::map_error(
-                turnloop::Error::new(turnloop::ErrorKind::InvalidInput),
-                "adopt",
-            )),
-            err,
-        );
+        return finish(Err(super::errors::invalid_input("adopt")), err);
     }
     #[cfg(unix)]
     {
@@ -372,16 +362,17 @@ pub unsafe extern "C" fn js_perry_net_adopt_stream(
         let sock = unsafe { std::os::windows::io::OwnedSocket::from_raw_socket(socket as u64) };
         finish(super::adopt_stream(id, subsystem.max(0) as u8, sock), err)
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(target_os = "wasi")]
     {
-        let _ = (id, subsystem);
         finish(
-            Err(super::map_error(
-                turnloop::Error::new(turnloop::ErrorKind::Unsupported),
-                "adopt",
-            )),
+            super::adopt_fd(id, subsystem.max(0) as u8, socket as i32),
             err,
         )
+    }
+    #[cfg(not(any(unix, windows, target_os = "wasi")))]
+    {
+        let _ = (id, subsystem);
+        finish(Err(super::errors::unsupported("adopt")), err)
     }
 }
 
@@ -481,13 +472,7 @@ pub unsafe extern "C" fn js_perry_net_timer_arm(
     err: *mut PerryNetError,
 ) -> i32 {
     if subsystem < 0 || subsystem as usize >= super::MAX_SUBSYSTEMS {
-        return finish(
-            Err(super::map_error(
-                turnloop::Error::new(turnloop::ErrorKind::InvalidInput),
-                "timer",
-            )),
-            err,
-        );
+        return finish(Err(super::errors::invalid_input("timer")), err);
     }
     finish(super::timer_arm(id, subsystem as u8, delay_ms), err)
 }
@@ -503,13 +488,7 @@ pub unsafe extern "C" fn js_perry_net_transfer(
     err: *mut PerryNetError,
 ) -> i32 {
     if subsystem < 0 {
-        return finish(
-            Err(super::map_error(
-                turnloop::Error::new(turnloop::ErrorKind::InvalidInput),
-                "transfer",
-            )),
-            err,
-        );
+        return finish(Err(super::errors::invalid_input("transfer")), err);
     }
     finish(super::transfer(id, subsystem as u8), err)
 }

@@ -72,7 +72,8 @@ class RunnerTests(unittest.TestCase):
         self.assertIn("timed out", result["detail"])
 
     def test_preopens_and_paths_with_spaces_remain_separate_arguments(self):
-        self.source.with_suffix(".json").write_text('{"wasmtime_args": ["--dir", "."]}')
+        self.source.with_suffix(".json").write_text(
+            '{"wasmtime_args": ["--dir", "."], "program_args": ["argument with spaces", "--flag"]}')
         def execute(command, **kwargs):
             return (
                 subprocess.CompletedProcess(command, 3, b"ok\n", b"")
@@ -83,6 +84,7 @@ class RunnerTests(unittest.TestCase):
         command = run.call_args_list[1].args[0]
         self.assertEqual(command[:4], ["wasmtime", "run", "--dir", "."])
         self.assertEqual(command[4], str(self.output / "fixture.wasm"))
+        self.assertEqual(command[5:], ["argument with spaces", "--flag"])
 
 
 if __name__ == "__main__":

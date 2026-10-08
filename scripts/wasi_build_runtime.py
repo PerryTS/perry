@@ -28,7 +28,8 @@ def main() -> int:
                "--message-format=json-render-diagnostics"]
     # Cargo may legitimately reuse a fresh archive. Observe the target
     # artifact message instead of requiring an mtime change on every build.
-    live = False
+    required = {"perry_runtime"}
+    live = set()
     with subprocess.Popen(command, cwd=ROOT, stdout=subprocess.PIPE, text=True) as process:
         for line in process.stdout:
             try:
@@ -36,18 +37,18 @@ def main() -> int:
             except ValueError:
                 continue
             if (message.get("reason") == "compiler-artifact"
-                    and message["target"]["name"] == "perry_runtime"):
+                    and message["target"]["name"] in required):
                 for filename in message.get("filenames", []):
                     archive = Path(filename)
                     if ("wasm32-wasip2" in archive.parts and archive.suffix == ".a"
                             and archive.is_file()):
                         print(f"WASI archive: {archive}", flush=True)
-                        live = True
+                        live.add(message["target"]["name"])
         status = process.wait()
     if status:
         return status
-    if not live:
-        sys.exit("Cargo reported no wasm32-wasip2 runtime archive")
+    if live != required:
+        sys.exit(f"Cargo reported no wasm32-wasip2 archives for {sorted(required - live)}")
     return 0
 
 

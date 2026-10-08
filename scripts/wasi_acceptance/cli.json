@@ -1,0 +1,1 @@
+{ "wasmtime_args": ["--env", "PERRY_WASI_ACCEPTANCE=guest environment"], "program_args": ["argument with spaces", "--flag"] }

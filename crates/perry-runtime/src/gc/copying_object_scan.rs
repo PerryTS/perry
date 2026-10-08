@@ -223,14 +223,19 @@ impl CopyingNurseryCollector {
         }
         let _ = residual_slots;
         while let Some(slot) = plan.next_slot() {
-            let before = *slot;
-            self.visit_slot_with_parent_facts(
-                GcMutableSlot::new(slot, None),
-                header,
-                weak,
-                remembering,
-            );
-            changed |= *slot != before;
+            let slot = {
+                #[cfg(target_pointer_width = "32")]
+                if slot == plan.prefix[2] {
+                    GcMutableSlot::pointer(slot.cast())
+                } else {
+                    GcMutableSlot::new(slot, None)
+                }
+                #[cfg(target_pointer_width = "64")]
+                GcMutableSlot::new(slot, None)
+            };
+            let before = slot.read();
+            self.visit_slot_with_parent_facts(slot, header, weak, remembering);
+            changed |= slot.read() != before;
         }
         // The generic walk's last Object-arm edge, from the same side table.
         crate::object::visit_overflow_field_slots_mut(user_ptr, |slot| {

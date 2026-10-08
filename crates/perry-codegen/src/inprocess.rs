@@ -106,6 +106,14 @@ static ANNOUNCE: Once = Once::new();
 
 fn global_init(mllvm: &[String]) {
     LLVM_GLOBAL_INIT.call_once(|| {
+        let mut mllvm = mllvm.to_vec();
+        // These options affect only the WebAssembly backend. Initialize
+        // them even if a native unit happens to be compiled first.
+        #[cfg(feature = "target-wasi")]
+        mllvm.extend([
+            "-wasm-enable-sjlj".into(),
+            "-wasm-use-legacy-eh=false".into(),
+        ]);
         // Only the backends Perry can actually emit for. `initialize_all()`
         // references every LLVM target's init symbol, which makes the static
         // link pull in all ~20 backends — measured at **+86.9 MB** on the
@@ -134,7 +142,7 @@ fn global_init(mllvm: &[String]) {
         Target::initialize_webassembly(&cfg);
         if !mllvm.is_empty() {
             let mut argv: Vec<CString> = vec![CString::new("perry-llvm-inprocess").unwrap()];
-            for flag in mllvm {
+            for flag in &mllvm {
                 if let Ok(c) = CString::new(flag.as_str()) {
                     argv.push(c);
                 }

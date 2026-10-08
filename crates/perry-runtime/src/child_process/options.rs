@@ -456,6 +456,7 @@ pub(crate) fn cp_resolve_program_path(program: &str, path: &str) -> Option<Strin
 /// `exec`s a real image, so it cannot hit the dyld hang, and the error surface
 /// stays identical.
 pub(crate) fn cp_command_for_program(program: &str, opts_val: f64) -> Command {
+    cp_require_process_support();
     #[cfg(unix)]
     {
         if !program.is_empty() && !program.contains('/') {

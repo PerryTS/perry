@@ -4893,6 +4893,7 @@ version = "0.5.1659"
 dependencies = [
  "aho-corasick",
  "anyhow",
+ "cc",
  "inkwell 0.10.0",
  "inkwell 0.9.0",
  "llvm-sys",
@@ -5123,6 +5124,7 @@ dependencies = [
  "rustls-pemfile",
  "serde_json",
  "turnloop-tls",
+ "webpki-roots 1.0.9",
 ]
 
 [[package]]
@@ -5373,6 +5375,7 @@ dependencies = [
 name = "perry-runtime-static"
 version = "0.5.1659"
 dependencies = [
+ "perry-ext-net",
  "perry-runtime",
 ]
 

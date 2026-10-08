@@ -818,7 +818,9 @@ pub(super) unsafe fn dispatch_primitive(
     // producing a subnormal float (bits == handle_id, no NaN-box tag). Untagged values
     // in the handle band are raw handle IDs from Perry's integer-typed handle parameters.
     let raw_bits = object.to_bits();
-    if crate::value::addr_class::is_small_handle(raw_bits as usize) {
+    // Classify the full word before narrowing: on wasm32 a boxed socket
+    // otherwise looks like a bare id here and bypasses tagged-handle dispatch.
+    if (1..crate::value::addr_class::HANDLE_BAND_MAX as u64).contains(&raw_bits) {
         if let Some(dispatch) = handle_method_dispatch() {
             let args = refreshed_args();
             return Some(dispatch(

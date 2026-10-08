@@ -57,7 +57,8 @@ pub(super) fn walk_block_maps(block: &ArenaBlock, visit: &mut impl FnMut(*mut Gc
                 // Free-list reuse can leave a bit for an older tenant.
                 if (*header).obj_type == crate::gc::GC_TYPE_MAP
                     && (*header).size as usize
-                        == GC_HEADER_SIZE + std::mem::size_of::<crate::map::MapHeader>()
+                        == (GC_HEADER_SIZE + std::mem::size_of::<crate::map::MapHeader>())
+                            .next_multiple_of(8)
                 {
                     visit(header);
                 }

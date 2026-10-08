@@ -70,6 +70,7 @@ pub extern "C" fn js_child_process_spawn_background(
     log_file_val: f64,
     env_json_val: f64,
 ) -> *mut ObjectHeader {
+    cp_require_process_support();
     unsafe {
         let cmd_str = match extract_string_from_nanboxed(cmd_val) {
             Some(s) => s,
@@ -198,6 +199,7 @@ pub extern "C" fn js_child_process_spawn_background(
 /// Returns the spawned child's PID on success, or `None` on failure (caller
 /// chooses how to surface that — `-1.0`/`-1` etc.).
 pub fn spawn_detached_command(cmd: &str, args: &[&str], cwd: Option<&str>) -> Option<u32> {
+    cp_require_process_support();
     let mut command = Command::new(cmd);
     for a in args {
         command.arg(a);

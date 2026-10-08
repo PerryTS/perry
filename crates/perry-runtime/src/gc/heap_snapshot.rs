@@ -344,7 +344,7 @@ pub fn gc_build_v8_heap_snapshot_json() -> String {
             visit_gc_rewrite_slots(rec.header, |slot| {
                 let slot_ordinal = ordinal;
                 ordinal += 1;
-                let bits = *slot.slot;
+                let bits = slot.read();
                 let target = decode_slot_target(bits);
                 if target == 0 {
                     return;

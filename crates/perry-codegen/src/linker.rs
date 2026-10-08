@@ -458,6 +458,20 @@ fn build_clang_compile_plan(
     clang_args.push(effective_target.clone());
 
     let mut analysis_clang_args = vec![opt_flag.to_string(), "-fno-math-errno".to_string()];
+    if effective_target.starts_with("wasm32") {
+        for args in [&mut clang_args, &mut analysis_clang_args] {
+            args.extend(
+                [
+                    "-mllvm",
+                    "-wasm-enable-sjlj",
+                    "-mllvm",
+                    "-wasm-use-legacy-eh=false",
+                ]
+                .into_iter()
+                .map(str::to_string),
+            );
+        }
+    }
     if let Some(arg) = &native_tuning_arg {
         analysis_clang_args.push(arg.clone());
     }

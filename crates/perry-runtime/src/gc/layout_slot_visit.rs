@@ -10,6 +10,10 @@ fn fixed_slot(slot: *mut u64) -> GcMutableSlotDescriptor {
     GcMutableSlotDescriptor::Slot(GcMutableSlot::new(slot, None))
 }
 
+fn pointer_slot(slot: *mut usize) -> GcMutableSlotDescriptor {
+    GcMutableSlotDescriptor::Slot(GcMutableSlot::pointer(slot))
+}
+
 impl HeapChildSlotIterator {
     /// The payload mask WORD for a `Masked` selection whose mask is
     /// [`LayoutSlotMask::Inline`]: exactly the slot indices [`Self::next`]
@@ -94,6 +98,13 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
 ) where
     F: FnMut(GcMutableSlotDescriptor) + ?Sized,
 {
+    #[cfg(target_pointer_width = "32")]
+    if (*header).obj_type == GC_TYPE_REGEXP {
+        for slot in crate::regex::regex_native_slots((header as *mut u8).add(GC_HEADER_SIZE)) {
+            visit(pointer_slot(slot));
+        }
+        return;
+    }
     let mut child_slots = gc_child_slots(header);
     // #8112: the authoritative ordered-keys edge, taken from the shape record
     // `gc_child_slots` already resolved for this receiver. It is the boxed
@@ -160,7 +171,12 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_inline<F>(
         visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
     }
     if let Some(slot) = child_slots.take_meta_child_slot() {
-        visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
+        let descriptor = if matches!((*header).obj_type, GC_TYPE_OBJECT | GC_TYPE_CLOSURE) {
+            pointer_slot(slot.cast())
+        } else {
+            fixed_slot(slot)
+        };
+        visit(descriptor.with_layout(HeapChildSlotReadKind::Prefix));
     }
     if let Some(slot) = child_slots.take_meta_child_slot2() {
         visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
@@ -344,33 +360,33 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             let promise = user_ptr as *mut crate::promise::Promise;
             visit(fixed_slot(&mut (*promise).value as *mut f64 as *mut u64));
             visit(fixed_slot(&mut (*promise).reason as *mut f64 as *mut u64));
-            visit(fixed_slot(
-                &mut (*promise).on_fulfilled as *mut _ as *mut u64,
+            visit(pointer_slot(
+                &mut (*promise).on_fulfilled as *mut _ as *mut usize,
             ));
-            visit(fixed_slot(
-                &mut (*promise).on_rejected as *mut _ as *mut u64,
+            visit(pointer_slot(
+                &mut (*promise).on_rejected as *mut _ as *mut usize,
             ));
-            visit(fixed_slot(&mut (*promise).next as *mut _ as *mut u64));
+            visit(pointer_slot(&mut (*promise).next as *mut _ as *mut usize));
             // #6759 phase 1: the metadata edge (MARK path as well as rewrite).
-            visit(fixed_slot(&mut (*promise).meta as *mut _ as *mut u64));
+            visit(pointer_slot(&mut (*promise).meta as *mut _ as *mut usize));
         }
         GcRewriteDescriptorKind::Error => {
             let error = user_ptr as *mut crate::error::ErrorHeader;
-            visit(fixed_slot(&mut (*error).message as *mut _ as *mut u64));
-            visit(fixed_slot(&mut (*error).name as *mut _ as *mut u64));
-            visit(fixed_slot(&mut (*error).stack as *mut _ as *mut u64));
+            visit(pointer_slot(&mut (*error).message as *mut _ as *mut usize));
+            visit(pointer_slot(&mut (*error).name as *mut _ as *mut usize));
+            visit(pointer_slot(&mut (*error).stack as *mut _ as *mut usize));
             visit(fixed_slot(&mut (*error).cause as *mut f64 as *mut u64));
-            visit(fixed_slot(&mut (*error).errors as *mut _ as *mut u64));
+            visit(pointer_slot(&mut (*error).errors as *mut _ as *mut usize));
             // #6759 phase 1: the metadata edge. This arm is reached by
             // `trace_heap_rewrite_slots`, so visiting the slot here both MARKS
             // the meta record (keeping it, and anything reachable only through
             // it, alive) and rewrites the edge when evacuation moves it.
-            visit(fixed_slot(&mut (*error).meta as *mut _ as *mut u64));
+            visit(pointer_slot(&mut (*error).meta as *mut _ as *mut usize));
             // #9486: the captured-frames blob. Same shape as `stack` beside
             // it — a `StringHeader` edge, null until captured and null again
             // once `.stack` has been materialised — so it needs exactly this
             // one line and no new descriptor kind.
-            visit(fixed_slot(&mut (*error).frames as *mut _ as *mut u64));
+            visit(pointer_slot(&mut (*error).frames as *mut _ as *mut usize));
         }
         GcRewriteDescriptorKind::Map => {
             let map = user_ptr as *mut crate::map::MapHeader;
@@ -416,7 +432,7 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             // well as the rewrite path (`trace_heap_rewrite_slots` drives it),
             // so visiting here keeps the record — and anything reachable only
             // through it — alive.
-            visit(fixed_slot(&mut (*map).meta as *mut _ as *mut u64));
+            visit(pointer_slot(&mut (*map).meta as *mut _ as *mut usize));
         }
         GcRewriteDescriptorKind::Set => {
             let set = user_ptr as *mut crate::set::SetHeader;
@@ -427,20 +443,22 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
                 });
             }
             // #6759 phase 1: the metadata edge (MARK path as well as rewrite).
-            visit(fixed_slot(&mut (*set).meta as *mut _ as *mut u64));
+            visit(pointer_slot(&mut (*set).meta as *mut _ as *mut usize));
         }
         GcRewriteDescriptorKind::LazyArray => {
             let lazy = user_ptr as *mut crate::json_tape::LazyArrayHeader;
             if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
                 return;
             }
-            visit(fixed_slot(&mut (*lazy).blob_str as *mut _ as *mut u64));
-            visit(fixed_slot(&mut (*lazy).materialized as *mut _ as *mut u64));
-            visit(fixed_slot(
-                &mut (*lazy).materialized_elements as *mut _ as *mut u64,
+            visit(pointer_slot(&mut (*lazy).blob_str as *mut _ as *mut usize));
+            visit(pointer_slot(
+                &mut (*lazy).materialized as *mut _ as *mut usize,
             ));
-            visit(fixed_slot(
-                &mut (*lazy).materialized_bitmap as *mut _ as *mut u64,
+            visit(pointer_slot(
+                &mut (*lazy).materialized_elements as *mut _ as *mut usize,
+            ));
+            visit(pointer_slot(
+                &mut (*lazy).materialized_bitmap as *mut _ as *mut usize,
             ));
 
             let cached_length = (*lazy).cached_length as usize;
@@ -471,7 +489,7 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
 
         GcRewriteDescriptorKind::NativePodView => {
             let view = user_ptr as *mut crate::native_arena::NativePodViewHeader;
-            visit(fixed_slot(&mut (*view).owner as *mut _ as *mut u64));
+            visit(pointer_slot(&mut (*view).owner as *mut _ as *mut usize));
         }
         GcRewriteDescriptorKind::ObjectMeta => {
             // #6759 Phase B: the recorded custom `[[Prototype]]` is a live
@@ -527,7 +545,7 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             // record. Reached by `trace_heap_rewrite_slots`, so this is the
             // MARK path as well as the rewrite path.
             if let Some(slot) = crate::object::cell_meta_slot(user_ptr as usize) {
-                visit(fixed_slot(slot as *mut u64));
+                visit(pointer_slot(slot.cast()));
             }
         }
         GcRewriteDescriptorKind::Buffer => {
@@ -537,9 +555,7 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<const INLINE_LAYOUT: bool>(
             #[cfg(not(test))]
             let trace_link = true;
             if (*cell).link != 0 && trace_link {
-                visit(fixed_slot(
-                    std::ptr::addr_of_mut!((*cell).link).cast::<u64>(),
-                ));
+                visit(pointer_slot(std::ptr::addr_of_mut!((*cell).link)));
             }
         }
         GcRewriteDescriptorKind::WeakStorage => {

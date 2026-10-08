@@ -113,12 +113,7 @@ extern "C" {
         arg2: f64,
         arg3: f64,
     ) -> f64;
-    fn js_closure_call_array(
-        closure: *const ClosureHeader,
-        this: JsThis,
-        args: *const f64,
-        args_len: i64,
-    ) -> f64;
+    fn js_closure_call_array(closure: i64, this: JsThis, args: *const f64, args_len: i64) -> f64;
     fn js_native_call_value(
         func_value: f64,
         this: JsThis,
@@ -319,7 +314,7 @@ impl JsClosure {
 
     /// Invoke with any number of arguments. See [`Self::call0`].
     pub unsafe fn call_slice(self, this: JsThis, args: &[f64]) -> f64 {
-        js_closure_call_array(self.0, this, args.as_ptr(), args.len() as i64)
+        js_closure_call_array(self.0 as i64, this, args.as_ptr(), args.len() as i64)
     }
 }
 

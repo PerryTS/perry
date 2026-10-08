@@ -1,0 +1,1 @@
+{"wasmtime_args": ["--env", "PERRY_GC_FORCE_EVACUATE=1", "--env", "PERRY_GC_VERIFY=1"]}

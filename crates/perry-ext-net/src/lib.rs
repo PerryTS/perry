@@ -960,7 +960,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
     let submitted = turnloop_io::on_loop(move || match path {
         Some(path) => match turnloop_io::listen_pipe(server_id, &path, 511) {
             Ok(()) => push_event(PendingNetEvent::ServerListening(server_id)),
-            Err(err) => fail_listen(server_id, format!("bind {}: {}", path, err.message())),
+            Err(err) => fail_listen(server_id, format!("{} {}", err.message(), path)),
         },
         None => match turnloop_io::listen_tcp(server_id, &host, port_u16, 511) {
             Ok(()) => {
@@ -969,7 +969,7 @@ pub unsafe extern "C" fn js_net_server_listen(handle: i64, port: f64, arg2: f64,
             }
             Err(err) => fail_listen(
                 server_id,
-                format!("bind {}:{}: {}", host, port_u16, err.message()),
+                format!("{} {}:{}", err.message(), host, port_u16),
             ),
         },
     });

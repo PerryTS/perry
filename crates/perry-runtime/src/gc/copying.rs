@@ -142,7 +142,10 @@ impl CopyingNurseryPreflight {
                 return;
             }
             slot.record_layout_read();
-            self.scan_slot(slot.slot as *const u64);
+            self.check_bits_with_reason(
+                slot.read(),
+                CopiedMinorFallbackReason::PinnedYoungTransitive,
+            );
         });
     }
 
@@ -756,12 +759,12 @@ impl CopyingNurseryCollector {
         let skip_remembering = self.skip_remembering;
         visit_gc_rewrite_slots_inline(header, |slot| unsafe {
             slot.record_layout_read();
-            let before = *slot.slot;
+            let before = slot.read();
             let weak = *weak_holder.get_or_insert_with(|| weak_holder_fact(header));
             let remembering =
                 *remembering.get_or_insert_with(|| ParentRemembering::of(header, skip_remembering));
             self.visit_slot_with_parent_facts(slot, header, weak, remembering);
-            changed |= *slot.slot != before;
+            changed |= slot.read() != before;
         });
         if changed {
             let user_ptr = (header as *mut u8).add(GC_HEADER_SIZE);
@@ -1067,7 +1070,7 @@ impl CopiedMinorEligibility {
             &snapshot,
             None,
             |slot, _header, _external, _stats| unsafe {
-                dirty_checker.check_bits(*slot);
+                dirty_checker.check_bits(slot.read());
             },
         );
         unsafe {
@@ -1403,9 +1406,9 @@ pub(super) fn run_copied_minor_attempt(
                 if let Some(d) = collector.survival.as_mut() {
                     d.remembered_parent_type = (*header).obj_type;
                 }
-                let before = *slot;
-                collector.visit_slot_with_parent(slot, header, external);
-                if *slot != before {
+                let before = slot.read();
+                collector.visit_mutable_slot_with_parent(slot, header, external);
+                if slot.read() != before {
                     stats.newly_marked += 1;
                 }
             },

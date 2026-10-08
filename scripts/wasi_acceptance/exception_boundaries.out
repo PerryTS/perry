@@ -1,0 +1,8 @@
+2 first root survives
+outer finally
+rethrow finally
+original
+true
+callback
+root survives
+exit 0

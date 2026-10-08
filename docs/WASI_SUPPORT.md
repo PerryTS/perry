@@ -1,141 +1,91 @@
-# WASI support: #11375 acceptance assessment
+# Standalone WASI support (#11375)
 
-Status: experimental; the complete acceptance scope is **not implemented**.
-This assessment uses [#11375](https://github.com/PerryTS/perry/issues/11375)
-as its scope and was verified on Windows x64 on 2026-10-08, against main
-`6521c0cbf` plus the changes in this branch.
+Perry's experimental `--target wasi` produces a WASIp2 component with its
+runtime and collector in linear memory. It needs a WASI host with WebAssembly
+exception handling enabled, and no JavaScript host. This is separate from the
+browser `wasm`/`web` targets.
 
-WASI programs run on Windows through a WASI host. We built and ran Perry
-components with Wasmtime 48.0.0 and wasi-sdk 34 on Windows. This is the
-standalone LLVM `--target wasi` pipeline targeting `wasm32-wasip2`, distinct
-from Perry's browser `wasm`/`web` targets and their JavaScript host runtime.
-See [Wasmtime's platform support](https://docs.wasmtime.dev/stability-platform-support.html).
+WASI components run on Windows through a host such as Wasmtime. This branch
+was developed and tested on Windows x64 with Wasmtime 48.0.0, wasi-sdk 34,
+the repository's pinned Rust toolchain, and LLVM 22. See
+[Wasmtime platform support](https://docs.wasmtime.dev/stability-platform-support.html)
+and [the agreed scope, #11375](https://github.com/PerryTS/perry/issues/11375).
 
-## What this branch fixes
+## Implemented contracts
 
-- `BufferHeader` was 12 bytes on ILP32, while the byte store ABI requires
-  offset 16. Eight-byte alignment preserves the native layout and makes the
-  WASI runtime compile without changing the link field's offset.
-- The linker now finds `clang.exe` in Windows wasi-sdk installations.
-- Runtime ABI source paths are normalized on Windows. Previously the checker
-  saw no runtime symbols because its prefix checks expected `/`; emission now
-  also refuses to replace the ABI table with an empty table.
-- A checksum-pinned PowerShell tool installer and a portable Python runtime
-  builder make the standalone pipeline usable on Windows. The builder accepts
-  Cargo's fresh cached artifacts and verifies that Cargo reported a real WASI
-  archive. Shell entry points delegate to the portable implementations.
-- Executable acceptance probes retain compile logs, stdout, stderr and JSON
-  results. Compile errors, missing/stale artifacts, timeouts and incorrect exit
-  statuses fail the run. The gap suite requires the repo's pinned Node oracle;
-  failing oracles fail coverage rather than silently dropping cases.
+- Arguments, environment variables, standard output, and filesystem access
+  through explicit directory preopens. Denied filesystem access raises a
+  catchable error.
+- UTC date operations. Local-time operations use the existing UTC fallback.
+- Nested exceptions, catch/finally/rethrow, runtime-originated errors and
+  errors crossing promise callbacks. Generated try blocks and the C runtime
+  use LLVM's wasm SjLj lowering, modern wasm EH, and wasi-libc `libsetjmp`.
+  Unwinding restores the GC shadow stack and async context. Locals visible
+  after setjmp stay in volatile stack slots through optimization.
+- Perry's collector, including moving collections. GC slot descriptors
+  distinguish native 32-bit pointers from 64-bit tagged values, including
+  object metadata, promises, errors, regexps, buffer owners and lazy JSON.
+  Map/Set allocation classifiers account for allocation padding on ILP32.
+- Runtime and generated closure ABIs agree on wasm indirect-call signatures,
+  including class-method function objects. Tagged values retain all 64 bits
+  when reflecting on objects and classifying native handles.
+- Timers, cancellation and promise microtasks continue while sockets are
+  active. The WASIp2 transport uses nonblocking wasi-libc sockets and a bounded
+  event-loop wake deadline; callbacks run after transport borrows are released.
+- DNS through wasi-libc's WASIp2 resolver, and TCP listen/accept/connect,
+  read/write, write-side shutdown and close. The runtime static archive bundles
+  the existing net extension and its callback bridges with one Rust allocator.
+  Network denial produces the socket's normal asynchronous error event.
+- `parallelMap`/`parallelFilter` run sequentially; `spawn` is deferred on the
+  current agent with promise adoption and rejection. Captured references and
+  pending results remain rooted. There are no parallel WASIp2 worker threads.
+- Child process creation throws a catchable `ERR_NOT_SUPPORTED` error with
+  `child_process is not supported on WASI`, including fork and async creation.
 
-## Measured acceptance
+The net extension builds its rustls client path with WebPKI roots on WASI;
+TLS interoperability is not established by the TCP acceptance probes. UDP
+(`mod-dgram`), Unix-domain/named pipes, native addons, host process creation,
+and general platform-specific Node/Bun APIs are outside the tested profile.
+This is not a claim of complete Node API compatibility or Linux/macOS runtime
+parity with the Windows measurements.
 
-The existing smoke suite passes **6/6**: classes, closures, collections,
-exit codes, iterators and values. The additional acceptance suite passes
-**6/11**, with the results below. These are focused probes, not exhaustive
-proofs of feature compatibility.
+## Acceptance and CI
 
-| Probe | Windows result | What it establishes or exposes |
-| --- | --- | --- |
-| Byte arrays / DataView | Pass | Allocation, indexing and slice with the corrected header |
-| UTC dates | Pass | Fixed UTC date formatting and timezone offset |
-| Files | Pass | Read/write/delete with an explicit directory preopen |
-| GC | Pass | Retained object graph across collections with forced evacuation and verification enabled |
-| Tagged values | Pass | Minimal #11412 prototype case plus defineProperty / Reflect.get; broader cases still fail below |
-| Timers | Pass | Promise microtask followed by a timer; the existing WASI event-pump path handles this case |
-| Exceptions | Fail at runtime | Nested throw/finally/catch terminates instead of unwinding |
-| DNS | Fail at runtime | `lookup('localhost')` returns ENOTFOUND even with inherited networking |
-| TCP | Fail at link | Missing `js_ext_net_*` / `js_net_*` symbols |
-| Threads | Fail at runtime | Sequential parallelMap/filter work; spawn rejects as unsupported |
-| Child processes | Fail at runtime | Missing-command error says UNKNOWN and cannot be caught; requires an explicit unsupported-operation error |
+Verified on Windows x64 on 2026-10-08 with the standard release runtime build:
+**18/18 acceptance**, **6/6 smoke**, and **10/10 Node comparisons** pass. Native
+GC regressions pass **171 tests** (one existing ignored test); WASI codegen unit
+tests pass **10/10**, the component-linker regression passes, and the six Python
+harness tests pass. The no-default-features WASI runtime check, runtime ABI
+self-test/table check, Node pin consistency and Actions topology check pass.
 
-Ten representative existing gap programs were also compared with Node
-26.5.1: **5/10 pass**. Array methods, string methods, closures, extended Map/Set
-and error extensions pass. Advanced classes and object methods terminate at
-expected catches. Advanced JSON and regexp encounter `Reflect.defineProperty
-called on non-object`. Advanced async traps with an indirect call type mismatch
-in `closure::dispatch::calln::dispatch_call_slice`. The latter needs callback ABI
-work even after exception transport exists.
 
-The passing six acceptance cases form `--suite core`. CI runs those cases and
-the five passing Node comparisons in the existing WASI codegen job. The full
-acceptance and full ten-case gap runs deliberately remain failing diagnostics.
-The existing CI job is Ubuntu-only and conditional on compatibility routing
-and the PR's `run-extended-tests` label; these changes do not make WASI a
-required PR check or establish Linux/macOS parity with this Windows run.
+The acceptance fixtures exercise bytes/DataView, UTC dates, preopened files,
+permission denial, arguments/environment, GC edges under forced evacuation,
+tagged reflection, exceptions across runtime/callback boundaries, timers,
+DNS, loopback TCP, timers plus GC during TCP, sequential thread fallbacks,
+and unsupported child processes. The smoke suite adds classes, closures,
+collections, iterators, values and exit status. Ten existing gap programs are
+compared against the pinned Node 26.5.1 oracle, including advanced classes,
+objects, JSON, regexp and async behavior.
 
-## Remaining implementation work, in dependency order
+The WASI codegen CI job runs the complete acceptance, smoke and ten-case gap
+suites on Windows and Linux. It retains the existing compatibility routing and
+`run-extended-tests` PR-label condition; it is not a required check on every PR.
+The workflow changes are locally validated; remote CI has not been run from
+this worktree. Local reports and per-case diagnostics are retained under
+`.cache/wasi-*` and ignored by Git.
 
-1. **Exception transport and GC restoration (#11378).** The WASI implementation
-   of `perry_sjlj_try` currently just calls its body; `js_throw` exits rather
-   than reaching a catch. The runtime build excludes the native C trampoline
-   on WASI. Select and implement a matching wasm exception strategy across
-   LLVM codegen, libc/compiler support and runtime boundaries. If following
-   the issue's SjLj design, provide the WASI trampoline and matching compiler
-   flags/libraries; the native invoke/landingpad/personality path cannot simply
-   be assumed to work. Save and restore GC shadow-stack/savepoint state across
-   unwinds. Require nested catch/finally, rethrow, runtime-originated errors,
-   callback errors and rejected async errors to pass with forced GC. A jump
-   target must remain live; a Rust wrapper that returns before longjmp is not
-   a safe substitute.
-
-2. **Complete the ILP32 ABI audit (#11412 and #11378).** The generated runtime
-   ABI adapter and closure receiver adaptation cover some calls. The minimal
-   prototype reproduction now passes, but the JSON/regexp failures show that
-   it is premature to mark the boxed-value problem fixed. Inventory parameters
-   which semantically carry 64-bit tagged values through pointer-shaped APIs;
-   preserve the tags instead of narrowing to wasm's 32-bit pointer width.
-   Regenerate and check `runtime_abi.tsv` after signature changes. Separately
-   audit runtime-created callback signatures, arities and indirect table calls
-   using the advanced async trap. Test callbacks from both generated code and
-   runtime code, including functions called with fewer or extra arguments.
-
-3. **WASIp2 networking and polling (#11377).** `run_pipeline.rs` currently
-   links the runtime archive alone for WASI; the TCP fixture needs extension
-   symbols as well as a WASI network implementation. Define a WASI feature
-   profile for the extension archives, integrate socket readiness with the
-   event pump, and use host-supported address resolution. Merely compiling
-   socket2 or linking an archive does not establish usable networking. Test
-   loopback TCP accept/connect/read/write/close, DNS results and errors, and
-   promises/timers progressing while I/O is pending. Make preopens and network
-   capabilities explicit, with catchable errors when denied. Existing simple
-   timers pass; test cancellation and multiple pending timers during this work.
-   UDP's `mod-dgram` remains excluded from the runtime build and must be
-   addressed if the final socket scope includes UDP.
-
-4. **Sequential thread fallback (#11377).** Keep the existing single-thread
-   map/filter behavior and implement spawn as a deferred task in the current
-   agent, with the closure and result promise rooted until completion. Do not
-   inline the native worker lifecycle: it claims/retires an agent and can
-   invalidate the main heap. Test captured references, returned values,
-   rejection, observable ordering and GC during pending work. This fulfills
-   the issue's fallback scope without requiring shared-memory wasm threads.
-
-5. **Portable platform contracts (#11377).** WASI has no general host process
-   spawning API. Return a clear, catchable unsupported-operation error for
-   child_process instead of UNKNOWN or a trap. Keep the documented UTC date
-   fallback, and document host filesystem/network rights and unsupported
-   platform-specific APIs. Extend the probes to environment, arguments and
-   deliberate permission denial before claiming portable CLI coverage.
-
-6. **Linking and acceptance gates (#11379 / #11380).** Keep the current build,
-   ABI, smoke, core and oracle checks; promote repaired cases into the gate
-   rather than suppressing their failures. Expand the Node parity selection
-   after the callback/exception fixes, run the native regression checks, add
-   Windows host CI, and establish Linux/macOS host results. Consolidate the
-   WASI tool pins with the repository's tool-version policy. Only mark #11375
-   complete when every agreed capability has end-to-end coverage and all
-   acceptance probes pass.
-
-These are separable implementation PRs, with exceptions and ABI work unlocking
-reliable diagnostics for the later platform work. The current branch supplies
-build repairs and reproducible evidence, not the remaining runtime designs.
+An additional repository GC root-holder inventory lint still fails on the
+branch baseline: two unpinned test counters, the `TRACKED_HEADER_PROBES` verdict,
+a stale `policy.rs` census pin, and two stale JSON tape entries. The current
+branch reports the same issues, with no new inventory issue paths. The
+`ephemeron.rs` pin affected by this change was separately reviewed and updated;
+no scanner exemption was added for the WASI transport.
 
 ## Reproducing on Windows
 
-Use the repository's pinned Rust toolchain and LLVM 22 setup first. From the
-repository root in PowerShell (Python 3.10+ required):
+Configure the repository's pinned Rust and LLVM 22 toolchain first. Python
+3.10+ is required. From the repository root in PowerShell:
 
 ```powershell
 . ./scripts/wasi_toolchain.ps1
@@ -143,35 +93,39 @@ rustup target add wasm32-wasip2
 cargo build --locked -p perry --no-default-features --features compile-cli,target-wasi
 python scripts/wasi_build_runtime.py
 python scripts/wasi_run.py target/debug/perry.exe --suite smoke --output .cache/wasi-smoke
-python scripts/wasi_run.py target/debug/perry.exe --suite core --output .cache/wasi-core
 python scripts/wasi_run.py target/debug/perry.exe --suite acceptance --output .cache/wasi-acceptance
 python scripts/wasi_run.py target/debug/perry.exe --suite gap --node <path-to-pinned-node> --output .cache/wasi-gap
 ```
 
-The installer pins SDK 34 and Wasmtime 48, sets the SDK/compiler/runtime
-environment variables and supports Windows x64 and ARM64. Only x64 was tested.
-The runtime builder enables the runtime's current default feature set except
-`alloc-mimalloc` (64-bit-only) and `mod-dgram` (unsupported UDP turnloop path),
-matching `wasi_check.sh`.
+The checksum-pinned PowerShell installer supports Windows x64 and ARM64;
+only x64 was tested. The runtime build uses standard release settings and
+all runtime default features except the 64-bit-only allocator (`alloc-mimalloc`)
+and UDP (`mod-dgram`), matching the WASI check profile. LLVM development headers
+are needed to build the wasm exception-model target-options shim.
 
-On Linux/macOS, configure the tools using
+On Linux/macOS, configure tools with
 `eval "$(./scripts/wasi_toolchain.sh)"`, then use the same Python commands with
-the platform's compiler path. `wasi_build_runtime.sh` and `wasi_smoke.sh` remain
-compatible shell entry points. `--filter` accepts repeatable name substrings;
-each fixture runs in a separate working directory. Without `--output`, logs
-are temporary. With it, `report.json` and per-case logs are retained.
+the platform compiler path. Shell build/smoke entry points delegate to the
+portable implementations. These instructions do not establish host parity.
 
-Harness regression checks:
+Fixtures run in separate working directories. Filesystem probes explicitly
+preopen their working directory. Networking probes grant `-S inherit-network=y`;
+DNS also grants `-S allow-ip-name-lookup=y`. Denial fixtures grant neither.
+Arguments follow the component path. GC fixtures set `PERRY_GC_FORCE_EVACUATE=1`
+and `PERRY_GC_VERIFY_EVACUATION=1` in the guest environment.
+
+Harness and ABI checks:
 
 ```powershell
 python scripts/test_wasi_run.py
 python scripts/runtime_abi_check.py --self-test
 python scripts/runtime_abi_check.py --check-wasm-abi
+python -X utf8 scripts/check_actions_topology.py
 cargo test --locked -p perry --bin perry --no-default-features --features compile-cli,target-wasi links_a_wasip2_component -- --nocapture
 ```
 
-The Windows run built the release WASI runtime with the supported feature
-profile, checked the runtime with no default features, built the compiler,
-passed the linker test, passed six harness
-regression tests, and confirmed the ABI table is current. Raw measurements
-are retained locally under `.cache/wasi-*`; generated artifacts are ignored.
+`--filter` accepts repeatable fixture-name substrings. Compile failures,
+timeouts, missing artifacts, oracle failures and output/exit mismatches fail
+the run. `--output` preserves `report.json`, compilation logs, stdout and
+stderr; without it the files are temporary. The historical `core` suite remains
+available for quick diagnostics; CI gates the complete `acceptance` suite.

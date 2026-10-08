@@ -17,7 +17,7 @@ struct DirtySlotRangeWork {
 
 enum DirtySlotWork {
     Single {
-        slot: *mut u64,
+        slot: GcMutableSlot,
         layout_kind: Option<HeapChildSlotReadKind>,
     },
     Range(DirtySlotRangeWork),
@@ -66,7 +66,7 @@ impl DirtyHeaderSlotScan {
             GcMutableSlotDescriptor::Slot(slot) => {
                 if dirty_pages_contains_addr(dirty_pages, slot.slot as usize) {
                     work.push(DirtySlotWork::Single {
-                        slot: slot.slot,
+                        slot,
                         layout_kind: slot.layout_kind,
                     });
                 }
@@ -100,12 +100,12 @@ impl DirtyHeaderSlotScan {
         &mut self,
         remaining: &mut usize,
         stats: &mut RememberedSetTraceStats,
-        visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
+        visit_slot: &mut dyn FnMut(GcMutableSlot, &mut RememberedSetTraceStats),
     ) -> bool {
         while *remaining > 0 && self.cursor < self.work.len() {
             match &mut self.work[self.cursor] {
                 DirtySlotWork::Single { slot, layout_kind } => unsafe {
-                    if !crate::weakref::is_weak_target_trace_slot(self.header, *slot) {
+                    if !crate::weakref::is_weak_target_trace_slot(self.header, slot.slot) {
                         process_dirty_slot_work(
                             *slot,
                             *layout_kind,
@@ -126,7 +126,7 @@ impl DirtyHeaderSlotScan {
                         let slot = range.slots.add(range.cursor);
                         if !crate::weakref::is_weak_target_trace_slot(self.header, slot) {
                             process_dirty_slot_work(
-                                slot,
+                                GcMutableSlot::new(slot, range.layout_kind),
                                 range.layout_kind,
                                 stats,
                                 visit_slot,
@@ -158,20 +158,20 @@ impl DirtyHeaderSlotScan {
 
 #[inline]
 unsafe fn process_dirty_slot_work(
-    slot: *mut u64,
+    slot: GcMutableSlot,
     layout_kind: Option<HeapChildSlotReadKind>,
     stats: &mut RememberedSetTraceStats,
-    visit_slot: &mut dyn FnMut(*mut u64, &mut RememberedSetTraceStats),
+    visit_slot: &mut dyn FnMut(GcMutableSlot, &mut RememberedSetTraceStats),
     changed: &mut bool,
 ) {
     if let Some(layout_kind) = layout_kind {
         record_layout_child_slot_read(layout_kind);
     }
     stats.dirty_slots_scanned += 1;
-    crate::arena::old_page_account_dirty_slot(slot as usize);
-    let before = *slot;
+    crate::arena::old_page_account_dirty_slot(slot.slot as usize);
+    let before = slot.read();
     visit_slot(slot, stats);
-    *changed |= *slot != before;
+    *changed |= slot.read() != before;
 }
 
 pub(in crate::gc) fn dirty_slot_ranges_for(
@@ -325,8 +325,8 @@ impl RememberedSetRootMarkState {
         }
 
         let mut remaining = budget;
-        let mut mark_slot = |slot: *mut u64, stats: &mut RememberedSetTraceStats| unsafe {
-            if try_mark_young_value_as_seed(*slot, valid_ptrs) {
+        let mut mark_slot = |slot: GcMutableSlot, stats: &mut RememberedSetTraceStats| unsafe {
+            if try_mark_young_value_as_seed(slot.read(), valid_ptrs) {
                 stats.newly_marked += 1;
             }
         };

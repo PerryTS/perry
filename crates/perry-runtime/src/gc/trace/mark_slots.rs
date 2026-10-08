@@ -60,19 +60,19 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool>(
     let weak_holder =
         crate::weakref::is_weak_holder_header(header) && !mark_hoist_sabotage::forgetting_weak();
     visit_gc_rewrite_slot_descriptors(header, |descriptor| unsafe {
-        let mut visit_slot = |slot: *mut u64, layout_kind: Option<HeapChildSlotReadKind>| {
-            if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot) {
+        let mut visit_slot = |slot: GcMutableSlot| {
+            if weak_holder && crate::weakref::is_weak_target_trace_slot(header, slot.slot) {
                 return;
             }
-            if let Some(kind) = layout_kind {
+            if let Some(kind) = slot.layout_kind {
                 record_layout_child_slot_read(kind);
                 record_trace_slot_read();
             }
-            mark_field_into_worklist(*slot, valid_ptrs, worklist, proxy_trace_active);
+            mark_field_into_worklist(slot.read(), valid_ptrs, worklist, proxy_trace_active);
             if REMEMBER {
                 #[cfg(test)]
                 {
-                    let child = decode_heap_addr(*slot);
+                    let child = decode_heap_addr(slot.read());
                     if child != 0
                         && crate::gc::barrier::remembered_child_needs_tracking(child)
                         && remembered_mark_sabotage::drop_next_entry()
@@ -80,7 +80,7 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool>(
                         return;
                     }
                 }
-                remember_evacuated_old_to_young_slot(sticky.as_deref_mut().unwrap(), header, slot);
+                remember_mutable_old_to_young_slot(sticky.as_deref_mut().unwrap(), header, slot);
             }
         };
         match descriptor {
@@ -91,7 +91,7 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool>(
                     }
                 }
             }
-            GcMutableSlotDescriptor::Slot(slot) => visit_slot(slot.slot, slot.layout_kind),
+            GcMutableSlotDescriptor::Slot(slot) => visit_slot(slot),
             GcMutableSlotDescriptor::Range { range, layout_kind } => {
                 // Start the header reads of the range's pointer children
                 // before marking any of them: each is a cold DRAM read the
@@ -107,7 +107,7 @@ unsafe fn trace_heap_rewrite_slots_impl<const REMEMBER: bool>(
                     }
                 }
                 for i in 0..range.slot_count() {
-                    visit_slot(range.slot(i), layout_kind);
+                    visit_slot(GcMutableSlot::new(range.slot(i), layout_kind));
                 }
             }
         }

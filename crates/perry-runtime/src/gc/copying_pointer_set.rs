@@ -320,12 +320,12 @@ pub(super) unsafe fn plausible_gc_header(header: *mut GcHeader, arena: bool) -> 
 /// fixed total.
 fn fixed_layout_total_size(info: &GcTypeInfo) -> Option<usize> {
     match info.type_id {
-        crate::gc::GC_TYPE_MAP => {
-            Some(GC_HEADER_SIZE + std::mem::size_of::<crate::map::MapHeader>())
-        }
-        crate::gc::GC_TYPE_SET => {
-            Some(GC_HEADER_SIZE + std::mem::size_of::<crate::set::SetHeader>())
-        }
+        crate::gc::GC_TYPE_MAP => Some(
+            (GC_HEADER_SIZE + std::mem::size_of::<crate::map::MapHeader>()).next_multiple_of(8),
+        ),
+        crate::gc::GC_TYPE_SET => Some(
+            (GC_HEADER_SIZE + std::mem::size_of::<crate::set::SetHeader>()).next_multiple_of(8),
+        ),
         _ => None,
     }
 }

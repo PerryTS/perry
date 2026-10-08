@@ -298,7 +298,10 @@ impl CopyingNurseryPreflight {
     pub(super) fn check_dirty_roots(&mut self) {
         let snapshot = remembered_dirty_snapshot();
         scan_remembered_dirty_slots_copying(&snapshot, None, |slot, _, _, _| unsafe {
-            self.check_bits_with_reason(*slot, CopiedMinorFallbackReason::PinnedYoungDirtySlot);
+            self.check_bits_with_reason(
+                slot.read(),
+                CopiedMinorFallbackReason::PinnedYoungDirtySlot,
+            );
         });
     }
 

@@ -1,3 +1,5 @@
-- Fix the WASI byte-buffer header layout on 32-bit targets and find wasi-sdk's `clang.exe` on Windows.
-- Add pinned Windows WASI tooling, a portable runtime builder, and executable acceptance probes for #11375. Extend WASI CI with the passing core and Node compatibility subsets.
-- Fix Windows path handling in runtime ABI checks and reject empty generated ABI tables.
+- Implement standalone WASIp2 exception transport using LLVM wasm SjLj and wasi-libc, with GC/async-context restoration and matching closure callback signatures.
+- Fix 32-bit GC pointer-slot tracing, Map/Set allocation padding, tagged reflection/native handle classification, and the WASI byte-buffer header layout.
+- Add WASIp2 DNS/TCP transport and event-loop integration, bundle the net extension into the runtime archive, and implement deferred sequential spawn and clear child-process rejection.
+- Add pinned Windows WASI tooling and portable build/acceptance runners. Gate complete acceptance, smoke and Node gap comparisons in Windows/Linux WASI CI.
+- Fix Windows runtime ABI source-path handling and reject empty generated ABI tables. Document capabilities, host rights, reproduction and profile limitations for #11375.

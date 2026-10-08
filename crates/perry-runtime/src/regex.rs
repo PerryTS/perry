@@ -283,6 +283,16 @@ pub(crate) unsafe fn regexp_source_and_flags(
     )
 }
 
+#[cfg(target_pointer_width = "32")]
+pub(crate) unsafe fn regex_native_slots(user_ptr: *mut u8) -> [*mut usize; 3] {
+    let data = user_ptr.cast::<RegExpData>();
+    [
+        std::ptr::addr_of_mut!((*data).pattern_ptr).cast(),
+        std::ptr::addr_of_mut!((*data).flags_ptr).cast(),
+        std::ptr::addr_of_mut!((*data).perex_program).cast(),
+    ]
+}
+
 /// Immutable original source, canonical flags and program of a RegExp.
 /// Never exposed as a JS receiver; the ordinary instance owns this cell through
 /// its intrinsic private slot. Recompilation publishes a new cell.

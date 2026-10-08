@@ -10,8 +10,7 @@ __pycache__/
 .cache/node-pin/
 # Pinned WASI SDK/runtime and local acceptance reports.
 .cache/wasi/
-.cache/wasi-*/
-.cache/wasi-*.log
+.cache/wasi-*
 # Local receipts for the staged npm release pipeline. These must survive
 # between `publish:stage` and `publish:approve`, but must never make a clean
 # release-candidate checkout appear dirty or be committed.

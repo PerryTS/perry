@@ -221,6 +221,7 @@ pub(crate) extern "C" fn cp_method_dispose(
     cp_undefined()
 }
 pub(crate) fn js_fork_child(args_len: usize) -> f64 {
+    cp_require_process_support();
     if args_len < 2 {
         crate::node_submodules::diagnostics::throw_type_error_no_code(
             b"Cannot destructure property 'initMessageChannel' of 'serialization[serializationMode]' as it is undefined.",

@@ -62,7 +62,7 @@ fn small_native_handle_id(value: f64) -> Option<i64> {
             return Some(raw);
         }
     }
-    if addr_class::is_small_handle(bits as usize) {
+    if (1..addr_class::HANDLE_BAND_MAX as u64).contains(&bits) {
         return Some(bits as i64);
     }
     if value.is_finite()

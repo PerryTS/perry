@@ -50,6 +50,7 @@ pub(super) fn link_args(
     ];
     args.extend(objects.iter().map(|o| o.display().to_string()));
     args.push(runtime.display().to_string());
+    args.push("-lsetjmp".to_string());
     args.extend([
         // The component adapter allocates through the module's allocator.
         "-Wl,--export=cabi_realloc".to_string(),

@@ -24,6 +24,7 @@ pub extern "C" fn js_child_process_exec_sync(
     cmd_ptr: *const StringHeader,
     options_ptr: *const ObjectHeader,
 ) -> f64 {
+    cp_require_process_support();
     let opts_val = if options_ptr.is_null() {
         cp_undefined()
     } else {
@@ -68,6 +69,7 @@ pub extern "C" fn js_child_process_spawn_sync(
     args_ptr: *const crate::array::ArrayHeader,
     options_ptr: *const ObjectHeader,
 ) -> *mut ObjectHeader {
+    cp_require_process_support();
     if cmd_ptr.is_null() {
         return std::ptr::null_mut();
     }
@@ -178,6 +180,7 @@ pub extern "C" fn js_child_process_spawn(
     _args_ptr: *const crate::array::ArrayHeader,
     _options_ptr: *const ObjectHeader,
 ) -> *mut ObjectHeader {
+    cp_require_process_support();
     // DEAD/LEGACY path: user-level `child_process.spawn(...)` no longer
     // routes here. It lowers to `Expr::ChildProcessSpawn`
     // (crates/perry-codegen/src/expr/child_proc.rs), which builds a real
@@ -210,6 +213,7 @@ pub extern "C" fn js_child_process_spawn(
 /// no callback we preserve the legacy behavior of returning the stdout string.
 #[no_mangle]
 pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64, arg2: f64) -> f64 {
+    cp_require_process_support();
     use crate::fs::extract_closure_ptr;
     // The callback is whichever argument is a closure; prefer the later slot.
     // Keep the NaN-boxed value too — the async path (#4912) GC-roots it while
@@ -298,6 +302,7 @@ pub extern "C" fn js_child_process_exec_file(
     opts_val: f64,
     cb_val: f64,
 ) -> f64 {
+    cp_require_process_support();
     use crate::fs::extract_closure_ptr;
     // Locate the callback and keep its NaN-boxed value for GC rooting while the
     // async run is in flight (#4912).
@@ -369,6 +374,7 @@ pub extern "C" fn js_child_process_exec_file_sync(
     args_val: f64,
     opts_val: f64,
 ) -> f64 {
+    cp_require_process_support();
     let file_str = unsafe { cp_read_string_header(file_ptr) };
     validate::cp_validate_no_null_bytes("file", &file_str);
     validate::cp_validate_args(args_val);

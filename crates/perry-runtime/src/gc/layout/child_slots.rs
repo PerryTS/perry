@@ -423,7 +423,7 @@ pub(in crate::gc) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSl
             // it alive and evacuation rewrites it.
             let props = &mut (*closure).props as *mut _ as *mut u64;
             HeapChildSlotIterator::new(header, None, range)
-                .with_meta_slot((*props != 0).then_some(props))
+                .with_meta_slot((!(*closure).props.is_null()).then_some(props))
         }
         GcLayoutSlotKind::None => HeapChildSlotIterator::empty(),
     }
@@ -431,6 +431,8 @@ pub(in crate::gc) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSl
 
 #[derive(Clone, Copy)]
 pub(in crate::gc) struct GcMutableSlot {
+    #[cfg(target_pointer_width = "32")]
+    pointer_width: bool,
     pub(in crate::gc) slot: *mut u64,
     pub(in crate::gc) layout_kind: Option<HeapChildSlotReadKind>,
 }
@@ -438,7 +440,44 @@ pub(in crate::gc) struct GcMutableSlot {
 impl GcMutableSlot {
     #[inline]
     pub(in crate::gc) fn new(slot: *mut u64, layout_kind: Option<HeapChildSlotReadKind>) -> Self {
-        Self { slot, layout_kind }
+        Self {
+            slot,
+            layout_kind,
+            #[cfg(target_pointer_width = "32")]
+            pointer_width: false,
+        }
+    }
+
+    /// Retain the native pointer width with the slot address across budgeted scans.
+    /// A wasm32 pointer is four bytes; a JS value is always eight bytes.
+    #[inline]
+    pub(in crate::gc) fn pointer(slot: *mut usize) -> Self {
+        Self {
+            slot: slot.cast(),
+            layout_kind: None,
+            #[cfg(target_pointer_width = "32")]
+            pointer_width: true,
+        }
+    }
+
+    #[inline(always)]
+    pub(in crate::gc) unsafe fn read(self) -> u64 {
+        #[cfg(target_pointer_width = "32")]
+        if self.pointer_width {
+            return *self.slot.cast::<usize>() as u64;
+        }
+        *self.slot
+    }
+
+    #[inline(always)]
+    pub(in crate::gc) unsafe fn write(self, bits: u64) {
+        #[cfg(target_pointer_width = "32")]
+        if self.pointer_width {
+            debug_assert!(bits <= usize::MAX as u64);
+            *self.slot.cast::<usize>() = bits as usize;
+            return;
+        }
+        *self.slot = bits;
     }
 
     /// Is the slot's address outside old-gen? #10182: classified on demand (its

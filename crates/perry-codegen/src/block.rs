@@ -276,7 +276,11 @@ impl RegCounter {
 
     /// Landing pad of the innermost active handler scope, if any.
     pub fn current_eh_unwind_label(&self) -> Option<String> {
-        self.eh_unwind_labels.borrow().last().cloned()
+        self.eh_unwind_labels
+            .borrow()
+            .last()
+            .filter(|label| !label.is_empty())
+            .cloned()
     }
 
     pub fn next(&self) -> u32 {

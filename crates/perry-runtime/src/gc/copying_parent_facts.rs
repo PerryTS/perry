@@ -280,6 +280,29 @@ impl CopyingNurseryCollector {
         self.visit_slot_with_weak_fact(slot, parent_header, weak_holder, external);
     }
 
+    pub(super) unsafe fn visit_mutable_slot_with_parent(
+        &mut self,
+        slot: GcMutableSlot,
+        parent_header: *mut GcHeader,
+        external: bool,
+    ) {
+        let skip = self.skip_remembering;
+        self.visit_slot_core(
+            slot,
+            parent_header,
+            weak_holder_fact(parent_header),
+            move || {
+                !parent_header.is_null()
+                    && !skip
+                    && barrier_parent_needs_remembering(
+                        (parent_header as *mut u8).add(GC_HEADER_SIZE) as usize,
+                        external,
+                    )
+            },
+            move || external,
+        );
+    }
+
     /// [`visit_slot_with_parent`](Self::visit_slot_with_parent) with the
     /// parent's weak-holder fact supplied by the caller, so a whole object's
     /// slots pay for it once. See [`weak_holder_fact`].
@@ -292,7 +315,7 @@ impl CopyingNurseryCollector {
     ) {
         let skip_remembering = self.skip_remembering;
         self.visit_slot_core(
-            slot,
+            GcMutableSlot::new(slot, None),
             parent_header,
             weak_holder,
             move || {
@@ -321,7 +344,7 @@ impl CopyingNurseryCollector {
         remembering: ParentRemembering,
     ) {
         self.visit_slot_core(
-            slot.slot,
+            slot,
             parent_header,
             weak_holder,
             move || remembering.for_slot(slot),
@@ -336,13 +359,13 @@ impl CopyingNurseryCollector {
     #[inline(always)]
     unsafe fn visit_slot_core(
         &mut self,
-        slot: *mut u64,
+        slot: GcMutableSlot,
         parent_header: *mut GcHeader,
         weak_holder: bool,
         remembering: impl FnOnce() -> bool,
         external: impl FnOnce() -> bool,
     ) {
-        if slot.is_null() {
+        if slot.slot.is_null() {
             return;
         }
         // Weak target edge (WeakRef referent / weak entry key / finreg
@@ -356,25 +379,25 @@ impl CopyingNurseryCollector {
         // tombstones dead ones.
         // No remembered-set entry either — the write barrier skips weak
         // slots the same way.
-        if weak_holder && crate::weakref::is_weak_target_trace_slot(parent_header, slot) {
-            if let Some(new_bits) = self.rewrite_value_bits(*slot) {
-                *slot = new_bits;
+        if weak_holder && crate::weakref::is_weak_target_trace_slot(parent_header, slot.slot) {
+            if let Some(new_bits) = self.rewrite_value_bits(slot.read()) {
+                slot.write(new_bits);
             }
-            self.weak_slots.push(slot);
+            self.weak_slots.push(slot.slot);
             return;
         }
         // Asked BEFORE the visit: it reads only the parent and the slot's own
         // address, never the child. Asked after, the optimizer duplicated the
         // call into both decode arms and then stopped inlining it.
         let remembering = remembering();
-        let visited = self.visit_value_bits_child(*slot);
+        let visited = self.visit_value_bits_child(slot.read());
         if let Some((_, Some(new_bits), _)) = visited {
-            *slot = new_bits;
+            slot.write(new_bits);
         }
         if !remembering {
             return;
         }
-        // The visit above already decoded this word; re-decoding `*slot`
+        // The visit above already decoded this word; re-decoding `slot.read()`
         // repeated it. Only a raw word that MOVED is validated again, which is
         // all the re-decode could still reject.
         let child = match visited {
@@ -389,7 +412,7 @@ impl CopyingNurseryCollector {
             // skips the objects this scan covered on the strength of the two
             // agreeing. Ask the walk's own question; it is the write barrier's
             // too, so this only keeps a page the barrier itself would keep.
-            None => unvalidated_child(*slot),
+            None => unvalidated_child(slot.read()),
             other => other.map(|(addr, _, _)| addr).filter(|&addr| addr != 0),
         };
         #[cfg(test)]
@@ -401,7 +424,8 @@ impl CopyingNurseryCollector {
             // CopyingPointerKind::Malloc) but the NEXT minor's malloc sweep
             // needs the edge again.
             if crate::gc::barrier::remembered_child_needs_tracking(child_addr) {
-                self.sticky.remember_slot(parent_header, slot, external());
+                self.sticky
+                    .remember_slot(parent_header, slot.slot, external());
             }
         }
     }

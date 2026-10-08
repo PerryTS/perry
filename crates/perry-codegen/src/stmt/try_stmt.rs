@@ -25,6 +25,7 @@
 //! statepoint relocation write-back — the motivating defect, #7174).
 
 use super::*;
+use crate::types::{I32, PTR};
 
 /// Arm the handler and materialize the unwind-target block(s) that funnel
 /// the exception into `exc_label`. Returns the unwind label; the caller
@@ -69,6 +70,17 @@ fn emit_eh_dispatch_inner(
     normal_label: &str,
     registered: bool,
 ) -> String {
+    if ctx.target_triple.starts_with("wasm32") {
+        // WASI uses wasm SjLj. The jump target is this generated frame,
+        // never a Rust frame; the wasm backend rewrites setjmp into EH.
+        let env = ctx.block().call(PTR, "js_try_push", &[]);
+        let status = ctx.block().call(I32, "setjmp", &[(PTR, &env)]);
+        let thrown = ctx.block().next_reg();
+        ctx.block()
+            .emit_raw(format!("{thrown} = icmp ne i32 {status}, 0"));
+        ctx.block().cond_br(&thrown, exc_label, normal_label);
+        return String::new();
+    }
     if !registered {
         ctx.func.personality = Some("perry_iterator_eh_personality");
     } else if ctx.func.personality != Some("perry_iterator_eh_personality") {

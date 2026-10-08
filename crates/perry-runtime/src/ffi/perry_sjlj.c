@@ -72,6 +72,14 @@ int perry_sjlj_try(void *env, perry_sjlj_body body, void *ctx) {
     return rc;
 }
 
+#if defined(__wasi__)
+/* Rust calls this stable C wrapper. The wasm SjLj compiler pass lowers the
+ * actual longjmp call to libsetjmp's EH implementation. */
+_Noreturn void perry_wasi_longjmp(void *env, int value) {
+    longjmp(*(jmp_buf *)env, value);
+}
+#endif
+
 #if defined(__linux__) && defined(__x86_64__) && defined(__GLIBC__) && __SIZEOF_POINTER__ == 8
 /* No native cleanup pads means no personality reference in the generated
  * program. Keep the cold search from pulling an otherwise unused personality

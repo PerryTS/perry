@@ -782,7 +782,11 @@ pub(crate) fn value_display_string(value: f64) -> String {
 fn reflect_value_is_symbol(value: f64) -> bool {
     let bits = value.to_bits();
     (bits >> 48) == (POINTER_TAG >> 48)
-        && (bits & POINTER_MASK) >= 0x1_0000_0000
+        && if cfg!(target_pointer_width = "32") {
+            (bits & POINTER_MASK) >= crate::value::addr_class::HANDLE_BAND_MAX as u64
+        } else {
+            (bits & POINTER_MASK) >= 0x1_0000_0000
+        }
         && unsafe { crate::symbol::js_is_symbol(value) != 0 }
 }
 
@@ -846,7 +850,9 @@ pub(crate) fn reflect_value_is_object(value: f64) -> bool {
         {
             return lower48 != 0;
         }
-        if lower48 < 0x1_0000_0000 {
+        // The wasm32 heap is entirely below 4 GiB. Its handle-band guard
+        // above separates ids from addresses; the native cutoff cannot.
+        if cfg!(target_pointer_width = "64") && lower48 < 0x1_0000_0000 {
             return false;
         }
         if reflect_value_is_symbol(value) {

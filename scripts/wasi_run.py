@@ -51,7 +51,8 @@ def run_case(perry: Path, wasmtime: str, source: Path, output: Path,
             return result
         result["stage"] = "run"
         executed = subprocess.run(
-            [wasmtime, "run", *config.get("wasmtime_args", []), str(wasm)],
+            [wasmtime, "run", *config.get("wasmtime_args", []), str(wasm),
+             *config.get("program_args", [])],
             cwd=output, capture_output=True, timeout=timeout)
         (output / f"{name}.stderr").write_bytes(executed.stderr)
         actual = normalized(executed.stdout) + f"exit {executed.returncode}\n"
@@ -71,6 +72,9 @@ def run_case(perry: Path, wasmtime: str, source: Path, output: Path,
 
 
 def main() -> int:
+    # Compiler diagnostics may contain Unicode even in a legacy Windows
+    # console. A diagnostic must not crash the runner before its JSON report.
+    sys.stdout.reconfigure(errors="backslashreplace")
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("perry", type=Path)
     parser.add_argument("--wasmtime", default=os.environ.get("WASMTIME", "wasmtime"))

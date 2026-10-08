@@ -238,6 +238,9 @@ pub mod typedarray_view;
 // their backends are wired per agent.
 #[cfg(not(target_arch = "wasm32"))]
 pub mod turnloop_net;
+#[cfg(target_os = "wasi")]
+#[path = "wasi_net/mod.rs"]
+pub mod turnloop_net;
 // turnloop P2: child processes, their pipes, `process.stdin`, dgram sockets
 // and OS signals on turnloop handles (`turnloop_proc/mod.rs`). Same target
 // gate as P1 — the driver itself is a native-only dependency.

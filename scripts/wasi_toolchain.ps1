@@ -53,6 +53,7 @@ $env:CC_wasm32_wasip2 = Join-Path $sdkPath 'bin/clang.exe'
 $env:AR_wasm32_wasip2 = Join-Path $sdkPath 'bin/llvm-ar.exe'
 # cc-rs parses quoted flag arguments; preserve sysroots containing spaces.
 $env:CFLAGS_wasm32_wasip2 = "--target=wasm32-wasip2 --sysroot=`"$(Join-Path $sdkPath 'share/wasi-sysroot')`""
+$env:CC_SHELL_ESCAPED_FLAGS = '1'
 Write-Host "WASI SDK: $sdkPath"
 & $env:WASMTIME --version
 if ($LASTEXITCODE -ne 0) { throw 'Wasmtime failed to start' }
