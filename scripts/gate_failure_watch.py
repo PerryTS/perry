@@ -116,6 +116,17 @@ def subject_verdict(jobs: Sequence[dict[str, Any]], subject: dict[str, Any]) -> 
         row = max(completed, key=lambda job: str(job.get("completed_at") or ""))
         value = row.get("conclusion")
         return "failure" if value in RED_CONCLUSIONS else ("success" if value == "success" else None)
+    summary = next(
+        (job for job in rows if job.get("name") == f"{subject['job']} / suite result"),
+        None,
+    )
+    if summary:
+        # The inline fan-in handles optional/skipped child jobs and is the
+        # authoritative result for the selected suite.
+        if summary.get("status") != "completed":
+            return None
+        value = summary.get("conclusion")
+        return "failure" if value in RED_CONCLUSIONS else ("success" if value == "success" else None)
     caller = next((job for job in rows if job.get("name") == subject["job"]), None)
     if caller and caller.get("conclusion") == "skipped":
         return None

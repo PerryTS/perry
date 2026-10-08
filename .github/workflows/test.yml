@@ -103,7 +103,7 @@ env:
 
 jobs:
   route:
-    name: CI suite routing
+    name: ci suite routing
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -5319,9 +5319,9 @@ jobs:
 
     permissions:
       contents: read
-    name: Coverage
+    name: coverage / llvm-cov
   coverage:
-    name: Coverage / suite result
+    name: coverage / suite result
     needs:
       - route
       - coverage__llvm-cov
@@ -5399,7 +5399,7 @@ jobs:
     permissions:
       contents: read
 
-    name: Security Audit / security-audit
+    name: security-audit / security-audit
   security-audit__soak-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -5445,7 +5445,7 @@ jobs:
     permissions:
       contents: read
 
-    name: Security Audit / soak-gate
+    name: security-audit / soak-gate
   security-audit__config-scans:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -5537,9 +5537,9 @@ jobs:
     permissions:
       contents: read
 
-    name: Security Audit / config-scans
+    name: security-audit / config-scans
   security-audit:
-    name: Security Audit / suite result
+    name: security-audit / suite result
     needs:
       - route
       - plan
@@ -5618,7 +5618,7 @@ jobs:
     if: ${{ needs.route.result == 'success' && needs.route.outputs.run_core != 'true' && fromJSON(needs.route.outputs.plan)['security-audit'] }}
     permissions:
       contents: read
-    name: Weekly Security Audit / security-audit
+    name: weekly security audit / security-audit
   security-weekly__soak-gate:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -5662,7 +5662,7 @@ jobs:
     if: ${{ needs.route.result == 'success' && needs.route.outputs.run_core != 'true' && fromJSON(needs.route.outputs.plan)['security-audit'] }}
     permissions:
       contents: read
-    name: Weekly Security Audit / soak-gate
+    name: weekly security audit / soak-gate
   security-weekly__config-scans:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -5752,9 +5752,9 @@ jobs:
     if: ${{ needs.route.result == 'success' && needs.route.outputs.run_core != 'true' && fromJSON(needs.route.outputs.plan)['security-audit'] }}
     permissions:
       contents: read
-    name: Weekly Security Audit / config-scans
+    name: weekly security audit / config-scans
   security-weekly:
-    name: Weekly Security Audit / suite result
+    name: weekly security audit / suite result
     needs:
       - route
       - security-weekly__security-audit
@@ -5840,7 +5840,7 @@ jobs:
     needs:
       - route
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['zizmor'] }}
-    name: zizmor
+    name: zizmor / zizmor
   zizmor:
     name: zizmor / suite result
     needs:
@@ -5902,9 +5902,9 @@ jobs:
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['native-result-ledger'] }}
     permissions:
       contents: read
-    name: Native Result Ledger
+    name: native-result-ledger / check
   native-result-ledger:
-    name: Native Result Ledger / suite result
+    name: native-result-ledger / suite result
     needs:
       - route
       - native-result-ledger__check
@@ -5931,7 +5931,7 @@ jobs:
           print(f'{len(ids)} suite jobs completed or were intentionally skipped')
           PY
   npm-launcher__detect-self-test:
-    name: npm launcher / Platform resolution self-test
+    name: npm-launcher / platform resolution self-test
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -5970,7 +5970,7 @@ jobs:
       contents: read
   npm-launcher__ubuntu-2204:
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-launcher'] && (github.event_name == 'workflow_dispatch') }}
-    name: npm launcher / Ubuntu 22.04 native glibc end-to-end
+    name: npm-launcher / ubuntu 22.04 native glibc end-to-end
     runs-on: ubuntu-22.04
     timeout-minutes: 20
     steps:
@@ -6045,7 +6045,7 @@ jobs:
     permissions:
       contents: read
   npm-launcher:
-    name: npm launcher / suite result
+    name: npm-launcher / suite result
     needs:
       - route
       - npm-launcher__detect-self-test

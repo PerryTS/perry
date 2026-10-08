@@ -191,6 +191,8 @@
 
 - [Memory Model](internals/memory-model.md)
 - [RegExp program ownership and caching](internals/regexp-program-cache.md)
+- [WeakMap lookup and owned identity storage](internals/weakmap-owned-index-design.md)
+  - [Implementation validation](internals/weakmap-owned-index-validation.md)
 - [Garbage Collector](internals/garbage-collector.md)
 - [Explicit Memory Control](internals/explicit-memory.md)
 - [The GC rooting invariant (codegen)](internals/gc-rooting-invariant.md)

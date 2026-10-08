@@ -77,7 +77,7 @@ concurrency:
 jobs:
   # Maintenance suites
   route:
-    name: Maintenance / suite routing
+    name: maintenance / suite routing
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -124,7 +124,7 @@ jobs:
           args+=(--suite "${SUITE:-}")
           python3 scripts/actions_plan.py "${args[@]}"
   validate:
-    name: Offline workflow and monitor checks
+    name: offline workflow and monitor checks
     needs: route
     if: needs.route.result == 'success' && needs.route.outputs.validate == 'true'
     runs-on: ubuntu-latest
@@ -171,7 +171,7 @@ jobs:
 
           '
   reject-nonmain-write:
-    name: Reject off-main maintenance writes
+    name: reject off-main maintenance writes
     needs: route
     if: always() && github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main' && (inputs.suite == 'gate-freshness' || inputs.suite == 'soak-autofix' || inputs.suite == 'npm-publish-freshness' || inputs.suite == 'delete-retired-runs' || (inputs.suite == 'ci-queue-reaper' && inputs.apply))
     runs-on: ubuntu-latest
@@ -228,9 +228,9 @@ jobs:
     needs:
       - route
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['ci-queue-reaper'] && (!inputs.apply || github.ref == 'refs/heads/main') }}
-    name: CI Queue Reaper
+    name: ci-queue-reaper / reap
   ci-queue-reaper:
-    name: CI Queue Reaper / suite result
+    name: ci-queue-reaper / suite result
     needs:
       - route
       - ci-queue-reaper__reap
@@ -297,9 +297,9 @@ jobs:
     needs:
       - route
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-freshness'] }}
-    name: Gate Freshness
+    name: gate-freshness / gate-freshness
   gate-freshness:
-    name: Gate Freshness / suite result
+    name: gate-freshness / suite result
     needs:
       - route
       - gate-freshness__gate-freshness
@@ -360,7 +360,7 @@ jobs:
         run: python3 scripts/gate_failure_watch.py --check-config
     needs:
       - route
-    name: Scheduled Gate Failure Watch / validate
+    name: gate-failure-watch / validate
   gate-failure-watch__observe:
     if: >-
       ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-failure-watch'] && (github.event_name == 'workflow_run' && (
@@ -412,9 +412,9 @@ jobs:
         run: python3 scripts/gate_failure_watch.py
     needs:
       - route
-    name: Scheduled Gate Failure Watch / observe
+    name: gate-failure-watch / observe
   gate-failure-watch:
-    name: Scheduled Gate Failure Watch / suite result
+    name: gate-failure-watch / suite result
     needs:
       - route
       - gate-failure-watch__validate
@@ -523,7 +523,7 @@ jobs:
           exit 1
     needs:
       - route
-    name: soak-autofix
+    name: soak-autofix / autofix
   soak-autofix:
     name: soak-autofix / suite result
     needs:
@@ -586,7 +586,7 @@ jobs:
         run: python3 scripts/check_npm_publish_freshness.py --check-manifest
     needs:
       - route
-    name: npm publish freshness / validate
+    name: npm-publish-freshness / validate
   npm-publish-freshness__reject-nonmain-dispatch:
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-publish-freshness'] && (github.event_name == 'workflow_dispatch' && github.ref != 'refs/heads/main') }}
     runs-on: ubuntu-latest
@@ -600,7 +600,7 @@ jobs:
           exit 1
     needs:
       - route
-    name: npm publish freshness / reject-nonmain-dispatch
+    name: npm-publish-freshness / reject-nonmain-dispatch
   npm-publish-freshness__npm-publish-freshness:
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['npm-publish-freshness'] && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) }}
     runs-on: ubuntu-latest
@@ -641,9 +641,9 @@ jobs:
         run: python3 scripts/check_npm_publish_freshness.py
     needs:
       - route
-    name: npm publish freshness / npm-publish-freshness
+    name: npm-publish-freshness / npm-publish-freshness
   npm-publish-freshness:
-    name: npm publish freshness / suite result
+    name: npm-publish-freshness / suite result
     needs:
       - route
       - npm-publish-freshness__validate
@@ -672,7 +672,7 @@ jobs:
           print(f'{len(ids)} suite jobs completed or were intentionally skipped')
           PY
   delete-retired-runs:
-    name: Delete completed runs from retired workflows
+    name: delete completed runs from retired workflows
     needs: route
     if: >-
       ${{
@@ -710,7 +710,7 @@ jobs:
 
   # Documentation suites
   route-documentation:
-    name: Documentation / suite routing
+    name: documentation / suite routing
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -817,7 +817,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: Docs checks / build-and-validation
+    name: docs-check / build-and-validation
   docs-check__external-links:
     if: ${{ needs.route-documentation.result == 'success' && fromJSON(needs.route-documentation.outputs.plan)['docs-check'] && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
@@ -857,9 +857,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: Docs checks / external-links
+    name: docs-check / external-links
   docs-check:
-    name: Docs checks / suite result
+    name: docs-check / suite result
     needs:
       - route-documentation
       - docs-check__build-and-validation
@@ -956,9 +956,9 @@ jobs:
       pull-requests: read
       pages: write
       id-token: write
-    name: Deploy Docs
+    name: docs / deploy
   docs:
-    name: Deploy Docs / suite result
+    name: docs / suite result
     needs:
       - route-documentation
       - docs__deploy
