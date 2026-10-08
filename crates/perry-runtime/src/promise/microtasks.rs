@@ -160,7 +160,8 @@ pub extern "C" fn js_promise_run_microtasks_await_loop() -> i32 {
     run_microtasks(MicrotaskDrainMode::AwaitLoop)
 }
 
-pub(crate) fn js_promise_run_microtasks_checkpoint() -> i32 {
+/// Complete one native callback before the next callback is delivered.
+pub fn js_promise_run_microtasks_checkpoint() -> i32 {
     run_microtasks(MicrotaskDrainMode::MicrotasksOnly)
 }
 
