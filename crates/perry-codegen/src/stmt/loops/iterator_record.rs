@@ -32,11 +32,7 @@ pub(super) fn lower(
     else {
         return Ok(false);
     };
-    if module != "__perry_runtime"
-        || method != "arrayRecordForBound"
-        || args.len() != 6
-        || !matches!(args[5], Expr::Bool(true))
-    {
+    if module != "__perry_runtime" || method != "arrayRecordForBound" || args.len() != 5 {
         return Ok(false);
     }
     let Expr::NativeMethodCall {
@@ -274,10 +270,13 @@ mod tests {
             local(
                 1,
                 Type::Boolean,
-                rt(
-                    "arrayRecordNeedsIterator",
-                    vec![Expr::LocalSet(0, Box::new(Expr::LocalGet(0)))],
-                ),
+                rt("arrayRecordNeedsIterator", {
+                    let mut args = vec![Expr::LocalSet(0, Box::new(Expr::LocalGet(0)))];
+                    if candidate {
+                        args.push(Expr::Bool(true));
+                    }
+                    args
+                }),
             ),
             local(3, Type::Any, Expr::Undefined),
             local(4, Type::Number, Expr::Number(0.0)),
@@ -308,7 +307,6 @@ mod tests {
                                 ],
                             ),
                             Expr::LocalSet(4, Box::new(Expr::Number(2.0))),
-                            Expr::Bool(candidate),
                         ],
                     )),
                 }),
@@ -364,14 +362,10 @@ mod tests {
     fn typed_record_uses_counted_admission_and_outlined_protocol() {
         let ir = emit_record(Type::Array(Box::new(Type::Number)));
         assert!(ir.contains("packed_f64.loop.fast.preheader"), "{ir}");
-        assert!(ir.contains("@js_array_record_enter"), "{ir}");
+        assert!(ir.contains("@js_array_record_enter_counted("), "{ir}");
         assert!(
-            ir.contains("record.indexed.guards.merge"),
-            "protocol must bypass indexed guards: {ir}"
-        );
-        assert!(
-            ir.contains("@js_typed_feedback_packed_f64_array_loop_guard"),
-            "{ir}"
+            !ir.contains("@js_typed_feedback_packed_f64_array_loop_guard("),
+            "the loop consumes the entry's admission, not a second classification: {ir}"
         );
         assert_eq!(ir.matches("@js_iterator_step(").count(), 1, "{ir}");
         assert!(
@@ -380,9 +374,18 @@ mod tests {
         );
     }
     #[test]
-    fn general_record_keeps_the_shared_protocol_without_numeric_assumption() {
+    fn erased_record_reaches_the_same_counted_copy_behind_the_layout_guard() {
         let ir = emit_record(Type::Any);
-        assert!(!ir.contains("packed_f64.loop.fast.preheader"), "{ir}");
+        assert!(ir.contains("packed_f64.loop.fast.preheader"), "{ir}");
+        assert!(ir.contains("@js_array_record_enter("), "{ir}");
+        assert!(
+            ir.contains("record.indexed.guards.merge"),
+            "protocol must bypass indexed guards: {ir}"
+        );
+        assert!(
+            ir.contains("@js_typed_feedback_packed_f64_array_loop_guard("),
+            "an erased source proves its layout at the loop: {ir}"
+        );
         assert_eq!(ir.matches("@js_iterator_step(").count(), 1, "{ir}");
         assert!(!ir.contains("0x7FF0000000000000"), "{ir}");
     }
