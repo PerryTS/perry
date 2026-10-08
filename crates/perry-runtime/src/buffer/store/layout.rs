@@ -113,8 +113,13 @@ pub(crate) fn byte_cell_type(addr: usize) -> Option<u8> {
 /// reservation descriptor regardless of its allocating thread. The caller
 /// must still hold the cell lifetime; classification is not a payload pin.
 /// Other targets retain their existing tracked-header and region proof.
-#[cfg_attr(target_os = "linux", inline)]
-#[cfg_attr(not(target_os = "linux"), inline(never))]
+///
+/// Out of line: [`byte_cell_type`] is inlined into every generic receiver
+/// probe (`lookup_typed_array_kind` on each dynamic index get and set,
+/// `is_registered_buffer`), and only a byte-family type byte reaches the
+/// proof. Inlined there, the proof grows those probes past LLVM's inlining
+/// budget, so every non-byte receiver pays an out-of-line call.
+#[inline(never)]
 pub(crate) fn byte_cell_is_owned(addr: usize, obj_type: u8) -> bool {
     #[cfg(test)]
     if byte_cell_proof_sabotaged() {
