@@ -1991,29 +1991,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ));
                     }
                 }
-                // Issue #446: `obj.method` PropertyGet on a known class
-                // instance, where `method` is a method (not a field, not a
-                // getter — those branches return above). Emit a bound-method
-                // closure (`BOUND_METHOD_FUNC_PTR` sentinel + (instance,
-                // name_ptr, name_len) captures) so reads work as JS expects:
-                //   - `typeof obj.method === "function"`
-                //   - `let f = obj.method; f(args)` dispatches to the method
-                //   - `arr.map(obj.method)` passes a callable reference
-                // The closure's call path routes through
-                // `js_native_call_method`, which resolves the symbol via
-                // `CLASS_VTABLE_REGISTRY` (populated at module init by
-                // `js_register_class_method`), so this works for both local
-                // and cross-module classes. Pre-fix, the read fell through
-                // to the generic property-bag lookup which doesn't store
-                // prototype methods — every method reference returned
-                // `undefined`.
-                let method_key = (class_name.clone(), property.clone());
-                if receiver_class_is_proven
-                    && !property.starts_with('#')
-                    && ctx.methods.contains_key(&method_key)
-                {
-                    return lower_class_method_bind(ctx, object, property);
-                }
+                // #12016: declared public methods are function values in
+                // prototype data slots. Read them through the ordinary shape
+                // site below, just like an untyped receiver: an own override
+                // wins (including undefined/null and accessors), and prototype
+                // mutation is checked by the same shape proof on every use.
+                // The former class/name lookup repeated method-owner walks
+                // before checking an own value on every `this.m` read. Native
+                // handle reification and private reads return above.
             }
             lower_generic_property_get(ctx, object, property, *byte_offset)
         }
