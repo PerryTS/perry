@@ -125,9 +125,9 @@ fn native_bytes(owner: f64) -> usize {
     let ptr =
         JsValue::from_bits(owner.to_bits()).as_pointer::<perry_runtime::object::ObjectHeader>();
     unsafe {
-        let state = (*(*ptr).meta).native_state;
-        let cell = JsValue::from_bits(state)
-            .as_pointer::<perry_runtime::native_handle::NativeHandleHeader>();
+        // `native_state` -> the stream's state record -> its payload cell.
+        let cell = perry_runtime::native_payload::payload_cell_of_word((*(*ptr).meta).native_state)
+            .expect("a zlib stream has a payload cell");
         (*cell).external_bytes as usize
     }
 }
