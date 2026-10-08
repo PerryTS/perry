@@ -1573,21 +1573,12 @@ pub unsafe extern "C" fn js_class_static_method_call(
             _ => {}
         }
     }
-    // #6475: `class X extends <function value>() {}` — a static member
-    // INHERITED from the parent FUNCTION's own properties, invoked as a call
-    // (`X.use(f)`, effect's `HttpRouter.Tag(id)().use`/`unwrap`/`serve`). The
-    // field-GET path already walks the parent closure
-    // (`get_field_by_name.rs` #36/#321: `closure_get_dynamic_prop(parent,
-    // name)`), so `typeof X.use === "function"` — but the fused static-CALL
-    // lowering routes here, and this helper only consulted CLASS_DYNAMIC_PROPS
-    // (which holds statics of a CLASS parent, not the own props of a runtime
-    // FUNCTION parent stored in the closure-props table). So the call missed,
-    // fell to the receiver fallback below, and effect's `X.use(f)` returned the
-    // class ref (`1`) instead of running the inherited arrow — every Tag-based
-    // Layer built through `.use`/`.serve` silently became the class itself.
-    // Walk the parent-closure chain and invoke the resolved callable with `this`
-    // bound to the receiver, mirroring the GET path.
-    if let Some(closure_ptr) = parent_closure_in_chain(class_id) {
+    // Inherited function properties and constructor prototypes use the same
+    // receiver-aware Get as a member read. A fresh class evaluation pins its
+    // heritage on the class object, not in the shared template's parent-closure
+    // metadata; a separate class-id walk therefore loses that edge. Keeping
+    // Get here also preserves accessor receivers and ordinary shadowing.
+    {
         let scope = crate::gc::RuntimeHandleScope::new();
         let receiver = scope.root_nanbox_f64(receiver);
         let args = if args_ptr.is_null() || args_len == 0 {
@@ -1595,48 +1586,20 @@ pub unsafe extern "C" fn js_class_static_method_call(
         } else {
             scope.root_nanbox_f64_slice(std::slice::from_raw_parts(args_ptr, args_len))
         };
-        let closure_val = f64::from_bits(
-            crate::value::POINTER_TAG | (closure_ptr as u64 & crate::value::POINTER_MASK),
+        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let member = crate::object::js_object_get_property_key(
+            receiver.get_nanbox_f64(),
+            crate::value::js_nanbox_string(key as i64),
         );
-        let member = crate::closure::closure_get_dynamic_prop(closure_ptr, name);
-        let mv = crate::value::JSValue::from_bits(member.to_bits());
-        if !mv.is_undefined()
-            && !mv.is_null()
-            && crate::collection_iter::is_callable(member)
-            // Guard against the closure_get_dynamic_prop fallback returning the
-            // closure itself for an unknown key (it never should for a miss,
-            // but be defensive): a member equal to the parent closure value is
-            // not a real inherited member.
-            && member.to_bits() != closure_val.to_bits()
-        {
+        if crate::collection_iter::is_callable(member) {
             let member = scope.root_nanbox_f64(member);
             let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
-            let result = crate::closure::native_call_value_this(
+            return crate::closure::native_call_value_this(
                 member.get_nanbox_f64(),
                 crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
                 args.as_ptr(),
                 args.len(),
             );
-            return result;
-        }
-    }
-    // #11492: the constructor chain ends at %Function.prototype% — a user
-    // method installed there (`Function.prototype.myHelper = fn`) is callable
-    // as `C.myHelper()` with `this` = the class, exactly as on a closure.
-    let fn_proto_member = if crate::object::class_prototype_ref_id(receiver).is_none() {
-        crate::closure::function_prototype_inherited_get(0, name, receiver)
-    } else {
-        None
-    };
-    if let Some(member) = fn_proto_member {
-        if crate::collection_iter::is_callable(member) {
-            let result = crate::closure::native_call_value_this(
-                member,
-                crate::closure::JsThis::from_f64(receiver),
-                args_ptr,
-                args_len,
-            );
-            return result;
         }
     }
     // True miss: no static method and no callable static field resolved on the
