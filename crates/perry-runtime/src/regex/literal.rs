@@ -19,26 +19,22 @@ pub extern "C" fn js_regexp_literal(
     if crate::agent::current_agent() != crate::agent::PRIMARY_AGENT {
         return super::perex_api::finish(super::perex_construct::new(pattern, flags));
     }
-    let scope = RuntimeHandleScope::new();
     let word = site_word as *mut u64;
-    let address = unsafe { word.read() };
-    let data = if address == 0 {
-        literal_miss(&scope, pattern, flags, word)
-    } else {
-        scope.root_raw_mut_ptr((address & crate::value::POINTER_MASK) as *mut RegExpData)
-    };
-    super::instance::new(&scope, &data)
+    if unsafe { word.read() } == 0 {
+        literal_miss(pattern, flags, word);
+    }
+    // The word is a registered global root: after the birth's allocation it
+    // holds the data cell's current address.
+    super::instance::new(|| unsafe {
+        (word.read() & crate::value::POINTER_MASK) as *const RegExpData
+    })
 }
 
 #[cold]
 #[inline(never)]
-fn literal_miss<'s>(
-    scope: &'s RuntimeHandleScope,
-    pattern: *const StringHeader,
-    flags: *const StringHeader,
-    word: *mut u64,
-) -> crate::gc::RuntimeHandle<'s> {
-    let data = super::perex_api::finish(super::perex_construct::new_data(scope, pattern, flags));
+fn literal_miss(pattern: *const StringHeader, flags: *const StringHeader, word: *mut u64) {
+    let scope = RuntimeHandleScope::new();
+    let data = super::perex_api::finish(super::perex_construct::new_data(&scope, pattern, flags));
     data.with_mut_ptr::<RegExpData, _>(|data| unsafe {
         // The existing root-store barrier admits publication during an
         // incremental cycle. Registration exposes the mutable word to both
@@ -49,7 +45,6 @@ fn literal_miss<'s>(
         );
         crate::gc::js_gc_register_global_root(word as i64);
     });
-    data
 }
 
 #[cfg(test)]

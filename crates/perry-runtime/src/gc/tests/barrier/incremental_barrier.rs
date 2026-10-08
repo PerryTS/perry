@@ -312,3 +312,37 @@ fn test_store_outside_incremental_mark_keeps_generational_behavior_only() {
     clear_marks();
     remembered_set_clear();
 }
+
+/// A RegExp literal's birth stores its matcher data into a newborn. While an
+/// incremental mark is live, that store must take the barrier (the newborn
+/// gate, `newborn_parent_needs_barrier`), so the data is shaded even when it
+/// has not been traced yet. A birth that wrote the slot raw would leave a
+/// marked receiver pointing at unmarked data.
+#[cfg(feature = "regex-engine")]
+#[test]
+fn test_incremental_barrier_shades_regexp_literal_birth_data() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_remembered_set();
+    let site = Box::leak(Box::new(0u64)) as *mut u64;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_string_ptr(crate::string::js_string_from_str("birth-shade"));
+    let flags = scope.root_string_ptr(crate::string::js_string_from_str("g"));
+    // The first evaluation compiles, publishes the site and mints the birth
+    // shape; the one under the barrier is an ordinary hit.
+    let _first = scope.root_raw_mut_ptr(source.with_const_ptr(|s| {
+        flags.with_const_ptr(|f| crate::regex::js_regexp_literal(s, f, site as i64))
+    }));
+    clear_marks();
+    let valid_ptrs = build_valid_pointer_set();
+    let _barrier = IncrementalMarkBarrierTestGuard::new(&valid_ptrs);
+    assert!(!crate::gc::incremental_mark_barrier_globally_idle());
+    let re = crate::regex::js_regexp_literal(std::ptr::null(), std::ptr::null(), site as i64);
+    let data = unsafe { (*site & crate::value::POINTER_MASK) as usize };
+    assert_eq!(crate::regex::regexp_data_ptr(re) as usize, data);
+    mark_user_ptr(re as usize);
+    drain_incremental_mark_barrier_seeds(&valid_ptrs);
+    assert_marked_user_ptr(data, "regexp literal matcher data");
+    clear_mark_user_ptr(re as usize);
+    clear_marks();
+    remembered_set_clear();
+}
