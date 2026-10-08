@@ -128,6 +128,7 @@ js_array_map_discard	void	ptr,ptr
 js_array_mark_arguments_object	ptr	ptr
 js_array_mark_numeric_f64_layout	i32s	ptr
 js_array_note_numeric_write	void	ptr,i64
+js_array_note_numeric_write_value	f64	ptr,f64
 js_array_numeric_get_f64_unboxed	f64	ptr,i32u
 js_array_numeric_push_f64_unboxed	ptr	ptr,f64
 js_array_numeric_range_add	i64	f64,f64,f64,f64

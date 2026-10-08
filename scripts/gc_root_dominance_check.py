@@ -513,6 +513,7 @@ NONCOLLECTING = {
     "js_write_barrier",                              # gc/barrier.rs:930
     "js_tdz_suppress_begin", "js_tdz_suppress_end",  # box.rs:242/248 counter
     "js_array_note_numeric_write",                   # array/header.rs:1443
+    "js_array_note_numeric_write_value",             # the note + a header read + a leaf conversion
     # #11522: the `.length` fast lane only. `js_array_length` itself is NOT
     # here: its Proxy arm runs the `get` trap and its object arm runs getters
     # and `valueOf`, so it can collect.
