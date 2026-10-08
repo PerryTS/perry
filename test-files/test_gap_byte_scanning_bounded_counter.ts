@@ -38,3 +38,17 @@ function freshOffset(): Uint8Array {
 const offset = freshOffset();
 offset.set([1, 2, 3, 4, 5, 6, 7, 8]);
 console.log('owner-gc', scanBounded(offset, 0, 8, false, collect));
+
+export function scanOffset(bytes: Uint8Array, i: number, end: number): number {
+  const stop = Math.min(end, end);
+  for (; i < stop; i++) { bytes[i + 1]; i | 0; }
+  return i;
+}
+console.log('computed-index', scanOffset(bytes, 0, 3));
+
+export function scanStep(bytes: Uint8Array, i: number, end: number): number {
+  const stop = Math.min(end, end);
+  for (; i < stop; i++) { bytes[++i]; i | 0; }
+  return i;
+}
+console.log('prefix-index', scanStep(bytes, 0, 3));

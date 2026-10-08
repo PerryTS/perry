@@ -547,8 +547,22 @@ pub(super) fn has_guarded_byte_index(ctx: &FnCtx<'_>, body: &[Stmt], controls: &
             }
             _ => return false,
         };
-        matches!(index.as_ref(), Expr::LocalGet(id) if ctx.numeric_accumulator_f64_slots.contains_key(id)
-            || (ctx.i32_counter_slots.contains_key(id) && ctx.receiver_descriptors.local_is_number_in_scope(*id)))
+        fn uses_guarded_local(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+            let id = match expr {
+                Expr::LocalGet(id) | Expr::Update { id, .. } | Expr::LocalSet(id, _) => Some(id),
+                _ => None,
+            };
+            let mut found = id.is_some_and(|id| {
+                ctx.numeric_accumulator_f64_slots.contains_key(id)
+                    || (ctx.i32_counter_slots.contains_key(id)
+                        && ctx.receiver_descriptors.local_is_number_in_scope(*id))
+            });
+            perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                found |= uses_guarded_local(ctx, child);
+            });
+            found
+        }
+        uses_guarded_local(ctx, index)
     }
     let mut found = false;
     crate::collectors::for_each_expr_in_stmts(body, &mut |e| found |= guarded(ctx, e));
