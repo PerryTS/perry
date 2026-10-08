@@ -174,20 +174,6 @@ pub(crate) fn emit_private_site_guard(
         .phi(DOUBLE, &[(obj, &probe_l), (&slow, &slow_end)])
 }
 
-pub(crate) fn emit_regexp_site_key(ctx: &mut FnCtx<'_>) -> String {
-    let site_id = ctx.ic_site_counter;
-    ctx.ic_site_counter += 1;
-    let prefix = ctx.strings.module_prefix();
-    let slot_name = if prefix.is_empty() {
-        format!("perry_regexp_site_{site_id}")
-    } else {
-        format!("perry_regexp_site_{prefix}__{site_id}")
-    };
-    ctx.typed_parse_rodata
-        .push(format!("@{slot_name} = private global i64 0"));
-    format!("@{slot_name}")
-}
-
 fn is_static_string_key_map(ctx: &FnCtx<'_>, map: &Expr) -> bool {
     matches!(
         map_static_type_args(ctx, map),
@@ -1516,31 +1502,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- RegExp literal: /pattern/flags --------
-        // Constructs a RegExpHeader at compile time. Both pattern
-        // and flags are interned in the StringPool so the runtime
-        // sees stable handles.
+        // A fresh ordinary RegExp per evaluation, born inline around the
+        // site's matcher data (`regex_literal.rs`).
         Expr::RegExp { pattern, flags } => {
-            let pattern_idx = ctx.strings.intern(pattern);
-            let flags_idx = ctx.strings.intern(flags);
-            let pattern_global = format!("@{}", ctx.strings.entry(pattern_idx).handle_global);
-            let flags_global = format!("@{}", ctx.strings.entry(flags_idx).handle_global);
-            let slot_ref = emit_regexp_site_key(ctx);
-            let blk = ctx.block();
-            let pattern_box = blk.load(DOUBLE, &pattern_global);
-            let flags_box = blk.load(DOUBLE, &flags_global);
-            let pattern_handle = unbox_to_i64(blk, &pattern_box);
-            let flags_handle = unbox_to_i64(blk, &flags_box);
-            let site_key = blk.ptrtoint(&slot_ref, I64);
-            let result = blk.call(
-                I64,
-                "js_regexp_literal",
-                &[
-                    (I64, &pattern_handle),
-                    (I64, &flags_handle),
-                    (I64, &site_key),
-                ],
-            );
-            Ok(nanbox_pointer_inline(blk, &result))
+            let result = super::regex_literal::lower_regexp_literal(ctx, pattern, flags);
+            Ok(nanbox_pointer_inline(ctx.block(), &result))
         }
 
         // `RegExp(<dynExpr>)` / `RegExp(<dynExpr>, <dynFlagsExpr>)` /

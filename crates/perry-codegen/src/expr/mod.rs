@@ -117,6 +117,7 @@ mod property_get_names;
 mod proven_view_access;
 mod proven_view_guarded;
 mod range_facts;
+mod regex_literal;
 mod strings;
 mod typed_feedback;
 mod url_helpers;

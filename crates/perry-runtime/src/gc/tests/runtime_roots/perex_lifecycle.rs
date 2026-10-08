@@ -169,7 +169,7 @@ fn perex_lifecycle_literal_and_dynamic_construction_have_independent_state() {
     let scope = RuntimeHandleScope::new();
     let source = text(&scope, "born[0-9]+built");
     let flags = text(&scope, "g");
-    let site = Box::leak(Box::new(0u64)) as *mut u64;
+    let site = Box::leak(Box::new([0u64; 2])).as_mut_ptr();
     let mut owners = Vec::new();
     for _ in 0..2 {
         owners.push(scope.root_raw_mut_ptr(source.with_const_ptr(|source| {
@@ -309,7 +309,7 @@ fn regexp_literal_site_is_the_only_root_and_rewrites_after_moving_gc() {
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _force = ForcedEvacuationTestGuard::on();
     super::perex_public::register_host_roots();
-    let site = Box::leak(Box::new(0u64)) as *mut u64;
+    let site = Box::leak(Box::new([0u64; 2])).as_mut_ptr();
     let old = {
         let scope = RuntimeHandleScope::new();
         let source = text(&scope, "site-only-root");

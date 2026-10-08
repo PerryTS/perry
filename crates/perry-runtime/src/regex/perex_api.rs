@@ -712,6 +712,47 @@ pub(crate) fn search_builtin<'mem>(
     )
 }
 
+/// [`search_builtin`] for a receiver whose caller proved, from its shape,
+/// that `lastIndex` is an own data property in inline slot 1, an `Any` lane
+/// (`regex_proto_thunks::method_site_test_code`). For a RegExp that is
+/// neither global nor sticky a Number there is all RegExpBuiltinExec needs
+/// of it: ToLength of a Number runs nothing and the search starts at 0, so no
+/// read site is consulted. Anything else is the general start.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+pub(crate) fn search_builtin_proven<'mem>(
+    re: *mut RegExpHeader,
+    data: *const super::RegExpData,
+    input: *const StringHeader,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    captures: &mut Option<host::Captures<'mem>>,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<Option<(Span, Position)>, EngineError> {
+    // SAFETY: the caller's shape proof; `data` is that receiver's live data.
+    unsafe {
+        if !(*data).global && !(*data).sticky {
+            let slots = (re as *const u8).add(std::mem::size_of::<RegExpHeader>()) as *const u64;
+            if crate::value::JSValue::from_bits(slots.add(1).read()).is_number() {
+                return search_from(
+                    re,
+                    (*data).perex_program,
+                    input,
+                    0,
+                    false,
+                    mode,
+                    budget,
+                    memory,
+                    captures,
+                    poll,
+                );
+            }
+        }
+    }
+    search_builtin(re, data, input, mode, budget, memory, captures, poll)
+}
+
 /// [`search_builtin`] from a start [`exec_start`] established, over the
 /// RegExp's program cell `program`, with the same address contract. The one
 /// copy of the in-place search every builtin exec runs.

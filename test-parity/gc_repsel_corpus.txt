@@ -995,3 +995,6 @@ test_gap_gc_generated_root_final_remark
 # #11929/#11960: root-heavy stable homes during budgeted marking and copying GC.
 test_gap_gc_11929_stable_home_marking
 test_gap_gc_11929_inline_births
+# Inline RegExp literal births around the site root word, and the fused .test
+# site calling the builtin directly with an in-place search (cc/rxdirect).
+test_gap_gc_regexp_direct_birth

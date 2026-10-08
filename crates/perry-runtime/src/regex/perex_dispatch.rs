@@ -323,22 +323,16 @@ pub(crate) fn same_value(
 /// polls (`api::search_builtin`). Any other receiver takes the observable
 /// path, rooted, exactly as `execute` runs it.
 pub(crate) fn test_string(receiver: f64, input: *const StringHeader) -> Result<bool, EngineError> {
-    let mut budget = Budget::new(api::WORK);
-    let memory = MemoryBudget::new(api::SCRATCH_BYTES);
     if let Some(data) = crate::object::regex_read_sites::builtin_exec_data(receiver) {
-        return api::search_builtin(
-            // The proof read the receiver's shape: it is an object pointer.
+        // The proof read the receiver's shape: it is an object pointer.
+        return test_builtin(
             (receiver.to_bits() & crate::value::POINTER_MASK) as *mut RegExpHeader,
             data,
             input,
-            host::CaptureMode::Full,
-            &mut budget,
-            &memory,
-            &mut None,
-            &mut host::poll,
-        )
-        .map(|found| found.is_some());
+        );
     }
+    let mut budget = Budget::new(api::WORK);
+    let memory = MemoryBudget::new(api::SCRATCH_BYTES);
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
     let input = scope.root_string_ptr(input);
@@ -352,6 +346,57 @@ pub(crate) fn test_string(receiver: f64, input: *const StringHeader) -> Result<b
         None,
     )
     .map(|result| result.is_some())
+}
+
+/// RegExp.prototype.test on a receiver whose caller proved, from shapes,
+/// that `exec` is the builtin, that the matcher data is its inline slot 0 and
+/// `lastIndex` its inline slot 1 (`regex_proto_thunks::method_site_test_code`).
+pub(crate) fn test_proven(
+    re: *mut RegExpHeader,
+    input: *const StringHeader,
+) -> Result<bool, EngineError> {
+    // SAFETY: the caller's shape proof places the matcher (a RegExpData
+    // pointer) in the first inline slot, an `Any` lane.
+    let data = unsafe {
+        let slot = (re as *const u8).add(std::mem::size_of::<RegExpHeader>()) as *const u64;
+        (slot.read() & crate::value::POINTER_MASK) as *const super::RegExpData
+    };
+    let mut budget = Budget::new(api::WORK);
+    let memory = MemoryBudget::new(api::SCRATCH_BYTES);
+    let found = api::search_builtin_proven(
+        re,
+        data,
+        input,
+        host::CaptureMode::Full,
+        &mut budget,
+        &memory,
+        &mut None,
+        &mut host::poll,
+    )?;
+    Ok(found.is_some())
+}
+
+/// RegExpBuiltinExec for `test` once `Get(R, "exec")` is known to be the
+/// builtin: no handle, the search roots what it needs only if it polls.
+#[inline]
+fn test_builtin(
+    re: *mut RegExpHeader,
+    data: *const super::RegExpData,
+    input: *const StringHeader,
+) -> Result<bool, EngineError> {
+    let mut budget = Budget::new(api::WORK);
+    let memory = MemoryBudget::new(api::SCRATCH_BYTES);
+    let found = api::search_builtin(
+        re,
+        data,
+        input,
+        host::CaptureMode::Full,
+        &mut budget,
+        &memory,
+        &mut None,
+        &mut host::poll,
+    )?;
+    Ok(found.is_some())
 }
 
 pub(crate) fn test_value(

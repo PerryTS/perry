@@ -93,8 +93,73 @@ fn direct_literal_test_constructs_data_site_and_uses_generic_method_call() {
         Type::Boolean,
     )]);
     assert!(ir.contains("call i64 @js_regexp_literal("), "{ir}");
-    assert!(ir.contains("private global i64 0"), "{ir}");
+    assert!(
+        ir.contains("private global [2 x i64] zeroinitializer"),
+        "{ir}"
+    );
     assert_generic(&ir);
+}
+
+/// The register a `getelementptr i8, ptr <base>, i64 <offset>` line defines.
+fn gep_reg(ir: &str, offset: &str) -> Vec<String> {
+    ir.lines()
+        .filter(|l| {
+            l.contains("getelementptr i8, ptr")
+                && l.trim_end().ends_with(&format!(", i64 {offset}"))
+        })
+        .filter_map(|l| l.trim().split(" = ").next().map(str::to_string))
+        .collect()
+}
+
+/// A literal evaluation is an inline birth: the agent gate and the site's
+/// header word, a bump of the inline arena, every slot initialized, and only
+/// then the birth seed (the runtime call is the slow arm).
+#[test]
+fn literal_birth_initializes_every_slot_before_the_birth_seed() {
+    let ir = compile(vec![function(
+        1,
+        "fresh",
+        Vec::new(),
+        vec![Stmt::Return(Some(Expr::RegExp {
+            pattern: "x".into(),
+            flags: "".into(),
+        }))],
+        Type::Any,
+    )]);
+    let body = &ir[ir.find("define").expect("a function")..];
+    assert!(
+        body.contains("load atomic i8, ptr @PERRY_METHOD_SITE_WORKERS_PRESENT seq_cst"),
+        "{ir}"
+    );
+    assert!(body.contains("call i64 @js_regexp_literal("), "{ir}");
+    let seed = body
+        .find("call void @js_gc_note_black_birth(")
+        .expect("the birth seed");
+    // Slot 0 (matcher data) at +24 and slot 1 (lastIndex) at +32 from the
+    // raw cell: both stores precede the seed.
+    // Only STORE lines count: the arena state's own fields (+24 birth flags,
+    // +32 seed queue) are loaded through geps of the same offsets.
+    let store_at = |reg: &str| {
+        let mut at = 0;
+        body.lines().find_map(|line| {
+            let here = at;
+            at += line.len() + 1;
+            let line = line.trim();
+            (line.starts_with("store i64 ") && line.ends_with(&format!(", ptr {reg}")))
+                .then_some(here)
+        })
+    };
+    for offset in ["24", "32"] {
+        let stored = gep_reg(body, offset)
+            .iter()
+            .filter_map(|reg| store_at(reg))
+            .min()
+            .unwrap_or_else(|| panic!("no store through the +{offset} slot: {ir}"));
+        assert!(
+            stored < seed,
+            "slot +{offset} stored after the birth seed: {ir}"
+        );
+    }
 }
 
 #[test]
