@@ -934,31 +934,50 @@ mod override_probe_allocation_tests {
     }
 }
 
+/// %ArrayIteratorPrototype%'s address once the iterator tower is published.
+#[inline(always)]
+pub(crate) fn array_iterator_prototype_addr() -> usize {
+    ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as usize
+}
+
+/// Whether the shape names `key` at a slot whose ConstFn lane owns `code`.
+/// A pristine owner names its intrinsic member among its first slots; any
+/// other layout is the same scan of the same shape.
+#[inline(always)]
+pub(crate) unsafe fn shape_member_body_is(
+    shape: super::shapes::ShapeRecordRef,
+    is_key: impl Fn(u64) -> bool,
+    code: *const u8,
+) -> bool {
+    let keys = crate::array::array_elements_ptr(shape.keys() as *const crate::array::ArrayHeader);
+    let Some(slot) = (0..shape.logical_key_count()).find(|&i| is_key(*keys.add(i as usize))) else {
+        return false;
+    };
+    shape
+        .constfn_info(slot)
+        .is_some_and(|info| (*(info as *const crate::closure::JsFunctionInfo)).code == code)
+}
+
 /// The array record omits the iterator allocation only when the current
 /// family shape still owns the intrinsic next body. Captured at entry;
-/// subsequent next writes cannot change that record.
+/// subsequent next writes cannot change that record. The key is validated
+/// with the ordinary key equality: the bounded intern table can evict an
+/// atom, so re-interning the same bytes need not reproduce the shape's key.
+#[inline(always)]
+pub(crate) unsafe fn array_iterator_next_is_intrinsic(owner: *const ObjectHeader) -> bool {
+    let Some(shape) = super::shapes::object_shape_record(owner) else {
+        return false;
+    };
+    shape_member_body_is(
+        shape,
+        |bits| crate::string::js_string_key_matches_bytes(JSValue::from_bits(bits), b"next"),
+        array_iterator_next_thunk as *const u8,
+    )
+}
+
 pub(crate) unsafe fn array_record_next_is_builtin() -> bool {
     ensure_iterator_prototypes();
-    let proto = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
-    let Some(shape) = super::shapes::object_shape_record(proto) else {
-        return false;
-    };
-    let keys = shape.keys() as *const crate::array::ArrayHeader;
-    if shape.logical_key_count() == 0 {
-        return false;
-    }
-    // Validate the property key owned by the shape using the ordinary key
-    // equality. The bounded intern table can evict an atom, so re-interning
-    // the same bytes need not reproduce this live shape's string pointer.
-    let slots = crate::array::array_elements_ptr(keys);
-    if !crate::string::js_string_key_matches_bytes(JSValue::from_bits(*slots), b"next") {
-        return false;
-    }
-    let Some(info) = shape.constfn_info(0) else {
-        return false;
-    };
-    (*(info as *const crate::closure::JsFunctionInfo)).code
-        == array_iterator_next_thunk as *const u8
+    array_iterator_next_is_intrinsic(array_iterator_prototype_addr() as *const ObjectHeader)
 }
 
 /// Prove a built-in advance using the receiver and prototype shapes.
@@ -1777,7 +1796,10 @@ mod array_record_tests;
 pub(crate) unsafe fn array_record_close_is_absent() -> bool {
     // Resolve allocating intrinsic setup before retaining raw shape owners.
     ensure_iterator_prototypes();
-    let object_proto = crate::array::object_prototype_addr();
+    let mut object_proto = crate::array::object_prototype_addr_if_resolved();
+    if object_proto == 0 {
+        object_proto = crate::array::object_prototype_addr();
+    }
     let mut obj = ARRAY_ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) as *const ObjectHeader;
     for _ in 0..64 {
         if super::dictionary::is_dictionary(obj) {
@@ -1786,13 +1808,20 @@ pub(crate) unsafe fn array_record_close_is_absent() -> bool {
         let Some(shape) = super::shapes::object_shape_record(obj) else {
             return false;
         };
-        let keys = shape.keys() as *const crate::array::ArrayHeader;
         // This is GetMethod(return)'s ordinary property-key lookup on the
         // owned shape, before a receiver is needed. An accessor or any own
         // return value materializes the record and uses shared IteratorClose.
-        if !keys.is_null()
-            && super::keys_find_slot_by_bytes(keys, shape.logical_key_count(), b"return").is_some()
-        {
+        // The shape's key list is the live, collector-maintained head.
+        let (slots, len) = super::keys_lookup::keys_array_dense_slots_resolved(
+            shape.keys() as *const crate::array::ArrayHeader
+        );
+        let count = (shape.logical_key_count() as usize).min(len);
+        if (0..count).any(|i| {
+            crate::string::js_string_key_matches_bytes(
+                JSValue::from_bits((*slots.add(i)).to_bits()),
+                b"return",
+            )
+        }) {
             return false;
         }
         let parent = super::shapes::object_prototype_word(obj);
