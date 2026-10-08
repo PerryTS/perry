@@ -1562,10 +1562,16 @@ fn decl_prototype_parent_bits(class_id: u32) -> Option<u64> {
                     // owns this edge. Its actual .prototype must precede the
                     // declared class-id fallback, which cannot identify a
                     // function-valued parent's property storage.
-                    let parent_proto =
-                        super::function_prototype::js_function_prototype_value_for_read(
+                    // Use ordinary Get, exactly as user code reading
+                    // F.prototype: native/global constructors, own accessors
+                    // and functions without an own prototype share that read.
+                    let parent_proto = unsafe {
+                        crate::value::js_get_property(
                             dynamic_parent.get_nanbox_f64(),
-                        );
+                            b"prototype".as_ptr() as i64,
+                            b"prototype".len() as i64,
+                        )
+                    };
                     Some(
                         class_parent_prototype_bits(parent_proto).unwrap_or_else(|| {
                             super::super::object_ops::throw_object_type_error(

@@ -1,0 +1,1 @@
+function mk(){return class{#x=1; peek(o){return o.#x}}} const A1=mk(),A2=mk(); class B extends A1{peek(o){return super.peek(o)}} try{console.log(new B().peek(new A2()))}catch(e){console.log(e instanceof TypeError)} console.log(new B().peek(new B()));

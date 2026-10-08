@@ -1,3 +1,5 @@
 Fix non-spread native superclass method calls by sharing the accessor's actual-home-prototype lookup and receiver-aware Reflect.get. Remove the declared/relinked-chain latch, native-method stashes, and collection-specific super dispatch.
 
 When linking a class prototype, the evaluated superclass's own prototype now precedes the declared-id fallback. This preserves native function-valued heritage even when a reserved class id names other runtime metadata. The regression materializes an fs.Stats prototype before forwarding Stream.on; Node and Bun return the emitter and deliver the event, while the base fails.
+
+Review: resolve a function superclass's prototype through ordinary Get and materialize the existing child prototype at definition time. Codegen passes its rooted interned property key to the shared super-call operation, removing per-call string allocation. Transform.prototype now owns its specified default _transform hook. This PR is stacked on #12190's unified explicit-this operation.

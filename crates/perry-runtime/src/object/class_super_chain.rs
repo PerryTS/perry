@@ -59,31 +59,24 @@ pub(crate) unsafe fn class_super_base(home_cid: u32, receiver: f64) -> f64 {
 /// `args_ptr` must point to `args_len` valid `f64`s (or be null when
 /// `args_len == 0`).
 pub(super) unsafe fn super_call_with_lookup(
-    name: &str,
+    key_value: f64,
     this_value: f64,
     args_ptr: *const f64,
     args_len: usize,
-    read: impl FnOnce(*const crate::StringHeader, f64) -> Option<crate::value::JSValue>,
+    read: impl FnOnce(f64, f64) -> Option<crate::value::JSValue>,
 ) -> f64 {
-    // The key allocation and the read (a getter on the new chain) can collect;
+    // The read (a getter on the new chain) can collect;
     // the receiver and the arguments ride across them in handles.
     let scope = crate::gc::RuntimeHandleScope::new();
     let this_handle = scope.root_nanbox_f64(this_value);
+    let key_handle = scope.root_nanbox_f64(key_value);
     let args: Vec<f64> = if args_len > 0 && !args_ptr.is_null() {
         std::slice::from_raw_parts(args_ptr, args_len).to_vec()
     } else {
         Vec::new()
     };
     let arg_handles = scope.root_nanbox_f64_slice(&args);
-    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    let value = if key.is_null() {
-        None
-    } else {
-        read(
-            key as *const crate::StringHeader,
-            this_handle.get_nanbox_f64(),
-        )
-    };
+    let value = read(key_handle.get_nanbox_f64(), this_handle.get_nanbox_f64());
     let callable = value.filter(|v| {
         let boxed = f64::from_bits(v.bits());
         v.is_pointer()
@@ -94,6 +87,8 @@ pub(super) unsafe fn super_call_with_lookup(
                 ))
     });
     let Some(method) = callable else {
+        let hdr = crate::builtins::js_string_coerce(key_handle.get_nanbox_f64());
+        let name = super::has_own_helpers::str_from_string_header(hdr).unwrap_or("");
         crate::error::js_throw_type_error_not_a_function(
             std::ptr::null(),
             0,

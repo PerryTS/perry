@@ -1,0 +1,1 @@
+const E:any=EventTarget; class T extends E{dispatchEvent(e){return super.dispatchEvent(e)}} const t=new T(); t.addEventListener("x",()=>console.log("event")); console.log(t.dispatchEvent(new Event("x"))); console.log(Object.getPrototypeOf(T.prototype)===EventTarget.prototype);

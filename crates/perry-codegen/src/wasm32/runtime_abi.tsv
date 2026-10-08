@@ -3686,6 +3686,8 @@ js_super_accessor_get	f64	i32u,f64,f64
 js_super_construct_apply	f64	i32u,f64,f64
 js_super_method_call_dynamic	f64	i32u,ptr,usize,f64,ptr,usize
 js_super_method_call_dynamic_apply	f64	i32u,ptr,usize,f64,f64
+js_super_method_call_key	f64	i32u,f64,f64,ptr,usize
+js_super_method_call_key_apply	f64	i32u,f64,f64,f64
 js_super_put_value_set	f64	i32u,f64,f64,f64,i32s
 js_suppressed_error_new	f64	f64,f64,f64
 js_switch_strict_equals	i32s	f64,f64

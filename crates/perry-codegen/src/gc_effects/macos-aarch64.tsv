@@ -3161,6 +3161,8 @@ js_super_accessor_get	Reenters
 js_super_construct_apply	Reenters
 js_super_method_call_dynamic	Reenters
 js_super_method_call_dynamic_apply	Reenters
+js_super_method_call_key	Reenters
+js_super_method_call_key_apply	Reenters
 js_super_put_value_set	Reenters
 js_suppressed_error_new	Reenters
 js_switch_strict_equals	AllocOnly

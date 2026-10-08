@@ -195,6 +195,7 @@ pub(crate) fn attach_stream_constructor_prototype(constructor_value: f64, name: 
         "Readable" => Some(crate::node_stream::StreamProto::Readable),
         "Writable" => Some(crate::node_stream::StreamProto::Writable),
         "Duplex" => Some(crate::node_stream::StreamProto::Duplex),
+        "Transform" => Some(crate::node_stream::StreamProto::Transform),
         _ => None,
     };
     if let Some(kind) = kind {
