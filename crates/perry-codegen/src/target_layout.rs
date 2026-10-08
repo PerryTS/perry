@@ -113,14 +113,20 @@ pub(crate) fn heap_addr_upper_bound_exclusive(target_triple: &str) -> u64 {
 /// runtime's conservative 2 TiB floor before any `GcHeader` dereference.
 pub(crate) fn heap_addr_lower_bound_inclusive(target_triple: &str) -> u64 {
     let triple = target_triple.to_ascii_lowercase();
+    // Codegen sees LLVM spellings, not only rustc ones: the macOS host triple
+    // is `arm64-apple-macosx15.0.0` and visionOS is `arm64-apple-xros1.0`.
+    // Missing them put macOS on the 2 TiB floor, so every inline guard missed
+    // for heap objects below 2 TiB (mimalloc's arenas happen to sit above it).
     let mainstream_os = triple.contains("android")
         || triple.contains("darwin")
+        || triple.contains("macos")
         || (triple.contains("linux") && !triple.contains("ohos"))
         || triple.contains("windows")
         || triple.contains("ios")
         || triple.contains("tvos")
         || triple.contains("watchos")
         || triple.contains("visionos")
+        || triple.contains("xros")
         // wasm32 WASI (#11378): must match perry-runtime's `is_valid_obj_ptr`
         // floor for `target_os = "wasi"`.
         || triple.contains("wasi");
@@ -442,6 +448,50 @@ mod tests {
         for triple in ["aarch64-unknown-linux-ohos", "riscv64gc-unknown-none-elf"] {
             assert_eq!(
                 heap_addr_lower_bound_inclusive(triple),
+                0x200_0000_0000,
+                "{triple}"
+            );
+        }
+    }
+
+    /// The floor must hold for the LLVM triples codegen really emits, not
+    /// just rustc spellings: the host default and every `--target` name.
+    #[test]
+    fn heap_address_floor_covers_emitted_triples() {
+        let mut triples = vec![crate::codegen::default_target_triple()];
+        for name in [
+            "macos",
+            "macos-x86_64",
+            "ios",
+            "ios-simulator",
+            "visionos",
+            "visionos-simulator",
+            "watchos",
+            "watchos-simulator",
+            "tvos",
+            "tvos-simulator",
+            "android",
+            "android-x86_64",
+            "linux",
+            "linux-aarch64",
+            "linux-musl",
+            "linux-aarch64-musl",
+            "windows",
+            "windows-aarch64",
+        ] {
+            triples.push(crate::codegen::resolve_target_triple(name).expect(name));
+        }
+        for triple in triples {
+            assert_eq!(
+                heap_addr_lower_bound_inclusive(&triple),
+                0x10_0000,
+                "{triple}"
+            );
+        }
+        for name in ["harmonyos", "harmonyos-simulator"] {
+            let triple = crate::codegen::resolve_target_triple(name).expect(name);
+            assert_eq!(
+                heap_addr_lower_bound_inclusive(&triple),
                 0x200_0000_0000,
                 "{triple}"
             );
