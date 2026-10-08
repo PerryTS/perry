@@ -462,11 +462,8 @@ fn emit_guarded_param_read(
         .clone();
     // No bag, no own props: an owner's link is 0 and an unbagged view's link
     // is its owner. A bagged view (link = bag) takes normal dispatch.
-    let owner = ctx.block().load(DOUBLE, &cache.owner_root_slot);
-    let owner_bits = ctx.block().bitcast_double_to_i64(&owner);
-    let owner_raw = ctx
-        .block()
-        .and(I64, &owner_bits, crate::nanbox::POINTER_MASK_I64);
+    // The proof already holds the owner untagged, so this is one compare.
+    let owner_raw = ctx.block().load(I64, &cache.owner_raw_slot);
     let link_addr = ctx.block().add(
         I64,
         &access.raw,

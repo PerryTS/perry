@@ -51,6 +51,7 @@ pub(crate) fn access_for(
         data_i64: "0".into(),
         receiver_root_slot,
         owner_root_slot,
+        owner_raw_slot: ctx.func.alloca_entry(I64),
         data_slot: ctx.func.alloca_entry(I64),
         length_slot: ctx.func.alloca_entry(I32),
         valid_slot: state_slot,
@@ -58,6 +59,8 @@ pub(crate) fn access_for(
         fixed_receiver: false,
         brands: brands.to_vec(),
     };
+    ctx.func
+        .entry_allocas_push_store(I64, "0", &access.owner_raw_slot);
     ctx.func
         .entry_allocas_push_store(I64, "0", &access.data_slot);
     ctx.func
@@ -113,6 +116,9 @@ fn refresh_param(
     let data = ctx
         .block()
         .phi(I64, &[(&resolved.data, &hit_l), ("0", &miss_l)]);
+    let owner_raw = ctx
+        .block()
+        .phi(I64, &[(&resolved.owner, &hit_l), ("0", &miss_l)]);
     let len = ctx
         .block()
         .phi(I32, &[(&resolved.len, &hit_l), ("0", &miss_l)]);
@@ -124,6 +130,7 @@ fn refresh_param(
         .block()
         .phi(DOUBLE, &[(&owner, &hit_l), (&undef, &miss_l)]);
     ctx.block().store(DOUBLE, &owner, &access.owner_root_slot);
+    ctx.block().store(I64, &owner_raw, &access.owner_raw_slot);
     ctx.block().store(I64, &data, &access.data_slot);
     ctx.block().store(I32, &len, &access.length_slot);
     let state = ctx.block().select(I1, &valid, I8, "1", "2");
@@ -279,62 +286,45 @@ pub(crate) fn resolve(ctx: &mut FnCtx<'_>, boxed: &str, brands: &[u8], miss: &st
     let linked = ctx.block().load(PTR, &link_ptr);
     let linked = ctx.block().ptrtoint(&linked, I64);
     let linked_word = header_word(ctx.block(), &linked);
-    let offset_addr = ctx
-        .block()
-        .add(I64, &raw, &crate::runtime_abi::BYTES_AUX.to_string());
-    let offset_ptr = ctx.block().inttoptr(I64, &offset_addr);
-    let offset = ctx.block().load(I32, &offset_ptr);
-    let offset = ctx.block().zext(I32, &offset, I64);
-    let admitted = plain_owner(ctx.block(), &linked_word);
-    let view_end = ctx.block().label.clone();
-    let bag_check = ctx.new_block("bytes.view.bag");
-    let bag_check_l = ctx.block_label(bag_check);
-    ctx.block().cond_br(&admitted, &labels[4], &bag_check_l);
-    // A view's link is its owner, or its bag; the bag holds the owner at a
-    // fixed first slot (`BYTES_VIEW_BAG_OWNER`), so a bagged view costs one
-    // more load and the direct link pays nothing for it.
-    ctx.current_block = bag_check;
+    // A view links its owner or its bag, and a bag holds the owner, boxed, at
+    // its fixed first slot `BYTES_VIEW_BAG_OWNER`. The hop is straight-line:
+    // a bag reads that slot, a direct link re-reads the view's own link word
+    // (always readable, and its untagged pointer survives the mask). No block
+    // or join is added, so the resolution keeps main's CFG and the owner arm
+    // is untouched by views.
     let linked_type = ctx.block().and(I64, &linked_word, "255");
     let bagged = ctx.block().icmp_eq(
         I64,
         &linked_type,
         &crate::runtime_abi::GC_TYPE_OBJECT.to_string(),
     );
-    let bag_owner = ctx.new_block("bytes.view.bag.owner");
-    let bag_owner_l = ctx.block_label(bag_owner);
-    ctx.block().cond_br(&bagged, &bag_owner_l, miss);
-    ctx.current_block = bag_owner;
-    let slot = ctx.block().add(
+    let bag_slot = ctx.block().add(
         I64,
         &linked,
         &crate::runtime_abi::BYTES_VIEW_BAG_OWNER.to_string(),
     );
-    let slot = ctx.block().inttoptr(I64, &slot);
-    let boxed_owner = ctx.block().load(I64, &slot);
-    let bag_o = ctx
+    let owner_addr = ctx.block().select(I1, &bagged, I64, &bag_slot, &link);
+    let owner_ptr = ctx.block().inttoptr(I64, &owner_addr);
+    let owner_bits = ctx.block().load(I64, &owner_ptr);
+    let o = ctx
         .block()
-        .and(I64, &boxed_owner, crate::nanbox::POINTER_MASK_I64);
-    let bag_ho = header_word(ctx.block(), &bag_o);
-    let bag_admitted = plain_owner(ctx.block(), &bag_ho);
-    let bag_end = ctx.block().label.clone();
-    ctx.block().cond_br(&bag_admitted, &labels[4], miss);
+        .and(I64, &owner_bits, crate::nanbox::POINTER_MASK_I64);
+    let ho = header_word(ctx.block(), &o);
+    let admitted = plain_owner(ctx.block(), &ho);
+    let offset_addr = ctx
+        .block()
+        .add(I64, &raw, &crate::runtime_abi::BYTES_AUX.to_string());
+    let offset_ptr = ctx.block().inttoptr(I64, &offset_addr);
+    let offset = ctx.block().load(I32, &offset_ptr);
+    let offset = ctx.block().zext(I32, &offset, I64);
+    let view_end = ctx.block().label.clone();
+    ctx.block().cond_br(&admitted, &labels[4], miss);
     ctx.current_block = store;
-    let owning = ctx.block().phi(
-        I64,
-        &[(&raw, &owner_end), (&linked, &view_end), (&bag_o, &bag_end)],
-    );
-    let word = ctx.block().phi(
-        I64,
-        &[
-            (&h, &owner_end),
-            (&linked_word, &view_end),
-            (&bag_ho, &bag_end),
-        ],
-    );
-    let offset = ctx.block().phi(
-        I64,
-        &[("0", &owner_end), (&offset, &view_end), (&offset, &bag_end)],
-    );
+    let owning = ctx.block().phi(I64, &[(&raw, &owner_end), (&o, &view_end)]);
+    let word = ctx.block().phi(I64, &[(&h, &owner_end), (&ho, &view_end)]);
+    let offset = ctx
+        .block()
+        .phi(I64, &[("0", &owner_end), (&offset, &view_end)]);
     let base = ctx
         .block()
         .add(I64, &owning, &crate::runtime_abi::BYTES_STORE.to_string());
