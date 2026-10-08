@@ -121,10 +121,9 @@ pub(crate) fn set_field_by_name_object_tail(
             // `OBJ_FLAG_HAS_DESCRIPTORS` is never set for an ArrayHeader). The
             // flag is set unconditionally by `define_array_property` whenever any
             // descriptor is installed on the array and travels with it across
-            // evacuation; `ACCESSOR_DESCRIPTORS` is keyed by raw address, so a
-            // fresh array reusing a freed address (its `_reserved` zeroed at
-            // allocation) skips this lookup and can't fire a previous tenant's
-            // stale accessor.
+            // evacuation and growth. The array's traced property bag owns
+            // accessor facts in its shape and getter/setter pairs in its slots;
+            // resolving a growth alias reaches that same holder.
             if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
                 if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
                     if acc.set != 0 {
