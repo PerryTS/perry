@@ -159,6 +159,17 @@ fn expr_alloc_free(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool) -> bool {
         Expr::BufferIndexGet { buffer, index } => {
             expr_alloc_free(buffer, is_inert) && expr_alloc_free(index, is_inert)
         }
+        // The array record's cursor advance is a mode select over a Number
+        // local update; it reads no receiver and calls nothing.
+        Expr::NativeMethodCall {
+            module,
+            class_name: None,
+            object: None,
+            method,
+            args,
+        } if module == "__perry_runtime" && method == "arrayRecordForUpdate" => {
+            args.iter().all(|a| expr_alloc_free(a, is_inert))
+        }
         Expr::Uint8ArrayGet { array, index } => {
             expr_alloc_free(array, is_inert) && expr_alloc_free(index, is_inert)
         }
