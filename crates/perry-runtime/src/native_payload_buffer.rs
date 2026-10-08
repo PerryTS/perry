@@ -73,11 +73,13 @@ impl PayloadBufferOwner {
 
     #[inline]
     fn sub(&self, bytes: usize) {
-        debug_assert!(
-            self.bytes.get() >= bytes,
-            "buffer released by another owner"
-        );
-        self.bytes.set(self.bytes.get().saturating_sub(bytes));
+        let held = self.bytes.get();
+        debug_assert!(held >= bytes, "buffer released by another owner");
+        // Releasing more than the owner holds is a caller bug. Both counters
+        // take the same clamped amount, so neither wraps and they stay equal
+        // (the process count is the sum of the owner counts).
+        let bytes = bytes.min(held);
+        self.bytes.set(held - bytes);
         LIVE_BYTES.fetch_sub(bytes, Ordering::Relaxed);
     }
 }
@@ -297,8 +299,11 @@ pub extern "C" fn js_perry_payload_buffer_live_bytes() -> usize {
 
 /// A C codec's allocator hook (`brotli_alloc_func`): `opaque` is the owner.
 /// The block is zeroed; its size is kept in a 16-byte prefix for the free.
+///
+/// # Safety
+/// `opaque` is null or a live [`PayloadBufferOwner`] on this thread.
 #[no_mangle]
-pub extern "C" fn js_perry_payload_buffer_hook_alloc(
+pub unsafe extern "C" fn js_perry_payload_buffer_hook_alloc(
     opaque: *mut c_void,
     size: usize,
 ) -> *mut c_void {
@@ -308,31 +313,33 @@ pub extern "C" fn js_perry_payload_buffer_hook_alloc(
     let Some(total) = size.checked_add(HOOK_HEADER) else {
         return std::ptr::null_mut();
     };
-    let owner = unsafe { &*(opaque as *const PayloadBufferOwner) };
+    let owner = &*(opaque as *const PayloadBufferOwner);
     match PayloadBuffer::alloc(owner, total) {
-        Some((ptr, _)) => unsafe {
+        Some((ptr, _)) => {
             (ptr.as_ptr() as *mut usize).write(total);
             ptr.as_ptr().add(HOOK_HEADER).cast()
-        },
+        }
         None => std::ptr::null_mut(),
     }
 }
 
 /// The matching free (`brotli_free_func`). Null is a no-op.
+///
+/// # Safety
+/// `ptr` is null or a live block from [`js_perry_payload_buffer_hook_alloc`]
+/// with this `opaque`, not used afterwards.
 #[no_mangle]
-pub extern "C" fn js_perry_payload_buffer_hook_free(opaque: *mut c_void, ptr: *mut c_void) {
+pub unsafe extern "C" fn js_perry_payload_buffer_hook_free(opaque: *mut c_void, ptr: *mut c_void) {
     if opaque.is_null() || ptr.is_null() {
         return;
     }
-    unsafe {
-        let base = (ptr as *mut u8).sub(HOOK_HEADER);
-        let total = (base as *const usize).read();
-        PayloadBuffer::release(
-            &*(opaque as *const PayloadBufferOwner),
-            NonNull::new_unchecked(base),
-            total,
-        );
-    }
+    let base = (ptr as *mut u8).sub(HOOK_HEADER);
+    let total = (base as *const usize).read();
+    PayloadBuffer::release(
+        &*(opaque as *const PayloadBufferOwner),
+        NonNull::new_unchecked(base),
+        total,
+    );
 }
 
 #[cfg(feature = "keepalive-anchors")]
@@ -365,10 +372,11 @@ mod keepalive {
     #[used(compiler)]
     static LIVE: extern "C" fn() -> usize = js_perry_payload_buffer_live_bytes;
     #[used(compiler)]
-    static HOOK_ALLOC: extern "C" fn(*mut c_void, usize) -> *mut c_void =
+    static HOOK_ALLOC: unsafe extern "C" fn(*mut c_void, usize) -> *mut c_void =
         js_perry_payload_buffer_hook_alloc;
     #[used(compiler)]
-    static HOOK_FREE: extern "C" fn(*mut c_void, *mut c_void) = js_perry_payload_buffer_hook_free;
+    static HOOK_FREE: unsafe extern "C" fn(*mut c_void, *mut c_void) =
+        js_perry_payload_buffer_hook_free;
 }
 
 #[cfg(test)]
@@ -410,16 +418,78 @@ mod tests {
     fn c_hook_counts_its_prefix_and_frees_without_a_size() {
         let owner = PayloadBufferOwner::new();
         let opaque = &owner as *const PayloadBufferOwner as *mut c_void;
-        let a = js_perry_payload_buffer_hook_alloc(opaque, 100);
-        let b = js_perry_payload_buffer_hook_alloc(opaque, 1 << 20);
-        assert!(!a.is_null() && !b.is_null());
-        assert_eq!(a as usize % PAYLOAD_BUFFER_ALIGN, 0);
-        assert_eq!(owner.bytes(), 100 + (1 << 20) + 2 * HOOK_HEADER);
-        js_perry_payload_buffer_hook_free(opaque, a);
-        assert_eq!(owner.bytes(), (1 << 20) + HOOK_HEADER);
-        js_perry_payload_buffer_hook_free(opaque, b);
-        js_perry_payload_buffer_hook_free(opaque, std::ptr::null_mut());
+        unsafe {
+            let a = js_perry_payload_buffer_hook_alloc(opaque, 100);
+            let b = js_perry_payload_buffer_hook_alloc(opaque, 1 << 20);
+            assert!(!a.is_null() && !b.is_null());
+            assert_eq!(a as usize % PAYLOAD_BUFFER_ALIGN, 0);
+            assert_eq!(owner.bytes(), 100 + (1 << 20) + 2 * HOOK_HEADER);
+            js_perry_payload_buffer_hook_free(opaque, a);
+            assert_eq!(owner.bytes(), (1 << 20) + HOOK_HEADER);
+            js_perry_payload_buffer_hook_free(opaque, b);
+            js_perry_payload_buffer_hook_free(opaque, std::ptr::null_mut());
+            assert_eq!(owner.bytes(), 0);
+            // A refused request is a null, as brotli's hook contract expects.
+            assert!(js_perry_payload_buffer_hook_alloc(opaque, usize::MAX).is_null());
+            assert!(js_perry_payload_buffer_hook_alloc(opaque, MAX_LEN).is_null());
+            assert_eq!(owner.bytes(), 0);
+        }
+    }
+
+    #[test]
+    fn grow_failure_leaves_the_buffer_and_the_count_unchanged() {
+        let owner = PayloadBufferOwner::new();
+        let (ptr, len) = PayloadBuffer::alloc(&owner, 4096).unwrap();
+        unsafe {
+            std::ptr::write_bytes(ptr.as_ptr(), 0x5a, len);
+            assert!(PayloadBuffer::grow(&owner, ptr, len, usize::MAX).is_none());
+            assert!(PayloadBuffer::grow(&owner, ptr, len, MAX_LEN + 1).is_none());
+            assert_eq!(owner.bytes(), 4096);
+            let bytes = std::slice::from_raw_parts(ptr.as_ptr(), len);
+            assert!(bytes.iter().all(|b| *b == 0x5a), "old bytes intact");
+            PayloadBuffer::release(&owner, ptr, len);
+        }
         assert_eq!(owner.bytes(), 0);
-        assert!(js_perry_payload_buffer_hook_alloc(opaque, usize::MAX).is_null());
+    }
+
+    #[test]
+    fn small_grow_and_grow_from_empty_keep_bytes_and_count() {
+        let owner = PayloadBufferOwner::new();
+        let (ptr, len) = PayloadBuffer::alloc(&owner, 1000).unwrap();
+        unsafe {
+            std::ptr::write_bytes(ptr.as_ptr(), 3, len);
+            // Inside the backing's size class: typically the same block.
+            let (ptr, len) = PayloadBuffer::grow(&owner, ptr, len, 1008).unwrap();
+            assert_eq!((len, owner.bytes()), (1008, 1008));
+            let bytes = std::slice::from_raw_parts(ptr.as_ptr(), len);
+            assert!(bytes[..1000].iter().all(|b| *b == 3));
+            assert!(bytes[1000..].iter().all(|b| *b == 0));
+            PayloadBuffer::release(&owner, ptr, len);
+            let (empty, zero) = PayloadBuffer::alloc(&owner, 0).unwrap();
+            let (ptr, len) = PayloadBuffer::grow(&owner, empty, zero, 64).unwrap();
+            assert_eq!((len, owner.bytes()), (64, 64));
+            assert!(std::slice::from_raw_parts(ptr.as_ptr(), len)
+                .iter()
+                .all(|b| *b == 0));
+            PayloadBuffer::release(&owner, ptr, len);
+        }
+        assert_eq!(owner.bytes(), 0);
+    }
+
+    #[test]
+    fn over_release_clamps_both_counters_alike() {
+        if cfg!(debug_assertions) {
+            return; // the debug assertion is the intended failure there
+        }
+        let owner = PayloadBufferOwner::new();
+        owner.add(100);
+        owner.sub(1000);
+        assert_eq!(owner.bytes(), 0);
+        // Only 100 came off the process count; wrapping would read as ~2^64
+        // (a bound, not an equality, so parallel tests cannot disturb it).
+        assert!(
+            live_bytes() < usize::MAX / 2,
+            "the process count did not wrap"
+        );
     }
 }
