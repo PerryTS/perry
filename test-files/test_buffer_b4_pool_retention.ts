@@ -1,3 +1,4 @@
+// parity-node-argv: --expose-gc
 // Each retained one-byte view keeps one distinct 8 KiB pool alive.
 declare function gc(): void;
 Buffer.poolSize = 8192;
