@@ -1,0 +1,3 @@
+Restore GitHub Actions' native `parallel` group for all six hermetic container suites, retaining individual step logs and results with an implicit wait for the entire group. GitHub added native parallel steps on June 25, 2026; the Bash replacement in the workflow consolidation was based on a local linter that did not recognize the new syntax.
+
+Remove the deleted Bash orchestration's unit test and correct the earlier changeset's unsupported-syntax claim. Validation: 31 Actions routing tests, topology checks for six parent workflows and 38 suites, and an exact comparison of all six original step definitions and Cargo commands.
