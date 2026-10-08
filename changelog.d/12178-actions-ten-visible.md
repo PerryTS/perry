@@ -1,0 +1,7 @@
+Consolidate the Actions sidebar from fourteen entries to ten after retired run history is cleaned up. Six repository workflows retain all 38 original suites alongside GitHub's four dynamic Pages, Dependabot, dependency graph, and Copilot entries.
+
+Group compiler/runtime, compatibility, integration, and performance under **Extended Tests**, with category and individual suite dispatch choices. Group documentation and maintenance under **Repository**, preserving safe offline defaults, explicit deployment/live maintenance selections, and the original cleanup path restriction. Retain the two publishing filenames for npm trusted publisher authorization.
+
+Preserve original schedules, suite result names, runners, permissions, and artifact contracts. Update release simulator dispatch/polling, tag riders, failure subscriptions, freshness subjects, and the Node core pin exemption to their new parents. Retired history cleanup now waits for queued/running jobs to finish before deleting their completed records and continues to spare current workflows and GitHub-managed registrations.
+
+Replace inherited unsupported container `parallel`/`wait-all` steps with a valid Bash step that starts six suites, waits for all results, and fails if any suite fails. Remove unsupported Bun action input metadata. Validation includes 32 Actions routing/parallel-result tests, two cleanup tests, five release gate fixtures, topology checks for six entrypoints and 38 suites, monitor/GC/Node pin checks, and actionlint on the redesigned parents.
