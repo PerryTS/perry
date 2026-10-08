@@ -48,6 +48,10 @@ stream_slots! {
     /// A stream family's payload cell (`native_payload`), POINTER_TAG-boxed:
     /// the stream's `native_state` names this record, and the record the cell.
     PayloadCell,
+    /// The object's native-this alias word (`object::native_this_alias`, its
+    /// own scalar encoding) when the stream is also an aliased native
+    /// construction: one `native_state` word, one owner.
+    NativeAlias,
     ReadableFlag,
     WritableFlag,
     /// A Transform (direct, subclass, PassThrough, or a native-payload family).
@@ -176,6 +180,33 @@ pub(crate) fn record_payload_cell(word: u64) -> u64 {
     }
 }
 
+/// The native-this alias word the record `native_state` names carries, or 0
+/// (no record, or no alias).
+#[inline]
+pub(crate) fn record_alias_word(native_state: u64) -> u64 {
+    let Some(record) = record_in_word(native_state) else {
+        return 0;
+    };
+    // SAFETY: a live record of the fixed length.
+    let bits = unsafe { *crate::array::array_elements_ptr(record).add(Slot::NativeAlias as usize) };
+    if bits == crate::value::TAG_UNDEFINED {
+        0
+    } else {
+        bits
+    }
+}
+
+/// Store a native-this alias word in the record `native_state` names, if it
+/// names one. The word is a scalar (its top half is the alias mark, a finite
+/// number's bits), so the record holds it as plain data the GC never follows.
+pub(crate) fn store_record_alias_word(native_state: u64, alias: u64) -> bool {
+    let Some(record) = record_in_word(native_state) else {
+        return false;
+    };
+    store(record, Slot::NativeAlias, f64::from_bits(alias));
+    true
+}
+
 /// Attach `cell_word` to the record `native_state` names, if it names one:
 /// a payload attached after the stream constructor ran (`attach_to_object`)
 /// joins the record instead of displacing it.
@@ -238,9 +269,11 @@ pub(crate) fn write_slot(stream: f64, slot: Slot, value: f64) {
 /// Give a stream being constructed its record: a fixed array of
 /// [`STREAM_RECORD_SLOT_COUNT`] words, every one absent, held in the stream's
 /// own `native_state`. A stream family's payload cell, attached before the
-/// stream constructor runs, moves into the record's [`Slot::PayloadCell`].
-/// An object whose `native_state` belongs to another kind (a weak
-/// collection's storage, a packed scalar) gets none.
+/// stream constructor runs, moves into the record's [`Slot::PayloadCell`];
+/// a native-this alias (`http.ServerResponse.call(this, req)` on an object
+/// the runtime also keeps stream state for) moves into
+/// [`Slot::NativeAlias`]. An object whose `native_state` belongs to another
+/// kind (a weak collection's storage, a packed scalar) gets none.
 pub(crate) fn ensure_record(stream: f64) -> bool {
     if record_of(stream).is_some() {
         return true;
@@ -256,7 +289,12 @@ pub(crate) fn ensure_record(stream: f64) -> bool {
         return false;
     }
     let word = unsafe { (*meta).native_state };
-    if word != 0 && crate::native_payload::payload_cell_of_word(word).is_none() {
+    let alias = crate::object::native_this_alias::is_alias_word(word);
+    #[cfg(test)]
+    if alias && super::native_hooks::stream_sabotage("record_displaces_alias") {
+        return false;
+    }
+    if word != 0 && !alias && crate::native_payload::payload_cell_of_word(word).is_none() {
         return false;
     }
     let record = crate::array::js_array_alloc_with_length_exact(STREAM_RECORD_SLOT_COUNT as u32);
@@ -269,7 +307,9 @@ pub(crate) fn ensure_record(stream: f64) -> bool {
             elements.add(i).write(crate::value::TAG_UNDEFINED);
         }
     }
-    if word != 0 {
+    if alias {
+        store(record, Slot::NativeAlias, f64::from_bits(word));
+    } else if word != 0 {
         // The cell does not move; its word is still current.
         store(record, Slot::PayloadCell, f64::from_bits(word));
     }
