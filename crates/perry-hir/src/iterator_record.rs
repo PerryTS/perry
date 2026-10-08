@@ -68,10 +68,15 @@ impl IteratorRecordPlan {
             out,
             Type::Boolean,
             false,
-            runtime(
-                "arrayRecordNeedsIterator",
-                vec![Expr::LocalSet(source, Box::new(Expr::LocalGet(source)))],
-            ),
+            runtime("arrayRecordNeedsIterator", {
+                let mut args = vec![Expr::LocalSet(source, Box::new(Expr::LocalGet(source)))];
+                // A counted consumer's entry also reports the packed layout
+                // admission of the head it resolves.
+                if numeric_candidate {
+                    args.push(Expr::Bool(true));
+                }
+                args
+            }),
         );
         // The source already owns the record. Reusing its actual Any value
         // keeps indexed property lowering on runtime facts rather than an
@@ -459,7 +464,6 @@ impl IteratorRecordPlan {
                 Expr::LocalGet(self.index),
                 crate::lower::iterator_step_call(iter_id, next, value_id),
                 Expr::LocalSet(state, Box::new(Expr::Number(2.0))),
-                Expr::Bool(self.numeric_candidate),
             ],
         );
         let mut stepped_body = vec![
@@ -841,9 +845,16 @@ mod tests {
         let general = IteratorRecordPlan::new(&mut ctx, Expr::Undefined, &mut setup);
         assert!(!general.numeric_candidate);
         let ir = hir("function f(a: number[]) { for (const x of a) { console.log(x); } }");
+        let entry = &ir[ir.find("\"arrayRecordNeedsIterator\"").unwrap()..];
         assert!(
-            ir.contains("Number(2.0)), Bool(true)"),
-            "static candidate survives source release: {ir}"
+            entry[..entry.find(']').unwrap()].contains("Bool(true)"),
+            "the static candidate selects the counted entry: {ir}"
+        );
+        let erased = hir("function f(a: any) { for (const x of a) { console.log(x); } }");
+        let entry = &erased[erased.find("\"arrayRecordNeedsIterator\"").unwrap()..];
+        assert!(
+            !entry[..entry.find(']').unwrap()].contains("Bool(true)"),
+            "an erased source keeps the plain entry: {erased}"
         );
     }
 

@@ -1433,47 +1433,57 @@ fn lower_packed_f64_versioned_for_with_protocol(
             PackedNumericLoopKind::U32 => TypedFeedbackContract::packed_u32_array_loop(),
         },
     );
-    // An overridden iterator never attempts indexed admission. The captured
-    // entry verdict short-circuits the existing numeric receiver guard.
-    let indexed_gate = if let Some((mode, _, _, _)) = protocol {
-        let mode = lower_expr(ctx, mode)?;
-        let bits = ctx.block().bitcast_double_to_i64(&mode);
-        let indexed = ctx
-            .block()
-            .icmp_eq(I64, &bits, &crate::nanbox::TAG_FALSE.to_string());
-        let from = ctx.block().label.clone();
-        let inspect = ctx.new_block("record.indexed.guards");
-        let merge = ctx.new_block("record.indexed.guards.merge");
-        let inspect_label = ctx.block_label(inspect);
-        let merge_label = ctx.block_label(merge);
-        ctx.block().cond_br(&indexed, &inspect_label, &merge_label);
-        ctx.current_block = inspect;
-        Some((from, merge, merge_label))
+    // A record's counted entry already admitted (or refused) this live head
+    // beside its shape proof; an overridden iterator never sets the bit.
+    let record_admission = protocol
+        .filter(|_| matches!(matched.array_kind, PackedNumericLoopKind::F64))
+        .and_then(|_| ctx.record_packed_admissions.get(&matched.array_id).cloned());
+    let guard_ok = if let Some(slot) = record_admission {
+        ctx.block().load(I1, &slot)
     } else {
-        None
-    };
-    let mut guard_ok = {
-        let blk = ctx.block();
-        let guard_fn = match matched.array_kind {
-            PackedNumericLoopKind::F64 => "js_typed_feedback_packed_f64_array_loop_guard",
-            PackedNumericLoopKind::I32 => "js_typed_feedback_packed_i32_array_loop_guard",
-            PackedNumericLoopKind::U32 => "js_typed_feedback_packed_u32_array_loop_guard",
+        // An overridden iterator never attempts indexed admission. The captured
+        // entry verdict short-circuits the existing numeric receiver guard.
+        let indexed_gate = if let Some((mode, _, _, _)) = protocol {
+            let mode = lower_expr(ctx, mode)?;
+            let bits = ctx.block().bitcast_double_to_i64(&mode);
+            let indexed = ctx
+                .block()
+                .icmp_eq(I64, &bits, &crate::nanbox::TAG_FALSE.to_string());
+            let from = ctx.block().label.clone();
+            let inspect = ctx.new_block("record.indexed.guards");
+            let merge = ctx.new_block("record.indexed.guards.merge");
+            let inspect_label = ctx.block_label(inspect);
+            let merge_label = ctx.block_label(merge);
+            ctx.block().cond_br(&indexed, &inspect_label, &merge_label);
+            ctx.current_block = inspect;
+            Some((from, merge, merge_label))
+        } else {
+            None
         };
-        let guard_i32 = blk.call(
-            I32,
-            guard_fn,
-            &[(I64, &feedback_site_id), (DOUBLE, &arr_box)],
-        );
-        blk.icmp_ne(I32, &guard_i32, "0")
+        let mut guard_ok = {
+            let blk = ctx.block();
+            let guard_fn = match matched.array_kind {
+                PackedNumericLoopKind::F64 => "js_typed_feedback_packed_f64_array_loop_guard",
+                PackedNumericLoopKind::I32 => "js_typed_feedback_packed_i32_array_loop_guard",
+                PackedNumericLoopKind::U32 => "js_typed_feedback_packed_u32_array_loop_guard",
+            };
+            let guard_i32 = blk.call(
+                I32,
+                guard_fn,
+                &[(I64, &feedback_site_id), (DOUBLE, &arr_box)],
+            );
+            blk.icmp_ne(I32, &guard_i32, "0")
+        };
+        if let Some((from, merge, merge_label)) = indexed_gate {
+            let inspected = ctx.block().label.clone();
+            ctx.block().br(&merge_label);
+            ctx.current_block = merge;
+            guard_ok = ctx
+                .block()
+                .phi(I1, &[("false", &from), (&guard_ok, &inspected)]);
+        }
+        guard_ok
     };
-    if let Some((from, merge, merge_label)) = indexed_gate {
-        let inspected = ctx.block().label.clone();
-        ctx.block().br(&merge_label);
-        ctx.current_block = merge;
-        guard_ok = ctx
-            .block()
-            .phi(I1, &[("false", &from), (&guard_ok, &inspected)]);
-    }
 
     record_packed_f64_loop_guard_artifacts(
         ctx,

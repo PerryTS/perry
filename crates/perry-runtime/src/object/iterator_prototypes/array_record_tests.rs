@@ -457,3 +457,61 @@ fn array_record_literal_preserves_dense_values_and_order() {
         assert_eq!(crate::array::js_array_length(empty), 0);
     }
 }
+
+#[test]
+fn array_record_counted_entry_admits_only_packed_numeric_heads() {
+    unsafe {
+        let _stable = crate::gc::GcSuppressScope::new();
+        let (_, _, sym) = fixture();
+        let numbers = js_nanbox_pointer({
+            let mut a = crate::array::js_array_alloc(0);
+            for v in [1.0, 2.5, 3.0] {
+                a = crate::array::js_array_push_f64(a, v);
+            }
+            a
+        } as i64);
+        let mut out = 0.0;
+        assert_eq!(
+            crate::array::js_array_record_enter_counted(numbers, &mut out),
+            2,
+            "a packed numeric head is admitted beside the shape proof"
+        );
+        assert_eq!(out.to_bits(), numbers.to_bits());
+        assert_eq!(
+            crate::array::js_array_record_enter(numbers, &mut out),
+            0,
+            "the plain entry reports only the shape verdict"
+        );
+        let mixed = js_nanbox_pointer({
+            let a = crate::array::js_array_alloc(0);
+            crate::array::js_array_push_f64(a, f64::from_bits(crate::value::TAG_UNDEFINED))
+        } as i64);
+        assert_eq!(
+            crate::array::js_array_record_enter_counted(mixed, &mut out),
+            0,
+            "a non-numeric head keeps the indexed record without admission"
+        );
+        crate::symbol::js_object_set_symbol_property(numbers, sym, 1.0);
+        assert_eq!(
+            crate::array::js_array_record_enter_counted(numbers, &mut out),
+            1,
+            "an own iterator member is never admitted"
+        );
+    }
+}
+
+#[test]
+fn array_record_absent_close_proof_reads_the_whole_chain() {
+    unsafe {
+        let _stable = crate::gc::GcSuppressScope::new();
+        fixture();
+        assert!(array_record_close_is_absent());
+        let object_proto = crate::array::object_prototype_addr() as *mut ObjectHeader;
+        let key = crate::string::intern_ascii_literal(b"return");
+        super::super::js_object_set_field_by_name(object_proto, key, 1.0);
+        assert!(
+            !array_record_close_is_absent(),
+            "a return member on Object.prototype is observable at close"
+        );
+    }
+}

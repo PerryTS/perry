@@ -1320,6 +1320,7 @@ pub(super) fn compile_function(
             .map(|id| (*id, crate::expr::SlotRep::I32))
             .collect(),
         i32_counter_slots: spec_i32_param_slots,
+        record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         transition_cache_base_slot: None,
         receiver_descriptors: Default::default(),

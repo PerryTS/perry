@@ -1443,30 +1443,51 @@ fn numeric_array_index_set_guard(
 }
 
 fn packed_f64_array_loop_guard(arr: *const ArrayHeader) -> bool {
-    if !plain_array_index_guard(arr, 0, false) {
-        return false;
-    }
     let raw_addr = normalize_raw_object_addr(arr as u64);
     let Some(header) = gc_header_for_user_addr(raw_addr) else {
         return false;
     };
     unsafe {
-        let flags = (*header)._reserved;
-        if flags
-            & (crate::gc::OBJ_FLAG_FROZEN
-                | crate::gc::OBJ_FLAG_SEALED
-                | crate::gc::OBJ_FLAG_NO_EXTEND)
-            != 0
+        // A pre-grow pointer is rejected before any length/capacity read
+        // (#6486); see `plain_array_index_guard_impl`.
+        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+            || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
         }
-        if (*header).obj_type == crate::gc::GC_TYPE_ARRAY
-            && (*(raw_addr as *const ArrayHeader)).length > i32::MAX as u32
-        {
-            return false;
-        }
+        packed_f64_loop_admits_live_array(raw_addr as *const ArrayHeader, (*header)._reserved)
     }
-    crate::array::js_array_is_numeric_f64_layout(raw_addr as *const ArrayHeader) != 0
+}
+
+/// The packed-f64 loop admission of a live, non-forwarded array head whose
+/// header flags the caller has already read. One predicate for the loop
+/// guard and for an array record entry that resolved the same head.
+///
+/// # Safety
+/// `arr` is a live, non-forwarded `GC_TYPE_ARRAY` head and `flags` its
+/// current `_reserved` word, with no intervening allocation.
+pub(crate) unsafe fn packed_f64_loop_admits_live_array(
+    arr: *const ArrayHeader,
+    flags: u16,
+) -> bool {
+    // Accessor/descriptor indices, a prototype that can serve holes, and
+    // frozen/sealed/non-extensible receivers all keep the ordinary path.
+    if flags
+        & (crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS
+            | crate::gc::OBJ_FLAG_FROZEN
+            | crate::gc::OBJ_FLAG_SEALED
+            | crate::gc::OBJ_FLAG_NO_EXTEND)
+        != 0
+        || crate::array::array_index_fast_path_invalid_for(flags)
+    {
+        return false;
+    }
+    let len = (*arr).length;
+    let cap = (*arr).capacity;
+    if cap > 16_000_000 || len > cap || len > i32::MAX as u32 {
+        return false;
+    }
+    crate::array::js_array_is_numeric_f64_layout_resolved(arr) != 0
 }
 
 /// #6011: entry guard for the packed-f64 *range* versioned loop. Validates the

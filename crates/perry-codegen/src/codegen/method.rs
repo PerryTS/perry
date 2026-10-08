@@ -683,6 +683,7 @@ pub(super) fn compile_method(
         region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
         i32_counter_slots: index_i32_param_slots,
+        record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         transition_cache_base_slot: None,
         receiver_descriptors: Default::default(),

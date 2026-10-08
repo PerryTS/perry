@@ -1146,6 +1146,10 @@ pub(crate) struct FnCtx<'a> {
     /// on hot array-walking loops like `for (let i = 0; i < arr.length;
     /// i++) arr[i] = expr`.
     pub i32_counter_slots: std::collections::HashMap<u32, String>,
+    /// Array-record source local -> i1 slot holding the packed-f64 loop
+    /// admission its counted entry computed beside the shape proof. Written
+    /// at that entry, consumed by the versioned loop that reads the source.
+    pub record_packed_admissions: std::collections::HashMap<u32, String>,
     /// Unboxed reduce-accumulator redirect, active only while a packed fast
     /// clone is being lowered: local id -> plain (addrspace-0) F64 alloca.
     /// The clone's preheader tag-tested the local as a Number and moved its

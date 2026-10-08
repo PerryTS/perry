@@ -357,6 +357,7 @@ pub(in crate::codegen) fn compile_static_method(
         region_loop_facts: Vec::new(),
         element_shape_loop_facts: Vec::new(),
         i32_counter_slots: HashMap::new(),
+        record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         transition_cache_base_slot: None,
         receiver_descriptors: Default::default(),
