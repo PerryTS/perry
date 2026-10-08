@@ -485,6 +485,9 @@ pub(crate) struct FnCtx<'a> {
     /// `compile_module` from `hir.classes`. Used by `Expr::New` to look up
     /// the field count, constructor body, and (eventually) method table.
     pub classes: &'a std::collections::HashMap<String, &'a perry_hir::Class>,
+    /// `classes` and `methods` inverted: subclasses per class and declaring
+    /// classes per method name (`codegen::class_hierarchy`).
+    pub class_hierarchy: &'a crate::codegen::class_hierarchy::ClassHierarchy,
     /// Map from interface name → HIR Interface definition. Built once
     /// from `hir.interfaces` and threaded via `cross_module.interfaces`.
     /// Consulted by `static_type_of` / `receiver_class_name` so a

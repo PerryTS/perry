@@ -1203,6 +1203,7 @@ pub(super) fn compile_function(
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
         classes,
+        class_hierarchy: &cross_module.class_hierarchy,
         this_stack,
         super_called_stack: Vec::new(),
         shared_super_scope_active: false,

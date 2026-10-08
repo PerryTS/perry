@@ -129,6 +129,21 @@ fn build_direct_method_args(
     direct_args
 }
 
+/// Every class whose `extends` chain resolves `property`: each class the
+/// method table registers it under, and every transitive subclass of one.
+/// Unordered and possibly repeating; callers sort and dedup by their own key.
+fn classes_resolving<'c>(ctx: &FnCtx<'c>, property: &str) -> Vec<&'c str> {
+    let hierarchy = ctx.class_hierarchy;
+    let mut out: Vec<&'c str> = Vec::new();
+    for definer in hierarchy.method_definers(property) {
+        out.push(definer.as_str());
+        out.extend(hierarchy.descendants(definer, None));
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
 /// Interface / dynamic dispatch fallback: when the static class is unknown OR
 /// resolves to an interface name not in the class registry, BUT the property
 /// name corresponds to a method defined on at least one class in the registry,
@@ -258,11 +273,17 @@ pub(crate) fn try_lower_instance_method_call(
         // name) which arm is emitted FIRST is what the runtime's first-match
         // tower actually executes — order-dependence that is behavioural, not
         // just cosmetic. Sorting by `(class_id, name)` is total and stable.
-        let mut dispatch_roots: Vec<(&String, u32)> =
-            ctx.class_ids.iter().map(|(k, &v)| (k, v)).collect();
+        //
+        // Only a class whose chain reaches a class declaring `property` can
+        // produce an entry, so the walk starts from those: every declaring
+        // class and everything below it, never the whole class table.
+        let mut dispatch_roots: Vec<(&str, u32)> = classes_resolving(ctx, property)
+            .into_iter()
+            .filter_map(|name| ctx.class_ids.get(name).map(|&id| (name, id)))
+            .collect();
         dispatch_roots.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
         for (start_cls, start_cid) in dispatch_roots {
-            let mut cur: Option<String> = Some(start_cls.clone());
+            let mut cur: Option<String> = Some(start_cls.to_string());
             while let Some(c) = cur {
                 let key = (c.clone(), property.to_string());
                 if let Some(fname) = ctx.methods.get(&key).cloned() {
@@ -277,8 +298,8 @@ pub(crate) fn try_lower_instance_method_call(
                         let has_user_rest =
                             crate::codegen::arguments::method_has_user_rest(ctx, &c, property);
                         let decl = ctx.method_param_counts.get(&key).copied().unwrap_or(0);
-                        impl_owner.push((c == *start_cls).then(|| start_cls.clone()));
-                        impl_class.push(start_cls.clone());
+                        impl_owner.push((c == start_cls).then(|| start_cls.to_string()));
+                        impl_class.push(start_cls.to_string());
                         implementors.push((start_cid, fname));
                         impl_meta.push((has_rest, has_synthetic_arguments, has_user_rest, decl));
                     }
@@ -956,32 +977,17 @@ pub(crate) fn try_lower_instance_method_call(
             // same reason: `overrides` is walked by index to emit the
             // `vdispatch.caseN` blocks, the `icmp eq i32` chain and the phi
             // incoming list, so the map's per-process order WAS the arm order.
-            let mut override_roots: Vec<(&String, u32)> =
-                ctx.class_ids.iter().map(|(k, &v)| (k, v)).collect();
+            let mut override_roots: Vec<(&str, u32)> = ctx
+                .class_hierarchy
+                .descendants(&class_name, None)
+                .into_iter()
+                .filter_map(|name| ctx.class_ids.get(name).map(|&id| (name, id)))
+                .collect();
             override_roots.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
             for (sub_name, sub_id) in override_roots {
-                if *sub_name == class_name {
-                    continue;
-                }
-                // Is sub_name transitively a subclass of class_name?
-                let mut parent = ctx
-                    .classes
-                    .get(sub_name)
-                    .and_then(|c| c.extends_name.clone());
-                let mut is_subclass = false;
-                while let Some(p) = parent {
-                    if p == class_name {
-                        is_subclass = true;
-                        break;
-                    }
-                    parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
-                }
-                if !is_subclass {
-                    continue;
-                }
                 // Resolve the method for sub_name by walking its
                 // own parent chain (NOT class_name's chain).
-                let mut cur = Some(sub_name.clone());
+                let mut cur = Some(sub_name.to_string());
                 let mut sub_method: Option<(String, (String, String))> = None;
                 while let Some(c) = cur {
                     let key = (c.clone(), property.to_string());
@@ -1207,26 +1213,15 @@ pub(crate) fn try_lower_instance_method_call(
             let mut subclass_arms: Vec<SubclassDispatchArm> = Vec::new();
             {
                 let mut seen_ids: Vec<u32> = vec![*ctx.class_ids.get(&class_name).unwrap_or(&0)];
-                let mut roots: Vec<(&String, u32)> =
-                    ctx.class_ids.iter().map(|(k, &v)| (k, v)).collect();
+                let mut roots: Vec<(&str, u32)> = ctx
+                    .class_hierarchy
+                    .descendants(&class_name, None)
+                    .into_iter()
+                    .filter_map(|name| ctx.class_ids.get(name).map(|&id| (name, id)))
+                    .collect();
                 roots.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
                 for (sub_name, sub_id) in roots {
-                    if *sub_name == class_name || sub_id == 0 || seen_ids.contains(&sub_id) {
-                        continue;
-                    }
-                    let mut parent = ctx
-                        .classes
-                        .get(sub_name)
-                        .and_then(|c| c.extends_name.clone());
-                    let mut is_subclass = false;
-                    while let Some(p) = parent {
-                        if p == class_name {
-                            is_subclass = true;
-                            break;
-                        }
-                        parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
-                    }
-                    if !is_subclass {
+                    if sub_id == 0 || seen_ids.contains(&sub_id) {
                         continue;
                     }
                     let Some(keys_global) = ctx.class_keys_globals.get(sub_name).cloned() else {
@@ -1236,7 +1231,7 @@ pub(crate) fn try_lower_instance_method_call(
                     // where it landed: the rest-param shape is a property of
                     // the declaring class, and a rest-bearing target cannot be
                     // called with this site's flat, base-arity argument list.
-                    let mut cur = Some(sub_name.clone());
+                    let mut cur = Some(sub_name.to_string());
                     let mut resolved: Option<(String, String)> = None;
                     while let Some(c) = cur {
                         let key = (c.clone(), property.to_string());

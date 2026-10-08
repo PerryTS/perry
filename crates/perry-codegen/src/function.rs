@@ -1008,6 +1008,14 @@ impl LlFunction {
     /// empty set; module and codegen-unit renderers compute the whole-module
     /// fixed point before serializing any function.
     pub(crate) fn to_ir_with_gc_leaf_callees(&self, gc_leaf_callees: &HashSet<String>) -> String {
+        self.text_finish(gc_leaf_callees)
+            .apply(self.render_unfinished(), gc_leaf_callees)
+    }
+
+    /// The function's text as its builder holds it: the define header, every
+    /// finalized body line, and the closing brace — before the whole-function
+    /// text passes [`TextFinish`] applies.
+    pub(crate) fn render_unfinished(&self) -> String {
         let mut ir = self.define_header(false);
         ir.push('\n');
         self.for_each_final_line::<std::convert::Infallible>(&mut |line| {
@@ -1023,62 +1031,27 @@ impl LlFunction {
         // through. This branch used to re-apply them here; after main moved
         // them, doing both emitted `%shadow_pop_l_0` twice in the same
         // function and clang rejected every module with a shadow frame.
-
-        // Research backend: turn the existing shadow-slot binding IR into
-        // native-frame stack maps only after lowering is complete, when every
-        // lazily-reserved scalar root and every call site is visible.
-        //
-        let ir = if self.stack_map_requested {
-            lower_precise_roots_to_native_stack(&ir, &self.name, self.stack_map_slot_count)
-        } else {
-            ir
-        };
-
-        // #8596: LLVM needs a statepoint at a caller edge exactly when the
-        // transitive callee can reach collection. The whole-module analysis
-        // proves direct generated callees that cannot; stamp those edges after
-        // root lowering (which separately handles audited runtime helpers).
-        // Unknown, indirect, cross-module and collecting callees remain
-        // unmarked and therefore remain statepoints.
-        let ir = if self.stack_map_requested && !gc_leaf_callees.is_empty() {
-            crate::gc_call_effects::annotate_transitive_leaf_calls(&ir, gc_leaf_callees)
-        } else {
-            ir
-        };
-
-        // RS4GC uses the unwind destination's landing pad **as the token** for
-        // the relocates it inserts on the exceptional edge, so
-        // `statepoint-example` requires that pad to be `landingpad token`.
-        // Perry emits the Itanium `{ ptr, i32 }` form, which makes RS4GC
-        // produce `gc.relocate({ ptr, i32 } %lpad, ...)` and the verifier
-        // reject the module — a try-carrying function simply fails to compile.
-        //
-        // Retyping is safe because the pad's value is dead: `try_stmt` emits it
-        // purely to anchor the edge and branches straight on, taking the
-        // exception from the runtime rather than the pad payload. Only the type
-        // is load-bearing, and only to RS4GC.
-        //
-        // Conditioned on exactly the predicate `define_header` uses for the GC
-        // strategy (#7982 moved that rendering into one place) — a function that
-        // does not carry the strategy must keep the Itanium form, or its pad
-        // becomes untypeable for ordinary EH lowering.
-        let ir = if self.stack_map_requested
-            && crate::codegen::helpers::native_stack_roots_enabled()
-            && crate::codegen::helpers::rs4gc_enabled()
-        {
-            retype_landing_pads_for_statepoints(&ir)
-        } else {
-            ir
-        };
-
-        // Invoke-EH (#7302): inline invoke splits move a block's true CFG
-        // tail behind `eh.contN:` labels; phi incoming-edge labels captured
-        // at emit time must follow. Runs last so it sees the streamed text.
-        if self.personality.is_some() && ir.contains("eh.cont") {
-            return crate::eh_mode::rewrite_phi_predecessors(&ir);
-        }
-
         ir
+    }
+
+    /// Which whole-function text passes finish this function's rendering.
+    /// Every decision that reads compile state (the root backend, which is
+    /// per-thread) is made here, on the thread that owns the function; the
+    /// returned plan applies on any thread.
+    pub(crate) fn text_finish(&self, gc_leaf_callees: &HashSet<String>) -> TextFinish {
+        TextFinish {
+            name: self.name.clone(),
+            precise_roots: self
+                .stack_map_requested
+                .then_some(self.stack_map_slot_count),
+            annotate_leaf_calls: self.stack_map_requested && !gc_leaf_callees.is_empty(),
+            // Conditioned on exactly the predicate `define_header` uses for
+            // the GC strategy (#7982).
+            retype_landing_pads: self.stack_map_requested
+                && crate::codegen::helpers::native_stack_roots_enabled()
+                && crate::codegen::helpers::rs4gc_enabled(),
+            rewrite_eh_phis: self.personality.is_some(),
+        }
     }
 
     /// Stream every finalized BODY line of this function (block labels,
@@ -1513,5 +1486,73 @@ mod define_header_tests {
             external,
             "force_external must remove the linkage keyword and change nothing else"
         );
+    }
+}
+
+/// The whole-function text passes that finish a function's rendering
+/// (`LlFunction::to_ir_with_gc_leaf_callees`), decided by
+/// [`LlFunction::text_finish`]. They are functions of the text alone, so a
+/// unit layout can finish many functions' texts on worker threads.
+pub(crate) struct TextFinish {
+    name: String,
+    /// `Some(slot count)` when precise roots lower to native stack maps.
+    precise_roots: Option<u32>,
+    annotate_leaf_calls: bool,
+    retype_landing_pads: bool,
+    rewrite_eh_phis: bool,
+}
+
+impl TextFinish {
+    pub(crate) fn apply(&self, ir: String, gc_leaf_callees: &HashSet<String>) -> String {
+        // Research backend: turn the existing shadow-slot binding IR into
+        // native-frame stack maps only after lowering is complete, when every
+        // lazily-reserved scalar root and every call site is visible.
+        let ir = match self.precise_roots {
+            Some(slot_count) => lower_precise_roots_to_native_stack(&ir, &self.name, slot_count),
+            None => ir,
+        };
+
+        // #8596: LLVM needs a statepoint at a caller edge exactly when the
+        // transitive callee can reach collection. The whole-module analysis
+        // proves direct generated callees that cannot; stamp those edges after
+        // root lowering (which separately handles audited runtime helpers).
+        // Unknown, indirect, cross-module and collecting callees remain
+        // unmarked and therefore remain statepoints.
+        let ir = if self.annotate_leaf_calls {
+            crate::gc_call_effects::annotate_transitive_leaf_calls(&ir, gc_leaf_callees)
+        } else {
+            ir
+        };
+
+        // RS4GC uses the unwind destination's landing pad **as the token** for
+        // the relocates it inserts on the exceptional edge, so
+        // `statepoint-example` requires that pad to be `landingpad token`.
+        // Perry emits the Itanium `{ ptr, i32 }` form, which makes RS4GC
+        // produce `gc.relocate({ ptr, i32 } %lpad, ...)` and the verifier
+        // reject the module — a try-carrying function simply fails to compile.
+        //
+        // Retyping is safe because the pad's value is dead: `try_stmt` emits it
+        // purely to anchor the edge and branches straight on, taking the
+        // exception from the runtime rather than the pad payload. Only the type
+        // is load-bearing, and only to RS4GC.
+        //
+        // Conditioned on exactly the predicate `define_header` uses for the GC
+        // strategy (#7982 moved that rendering into one place) — a function that
+        // does not carry the strategy must keep the Itanium form, or its pad
+        // becomes untypeable for ordinary EH lowering.
+        let ir = if self.retype_landing_pads {
+            retype_landing_pads_for_statepoints(&ir)
+        } else {
+            ir
+        };
+
+        // Invoke-EH (#7302): inline invoke splits move a block's true CFG
+        // tail behind `eh.contN:` labels; phi incoming-edge labels captured
+        // at emit time must follow. Runs last so it sees the streamed text.
+        if self.rewrite_eh_phis && ir.contains("eh.cont") {
+            return crate::eh_mode::rewrite_phi_predecessors(&ir);
+        }
+
+        ir
     }
 }

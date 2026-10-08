@@ -107,16 +107,16 @@ pub(crate) fn class_field_subclass_arms(
     };
     // Deterministic order: class id, then name. Codegen output must be
     // byte-reproducible (the corpus `cmp` A/B depends on it).
-    let mut candidates: Vec<(&String, u32)> = ctx.class_ids.iter().map(|(k, &v)| (k, v)).collect();
+    let mut candidates: Vec<(&str, u32)> = transitive_subclasses(ctx, class_name)
+        .into_iter()
+        .filter_map(|name| ctx.class_ids.get(name).map(|&id| (name, id)))
+        .collect();
     candidates.sort_unstable_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
 
     let mut arms: Vec<ClassFieldSubclassArm> = Vec::new();
     let mut seen_ids: Vec<u32> = vec![declared_id];
     for (sub_name, sub_id) in candidates {
-        if sub_name == class_name || sub_id == 0 || seen_ids.contains(&sub_id) {
-            continue;
-        }
-        if !is_transitive_subclass(ctx, sub_name, class_name) {
+        if sub_id == 0 || seen_ids.contains(&sub_id) {
             continue;
         }
         // A class with computed runtime members has keys the packed layout
@@ -204,19 +204,17 @@ pub(crate) fn class_field_arms_cover_every_subclass(
     let Some(&declared_id) = ctx.class_ids.get(class_name) else {
         return true;
     };
-    ctx.class_ids.iter().all(|(sub_name, &sub_id)| {
-        sub_name == class_name
-            || sub_id == 0
-            || sub_id == declared_id
-            || !is_transitive_subclass(ctx, sub_name, class_name)
-            || arms.iter().any(|arm| arm.class_id == sub_id)
-    })
+    transitive_subclasses(ctx, class_name)
+        .into_iter()
+        .all(|sub_name| {
+            ctx.class_ids.get(sub_name).is_none_or(|&sub_id| {
+                sub_id == 0
+                    || sub_id == declared_id
+                    || arms.iter().any(|arm| arm.class_id == sub_id)
+            })
+        })
 }
 
-/// Is `name` a transitive subclass of `ancestor`? Cycle- and depth-guarded:
-/// heavily-modular packages declare same-named classes across modules, and the
-/// name-keyed `ctx.classes` can then form a parent cycle (see
-/// `type_analysis_class_fields.rs`).
 /// Do instances of `class_name` (or of any subclass) gain keys in their
 /// constructors beyond the declared layout?
 ///
@@ -242,9 +240,9 @@ pub(crate) fn class_instances_grow_past_layout(ctx: &FnCtx<'_>, class_name: &str
         })
     };
     grows(class_name)
-        || ctx.classes.keys().any(|sub| {
-            sub != class_name && is_transitive_subclass(ctx, sub, class_name) && grows(sub)
-        })
+        || transitive_subclasses(ctx, class_name)
+            .into_iter()
+            .any(grows)
 }
 
 /// Do finished instances of `class_name` (or of any subclass) carry a private
@@ -259,9 +257,9 @@ pub(crate) fn class_instances_carry_private_elements(ctx: &FnCtx<'_>, class_name
             .is_some_and(|class| class_completes_off_guarded_shapes(ctx, name, class))
     };
     carries(class_name)
-        || ctx.classes.keys().any(|sub| {
-            sub != class_name && is_transitive_subclass(ctx, sub, class_name) && carries(sub)
-        })
+        || transitive_subclasses(ctx, class_name)
+            .into_iter()
+            .any(carries)
 }
 
 /// Does constructing `class` leave every instance on a shape the class guards
@@ -280,7 +278,7 @@ fn class_completes_off_guarded_shapes(
 
 /// Does constructing `class` add a private brand or a private field, from
 /// `class` itself or any class it extends? Cycle- and depth-guarded like
-/// [`is_transitive_subclass`].
+/// [`transitive_subclasses`].
 fn class_chain_has_private_instance_elements(ctx: &FnCtx<'_>, class: &perry_hir::Class) -> bool {
     let mut current = Some(class);
     let mut depth = 0usize;
@@ -300,22 +298,18 @@ fn class_chain_has_private_instance_elements(ctx: &FnCtx<'_>, class: &perry_hir:
     false
 }
 
-fn is_transitive_subclass(ctx: &FnCtx<'_>, name: &str, ancestor: &str) -> bool {
-    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut parent = ctx.classes.get(name).and_then(|c| c.extends_name.clone());
-    let mut depth = 0usize;
-    while let Some(p) = parent {
-        depth += 1;
-        if depth > 64 || !seen.insert(p.clone()) {
-            return false;
-        }
-        if p == ancestor {
-            return true;
-        }
-        parent = ctx.classes.get(&p).and_then(|c| c.extends_name.clone());
-    }
-    false
+/// Every transitive subclass of `ancestor` (never `ancestor` itself).
+fn transitive_subclasses<'c>(ctx: &FnCtx<'c>, ancestor: &str) -> Vec<&'c str> {
+    ctx.class_hierarchy
+        .descendants(ancestor, Some(MAX_SUBCLASS_DEPTH))
 }
+
+/// How many `extends` steps a subclass may sit below the class it is checked
+/// against. Heavily-modular packages declare same-named classes across
+/// modules, and the name-keyed `ctx.classes` can then form a parent cycle (see
+/// `type_analysis_class_fields.rs`); the search stops at a repeated name and at
+/// this depth.
+const MAX_SUBCLASS_DEPTH: usize = 64;
 
 /// Emit the `i1` "plain finite number" predicate on a value's raw bits: true
 /// iff the exponent field is not all-ones. Rejects ±Inf, every NaN (canonical

@@ -919,6 +919,9 @@ impl ImportedCtor {
 pub(crate) struct CrossModuleCtx {
     pub program_has_worker: bool,
     pub program_has_thread_agents: bool,
+    /// The class and method tables inverted (`class_hierarchy`). Set once
+    /// both tables are final, before any function body is lowered.
+    pub class_hierarchy: super::class_hierarchy::ClassHierarchy,
     pub namespace_imports: std::collections::HashSet<String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
     /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.
