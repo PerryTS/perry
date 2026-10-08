@@ -141,28 +141,6 @@ pub unsafe extern "C-unwind" fn js_iterator_step_rest_to_array(
 static KEEP_ITERATOR_STEP_REST: unsafe extern "C-unwind" fn(f64, f64, f64) -> f64 =
     js_iterator_step_rest_to_array;
 
-/// The compiler's private source root names the current array backing before
-/// entry. This repairs a growth alias only in that private root, leaving all
-/// ordinary readers and their forwarding custody unchanged.
-#[no_mangle]
-pub unsafe extern "C-unwind" fn js_array_record_source(value: f64) -> f64 {
-    if !JSValue::from_bits(value.to_bits()).is_pointer() {
-        return value;
-    }
-    let raw = js_nanbox_get_pointer(value) as usize;
-    if !crate::value::addr_class::try_read_gc_header(raw)
-        .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
-    {
-        return value;
-    }
-    let array = crate::array::clean_arr_ptr(raw as *const crate::array::ArrayHeader);
-    if array.is_null() {
-        value
-    } else {
-        crate::value::js_nanbox_pointer(array as i64)
-    }
-}
-
 /// Entry proof for the array representation of an IteratorRecord. Own array
 /// keys/reparenting are already described by the array's header shape word.
 /// The prototype shape describes the iteration member and its ConstFn body.
@@ -170,14 +148,25 @@ pub unsafe extern "C-unwind" fn js_array_record_source(value: f64) -> f64 {
 pub unsafe extern "C-unwind" fn js_array_record_needs_iterator(value: f64) -> i32 {
     let proto = crate::array::array_prototype_addr_if_resolved();
     if proto != 0 && crate::object::iterator_prototypes_materialized() {
-        return array_record_needs_iterator_resolved(value, proto);
+        return array_record_needs_iterator_resolved(value, proto, std::ptr::null_mut());
     }
-    array_record_needs_iterator_cold(value)
+    array_record_needs_iterator_cold(value, std::ptr::null_mut())
+}
+
+/// Capture the actual source and its shape verdict together. The output is
+/// published only after intrinsic materialization has finished allocating.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_array_record_enter(value: f64, out: *mut f64) -> i32 {
+    let proto = crate::array::array_prototype_addr_if_resolved();
+    if proto != 0 && crate::object::iterator_prototypes_materialized() {
+        return array_record_needs_iterator_resolved(value, proto, out);
+    }
+    array_record_needs_iterator_cold(value, out)
 }
 
 #[cold]
 #[inline(never)]
-unsafe fn array_record_needs_iterator_cold(value: f64) -> i32 {
+unsafe fn array_record_needs_iterator_cold(value: f64, out: *mut f64) -> i32 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let _ = crate::object::builtin_prototype_value("Array");
@@ -185,10 +174,15 @@ unsafe fn array_record_needs_iterator_cold(value: f64) -> i32 {
     array_record_needs_iterator_resolved(
         value.get_nanbox_f64(),
         crate::array::array_prototype_addr(),
+        out,
     )
 }
 
-unsafe fn array_record_needs_iterator_resolved(value: f64, proto: usize) -> i32 {
+unsafe fn array_record_needs_iterator_resolved(value: f64, proto: usize, out: *mut f64) -> i32 {
+    if !out.is_null() {
+        // GC_STORE_AUDIT(STACK): publish after the cold entry has completed reentry.
+        *out = value;
+    }
     if !JSValue::from_bits(value.to_bits()).is_pointer() {
         return 1;
     }
@@ -202,6 +196,10 @@ unsafe fn array_record_needs_iterator_resolved(value: f64, proto: usize) -> i32 
     // An alias can still name a growth stub. Its old flags do not describe
     // members subsequently installed on the live array.
     let array = crate::array::clean_arr_ptr(raw as *const crate::array::ArrayHeader);
+    if !array.is_null() && !out.is_null() {
+        // GC_STORE_AUDIT(STACK): caller owns the repaired live source root.
+        *out = crate::value::js_nanbox_pointer(array as i64);
+    }
     if array.is_null()
         || crate::array::array_object_flags_resolved(array) & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
     {
@@ -210,7 +208,8 @@ unsafe fn array_record_needs_iterator_resolved(value: f64, proto: usize) -> i32 
     let symbol = crate::symbol::well_known_symbol("iterator");
     if crate::array::array_object_flags_resolved(array) & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0
     {
-        if let Some(own) = crate::object::shaped_symbols::owner(array as usize) {
+        let own = crate::array::array_property_bag(array);
+        if !own.is_null() {
             if crate::object::shaped_symbols::position(own, symbol as usize).is_some() {
                 return 1;
             }
@@ -232,9 +231,10 @@ pub unsafe extern "C-unwind" fn js_array_record_literal_needs_iterator() -> i32 
 }
 
 unsafe fn array_record_prototypes_need_iterator(proto_addr: usize, symbol: usize) -> i32 {
-    let Some(proto) = crate::object::shaped_symbols::owner(proto_addr) else {
-        return 1;
-    };
+    // The intrinsic root is an Array, and its actual property bag owns the
+    // symbol shape. Avoid rediscovering that known receiver brand through
+    // the generic descriptor router. No mutation fact is cached here.
+    let proto = crate::array::array_property_bag(proto_addr as *const crate::array::ArrayHeader);
     if proto.is_null() {
         return 1;
     }

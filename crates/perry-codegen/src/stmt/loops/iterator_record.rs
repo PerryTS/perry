@@ -243,15 +243,15 @@ mod tests {
             local(
                 0,
                 ty,
-                rt(
-                    "arrayRecordSource",
-                    vec![Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)])],
-                ),
+                Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)]),
             ),
             local(
                 1,
                 Type::Boolean,
-                rt("arrayRecordNeedsIterator", vec![Expr::LocalGet(0)]),
+                rt(
+                    "arrayRecordEnter",
+                    vec![Expr::LocalSet(0, Box::new(Expr::LocalGet(0)))],
+                ),
             ),
             local(3, Type::Any, Expr::Undefined),
             local(4, Type::Number, Expr::Number(0.0)),
@@ -336,7 +336,7 @@ mod tests {
     fn typed_record_uses_counted_admission_and_outlined_protocol() {
         let ir = emit_record(Type::Array(Box::new(Type::Number)));
         assert!(ir.contains("packed_f64.loop.fast.preheader"), "{ir}");
-        assert!(ir.contains("@js_array_record_needs_iterator"), "{ir}");
+        assert!(ir.contains("@js_array_record_enter"), "{ir}");
         assert!(
             ir.contains("record.indexed.guards.merge"),
             "protocol must bypass indexed guards: {ir}"
