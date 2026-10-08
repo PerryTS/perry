@@ -40,6 +40,13 @@ def main() -> int:
             literal = re.sub(r'\$\{\{.*?\}\}', '', display_name)
             if literal != literal.lower():
                 errors.append(f'{name}/{job_id}: job display name must be lowercase')
+            if '__' in job_id:
+                suite_id = job_id.split('__', 1)[0]
+                if not display_name.startswith(f'{suite_id} / '):
+                    errors.append(f'{name}/{job_id}: display name must use its stable suite ID')
+            elif display_name.endswith('/ suite result'):
+                if display_name != f'{job_id} / suite result':
+                    errors.append(f'{name}/{job_id}: result job must use its stable suite ID')
     active = {
         name for name, workflow in workflows.items()
         if any(event != 'workflow_call' for event in trigger_set(workflow))
@@ -96,9 +103,6 @@ def main() -> int:
                 errors.append(f'{parent}/{module_id}: result job must run after failed or skipped jobs')
             if summary.get('name') != f'{module_id} / suite result':
                 errors.append(f'{parent}/{module_id}: result job must use its stable suite ID')
-            for job_id, job in suite_jobs.items():
-                if not str(job.get('name') or '').startswith(f'{module_id} / '):
-                    errors.append(f'{parent}/{job_id}: display name must use its stable suite ID')
             if category.get('route_job') and f'needs.{route_job}.outputs.plan' not in str(summary.get('if') or ''):
                 errors.append(f'{parent}/{module_id}: result job must use its category router')
 
