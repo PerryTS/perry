@@ -395,15 +395,6 @@ pub(crate) fn function_shape_inherits_from_function_prototype(id: u32, key: &[u8
     keyed_shape_verdict(id) & bit != 0
 }
 
-/// Is the keyed ShapeId `id` (not a base shape, not the FunctionDictionary
-/// shape) a Function shape whose prototype identity is Function.prototype's?
-/// A fact of the id alone, for every key: with the base Function shape, the
-/// receivers a `Function.prototype` intrinsic can be inherited by at all.
-#[inline]
-pub(crate) fn keyed_function_shape_has_function_prototype(id: u32) -> bool {
-    keyed_shape_verdict(id) & VERDICT_FUNCTION_PROTOTYPE != 0
-}
-
 /// This agent's base `Function` ShapeId and its FunctionDictionary ShapeId,
 /// in one read of the cell. An id not minted yet reads 0, which no function
 /// object carries.

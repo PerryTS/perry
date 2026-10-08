@@ -348,7 +348,14 @@ pub(crate) fn emit_method_site(
     let w = {
         let blk = ctx.block();
         let wp = emit_field_ptr(blk, &biased, 0);
-        blk.load(I64, &wp)
+        let raw = blk.load(I64, &wp);
+        let exotic = blk.icmp_uge(
+            I64,
+            &raw,
+            &(u64::from(crate::runtime_abi::METHOD_SITE_SHAPE_ONLY_FROM) << 32).to_string(),
+        );
+        let shape = blk.and(I64, &raw, "18446744069414584320");
+        blk.select(I1, &exotic, I64, &shape, &raw)
     };
     let mut found: Vec<(String, String)> = Vec::new();
     // The label where each way after the first starts its word compare: an
@@ -423,14 +430,19 @@ pub(crate) fn emit_method_site(
     let icf_hit_l = ctx.block_label(icf_hit_idx);
     let cf_call_idx = ctx.new_block("msite.call_constfn");
     let cf_call_l = ctx.block_label(cf_call_idx);
-    let (slot, top) = {
+    let (slot, top, storage_slot) = {
         let blk = ctx.block();
         let sp = blk.gep(crate::types::I8, &entry, &[(I64, &abi_slot)]);
         let s = blk.load(I64, &sp);
-        let top = blk.lshr(I64, &s, "59");
+        let storage = blk.and(
+            I64,
+            &s,
+            &(!crate::runtime_abi::METHOD_SITE_NATIVE_ARGS).to_string(),
+        );
+        let top = blk.lshr(I64, &storage, "59");
         let tagged = blk.icmp_ne(I64, &top, "0");
         blk.cond_br(&tagged, &cf_kind_l, &own_l);
-        (s, top)
+        (s, top, storage)
     };
     // The ConstFn kinds are decoded before the older tags: own ConstFn is
     // exactly bit 59, inherited ConstFn exactly bits 63 and 59.
@@ -450,7 +462,7 @@ pub(crate) fn emit_method_site(
         blk.cond_br(&is_icf, &icf_l, &other_l);
     }
     // other: inherited (bit 63), own spill (bit 62) or function bag (bit 61).
-    // Bit 60 is reserved; unknown tags miss.
+    // The body ABI bit was removed before decoding these storage tags.
     ctx.current_block = other_idx;
     {
         let blk = ctx.block();
@@ -473,7 +485,7 @@ pub(crate) fn emit_method_site(
         let is_bag = blk.icmp_ne(I64, &bag_bit, "0");
         blk.cond_br(&is_bag, &bag_l, &other4_l);
     }
-    // Every remaining tag (bit 60 is reserved) misses: an unknown entry must
+    // Every remaining storage tag misses: an unknown entry must
     // never become an unchecked call.
     ctx.current_block = other4_idx;
     ctx.block().br(&miss_l);
@@ -500,12 +512,12 @@ pub(crate) fn emit_method_site(
         blk.br(&value_l);
         (v, end)
     };
-    // own inline: load the slot (an untagged entry, the slot index itself).
+    // Own inline: remove the body ABI tag before using the slot as an index.
     ctx.current_block = own_idx;
     let (inline_v, inline_end) = {
         let blk = ctx.block();
         let base = emit_field_ptr(blk, &biased, header);
-        let vp = blk.gep(I64, &base, &[(I64, &slot)]);
+        let vp = blk.gep(I64, &base, &[(I64, &storage_slot)]);
         let v = blk.load(I64, &vp);
         let end = blk.label.clone();
         blk.br(&value_l);
@@ -712,6 +724,29 @@ pub(crate) fn emit_method_site(
     call_args.extend(std::iter::repeat_n(undefined, pad));
     // The body gets the receiver as its `this` parameter.
     let recv_bits = ctx.block().bitcast_double_to_i64(recv_box);
+    let native_idx = ctx.new_block("msite.native_args");
+    let fixed_idx = ctx.new_block("msite.fixed_args");
+    let native_l = ctx.block_label(native_idx);
+    let fixed_l = ctx.block_label(fixed_idx);
+    let flag = ctx.block().and(
+        I64,
+        &slot,
+        &crate::runtime_abi::METHOD_SITE_NATIVE_ARGS.to_string(),
+    );
+    let native = ctx.block().icmp_ne(I64, &flag, "0");
+    ctx.block().cond_br(&native, &native_l, &fixed_l);
+    ctx.current_block = native_idx;
+    let native_value = crate::expr::body_call::emit_native_args_body_call(
+        ctx.block(),
+        &fptr,
+        &handle,
+        &recv_bits,
+        args_ptr,
+        argc,
+    );
+    let native_end = ctx.block().label.clone();
+    ctx.block().br(&merge_l);
+    ctx.current_block = fixed_idx;
     let hit_value = crate::expr::body_call::emit_js_body_call(
         ctx.block(),
         crate::expr::body_call::JsBody::Pointer(&fptr),
@@ -775,7 +810,11 @@ pub(crate) fn emit_method_site(
     }
 
     ctx.current_block = merge_idx;
-    let mut incoming: Vec<(&str, &str)> = vec![(&hit_value, &hit_end), (&miss_value, &miss_end)];
+    let mut incoming: Vec<(&str, &str)> = vec![
+        (&hit_value, &hit_end),
+        (&native_value, &native_end),
+        (&miss_value, &miss_end),
+    ];
     incoming.extend(lane_hits.iter().map(|(v, l)| (v.as_str(), l.as_str())));
     incoming.extend(cf_results.iter().map(|(v, l)| (v.as_str(), l.as_str())));
     ctx.block().phi(DOUBLE, &incoming)
@@ -1078,4 +1117,115 @@ pub(crate) fn emit_method_site_call(
         .map(|(v, l)| (v.as_str(), l.as_str()))
         .collect();
     ctx.block().phi(DOUBLE, &incoming)
+}
+
+#[cfg(test)]
+mod tests {
+    use perry_hir::{types::Type, Expr, Function, Module, ModuleInitKind, Param, Stmt};
+
+    fn native_hit_is_reachable(ir: &str) -> bool {
+        ir.lines().any(|line| {
+            line.contains("br i1 %")
+                && line.contains("label %msite.native_args")
+                && line.contains("label %msite.fixed_args")
+        })
+    }
+
+    fn own_slot_excludes_body_tag(ir: &str) -> bool {
+        let mask = (!crate::runtime_abi::METHOD_SITE_NATIVE_ARGS).to_string();
+        let mut own = false;
+        for line in ir.lines() {
+            if line.ends_with(':') {
+                own = line.starts_with("msite.own.");
+            }
+            if own && line.contains("getelementptr i64") {
+                let Some((_, index)) = line.rsplit_once(", i64 ") else {
+                    continue;
+                };
+                let definition = format!("{} = and i64 ", index.trim());
+                return ir.lines().any(|line| {
+                    line.trim_start().starts_with(&definition) && line.ends_with(&mask)
+                });
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn function_native_argument_method_site_emits_a_live_hit() {
+        let mut module = Module::new("function_method_site.ts");
+        module.init_kind = ModuleInitKind::Eager;
+        module.functions.push(Function {
+            id: 1,
+            name: "bindUnknown".into(),
+            type_params: Vec::new(),
+            params: vec![Param {
+                id: 10,
+                name: "f".into(),
+                ty: Type::Any,
+                default: None,
+                decorators: Vec::new(),
+                is_rest: false,
+                arguments_object: None,
+            }],
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(Expr::Call {
+                callee: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::LocalGet(10)),
+                    property: "bind".into(),
+                    byte_offset: 0,
+                }),
+                args: vec![Expr::Null],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }))],
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+        });
+        let ir = String::from_utf8(
+            crate::compile_module(&module, super::super::class_field_barrier_tests::ir_opts())
+                .expect("fixture compiles"),
+        )
+        .unwrap();
+        assert!(
+            native_hit_is_reachable(&ir),
+            "native body must be a live emitted hit: {ir}"
+        );
+        assert!(
+            ir.contains("and i64")
+                && ir.contains(&crate::runtime_abi::METHOD_SITE_NATIVE_ARGS.to_string())
+        );
+        assert!(
+            ir.contains("18446744069414584320"),
+            "captures are not a receiver-shape fact"
+        );
+        assert!(
+            own_slot_excludes_body_tag(&ir),
+            "ABI bits cannot index a slot"
+        );
+        assert!(!own_slot_excludes_body_tag(&ir.replace(
+            &(!crate::runtime_abi::METHOD_SITE_NATIVE_ARGS).to_string(),
+            &u64::MAX.to_string(),
+        )));
+        // Disable the real edge while leaving all native-call blocks intact.
+        // A label-only detector would stay green on this sabotage.
+        let sabotaged = ir
+            .lines()
+            .map(|line| {
+                if line.contains("br i1 %") && line.contains("label %msite.native_args") {
+                    "  br label %msite.fixed_args.sabotaged"
+                } else {
+                    line
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!native_hit_is_reachable(&sabotaged));
+    }
 }
