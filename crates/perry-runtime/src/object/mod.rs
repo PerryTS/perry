@@ -158,7 +158,7 @@ pub(crate) use global_this::{
 mod global_this_tables;
 mod groupby;
 pub(crate) mod has_own_helpers;
-mod instanceof;
+pub(crate) mod instanceof;
 #[cfg(test)]
 mod keys_walk_accessor_tests;
 mod live_slots;

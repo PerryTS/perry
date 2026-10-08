@@ -34,6 +34,8 @@ use crate::runtime_abi::{SHAPE_ID_BASE, STATIC_SHAPE_ID_COUNT};
 pub enum BirthProto {
     Literal,
     Class(u32),
+    /// A lazy declaration holder and its fixed parent declaration (0 = Object).
+    Prototype(u32, u32),
 }
 
 /// A typed class layout's masks (#8405): part of the content, so two layouts
@@ -79,13 +81,18 @@ pub struct BirthShape {
     /// A completed class content's sorted brand list (#11791). Empty for
     /// every other content.
     pub brands: Vec<u64>,
+    /// Complete prototype key attributes; empty for ordinary births.
+    pub attrs: Vec<u8>,
 }
 
 impl BirthShape {
     /// A completed (final) content: ConstFn lanes or private facts. Never an
     /// allocation's birth.
     pub fn is_completed(&self) -> bool {
-        !self.constfn.is_empty() || !self.private.is_empty() || !self.brands.is_empty()
+        matches!(self.proto, BirthProto::Prototype(..))
+            || !self.constfn.is_empty()
+            || !self.private.is_empty()
+            || !self.brands.is_empty()
     }
 
     /// A literal content without a typed layout: the runtime seed mints it
@@ -100,7 +107,7 @@ impl BirthShape {
     /// The facts the runtime mints for this content, without the masks: a
     /// typed layout and a structural mint of the same class share them. The
     /// rep is a runtime fact, so it is part of them.
-    pub(crate) fn structure(&self) -> (&[u8], u32, u32, &BirthProto, u64, &[ConstFnBirth]) {
+    pub(crate) fn structure(&self) -> (&[u8], u32, u32, &BirthProto, u64, &[ConstFnBirth], &[u8]) {
         (
             &self.keys,
             self.key_count,
@@ -108,6 +115,7 @@ impl BirthShape {
             &self.proto,
             self.rep,
             &self.constfn,
+            &self.attrs,
         )
     }
 
@@ -130,6 +138,11 @@ impl BirthShape {
             BirthProto::Class(cid) => {
                 eat(&[1]);
                 eat(&cid.to_le_bytes());
+            }
+            BirthProto::Prototype(cid, parent) => {
+                eat(&[6]);
+                eat(&cid.to_le_bytes());
+                eat(&parent.to_le_bytes());
             }
         }
         if let Some(masks) = &self.typed {
@@ -168,6 +181,10 @@ impl BirthShape {
             for b in &self.brands {
                 eat(&b.to_le_bytes());
             }
+        }
+        if !self.attrs.is_empty() {
+            eat(&[7]);
+            eat(&self.attrs);
         }
         h
     }
@@ -438,6 +455,7 @@ pub(crate) fn class_birth(
         constfn: Vec::new(),
         private: Vec::new(),
         brands: Vec::new(),
+        attrs: Vec::new(),
     });
     ClassBirth {
         class_id,
@@ -700,6 +718,7 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
             constfn,
             private: Vec::new(),
             brands: Vec::new(),
+            attrs: Vec::new(),
         },
     ))
 }
@@ -969,3 +988,13 @@ pub(crate) fn module_births(
 #[cfg(test)]
 #[path = "static_shape_ids_tests.rs"]
 mod tests;
+
+/// A prototype candidate from the program-wide completed content set.
+pub(crate) fn static_prototype_shape(cid: u32) -> Option<(u32, BirthShape)> {
+    MODULE_FINAL_IDS.with(|m| {
+        m.borrow().iter().find_map(|(shape, id)| {
+            matches!(shape.proto, BirthProto::Prototype(c, _) if c == cid)
+                .then(|| (*id, shape.clone()))
+        })
+    })
+}

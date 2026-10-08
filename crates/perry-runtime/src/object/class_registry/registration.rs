@@ -460,6 +460,7 @@ pub unsafe extern "C" fn js_register_class_getter(
             Err(_) => return,
         }
     };
+    let newly_declared = class_own_accessor_ptrs(class_id as u32, &name).is_none();
     let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
     if registry.is_none() {
         *registry = Some(crate::fast_hash::new_ptr_hash_map());
@@ -469,7 +470,11 @@ pub unsafe extern "C" fn js_register_class_getter(
     vtable.declare_accessor_half(&name, func_ptr as usize, false);
     VTABLE_GEN.fetch_add(1, Ordering::Release);
     drop(registry);
-    super::decl_accessors::note_instance_accessor_registered(class_id as u32, &name);
+    super::decl_accessors::note_instance_accessor_registered(
+        class_id as u32,
+        &name,
+        newly_declared,
+    );
 }
 
 /// Register a class setter in the vtable registry.
@@ -504,6 +509,7 @@ pub unsafe extern "C" fn js_register_class_setter(
             Err(_) => return,
         }
     };
+    let newly_declared = class_own_accessor_ptrs(class_id as u32, &name).is_none();
     let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
     if registry.is_none() {
         *registry = Some(crate::fast_hash::new_ptr_hash_map());
@@ -518,7 +524,11 @@ pub unsafe extern "C" fn js_register_class_setter(
     );
     VTABLE_GEN.fetch_add(1, Ordering::Release);
     drop(registry);
-    super::decl_accessors::note_instance_accessor_registered(class_id as u32, &name);
+    super::decl_accessors::note_instance_accessor_registered(
+        class_id as u32,
+        &name,
+        newly_declared,
+    );
 }
 
 /// Register a `static get name()` accessor on the class *constructor*
@@ -704,4 +714,16 @@ unsafe fn register_class_static_accessor_half(
     }
     VTABLE_GEN.fetch_add(1, Ordering::Release);
     crate::object::class_value::note_intrinsic_registration(class_id as u32, &name);
+}
+
+/// Register materialization input in the declaration record.
+#[no_mangle]
+pub extern "C" fn js_register_class_prototype_shape(class_id: u32, shape_id: u32) {
+    if let Ok(mut registry) = CLASS_VTABLE_REGISTRY.write() {
+        registry
+            .get_or_insert_with(crate::fast_hash::new_ptr_hash_map)
+            .entry(class_id)
+            .or_default()
+            .prototype_birth_shape = shape_id;
+    }
 }

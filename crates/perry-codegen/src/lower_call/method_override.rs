@@ -221,8 +221,7 @@ fn total_value_truthy(ctx: &mut FnCtx<'_>, value: &str) -> String {
 /// The first block proves that the value is a tagged heap pointer or the raw
 /// object-address form used by internal method ABIs before any dereference.
 /// The second block reproduces the runtime helper's production contract: the
-/// all-method escape latch and this method name's invalidation byte are clear,
-/// the receiver is a non-forwarded ordinary object without own descriptors,
+/// receiver is a non-forwarded ordinary object without own descriptors,
 /// and its exact `(class_id, ShapeId)` pair still matches the
 /// compiler-published pair. Any failed proof takes the unchanged dynamic
 /// method fallback.
@@ -239,39 +238,11 @@ fn method_inline_probe_enabled() -> bool {
     })
 }
 
-/// `i1`: no prototype surgery has retired direct-method arms for the name
-/// whose guard slot is `method_guard_slot` (the low 16 bits of its dispatch
-/// hash) — neither the all-names byte nor that name's byte is set.
-///
-/// A compiler-resolved method body for an INHERITED name (the dispatch tower,
-/// `super.m()`) assumes the declared `extends` chain is the instance chain.
-/// Assigning, deleting or redefining a prototype member, or relinking a class
-/// prototype (`Object.setPrototypeOf(C.prototype, X)`), sets these bytes
-/// (`perry-runtime` `class_registry/prototype_methods.rs`); a set byte sends
-/// the site to its runtime dispatch.
-pub(crate) fn emit_prototype_method_guard_ok(
-    blk: &mut crate::block::LlBlock,
-    method_guard_slot: &str,
-) -> String {
-    let invalidated =
-        blk.load_atomic_acquire(I8, "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", 1);
-    let all_methods_ok = blk.icmp_eq(I8, &invalidated, "0");
-    let method_slot_ptr = blk.gep(
-        I8,
-        "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD",
-        &[(I64, method_guard_slot)],
-    );
-    let method_invalidated = blk.load_atomic_acquire(I8, &method_slot_ptr, 1);
-    let method_ok = blk.icmp_eq(I8, &method_invalidated, "0");
-    blk.and(I1, &all_methods_ok, &method_ok)
-}
-
 /// Inline form of the runtime probe `js_method_direct_shape_class`: resolve
 /// the live receiver's `(class_id, ShapeId)` for a multi-arm compare chain,
 /// or `(0, 0)` wherever the probe would decline — a non-pointer, an address
 /// outside the heap band, a non-`GC_TYPE_OBJECT` / forwarded /
-/// descriptor-bearing / packed-numeric-proof header, a tripped prototype
-/// latch (process-wide or for this method's dispatch slot), a zero class id
+/// descriptor-bearing / packed-numeric-proof header, a zero class id
 /// or a zero ShapeId. The chains only ever compare both words against
 /// compiler-published non-zero pairs, so the zero convention is preserved by
 /// two `select`s rather than extra blocks.
@@ -284,7 +255,7 @@ pub(crate) fn emit_prototype_method_guard_ok(
 pub(crate) fn emit_inline_direct_method_shape_probe(
     ctx: &mut FnCtx<'_>,
     recv_box: &str,
-    method_guard_slot: &str,
+    _method_guard_slot: &str,
 ) -> (String, String) {
     let deref_idx = ctx.new_block("method_probe.deref");
     let read_idx = ctx.new_block("method_probe.read");
@@ -298,17 +269,6 @@ pub(crate) fn emit_inline_direct_method_shape_probe(
         crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
     let check_end = {
         let blk = ctx.block();
-        let invalidated =
-            blk.load_atomic_acquire(I8, "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", 1);
-        let all_methods_ok = blk.icmp_eq(I8, &invalidated, "0");
-        let method_slot_ptr = blk.gep(
-            I8,
-            "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD",
-            &[(I64, method_guard_slot)],
-        );
-        let method_invalidated = blk.load_atomic_acquire(I8, &method_slot_ptr, 1);
-        let method_ok = blk.icmp_eq(I8, &method_invalidated, "0");
-        let prototype_ok = blk.and(I1, &all_methods_ok, &method_ok);
         let recv_bits = blk.bitcast_double_to_i64(recv_box);
         let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
         let tag = blk.lshr(I64, &recv_bits, "48");
@@ -321,7 +281,7 @@ pub(crate) fn emit_inline_direct_method_shape_probe(
         let below_ceiling = blk.icmp_ult(I64, &recv_handle, &heap_ceiling);
         let in_heap_range = blk.and(I1, &above_floor, &below_ceiling);
         let ptr_safe = blk.and(I1, &is_ptr, &in_heap_range);
-        let can_deref = blk.and(I1, &prototype_ok, &ptr_safe);
+        let can_deref = ptr_safe;
         blk.cond_br(&can_deref, &deref_label, &merge_label);
         blk.label.clone()
     };
@@ -1009,9 +969,8 @@ pub(super) fn emit_guarded_direct_method_call(
     // (an RwLock read plus TWO SipHash HashMap probes in
     // `vtable_method_matches`, ~180-390 ns/call on a typed-param receiver).
     // Decide the monomorphic case with the SAME inline probe the shape-only
-    // sites emit — its prototype-override latches are exactly what the
-    // shape-only direct dispatch already trusts for calling this method
-    // body — and keep the out-of-line guard (which records the observation
+    // sites emit, with the same complete holder proof, and keep the
+    // out-of-line guard (which records the observation
     // and handles forwarding/exotic receivers) as the probe-MISS edge, so
     // nothing is lost. Emission-enabled builds keep the guard first so the
     // feedback stream still sees every call.
@@ -1051,9 +1010,22 @@ pub(super) fn emit_guarded_direct_method_call(
         .as_ref()
         .zip(learned_label.as_ref())
         .map(|((word, _), label)| (word.as_str(), label.as_str()));
+    let holder_ok = if multi_arm {
+        "true".to_string()
+    } else {
+        super::holder_shape_guard::method_guard(ctx, receiver_class_name, property)
+    };
     if multi_arm {
         let (cid, shape_id) =
             emit_inline_direct_method_shape_probe(ctx, recv_box, &method_guard_slot_str);
+        let mut holder_candidates = vec![(expected_class_id, receiver_class_name.to_string())];
+        holder_candidates.extend(subclass_arms.iter().filter_map(|arm| {
+            ctx.class_ids
+                .iter()
+                .find(|(_, id)| **id == arm.class_id)
+                .map(|(name, _)| (arm.class_id, name.clone()))
+        }));
+        let cid = super::holder_shape_guard::gate_class(ctx, &cid, property, &holder_candidates);
         {
             let next = sub_test_labels[0].clone();
             let blk = ctx.block();
@@ -1115,7 +1087,7 @@ pub(super) fn emit_guarded_direct_method_call(
             recv_box,
             &expected_class_id_str,
             &expected_shape_id,
-            &method_guard_slot_str,
+            &holder_ok,
             &fast_label,
             &fallback_label,
             true,
@@ -1130,7 +1102,7 @@ pub(super) fn emit_guarded_direct_method_call(
             recv_box,
             &expected_class_id_str,
             &expected_shape_id,
-            &method_guard_slot_str,
+            &holder_ok,
             &fast_label,
             &runtime_guard_label,
             false,
@@ -1175,6 +1147,7 @@ pub(super) fn emit_guarded_direct_method_call(
     };
     if !multi_arm && !inline_single_arm {
         let guard_pass = ctx.block().icmp_ne(I32, &guard_ok, "0");
+        let guard_pass = ctx.block().and(I1, &guard_pass, &holder_ok);
         ctx.block()
             .cond_br(&guard_pass, &fast_label, &fallback_label);
     }
@@ -1849,7 +1822,7 @@ pub(super) fn emit_guarded_direct_method_call(
 
     // The learned arm: the receiver is an instance of the declared class whose
     // exact word the runtime proved shadows nothing (`learned_check` above),
-    // and the prototype guard bytes were re-checked on the way in. The
+    // and the complete holder shapes were re-checked on the way in. The
     // ordinary body runs its own receiver guards, so no layout is assumed.
     let learned_value = learned_site.as_ref().and_then(|(_, idx)| {
         ctx.current_block = *idx;
@@ -1896,16 +1869,16 @@ pub(super) fn emit_guarded_direct_method_call(
     let method_id = crate::strings::emit_static_dispatch_id(ctx.block(), &dispatch_global);
     let fallback_value = match learned_site.as_ref() {
         Some((word, _)) => {
-            // The learned word is consulted only behind the prototype guard
-            // bytes, so while they are set (a prototype member of this
-            // method's name was assigned, deleted or redefined) nothing the
-            // runtime could learn would ever be read: the miss edge then
+            // The learned word is consulted only behind the holder shape
+            // proof. After a holder changes, nothing the runtime could learn
+            // would be read: the miss edge then
             // passes the site's address tagged with bit 0, and the runtime
             // learns nothing. Either way the word is followed by the site's
             // chain memo slot, from which a receiver the arms decline repeats
             // its by-name answer instead of walking the prototype chain.
+            let prototype_ok =
+                super::holder_shape_guard::method_guard(ctx, receiver_class_name, property);
             let blk = ctx.block();
-            let prototype_ok = emit_prototype_method_guard_ok(blk, &method_guard_slot_str);
             let no_learn = blk.gep(I8, word, &[(I64, "1")]);
             let site = blk.select(I1, &prototype_ok, crate::types::PTR, word, &no_learn);
             ctx.block().call(

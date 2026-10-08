@@ -553,13 +553,12 @@ unsafe fn site_mut(cache: *mut PicCache) -> &'static mut Site {
 
 unsafe fn publish(cache: *mut PicCache, recv: *const ObjectHeader, w: &Walk) {
     let walked = &w.hops[..w.depth.saturating_sub(1)];
-    // walk_to admits serial/default/null/MIXED identities for every
-    // intermediate hop. Refuse any unproved link before publication, so
-    // all hits use the same per-hop shape validation.
-    if !walked
-        .iter()
-        .all(|&(_, shape)| shape_proto_id(shape).is_some_and(hop_identity_pins_link))
-    {
+    // Recheck the exact link admission used by walk_to, including fixed
+    // declaration parents. All hits validate those same intermediate shapes.
+    if !walked.iter().all(|&(holder, shape)| {
+        shape_proto_id(shape).is_some_and(hop_identity_pins_link)
+            || admitted_link(holder as *const ObjectHeader).is_some()
+    }) {
         return;
     }
     let s = site_mut(cache);

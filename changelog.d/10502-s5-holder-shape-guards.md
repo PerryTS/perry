@@ -1,0 +1,3 @@
+Replace generated class prototype latch checks with complete holder ShapeId proofs, including intermediate holders and super homes. Assign static final shapes to eligible lazy declaration prototypes and use their P values in inherited ConstFn lanes. Parameter guards and ordinary instanceof ancestry follow the live prototype shapes; user Symbol.hasInstance hooks retain precedence.
+
+Remove S6's prototype classification hook from ordinary inline and spill stores. Keep the historical latch bytes and writers for S7, with no readers. The existing class function-object directory supplies holder links; no new runtime cache or side table is introduced. Refs #10502.

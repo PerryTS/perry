@@ -541,7 +541,11 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
         byte_offset: 0,
         cap_args_appended: 0,
     }));
-    let births = crate::module_birth_shapes(&m, opts("executable")).unwrap();
+    let births: Vec<_> = crate::module_birth_shapes(&m, opts("executable"))
+        .unwrap()
+        .into_iter()
+        .filter(|b| matches!(b.shape.proto, super::super::BirthProto::Class(_)))
+        .collect();
     let ordinary = births.iter().find(|b| b.shape.constfn.is_empty()).unwrap();
     let final_content = births.iter().find(|b| !b.shape.constfn.is_empty()).unwrap();
     assert_eq!(births.len(), 2);

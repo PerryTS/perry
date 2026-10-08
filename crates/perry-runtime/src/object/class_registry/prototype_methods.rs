@@ -153,43 +153,10 @@ per_test_global! {
         std::sync::RwLock::new(std::collections::HashSet::new());
 }
 
-pub(crate) fn class_prototype_fast_guards_invalidated() -> bool {
-    #[cfg(not(test))]
-    {
-        PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.load(std::sync::atomic::Ordering::Acquire)
-            != 0
-    }
-    #[cfg(test)]
-    {
-        CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.load(std::sync::atomic::Ordering::Acquire)
-    }
-}
-
 #[inline]
 pub(crate) fn class_prototype_method_guard_slot(name: &str) -> u32 {
     (super::super::key_bytes_hash(name.as_ptr(), name.len())
         & CLASS_PROTOTYPE_METHOD_GUARD_SLOT_MASK) as u32
-}
-
-#[inline]
-pub(crate) fn class_prototype_fast_guard_invalidated_for_method(slot: u32) -> bool {
-    if class_prototype_fast_guards_invalidated() {
-        return true;
-    }
-    let slot = (slot as usize) & (CLASS_PROTOTYPE_METHOD_GUARD_SLOT_COUNT - 1);
-    #[cfg(not(test))]
-    {
-        PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD[slot]
-            .load(std::sync::atomic::Ordering::Acquire)
-            != 0
-    }
-    #[cfg(test)]
-    {
-        CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD
-            .read()
-            .unwrap()
-            .contains(&(slot as u16))
-    }
 }
 
 #[inline]
@@ -223,13 +190,8 @@ pub(crate) fn invalidate_class_prototype_fast_guards_for_method(name: &str) {
 /// (`instance_chain_parent_class_id`); what remains are the resolutions made
 /// before the relink or ahead of time:
 ///
-/// * compiler-emitted direct-method arms (the dispatch tower, `super.m()`)
-///   resolved an inherited name to an ancestor's body along the declared
-///   `extends` chain. They are guarded by the per-name invalidation bytes, so
-///   the relink retires the slot of every method, getter and setter name an
-///   ancestor declares — exactly the names whose resolution it can change. A
-///   name the class itself declares still resolves to its own body, and a
-///   name no declared class carries never had a direct arm;
+/// Compiler-emitted arms compare every holder ShapeId. The historical byte
+/// writes remain until S7, but no call guard reads them.
 /// The runtime's by-name method calls need nothing: they read the
 /// prototype chain's shapes (`native_call_method::class_holder`), and the
 /// relink restamps `proto`. Neither do the receiver-word site memos: the
@@ -278,8 +240,7 @@ pub(crate) fn invalidate_class_prototype_fast_guards() {
     PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(1, std::sync::atomic::Ordering::Release);
     #[cfg(test)]
     CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(true, std::sync::atomic::Ordering::Release);
-    // Unknown-key prototype surgery cannot use a scoped slot. Retire every
-    // direct-method guard, then perform the common cache invalidations.
+    // Preserve the historical byte writer until S7 and retire runtime caches.
     retire_prototype_dependent_caches();
 }
 

@@ -1227,6 +1227,17 @@ pub(super) fn emit_string_pool(
             ", i64 0".repeat(words - 1)
         ));
     }
+    for class in module_classes {
+        if let Some(&cid) = class_ids.get(&class.name) {
+            if let Some((id, _)) = super::static_shape_ids::static_prototype_shape(cid) {
+                chunker.roll_if_full();
+                chunker.current_block().call_void(
+                    "js_register_class_prototype_shape",
+                    &[(I32, &cid.to_string()), (I32, &id.to_string())],
+                );
+            }
+        }
+    }
     method_triples.sort_unstable();
     let mut method_entries: Vec<StaticMethodEntry> = Vec::new();
     for (

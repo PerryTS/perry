@@ -1671,6 +1671,10 @@ mod shape_transition_tests_6759 {
         const LEAF: u32 = 0x0C3C_6772;
         let packed = b"chain6759_p\0chain6759_q";
         unsafe {
+            // Each declared identity needs a lazy prototype holder.
+            for cid in [BASE, MID, LEAF] {
+                crate::object::js_register_class_name(cid, b"Chain6759".as_ptr(), 9);
+            }
             let leaf = crate::object::js_object_alloc_class_with_keys(
                 LEAF,
                 MID,

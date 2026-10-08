@@ -224,7 +224,7 @@ impl<'a> GuardGraphBuilder<'a> {
         } else if let Some(class_id) = self.class_ids.get(name).copied().filter(|id| *id != 0) {
             // (#8099) A class parameter is validated exactly like an interface
             // one — every declared field on the inheritance chain, by name —
-            // plus a `class_chain_reaches` identity check that no structural
+            // plus a prototype-shape ancestry check that no structural
             // type can supply. The identity half is what gives
             // `param_type_guard.rs`'s class branch its first caller.
             //
@@ -1690,7 +1690,7 @@ mod tests {
     }
 
     /// #8099: a class parameter carries BOTH halves — the non-zero class id
-    /// that `param_type_guard.rs`'s `class_chain_reaches` branch consumes (its
+    /// that `param_type_guard.rs`'s shape ancestry branch consumes (its
     /// only caller; codegen emitted a literal 0 there until this landed), and
     /// the declared field types, which are the half that actually buys a
     /// lowering. Identity alone was measured and reverted: the clone came out

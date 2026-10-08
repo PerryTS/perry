@@ -23,6 +23,7 @@ const CLASS_ID_URL: u32 = 0xFFFF0063;
 mod builtin_prototype_tests;
 mod dynamic_dispatch;
 mod proxy_rhs;
+pub(crate) mod shape_ancestry;
 mod static_dispatch;
 
 pub use dynamic_dispatch::js_instanceof_dynamic;
@@ -664,6 +665,7 @@ pub extern "C" fn js_instanceof_noncallable_rhs() -> f64 {
 /// `super()` construction, static-method lookup and vtable dispatch, and
 /// splicing `Gen` in between `Gen$num` and its real base would re-run the wrong
 /// constructor. See `object/class_meta_registry.rs`.
+#[cfg(test)]
 pub(crate) fn class_chain_reaches(start: u32, want: u32) -> bool {
     if start == 0 || want == 0 {
         return false;
@@ -690,18 +692,8 @@ pub(crate) fn class_chain_reaches(start: u32, want: u32) -> bool {
     }
 }
 
-/// `value instanceof <class want>` (`value` an ordinary object of class
-/// `start`) when the declared class ids may not describe its chain: its shape
-/// names a prototype other than the one class `start` implies (a user
-/// `setPrototypeOf`/`__proto__`, `Object.create`, a function constructor's
-/// instance, an evaluated class), or a class declaration prototype on the way
-/// from `start` was re-pointed. Then `OrdinaryHasInstance` walks the live
-/// chain, reading each hop's prototype from its shape. `None` means the
-/// declared walk answers: the receiver's shape names its class's prototype
-/// and no declaration prototype was ever relinked (one latch load), or
-/// `want` is reached first.
-/// `want` is a compiled class, or `Object` (its reserved id), whose
-/// constructor is the global one.
+/// Read ordinary ancestry from the receiver and each live prototype shape.
+/// Missing declaration holders are materialized from their birth facts.
 #[inline(always)]
 pub(crate) fn relinked_instance_chain_answer(value: f64, start: u32, want: u32) -> Option<bool> {
     let obj = value_addr(value) as *const ObjectHeader;
@@ -720,73 +712,14 @@ pub(crate) fn relinked_object_chain_answer(
     start: u32,
     want: u32,
 ) -> Option<bool> {
-    // SAFETY: every caller has proved a live `GC_TYPE_OBJECT` receiver.
-    // The common receiver's ShapeId names an unlinked identity: the default,
-    // its own class's or a per-object one, none of them foreign (a class
-    // instance linked anywhere but its class's declaration prototype has a
-    // linked identity). One compare of the header word decides, before the
-    // shape record or any registry is read.
-    if unsafe { crate::object::shapes::shape_word_may_be_linked((*obj).parent_class_id) } {
-        // SAFETY: as above.
-        let identity = unsafe { crate::object::shapes::object_shape_identity(obj) };
-        if identity != (crate::object::shapes::PROTO_ID_CLASS | u64::from(start))
-            && identity != crate::object::shapes::class_proto_id(start)
-            && identity != crate::object::shapes::PROTO_ID_PER_OBJECT
-            && super::prototype_chain::object_prototype_is_foreign(obj as usize)
-        {
-            return live_chain_answer(value, want);
-        }
-    }
-    if !super::prototype_chain::any_class_chain_relinked() {
-        return None;
-    }
-    relinked_declared_chain_answer(value, start, want)
-}
-
-/// The receiver's own (shape-recorded) chain decides.
-#[cold]
-#[inline(never)]
-fn live_chain_answer(value: f64, want: u32) -> Option<bool> {
-    const CLASS_ID_OBJECT: u32 = 0xFFFF0050;
-    if want == 0 || (want != CLASS_ID_OBJECT && !super::is_class_id_registered(want)) {
-        return None;
-    }
-    let constructor = if want == CLASS_ID_OBJECT {
-        js_get_global_this_builtin_value(b"Object".as_ptr(), 6)
-    } else {
-        super::class_constructor_ref_value(want)
-    };
-    Some(ordinary_has_instance_prototype_walk(value, constructor))
-}
-
-/// [`relinked_instance_chain_answer`] once a class declaration prototype was
-/// ever re-pointed: the live chain decides from the first relinked
-/// declaration prototype on the declared walk.
-#[cold]
-#[inline(never)]
-fn relinked_declared_chain_answer(value: f64, start: u32, want: u32) -> Option<bool> {
-    if start == 0 {
-        return None;
-    }
-    let mut cur = start;
-    for _ in 0..64 {
-        if cur == want || crate::object::class_generic_origin(cur) == Some(want) {
-            return None;
-        }
-        if super::class_registry::class_decl_prototype_relinked(cur) {
-            return live_chain_answer(value, want);
-        }
-        match get_parent_class_id(cur) {
-            Some(pid) if pid != 0 && pid != cur => cur = pid,
-            _ => return None,
-        }
-    }
-    None
+    let _ = (value, start);
+    Some(unsafe { shape_ancestry::class_shape_reaches(obj, want, true) })
 }
 
 /// The parent-only half of [`class_chain_reaches`], used to continue a walk that
 /// has already stepped onto a generic origin. Separate so the two edges cannot
 /// recurse into each other without bound.
+#[cfg(test)]
 fn class_chain_reaches_parents_only(start: u32, want: u32, depth0: usize) -> bool {
     let mut cur = start;
     let mut depth = depth0;
@@ -803,77 +736,8 @@ fn class_chain_reaches_parents_only(start: u32, want: u32, depth0: usize) -> boo
     false
 }
 
-/// #10624: `subclass_of_builtin_reaches`'s armed-latch arm.
-fn class_chain_reaches_dynamic_armed(cur: u32, obj: *const ObjectHeader, want: u32) -> bool {
-    let pin = super::class_registry::instance_pinned_constructing_class(obj);
-    class_chain_reaches_dynamic(cur, pin, want)
-}
-
-/// Does the ancestry chain from `start_cid` reach `want`, walking by VALUE
-/// while precision is available? `class_chain_reaches` walks purely by
-/// class_id through the shared, last-write-wins `CLASS_REGISTRY` —
-/// ambiguous once the SAME `ClassExprFresh` template has been evaluated more
-/// than once. Each hop here instead prefers, in order: (1) `start_pin`/a
-/// pinned VALUE on the current node (`class_object_pinned_parent`, the same
-/// per-evaluation edge `super()`/captures already consult), (2)
-/// `template_dynamic_parent_value`, the actual parent VALUE for any class_id
-/// registered dynamically. Exhausting both degrades to exactly
-/// `class_chain_reaches`'s answer — so an instance from an EARLIER
-/// evaluation stays correct even after a LATER one overwrote the table.
-fn class_chain_reaches_dynamic(start_cid: u32, start_pin: Option<f64>, want: u32) -> bool {
-    const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
-    if start_cid == 0 || want == 0 {
-        return false;
-    }
-    let mut cur = start_cid;
-    let mut cur_value = start_pin;
-    let mut depth = 0usize;
-    loop {
-        if cur == want {
-            return true;
-        }
-        if depth > 64 {
-            return false;
-        }
-        if let Some(gid) = crate::object::class_generic_origin(cur) {
-            if gid == want || class_chain_reaches_parents_only(gid, want, depth + 1) {
-                return true;
-            }
-        }
-        let pinned = cur_value
-            .filter(|v| is_class_object_value(*v))
-            .and_then(|v| {
-                class_object_pinned_parent(
-                    crate::value::js_nanbox_get_pointer(v) as *const ObjectHeader
-                )
-            });
-        let next_value = pinned.unwrap_or_else(|| {
-            super::class_registry::parent_static::template_dynamic_parent_value(cur)
-        });
-        if next_value.to_bits() == TAG_UNDEFINED {
-            return false;
-        }
-        let next_cid = dynamic_value_class_id(next_value);
-        if next_cid == 0 || next_cid == cur {
-            return false;
-        }
-        cur = next_cid;
-        cur_value = Some(next_value);
-        depth += 1;
-    }
-}
-
-/// `class S extends Array {}` produces a real `ObjectHeader` instance whose
-/// class-id chain reaches the built-in's reserved class id (a parent edge
-/// registered at module init). The per-built-in probes in `js_instanceof`
-/// short-circuit to `false` for such an instance (it isn't a *real*
-/// Array/Map/Error/…), so walk the object's own class chain up front. Only
-/// genuine `GC_TYPE_OBJECT` instances carry a `class_id` field. Refs
-/// class/subclass-builtins/* and class/subclass/builtin-objects/*.
-///
-/// Split out of `js_instanceof` (#10624) so that function's own size, and
-/// thus how well its unrelated, far more common paths optimize, does not
-/// depend on this ladder's own latch-gated logic.
+/// Ordinary subclass instances use the live shape chain before the native
+/// builtin brand probes. Non-object native cells keep their brand dispatch.
 fn subclass_of_builtin_reaches(value: f64, class_id: u32) -> bool {
     let jv = crate::JSValue::from_bits(value.to_bits());
     if !jv.is_pointer() {
@@ -888,28 +752,8 @@ fn subclass_of_builtin_reaches(value: f64, class_id: u32) -> bool {
     if unsafe { (*gc_header).obj_type } != crate::gc::GC_TYPE_OBJECT {
         return false;
     }
-    let cur = unsafe { (*obj).class_id };
-    if let Some(answer) = relinked_instance_chain_answer(value, cur, class_id) {
-        return answer;
-    }
-    // #10624: only pay for the value-aware walk once something has pinned
-    // per-evaluation heritage.
-    let reaches =
-        if super::class_registry::evaluation_heritage::CLASS_OBJECT_HERITAGE_PIN_LATCH.is_idle() {
-            class_chain_reaches(cur, class_id)
-        } else {
-            class_chain_reaches_dynamic_armed(cur, obj, class_id)
-        };
-    if reaches {
-        return true;
-    }
-
-    // #9362: util.inherits(DerivedClass, BaseClass) links DerivedClass.prototype
-    // to BaseClass.prototype at runtime without an extends edge between the
-    // constructors. That relink is a shape fact of the prototype it moved
-    // (`relinked_instance_chain_answer` above walks the live chain from it),
-    // so no further escape hatch is needed here.
-    false
+    // Builtin native brands below still answer cells with no physical chain.
+    unsafe { shape_ancestry::class_shape_reaches(obj, class_id, true) }
 }
 
 /// Check if a value is an instance of a class with the given class_id

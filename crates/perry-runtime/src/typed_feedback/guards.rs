@@ -106,12 +106,10 @@ fn method_direct_call_contract(
         );
     };
     let name_hash = hash_bytes(method_bytes);
-    let method_guard_slot = crate::object::class_prototype_method_guard_slot(method_name);
     if object_addr == 0
         || expected_class_id == 0
         || !crate::object::shapes::is_shape_id(expected_shape_id)
         || expected_func_ptr.is_null()
-        || crate::object::class_prototype_fast_guard_invalidated_for_method(method_guard_slot)
     {
         return (shape_addr, class_id, gc_type, name_hash, false);
     }
@@ -1262,7 +1260,7 @@ pub unsafe extern "C" fn js_typed_feedback_method_direct_call_guard(
 pub unsafe extern "C" fn js_method_direct_shape_class(
     receiver: f64,
     out_shape_id: *mut u32,
-    method_guard_slot: u32,
+    _method_guard_slot: u32,
 ) -> u32 {
     if !out_shape_id.is_null() {
         *out_shape_id = 0;
@@ -1279,7 +1277,6 @@ pub unsafe extern "C" fn js_method_direct_shape_class(
         || (*gc_header)._reserved
             & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
             != 0
-        || crate::object::class_prototype_fast_guard_invalidated_for_method(method_guard_slot)
     {
         return 0;
     }

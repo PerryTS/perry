@@ -3971,3 +3971,5 @@ js_iterator_close_on_throw	Reenters
 js_iterator_delegate_return	Reenters
 js_iterator_delegate_throw	Reenters
 perry_native_iterator_cleanup_before_trap	Leaf
+perry_class_value_dir_cell	Leaf
+js_register_class_prototype_shape	Leaf

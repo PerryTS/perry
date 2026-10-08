@@ -82,14 +82,14 @@ pub(crate) fn install_decl_prototype_accessor(proto: *mut ObjectHeader, class_id
 
 /// A getter or setter of `class_id` was registered: when this realm already
 /// built the class's decl prototype, install it there too.
-pub(crate) fn note_instance_accessor_registered(class_id: u32, name: &str) {
+pub(crate) fn note_instance_accessor_registered(class_id: u32, name: &str, newly_declared: bool) {
     // A specialization shares its generic's prototype, whose accessors are
     // the generic's own registrations.
     if decl_prototype_identity_id(class_id) != class_id || name.starts_with('#') {
         return;
     }
     let proto = class_decl_prototype_object(class_id);
-    if !proto.is_null() && !class_proto_key_deleted(class_id, name) {
+    if !proto.is_null() && (newly_declared || !class_proto_key_deleted(class_id, name)) {
         install_decl_prototype_accessor(proto, class_id, name);
     }
 }

@@ -8,6 +8,7 @@ use anyhow::Result;
 use perry_hir::Expr;
 
 use crate::expr::{nanbox_pointer_inline, unbox_to_i64, FnCtx};
+use crate::lower_call::holder_shape_guard::gate_named_classes;
 use crate::nanbox::double_literal;
 use crate::type_analysis::receiver_class_name;
 use crate::types::{DOUBLE, I1, I32, I64};
@@ -361,13 +362,9 @@ pub(crate) fn try_lower_instance_method_call(
                 || post_args_may_collect
                 || crate::rooting::any_operand_may_collect(ctx, args.iter());
             let recv_idx = roots.lower(ctx, object, recv_collects)?;
-            // #11910: before the arguments, a receiver no implementor arm
-            // claims (the same class-id and prototype-guard probe the tower
-            // runs) performs the split site's lookup half; an implementor
-            // skips it. The probe's (class id, ShapeId) is that read: the
-            // tower below the arguments dispatches on it instead of probing
-            // again, so an argument that patches the prototype or adds an own
-            // method cannot change which body the read named.
+            // #11910: an unclaimed receiver performs the split lookup before
+            // the arguments. The tower reuses this receiver and holder proof,
+            // preserving the body selected before argument evaluation.
             let mut pre_probe: Option<(String, String)> = None;
             let pre_lookup = if split {
                 let recv = roots.reread(ctx, recv_idx)?;
@@ -379,6 +376,7 @@ pub(crate) fn try_lower_instance_method_call(
                         &recv,
                         &guard_slot,
                     );
+                let cid = gate_named_classes(ctx, &cid, property, &impl_class);
                 pre_probe = Some((cid.clone(), shape_id));
                 let claimed = {
                     let blk = ctx.block();
@@ -548,6 +546,11 @@ pub(crate) fn try_lower_instance_method_call(
                             &method_guard_slot_str,
                         )
                     }
+                };
+                let cid = if split {
+                    cid
+                } else {
+                    gate_named_classes(ctx, &cid, property, &impl_class)
                 };
                 shape_probe_cid = Some(cid.clone());
                 let own_idx = ctx.new_block("idisp.own_probe");
@@ -729,10 +732,7 @@ pub(crate) fn try_lower_instance_method_call(
             // returning a sentinel is cheaper).
             ctx.current_block = tower_idx;
             let recv_handle = unbox_to_i64(ctx.block(), &recv_box);
-            // Reuse the class id the receiver probe already validated. Zero is
-            // intentional: it sends descriptor/prototype invalidation and every
-            // non-instance receiver to the runtime fallback instead of
-            // re-entering this hard-coded tower.
+            // Zero sends a failed receiver or holder proof to the fallback.
             let cid = shape_probe_cid.expect("the receiver probe runs for every tower");
 
             for (i, (case_cid, _)) in implementors.iter().enumerate() {

@@ -810,7 +810,7 @@ pub(super) fn delete_transition_generation(
     x ^= x >> 27;
     x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
     x ^= x >> 31;
-    Some(x | (1 << 63))
+    Some(super::mutation_generation(x))
 }
 
 /// Retire every descriptor indexed under `keys` other than `keep`.

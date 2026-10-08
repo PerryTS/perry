@@ -3214,6 +3214,7 @@ js_register_class_method_with_entry	void	i64,ptr,i64,i64,i64,i64,i64,i64
 js_register_class_name	void	i32u,ptr,i32u
 js_register_class_parent	void	i32u,i32u
 js_register_class_parent_dynamic	void	i32u,f64
+js_register_class_prototype_shape	void	i32u,i32u
 js_register_class_setter	void	i64,ptr,i64,i64,i32s
 js_register_class_source	void	i32u,ptr,i32u
 js_register_class_source_static	void	i32u,ptr,i32u
@@ -4583,6 +4584,7 @@ perry_arkts_set_content_view	void	f64,f64
 perry_arkts_set_text	void	f64,f64
 perry_arkts_set_visibility	void	f64,f64
 perry_arkts_show_toast	void	f64
+perry_class_value_dir_cell	ptr	
 perry_cluster_compute_key_id	i32u	ptr,i32u,i32s,i32s
 perry_cluster_is_worker	i32s	
 perry_cluster_worker_listening	void	ptr,i32u,i32s,i32s

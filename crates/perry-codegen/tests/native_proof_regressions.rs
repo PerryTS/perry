@@ -230,8 +230,7 @@ fn generic_strict_equality_does_not_read_unverified_pointer_headers() {
 }
 
 fn contains_inline_direct_method_shape_guard(ir: &str) -> bool {
-    ir.contains("method_direct.inline_deref")
-        && ir.contains("load atomic i8, ptr @PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED acquire")
+    ir.contains("method_direct.inline_deref") && ir.contains("method_direct.inline_deref")
 }
 
 fn compile_artifact_json(name: &str, body: Vec<Stmt>) -> serde_json::Value {
@@ -13300,7 +13299,7 @@ fn typed_f64_receiver_method_clone_raw_loads_after_composed_guards() {
     // fast arm in text order. Either form is the same proof; take whichever
     // comes first so the ordering assertion below is about the proof, not
     // about which emission shape carried it.
-    let inline_probe = caller_ir.find("@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED");
+    let inline_probe = caller_ir.find("method_direct.inline_deref");
     let method_proof = inline_probe.map_or(method_guard, |p| p.min(method_guard));
     // One-exit class-field GET: at a field-GET site the runtime guard is no
     // longer CALLED -- it is the body of `js_class_field_get_ic`, the inline

@@ -603,7 +603,9 @@ impl GuardState<'_> {
                     return false;
                 };
                 if class_id != 0
-                    && !crate::object::class_chain_reaches((*object).class_id, class_id)
+                    && !crate::object::instanceof::shape_ancestry::class_shape_reaches(
+                        object, class_id, false,
+                    )
                 {
                     return false;
                 }
@@ -676,7 +678,9 @@ impl GuardState<'_> {
                 let Some((object, _, _)) = self.plain_object(value) else {
                     return false;
                 };
-                if !crate::object::class_chain_reaches((*object).class_id, class_id) {
+                if !crate::object::instanceof::shape_ancestry::class_shape_reaches(
+                    object, class_id, false,
+                ) {
                     return false;
                 }
                 // The value half. Without it this node would claim only
@@ -949,6 +953,48 @@ mod tests {
             0,
             "another class"
         );
+    }
+
+    #[test]
+    fn subclass_param_guards_follow_the_live_holder_shapes() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        const BASE: u32 = 0x6D61;
+        const CHILD: u32 = 0x6D62;
+        for (id, name) in [
+            (BASE, b"ParamShapeBase".as_slice()),
+            (CHILD, b"ParamShapeChild"),
+        ] {
+            unsafe {
+                crate::object::js_register_class_name(id, name.as_ptr(), name.len() as u32);
+            }
+        }
+        crate::object::js_register_class_parent(CHILD, BASE);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_raw_mut_ptr(crate::object::js_object_alloc(CHILD, 0));
+        let holder = scope.root_nanbox_f64(crate::object::class_decl_prototype_value(CHILD));
+        let nominal = one_node(&class_nominal_node_with_fields(BASE, 0));
+        let mut object_node = vec![OP_OBJECT];
+        object_node.extend_from_slice(&BASE.to_le_bytes());
+        object_node.extend_from_slice(&0u32.to_le_bytes());
+        let structural = one_node(&object_node);
+        let value = || {
+            receiver.with_const_ptr(|p: *const crate::object::ObjectHeader| {
+                JSValue::from_bits(crate::value::js_nanbox_pointer(p as i64).to_bits())
+            })
+        };
+        assert_eq!(guard(value(), &nominal), 1);
+        assert_eq!(guard(value(), &structural), 1);
+        let before = receiver.with_const_ptr(|p| unsafe { *(p as *const u64) });
+        crate::object::js_object_set_prototype_of(
+            holder.get_nanbox_f64(),
+            f64::from_bits(crate::value::TAG_NULL),
+        );
+        assert_eq!(
+            before,
+            receiver.with_const_ptr(|p| unsafe { *(p as *const u64) })
+        );
+        assert_eq!(guard(value(), &nominal), 0);
+        assert_eq!(guard(value(), &structural), 0);
     }
 
     /// Class id 0 means "structural" for `OP_OBJECT`, where it is a legal

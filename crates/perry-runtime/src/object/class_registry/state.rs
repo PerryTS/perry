@@ -43,25 +43,24 @@ pub(crate) fn throw_non_constructable_builtin_function() -> ! {
 /// `name` (a method, an accessor, or `constructor`)? Derived from the object
 /// that owns the member: it was declared, the class's decl prototype exists,
 /// and that object no longer holds the key.
-/// Every delete of a prototype member retires the per-name prototype fast
-/// guard first, so a name whose guard is intact was never deleted anywhere.
 pub(crate) fn class_proto_key_deleted(class_id: u32, name: &str) -> bool {
-    if class_id == 0
-        || !class_prototype_fast_guard_invalidated_for_method(class_prototype_method_guard_slot(
-            name,
-        ))
-    {
+    if class_id == 0 {
+        return false;
+    }
+    let proto = class_decl_prototype_object(class_id);
+    if proto.is_null() {
+        // A lazy holder cannot have lost any of its declaration's keys.
+        return false;
+    }
+    // The complete birth P proves every declared key is still present. This
+    // replaces the old latch-byte shortcut without probing the method name.
+    if unsafe { crate::object::shapes::pristine_declaration_holder(proto) } {
         return false;
     }
     let declared = name == "constructor"
         || class_own_accessor_ptrs(class_id, name).is_some()
         || super::super::native_module::class_has_own_method(class_id, name);
     if !declared || proto_member_has_no_string_key(class_id, name) {
-        return false;
-    }
-    let proto = class_decl_prototype_object(class_id);
-    if proto.is_null() {
-        // Never materialized: nothing was deleted from it.
         return false;
     }
     // SAFETY: `proto` is this realm's live decl prototype; nothing below
@@ -364,6 +363,8 @@ pub struct AccessorDecl {
 /// lexical class read them.
 #[derive(Default)]
 pub struct ClassVTable {
+    /// Compiler candidate for lazy materialization, never a live lookup answer.
+    pub prototype_birth_shape: u32,
     pub methods: HashMap<String, VTableMethodEntry>,
     pub accessors: HashMap<String, AccessorDecl>,
     pub private_accessors: HashMap<String, AccessorDecl>,
@@ -1289,7 +1290,7 @@ fn class_parent_prototype_bits(value: f64) -> Option<u64> {
 /// identity, not merely by shape. Array/Map/Set/Error/typed-array subclasses
 /// have their own dedicated instance/prototype modeling and don't reach this
 /// fallback the same way.
-fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
+pub(crate) fn reserved_native_parent_prototype_bits(parent_id: u32) -> Option<u64> {
     let web = match parent_id {
         crate::native_class_ids::EVENT_TARGET => Some("EventTarget"),
         crate::native_class_ids::EVENT => Some("Event"),

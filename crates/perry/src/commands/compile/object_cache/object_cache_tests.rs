@@ -903,6 +903,7 @@ fn static_seeds_round_trip_and_an_entry_without_them_misses() {
             constfn: Vec::new(),
             private: Vec::new(),
             brands: Vec::new(),
+            attrs: Vec::new(),
         },
     );
     cache.store_static_seeds(key, &[line.as_str()]);
@@ -936,6 +937,7 @@ fn constfn_body_sidecar_survives_a_warm_cache_hit_without_publishing_it() {
         }],
         private: Vec::new(),
         brands: Vec::new(),
+        attrs: Vec::new(),
     };
     let line = perry_codegen::encode_static_seed(0x1000_0044, &shape);
     cache.store_ffi_manifest(key, &[]);

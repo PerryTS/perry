@@ -124,17 +124,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // name) sends the call to the runtime, which reads that chain.
             let home_cid = ctx.class_ids.get(&current_class_name).copied().unwrap_or(0);
             let guarded_merge = if home_cid != 0 {
-                let key_idx = ctx.strings.intern(method);
-                let slot = (ctx.strings.entry(key_idx).dispatch_hash & 0xffff).to_string();
                 let direct_idx = ctx.new_block("super_m.direct");
                 let dynamic_idx = ctx.new_block("super_m.dynamic");
                 let merge_idx = ctx.new_block("super_m.merge");
                 let direct_label = ctx.block_label(direct_idx);
                 let dynamic_label = ctx.block_label(dynamic_idx);
                 let merge_label = ctx.block_label(merge_idx);
-                let ok = crate::lower_call::method_override::emit_prototype_method_guard_ok(
-                    ctx.block(),
-                    &slot,
+                let ok = crate::lower_call::holder_shape_guard::super_guard(
+                    ctx,
+                    &current_class_name,
+                    method,
                 );
                 ctx.block().cond_br(&ok, &direct_label, &dynamic_label);
                 ctx.current_block = dynamic_idx;
@@ -420,20 +419,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 return Ok(runtime_get(ctx));
             };
             // The method above was resolved along the declared `extends`
-            // chain, which holds while no prototype surgery touched this
-            // name (the guard bytes `super.m()` reads too).
+            // chain, which holds while the home and intermediate holders
+            // retain their complete candidate shapes, as for `super.m()`.
             let guarded = if home_cid != 0 {
-                let key_idx = ctx.strings.intern(property);
-                let slot = (ctx.strings.entry(key_idx).dispatch_hash & 0xffff).to_string();
                 let direct_idx = ctx.new_block("super_get.direct");
                 let dynamic_idx = ctx.new_block("super_get.dynamic");
                 let merge_idx = ctx.new_block("super_get.merge");
                 let direct_label = ctx.block_label(direct_idx);
                 let dynamic_label = ctx.block_label(dynamic_idx);
                 let merge_label = ctx.block_label(merge_idx);
-                let ok = crate::lower_call::method_override::emit_prototype_method_guard_ok(
-                    ctx.block(),
-                    &slot,
+                let ok = crate::lower_call::holder_shape_guard::super_guard(
+                    ctx,
+                    &current_class_name,
+                    property,
                 );
                 ctx.block().cond_br(&ok, &direct_label, &dynamic_label);
                 ctx.current_block = dynamic_idx;

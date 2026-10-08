@@ -172,7 +172,12 @@ const CLASS_VALUE_PAGE_LEN: usize = 1 << CLASS_VALUE_PAGE_SHIFT;
 type ClassValuePage = [*mut ClosureHeader; CLASS_VALUE_PAGE_LEN];
 
 /// One band's page directory: `len` page pointers (null or a leaked page).
-type ClassValueDir = (*mut *mut ClassValuePage, usize);
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct ClassValueDir {
+    pages: *mut *mut ClassValuePage,
+    len: usize,
+}
 
 /// The class-id bands, each with its own page directory. A class id is never
 /// an index by itself: it is an OFFSET from its band's base, so a directory is
@@ -213,8 +218,10 @@ fn class_value_band(class_id: u32) -> Option<(usize, u32)> {
 }
 
 #[allow(clippy::declare_interior_mutable_const)]
-const EMPTY_CLASS_VALUE_DIR: std::cell::Cell<ClassValueDir> =
-    std::cell::Cell::new((std::ptr::null_mut(), 0));
+const EMPTY_CLASS_VALUE_DIR: std::cell::Cell<ClassValueDir> = std::cell::Cell::new(ClassValueDir {
+    pages: std::ptr::null_mut(),
+    len: 0,
+});
 
 crate::perry_thread_local! {
     /// This agent's class function objects: per class-id band
@@ -230,14 +237,17 @@ crate::perry_thread_local! {
 
 /// Band `band`'s directory.
 #[inline(always)]
-fn class_value_dir(band: usize) -> ClassValueDir {
-    CLASS_VALUES.with(|bands| bands[band].get())
+fn class_value_dir(band: usize) -> (*mut *mut ClassValuePage, usize) {
+    CLASS_VALUES.with(|bands| {
+        let d = bands[band].get();
+        (d.pages, d.len)
+    })
 }
 
 /// Every band's directory (tests and resets).
 #[cfg(test)]
-fn class_value_dirs() -> [ClassValueDir; CLASS_VALUE_BANDS] {
-    CLASS_VALUES.with(|bands| std::array::from_fn(|band| bands[band].get()))
+fn class_value_dirs() -> [(*mut *mut ClassValuePage, usize); CLASS_VALUE_BANDS] {
+    std::array::from_fn(class_value_dir)
 }
 
 #[inline]
@@ -321,8 +331,9 @@ fn class_value_slot(class_id: u32) -> *mut *mut ClosureHeader {
         }
         pages = Box::leak(dir.into_boxed_slice()).as_mut_ptr();
         len = new_len;
-        CLASS_VALUES.with(|bands| bands[band].set((pages, len)));
+        CLASS_VALUES.with(|bands| bands[band].set(ClassValueDir { pages, len }));
     }
+    perry_class_value_dir_cell();
     // SAFETY: `page < len`.
     unsafe {
         let slot = pages.add(page);
@@ -928,7 +939,7 @@ pub(crate) fn class_value_ptr(class_id: u32) -> *mut ClosureHeader {
 const CLASS_VALUE_CAPTURES: usize = 3;
 /// The capture holding the class's `prototype` object (NaN-boxed), or
 /// `undefined` before it exists.
-const CLASS_PROTOTYPE_LINK_CAPTURE: usize = 2;
+const CLASS_PROTOTYPE_LINK_CAPTURE: usize = crate::codegen_abi::CLASS_PROTOTYPE_LINK_CAPTURE;
 const _: () = assert!(CLASS_PROTOTYPE_LINK_CAPTURE != CLASS_EVALUATION_STATE_SLOT);
 const _: () = assert!(CLASS_EVALUATION_STATE_SLOT < CLASS_VALUE_CAPTURES);
 const _: () = assert!(CLASS_PROTOTYPE_LINK_CAPTURE < CLASS_VALUE_CAPTURES);
@@ -1954,4 +1965,14 @@ mod tests {
             None
         );
     }
+}
+
+/// Expose the existing class function-object directory, without another registry.
+#[no_mangle]
+pub extern "C" fn perry_class_value_dir_cell() -> *const u8 {
+    CLASS_VALUES.with(|bands| {
+        let p = bands[0].as_ptr() as *const u8;
+        crate::agent_ptrs::publish(crate::codegen_abi::AGENT_PTR_CLASS_VALUES, p);
+        p
+    })
 }

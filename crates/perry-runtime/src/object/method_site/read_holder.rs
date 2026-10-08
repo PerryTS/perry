@@ -695,10 +695,25 @@ fn hop_identity_pins_link(pid: u64) -> bool {
 }
 
 /// [`admitted_proto_id`], with `obj`'s recorded word.
-unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64)> {
+pub(super) unsafe fn admitted_link(obj: *const ObjectHeader) -> Option<(u64, u64)> {
     let pid = shape_proto_id(object_shape_stamp(obj))?;
     if !hop_identity_pins_link(pid) {
-        return None;
+        // Only a declaration's immutable parent proof admits bare CLASS.
+        // Reject other CLASS shapes before classifying their link: that
+        // classification can consult synthetic/generic declaration metadata.
+        let word = crate::object::shapes::object_prototype_word(obj);
+        if crate::object::shapes::declaration_parent_identity(obj, word) != Some(pid) {
+            return None;
+        }
+        // Preserve the read-semantics exclusions of object_proto_id_for.
+        let meta = (*obj).meta;
+        if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
+            || (!meta.is_null()
+                && (*meta).flags & crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0)
+        {
+            return None;
+        }
+        return Some((pid, word));
     }
     let (stated, word) = stated_link(obj);
     (stated == pid).then_some((pid, word))
@@ -723,7 +738,7 @@ pub(super) unsafe fn class_link(recv: *const ObjectHeader) -> Option<*const Obje
     let holder = if (PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
         next_from_word(recv, word)
     } else if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
-        crate::object::class_decl_prototype_object((*recv).class_id)
+        crate::object::class_decl_prototype_object(pid as u32)
     } else {
         return None;
     };
@@ -752,6 +767,12 @@ pub(crate) unsafe fn recorded_class_link(
         return Err(());
     }
     if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&pid) {
+        if crate::object::shapes::declaration_parent_identity(recv, word) == Some(pid) {
+            let parent = next_from_word(recv, word);
+            return (!parent.is_null() && parent != recv)
+                .then_some(Some(parent))
+                .ok_or(());
+        }
         return Ok(None);
     }
     if !(PROTO_ID_MIXED..PROTO_ID_UNIQUE).contains(&pid) {
@@ -1884,5 +1905,52 @@ mod tests {
         );
         assert!(claimed >= crate::object::shapes::PROTO_ID_CLASS);
         assert_eq!(unsafe { admitted_proto_id(obj) }, None);
+    }
+
+    #[test]
+    fn static_declaration_parent_walk_can_publish_and_hit_an_absent_read() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let _no_move = crate::gc::GcSuppressScope::new();
+        const BASE: u32 = 0x6E91;
+        const CHILD: u32 = 0x6E92;
+        unsafe {
+            for (cid, name) in [
+                (BASE, b"FixedReadBase".as_slice()),
+                (CHILD, b"FixedReadChild"),
+            ] {
+                crate::object::js_register_class_name(cid, name.as_ptr(), name.len() as u32);
+            }
+            crate::object::js_register_class_parent(CHILD, BASE);
+            {
+                let mut registry = crate::object::CLASS_VTABLE_REGISTRY.write().unwrap();
+                for (cid, offset) in [(BASE, 989), (CHILD, 990)] {
+                    registry
+                        .get_or_insert_with(crate::fast_hash::new_ptr_hash_map)
+                        .entry(cid)
+                        .or_default()
+                        .prototype_birth_shape = crate::object::shapes::SHAPE_ID_BASE + offset;
+                }
+            }
+            let _ = crate::object::class_registry::class_decl_prototype_value(CHILD);
+            let recv = crate::object::js_object_alloc(CHILD, 0);
+            let name = b"absent_from_fixed_chain";
+            let key = crate::string::canonical_key(name);
+            let mut slot: PicCacheSlot = std::ptr::null_mut();
+            assert_eq!(
+                class_read::prime(recv, key, &mut slot, name).map(|v| v.bits()),
+                Some(crate::value::TAG_UNDEFINED)
+            );
+            assert_eq!(
+                class_read::try_hit(recv, &mut slot).map(|v| v.bits()),
+                Some(crate::value::TAG_UNDEFINED)
+            );
+            let holder = crate::object::class_decl_prototype_object(CHILD);
+            let target = crate::object::js_object_alloc(0, 0);
+            crate::object::js_object_set_prototype_of(
+                crate::value::js_nanbox_pointer(holder as i64),
+                crate::value::js_nanbox_pointer(target as i64),
+            );
+            assert!(class_read::try_hit(recv, &mut slot).is_none());
+        }
     }
 }

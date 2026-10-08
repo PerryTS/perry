@@ -967,6 +967,7 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
             throw_object_type_error(b"Classes may not have a static property named 'prototype'");
         }
         if is_static == 0 {
+            let newly_declared = class_own_accessor_ptrs(class_id, &name).is_none();
             let mut registry = CLASS_VTABLE_REGISTRY.write().unwrap();
             if registry.is_none() {
                 *registry = Some(crate::fast_hash::new_ptr_hash_map());
@@ -975,7 +976,11 @@ pub unsafe extern "C" fn js_register_class_computed_accessor(
             vtable.declare_accessor_half(&name, getter_ptr as usize, false);
             vtable.declare_accessor_half(&name, setter_ptr as usize, true);
             drop(registry);
-            super::decl_accessors::note_instance_accessor_registered(class_id, &name);
+            super::decl_accessors::note_instance_accessor_registered(
+                class_id,
+                &name,
+                newly_declared,
+            );
         } else {
             {
                 let mut guard = CLASS_STATIC_ACCESSORS.write().unwrap();

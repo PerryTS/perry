@@ -12,7 +12,7 @@ use crate::expr::FnCtx;
 use crate::types::{I1, I32, I64, I8};
 
 /// Emit the single-arm equivalent of the runtime `js_method_direct_shape_guard`
-/// inline: the prototype guard bytes, a pointer gate, then the exact
+/// inline: the holder shape proof, a pointer gate, then the exact
 /// `(class_id, ShapeId)` compare against the birth pair and, when `learned` is
 /// given, against the site's learned word (see [`emit_direct_method_site_word`]).
 pub(crate) fn emit_inline_direct_method_shape_guard(
@@ -20,7 +20,7 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
     recv_box: &str,
     expected_class_id: &str,
     expected_shape_id: &str,
-    method_guard_slot: &str,
+    holder_ok: &str,
     fast_label: &str,
     fallback_label: &str,
     // `true` at sites whose receiver may arrive in the internal raw-address
@@ -44,17 +44,6 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
 
     {
         let blk = ctx.block();
-        let invalidated =
-            blk.load_atomic_acquire(I8, "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED", 1);
-        let all_methods_ok = blk.icmp_eq(I8, &invalidated, "0");
-        let method_slot_ptr = blk.gep(
-            I8,
-            "@PERRY_CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD",
-            &[(I64, method_guard_slot)],
-        );
-        let method_invalidated = blk.load_atomic_acquire(I8, &method_slot_ptr, 1);
-        let method_ok = blk.icmp_eq(I8, &method_invalidated, "0");
-        let prototype_ok = blk.and(I1, &all_methods_ok, &method_ok);
         let recv_bits = blk.bitcast_double_to_i64(recv_box);
         let recv_handle = blk.and(I64, &recv_bits, crate::nanbox::POINTER_MASK_I64);
         let tag = blk.lshr(I64, &recv_bits, "48");
@@ -73,7 +62,7 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
         let below_ceiling = blk.icmp_ult(I64, &recv_handle, &heap_ceiling);
         let in_heap_range = blk.and(I1, &above_floor, &below_ceiling);
         let ptr_safe = blk.and(I1, &is_ptr, &in_heap_range);
-        let can_deref = blk.and(I1, &prototype_ok, &ptr_safe);
+        let can_deref = blk.and(I1, holder_ok, &ptr_safe);
         blk.cond_br(&can_deref, &deref_label, fallback_label);
     }
 

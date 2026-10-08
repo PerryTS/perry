@@ -148,7 +148,6 @@ pub(crate) use prototype_methods::{
 
 // ── prototype_methods.rs ────────────────────────────────────────────────────
 pub(crate) use prototype_methods::{
-    class_prototype_fast_guard_invalidated_for_method, class_prototype_method_guard_slot,
     class_prototype_relinked, class_prototype_set, invalidate_class_prototype_fast_guards,
     invalidate_class_prototype_fast_guards_for_method, prototype_relink_may_retarget_direct_arms,
     retire_prototype_caches_without_direct_arms, synthetic_class_id_for_function,
@@ -322,3 +321,8 @@ pub(crate) fn class_registry_census() -> Vec<crate::gc::census::SideTableRow> {
     }
     rows
 }
+
+#[cfg(test)]
+pub(crate) use prototype_methods::class_prototype_method_guard_slot;
+
+pub(crate) use state::reserved_native_parent_prototype_bits;
