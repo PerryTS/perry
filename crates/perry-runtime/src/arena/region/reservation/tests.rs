@@ -243,3 +243,37 @@ fn owner_classifiers_project_without_remote_snapshots() {
         assert_eq!(owned_space(base), None);
     }
 }
+
+#[test]
+fn registering_thread_owns_a_block_mapped_by_another_thread() {
+    // The from-space quarantine ring hands a retired block to whichever
+    // thread evicts it. Registration on the new thread must move ownership.
+    let data = std::thread::spawn(|| unsafe { super::super::map(Kind::NurseryBlock, ALIGN) as usize })
+        .join()
+        .unwrap();
+    assert!(data != 0, "LIVE SUBJECT: block mapped by another thread");
+    assert_eq!(owned_generation(data), None);
+    let mut starts = [1u64];
+    assert!(set_space(
+        data,
+        ALIGN,
+        HeapSpace::NurseryEden,
+        Some(starts.as_mut_ptr() as usize)
+    ));
+    assert_eq!(
+        crate::arena::page_meta::classify_heap_generation(data + 8),
+        HeapGeneration::Nursery
+    );
+    assert_eq!(
+        crate::arena::page_meta::classify_heap_space_in_range(data + 8),
+        Some((HeapSpace::NurseryEden, data, starts.as_mut_ptr()))
+    );
+    let snapshot = classify(data).unwrap();
+    assert!(snapshot.is_current_thread());
+    assert_eq!(snapshot.owner, crate::agent::current_agent());
+    std::thread::spawn(move || assert_eq!(owned_generation(data), None))
+        .join()
+        .unwrap();
+    assert!(set_space(data, ALIGN, HeapSpace::Unknown, Some(0)));
+    unsafe { super::super::unmap(data as *mut u8, ALIGN) };
+}
