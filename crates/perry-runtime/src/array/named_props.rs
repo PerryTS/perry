@@ -921,9 +921,10 @@ pub(crate) unsafe fn array_has_sparse_index_properties_resolved(arr: *const Arra
     let flags = array_object_flags_resolved(arr);
     let pairs = match reserve_of(arr, flags) {
         Reserve::Bag(bag) => {
-            return property_bag::names(bag, false)
-                .iter()
-                .any(|name| crate::object::canonical_array_index(name).is_some())
+            return property_bag::names(bag, false).iter().any(|name| {
+                crate::object::canonical_array_index(name)
+                    .is_some_and(|index| index >= (*arr).capacity)
+            })
         }
         Reserve::Pairs(pairs) => pairs,
         Reserve::None if fallback_possible(flags) => {
