@@ -13,3 +13,4 @@ existing Number tier, including loops outside byte scanning; full-program
 measurements check that behavior.
 
 Dynamic numeric reads of NativeArena views now use the validated typed-array accessor before bounds, so disposal still throws after its length becomes zero. Transfer and disposal witnesses use runtime loop bounds to avoid HIR unrolling.
+Loop pre-registration also covers indexed writes and declarations inside loops, before initializer callbacks.

@@ -92,23 +92,35 @@ pub(crate) fn byte_read_is_numeric(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 /// a callback before the first global-table read must dirty that proof on
 /// every iteration, including iterations after its initial admission.
 pub(crate) fn prepare_loop_accesses(ctx: &mut FnCtx<'_>, body: &[perry_hir::Stmt]) {
-    if ctx.is_async_fn || ctx.disable_buffer_fast_path {
+    if ctx.is_async_fn || ctx.disable_buffer_fast_path
+        || !super::ta_param_f64_read::ta_param_f64_read_enabled()
+    {
         return;
     }
-    let mut declared = std::collections::HashSet::new();
-    crate::collectors::collect_let_ids(body, &mut declared);
+    // Declared types only select a checked brand guard; they are not admission
+    // evidence. Register before initializers too, since a loop-local initializer
+    // can call back while the same receiver survives from an earlier iteration.
+    let mut declared = std::collections::HashMap::new();
+    crate::boxed_vars::collect_let_types_in_stmts(body, &mut declared);
     let mut referenced = std::collections::HashSet::new();
     crate::collectors::collect_ref_ids_in_stmts(body, &mut referenced);
     let ids: std::collections::BTreeSet<u32> = referenced.into_iter().collect();
     for id in ids {
         if ctx.boxed_vars.contains(&id)
-            || (!ctx.module_global_proven_types.contains_key(&id) && !ctx.locals.contains_key(&id))
-            || (!ctx.module_globals.contains_key(&id) && declared.contains(&id))
-            || !super::u8_buffer_read::loop_param_is_read(body, id)
+            || (!ctx.module_global_proven_types.contains_key(&id)
+                && !ctx.locals.contains_key(&id)
+                && !declared.contains_key(&id))
+            || !super::u8_buffer_read::loop_param_is_accessed(body, id)
         {
             continue;
         }
-        let Some(kind) = receiver_kind(ctx, &Expr::LocalGet(id)) else {
+        let Some(kind) = receiver_kind(ctx, &Expr::LocalGet(id)).or_else(|| {
+            (!ctx.reassigned_locals.contains(&id)
+                && !ctx.receiver_descriptors.contains_buffer_view(&id)
+                && super::u8_buffer_read::u8_inline_read_enabled()
+                && declared.get(&id).is_some_and(byte_type))
+                .then_some(1)
+        }) else {
             continue;
         };
         let brand = [super::byte_cell::brand_for_kind(kind)];
