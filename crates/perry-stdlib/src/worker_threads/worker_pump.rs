@@ -174,6 +174,9 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
                 processed += 1;
             }
         }
+        // Each queued worker event is one host callback. Finish its nextTicks
+        // and promise jobs before the next event, as timer callbacks already do.
+        processed += perry_runtime::promise::microtasks::js_promise_run_microtasks_checkpoint();
     }
 
     // Collect messages to process
