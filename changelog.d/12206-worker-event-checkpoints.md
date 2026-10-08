@@ -1,0 +1,1 @@
+Worker event delivery now runs the existing nextTick and promise checkpoint after each queued worker event, before delivering the next one, matching Node's callback order. All listeners of one event still run together (#12206).
