@@ -56,6 +56,7 @@ mod birth;
 pub use birth::{BirthMemo, OwnAccessor};
 #[path = "native_payload_slots.rs"]
 mod callback_slots;
+pub use crate::native_payload_buffer::{PayloadBuffer, PayloadBufferOwner};
 pub use callback_slots::{call_callback, callback_at, callback_from_link};
 pub(crate) use callback_slots::{callback_slot_address, NativeCallbackCell};
 use callback_slots::{store_callbacks, sync_callbacks};

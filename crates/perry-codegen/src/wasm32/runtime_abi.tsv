@@ -2781,6 +2781,14 @@ js_perry_net_write	i32s	i64,ptr,usize,i64,ptr,ptr
 js_perry_payload_abi_layout	i64	
 js_perry_payload_alloc	f64	ptr,ptr,f64,usize
 js_perry_payload_attach	i32s	f64,ptr,ptr,usize
+js_perry_payload_buffer_abi	i64	
+js_perry_payload_buffer_alloc	ptr	ptr,usize,ptr
+js_perry_payload_buffer_grow	ptr	ptr,ptr,usize,usize,ptr
+js_perry_payload_buffer_hook_alloc	ptr	ptr,usize
+js_perry_payload_buffer_hook_free	void	ptr,ptr
+js_perry_payload_buffer_live_bytes	usize	
+js_perry_payload_buffer_release	void	ptr,ptr,usize
+js_perry_payload_buffer_shrink	ptr	ptr,ptr,usize,usize,ptr
 js_perry_payload_close	i32s	f64,ptr
 js_perry_payload_close_attached	i32s	f64,ptr
 js_perry_payload_external_bytes	void	f64,ptr,usize
