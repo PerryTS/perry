@@ -2527,6 +2527,19 @@ pub(crate) fn inline_cache_global_name(ctx: &FnCtx<'_>, site_id: u32) -> String 
 /// inline hit path loads the slot through [`emit_inline_cache_slot`] and
 /// proves it non-null before reading a cache word; every runtime miss entry
 /// takes the slot's address.
+/// A fresh array-record entry site: one zeroed `i64` word the runtime uses
+/// as the site's memo of the intrinsic owners' validated ShapeIds
+/// (`perry_runtime::array::iterator_step::ArrayRecordSite`). It holds no heap
+/// pointer and is re-validated by ShapeId compare on every entry.
+pub(crate) fn array_record_site(ctx: &mut FnCtx<'_>) -> String {
+    let site_id = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let name = format!("{}_record", inline_cache_global_name(ctx, site_id));
+    ctx.typed_parse_rodata
+        .push(format!("@{name} = private global i64 0, align 8"));
+    format!("@{name}")
+}
+
 pub(crate) fn inline_cache_global_definition(name: &str) -> String {
     format!("@{name} = private global ptr null")
 }

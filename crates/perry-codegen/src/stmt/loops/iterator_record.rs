@@ -364,6 +364,11 @@ mod tests {
         assert!(ir.contains("packed_f64.loop.fast.preheader"), "{ir}");
         assert!(ir.contains("@js_array_record_enter_counted("), "{ir}");
         assert!(
+            ir.lines()
+                .any(|l| l.contains("@js_array_record_enter_counted(") && l.contains("_record")),
+            "the entry passes its site's memo word: {ir}"
+        );
+        assert!(
             !ir.contains("@js_typed_feedback_packed_f64_array_loop_guard("),
             "the loop consumes the entry's admission, not a second classification: {ir}"
         );

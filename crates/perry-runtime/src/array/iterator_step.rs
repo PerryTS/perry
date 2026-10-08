@@ -166,31 +166,53 @@ pub unsafe extern "C-unwind" fn js_array_record_literal(values: *const f64, coun
 /// The prototype shape describes the iteration member and its ConstFn body.
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_array_record_needs_iterator(value: f64) -> i32 {
-    array_record_enter(value, std::ptr::null_mut(), false)
+    array_record_enter(value, std::ptr::null_mut(), std::ptr::null(), false)
 }
+
+/// One entry site's memo of the intrinsic owners' shapes its last full proof
+/// validated: the Array prototype bag's ShapeId in the low half and
+/// %ArrayIteratorPrototype%'s in the high half. Its only authority is the
+/// compare against both owners' current ShapeIds at every entry; ShapeIds are
+/// minted from one process-wide sequence and never reused, so a word written
+/// by another realm or agent can only match an owner whose shape carries the
+/// same validated facts. Zero never matches (it names no shape).
+pub type ArrayRecordSite = std::sync::atomic::AtomicU64;
 
 /// Capture the actual source and its shape verdict together. The output is
 /// published only after intrinsic materialization has finished allocating.
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_array_record_enter(value: f64, out: *mut f64) -> i32 {
-    array_record_enter(value, out, false)
+pub unsafe extern "C-unwind" fn js_array_record_enter(
+    value: f64,
+    out: *mut f64,
+    site: *const ArrayRecordSite,
+) -> i32 {
+    array_record_enter(value, out, site, false)
 }
 
 /// The counted consumer's entry: the same proof (bit 0), then the packed-f64
 /// loop admission of the live head the proof already resolved (bit 1). The
 /// loop consumes bit 1 in place of a second receiver classification.
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_array_record_enter_counted(value: f64, out: *mut f64) -> i32 {
-    array_record_enter(value, out, true)
+pub unsafe extern "C-unwind" fn js_array_record_enter_counted(
+    value: f64,
+    out: *mut f64,
+    site: *const ArrayRecordSite,
+) -> i32 {
+    array_record_enter(value, out, site, true)
 }
 
 #[inline(always)]
-unsafe fn array_record_enter(value: f64, out: *mut f64, counted: bool) -> i32 {
+unsafe fn array_record_enter(
+    value: f64,
+    out: *mut f64,
+    site: *const ArrayRecordSite,
+    counted: bool,
+) -> i32 {
     let proto = crate::array::array_prototype_addr_if_resolved();
     // Published only once the whole iterator-prototype tower is built.
     let next_owner = crate::object::array_iterator_prototype_addr();
     if proto != 0 && next_owner != 0 {
-        return array_record_needs_iterator_resolved(value, proto, next_owner, out, counted);
+        return array_record_needs_iterator_resolved(value, proto, next_owner, out, site, counted);
     }
     array_record_needs_iterator_cold(value, out)
 }
@@ -207,15 +229,18 @@ unsafe fn array_record_needs_iterator_cold(value: f64, out: *mut f64) -> i32 {
         crate::array::array_prototype_addr(),
         crate::object::array_iterator_prototype_addr(),
         out,
+        std::ptr::null(),
         false,
     )
 }
 
+#[inline(always)]
 unsafe fn array_record_needs_iterator_resolved(
     value: f64,
     proto: usize,
     next_owner: usize,
     out: *mut f64,
+    site: *const ArrayRecordSite,
     counted: bool,
 ) -> i32 {
     if !out.is_null() {
@@ -250,14 +275,14 @@ unsafe fn array_record_needs_iterator_resolved(
     if flags & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
         return 1;
     }
-    let symbol = crate::symbol::well_known_symbol("iterator") as usize;
     if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
         let own = crate::array::array_property_bag(array);
+        let symbol = crate::symbol::well_known_symbol("iterator") as usize;
         if !own.is_null() && crate::object::shaped_symbols::position(own, symbol).is_some() {
             return 1;
         }
     }
-    if array_record_prototypes_need_iterator(proto, next_owner, symbol) != 0 {
+    if !array_record_prototypes_proven_at(site, proto, next_owner) {
         return 1;
     }
     if counted && crate::typed_feedback::packed_f64_loop_admits_live_array(array, flags) {
@@ -267,7 +292,9 @@ unsafe fn array_record_needs_iterator_resolved(
 }
 
 #[no_mangle]
-pub unsafe extern "C-unwind" fn js_array_record_literal_needs_iterator() -> i32 {
+pub unsafe extern "C-unwind" fn js_array_record_literal_needs_iterator(
+    site: *const ArrayRecordSite,
+) -> i32 {
     let mut proto_addr = crate::array::array_prototype_addr_if_resolved();
     let mut next_owner = crate::object::array_iterator_prototype_addr();
     if proto_addr == 0 || next_owner == 0 {
@@ -276,8 +303,42 @@ pub unsafe extern "C-unwind" fn js_array_record_literal_needs_iterator() -> i32 
         proto_addr = crate::array::array_prototype_addr();
         next_owner = crate::object::array_iterator_prototype_addr();
     }
-    let symbol = crate::symbol::well_known_symbol("iterator");
-    array_record_prototypes_need_iterator(proto_addr, next_owner, symbol as usize)
+    i32::from(!array_record_prototypes_proven_at(
+        site, proto_addr, next_owner,
+    ))
+}
+
+/// The prototype facts at one entry site: a hit is the two owners' current
+/// ShapeIds equal to the site's validated pair; anything else is the full
+/// shape proof, whose success re-publishes the pair. Every edit that can
+/// change a checked fact (a store, define or delete on either member, a
+/// dictionary conversion) moves its owner to another ShapeId.
+#[inline(always)]
+unsafe fn array_record_prototypes_proven_at(
+    site: *const ArrayRecordSite,
+    proto_addr: usize,
+    next_owner: usize,
+) -> bool {
+    let bag = crate::array::array_property_bag(proto_addr as *const crate::array::ArrayHeader);
+    if bag.is_null() {
+        return false;
+    }
+    let pair = u64::from(crate::object::shapes::object_shape_stamp(bag))
+        | u64::from(crate::object::shapes::object_shape_stamp(
+            next_owner as *const ObjectHeader,
+        )) << 32;
+    let complete = pair as u32 != 0 && (pair >> 32) as u32 != 0;
+    if !site.is_null() && complete && (*site).load(std::sync::atomic::Ordering::Relaxed) == pair {
+        return true;
+    }
+    let symbol = crate::symbol::well_known_symbol("iterator") as usize;
+    if array_record_prototypes_need_iterator(proto_addr, next_owner, symbol) != 0 {
+        return false;
+    }
+    if !site.is_null() && complete {
+        (*site).store(pair, std::sync::atomic::Ordering::Relaxed);
+    }
+    true
 }
 
 /// Both intrinsic members, read from their owners' current shapes: the

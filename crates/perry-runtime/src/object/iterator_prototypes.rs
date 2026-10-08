@@ -949,6 +949,11 @@ pub(crate) unsafe fn shape_member_body_is(
     is_key: impl Fn(u64) -> bool,
     code: *const u8,
 ) -> bool {
+    // A dictionary owner delegates its key list to the receiver; only an
+    // ordinary shape can carry the member's ConstFn lane.
+    if shape.keys() == 0 {
+        return false;
+    }
     let keys = crate::array::array_elements_ptr(shape.keys() as *const crate::array::ArrayHeader);
     let Some(slot) = (0..shape.logical_key_count()).find(|&i| is_key(*keys.add(i as usize))) else {
         return false;
