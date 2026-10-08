@@ -351,21 +351,68 @@ unsafe fn array_record_prototypes_need_iterator(
     next_owner: usize,
     symbol: usize,
 ) -> i32 {
-    let bag = crate::array::array_property_bag(proto_addr as *const crate::array::ArrayHeader);
-    if bag.is_null() {
-        return 1;
-    }
-    let Some(shape) = crate::object::shapes::object_shape_record(bag) else {
-        return 1;
-    };
-    let key_bits = crate::value::POINTER_TAG | symbol as u64;
-    let values = crate::object::array_prototype_values_thunk as *const u8;
-    if !crate::object::shape_member_body_is(shape, |bits| bits == key_bits, values) {
+    if !array_prototype_iterates_intrinsically(proto_addr, symbol) {
         return 1;
     }
     i32::from(!crate::object::array_iterator_next_is_intrinsic(
         next_owner as *const ObjectHeader,
     ))
+}
+
+/// The Array prototype bag's shape names `@@iterator` at a ConstFn lane whose
+/// body is the intrinsic `values`.
+#[inline(always)]
+unsafe fn array_prototype_iterates_intrinsically(proto_addr: usize, symbol: usize) -> bool {
+    let bag = crate::array::array_property_bag(proto_addr as *const crate::array::ArrayHeader);
+    if bag.is_null() {
+        return false;
+    }
+    let Some(shape) = crate::object::shapes::object_shape_record(bag) else {
+        return false;
+    };
+    let key_bits = crate::value::POINTER_TAG | symbol as u64;
+    let values = crate::object::array_prototype_values_thunk as *const u8;
+    crate::object::shape_member_body_is(shape, |bits| bits == key_bits, values)
+}
+
+/// GetIterator(array) when the shapes prove its iteration member is the
+/// intrinsic `values`: no own `@@iterator`, the ordinary Array prototype, and
+/// that prototype's ConstFn lane. Calling that member with the array as
+/// receiver is exactly `array_values_iter`; anything else answers `None` and
+/// the caller performs the ordinary GetMethod and Call.
+pub(crate) unsafe fn array_intrinsic_values_iterator(value: f64) -> Option<f64> {
+    let proto = crate::array::array_prototype_addr_if_resolved();
+    if proto == 0 || !JSValue::from_bits(value.to_bits()).is_pointer() {
+        return None;
+    }
+    let raw = js_nanbox_get_pointer(value) as usize;
+    let header = crate::value::addr_class::try_read_gc_header(raw)?;
+    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        return None;
+    }
+    let mut array = raw as *const crate::array::ArrayHeader;
+    let mut flags = header._reserved;
+    if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
+        array = crate::array::clean_arr_ptr(array);
+        if array.is_null() {
+            return None;
+        }
+        flags = crate::array::array_object_flags_resolved(array);
+    }
+    if flags & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0 {
+        return None;
+    }
+    let symbol = crate::symbol::well_known_symbol("iterator") as usize;
+    if flags & crate::gc::OBJ_FLAG_ARRAY_DESCRIPTORS != 0 {
+        let own = crate::array::array_property_bag(array);
+        if !own.is_null() && crate::object::shaped_symbols::position(own, symbol).is_some() {
+            return None;
+        }
+    }
+    if !array_prototype_iterates_intrinsically(proto, symbol) {
+        return None;
+    }
+    Some(crate::array::array_values_iter(value))
 }
 
 #[no_mangle]
