@@ -474,7 +474,6 @@ fn build_family_proto(
 }
 
 /// Whether any iterator-prototype tower has been materialized on this thread.
-#[cfg(test)]
 pub(crate) fn iterator_prototypes_materialized() -> bool {
     ITERATOR_PROTOTYPE_PTR.load(Ordering::Acquire) != 0
 }

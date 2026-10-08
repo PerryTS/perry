@@ -18,6 +18,41 @@
                 arg_group.release(ctx);
                 return Ok(result);
             }
+            "arrayRecordSource" => {
+                let value = lower_expr(ctx, &args[0])?;
+                return Ok(ctx.block().call(DOUBLE, "js_array_record_source", &[(DOUBLE, &value)]));
+            }
+            "arrayRecordForUpdate" => {
+                return lower_expr(ctx, &Expr::Conditional {
+                    condition: Box::new(args[0].clone()),
+                    then_expr: Box::new(Expr::Number(0.0)),
+                    else_expr: Box::new(args[1].clone()),
+                });
+            }
+            "arrayRecordForValue" => {
+                return lower_expr(ctx, &Expr::Conditional {
+                    condition: Box::new(args[0].clone()),
+                    then_expr: Box::new(args[1].clone()), else_expr: Box::new(args[2].clone()),
+                });
+            }
+            "arrayRecordForBound" => {
+                return lower_expr(ctx, &Expr::Sequence(vec![args[4].clone(), Expr::Conditional {
+                    condition: Box::new(args[0].clone()),
+                    then_expr: Box::new(Expr::Conditional {
+                        condition: Box::new(args[3].clone()),
+                        then_expr: Box::new(args[2].clone()),
+                        else_expr: Box::new(Expr::Number(f64::INFINITY)),
+                    }),
+                    else_expr: Box::new(Expr::NativeMethodCall {
+                        module: "__perry_runtime".into(), class_name: None, object: None,
+                        method: "arrayRecordLength".into(), args: vec![args[1].clone()],
+                    }),
+                }]));
+            }
+            "arrayRecordCloseAbsent" => {
+                let needs = ctx.block().call(I32, "js_array_record_close_absent", &[]);
+                return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
+            }
             "arrayRecordClose" => {
                 let (values, roots) = super::lower_call_args_rooted(ctx, args)?;
                 let values = values.iter().map(|v| (DOUBLE, v.as_str())).collect::<Vec<_>>();
@@ -83,6 +118,10 @@
             // with no static array proof — a NaN-boxed boolean, the same shape
             // `Expr::ArrayIterationPatched` produces for the proven arm.
             "arrayDestructureNeedsIterator" | "arrayRecordNeedsIterator" => {
+                if method == "arrayRecordNeedsIterator" && args.is_empty() {
+                    let needs = ctx.block().call(I32, "js_array_record_literal_needs_iterator", &[]);
+                    return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
+                }
                 let source = args.first().map_or_else(
                     || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
                     |arg| lower_expr(ctx, arg),

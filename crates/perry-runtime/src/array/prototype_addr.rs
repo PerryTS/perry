@@ -320,6 +320,10 @@ fn bootstrap_prototype_addr(slot: usize) -> usize {
     addr
 }
 
+pub(crate) fn array_prototype_addr_if_resolved() -> usize {
+    memoized_prototype_addr(&prototype_addrs()[ARRAY_PROTO_CACHE]).unwrap_or(0)
+}
+
 pub(crate) fn array_prototype_addr() -> usize {
     resolve_prototype_addr(ARRAY_PROTO_CACHE)
 }

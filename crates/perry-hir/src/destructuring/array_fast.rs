@@ -32,7 +32,7 @@ impl ArraySource {
     /// existing iterator-step sequence, used verbatim on the protocol arm.
     pub(crate) fn pull(
         &self,
-        _idx: usize,
+        idx: usize,
         _value_id: LocalId,
         mut iter_pull: Vec<Stmt>,
     ) -> Vec<Stmt> {
@@ -40,7 +40,7 @@ impl ArraySource {
             ArraySource::Iterator(_) => iter_pull,
             ArraySource::Guarded(plan) => {
                 for stmt in &mut iter_pull {
-                    plan.rewrite(stmt, None, true);
+                    plan.rewrite_at(stmt, None, true, Some(idx));
                 }
                 iter_pull
             }
@@ -105,7 +105,11 @@ impl ArraySource {
                 init: Some(Expr::Undefined),
             },
             Stmt::If {
-                condition: Expr::LocalGet(done),
+                condition: Expr::Compare {
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(done)),
+                    right: Box::new(Expr::Bool(true)),
+                },
                 then_branch: vec![],
                 else_branch: Some(vec![Stmt::While {
                     condition: Expr::Bool(true),
@@ -128,7 +132,14 @@ impl ArraySource {
         ]
     }
 
-    /// `IteratorClose`, run only where an iterator was actually created.
+    pub(crate) fn release(&self, extra: &[LocalId]) -> Vec<Stmt> {
+        match self {
+            Self::Iterator(_) => Vec::new(),
+            Self::Guarded(plan) => plan.release(extra),
+        }
+    }
+
+    /// Close runs only where an iterator was actually created.
     pub(crate) fn close(&self, mut close: Stmt) -> Stmt {
         match self {
             ArraySource::Iterator(_) => close,
@@ -151,7 +162,7 @@ pub(crate) fn plan_for_literal(
         .iter()
         .map(|e| lower_expr(ctx, e))
         .collect::<Result<Vec<_>>>()?;
-    Ok(FastPlan::new(ctx, Expr::Array(values), out))
+    Ok(FastPlan::literal(ctx, values, out))
 }
 
 pub(crate) fn plan_for_proven_array(
