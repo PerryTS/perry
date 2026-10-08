@@ -678,21 +678,56 @@ fn normalize_int32_immediate(ctx: &mut FnCtx<'_>, value: &str) -> String {
 
 /// Strict equality where exactly one operand is a proven Number.
 ///
-/// `fcmp` already rejects every Perry non-number tag because those encodings
-/// are NaNs. The only representation it cannot consume directly is the
-/// canonical INT32 immediate, which we normalize above. This therefore
-/// replaces `js_eq` without speculating on an object's shape or invoking any
-/// coercion (strict equality never coerces).
-fn lower_strict_eq_against_number(ctx: &mut FnCtx<'_>, op: CompareOp, l: &str, r: &str) -> String {
-    let l = normalize_int32_immediate(ctx, l);
-    let r = normalize_int32_immediate(ctx, r);
-    let pred = if matches!(op, CompareOp::Ne) {
-        // `une` is required for both ordinary NaN and every non-number tag.
-        "une"
+/// Compare raw double encodings, then compare the varying value's compact
+/// INT32 payload against the Number's exact integer encoding. Normalizing the
+/// varying operand first speculates an integer-to-double conversion even for
+/// ordinary doubles, extending byte-dependent loop recurrences. Encoding the
+/// proven operand leaves that conversion off the varying operand's dependency
+/// chain and folds away for constants. Saturation avoids poison for NaN,
+/// infinity and out-of-range Numbers; the round trip rejects those and fractions.
+fn lower_strict_eq_against_number(
+    ctx: &mut FnCtx<'_>,
+    op: CompareOp,
+    l: &str,
+    r: &str,
+    dynamic_is_left: bool,
+) -> String {
+    let (dynamic, number) = if dynamic_is_left { (l, r) } else { (r, l) };
+    let number = normalize_int32_immediate(ctx, number);
+    let number = number.as_str();
+    let bits = ctx.block().bitcast_double_to_i64(dynamic);
+    let tag = ctx.block().lshr(I64, &bits, "48");
+    let is_i32 = ctx
+        .block()
+        .icmp_eq(I64, &tag, crate::nanbox::INT32_TAG_TOP16_I64);
+    let integer = ctx
+        .block()
+        .call(I32, "llvm.fptosi.sat.i32.f64", &[(DOUBLE, number)]);
+    let roundtrip = ctx.block().sitofp(I32, &integer, DOUBLE);
+    let exact = ctx.block().fcmp("oeq", &roundtrip, number);
+    let payload = ctx.block().trunc(I64, &bits, I32);
+    let same_integer = ctx.block().icmp_eq(I32, &payload, &integer);
+    let compact = ctx.block().and(I1, &is_i32, &exact);
+    let compact = ctx.block().and(I1, &compact, &same_integer);
+    // Raw doubles compare by bits, except that both signed zeros are equal and
+    // NaN is unequal to itself. Keeping the NaN check on the proven operand
+    // avoids a floating-point round trip through the varying value as well.
+    let number_bits = ctx.block().bitcast_double_to_i64(number);
+    let same_bits = ctx.block().icmp_eq(I64, &bits, &number_bits);
+    let dynamic_magnitude = ctx.block().shl(I64, &bits, "1");
+    let number_magnitude = ctx.block().shl(I64, &number_bits, "1");
+    let dynamic_zero = ctx.block().icmp_eq(I64, &dynamic_magnitude, "0");
+    let number_zero = ctx.block().icmp_eq(I64, &number_magnitude, "0");
+    let both_zero = ctx.block().and(I1, &dynamic_zero, &number_zero);
+    let raw = ctx.block().or(I1, &same_bits, &both_zero);
+    let ordered = ctx.block().fcmp("oeq", number, number);
+    let raw = ctx.block().and(I1, &raw, &ordered);
+    let equal = ctx.block().or(I1, &raw, &compact);
+    let bit = if matches!(op, CompareOp::Ne) {
+        ctx.block().xor(I1, &equal, "true")
     } else {
-        "oeq"
+        equal
     };
-    let bit = ctx.block().fcmp(pred, &l, &r);
     let tagged = ctx.block().select(
         I1,
         &bit,
@@ -1736,7 +1771,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let both_numeric = left_numeric && right_numeric;
                 let exactly_one_numeric = left_numeric ^ right_numeric;
                 if matches!(op, CompareOp::Eq | CompareOp::Ne) && exactly_one_numeric {
-                    return Ok(lower_strict_eq_against_number(ctx, *op, &l, &r));
+                    return Ok(lower_strict_eq_against_number(
+                        ctx,
+                        *op,
+                        &l,
+                        &r,
+                        !left_numeric,
+                    ));
                 }
                 if is_relational_op && !both_numeric {
                     let (pred, fname) = match op {

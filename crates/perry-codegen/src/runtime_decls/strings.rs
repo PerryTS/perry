@@ -125,6 +125,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // get hardware instructions / libm calls instead of depending
     // on `js_math_*` runtime symbols (which the auto-optimize
     // dead-strip removes from libperry_runtime.a).
+    module.declare_function("llvm.fptosi.sat.i32.f64", I32, &[DOUBLE]);
     module.declare_function("llvm.sqrt.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.floor.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.ceil.f64", DOUBLE, &[DOUBLE]);
