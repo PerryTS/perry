@@ -83,8 +83,11 @@ pub(crate) unsafe fn bag_ensure(addr: usize) -> *mut ObjectHeader {
         // The owner is the bag's first key, born in inline slot 0 with its
         // final attributes, so `BYTES_VIEW_BAG_OWNER` reaches it in one load.
         #[cfg(test)]
-        if super::bytes::b4_sabotage("view_bag_owner_spilled") {
+        if super::bytes::b4_sabotage("view_bag_owner_not_first") {
+            // Planted fault: another key is born first, so the owner is not
+            // at `BYTES_VIEW_BAG_OWNER`.
             let obj = crate::object::js_object_alloc_null_proto(0, 0);
+            object_define(obj, "sabotage", 0.0, false);
             object_define(
                 obj,
                 VIEW_OWNER_KEY,
@@ -98,9 +101,7 @@ pub(crate) unsafe fn bag_ensure(addr: usize) -> *mut ObjectHeader {
                 VIEW_OWNER_KEY,
                 crate::value::js_nanbox_pointer(owner as i64),
             )],
-            &[crate::object::key_attrs::attr_bits_to_entry(
-                crate::object::PropertyAttrs::new(false, false, false).bits,
-            )],
+            &[crate::object::key_attrs::attr_bits_to_entry(hidden_attrs())],
         )
     } else {
         crate::object::js_object_alloc_null_proto(0, 0)
@@ -120,14 +121,20 @@ unsafe fn attach_bag(cell: *mut BufferHeader, obj: *mut ObjectHeader) -> *mut Ob
     obj
 }
 
+/// The attributes of an engine-owned bag key: neither writable, enumerable
+/// nor configurable, at bag birth and at a later define alike.
+fn hidden_attrs() -> u8 {
+    #[cfg(test)]
+    let writable = super::bytes::b4_sabotage("private_key_descriptor");
+    #[cfg(not(test))]
+    let writable = false;
+    crate::object::PropertyAttrs::new(writable, false, writable).bits
+}
+
 pub(crate) unsafe fn object_define(obj: *mut ObjectHeader, key: &str, value: f64, hidden: bool) {
     let name = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
     crate::object::object_ops::define_property_force_store_value(obj, name, value);
     if hidden {
-        #[cfg(test)]
-        let writable = super::bytes::b4_sabotage("private_key_descriptor");
-        #[cfg(not(test))]
-        let writable = false;
         crate::object::descriptor_state::note_descriptor_target_edits(
             obj as usize,
             &[crate::object::key_attrs::AttrsEdit::Data(
@@ -136,7 +143,7 @@ pub(crate) unsafe fn object_define(obj: *mut ObjectHeader, key: &str, value: f64
                 // public assignment/redefinition cannot replace an owner
                 // edge or pin count. Trusted updates use the force-store
                 // funnel above, including after freeze/preventExtensions.
-                crate::object::PropertyAttrs::new(writable, false, writable).bits,
+                hidden_attrs(),
             )],
         );
     }
