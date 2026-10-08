@@ -1,6 +1,6 @@
 # GitHub Actions consolidation implementation plan
 
-> **Follow-up status (2026-10):** the initial rollout below retained reusable child workflow files. The follow-up now inlines those suite jobs into the ten entrypoints and removes the child YAML files. Instructions below that require `workflow_call` or retained child files describe the original rollout and are superseded by that follow-up.
+> **Current status (2026-10):** the initial rollout below is historical. All 38 suites are now inlined under six repository entrypoints: CI, Extended Tests, GC, Repository, and the two publishing workflows. Extended Tests groups compiler/runtime, compatibility, integration, and performance; Repository groups documentation and maintenance. GitHub's four dynamic registrations bring the sidebar total to ten after retired run history is cleaned up. See `docs/src/testing/ci-tiers.md` and the live `scripts/actions_catalog.json` for current routing; the frozen inventory and implementation instructions below describe the original ten-parent rollout.
 
 Implement 10 category entrypoints with related suites shown as nested jobs. This is a handoff for `gpt-6-luna` with low reasoning and the user's Fast setting. Follow the numbered phases in order. The plan supplies the architecture, filenames, routing rules, exceptions, validation cases, and completion criteria; do not redesign these during implementation.
 

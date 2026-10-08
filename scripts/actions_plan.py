@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select the workflow_call suites that belong in one category run."""
+"""Select suites within a category, including categories sharing one workflow."""
 
 from __future__ import annotations
 
@@ -201,26 +201,36 @@ def select(category_key: str, event_name: str, event: dict[str, Any], ref: str =
     if category_key not in categories:
         raise ValueError(f"unknown workflow category: {category_key}")
     category = categories[category_key]
+    siblings = [value for value in categories.values()
+                if value["entrypoint"] == category["entrypoint"]]
+    parent = catalog.get("entrypoints", {}).get(category["entrypoint"], category)
     modules = category["modules"]
     ids = [module["id"] for module in modules]
     if len(ids) != len(set(ids)):
         raise ValueError(f"duplicate module ID in category {category_key}")
     run_core = False
     if event_name == "workflow_dispatch":
-        if category_key == "ci":
-            requested = suite or "core"
+        requested = suite or parent["dispatch_inputs"]["suite"]["default"]
+        if requested not in parent["dispatch_inputs"]["suite"]["options"]:
+            raise ValueError(f"unknown {category['name']} suite selection: {requested}")
+        local_options = category["dispatch_inputs"]["suite"]["options"]
+        if requested == category_key:
+            requested = "all"
+        if requested not in local_options:
+            # A sibling owns this dispatch. Its router runs independently;
+            # this category must select nothing rather than fail the parent.
+            requested_ids = set()
+        elif category_key == "ci":
             if requested not in categories[category_key]["dispatch_inputs"]["suite"]["options"]:
                 raise ValueError(f"unknown CI suite selection: {requested}")
             run_core = requested in {"core", "all"}
             requested_ids = set(ids if requested == "all" else ([] if requested == "core" else [requested]))
         elif category_key == "maintenance":
-            requested = suite or "validate"
             valid = categories[category_key]["dispatch_inputs"]["suite"]["options"]
             if requested == "all" or requested not in valid:
                 raise ValueError(f"unknown Maintenance suite selection: {requested}")
             requested_ids = set([] if requested in {"validate", "delete-retired-runs"} else [requested])
         else:
-            requested = suite or category.get("dispatch_inputs", {}).get("suite", {}).get("default", "all")
             valid = ["all", *ids]
             if requested not in valid:
                 raise ValueError(f"unknown {category_key} suite selection: {requested}")
@@ -247,21 +257,18 @@ def select(category_key: str, event_name: str, event: dict[str, Any], ref: str =
         if category_key == "ci":
             core = next(module for module in modules if module["id"] == "core")
             run_core = _matches_event(core, event_name, event, ref, changed_paths)
-    if event_name == "schedule" and not selected and not run_core:
-        raise ValueError(f"unrecognized {category_key} schedule: {event.get('schedule')!r}")
     if event_name == "schedule" and not any(
         isinstance(rule, dict) and event.get("schedule") == rule.get("cron")
-        for module in modules for rule in _event_rules(module, "schedule")
+        for sibling in siblings for module in sibling["modules"]
+        for rule in _event_rules(module, "schedule")
     ):
         raise ValueError(f"unrecognized {category_key} schedule: {event.get('schedule')!r}")
-    if category_key == "maintenance" and event_name == "workflow_dispatch" and requested != "validate" and ref != "refs/heads/main":
+    if (category_key == "maintenance" and event_name == "workflow_dispatch"
+            and requested in category["dispatch_inputs"]["suite"]["options"]
+            and requested != "validate" and ref != "refs/heads/main"):
         raise ValueError(f"Maintenance suite {requested!r} may be dispatched only from main")
     plan = {module_id: module_id in selected for module_id in ids}
     if event_name == "workflow_dispatch":
-        requested = suite
-        if category_key == "ci": requested = requested or "core"
-        elif category_key == "maintenance": requested = requested or "validate"
-        else: requested = requested or category.get("dispatch_inputs", {}).get("suite", {}).get("default", "all")
         module_inputs = {
             module["id"]: _provided_inputs(module, category, event)
             for module in modules if module["id"] in selected
@@ -275,9 +282,13 @@ def select(category_key: str, event_name: str, event: dict[str, Any], ref: str =
             "selection": ",".join(module_id for module_id in ids if module_id in selected),
             "module_inputs": json.dumps(module_inputs, separators=(",", ":")),
             "run_core": str(run_core).lower(),
+            "cleanup": str(category_key == "maintenance" and event_name == "push"
+                           and ref == "refs/heads/main"
+                           and (changed_paths is None or path_matches(
+                               category.get("cleanup_push_paths", []), changed_paths))).lower(),
             "validate": str(category_key == "maintenance" and
                             (event_name == "pull_request" or
-                             (event_name == "workflow_dispatch" and (suite or "validate") == "validate"))).lower()}
+                             (event_name == "workflow_dispatch" and requested == "validate"))).lower()}
 
 
 def _load_paths(path: str | None) -> list[str] | None:

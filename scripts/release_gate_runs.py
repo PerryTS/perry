@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate the simulator job inside consolidated Integration runs."""
+"""Evaluate the simulator job inside consolidated Extended Tests runs."""
 
 from __future__ import annotations
 

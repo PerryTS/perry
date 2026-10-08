@@ -3,7 +3,8 @@
 
 The script is intentionally restartable: each invocation keeps deleting from
 the first page until the API quota is nearly exhausted, then dispatches itself
-again on main. It never touches active runs or workflows that still exist.
+again on main. Active runs are allowed to finish before their history is
+deleted. Workflows that still exist, including GitHub-managed ones, are spared.
 """
 from __future__ import annotations
 
@@ -91,6 +92,23 @@ def main() -> int:
                 return 1
             runs = json.loads(payload).get("workflow_runs", [])
             if not runs:
+                # A merge can retire a workflow while its last jobs are still
+                # queued/running. Do not declare the sidebar clean until those
+                # jobs have finished and their completed history is removed.
+                status, headers, payload = api.request(
+                    "GET", f"/actions/workflows/{workflow_id}/runs?per_page=1")
+                remaining = int(headers.get("X-RateLimit-Remaining", remaining) or remaining)
+                reset_at = int(headers.get("X-RateLimit-Reset", reset_at) or reset_at)
+                if status == 404:
+                    break
+                if status != 200:
+                    print(f"Unable to check outstanding runs for {workflow_path}: HTTP {status}", file=sys.stderr)
+                    return 1
+                outstanding = json.loads(payload).get("workflow_runs", [])
+                if any(run.get("status") != "completed" for run in outstanding):
+                    print(f"Waiting for active runs of {workflow_path} to finish before history cleanup")
+                    time.sleep(min(60, max(0, deadline - time.monotonic())))
+                    continue
                 break
             for run in runs:
                 if time.monotonic() >= deadline or remaining < 25:

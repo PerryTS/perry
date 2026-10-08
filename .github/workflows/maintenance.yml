@@ -1,60 +1,66 @@
-name: Maintenance
-run-name: ${{ format('Maintenance / {0} / {1}', inputs.suite || 'scheduled', github.ref_name) }}
+name: Repository
+run-name: ${{ format('Repository / {0} / {1}', inputs.suite || github.event.schedule || github.event_name, github.ref_name) }}
 on:
   pull_request:
     types:
-      - opened
-      - reopened
-      - synchronize
+    - opened
+    - reopened
+    - synchronize
     paths:
-      - .github/workflows/*.yml
-      - .github/workflows/ci-queue-reaper.yml
-      - .github/workflows/gate-failure-watch.yml
-      - .github/workflows/gate-freshness.yml
-      - .github/workflows/maintenance.yml
-      - .github/workflows/npm-publish-freshness.yml
-      - .github/workflows/soak-autofix.yml
-      - npm/**
-      - scripts/actions_catalog.json
-      - scripts/actions_plan.py
-      - scripts/check_gate_freshness.py
-      - scripts/check_npm_publish_freshness.py
-      - scripts/gate_failure_watch.json
-      - scripts/gate_failure_watch.py
-      - scripts/gate_freshness.json
-      - scripts/npm_publish_freshness.json
+    - .github/workflows/*.yml
+    - .github/workflows/ci-queue-reaper.yml
+    - .github/workflows/gate-failure-watch.yml
+    - .github/workflows/gate-freshness.yml
+    - .github/workflows/maintenance.yml
+    - .github/workflows/npm-publish-freshness.yml
+    - .github/workflows/soak-autofix.yml
+    - npm/**
+    - scripts/actions_catalog.json
+    - scripts/actions_plan.py
+    - scripts/check_gate_freshness.py
+    - scripts/check_npm_publish_freshness.py
+    - scripts/gate_failure_watch.json
+    - scripts/gate_failure_watch.py
+    - scripts/gate_freshness.json
+    - scripts/npm_publish_freshness.json
+    - .github/workflows/docs-check.yml
+    - .github/workflows/docs.yml
+    - README.md
+    - crates/perry-doc-tests/**
+    - docs/**
+    - scripts/check_docs.py
   schedule:
-    - cron: 13,43 * * * *
-    - cron: 17 0 * * *
-    - cron: 20 7 * * *
-    - cron: 5 */2 * * *
+  - cron: 13,43 * * * *
+  - cron: 17 0 * * *
+  - cron: 20 7 * * *
+  - cron: 5 */2 * * *
+  - cron: 23 5 * * 1
   push:
+    tags:
+    - v*
     branches:
-      - main
-    paths:
-      - .github/workflows/maintenance.yml
-      - scripts/delete_retired_workflow_runs.py
+    - main
   workflow_run:
     workflows:
-      - CI
-      - Compiler and Runtime
-      - GC
-      - Integration
-      - Performance
+    - CI
+    - GC
+    - Extended Tests
     types:
-      - completed
+    - completed
   workflow_dispatch:
     inputs:
       suite:
-        description: Offline validation by default; choose a live task explicitly.
+        description: Offline validation by default; select docs deployment or maintenance explicitly.
         type: choice
         options:
-          - validate
-          - ci-queue-reaper
-          - gate-freshness
-          - soak-autofix
-          - npm-publish-freshness
-          - delete-retired-runs
+        - validate
+        - docs-check
+        - docs
+        - ci-queue-reaper
+        - gate-freshness
+        - soak-autofix
+        - npm-publish-freshness
+        - delete-retired-runs
         default: validate
       apply:
         description: Apply queue cleanup; unchecked is dry run.
@@ -69,7 +75,9 @@ concurrency:
   group: maintenance-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  # Maintenance suites
   route:
+    name: Maintenance / suite routing
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -80,6 +88,7 @@ jobs:
       selection: ${{ steps.route.outputs.selection }}
       module_inputs: ${{ steps.route.outputs.module_inputs }}
       validate: ${{ steps.route.outputs.validate }}
+      cleanup: ${{ steps.route.outputs.cleanup }}
     steps:
       - name: Checkout workflow source for routing
         shell: bash
@@ -141,6 +150,8 @@ jobs:
         run: 'set -euo pipefail
 
           python3 scripts/test_actions_plan.py
+
+          python3 scripts/test_delete_retired_workflow_runs.py
 
           python3 scripts/check_actions_topology.py
 
@@ -667,7 +678,7 @@ jobs:
       ${{
         needs.route.result == 'success' && github.ref == 'refs/heads/main' &&
         ((github.event_name == 'workflow_dispatch' && inputs.suite == 'delete-retired-runs' && inputs.confirm_delete_retired_runs) ||
-         github.event_name == 'push')
+         (github.event_name == 'push' && needs.route.outputs.cleanup == 'true'))
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 350
@@ -696,3 +707,280 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_API_URL: ${{ github.api_url }}
         run: python3 scripts/delete_retired_workflow_runs.py
+
+  # Documentation suites
+  route-documentation:
+    name: Documentation / suite routing
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      plan: ${{ steps.route.outputs.plan }}
+      selection: ${{ steps.route.outputs.selection }}
+      module_inputs: ${{ steps.route.outputs.module_inputs }}
+    steps:
+      - name: Checkout workflow source for routing
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth 1 origin "$CHECKOUT_REF"
+          git checkout --force --detach FETCH_HEAD
+      - name: Route suites
+        id: route
+        env:
+          SUITE: ${{ inputs.suite }}
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          REF: ${{ github.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(--category documentation --event "$EVENT_NAME" --event-path "$EVENT_PATH" --ref "$REF")
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            python3 scripts/ci_pr_files.py "$GITHUB_REPOSITORY" "$PR_NUMBER" --expected-head "$PR_HEAD_SHA" > changed-files.txt
+            args+=(--changed-files changed-files.txt)
+          fi
+          args+=(--suite "${SUITE:-}")
+          python3 scripts/actions_plan.py "${args[@]}"
+  docs-check__build-and-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Fetch the docs deployed by the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)"
+          git fetch --depth=1 origin "refs/tags/${release_tag}:refs/tags/${release_tag}"
+          echo "PERRY_DOCS_RELEASE_TAG=${release_tag}" >> "$GITHUB_ENV"
+      - name: Install mdBook and gettext tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gettext
+          mkdir -p "$HOME/.cargo/bin"
+          curl -sSL "https://github.com/rust-lang/mdBook/releases/download/${MDBOOK_VERSION}/mdbook-${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.cargo/bin"
+          cargo install mdbook-i18n-helpers --locked --version 0.4.0
+      - name: Check navigation, README release links, local links, anchors, and includes
+        run: |
+          python3 scripts/check_docs.py --self-test
+          python3 scripts/check_docs.py
+      - name: Check TypeScript fences
+        run: cargo run --release --quiet -p perry-doc-tests -- --lint docs/src
+      - name: Validate gettext catalogs
+        run: |
+          # Translation updates require review. Regenerating here rewrites
+          # obsolete entries and can drop existing translations (#10955).
+          for catalog in docs/po/*.po; do
+            msgfmt --check --check-format --statistics --output-file=/dev/null "$catalog"
+          done
+      - name: Build English and all translations
+        run: ./docs/i18n.sh build-all
+    needs:
+      - route-documentation
+    if: ${{ needs.route-documentation.result == 'success' && fromJSON(needs.route-documentation.outputs.plan)['docs-check'] }}
+    env:
+      MDBOOK_VERSION: v0.5.4
+
+    permissions:
+      contents: read
+      pull-requests: read
+    name: Docs checks / build-and-validation
+  docs-check__external-links:
+    if: ${{ needs.route-documentation.result == 'success' && fromJSON(needs.route-documentation.outputs.plan)['docs-check'] && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install lychee
+        run: cargo install lychee --locked --version 0.24.2
+      - name: Check external links
+        run: >-
+          lychee --no-progress --max-retries 3 --accept 200..=399,403,429 --exclude 'https://www.npmjs.com/' --exclude 'https://xtermjs.org/' 'README.md' 'docs/src/**/*.md' 'docs/*.md'
+    needs:
+      - route-documentation
+    env:
+      MDBOOK_VERSION: v0.5.4
+
+    permissions:
+      contents: read
+      pull-requests: read
+    name: Docs checks / external-links
+  docs-check:
+    name: Docs checks / suite result
+    needs:
+      - route-documentation
+      - docs-check__build-and-validation
+      - docs-check__external-links
+    if: ${{ always() && (needs.route-documentation.result == 'success' && fromJSON(needs.route-documentation.outputs.plan)['docs-check']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["docs-check__build-and-validation","docs-check__external-links"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  docs__deploy:
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "true"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Install mdBook and gettext tooling
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          source docs/i18n-toolchain.env
+          sudo apt-get update
+          sudo apt-get install -y gettext
+          gettext_actual=$(msgmerge --version | head -n 1)
+          if [ "$gettext_actual" != "msgmerge (GNU gettext-tools) ${GETTEXT_VERSION}" ]; then
+            echo "::error::Expected gettext ${GETTEXT_VERSION}; found ${gettext_actual}"
+            exit 1
+          fi
+          mkdir -p "$HOME/.cargo/bin"
+          curl -fsSL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" | tar -xz -C "$HOME/.cargo/bin"
+      - name: Install mdbook-i18n-helpers
+        run: |
+          source docs/i18n-toolchain.env
+          cargo install mdbook-i18n-helpers --locked --version "$MDBOOK_I18N_VERSION"
+      - name: Build docs (all languages)
+        run: |
+          ./docs/i18n.sh extract
+          ./docs/i18n.sh sync
+          git diff --exit-code -- docs/po
+          for catalog in docs/po/*.po; do
+            msgfmt --check --check-format --statistics --output-file=/dev/null "$catalog"
+          done
+          ./docs/i18n.sh build-all
+          cp docs/CNAME docs/book/CNAME
+      - uses: ./.github/actions/perry/actions/configure-pages
+      - uses: ./.github/actions/perry/actions/upload-pages-artifact
+        with:
+          path: docs/book
+      - id: deployment
+        uses: ./.github/actions/perry/actions/deploy-pages
+    needs:
+      - route-documentation
+    if: ${{ needs.route-documentation.result == 'success' && fromJSON(needs.route-documentation.outputs.plan)['docs'] }}
+    permissions:
+      contents: read
+      pull-requests: read
+      pages: write
+      id-token: write
+    name: Deploy Docs
+  docs:
+    name: Deploy Docs / suite result
+    needs:
+      - route-documentation
+      - docs__deploy
+    if: ${{ always() && (needs.route-documentation.result == 'success' && fromJSON(needs.route-documentation.outputs.plan)['docs']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["docs__deploy"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY

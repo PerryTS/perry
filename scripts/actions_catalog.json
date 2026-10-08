@@ -578,11 +578,12 @@
           ],
           "default": "all"
         }
-      }
+      },
+      "route_job": "route"
     },
     "compatibility": {
       "name": "Compatibility",
-      "entrypoint": "compatibility.yml",
+      "entrypoint": "compiler-runtime.yml",
       "modules": [
         {
           "id": "node-compat-matrix",
@@ -717,7 +718,8 @@
                 "scripts/wasi_smoke/**",
                 "crates/perry-codegen/src/**",
                 "crates/perry/src/commands/compile/**",
-                ".github/workflows/wasi-check.yml"
+                ".github/workflows/wasi-check.yml",
+                ".github/workflows/compiler-runtime.yml"
               ]
             },
             "schedule": [
@@ -830,11 +832,12 @@
           ],
           "default": "all"
         }
-      }
+      },
+      "route_job": "route-compatibility"
     },
     "integration": {
       "name": "Integration",
-      "entrypoint": "integration.yml",
+      "entrypoint": "compiler-runtime.yml",
       "modules": [
         {
           "id": "container-tests",
@@ -868,7 +871,7 @@
                 "types/perry/compose/**",
                 "types/perry/workloads/**",
                 ".github/workflows/container-tests.yml",
-                ".github/workflows/integration.yml"
+                ".github/workflows/compiler-runtime.yml"
               ]
             },
             "schedule": [
@@ -991,7 +994,8 @@
                 ".github/workflows/auto-opt-app-patterns.yml",
                 "types/perry/container/**",
                 "types/perry/compose/**",
-                "types/perry/workloads/**"
+                "types/perry/workloads/**",
+                ".github/workflows/compiler-runtime.yml"
               ]
             },
             "schedule": [
@@ -1051,11 +1055,12 @@
           ],
           "default": "all"
         }
-      }
+      },
+      "route_job": "route-integration"
     },
     "performance": {
       "name": "Performance",
-      "entrypoint": "performance.yml",
+      "entrypoint": "compiler-runtime.yml",
       "modules": [
         {
           "id": "benchmark",
@@ -1148,11 +1153,12 @@
           ],
           "default": "all"
         }
-      }
+      },
+      "route_job": "route-performance"
     },
     "documentation": {
       "name": "Documentation",
-      "entrypoint": "documentation.yml",
+      "entrypoint": "maintenance.yml",
       "modules": [
         {
           "id": "docs-check",
@@ -1165,7 +1171,8 @@
                 "scripts/check_docs.py",
                 "crates/perry-doc-tests/**",
                 ".github/workflows/docs-check.yml",
-                ".github/workflows/docs.yml"
+                ".github/workflows/docs.yml",
+                ".github/workflows/maintenance.yml"
               ]
             },
             "push": {
@@ -1226,7 +1233,8 @@
           ],
           "default": "docs-check"
         }
-      }
+      },
+      "route_job": "route-documentation"
     },
     "release-packages": {
       "name": "Publish to npm / GitHub Release",
@@ -1454,7 +1462,8 @@
               "paths": [
                 "scripts/check_gate_freshness.py",
                 "scripts/gate_freshness.json",
-                ".github/workflows/gate-freshness.yml"
+                ".github/workflows/gate-freshness.yml",
+                ".github/workflows/maintenance.yml"
               ]
             },
             "workflow_dispatch": null
@@ -1474,9 +1483,7 @@
               "workflows": [
                 "CI",
                 "GC",
-                "Compiler and Runtime",
-                "Integration",
-                "Performance"
+                "Extended Tests"
               ],
               "types": [
                 "completed"
@@ -1487,7 +1494,8 @@
                 ".github/workflows/*.yml",
                 "scripts/gate_failure_watch.json",
                 "scripts/gate_failure_watch.py",
-                "scripts/gate_freshness.json"
+                "scripts/gate_freshness.json",
+                ".github/workflows/maintenance.yml"
               ]
             }
           },
@@ -1496,9 +1504,7 @@
           "workflow_run_names": [
             "CI",
             "GC",
-            "Compiler and Runtime",
-            "Integration",
-            "Performance"
+            "Extended Tests"
           ],
           "validation_only_events": [
             "pull_request"
@@ -1579,14 +1585,141 @@
       "workflow_run_names": [
         "CI",
         "GC",
-        "Compiler and Runtime",
-        "Integration",
-        "Performance"
+        "Extended Tests"
       ],
       "self_alerting": [
         "gate-freshness",
         "npm-publish-freshness"
+      ],
+      "route_job": "route",
+      "cleanup_push_paths": [
+        ".github/workflows/maintenance.yml",
+        "scripts/delete_retired_workflow_runs.py"
       ]
+    }
+  },
+  "entrypoints": {
+    "compiler-runtime.yml": {
+      "name": "Extended Tests",
+      "categories": [
+        "compiler-runtime",
+        "compatibility",
+        "integration",
+        "performance"
+      ],
+      "dispatch_inputs": {
+        "suite": {
+          "description": "All extended checks, one category, or an individual suite.",
+          "type": "choice",
+          "options": [
+            "all",
+            "compiler-runtime",
+            "compatibility",
+            "integration",
+            "performance",
+            "llvm-inprocess",
+            "cc-parity",
+            "eh-transport",
+            "ext-link",
+            "node-compat-matrix",
+            "node-suite-guard",
+            "node-core-subset",
+            "feature-matrix",
+            "wasi-check",
+            "npm-package-sweep",
+            "container-tests",
+            "simctl-tests",
+            "next-app-route",
+            "auto-opt-app-patterns",
+            "benchmark",
+            "tak-performance",
+            "tls-budget"
+          ],
+          "default": "all"
+        },
+        "apis": {
+          "description": "Optional Node core API list.",
+          "type": "string",
+          "default": ""
+        },
+        "max_per_api": {
+          "description": "Node core test limit per API; 0 means unlimited.",
+          "type": "string",
+          "default": "25"
+        },
+        "packages": {
+          "description": "Optional comma-separated package specs.",
+          "type": "string",
+          "default": ""
+        },
+        "limit": {
+          "description": "Package sweep limit; 0 means all selected packages.",
+          "type": "number",
+          "default": 6
+        },
+        "strict": {
+          "description": "Fail on any package sweep failure.",
+          "type": "boolean",
+          "default": false
+        },
+        "device": {
+          "description": "Simulator device name.",
+          "type": "string",
+          "default": "iPhone 15"
+        },
+        "run_e2e": {
+          "description": "Run container E2E tests.",
+          "type": "choice",
+          "options": [
+            "true",
+            "false"
+          ],
+          "default": "false"
+        },
+        "run_fuzz": {
+          "description": "Run container fuzz tests.",
+          "type": "choice",
+          "options": [
+            "true",
+            "false"
+          ],
+          "default": "false"
+        }
+      }
+    },
+    "maintenance.yml": {
+      "name": "Repository",
+      "categories": [
+        "maintenance",
+        "documentation"
+      ],
+      "dispatch_inputs": {
+        "suite": {
+          "description": "Offline validation by default; select docs deployment or maintenance explicitly.",
+          "type": "choice",
+          "options": [
+            "validate",
+            "docs-check",
+            "docs",
+            "ci-queue-reaper",
+            "gate-freshness",
+            "soak-autofix",
+            "npm-publish-freshness",
+            "delete-retired-runs"
+          ],
+          "default": "validate"
+        },
+        "apply": {
+          "description": "Apply queue cleanup; unchecked is dry run.",
+          "type": "boolean",
+          "default": false
+        },
+        "confirm_delete_retired_runs": {
+          "description": "Required confirmation for deleting completed runs of retired workflows.",
+          "type": "boolean",
+          "default": false
+        }
+      }
     }
   }
 }

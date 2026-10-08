@@ -9,7 +9,11 @@
         {
           "id": "core",
           "name": "CI core gate",
-          "job_names": ["pr-gate", "main-gate", "full-suite-gate"],
+          "job_names": [
+            "pr-gate",
+            "main-gate",
+            "full-suite-gate"
+          ],
           "path": "test.yml"
         },
         {
@@ -70,7 +74,7 @@
     },
     {
       "path": "compiler-runtime.yml",
-      "name": "Compiler and Runtime",
+      "name": "Extended Tests",
       "subjects": [
         {
           "id": "eh-transport",
@@ -83,25 +87,13 @@
           "name": "llvm-inprocess",
           "job": "llvm-inprocess",
           "path": "llvm-inprocess.yml"
-        }
-      ]
-    },
-    {
-      "path": "integration.yml",
-      "name": "Integration",
-      "subjects": [
+        },
         {
           "id": "auto-opt-app-patterns",
           "name": "Auto-Optimize App Patterns",
           "job": "auto-opt-app-patterns",
           "path": "auto-opt-app-patterns.yml"
-        }
-      ]
-    },
-    {
-      "path": "performance.yml",
-      "name": "Performance",
-      "subjects": [
+        },
         {
           "id": "tls-budget",
           "name": "TLS Budget",
@@ -114,7 +106,7 @@
   "excluded": [
     {
       "path": "maintenance.yml",
-      "why": "Maintenance's gate-freshness and npm-publish-freshness subjects maintain their own sticky issues; observer validation runs offline in Maintenance and the observer does not subscribe to its own parent."
+      "why": "Repository's gate-freshness and npm-publish-freshness subjects maintain their own sticky issues; observer validation runs offline in Repository and the observer does not subscribe to its own parent."
     }
   ]
 }
