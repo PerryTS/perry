@@ -391,7 +391,10 @@ pub(super) unsafe fn unmap(data: *mut u8, mapped: usize) {
     assert_eq!(replacement, data.cast(), "region retirement failed");
 }
 /// Existing register/retag/remove funnel owns active presence. Pool backing
-/// remains mapped while active space/bitmap facts disappear.
+/// remains mapped while active space/bitmap facts disappear. A live space
+/// belongs to the thread that registers it, as the per-thread map did: a
+/// block mapped by one thread can be handed to another (the from-space
+/// quarantine ring is process-wide), and the new holder must classify it.
 pub(crate) fn set_space(base: usize, len: usize, space: HeapSpace, starts: Option<usize>) -> bool {
     let Some(r) = existing() else {
         return false;
@@ -412,6 +415,14 @@ pub(crate) fn set_space(base: usize, len: usize, space: HeapSpace, starts: Optio
         d.publication.store(before | UPDATING, SeqCst);
         if let Some(starts) = starts {
             d.starts.store(starts, SeqCst);
+        }
+        #[cfg(test)]
+        let adopt = !sabotaged("adopt");
+        #[cfg(not(test))]
+        let adopt = true;
+        if adopt && space != HeapSpace::Unknown {
+            d.owner.store(crate::agent::current_agent(), SeqCst);
+            d.thread.store(crate::tls_hot::thread_identity(), SeqCst);
         }
         let kind = match space {
             HeapSpace::Old | HeapSpace::PromotedYoung | HeapSpace::Longlived if len > ALIGN => {
