@@ -1317,23 +1317,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                     (key as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
                     (*key).byte_len as usize,
                 );
-                // Issue #838 followup (b): same keyless-receiver gap for
-                // JS-classic prototype methods. An instance allocated via
-                // `js_new_function_construct` (no constructor-body write
-                // yet, or a constructor that runs the closures' own
-                // capture writes but never `this.<own field> = …`)
-                // starts with `keys_array == null`. Without this arm
-                // dayjs's `(new _(cfg)).format` returned undefined
-                // because the keyless branch skipped the regular
-                // `CLASS_PROTOTYPE_METHODS` walk reached further down
-                // — see the matching arm at line ~4083.
                 if let Ok(name) = std::str::from_utf8(key_bytes) {
-                    if let Some(v) = class_walk
-                        .then(|| lookup_prototype_method(class_id, name))
-                        .flatten()
-                    {
-                        return JSValue::from_bits(v.to_bits());
-                    }
                     // Class accessors are properties of the class prototype
                     // (charter step 3), so keyless receivers need the same
                     // fallback as shaped receivers.
@@ -1687,20 +1671,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 }
             }
 
-            // Issue #838: JS-classic `Class.prototype.method = fn`
-            // assignment registered via `js_register_prototype_method`.
-            // Read returns the stored closure value directly, mirroring
-            // Node's `Object.getPrototypeOf(inst).method` lookup. The
-            // bound-method-closure fallback below handles vtable methods;
-            // this arm covers methods that only exist as prototype
-            // assignments (never declared inside the `class` block).
             if let Ok(name) = std::str::from_utf8(key_bytes) {
-                if let Some(v) = class_walk
-                    .then(|| lookup_prototype_method(class_id, name))
-                    .flatten()
-                {
-                    return JSValue::from_bits(v.to_bits());
-                }
                 if class_id == crate::builtins::CONSOLE_INSTANCE_CLASS_ID
                     && crate::builtins::is_console_instance_method_name(name)
                 {

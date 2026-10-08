@@ -64,13 +64,11 @@ fn vtable_method_matches(class_id: u32, method_name: &str, expected_func_ptr: us
     false
 }
 
-fn prototype_may_override_method(class_id: u32, method_name: &str, method_bytes: &[u8]) -> bool {
+fn prototype_may_override_method(class_id: u32, method_bytes: &[u8]) -> bool {
     if class_id == 0 {
         return false;
     }
-    if crate::object::lookup_prototype_method(class_id, method_name).is_some() {
-        return true;
-    }
+
     let mut cid = class_id;
     for _ in 0..32 {
         let proto = crate::object::class_prototype_object(cid);
@@ -145,7 +143,7 @@ fn method_direct_call_contract(
 
     let expected_func = expected_func_ptr as usize;
     let valid = vtable_method_matches(class_id, method_name, expected_func)
-        && !prototype_may_override_method(class_id, method_name, method_bytes);
+        && !prototype_may_override_method(class_id, method_bytes);
     (shape_addr, class_id, gc_type, name_hash, valid)
 }
 

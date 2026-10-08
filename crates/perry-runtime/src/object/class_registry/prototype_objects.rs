@@ -81,34 +81,6 @@ pub(crate) fn ensure_function_prototype_object(
         class_prototype_object_root_store(class_id, proto)
     });
 
-    // #5024: methods registered before the prototype object materialized
-    // (`F.prototype.m = v` typically runs long before any reflective
-    // `F.prototype` read) live only in CLASS_PROTOTYPE_METHODS. Backfill
-    // them as ordinary own properties so enumeration sees them; later
-    // registrations write through via class_prototype_method_root_store.
-    let registered_bits: Vec<(String, u64)> = {
-        CLASS_PROTOTYPE_METHODS.with(|table| {
-            let guard = table.read().unwrap();
-            guard
-                .as_ref()
-                .and_then(|map| map.get(&class_id))
-                .map(|per_class| per_class.iter().map(|(k, &v)| (k.clone(), v)).collect())
-                .unwrap_or_default()
-        })
-    };
-    // The copied side-table values are no longer themselves scanner roots.
-    // Root the whole snapshot before the first mirrored property can allocate.
-    let registered: Vec<_> = registered_bits
-        .into_iter()
-        .map(|(name, value_bits)| (name, scope.root_nanbox_u64(value_bits)))
-        .collect();
-    for (name, value) in registered {
-        let enumerable = class_prototype_method_is_enumerable(class_id, &name);
-        proto_handle.with_mut_ptr::<ObjectHeader, _>(|proto| unsafe {
-            mirror_prototype_method_on_object(proto, &name, value.get_nanbox_u64(), enumerable)
-        });
-    }
-
     // #5477: the bound `events.EventEmitter` / `EventEmitterAsyncResource` export's
     // synthetic prototype must carry the EventEmitter methods (`emit`/`on`/`once`/
     // …) so the `Object.setPrototypeOf(x, EventEmitter.prototype)` mixin pattern

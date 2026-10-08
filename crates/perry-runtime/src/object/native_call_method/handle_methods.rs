@@ -1094,22 +1094,6 @@ pub(super) unsafe fn dispatch_handle(
                         return Some(result);
                     }
                 }
-
-                // Issue #838: JS-classic `Class.prototype.method = fn`
-                // method dispatch. The vtable / proto-object walks above
-                // cover ES-class methods and synthetic-prototype-object
-                // shapes; this arm catches the case where the method
-                // only exists in `CLASS_PROTOTYPE_METHODS`. Bind `this`
-                // to the receiver and call the stored closure.
-                if let Some(method_value) = lookup_prototype_method(class_id, method_name) {
-                    let result = crate::closure::native_call_value_this(
-                        method_value,
-                        crate::closure::JsThis::from_f64(object_handle.get_nanbox_f64()),
-                        args_ptr,
-                        args_len,
-                    );
-                    return Some(result);
-                }
             }
         }
     }

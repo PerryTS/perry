@@ -241,21 +241,11 @@ fn worker_threads_locks_proto_value() -> f64 {
         crate::fn_info!(worker_threads_locks_request, 3; with_declared(3)),
         2,
     );
-    crate::object::class_prototype_method_root_store(
-        WORKER_THREADS_LOCK_MANAGER_CLASS_ID,
-        "request".to_string(),
-        request.to_bits(),
-    );
     web_locks_set_field(proto, "request", request);
     let query = web_locks_make_function(
         "query",
         crate::fn_info!(worker_threads_locks_query, 0; with_declared(0)),
         0,
-    );
-    crate::object::class_prototype_method_root_store(
-        WORKER_THREADS_LOCK_MANAGER_CLASS_ID,
-        "query".to_string(),
-        query.to_bits(),
     );
     web_locks_set_field(proto, "query", query);
     web_locks_object_value(proto)

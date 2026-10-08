@@ -455,6 +455,10 @@ pub extern "C" fn js_object_set_field_by_name(
                         .to_string();
                     let recv = crate::object::class_value::boxed_class_word(bits);
                     let is_prototype_ref = super::class_prototype_ref_id(recv).is_some();
+                    if is_prototype_ref {
+                        super::class_registry::class_prototype_set(class_id, name, value.to_bits());
+                        return;
+                    }
                     if !is_prototype_ref
                         && name == "name"
                         && !super::class_registry::class_static_key_deleted(class_id, &name)
@@ -465,24 +469,9 @@ pub extern "C" fn js_object_set_field_by_name(
                     {
                         return;
                     }
-                    let has_own_data = if is_prototype_ref {
-                        super::class_registry::lookup_own_prototype_method(class_id, &name)
-                            .is_some()
-                            || super::native_module::class_has_own_method(class_id, &name)
-                    } else {
-                        crate::object::class_value::class_static_get(class_id, &name).is_some()
-                    };
-                    // `C.prototype[key] = v` where `key` is an instance
-                    // accessor invokes the setter with `this = C.prototype`.
-                    // A getter-only accessor absorbs a non-strict assignment.
-                    if is_prototype_ref && !has_own_data {
-                        if super::class_registry::class_instance_setter_apply(
-                            class_id, &name, recv, value,
-                        ) {
-                            return;
-                        }
-                    } else if !is_prototype_ref
-                        && !has_own_data
+                    let has_own_data =
+                        crate::object::class_value::class_static_get(class_id, &name).is_some();
+                    if !has_own_data
                         && super::class_registry::class_static_accessor_setter_apply(
                             class_id, &name, recv, value,
                         )
@@ -501,20 +490,7 @@ pub extern "C" fn js_object_set_field_by_name(
                             "ERR_INVALID_ARG_TYPE",
                         );
                     }
-                    if is_prototype_ref {
-                        // Imported `C.prototype.m = value` reaches this generic
-                        // class-ref path. Publish it as an enumerable prototype
-                        // data property so instance dispatch sees the replacement.
-                        super::class_registry::class_prototype_method_set_enumerable(
-                            class_id, &name, true,
-                        );
-                        super::class_registry::class_prototype_method_root_store(
-                            class_id,
-                            name,
-                            value.to_bits(),
-                        );
-                        crate::typed_feedback::invalidate_method_change(class_id);
-                    } else {
+                    {
                         // A read-only own static (defineProperty writable:false):
                         // strict-mode [[Set]] throws; the value stays.
                         if has_own_data

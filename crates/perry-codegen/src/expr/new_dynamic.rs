@@ -653,9 +653,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Route through the runtime construct helper so the
             // synthetic class id allocated against the closure's bits
             // (in `js_register_function_prototype_method`) lands on the
-            // instance header — dispatch then finds the
-            // prototype-registered methods via the regular
-            // `(*obj).class_id → CLASS_PROTOTYPE_METHODS` walk. The
+            // instance header. Dispatch reads the instance's recorded prototype. The
             // helper also binds `this` to the new instance for the
             // duration of the constructor call so `this.<field> = …`
             // writes in the function body land on the instance.

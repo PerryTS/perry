@@ -288,22 +288,16 @@ pub(crate) unsafe fn try_decode_descriptor<'scope>(
         {
             return None;
         }
-        let has_prototype_methods =
-            super::super::class_registry::CLASS_PROTOTYPE_METHODS.with(|table| {
-                table
-                    .read()
-                    .ok()
-                    .and_then(|g| g.as_ref().map(|m| m.contains_key(&class_id)))
-                    .unwrap_or(false)
-            });
-        if has_prototype_methods {
-            return None;
-        }
     }
     if crate::object::descriptor_state::object_has_descriptors(addr) {
         return None;
     }
-    if super::super::prototype_chain::object_static_prototype(addr).is_some() {
+    if super::super::prototype_chain::object_static_prototype(addr).is_some()
+        || (class_id != 0
+            && (!super::super::class_registry::synthetic_class_prototype_object(class_id)
+                .is_null()
+                || !super::super::class_registry::class_decl_prototype_object(class_id).is_null()))
+    {
         return None;
     }
 

@@ -2243,7 +2243,14 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
         (*obj).parent_class_id = expected_shape_id;
     }
 
-    crate::object::class_prototype_method_root_store(
+    unsafe {
+        crate::object::js_register_class_name(
+            class_id.wrapping_add(10),
+            b"GuardStore".as_ptr(),
+            10,
+        );
+    }
+    crate::object::class_prototype_set(
         class_id.wrapping_add(10),
         "direct_shape_unrelated_1061".to_string(),
         crate::value::TAG_UNDEFINED,
@@ -2261,7 +2268,14 @@ fn method_direct_shape_guard_requires_the_exact_compiler_pair() {
         "a different method name must not poison this direct guard",
     );
 
-    crate::object::class_prototype_method_root_store(
+    unsafe {
+        crate::object::js_register_class_name(
+            class_id.wrapping_add(11),
+            b"GuardStore".as_ptr(),
+            10,
+        );
+    }
+    crate::object::class_prototype_set(
         class_id.wrapping_add(11),
         method_name.to_string(),
         crate::value::TAG_UNDEFINED,
@@ -2364,6 +2378,7 @@ fn typed_feedback_method_direct_guard_fails_for_prototype_method_registration() 
     let expected_shape_id = shape_id(obj);
     unsafe {
         register_test_method(class_id, b"m");
+        crate::object::js_register_class_name(class_id, b"PrototypeGuard".as_ptr(), 14);
         crate::object::js_register_prototype_method(
             class_id,
             b"m".as_ptr(),

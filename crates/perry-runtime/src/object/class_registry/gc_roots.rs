@@ -2,10 +2,6 @@ use super::*;
 
 #[derive(Clone)]
 enum ClassSideTableRootSlot {
-    PrototypeMethod {
-        class_id: u32,
-        name: String,
-    },
     PrototypeMethodValue {
         class_id: u32,
         name: String,
@@ -71,18 +67,6 @@ pub fn scan_class_side_table_roots(mark: &mut dyn FnMut(f64)) {
 }
 
 pub fn scan_class_side_table_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    CLASS_PROTOTYPE_METHODS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            if let Some(map) = guard.as_mut() {
-                for methods in map.values_mut() {
-                    for value_bits in methods.values_mut() {
-                        visitor.visit_nanbox_u64_slot(value_bits);
-                    }
-                }
-            }
-        }
-    });
-
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
         let mut cache = cache.borrow_mut();
         for value_bits in cache.values_mut() {
@@ -196,21 +180,6 @@ fn scan_class_symbol_member_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor
 fn class_side_table_root_snapshot() -> Vec<ClassSideTableRootSlot> {
     let mut slots = Vec::new();
 
-    CLASS_PROTOTYPE_METHODS.with(|table| {
-        if let Ok(guard) = table.read() {
-            if let Some(map) = guard.as_ref() {
-                for (&class_id, methods) in map.iter() {
-                    for name in methods.keys() {
-                        slots.push(ClassSideTableRootSlot::PrototypeMethod {
-                            class_id,
-                            name: name.clone(),
-                        });
-                    }
-                }
-            }
-        }
-    });
-
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
         let cache = cache.borrow();
         for ((class_id, name), _) in cache.iter() {
@@ -314,19 +283,6 @@ fn scan_class_side_table_root_slot(
     slot: &ClassSideTableRootSlot,
 ) {
     match slot {
-        ClassSideTableRootSlot::PrototypeMethod { class_id, name } => {
-            CLASS_PROTOTYPE_METHODS.with(|table| {
-                if let Ok(mut guard) = table.write() {
-                    if let Some(value_bits) = guard
-                        .as_mut()
-                        .and_then(|map| map.get_mut(class_id))
-                        .and_then(|methods| methods.get_mut(name))
-                    {
-                        visitor.visit_nanbox_u64_slot(value_bits);
-                    }
-                }
-            });
-        }
         ClassSideTableRootSlot::PrototypeMethodValue { class_id, name } => {
             CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| {
                 if let Some(value_bits) = cache.borrow_mut().get_mut(&(*class_id, name.clone())) {
@@ -554,11 +510,7 @@ fn visit_metadata_nanbox_key(
 pub(crate) fn test_clear_class_side_table_roots() {
     super::state::CLASS_DECLARED_STATIC_GLOBAL_SLOTS.with(|m| m.borrow_mut().clear());
     CLASS_PROTOTYPE_METHOD_VALUES.with(|cache| cache.borrow_mut().clear());
-    CLASS_PROTOTYPE_METHODS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            *guard = None;
-        }
-    });
+
     CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED.store(false, std::sync::atomic::Ordering::Release);
     CLASS_PROTOTYPE_FAST_GUARDS_INVALIDATED_BY_METHOD
         .write()
@@ -623,28 +575,6 @@ pub(crate) fn test_class_dynamic_prop_root_bits(class_id: u32, name: &str) -> u6
 }
 
 #[cfg(test)]
-pub(crate) fn test_seed_class_prototype_method_root(class_id: u32, name: &str, value_bits: u64) {
-    class_prototype_method_root_store(class_id, name.to_string(), value_bits);
-}
-
-#[cfg(test)]
-pub(crate) fn test_class_prototype_method_root_bits(class_id: u32, name: &str) -> u64 {
-    CLASS_PROTOTYPE_METHODS.with(|table| {
-        table
-            .read()
-            .ok()
-            .and_then(|guard| {
-                guard
-                    .as_ref()
-                    .and_then(|map| map.get(&class_id))
-                    .and_then(|methods| methods.get(name))
-                    .copied()
-            })
-            .unwrap_or(0)
-    })
-}
-
-#[cfg(test)]
 pub(crate) fn test_seed_class_prototype_method_value_root(
     class_id: u32,
     name: &str,
@@ -682,7 +612,14 @@ pub(crate) fn test_class_prototype_object_root_addr(class_id: u32) -> usize {
 
 #[cfg(test)]
 pub(crate) fn test_seed_class_decl_prototype_object_root(class_id: u32, addr: usize) {
-    class_decl_prototype_object_root_store(class_id, addr as *mut ObjectHeader);
+    // Deliberately seed the bare link: holder-read tests need two equal-shape
+    // objects before replacement, independent of production's prototype mark.
+    let proto = addr as *mut ObjectHeader;
+    let displaced = crate::object::class_value::class_decl_prototype_link_store(class_id, proto);
+    super::class_lookup_surface_gen_bump();
+    if !displaced.is_null() && displaced != proto {
+        super::state::retire_displaced_decl_prototype(displaced);
+    }
 }
 
 #[cfg(test)]

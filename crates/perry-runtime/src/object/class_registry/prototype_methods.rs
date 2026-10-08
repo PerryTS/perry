@@ -1,6 +1,5 @@
 use super::*;
 use std::collections::HashMap;
-use std::sync::RwLock;
 
 const CLASS_LEXICAL_BINDING_KEY: &str = "#<perry:private-class-lexical-binding>";
 
@@ -120,34 +119,6 @@ pub unsafe extern "C" fn js_class_computed_field_key(
     };
     class_own_static_field_value(class_id, name)
         .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
-}
-
-crate::perry_thread_local! {
-    /// Issue #838: JS-classic prototype method assignment.
-    ///
-    /// `Class.prototype.method = function() {…}` (and the aliased form
-    /// `var p = Class.prototype; p.method = function() {…}`) is a pre-ES6
-    /// idiom dayjs, chalk, and a long tail of libraries still ship.
-    /// Pre-fix the assignment was lowered to a generic `PropertySet` whose
-    /// receiver evaluated to a class-prototype-shaped object that nothing
-    /// downstream consulted, so `(new Class()).method` came back as
-    /// `undefined`.
-    ///
-    /// The HIR-level fix routes recognised shapes to
-    /// `js_register_prototype_method(class_id, name, value)`, which stores
-    /// the closure value into a per-class side-table here. The dispatch
-    /// hot paths (`js_object_get_field_by_name` for `inst.method` reads
-    /// and `js_native_call_method` for `inst.method(...)` calls) consult
-    /// this table after the regular vtable / proto-object lookups miss,
-    /// invoking the closure with `this` bound to the receiver.
-    ///
-    /// Stored values use their full NaN-boxed bits (f64) — typically a
-    /// POINTER_TAG'd closure, but the dispatch path treats whatever is
-    /// stored as a callable value and routes it through
-    /// `js_native_call_value`, which itself accepts both closures and raw
-    /// `*ClosureHeader` shapes.
-    pub static CLASS_PROTOTYPE_METHODS: RwLock<Option<HashMap<u32, HashMap<String, u64>>>> =
-        RwLock::new(None);
 }
 
 // Production codegen reads this fail-closed all-method byte and the scoped
@@ -363,112 +334,29 @@ pub(crate) fn retire_prototype_caches_without_direct_arms() {
     retire_prototype_dependent_caches();
 }
 
-pub(crate) fn class_prototype_method_root_store(class_id: u32, name: String, value_bits: u64) {
-    CLASS_PROTOTYPE_METHODS.with(|table| {
-        let mut guard = table.write().unwrap();
-        if guard.is_none() {
-            *guard = Some(HashMap::new());
-        }
-        guard
-            .as_mut()
-            .unwrap()
-            .entry(class_id)
-            .or_default()
-            .insert(name.clone(), value_bits);
-    });
-    invalidate_class_prototype_fast_guards_for_method(&name);
-    crate::gc::runtime_write_barrier_root_nanbox(value_bits);
-    // #5024: the side table makes the method dispatchable, but own-key
-    // enumeration on the prototype OBJECT (Object.keys / getOwnPropertyNames /
-    // `in` / hasOwnProperty / for-in / Object.assign) consults the object's
-    // keys_array, which the side table never touched — React's
-    // `Object.assign(PureComponent.prototype, Component.prototype)` copied
-    // nothing, so `isReactComponent` vanished and every `extends PureComponent`
-    // class rendered as a function component. Mirror the write onto the
-    // materialized prototype object as an ordinary enumerable own property.
-    let enumerable = class_prototype_method_is_enumerable(class_id, &name);
-    let proto = class_prototype_object(class_id);
-    if !proto.is_null() {
-        unsafe { mirror_prototype_method_on_object(proto, &name, value_bits, enumerable) };
-    }
-    // #5024 followup: reflective `ClassName.prototype` enumeration
-    // (`Object.keys` / `getOwnPropertyNames` / `in` / `hasOwnProperty` /
-    // `for-in`) reads the DECL-prototype object (CLASS_DECL_PROTOTYPE_OBJECTS),
-    // which is a DIFFERENT object than the #711/#809 synthetic prototype cache
-    // (CLASS_PROTOTYPE_OBJECTS) the mirror above targets. Without mirroring
-    // here too, an assignment-registered method (`Class.prototype.m = fn`) was
-    // dispatchable (side table) but invisible to own-key enumeration on the
-    // reflective prototype — zod's `b1` trait factory copies base methods onto
-    // instances via `for (let H in O.prototype) ...`, which enumerated nothing,
-    // so `z.number().optional()` threw "Cannot read properties of undefined".
-    // When the decl-proto isn't materialised yet, `class_decl_prototype_value`
-    // backfills CLASS_PROTOTYPE_METHODS at materialisation time, so we only
-    // need to write through to an already-live decl-proto here.
-    let decl_proto = class_decl_prototype_object(class_id);
-    if !decl_proto.is_null() && decl_proto != proto {
-        unsafe { mirror_prototype_method_on_object(decl_proto, &name, value_bits, enumerable) };
-    }
-}
-
-/// Remove a runtime-assigned method when defineProperty restores a declared
-/// vtable method. The declaration becomes authoritative again after the
-/// caller clears the deletion marker and invalidates dispatch caches.
-pub(crate) fn class_prototype_method_root_remove(class_id: u32, name: &str) {
-    CLASS_PROTOTYPE_METHODS.with(|table| {
-        if let Ok(mut guard) = table.write() {
-            if let Some(per_class) = guard.as_mut().and_then(|map| map.get_mut(&class_id)) {
-                per_class.remove(name);
-            }
-        }
-    });
-}
-
-/// #5024: write a side-table-registered prototype method onto the
-/// materialized prototype object so the key lands in its `keys_array`.
-/// `enumerable` carries assignment semantics (`Class.prototype.m = fn` →
-/// enumerable) vs `Object.defineProperty` default (non-enumerable). Values
-/// keep their full NaN-boxed bits; dispatch paths that find the property on
-/// the object see the same value the side table holds.
-pub(crate) unsafe fn mirror_prototype_method_on_object(
-    proto: *mut ObjectHeader,
-    name: &str,
-    value_bits: u64,
-    enumerable: bool,
-) {
-    if proto.is_null() || name.is_empty() {
-        return;
-    }
+/// Compatibility entry points for HIR assembled by embedders. The prototype
+/// is read before the value is stored; its ordinary [[Set]] owns the mutation.
+pub(crate) fn class_prototype_set(class_id: u32, name: String, value_bits: u64) {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_raw_mut_ptr(proto);
     let value = scope.root_nanbox_u64(value_bits);
-    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
-        name.as_ptr(),
-        name.len() as u32,
-    ));
-    proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-        key.with_const_ptr::<crate::StringHeader, _>(|key| {
-            js_object_set_field_by_name(proto, key, value.get_nanbox_f64())
-        })
-    });
-    if !enumerable {
-        // `js_object_set_field_by_name` records the default (enumerable) attrs;
-        // override so reflective own-key enumeration skips a defineProperty-
-        // registered non-enumerable method.
-        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-            set_builtin_property_attrs(
-                proto as usize,
-                name.to_string(),
-                PropertyAttrs::new(true, false, true),
-            )
-        });
-    }
+    let proto = class_prototype_object(class_id);
+    let proto = if proto.is_null() {
+        class_decl_prototype_value(class_id)
+    } else {
+        crate::value::js_nanbox_pointer(proto as i64)
+    };
+    let proto = scope.root_nanbox_f64(proto);
+    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let key = crate::value::js_nanbox_string(key as i64);
+    crate::proxy::js_put_value_set(
+        proto.get_nanbox_f64(),
+        key,
+        value.get_nanbox_f64(),
+        proto.get_nanbox_f64(),
+        1,
+    );
 }
 
-/// Register a JS-classic prototype-method assignment on a class.
-/// Called by codegen-emitted init code for each `Class.prototype.<name>
-/// = <fn>` (or aliased form) that the HIR recognises. `value` is the
-/// NaN-boxed callable to be invoked with `this` bound to the receiver
-/// at dispatch time.
 #[no_mangle]
 pub unsafe extern "C" fn js_register_prototype_method(
     class_id: u32,
@@ -476,173 +364,30 @@ pub unsafe extern "C" fn js_register_prototype_method(
     name_len: usize,
     value: f64,
 ) {
-    if class_id == 0 || name_ptr.is_null() || name_len == 0 {
+    if name_ptr.is_null() {
         return;
     }
-    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
-        Ok(s) => s.to_string(),
-        Err(_) => return,
-    };
-    // `C.prototype.X = v` where X is an instance accessor on the class must
-    // invoke the setter, not overwrite the accessor with a data method. This
-    // write was lowered as a prototype-method monkey-patch because computed-key
-    // accessors (`set [expr](v)`) aren't known at compile time, so the
-    // recogniser couldn't route it to the ordinary setter path. If X has a
-    // setter, invoke it with `this` = the prototype ref; if it's a getter-only
-    // accessor, the (non-strict) assignment is a silent no-op rather than a
-    // clobber (Test262 accessor-name-*/computed setters).
-    let proto_ref = class_prototype_ref_value(class_id);
-    if class_instance_setter_apply(class_id, &name, proto_ref, value) {
-        return;
+    if let Ok(name) = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
+        class_prototype_set(class_id, name.to_string(), value.to_bits());
     }
-    // `C.prototype.__proto__ = v` is not a method install: it is a `[[Set]]`
-    // that reaches `Object.prototype`'s `__proto__` accessor, whose setter
-    // relinks the prototype exactly like `Object.setPrototypeOf`.
-    if name == "__proto__" {
-        let proto = super::class_decl_prototype_value(class_id);
-        if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
-            let scope = crate::gc::RuntimeHandleScope::new();
-            let proto = scope.root_nanbox_f64(proto);
-            let value = scope.root_nanbox_f64(value);
-            let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-            let key = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
-            crate::proxy::js_put_value_set(
-                proto.get_nanbox_f64(),
-                key,
-                value.get_nanbox_f64(),
-                proto.get_nanbox_f64(),
-                1,
-            );
-            return;
-        }
-    }
-    class_prototype_method_root_store(class_id, name, value.to_bits());
-    // Ensure the receiver class can be `typeof`-detected. Method-less
-    // classes that only get extended via `Class.prototype.m = fn`
-    // wouldn't otherwise reach js_register_class_id.
-    js_register_class_id(class_id);
-    crate::typed_feedback::invalidate_method_change(class_id);
 }
 
-/// Issue #838 followup (b): function-classic prototype-method dispatch.
-/// dayjs's minified bundle declares its instance class via a function
-/// declaration inside an IIFE (`function M(cfg) {…}; var m = M.prototype;
-/// m.format = function(){…}; return M`). At HIR time `M` is a function
-/// (no `class M` block), so the #838 recogniser bailed because
-/// `lookup_class("M")` returned None. This helper closes the gap on the
-/// runtime side: a single call takes the closure value of `M`, allocates
-/// (or reuses) a synthetic class id keyed by the closure's NaN-boxed
-/// bits, registers the method on that synthetic class, and returns the
-/// id so a paired `new <FuncRef>(args)` allocator can stamp the same id
-/// on the instance header. After both arms run, the existing dispatch
-/// hot paths (`js_object_get_field_by_name`, `js_native_call_method`)
-/// find the method without further changes.
-///
-/// `func_value` must be a POINTER_TAG'd ClosureHeader (the shape
-/// `Expr::FuncRef` lowers to via `js_closure_alloc_singleton`). Anything
-/// else is a no-op — preserves the pre-fix baseline where non-callable
-/// `.prototype.m = fn` writes were silent property sets.
-/// Issue #838 followup (b) — read side: look up a method previously
-/// registered via `js_register_function_prototype_method` against the
-/// synthetic class id derived from `func_value`. Pre-fix the AST shape
-/// `<funcDecl>.prototype.<name>` lowered to a generic PropertyGet on a
-/// `Function.prototype` object that never materialised, so the read
-/// was always `undefined` — `typeof Foo.prototype.method` came back
-/// `'undefined'` even when the method was correctly dispatched through
-/// `(new Foo()).method` via the side-table walk. Pairs with the new
-/// `Expr::GetFunctionPrototypeMethod` HIR variant.
-///
-/// Returns the NaN-boxed `undefined` tag if the function value isn't a
-/// registered closure, or no method by that name was registered.
 #[no_mangle]
 pub unsafe extern "C" fn js_get_function_prototype_method(
     func_value: f64,
     name_ptr: *const u8,
     name_len: usize,
 ) -> f64 {
-    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    if name_ptr.is_null() || name_len == 0 {
-        return undef;
+    if name_ptr.is_null() {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
-        Ok(s) => s,
-        Err(_) => return undef,
-    };
-    // `f.prototype.constructor` — a *data* property (the prototype's back-pointer
-    // to its constructor), not a registered method, so `lookup_prototype_method`
-    // never finds it and the method allowlist below excludes it. When the inline
-    // `<funcref>.prototype.constructor` read folds to this entry (no separate
-    // `.prototype` access ran to allocate the synthetic class id), `cid` is 0 and
-    // the function returned `undefined`. Route through the real prototype value —
-    // `js_function_prototype_value_for_read` materializes the auto-created
-    // prototype (whose `constructor` is `func_value`) or returns a replaced
-    // `f.prototype = X` — then read its `constructor` field. (Spec
-    // language/statements/function/S13.2_A4_*, S13.2.2_A1_*.)
-    if name == "constructor" {
-        let proto_val = js_function_prototype_value_for_read(func_value);
-        let jv = crate::value::JSValue::from_bits(proto_val.to_bits());
-        if !jv.is_pointer() {
-            return undef;
-        }
-        let pptr = jv.as_pointer::<ObjectHeader>();
-        if pptr.is_null() {
-            return undef;
-        }
-        let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
-        let v = js_object_get_field_by_name(pptr, key as *const crate::StringHeader);
-        return f64::from_bits(v.bits());
-    }
-    // Look up the (already-allocated) synthetic class id for this
-    // function value. Don't allocate one here — reads on a function
-    // that never had any `.prototype.x = fn` assignment should
-    // return `undefined`, matching the spec'd behavior of reading a
-    // missing property on the `Function.prototype` object.
-    let cid = function_class_id(func_value);
-    if cid == 0 {
-        return undef;
-    }
-    match lookup_prototype_method(cid, name) {
-        Some(v) => v,
-        None if matches!(
-            name,
-            "toString"
-                | "valueOf"
-                | "hasOwnProperty"
-                | "isPrototypeOf"
-                | "propertyIsEnumerable"
-                | "toLocaleString"
-        ) =>
-        {
-            let proto = ensure_function_prototype_object(func_value, cid);
-            if proto.is_null() {
-                return undef;
-            }
-            let receiver = crate::value::js_nanbox_pointer(proto as i64);
-            let method = js_class_method_bind(receiver, name_ptr, name_len);
-            f64::from_bits(method.to_bits())
-        }
-        None => {
-            // #5024: properties can land on the prototype OBJECT without a
-            // side-table registration — `Object.assign(F.prototype, src)`
-            // (React's PureComponent setup), a replaced `F.prototype = obj`,
-            // or any generic dynamic write. Read the real prototype value
-            // (replaced object, or the materialized auto-created one) so
-            // the recognised `<func>.prototype.<name>` read shape agrees
-            // with the generic property-get path.
-            let proto_val = js_function_prototype_value_for_read(func_value);
-            let jv = crate::value::JSValue::from_bits(proto_val.to_bits());
-            if !jv.is_pointer() {
-                return undef;
-            }
-            let pptr = jv.as_pointer::<ObjectHeader>();
-            if pptr.is_null() {
-                return undef;
-            }
-            let key = crate::string::js_string_from_bytes(name_ptr, name_len as u32);
-            let v = js_object_get_field_by_name(pptr, key);
-            f64::from_bits(v.bits())
-        }
-    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let proto = scope.root_nanbox_f64(js_function_prototype_value_for_read(func_value));
+    let key = crate::string::js_string_from_bytes(name_ptr, name_len as u32);
+    super::super::field_get_set::js_object_get_field_by_name_f64(
+        proto.get_nanbox_f64().to_bits() as *const ObjectHeader,
+        key,
+    )
 }
 
 #[no_mangle]
@@ -652,18 +397,21 @@ pub unsafe extern "C" fn js_register_function_prototype_method(
     name_len: usize,
     value: f64,
 ) -> u32 {
-    let cid = synthetic_class_id_for_function(func_value);
-    if cid == 0 || name_ptr.is_null() || name_len == 0 {
-        return cid;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let func = scope.root_nanbox_f64(func_value);
+    let value = scope.root_nanbox_f64(value);
+    let proto = scope.root_nanbox_f64(js_function_prototype_value_for_read(func.get_nanbox_f64()));
+    if !name_ptr.is_null() {
+        let key = crate::string::js_string_from_bytes(name_ptr, name_len as u32);
+        crate::proxy::js_put_value_set(
+            proto.get_nanbox_f64(),
+            crate::value::js_nanbox_string(key as i64),
+            value.get_nanbox_f64(),
+            proto.get_nanbox_f64(),
+            1,
+        );
     }
-    let name = match std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)) {
-        Ok(s) => s.to_string(),
-        Err(_) => return cid,
-    };
-    class_prototype_method_root_store(cid, name, value.to_bits());
-    js_register_class_id(cid);
-    crate::typed_feedback::invalidate_method_change(cid);
-    cid
+    function_class_id(func.get_nanbox_f64())
 }
 
 /// Get-or-allocate a synthetic class id keyed by a function value's

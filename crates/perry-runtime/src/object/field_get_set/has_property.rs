@@ -1272,8 +1272,7 @@ unsafe fn ordinary_has_property(
                     // the same hop here `in` and `getPrototypeOf` disagreed about the
                     // very same chain: `"m" in new C()` was false for any member that
                     // is not a vtable method — notably a method added by ASSIGNMENT
-                    // (`C.prototype.m = fn`, stored in `CLASS_PROTOTYPE_METHODS` and
-                    // mirrored onto the decl-proto object), which the
+                    // (`C.prototype.m = fn`, stored on the prototype itself), which the
                     // `class_instance_has_member` vtable fallback below does not cover.
                     // That divergence silently emptied `for…in` over an instance: the
                     // #6147 for-in desugar re-checks every snapshotted key with
@@ -1282,9 +1281,8 @@ unsafe fn ordinary_has_property(
                     //
                     // Resolve through the materializing accessor — the same one
                     // `js_object_get_prototype_of` uses — so the walk is
-                    // order-independent: a `C.prototype.m = fn` assignment registers the
-                    // method long before any reflective `C.prototype` read materializes
-                    // the decl-proto object.
+                    // order-independent, including a first read before any prototype
+                    // assignment has materialized the decl-proto object.
                     if let Some(decl_proto) =
                         crate::object::class_decl_prototype_value_for_instance_class(cur_class_id)
                     {

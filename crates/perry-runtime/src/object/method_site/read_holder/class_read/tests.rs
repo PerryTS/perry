@@ -374,7 +374,8 @@ fn multi_absent_reproves_shared_class_link_after_generation_change() {
     );
     let a =
         crate::object::js_object_alloc_class_inline_keys_stamped(PROTO_CID, 0, 1, keys, shape, 0);
-    crate::object::class_decl_prototype_object_root_store(CID, a);
+    // Seed the bare link to preserve the deliberate equal-shape premise.
+    crate::object::test_seed_class_decl_prototype_object_root(CID, a as usize);
     let b =
         crate::object::js_object_alloc_class_inline_keys_stamped(PROTO_CID, 0, 1, keys, shape, 0);
     let a = crate::object::class_decl_prototype_object(CID);
@@ -439,7 +440,7 @@ fn multi_absent_reproves_shared_class_link_after_generation_change() {
             Some(crate::value::TAG_UNDEFINED)
         );
     }
-    crate::object::class_decl_prototype_object_root_store(CID, b);
+    crate::object::test_seed_class_decl_prototype_object_root(CID, b as usize);
     for r in &receivers {
         let token = (PIC_ID_TOKEN_BIT | u64::from(unsafe { object_shape_stamp(*r) })) as i64;
         assert_eq!(unsafe { leaf_answer(&cache, *r, token) }, None);
@@ -680,7 +681,8 @@ fn bare_class_link_replacement_with_same_holder_shape_declines() {
         proto_shape,
         0,
     );
-    crate::object::class_decl_prototype_object_root_store(CID, a);
+    // Seed the bare link to preserve the deliberate equal-shape premise.
+    crate::object::test_seed_class_decl_prototype_object_root(CID, a as usize);
     let b = crate::object::js_object_alloc_class_inline_keys_stamped(
         PROTO_CID,
         0,
@@ -738,13 +740,13 @@ fn bare_class_link_replacement_with_same_holder_shape_declines() {
         std::ptr::write(slot, 43.0f64.to_bits());
         assert_eq!(answer(&mut data_entry, recv), Some(43.0f64.to_bits()));
     }
-    crate::object::class_decl_prototype_object_root_store(CID, b);
+    crate::object::test_seed_class_decl_prototype_object_root(CID, b as usize);
     assert_eq!(unsafe { answer(&mut entry, recv) }, None);
     // The displaced holder's ShapeId was retired: an entry naming it can
     // never answer again, whatever the registry says later.
     assert_ne!(unsafe { object_shape_stamp(a) }, proto_shape);
 
-    crate::object::class_decl_prototype_object_root_store(CID, a);
+    crate::object::test_seed_class_decl_prototype_object_root(CID, a as usize);
     assert_eq!(unsafe { answer(&mut entry, recv) }, None);
     let mut entry = Entry {
         holder_shape: unsafe { object_shape_stamp(a) },

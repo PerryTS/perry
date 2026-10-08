@@ -951,8 +951,7 @@ pub unsafe extern "C-unwind" fn js_new_function_construct(
     // Allocate the instance with the synthetic class id (or 0 if the
     // value isn't callable). The object starts with no own props; the
     // constructor body fills `this.<field>` writes through
-    // PropertySet, and prototype-method dispatch consults the
-    // synthetic class id's entry in CLASS_PROTOTYPE_METHODS.
+    // PropertySet, and method dispatch reads its recorded prototype.
     // Learned inline sizing: a class that overflowed once pre-sizes every
     // later instance so all its fields land inline (object/mod.rs).
     // #7341: `func_value` is a heap pointer (the closure) and every use of it
@@ -1765,6 +1764,3 @@ pub(super) fn is_arrow_function_value(value: f64) -> bool {
     }
     crate::closure::closure_is_arrow(ptr)
 }
-
-mod prototype_methods;
-pub(crate) use prototype_methods::{lookup_own_prototype_method, lookup_prototype_method};

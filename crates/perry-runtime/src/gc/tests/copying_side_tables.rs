@@ -31,7 +31,7 @@ fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
     js_shadow_slot_set(0, ptr_bits(key));
 
     crate::object::test_seed_class_dynamic_prop_root(0x5401, "dyn", string_bits(value));
-    crate::object::test_seed_class_prototype_method_root(0x5401, "proto", string_bits(value));
+
     crate::object::test_seed_class_prototype_method_value_root(0x5401, "bound", string_bits(value));
     crate::object::test_seed_class_prototype_object_root(0x5401, prototype_object);
     crate::object::test_seed_class_decl_prototype_object_root(0x5401, decl_prototype_object);
@@ -41,7 +41,7 @@ fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
     let _ = gc_collect_minor();
 
     let dynamic_bits = crate::object::test_class_dynamic_prop_root_bits(0x5401, "dyn");
-    let prototype_bits = crate::object::test_class_prototype_method_root_bits(0x5401, "proto");
+
     let cached_bits = crate::object::test_class_prototype_method_value_root_bits(0x5401, "bound");
     let prototype_object_after = crate::object::test_class_prototype_object_root_addr(0x5401);
     let decl_prototype_object_after =
@@ -51,7 +51,6 @@ fn test_copying_minor_rewrites_class_side_table_values_and_function_keys() {
     let key_after_bits = js_shadow_slot_get(0);
 
     assert_eq!(dynamic_bits & TAG_MASK, STRING_TAG);
-    assert_eq!(prototype_bits, dynamic_bits);
     assert_eq!(cached_bits, dynamic_bits);
     assert_ne!(value_after, value);
     assert!(crate::arena::pointer_in_nursery(value_after));
@@ -96,6 +95,9 @@ fn test_function_prototype_registration_class_id_survives_a_move() {
     crate::object::test_clear_class_side_table_roots();
     gc_register_mutable_root_scanner(crate::object::scan_class_side_table_roots_mut);
 
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
+    gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
+    gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     let func = crate::arena::arena_alloc_gc(
         std::mem::size_of::<crate::closure::ClosureHeader>(),
         std::mem::align_of::<crate::closure::ClosureHeader>(),
@@ -147,10 +149,19 @@ fn test_function_prototype_registration_class_id_survives_a_move() {
         before_cid,
         "`new F()` through the moved function must stamp the same class id"
     );
-    assert_eq!(
-        crate::object::test_class_prototype_method_root_bits(before_cid, "before") & TAG_MASK,
-        STRING_TAG,
-        "the method registered before the move must stay on the same class"
+
+    let stored = unsafe {
+        crate::object::js_get_function_prototype_method(
+            f64::from_bits(func_after_bits),
+            b"before".as_ptr(),
+            6,
+        )
+    };
+    assert_eq!(stored.to_bits() & TAG_MASK, STRING_TAG);
+    assert_ne!(
+        stored.to_bits() & POINTER_MASK,
+        before as u64,
+        "the prototype slot value must move too"
     );
 }
 

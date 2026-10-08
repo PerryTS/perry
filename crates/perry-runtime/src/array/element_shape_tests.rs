@@ -384,6 +384,7 @@ fn prototype_surgery_retires_every_outstanding_proof() {
 
     let name = b"patched";
     unsafe {
+        crate::object::js_register_class_name(CLASS_A, b"ElementShapeA".as_ptr(), 13);
         crate::object::js_register_prototype_method(
             CLASS_A,
             name.as_ptr(),

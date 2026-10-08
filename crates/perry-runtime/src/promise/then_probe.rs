@@ -636,7 +636,7 @@ fn class_id_admissible(class_id: u32) -> bool {
 /// nothing for `class_id`: no vtable (getters, setters, methods), no class
 /// prototype object of either flavour, and no parent edge. Those four
 /// registries are the entire input to `resolve_proto_chain_field_with_receiver`,
-/// `lookup_prototype_method`, `lookup_class_method_in_chain` and the
+/// the ordinary prototype read, `lookup_class_method_in_chain` and the
 /// `CLASS_VTABLE_REGISTRY` getter/method dispatch in the dynamic getter.
 pub(crate) fn class_registry_inert(class_id: u32) -> bool {
     if crate::object::get_parent_class_id(class_id).is_some() {
