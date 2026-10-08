@@ -236,7 +236,7 @@ jobs:
       CARGO_TERM_COLOR: always
       MACOSX_DEPLOYMENT_TARGET: "13.0"
 
-    name: GC Ratchet / gc-ratchet
+    name: gc-ratchet / gc-ratchet
   gc-ratchet__report-main-result:
     needs:
       - route
@@ -287,9 +287,9 @@ jobs:
       CARGO_TERM_COLOR: always
       MACOSX_DEPLOYMENT_TARGET: "13.0"
 
-    name: GC Ratchet / report-main-result
+    name: gc-ratchet / report-main-result
   gc-ratchet:
-    name: GC Ratchet / suite result
+    name: gc-ratchet / suite result
     needs:
       - route
       - gc-ratchet__gc-ratchet
@@ -525,9 +525,9 @@ jobs:
   # and leaves the object cache, which keys the flag correctly, in place.
       PERRY_DISABLE_BUILD_CACHE: "1"
 
-    name: GC Moving Witnesses
+    name: gc-moving-witnesses / gc-moving-witnesses
   gc-moving-witnesses:
-    name: GC Moving Witnesses / suite result
+    name: gc-moving-witnesses / suite result
     needs:
       - route
       - gc-moving-witnesses__gc-moving-witnesses
@@ -1191,7 +1191,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: GC Root Dominance / gc-root-dominance
+    name: gc-root-dominance / gc-root-dominance
   gc-root-dominance__gc-root-dominance-statepoints:
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-root-dominance'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
     runs-on: macos-14
@@ -1455,9 +1455,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: GC Root Dominance / gc-root-dominance-statepoints
+    name: gc-root-dominance / gc-root-dominance-statepoints
   gc-root-dominance:
-    name: GC Root Dominance / suite result
+    name: gc-root-dominance / suite result
     needs:
       - route
       - gc-root-dominance__gc-root-dominance
@@ -1521,7 +1521,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: GC Parse-Churn Layout Gate / self-test-checker
+    name: gc-parse-churn-gate / self-test-checker
   gc-parse-churn-gate__gc-parse-churn-gate:
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-parse-churn-gate'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
     runs-on: ubuntu-latest
@@ -1618,9 +1618,9 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
 
-    name: GC Parse-Churn Layout Gate / gc-parse-churn-gate
+    name: gc-parse-churn-gate / gc-parse-churn-gate
   gc-parse-churn-gate:
-    name: GC Parse-Churn Layout Gate / suite result
+    name: gc-parse-churn-gate / suite result
     needs:
       - route
       - gc-parse-churn-gate__self-test-checker
@@ -1768,9 +1768,9 @@ jobs:
   # changes the GC trace format the harness parses for its liveness evidence.
   # Setting it here from outside could silently turn every cell UNVER.
 
-    name: GC Ptr<Shape> OFF-arm witness
+    name: gc-ptr-shape-off-witness / gc-ptr-shape-off-witness
   gc-ptr-shape-off-witness:
-    name: GC Ptr<Shape> OFF-arm witness / suite result
+    name: gc-ptr-shape-off-witness / suite result
     needs:
       - route
       - gc-ptr-shape-off-witness__gc-ptr-shape-off-witness

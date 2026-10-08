@@ -120,13 +120,13 @@ class CategoryRoutingTests(unittest.TestCase):
         self.assertIn("github.event_name == 'pull_request'", full["if"])
         self.assertIn("route_result", full["steps"][0]["run"])
         self.assertTrue({"lint", "check", "warnings", "cargo-test", "security-audit"}.issubset(set(full["needs"])))
-        self.assertEqual(jobs["security-weekly"]["name"], "Weekly Security Audit / suite result")
+        self.assertEqual(jobs["security-weekly"]["name"], "security-weekly / suite result")
         self.assertIn("needs.route.outputs.plan", jobs["security-weekly"]["if"])
         for module, display_name in {
-            "coverage": "Coverage / suite result",
+            "coverage": "coverage / suite result",
             "zizmor": "zizmor / suite result",
-            "native-result-ledger": "Native Result Ledger / suite result",
-            "npm-launcher": "npm launcher / suite result",
+            "native-result-ledger": "native-result-ledger / suite result",
+            "npm-launcher": "npm-launcher / suite result",
         }.items():
             self.assertEqual(jobs[module]["name"], display_name)
 

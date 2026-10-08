@@ -274,6 +274,13 @@ The Actions sidebar has six repository workflows. GitHub also registers four ind
 
 All 38 original suites remain represented. Schedules select their original suites even when several categories share a parent. Category and `all` dispatches use the original suite input defaults; individual suite dispatches accept their custom inputs. Live maintenance tasks must be selected explicitly and dispatched from `main`. Documentation deployment can still be dispatched on a release tag. The release workflows retain their filenames for npm trusted publisher authorization.
 
+Job display names use lowercase. Nested suite jobs use the stable suite ID as
+their prefix, for example `docs-check / build-and-validation` and
+`docs-check / suite result`. Workflow category names retain their sidebar casing.
+Keep suite prefixes stable: freshness checks, failure monitoring, and release
+orchestration select jobs by these names. `scripts/check_actions_topology.py`
+enforces lowercase labels and suite prefixes.
+
 For example, `gh workflow run compiler-runtime.yml -f suite=performance` runs the performance category; `gh workflow run compiler-runtime.yml -f suite=benchmark` runs only the benchmark suite. Release orchestration dispatches the simulator suite on the exact candidate SHA and checks its actual job result, independently of other Extended Tests jobs.
 
 After a consolidation lands, Repository automatically deletes completed runs whose repository workflow file no longer exists. It allows queued/running jobs to finish before deleting their history and leaves GitHub's dynamic registrations alone. This removes retired entries from the sidebar as their last runs are cleaned up.

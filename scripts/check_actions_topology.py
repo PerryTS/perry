@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -32,6 +33,13 @@ def main() -> int:
     errors = []
     owners = {}
     workflows = {path.name: read(path) for path in WORKFLOWS.glob('*.yml')}
+    for name, workflow in workflows.items():
+        for job_id, job in (workflow.get('jobs') or {}).items():
+            display_name = str(job.get('name') or job_id)
+            # Expression identifiers such as fromJSON are case-sensitive.
+            literal = re.sub(r'\$\{\{.*?\}\}', '', display_name)
+            if literal != literal.lower():
+                errors.append(f'{name}/{job_id}: job display name must be lowercase')
     active = {
         name for name, workflow in workflows.items()
         if any(event != 'workflow_call' for event in trigger_set(workflow))
@@ -86,8 +94,11 @@ def main() -> int:
                 errors.append(f'{parent}/{module_id}: result job does not depend on every suite job')
             if 'always()' not in str(summary.get('if') or ''):
                 errors.append(f'{parent}/{module_id}: result job must run after failed or skipped jobs')
-            if not str(summary.get('name') or '').endswith('/ suite result'):
-                errors.append(f'{parent}/{module_id}: result job needs a distinct display name')
+            if summary.get('name') != f'{module_id} / suite result':
+                errors.append(f'{parent}/{module_id}: result job must use its stable suite ID')
+            for job_id, job in suite_jobs.items():
+                if not str(job.get('name') or '').startswith(f'{module_id} / '):
+                    errors.append(f'{parent}/{job_id}: display name must use its stable suite ID')
             if category.get('route_job') and f'needs.{route_job}.outputs.plan' not in str(summary.get('if') or ''):
                 errors.append(f'{parent}/{module_id}: result job must use its category router')
 
@@ -137,6 +148,17 @@ def main() -> int:
             key for key, category in CATALOG['categories'].items() if category['entrypoint'] == parent
         }:
             errors.append(f'{parent}: parent category membership differs from routing contract')
+
+    freshness = json.loads((ROOT / 'scripts/gate_freshness.json').read_text())
+    for gate in freshness['gates']:
+        parent = gate.get('source_workflow', gate['workflow'])
+        names = {
+            job.get('name') or job_id
+            for job_id, job in (workflows.get(parent, {}).get('jobs') or {}).items()
+        }
+        for name in gate.get('job_names', []):
+            if name not in names:
+                errors.append(f'{parent}: freshness selector does not match a job: {name}')
 
     release = workflows.get('release-packages.yml') or {}
     cross = ((release.get('jobs') or {}).get('build-cross') or {})

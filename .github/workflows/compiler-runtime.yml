@@ -105,7 +105,7 @@ concurrency:
 jobs:
   # Compiler and Runtime suites
   route:
-    name: Compiler and Runtime / suite routing
+    name: compiler and runtime / suite routing
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -969,7 +969,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: ext-link
+    name: ext-link / ext-link
   ext-link:
     name: ext-link / suite result
     needs:
@@ -1000,7 +1000,7 @@ jobs:
 
   # Compatibility suites
   route-compatibility:
-    name: Compatibility / suite routing
+    name: compatibility / suite routing
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1105,9 +1105,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: Node Compat Matrix Guard
+    name: node-compat-matrix / node-compat-matrix
   node-compat-matrix:
-    name: Node Compat Matrix Guard / suite result
+    name: node-compat-matrix / suite result
     needs:
       - route-compatibility
       - node-compat-matrix__node-compat-matrix
@@ -1194,9 +1194,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: Node Suite Regression Guard
+    name: node-suite-guard / node-suite-guard
   node-suite-guard:
-    name: Node Suite Regression Guard / suite result
+    name: node-suite-guard / suite result
     needs:
       - route-compatibility
       - node-suite-guard__node-suite-guard
@@ -1223,7 +1223,7 @@ jobs:
           print(f'{len(ids)} suite jobs completed or were intentionally skipped')
           PY
   node-core-subset__radar:
-    name: Node Core Subset Radar / radar (shard ${{ matrix.shard }})
+    name: node-core-subset / radar (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 75
     strategy:
@@ -1339,7 +1339,7 @@ jobs:
       contents: read
       pull-requests: read
   node-core-subset__report:
-    name: Node Core Subset Radar / merge + publish
+    name: node-core-subset / merge + publish
     needs:
       - route-compatibility
       - node-core-subset__radar
@@ -1451,7 +1451,7 @@ jobs:
       contents: read
       pull-requests: read
   node-core-subset:
-    name: Node Core Subset Radar / suite result
+    name: node-core-subset / suite result
     needs:
       - route-compatibility
       - node-core-subset__radar
@@ -1555,9 +1555,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: TypeScript Feature Matrix
+    name: feature-matrix / feature-matrix
   feature-matrix:
-    name: TypeScript Feature Matrix / suite result
+    name: feature-matrix / suite result
     needs:
       - route-compatibility
       - feature-matrix__feature-matrix
@@ -1632,7 +1632,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: WASI Check / wasi-check
+    name: wasi-check / wasi-check
   wasi-check__wasi-codegen:
     if: ${{ needs.route-compatibility.result == 'success' && fromJSON(needs.route-compatibility.outputs.plan)['wasi-check'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
     runs-on: ubuntu-latest
@@ -1685,9 +1685,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: WASI Check / wasi-codegen
+    name: wasi-check / wasi-codegen
   wasi-check:
-    name: WASI Check / suite result
+    name: wasi-check / suite result
     needs:
       - route-compatibility
       - wasi-check__wasi-check
@@ -1715,7 +1715,7 @@ jobs:
           print(f'{len(ids)} suite jobs completed or were intentionally skipped')
           PY
   npm-package-sweep__compile-packages-sweep:
-    name: NPM Package Sweep
+    name: npm-package-sweep / compile-packages-sweep
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -1802,7 +1802,7 @@ jobs:
       contents: read
       pull-requests: read
   npm-package-sweep:
-    name: NPM Package Sweep / suite result
+    name: npm-package-sweep / suite result
     needs:
       - route-compatibility
       - npm-package-sweep__compile-packages-sweep
@@ -1831,7 +1831,7 @@ jobs:
 
   # Integration suites
   route-integration:
-    name: Integration / suite routing
+    name: integration / suite routing
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -1877,7 +1877,7 @@ jobs:
           python3 scripts/actions_plan.py "${args[@]}"
   container-tests__hermetic:
     if: ${{ needs.route-integration.result == 'success' && fromJSON(needs.route-integration.outputs.plan)['container-tests'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
-    name: Container Tests / Hermetic Tests (Layer A + B)
+    name: container-tests / hermetic tests (layer a + b)
     strategy:
       fail-fast: false
       matrix:
@@ -1967,7 +1967,7 @@ jobs:
       contents: read
       pull-requests: read
   container-tests__integration-macos-apple:
-    name: Container Tests / Layer C — Integration (macOS / apple/container)
+    name: container-tests / layer c — integration (macos / apple/container)
     runs-on: macos-14
     if: ${{ needs.route-integration.result == 'success' && fromJSON(needs.route-integration.outputs.plan)['container-tests'] && ((github.event_name != 'pull_request' || github.base_ref == 'main') && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))) }}
     steps:
@@ -2039,7 +2039,7 @@ jobs:
       contents: read
       pull-requests: read
   container-tests__integration-linux-podman:
-    name: Container Tests / Layer C — Integration (Linux / podman)
+    name: container-tests / layer c — integration (linux / podman)
     runs-on: ubuntu-24.04
     if: ${{ needs.route-integration.result == 'success' && fromJSON(needs.route-integration.outputs.plan)['container-tests'] && ((github.event_name != 'pull_request' || github.base_ref == 'main') && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests'))) }}
     steps:
@@ -2102,7 +2102,7 @@ jobs:
       contents: read
       pull-requests: read
   container-tests__e2e-linux:
-    name: Container Tests / Layer D — E2E (Linux / docker)
+    name: container-tests / layer d — e2e (linux / docker)
     runs-on: ubuntu-24.04
     if: |-
       ${{ needs.route-integration.result == 'success' && fromJSON(needs.route-integration.outputs.plan)['container-tests'] && (startsWith(github.ref, 'refs/tags/v') ||
@@ -2181,7 +2181,7 @@ jobs:
       contents: read
       pull-requests: read
   container-tests__fuzz:
-    name: Container Tests / Layer E — Fuzz (libfuzzer)
+    name: container-tests / layer e — fuzz (libfuzzer)
     runs-on: ubuntu-24.04
     if: |-
       ${{ needs.route-integration.result == 'success' && fromJSON(needs.route-integration.outputs.plan)['container-tests'] && (github.event_name == 'schedule' ||
@@ -2241,7 +2241,7 @@ jobs:
       contents: read
       pull-requests: read
   container-tests__container-tests-gate:
-    name: Container Tests / Container Tests Gate
+    name: container-tests / container tests gate
     runs-on: ubuntu-24.04
     needs:
       - route-integration
@@ -2264,7 +2264,7 @@ jobs:
       contents: read
       pull-requests: read
   container-tests:
-    name: Container Tests / suite result
+    name: container-tests / suite result
     needs:
       - route-integration
       - container-tests__hermetic
@@ -2372,9 +2372,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: Simulator Tests (iOS)
+    name: simctl-tests / simctl
   simctl-tests:
-    name: Simulator Tests (iOS) / suite result
+    name: simctl-tests / suite result
     needs:
       - route-integration
       - simctl-tests__simctl
@@ -2462,9 +2462,9 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: Next App Route dylib
+    name: next-app-route / next-app-route
   next-app-route:
-    name: Next App Route dylib / suite result
+    name: next-app-route / suite result
     needs:
       - route-integration
       - next-app-route__next-app-route
@@ -2600,9 +2600,9 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
 
-    name: Auto-Optimize App Patterns
+    name: auto-opt-app-patterns / auto-opt-app-patterns
   auto-opt-app-patterns:
-    name: Auto-Optimize App Patterns / suite result
+    name: auto-opt-app-patterns / suite result
     needs:
       - route-integration
       - auto-opt-app-patterns__auto-opt-app-patterns
@@ -2631,7 +2631,7 @@ jobs:
 
   # Performance suites
   route-performance:
-    name: Performance / suite routing
+    name: performance / suite routing
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -2914,7 +2914,7 @@ jobs:
 
     permissions:
       contents: write
-    name: Regression Check / performance
+    name: benchmark / performance
   benchmark__binary-size:
     runs-on: macos-14
     steps:
@@ -3037,7 +3037,7 @@ jobs:
 
     permissions:
       contents: write
-    name: Regression Check / binary-size
+    name: benchmark / binary-size
   benchmark__compile-time:
     runs-on: macos-14
     steps:
@@ -3115,7 +3115,7 @@ jobs:
 
     permissions:
       contents: write
-    name: Regression Check / compile-time
+    name: benchmark / compile-time
   benchmark__update-baseline:
     if: ${{ needs.route-performance.result == 'success' && fromJSON(needs.route-performance.outputs.plan)['benchmark'] && (github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.AUTO_UPDATE_BASELINE == 'true') }}
     runs-on: macos-14
@@ -3175,9 +3175,9 @@ jobs:
   # Nightly / workflow_dispatch: just warn, don't block (noisy CI runners produce false positives)
       IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') || github.event_name == 'release' }}
 
-    name: Regression Check / update-baseline
+    name: benchmark / update-baseline
   benchmark:
-    name: Regression Check / suite result
+    name: benchmark / suite result
     needs:
       - route-performance
       - benchmark__performance
@@ -3291,7 +3291,7 @@ jobs:
     permissions:
       contents: write
       actions: read
-    name: tak Performance Report / report
+    name: tak-performance / report
   tak-performance__publish:
     needs:
       - route-performance
@@ -3353,9 +3353,9 @@ jobs:
             .tak-results/detect.txt
           if-no-files-found: warn
           retention-days: 90
-    name: tak Performance Report / publish
+    name: tak-performance / publish
   tak-performance:
-    name: tak Performance Report / suite result
+    name: tak-performance / suite result
     needs:
       - route-performance
       - tak-performance__report
@@ -3426,7 +3426,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    name: TLS Budget / self-test-checkers
+    name: tls-budget / self-test-checkers
   tls-budget__tls-budget:
     if: ${{ needs.route-performance.result == 'success' && fromJSON(needs.route-performance.outputs.plan)['tls-budget'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
     runs-on: macos-14
@@ -3525,9 +3525,9 @@ jobs:
       CARGO_TERM_COLOR: always
       MACOSX_DEPLOYMENT_TARGET: "13.0"
 
-    name: TLS Budget / tls-budget
+    name: tls-budget / tls-budget
   tls-budget:
-    name: TLS Budget / suite result
+    name: tls-budget / suite result
     needs:
       - route-performance
       - tls-budget__self-test-checkers
