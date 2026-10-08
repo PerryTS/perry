@@ -287,6 +287,8 @@ fn flush_emissions(engine: &mut Engine, id: u64) {
     }
 }
 
+/// Consumer credit resumes a response only after its headers have arrived.
+/// DNS, connection and handshake progress belong to transport completions.
 /// The source owns its exchange through its sink context, on this agent only.
 pub(crate) fn resume_source(ctx: usize) {
     ENGINE.with(|e| {
@@ -294,7 +296,7 @@ pub(crate) fn resume_source(ctx: usize) {
         let conn = engine
             .requests
             .values()
-            .find(|r| r.sink.ctx == ctx)
+            .find(|r| r.sink.ctx == ctx && r.head.is_some())
             .and_then(|r| r.conn);
         if let Some(conn) = conn {
             exchange::resume(&mut engine, conn);
@@ -591,13 +593,9 @@ fn drain_pending() {
             }
             Delivery::Done(outcome) => (sink.on_done)(sink.ctx, outcome),
         }
-        ENGINE.with(|e| {
-            let mut engine = e.borrow_mut();
-            let conns: Vec<_> = engine.conns.keys().copied().collect();
-            for conn in conns {
-                exchange::resume(&mut engine, conn);
-            }
-        });
+        // This callback returns credit to its response, not to every socket.
+        // Newly submitted requests still belong to transport completions.
+        resume_source(sink.ctx);
     }
 }
 
