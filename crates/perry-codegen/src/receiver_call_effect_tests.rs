@@ -10,6 +10,11 @@ fn readonly_calls_preserve_receiver_proofs_and_other_calls_invalidate_them() {
         "js_typed_i32_arg_guard",
         "js_typed_i32_arg_to_raw",
     ] {
+        assert_eq!(
+            crate::gc_call_effects::classify_direct_callee(callee),
+            crate::gc_call_effects::GcCallEffect::CannotCollect,
+            "proof preservation also needs a noncollecting call"
+        );
         let counter = Rc::new(RegCounter::new());
         counter.push_byte_access_dirty_slot("%byte_state".into());
         counter.push_stable_packed_revalidation_slot("%packed_state".into());
@@ -32,6 +37,7 @@ fn noncollecting_writers_and_unknown_calls_still_invalidate_receiver_proofs() {
     for callee in [
         "js_typed_feedback_numeric_array_index_get_guard",
         "js_dyn_index_get",
+        "js_array_length",
         "unknown_callee",
     ] {
         let counter = Rc::new(RegCounter::new());
