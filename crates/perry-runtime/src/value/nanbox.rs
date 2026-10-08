@@ -484,15 +484,8 @@ mod ffi_sso_header_tests {
                 assert!(!crate::buffer::is_registered_buffer(addr));
                 assert!(crate::typedarray::lookup_typed_array_kind(addr).is_none());
                 let string = addr as *const crate::string::StringHeader;
-                let bytes = unsafe {
-                    std::slice::from_raw_parts(
-                        string
-                            .cast::<u8>()
-                            .add(std::mem::size_of::<crate::string::StringHeader>()),
-                        (*string).byte_len as usize,
-                    )
-                };
-                assert_eq!(bytes, text.as_bytes());
+                let bytes = unsafe { crate::string::OwnedStringBytes::copy_from_header(string) };
+                assert_eq!(bytes.as_bytes(), text.as_bytes());
             }
         })
         .join()

@@ -117,6 +117,7 @@ fn alloc_shared_block(size: u32) -> *mut BufferHeader {
         (*header)._reserved = 0;
         // Total block size, for honesty; a non-arena object is never block-walked.
         (*header).size = total.min(u32::MAX as usize) as u32;
+// GC_STORE_AUDIT(INIT): fills a fresh non-arena header before publication.
         std::ptr::write(
             buf,
             BufferHeader {

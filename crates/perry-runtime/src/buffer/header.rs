@@ -64,16 +64,17 @@ use std::sync::{Mutex, OnceLock};
 /// SharedArrayBuffer block) — proven before the header is read.
 #[inline]
 pub(crate) fn byte_word_address(bits: u64) -> Option<usize> {
-    if bits < 0x1000 {
+    let tagged = (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG;
+    if !tagged && (bits >> 48) != 0 {
         return None;
     }
-    if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
-        return Some((bits & crate::value::POINTER_MASK) as usize);
-    }
-    if (bits >> 48) != 0 {
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if crate::value::addr_class::is_handle_band(addr) {
         return None;
     }
-    let addr = bits as usize;
+    if tagged {
+        return Some(addr);
+    }
     raw_byte_word_is_owned(addr).then_some(addr)
 }
 
@@ -981,6 +982,8 @@ pub(crate) unsafe fn externalize_on_attach_for_test(addr: usize) {
     };
     let backing = super::backing::Backing::copy(super::store::owner_data(addr), header.capacity);
     let data = backing.data();
+// GC_STORE_AUDIT(INIT): rewrites this buffer in place before it escapes;
+// the link is copied unchanged, so no new edge appears.
     std::ptr::write(
         addr as *mut ForeignBuffer,
         ForeignBuffer {
