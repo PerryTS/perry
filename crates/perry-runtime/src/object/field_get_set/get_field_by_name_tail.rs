@@ -1246,7 +1246,7 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
             }
         }
 
-        let keys_view = crate::object::object_keys(obj);
+        let (keys_view, live_slots) = crate::object::object_keys_and_live_slot_count(obj);
         let keys = keys_view.arr();
 
         if keys.is_null() {
@@ -1443,14 +1443,6 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // reading a 56-byte retired-from-space `GC_TYPE_STRING`.
         let key_copy = crate::object::field_get_set::HeapKeyBytes::copy_of_key(key);
         let key_bytes = key_copy.as_bytes();
-        // Gate-neutral builtin accessors mark only their owning object. Consult
-        // the descriptor table before an accessor's empty backing slot is read;
-        // unrelated objects pay only this already-loaded header-bit test.
-        if (*gc_header)._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0 {
-            if let Some(v) = builtin_reflection_accessor_read(obj, key_bytes) {
-                return v;
-            }
-        }
         let key_hash = {
             let mut h: u32 = 0x811c9dc5;
             for &b in key_bytes {
@@ -1512,24 +1504,11 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 let cache = &mut *st.field_lookup.field_cache.get();
                 cache[cache_idx] = (0, 0, 0);
             } else {
-                // Accessor short-circuit: if this (obj, key) has a getter installed,
-                // invoke it instead of reading the slot. The `ACCESSORS_IN_USE`
-                // thread-local gate keeps this off the hot path in the common case;
-                // the per-object flag gate avoids invoking a stale getter left by a
-                // freed object whose address this fresh object reused.
-                if super::super::object_has_descriptors(obj as usize) {
-                    if let Ok(name) = std::str::from_utf8(key_bytes) {
-                        if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
-                            if acc.get != 0 {
-                                let receiver = crate::value::js_nanbox_pointer(obj as i64);
-                                return invoke_accessor_getter(acc.get, receiver);
-                            }
-                            // Has accessor but no getter → undefined.
-                            return JSValue::undefined();
-                        }
-                    }
+                if let Some(value) = object_accessor_at_with_live(obj, keys, field_idx, live_slots)
+                {
+                    return value;
                 }
-                return js_object_get_field(obj, field_idx);
+                return super::accessors::object_field_at_with_live(obj, field_idx, live_slots);
             }
         }
 
@@ -1539,7 +1518,6 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // by every field read below and by the stamp; this used to be two
         // probes here (one of them into an unused binding) plus one more
         // inside every `js_object_get_field` the scan returned through.
-        let live_slots = crate::object::object_live_slot_count(obj);
         let alloc_limit =
             std::cmp::max(live_slots, crate::object::INLINE_SLOT_FLOOR as u32) as usize;
 
@@ -1548,16 +1526,8 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
         // linear scan below (the index is an accelerator, not authoritative).
         if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
             if let Some(i) = wide_key_index_lookup(keys_id, key_bytes, key, keys, key_count) {
-                if super::super::object_has_descriptors(obj as usize) {
-                    if let Ok(name) = std::str::from_utf8(key_bytes) {
-                        if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
-                            if acc.get != 0 {
-                                let receiver = crate::value::js_nanbox_pointer(obj as i64);
-                                return invoke_accessor_getter(acc.get, receiver);
-                            }
-                            return JSValue::undefined();
-                        }
-                    }
+                if let Some(value) = object_accessor_at_with_live(obj, keys, i, live_slots) {
+                    return value;
                 }
                 return if (i as usize) < alloc_limit {
                     super::accessors::object_field_at_with_live(obj, i, live_slots)
@@ -1623,17 +1593,8 @@ pub(super) fn get_field_by_name_object_tail_with_kind(
                 if key_count >= WIDE_KEY_INDEX_MIN_KEYS {
                     wide_key_index_note_hit(keys_id, key_bytes, i as u32);
                 }
-                // Accessor short-circuit (see fast path above).
-                if super::super::object_has_descriptors(obj as usize) {
-                    if let Ok(name) = std::str::from_utf8(key_bytes) {
-                        if let Some(acc) = get_accessor_descriptor(obj as usize, name) {
-                            if acc.get != 0 {
-                                let receiver = crate::value::js_nanbox_pointer(obj as i64);
-                                return invoke_accessor_getter(acc.get, receiver);
-                            }
-                            return JSValue::undefined();
-                        }
-                    }
+                if let Some(value) = object_accessor_at_with_live(obj, keys, i as u32, live_slots) {
+                    return value;
                 }
                 if i < alloc_limit {
                     return super::accessors::object_field_at_with_live(obj, i as u32, live_slots);

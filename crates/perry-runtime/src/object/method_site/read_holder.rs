@@ -630,7 +630,7 @@ struct Walk {
 
 /// A hop the entry may name: an ordinary, shaped, non-exotic object whose
 /// ShapeId records the prototype identity it really has.
-unsafe fn hop_admitted(addr: usize, name: &[u8]) -> bool {
+unsafe fn hop_admitted(addr: usize) -> bool {
     if !crate::value::addr_class::is_above_handle_band(addr)
         || !super::address_is_prime_stable(addr)
     {
@@ -655,7 +655,7 @@ unsafe fn hop_admitted(addr: usize, name: &[u8]) -> bool {
     {
         return false;
     }
-    !key_may_be_accessor(obj, name)
+    true
 }
 
 /// What `obj` says its prototype identity is
@@ -970,7 +970,7 @@ unsafe fn walk_to(
                 None => next_prototype(current),
             }
         };
-        if next.is_null() || next == current || next == recv || !hop_admitted(next as usize, name) {
+        if next.is_null() || next == current || next == recv || !hop_admitted(next as usize) {
             return None;
         }
         let shape = object_shape_descriptor(next)?;
@@ -982,6 +982,12 @@ unsafe fn walk_to(
             if let Some(s) =
                 crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
             {
+                // This exact slot, not another name walk, supplies the data
+                // admission proof kept by the existing holder memo. Its
+                // ShapeId compare invalidates it when the entry changes.
+                if crate::object::key_attrs::key_is_accessor_at(keys, s) {
+                    return None;
+                }
                 let s = holder_slot_word(next as usize, s, shape.live_inline_slot_count)?;
                 w.holder = next as usize;
                 w.holder_shape = object_shape_stamp(next);
@@ -1047,9 +1053,6 @@ pub(crate) unsafe fn dynamic_own_or_absent(
         return None;
     }
     let recv = ordinary_receiver(obj as usize)?;
-    if key_may_be_accessor(recv, name) {
-        return None;
-    }
     let shape = object_shape_descriptor(recv)?;
     if !shape.object_kind.is_ordinary_layout() {
         return None;
@@ -1059,6 +1062,9 @@ pub(crate) unsafe fn dynamic_own_or_absent(
         if let Some(slot) =
             crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
         {
+            if crate::object::key_attrs::key_is_accessor_at(keys, slot) {
+                return None;
+            }
             return Some(DynamicKeyVerdict::Own {
                 slot,
                 live: shape.live_inline_slot_count,
@@ -1130,7 +1136,7 @@ unsafe fn function_walk(closure: usize, name: &[u8]) -> Option<Walk> {
         return None;
     }
     let fp = crate::array::function_prototype_addr_if_resolved();
-    if fp == 0 || !hop_admitted(fp, name) {
+    if fp == 0 || !hop_admitted(fp) {
         return None;
     }
     let fp_obj = fp as *const ObjectHeader;
@@ -1144,6 +1150,9 @@ unsafe fn function_walk(closure: usize, name: &[u8]) -> Option<Walk> {
         if let Some(s) =
             crate::object::keys_find_slot_by_bytes_resolved(keys, shape.logical_key_count, name)
         {
+            if crate::object::key_attrs::key_is_accessor_at(keys, s) {
+                return None;
+            }
             return Some(Walk {
                 holder: fp,
                 holder_shape: fp_shape,

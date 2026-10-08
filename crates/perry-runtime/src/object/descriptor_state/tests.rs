@@ -85,6 +85,56 @@ fn accessor_installed_after_a_holder_memo_retires_that_memo() {
 }
 
 #[test]
+fn resolved_own_slots_observe_accessor_edits_in_narrow_wide_and_dictionary_holders() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        for (width, dictionary) in [(3, false), (300, false), (3, true)] {
+            let object = crate::object::js_object_alloc(0, width);
+            for i in 0..width {
+                crate::object::js_object_set_field_by_name(
+                    object,
+                    key(&format!("resolved_holder_{i}")),
+                    i as f64,
+                );
+            }
+            if dictionary {
+                assert!(crate::object::dictionary::latch_object_to_dictionary(
+                    object
+                ));
+            }
+            let lane = key("resolved_holder_1");
+            let neighbor = key("resolved_holder_2");
+            for _ in 0..3 {
+                assert_eq!(
+                    crate::object::js_object_get_field_by_name(object, lane).as_number(),
+                    1.0
+                );
+            }
+            let before = super::super::shapes::object_shape_stamp(object);
+            set_accessor_descriptor(object as usize, "resolved_holder_1".into(), getter());
+            assert_ne!(before, super::super::shapes::object_shape_stamp(object));
+            for _ in 0..3 {
+                assert_eq!(
+                    crate::object::js_object_get_field_by_name(object, lane).as_number(),
+                    41.0
+                );
+                assert_eq!(
+                    crate::object::js_object_get_field_by_name(object, neighbor).as_number(),
+                    2.0
+                );
+            }
+            clear_accessor_descriptor(object as usize, "resolved_holder_1");
+            crate::object::js_object_set_field_by_name(object, lane, 19.0);
+            assert_eq!(
+                crate::object::js_object_get_field_by_name(object, lane).as_number(),
+                19.0
+            );
+        }
+    }
+}
+
+#[test]
 fn array_descriptor_holder_survives_growth_without_rekeying() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();

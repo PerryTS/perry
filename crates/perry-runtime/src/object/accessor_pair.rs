@@ -284,6 +284,18 @@ pub(crate) extern "C-unwind" fn holder_closure_getter(this: f64, pair: i64) -> f
 /// carries `ENTRY_ACCESSOR`.
 pub(crate) unsafe fn slot_accessor(obj: *const crate::object::ObjectHeader, pos: u32) -> Accessor {
     let live = crate::object::object_live_slot_count(obj);
+    slot_accessor_with_live(obj, pos, live)
+}
+
+/// Read an already-resolved accessor lane without resolving its holder again.
+/// The caller's current shape/key proof supplies the slot and inline bound;
+/// no allocation or safepoint may intervene before this read.
+#[inline]
+pub(crate) unsafe fn slot_accessor_with_live(
+    obj: *const crate::object::ObjectHeader,
+    pos: u32,
+    live: u32,
+) -> Accessor {
     let value = crate::object::field_get_set::object_field_at_with_live(obj, pos, live).bits();
     pair_of_value(value).unwrap_or_default()
 }
@@ -295,12 +307,25 @@ pub(crate) unsafe fn slot_accessor(obj: *const crate::object::ObjectHeader, pos:
 /// `obj` is a live object whose attributes live with its keys.
 pub(crate) unsafe fn own_accessor(obj: usize, key: &[u8]) -> Option<Accessor> {
     let obj = obj as *const crate::object::ObjectHeader;
-    if !crate::object::key_attrs::object_key_is_accessor(obj, key) {
+    let record = crate::object::shapes::object_shape_record(obj)?;
+    if record.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR == 0 {
         return None;
     }
-    let keys = crate::object::object_keys(obj);
+    let keys = crate::object::object_keys_from_shape_record(obj, record);
+    if keys.is_null()
+        || !crate::object::key_attrs::keys_may_carry(keys.arr(), keys.count(), key, true)
+    {
+        return None;
+    }
     let pos = crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), key)?;
-    Some(slot_accessor(obj, pos))
+    if !crate::object::key_attrs::key_is_accessor_at(keys.arr(), pos) {
+        return None;
+    }
+    Some(slot_accessor_with_live(
+        obj,
+        pos,
+        record.live_inline_slot_count(),
+    ))
 }
 
 /// Store `acc` (or, for `None`, `undefined`) in the value slot of `obj`'s
