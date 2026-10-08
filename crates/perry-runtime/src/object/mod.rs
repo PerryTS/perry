@@ -1737,25 +1737,29 @@ pub(crate) unsafe fn object_keys_and_live_slot_count(
     let Some(record) = shapes::object_shape_record(obj) else {
         return (ObjectKeys::NONE, 0);
     };
-    let live_slots = record.live_inline_slot_count();
+    (
+        object_keys_from_shape_record(obj, record),
+        record.live_inline_slot_count(),
+    )
+}
+
+/// Ordered keys from the receiver's already borrowed, current shape record.
+/// The caller must keep `obj` and `record` current across this non-collecting read.
+#[inline]
+pub(crate) unsafe fn object_keys_from_shape_record(
+    obj: *const ObjectHeader,
+    record: shapes::ShapeRecordRef,
+) -> ObjectKeys {
     if record.keys() != 0 {
         let keys = ObjectKeys::new(
             record.keys() as usize as *mut ArrayHeader,
             record.logical_key_count(),
         );
-        return (keys, live_slots);
+        return keys;
     }
-    // The shape publishes no keys. Either the receiver genuinely has none, or
-    // it is in DICTIONARY MODE and carries its own ordered list (#10868 step
-    // 2.5 stage 1, `object/dictionary.rs`). This is the single derivation of
-    // "the receiver's keys" in the runtime, which is why one branch here gives
-    // every enumeration walk, `in`/`hasOwn`, `delete` and `JSON.stringify`
-    // node-identical behaviour on a dictionary object with no second
-    // implementation of key order. An ordinary receiver never reaches this
-    // line — the nonzero `keys` word returns above — so the branch costs
-    // nothing on the path that matters. A dictionary list is the receiver's
-    // own, so its header length is its count.
-    (ObjectKeys::owned(dictionary::keys_array(obj)), live_slots)
+    // A dictionary shape's ordered list belongs to its receiver. Its header
+    // supplies the count; normal shapes use their immutable prefix above.
+    ObjectKeys::owned(dictionary::keys_array(obj))
 }
 
 /// Return the two shape facts needed together by callback-free serializers.

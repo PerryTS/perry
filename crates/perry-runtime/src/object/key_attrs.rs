@@ -786,10 +786,17 @@ pub(crate) unsafe fn object_key_has_private_entry(
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn object_key_entry(obj: *const crate::object::ObjectHeader, key: &[u8]) -> u8 {
-    if object_summary(obj) & SUMMARY_KEY_BITS == 0 {
+    let Some(record) = crate::object::shapes::object_shape_record(obj) else {
+        return 0;
+    };
+    if record.summary() & SUMMARY_KEY_BITS == 0 {
         return 0;
     }
-    object_key_entry_filtered(obj, key, false)
+    object_key_entry_filtered(
+        crate::object::object_keys_from_shape_record(obj, record),
+        key,
+        false,
+    )
 }
 
 /// Is `obj`'s own key `key` an accessor? The accessor filters answer most
@@ -802,19 +809,26 @@ pub(crate) unsafe fn object_key_is_accessor(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    if object_summary(obj) & SUMMARY_ACCESSOR == 0 {
+    let Some(record) = crate::object::shapes::object_shape_record(obj) else {
+        return false;
+    };
+    if record.summary() & SUMMARY_ACCESSOR == 0 {
         return false;
     }
-    object_key_entry_filtered(obj, key, true) & ENTRY_ACCESSOR != 0
+    object_key_entry_filtered(
+        crate::object::object_keys_from_shape_record(obj, record),
+        key,
+        true,
+    ) & ENTRY_ACCESSOR
+        != 0
 }
 
 #[inline(never)]
 unsafe fn object_key_entry_filtered(
-    obj: *const crate::object::ObjectHeader,
+    keys: crate::object::ObjectKeys,
     key: &[u8],
     accessor: bool,
 ) -> u8 {
-    let keys = crate::object::object_keys(obj);
     if keys.is_null() || !keys_may_carry(keys.arr(), keys.count(), key, accessor) {
         return 0;
     }
@@ -837,7 +851,10 @@ pub(crate) unsafe fn object_key_entry_for_string(
     obj: *const crate::object::ObjectHeader,
     key: *const crate::StringHeader,
 ) -> u8 {
-    if object_summary(obj) & SUMMARY_KEY_BITS == 0 {
+    let Some(record) = crate::object::shapes::object_shape_record(obj) else {
+        return 0;
+    };
+    if record.summary() & SUMMARY_KEY_BITS == 0 {
         return 0;
     }
     if key.is_null() {
@@ -847,7 +864,11 @@ pub(crate) unsafe fn object_key_entry_for_string(
         crate::value::JSValue::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
     let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
     match crate::string::js_string_key_bytes(boxed, &mut sso) {
-        Some(bytes) => object_key_entry_filtered(obj, bytes, false),
+        Some(bytes) => object_key_entry_filtered(
+            crate::object::object_keys_from_shape_record(obj, record),
+            bytes,
+            false,
+        ),
         None => ENTRY_ACCESSOR,
     }
 }
@@ -892,7 +913,10 @@ pub(crate) unsafe fn object_key_blocks_plain_store(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    let summary = object_summary(obj);
+    let Some(record) = crate::object::shapes::object_shape_record(obj) else {
+        return false;
+    };
+    let summary = record.summary();
     if summary & SUMMARY_BLOCKS_STORE == 0 {
         #[cfg(feature = "attr-census")]
         crate::object::attr_census::note_global("read.store_check_summary_clear");
@@ -902,7 +926,11 @@ pub(crate) unsafe fn object_key_blocks_plain_store(
     // Use the existing accessor filter: non-enumerable prototype methods
     // need no lookup for a store merely because another key is an accessor.
     let accessor_only = summary & SUMMARY_NON_WRITABLE == 0;
-    !entry_is_plain_writable_data(object_key_entry_filtered(obj, key, accessor_only))
+    !entry_is_plain_writable_data(object_key_entry_filtered(
+        crate::object::object_keys_from_shape_record(obj, record),
+        key,
+        accessor_only,
+    ))
 }
 
 // ---------------------------------------------------------------------------
