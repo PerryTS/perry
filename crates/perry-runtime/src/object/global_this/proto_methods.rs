@@ -806,7 +806,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method_rest(
                 proto_obj,
                 "bind",
-                crate::fn_info!(function_prototype_bind_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(native_args function_prototype_bind_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // #4101: dedicated toString thunk (source reconstruction + brand
@@ -820,7 +820,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method_rest(
                 proto_obj,
                 "call",
-                crate::fn_info!(function_prototype_call_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(native_args function_prototype_call_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);

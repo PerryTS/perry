@@ -12,8 +12,8 @@ use super::*;
 
 pub use crate::codegen_abi::{
     JsFunctionInfo, FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_BUILTIN, FN_GENERATOR,
-    FN_HAS_DECLARED, FN_HAS_LENGTH, FN_NON_CONSTRUCTOR, FN_REST_MASK, FN_REST_SYNTHETIC_ARGUMENTS,
-    FN_REST_USER, FN_REST_USER_AND_ARGUMENTS, FN_STRICT,
+    FN_HAS_DECLARED, FN_HAS_LENGTH, FN_NON_CONSTRUCTOR, FN_REST_MASK, FN_REST_NATIVE_ARGS,
+    FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER, FN_REST_USER_AND_ARGUMENTS, FN_STRICT,
 };
 
 /// A compiler-private direct-call clone of an arrow body, from its info.
@@ -52,12 +52,19 @@ pub fn resolve_strategy(info: &JsFunctionInfo) -> DispatchStrategy {
 /// `info`'s rest kind and its fixed parameter count, if it has one.
 #[inline(always)]
 pub fn info_rest(info: &JsFunctionInfo) -> Option<(u32, RestDispatchKind)> {
+    // One mask test answers every body without a rest kind, the case each
+    // dynamic call takes.
+    if info.flags & FN_REST_MASK == 0 {
+        return None;
+    }
     let kind = if info.flags & FN_REST_USER != 0 {
         RestDispatchKind::UserRest
     } else if info.flags & FN_REST_SYNTHETIC_ARGUMENTS != 0 {
         RestDispatchKind::SyntheticArguments
     } else if info.flags & FN_REST_USER_AND_ARGUMENTS != 0 {
         RestDispatchKind::UserRestAndArguments
+    } else if info.flags & FN_REST_NATIVE_ARGS != 0 {
+        RestDispatchKind::NativeArgs
     } else {
         return None;
     };
@@ -178,6 +185,9 @@ pub enum RestDispatchKind {
     UserRest,
     SyntheticArguments,
     UserRestAndArguments,
+    /// A runtime-native body taking the arguments in place
+    /// (`FN_REST_NATIVE_ARGS`): nothing is bundled.
+    NativeArgs,
 }
 
 /// Build a JS array from a slice of NaN-boxed f64 values and return it
@@ -229,6 +239,9 @@ pub unsafe fn dispatch_rest_bundled(
     fixed_arity: u32,
     kind: RestDispatchKind,
 ) -> f64 {
+    if kind == RestDispatchKind::NativeArgs {
+        return call_native_args_body(closure, func_ptr, this, args);
+    }
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
     let k = fixed_arity as usize;
     let provided = args.len();
@@ -324,6 +337,39 @@ pub unsafe fn dispatch_rest_bundled(
             super::dispatch_wide_abi(closure, func_ptr, this, &slots, width)
         }
     }
+}
+
+/// Call an `FN_REST_NATIVE_ARGS` body with the caller's own argument slice.
+/// Nothing allocates between the caller's read of these values and the
+/// body's, so the body sees them exactly as the caller held them; a body that
+/// allocates before it is done with them roots them itself.
+#[inline]
+unsafe fn call_native_args_body(
+    closure: *const ClosureHeader,
+    func_ptr: *const u8,
+    this: crate::closure::JsThis,
+    args: &[f64],
+) -> f64 {
+    let (ptr, len) = if args.is_empty() {
+        (std::ptr::null(), 0)
+    } else {
+        (args.as_ptr(), args.len())
+    };
+    #[cfg(panic = "abort")]
+    let f = std::mem::transmute::<*const u8, crate::codegen_abi::JsNativeArgsBody<ClosureHeader>>(
+        func_ptr,
+    );
+    #[cfg(not(panic = "abort"))]
+    let f = std::mem::transmute::<
+        *const u8,
+        unsafe extern "C-unwind" fn(
+            *const ClosureHeader,
+            crate::closure::JsThis,
+            *const f64,
+            usize,
+        ) -> f64,
+    >(func_ptr);
+    f(closure, this, ptr, len)
 }
 
 /// Dispatch a closure call where the caller supplied fewer args than the
