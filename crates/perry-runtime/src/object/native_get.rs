@@ -111,7 +111,8 @@ unsafe fn try_data_lookup_key(
                 {
                     let value = super::field_get_set::object_field_at_with_live(object, slot, live);
                     if value.bits() != crate::value::TAG_HOLE
-                        && !(value.is_undefined() && super::native_this_alias::alias_active())
+                        && !(value.is_undefined()
+                            && super::native_this_alias::object_alias(object).is_some())
                     {
                         return Some(Some(value));
                     }
@@ -220,7 +221,8 @@ unsafe fn try_data_lookup_key(
                     // misses at some class edges. Preserve that fallback, and
                     // the f64 entry's native-handle alias on undefined reads.
                     if (inherited && (value.is_undefined() || value.is_null()))
-                        || (value.is_undefined() && super::native_this_alias::alias_active())
+                        || (value.is_undefined()
+                            && super::native_this_alias::object_alias(object).is_some())
                     {
                         return None;
                     }

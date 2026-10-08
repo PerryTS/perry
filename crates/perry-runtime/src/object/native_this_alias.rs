@@ -25,29 +25,18 @@
 //! alias for object receivers with no own method of that name and forwards
 //! the call to the handle, so the instance behaves as the native object.
 //!
-//! Storage is a small Vec (alias count is tiny — one per inherits-style
-//! server) with a GC root scanner that keeps both the object and the handle
-//! value alive and rewrites the object pointer if the GC moves it.
+//! Storage: the alias lives ON the object — its `ObjectMeta.native_state`
+//! word holds the handle id in the alias encoding ([`alias_word`]). The meta
+//! record moves with its owner, so the alias follows an evacuated object, and
+//! it dies with the object. Nothing roots the object on the alias's behalf:
+//! the handle is a small registry id, not a GC value, and the native side
+//! never reaches back from the handle to the aliasing object. (The earlier
+//! thread-local table of `(address, handle)` pairs rooted every aliased
+//! object forever and was scanned linearly on every lookup: fastify's
+//! `inject` aliases one light-my-request `Response` per request.)
 
 use crate::value::JSValue;
-use std::cell::{Cell, RefCell};
-
-struct AliasEntry {
-    /// Raw heap address of the user object (`this`). Rewritten by the GC
-    /// scanner when the object is evacuated. Keyed by address (not NaN-box
-    /// bits) because `this` reaches the runtime both NaN-boxed
-    /// (POINTER_TAG) and as a raw i64 pointer bit-cast to f64, depending on
-    /// the codegen path.
-    obj_addr: usize,
-    /// NaN-boxed handle value the object forwards to.
-    handle_bits: u64,
-    /// Forward through the composite handle dispatcher (extensions first)
-    /// rather than the primary one. The server aliases stay primary-only (see
-    /// `handle_method_dispatch_primary`); a `ServerResponse` handle is served
-    /// by perry-ext-http's dispatch extension when that crate owns `http`, so
-    /// the primary dispatcher does not know it (#10454).
-    composite: bool,
-}
+use std::cell::Cell;
 
 /// Extract a plausible ObjectHeader address from a value that may be
 /// NaN-boxed (POINTER_TAG) or a raw i64 pointer bit-cast to f64 (top 16
@@ -79,56 +68,70 @@ fn plain_object_addr_of(value: f64) -> Option<usize> {
     .then_some(addr)
 }
 
-crate::perry_thread_local! {
-    static ALIAS_ACTIVE: Cell<bool> = const { Cell::new(false) };
-    static ALIASES: RefCell<Vec<AliasEntry>> = const { RefCell::new(Vec::new()) };
-    // The mutable-root scanner registry is thread-local, so this latch must be too.
-    static SCANNER_REGISTERED: Cell<bool> = const { Cell::new(false) };
-}
+/// The alias encoding of an `ObjectMeta.native_state` word. Top 16 bits are
+/// [`ALIAS_MARK`]: never a POINTER_TAG payload/weak cell (the GC's edge
+/// predicate `native_payload::is_payload_state_word` declines it, so the word
+/// is not traced), never an untagged pointer, a timer/TUI state word or a
+/// private-evaluation counter (all have a zero top half). Bit 47 is the
+/// composite-dispatch flag; bits 0..47 are the handle id.
+const ALIAS_MARK: u64 = 0xA11A_0000_0000_0000;
+const ALIAS_MARK_MASK: u64 = 0xFFFF_0000_0000_0000;
+const ALIAS_COMPOSITE: u64 = 1 << 47;
+const ALIAS_ID_MASK: u64 = ALIAS_COMPOSITE - 1;
 
-fn ensure_scanner_registered() {
-    SCANNER_REGISTERED.with(|registered| {
-        if registered.get() {
-            return;
-        }
-        crate::gc::gc_register_mutable_root_scanner_named(
-            "runtime:native-this-alias",
-            scan_alias_roots,
-        );
-        registered.set(true);
-    });
-}
-
-fn scan_alias_roots(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
-    ALIASES.with(|a| {
-        for entry in a.borrow_mut().iter_mut() {
-            visitor.visit_usize_slot(&mut entry.obj_addr);
-            visitor.visit_nanbox_u64_slot(&mut entry.handle_bits);
-        }
-    });
-}
-
-/// Cheap per-call gate for `js_native_call_method`: true only after at least
-/// one alias has been registered on this thread.
+/// The `native_state` word that aliases its object to handle `id`.
 #[inline]
-pub(crate) fn alias_active() -> bool {
-    ALIAS_ACTIVE.with(|c| c.get())
+fn alias_word(id: u64, composite: bool) -> u64 {
+    debug_assert!(id <= ALIAS_ID_MASK);
+    ALIAS_MARK | (id & ALIAS_ID_MASK) | if composite { ALIAS_COMPOSITE } else { 0 }
 }
 
-/// Look up the forwarding handle for an object receiver (NaN-boxed or raw
+/// Decode an `ObjectMeta.native_state` word: the NaN-boxed handle and whether
+/// it dispatches through the composite dispatcher (extensions first) rather
+/// than the primary one. The server aliases stay primary-only (see
+/// `handle_method_dispatch_primary`); a `ServerResponse` handle is served by
+/// perry-ext-http's dispatch extension when that crate owns `http`, so the
+/// primary dispatcher does not know it (#10454).
+#[inline]
+fn decode_alias_word(word: u64) -> Option<(f64, bool)> {
+    (word & ALIAS_MARK_MASK == ALIAS_MARK).then(|| {
+        (
+            f64::from_bits(crate::value::POINTER_TAG | (word & ALIAS_ID_MASK)),
+            word & ALIAS_COMPOSITE != 0,
+        )
+    })
+}
+
+/// The alias an object carries, read from the object itself.
+///
+/// # Safety
+/// `obj` must be a live `GC_TYPE_OBJECT` header (the caller has classified
+/// it).
+#[inline]
+pub(crate) unsafe fn object_alias(obj: *const super::ObjectHeader) -> Option<(f64, bool)> {
+    let meta = (*obj).meta;
+    if meta.is_null() {
+        return None;
+    }
+    decode_alias_word((*meta).native_state)
+}
+
+/// Look up the forwarding handle for an arbitrary receiver (NaN-boxed or raw
 /// pointer value), and whether to dispatch it through the composite
-/// dispatcher (`AliasEntry::composite`).
+/// dispatcher. None for anything that is not a live ordinary object carrying
+/// an alias.
 pub(crate) fn alias_handle_for_object(receiver: f64) -> Option<(f64, bool)> {
     let addr = object_addr_of(receiver);
     if addr == 0 {
         return None;
     }
-    ALIASES.with(|a| {
-        a.borrow()
-            .iter()
-            .find(|e| e.obj_addr == addr)
-            .map(|e| (f64::from_bits(e.handle_bits), e.composite))
-    })
+    let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    unsafe { object_alias(addr as *const super::ObjectHeader) }
 }
 
 /// True when `(module, method)` names a native-module class export whose
@@ -147,10 +150,10 @@ fn is_construct_before_call_native_class(module: &str, method: &str) -> bool {
     module == "http" && method == "ServerResponse"
 }
 
-/// Register `this_arg → result` in the alias table when `result` is a
-/// NaN-boxed small native handle and `this_arg` is a real heap object (not a
-/// closure, not another handle).
-fn register_this_to_handle_alias(this_arg: f64, result: f64, composite: bool) {
+/// Alias `this_arg` to `result` — store the handle in `this_arg`'s own
+/// `native_state` word — when `result` is a NaN-boxed small native handle and
+/// `this_arg` is a real heap object (not a closure, not another handle).
+pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composite: bool) {
     let result_jv = JSValue::from_bits(result.to_bits());
     if !result_jv.is_pointer() {
         return;
@@ -165,25 +168,37 @@ fn register_this_to_handle_alias(this_arg: f64, result: f64, composite: bool) {
         return;
     };
 
-    ensure_scanner_registered();
-    ALIASES.with(|a| {
-        let mut aliases = a.borrow_mut();
-        if let Some(existing) = aliases.iter_mut().find(|e| e.obj_addr == obj_addr) {
-            existing.handle_bits = result.to_bits();
-            existing.composite = composite;
-        } else {
-            aliases.push(AliasEntry {
-                obj_addr,
-                handle_bits: result.to_bits(),
-                composite,
-            });
+    let id = handle_addr as u64;
+    if id > ALIAS_ID_MASK {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_raw_mut_ptr(obj_addr as *mut super::ObjectHeader);
+    // `object_meta_ensure` roots its owner across the record allocation.
+    let installed = object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
+        let meta = super::object_meta_ensure(obj);
+        let word = (*meta).native_state;
+        // The word is free, or already this object's alias (a second
+        // construction re-aliases, as before). Any other occupant is a
+        // native family's state, which an ordinary `this` never carries;
+        // never overwrite it.
+        if word != 0 && decode_alias_word(word).is_none() {
+            return false;
         }
+        // GC_STORE_AUDIT(POINTER_FREE): the alias word is scalar.
+        (*meta).native_state = alias_word(id, composite);
+        true
     });
-    ALIAS_ACTIVE.with(|c| c.set(true));
+    if !installed {
+        return;
+    }
     // Native state is per receiver, not a fact of its ordinary shape. Move
     // onto an exotic-read lineage so pre-alias cached misses cannot survive
-    // construction or be shared with a sibling receiver (#11725).
-    unsafe { super::proto_validity::mark_exotic_read_receiver(obj_addr) };
+    // construction or be shared with a sibling receiver (#11725). The mark
+    // roots its receiver before it allocates.
+    object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
+        super::proto_validity::mark_exotic_read_receiver(obj as usize)
+    });
 }
 
 /// Called from the `Function.prototype.call` / `.apply` arms after the callee
@@ -323,17 +338,9 @@ pub(crate) unsafe fn maybe_run_stream_subclass_init_via_this(
 /// static `Named("<fn>")` paths read the method as a property value first,
 /// then call it. Returns None when the receiver has no alias or the handle
 /// dispatcher yields undefined.
-pub(crate) fn alias_forward_property_read(obj_addr: usize, key: &str) -> Option<f64> {
-    if !alias_active() || obj_addr == 0 {
-        return None;
-    }
-    let (handle_bits, composite) = ALIASES.with(|a| {
-        a.borrow()
-            .iter()
-            .find(|e| e.obj_addr == obj_addr)
-            .map(|e| (e.handle_bits, e.composite))
-    })?;
-    let handle = (handle_bits & crate::value::POINTER_MASK) as i64;
+pub(crate) fn alias_forward_property_read(receiver: f64, key: &str) -> Option<f64> {
+    let (handle_val, composite) = alias_handle_for_object(receiver)?;
+    let handle = (handle_val.to_bits() & crate::value::POINTER_MASK) as i64;
     // Primary dispatcher only for the server aliases — see
     // handle_method_dispatch_primary (an id-colliding ext-net socket must not
     // answer for the server).
