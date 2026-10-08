@@ -113,10 +113,29 @@ impl RuntimeReadSite {
     /// # Safety
     /// `obj` is a live `GC_TYPE_OBJECT` above the handle band (see
     /// [`object_receiver`]).
-    #[inline]
+    #[inline(always)]
     pub(crate) unsafe fn read_leaf(&self, obj: *const ObjectHeader) -> Option<f64> {
         if let Some(value) = self.read_own_inline(obj) {
             return Some(value);
+        }
+        self.read_leaf_inherited(obj)
+    }
+
+    /// [`Self::read_leaf`] past the compact word: the holder entry the front
+    /// would consult first, read in place (an inherited data hit is the
+    /// receiver's and the holder's ShapeId compares and one load, without the
+    /// front's call), then the front itself.
+    #[inline(never)]
+    unsafe fn read_leaf_inherited(&self, obj: *const ObjectHeader) -> Option<f64> {
+        let cache = self.slot.load(Ordering::Relaxed);
+        if !cache.is_null() {
+            let stamp = crate::object::shapes::object_shape_stamp(obj);
+            let token = (u64::from(stamp) | crate::object::shapes::PIC_ID_TOKEN_BIT) as i64;
+            if let Some(bits) =
+                crate::object::method_site::read_holder::entry_answer(&*cache, token)
+            {
+                return Some(f64::from_bits(bits));
+            }
         }
         let dir = std::ptr::addr_of!(crate::object::shapes::PERRY_EMPTY_SHAPE_DIR) as *const u8;
         let biased = (obj as usize).wrapping_sub(perry_abi::RECEIVER_HANDLE_FLOOR) as i64;
@@ -250,6 +269,7 @@ impl RuntimeReadSite {
     /// # Safety
     /// As [`Self::read_slow`].
     #[cfg(any(test, feature = "regex-engine"))]
+    #[inline]
     pub(crate) unsafe fn read(&self, obj: *mut ObjectHeader, key: &'static [u8]) -> f64 {
         match self.read_leaf(obj) {
             Some(v) => v,

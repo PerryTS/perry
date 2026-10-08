@@ -239,7 +239,9 @@ pub(super) fn new(
 ) -> Result<*mut RegExpHeader, EngineError> {
     let scope = RuntimeHandleScope::new();
     let data = new_data(&scope, source, flags)?;
-    Ok(super::instance::new(&scope, &data))
+    Ok(super::instance::new(|| {
+        data.with_const_ptr::<RegExpData, _>(|d| d)
+    }))
 }
 
 fn property(owner: &RuntimeHandle<'_>, name: &'static str) -> f64 {

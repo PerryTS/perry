@@ -3,8 +3,8 @@
 
 use super::flags::CanonicalFlags;
 use super::perex_memory::{Buffer, Charge, MemoryBudget, StorageError};
-use super::perex_owner::{BuildError, GcProgram, InPlace, OwnerError};
-use crate::gc::{RuntimeHandle, RuntimeHandleScope};
+use super::perex_owner::{BuildError, GcProgram, HostResourceError, InPlace, OwnerError};
+use crate::gc::RuntimeHandleScope;
 use perex::binding::{
     BoundProgram, BoundProgramError, BoundResources, BoundSubject, ImmutableSubject, PairError,
     SubjectError,
@@ -371,11 +371,39 @@ pub(crate) struct Match<'a> {
     pub(crate) captures: Option<Captures<'a>>,
 }
 
-fn search_error(error: SearchError<PairError<OwnerError, OwnerError>>) -> EngineError {
+fn search_error<P: HostResourceError, S: HostResourceError>(
+    error: SearchError<PairError<P, S>>,
+) -> EngineError {
     match error {
         SearchError::Execution(error) => EngineError::Execution(error),
-        SearchError::Resource(PairError::Program(error)) => EngineError::Program(error),
-        SearchError::Resource(PairError::Subject(error)) => EngineError::Subject(error),
+        SearchError::Resource(PairError::Program(error)) => {
+            EngineError::Program(program_error(error))
+        }
+        SearchError::Resource(PairError::Subject(error)) => {
+            EngineError::Subject(subject_error(error))
+        }
+    }
+}
+
+/// A program binding's error in the host's terms.
+pub(crate) fn program_error<E: HostResourceError>(
+    error: BoundProgramError<E>,
+) -> BoundProgramError<OwnerError> {
+    match error {
+        BoundProgramError::Resource(e) => BoundProgramError::Resource(e.into_owner()),
+        BoundProgramError::Validation(e) => BoundProgramError::Validation(e),
+        BoundProgramError::ChangedLayout => BoundProgramError::ChangedLayout,
+    }
+}
+
+/// A subject binding's error in the host's terms.
+pub(crate) fn subject_error<E: HostResourceError>(
+    error: SubjectError<E>,
+) -> SubjectError<OwnerError> {
+    match error {
+        SubjectError::Resource(e) => SubjectError::Resource(e.into_owner()),
+        SubjectError::Encoding(e) => SubjectError::Encoding(e),
+        SubjectError::ChangedLayout => SubjectError::ChangedLayout,
     }
 }
 
@@ -390,6 +418,7 @@ fn search_error(error: SearchError<PairError<OwnerError, OwnerError>>) -> Engine
 /// runs before the hook.
 pub(crate) trait PollRoots {
     fn before_poll(&self) {}
+    fn after_poll(&self) {}
 }
 
 impl PollRoots for () {}
@@ -401,7 +430,9 @@ fn poll_with<H: PollRoots>(
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<(), EngineError> {
     hooks.before_poll();
-    poll()
+    let polled = poll();
+    hooks.after_poll();
+    polled
 }
 
 /// Copy a decided match's captures into the caller's slot under `All`.
@@ -506,18 +537,20 @@ pub(crate) fn find_near_into<'mem, S: ImmutableSubject<Error = OwnerError>>(
     )
 }
 
-/// One builtin search over the program cell of the RegExp `receiver` holds
-/// (NaN-boxed, as `perex_api::execute_rooted` takes it) and `input`'s own bytes
-/// (S6): the bound program is the cell, whose witness makes binding it a
-/// header compare, and the subject is the string's storage, bound in constant
+/// One builtin search over `program`, the program cell of the RegExp at `re`,
+/// and `input`'s own bytes (S6), all at their current addresses: the bound
+/// program is the cell, whose witness makes binding it a header compare, and the subject is the string's storage, bound in constant
 /// work once it carries `STRING_FLAG_WTF8_VALIDATED`. Nothing is rooted,
 /// copied or marked unless the search polls; see `perex_owner::InPlace` for
 /// why every poll is safe. `hint` asks for the cross-call position hint of a
-/// non-ASCII subject (#10164), which only g/y searches can use.
+/// non-ASCII subject (#10164), which only g/y searches can use. Returns the
+/// RegExp's address after the search, which moved only if the search polled.
 #[allow(clippy::too_many_arguments)]
+#[inline]
 pub(crate) fn find_in_place<'mem>(
-    receiver: &RuntimeHandle<'_>,
-    input: &RuntimeHandle<'_>,
+    re: *const super::RegExpHeader,
+    program: *const u8,
+    input: *const crate::string::StringHeader,
     start: usize,
     hint: bool,
     mode: CaptureMode,
@@ -526,14 +559,12 @@ pub(crate) fn find_in_place<'mem>(
     quantum: usize,
     captures: &mut Option<Captures<'mem>>,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
-) -> Result<(Option<Span>, Position), EngineError> {
+) -> Result<(Option<Span>, Position, *mut super::RegExpHeader), EngineError> {
     // The pre-search poll runs before either base is read.
     begin(quantum, poll)?;
-    let scope = RuntimeHandleScope::new();
     // No collecting action from here on except the search's own polls, each
     // of which roots the in-place resources first.
-    let re = super::perex_api::regexp(receiver);
-    let place = unsafe { InPlace::new(&scope, re, input) }
+    let place = unsafe { InPlace::new(re, program, input) }
         .map_err(|e| EngineError::Subject(SubjectError::Resource(e)))?;
     let program =
         super::perex_api::bind_witnessed(place.words(), place.witness(), budget, |witness| {
@@ -543,11 +574,6 @@ pub(crate) fn find_in_place<'mem>(
     // `with_string_mut` passes stays current through it, and marking it
     // validated is a flag store into that same header.
     let (subject, identity) = place.with_string_mut(|s| unsafe {
-        if s.is_null() {
-            return Err(EngineError::Subject(SubjectError::Resource(
-                OwnerError::Missing,
-            )));
-        }
         let identity = if hint {
             super::perex_position_hint::identity_of_header(s)
         } else {
@@ -559,7 +585,7 @@ pub(crate) fn find_in_place<'mem>(
             (*s).flags & crate::string::STRING_FLAG_WTF8_VALIDATED != 0,
             || (*s).flags |= crate::string::STRING_FLAG_WTF8_VALIDATED,
         )?;
-        Ok((subject, identity))
+        Ok::<_, EngineError>((subject, identity))
     })?;
     let near = identity.and_then(super::perex_position_hint::lookup);
     let registers = match place.registers() {
@@ -567,7 +593,7 @@ pub(crate) fn find_in_place<'mem>(
         None => {
             let registers = program
                 .with_view(|program| program.register_count())
-                .map_err(EngineError::Program)?;
+                .map_err(|e| EngineError::Program(program_error(e)))?;
             place.record_registers(registers);
             registers
         }
@@ -591,16 +617,18 @@ pub(crate) fn find_in_place<'mem>(
     if identity.is_some() {
         // Re-read after the search: a collection during it may have moved the
         // string, and the identity must be the one the next call will see.
-        if let Some(identity) = super::perex_position_hint::identity_of(input) {
+        if let Some(identity) =
+            place.with_string_mut(|s| unsafe { super::perex_position_hint::identity_of_header(s) })
+        {
             super::perex_position_hint::record(identity, position);
         }
     }
-    Ok((full, position))
+    Ok((full, position, place.receiver()))
 }
 
 /// The per-search preamble: count it, check the quantum, and run the strided
 /// pre-search poll while no search state or view exists yet.
-#[inline]
+#[inline(always)]
 fn begin(
     quantum: usize,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
@@ -616,8 +644,15 @@ fn begin(
 
 /// One search over lent scratch. Returns `Fallback` without an answer when the
 /// scratch cannot serve this search; the caller then runs the owned path.
+///
+/// The search decided within its first quantum, which is nearly every
+/// per-call search, is the straight line here. A search that pauses continues
+/// in [`resume_lent`] and one the lent cell cannot serve in [`search_owned`],
+/// both outlined, so the decided search carries neither their state nor
+/// their frame.
 #[allow(clippy::too_many_arguments)]
-fn find_near_lent<'mem, R, H>(
+#[inline]
+fn find_near_lent<'mem, R, RP, RS, H>(
     resources: &R,
     hooks: &H,
     registers: usize,
@@ -631,7 +666,9 @@ fn find_near_lent<'mem, R, H>(
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<Lent, EngineError>
 where
-    R: Resources<Error = PairError<OwnerError, OwnerError>>,
+    R: Resources<Error = PairError<RP, RS>>,
+    RP: HostResourceError,
+    RS: HostResourceError,
     H: PollRoots,
 {
     LENT_SCRATCH.with(|cell| {
@@ -639,18 +676,8 @@ where
             return Ok(Lent::Fallback);
         };
         let cell = &mut *cell;
-        if cell.registers.len() < registers {
-            // Once per thread per new high-water mark; `search` has already
-            // checked `registers <= LENT_REGISTERS`. A search initializes the
-            // registers it reads, so the fill value is never observed.
-            if cell
-                .registers
-                .try_reserve_exact(registers - cell.registers.len())
-                .is_err()
-            {
-                return Ok(Lent::Fallback);
-            }
-            cell.registers.resize(registers, 0);
+        if cell.registers.len() < registers && !grow_lent_registers(cell, registers) {
+            return Ok(Lent::Fallback);
         }
         // Charged exactly like the owner it replaces: the operation's limit
         // sees the slots a search may use, whether or not they were allocated
@@ -674,16 +701,16 @@ where
         };
         // Both views are acquired once for the quantum that decides nearly
         // every per-call search; a `Search` is built and moved only if this
-        // one pauses or asks for more scratch.
+        // one pauses or asks for more scratch. The run is matched where it is
+        // returned, so only the arm taken moves out of it.
         // A failed run reports the work it left (perex 0.1.10), so the budget
         // records what the failed call spent, as a failed search did.
-        let run =
-            Search::run(resources, start, near, scratch, *budget, quantum).map_err(|failed| {
+        let required = match Search::run(resources, start, near, scratch, *budget, quantum) {
+            Err(failed) => {
                 *budget = Budget::new(failed.remaining_work);
-                search_error(failed.error)
-            })?;
-        let mut search = match run {
-            Run::Finished(mut finished) => {
+                return Err(search_error(failed.error));
+            }
+            Ok(Run::Finished(mut finished)) => {
                 *budget = Budget::new(finished.remaining_work());
                 let position = finished.position();
                 if !finished.matched() {
@@ -702,62 +729,121 @@ where
                 })?;
                 return Ok(Lent::Done(Some(full), position));
             }
-            Run::Paused(search) => search,
-        };
-        loop {
-            let result = search.advance(quantum);
-            *budget = Budget::new(search.remaining_work());
-            match result {
-                Ok(Progress::NoMatch) => return Ok(Lent::Done(None, search.position())),
-                Ok(Progress::Matched) => {
-                    let full = search
-                        .capture(0)
-                        .map_err(EngineError::Execution)?
-                        .ok_or(EngineError::Execution(ExecError::InvalidProgram))?;
-                    if let CaptureMode::All = mode {
-                        poll_with(hooks, poll)?;
-                    }
-                    let count = search.capture_count();
-                    take_captures(mode, count, memory, captures, |output| {
-                        search.copy_captures(output)
-                    })?;
-                    return Ok(Lent::Done(Some(full), search.position()));
+            Ok(Run::Paused(search)) => {
+                match resume_lent(search, hooks, mode, budget, memory, quantum, captures, poll)? {
+                    Resumed::Done(found, position) => return Ok(Lent::Done(found, position)),
+                    Resumed::Grow(required) => required,
                 }
-                Ok(Progress::Pending) => poll_with(hooks, poll)?,
-                Err(SearchError::Execution(ExecError::Frames | ExecError::Undo)) => {
-                    // Grow the cell for the next call and let this one run the
-                    // owned path, which charges the whole search once from the
-                    // caller's entry budget. Rebuffering in place would need a
-                    // second borrow of the cell the search already holds.
-                    let required = search.required_scratch();
-                    drop(search);
-                    if crate::hot_diag::regex_on() {
-                        crate::hot_diag::regex_with(|d| d.perex_scratch_grows += 1);
-                    }
-                    let frames = required
-                        .frames
-                        .max(cell.frames.len().saturating_mul(2))
-                        .max(8);
-                    let undo = required.undo.max(cell.undo.len().saturating_mul(2)).max(16);
-                    if frames > cell.frames.len() {
-                        cell.frames.resize(frames, Frame::default());
-                    }
-                    if undo > cell.undo.len() {
-                        cell.undo.resize(undo, Undo::default());
-                    }
-                    return Ok(Lent::Fallback);
-                }
-                Err(error) => return Err(search_error(error)),
             }
-        }
+        };
+        // Grow the cell for the next call and let this one run the owned
+        // path, which charges the whole search once from the caller's entry
+        // budget. Rebuffering in place would need a second borrow of the cell
+        // the paused search held.
+        grow_lent_frames(cell, required);
+        Ok(Lent::Fallback)
     })
+}
+
+/// What a paused lent search came to: an answer, or the scratch it asked for.
+enum Resumed {
+    Done(Option<Span>, Position),
+    Grow(ScratchRequirements),
+}
+
+/// The rest of a lent search that did not decide within its first quantum:
+/// poll between quanta, or report the frames or undo entries it needs.
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn resume_lent<'mem, R, RP, RS, H>(
+    mut search: Search<'_, R, Scratch<'_>>,
+    hooks: &H,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    quantum: usize,
+    captures: &mut Option<Captures<'mem>>,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<Resumed, EngineError>
+where
+    R: Resources<Error = PairError<RP, RS>>,
+    RP: HostResourceError,
+    RS: HostResourceError,
+    H: PollRoots,
+{
+    loop {
+        let result = search.advance(quantum);
+        *budget = Budget::new(search.remaining_work());
+        match result {
+            Ok(Progress::NoMatch) => return Ok(Resumed::Done(None, search.position())),
+            Ok(Progress::Matched) => {
+                let full = search
+                    .capture(0)
+                    .map_err(EngineError::Execution)?
+                    .ok_or(EngineError::Execution(ExecError::InvalidProgram))?;
+                if let CaptureMode::All = mode {
+                    poll_with(hooks, poll)?;
+                }
+                let count = search.capture_count();
+                take_captures(mode, count, memory, captures, |output| {
+                    search.copy_captures(output)
+                })?;
+                return Ok(Resumed::Done(Some(full), search.position()));
+            }
+            Ok(Progress::Pending) => poll_with(hooks, poll)?,
+            Err(SearchError::Execution(ExecError::Frames | ExecError::Undo)) => {
+                return Ok(Resumed::Grow(search.required_scratch()));
+            }
+            Err(error) => return Err(search_error(error)),
+        }
+    }
+}
+
+/// Grow the lent registers to `registers`, once per thread per new
+/// high-water mark; `search` has already checked `registers <= LENT_REGISTERS`.
+/// A search initializes the registers it reads, so the fill value is never
+/// observed. `false` when the memory is not available.
+#[cold]
+#[inline(never)]
+fn grow_lent_registers(cell: &mut ScratchCell, registers: usize) -> bool {
+    if cell
+        .registers
+        .try_reserve_exact(registers - cell.registers.len())
+        .is_err()
+    {
+        return false;
+    }
+    cell.registers.resize(registers, 0);
+    true
+}
+
+/// Grow the lent frames and undo entries to what a search asked for, so the
+/// next search of the same program fits.
+#[cold]
+#[inline(never)]
+fn grow_lent_frames(cell: &mut ScratchCell, required: ScratchRequirements) {
+    if crate::hot_diag::regex_on() {
+        crate::hot_diag::regex_with(|d| d.perex_scratch_grows += 1);
+    }
+    let frames = required
+        .frames
+        .max(cell.frames.len().saturating_mul(2))
+        .max(8);
+    let undo = required.undo.max(cell.undo.len().saturating_mul(2)).max(16);
+    if frames > cell.frames.len() {
+        cell.frames.resize(frames, Frame::default());
+    }
+    if undo > cell.undo.len() {
+        cell.undo.resize(undo, Undo::default());
+    }
 }
 
 /// The search every entry above runs once its resources are bound: lent
 /// scratch first, owned buffers when the lent cell cannot serve it. Every poll
 /// it runs goes through `hooks` ([`PollRoots`]).
 #[allow(clippy::too_many_arguments)]
-fn search<'mem, R, H>(
+fn search<'mem, R, RP, RS, H>(
     resources: &R,
     hooks: &H,
     registers: usize,
@@ -771,17 +857,14 @@ fn search<'mem, R, H>(
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<(Option<Span>, Position), EngineError>
 where
-    R: Resources<Error = PairError<OwnerError, OwnerError>>,
+    R: Resources<Error = PairError<RP, RS>>,
+    RP: HostResourceError,
+    RS: HostResourceError,
     H: PollRoots,
 {
-    let mut size = ScratchRequirements {
-        registers,
-        frames: 0,
-        undo: 0,
-    };
     // Lend the thread's scratch first: a search that fits it constructs and
     // moves nothing (#10166). Anything the cell cannot serve falls through to
-    // the owned buffers below with the budget it entered on.
+    // the owned buffers with the budget it entered on.
     if registers <= LENT_REGISTERS {
         let entry = *budget;
         match find_near_lent(
@@ -791,19 +874,51 @@ where
             Lent::Fallback => *budget = entry,
         }
     }
+    search_owned(
+        resources, hooks, registers, start, near, mode, budget, memory, quantum, captures, poll,
+    )
+}
 
+/// [`search`] over buffers this search owns.
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+fn search_owned<'mem, R, RP, RS, H>(
+    resources: &R,
+    hooks: &H,
+    registers: usize,
+    start: usize,
+    near: Option<Position>,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    quantum: usize,
+    captures: &mut Option<Captures<'mem>>,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<(Option<Span>, Position), EngineError>
+where
+    R: Resources<Error = PairError<RP, RS>>,
+    RP: HostResourceError,
+    RS: HostResourceError,
+    H: PollRoots,
+{
+    let mut size = ScratchRequirements {
+        registers,
+        frames: 0,
+        undo: 0,
+    };
     #[cfg(test)]
     OWNED_SEARCHES.with(|n| n.set(n.get() + 1));
     poll_with(hooks, poll)?;
     let buffers = MatchBuffers::new(memory, size)?;
     // A failed run reports the work it left (perex 0.1.10), so the budget
     // records what the failed call spent, as a failed search did.
-    let run = Search::run(resources, start, near, buffers, *budget, quantum).map_err(|failed| {
-        *budget = Budget::new(failed.remaining_work);
-        search_error(failed.error)
-    })?;
-    let mut search = match run {
-        Run::Finished(mut finished) => {
+    let mut search = match Search::run(resources, start, near, buffers, *budget, quantum) {
+        Err(failed) => {
+            *budget = Budget::new(failed.remaining_work);
+            return Err(search_error(failed.error));
+        }
+        Ok(Run::Finished(mut finished)) => {
             *budget = Budget::new(finished.remaining_work());
             let position = finished.position();
             if !finished.matched() {
@@ -822,7 +937,7 @@ where
             })?;
             return Ok((Some(full), position));
         }
-        Run::Paused(search) => search,
+        Ok(Run::Paused(search)) => search,
     };
     loop {
         let result = search.advance(quantum);

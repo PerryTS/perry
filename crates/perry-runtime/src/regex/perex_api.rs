@@ -1,7 +1,7 @@
 //! Perry's public RegExp execution boundary. JS throws are caught below native
 //! owners and rethrown only after those owners have been released normally.
 use super::perex_memory::{MemoryBudget, StorageError};
-use super::perex_owner::{BuildError, GcProgram, HeapSubject, OwnerError};
+use super::perex_owner::{BuildError, GcProgram, HeapSubject};
 use super::perex_runtime::{self as host, CaptureMode, EngineError, Match};
 use super::RegExpHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
@@ -145,12 +145,16 @@ pub(crate) fn bind_program<'s>(
 
 /// [`bind_program`] for any view of a program cell: `witness` is the one the
 /// cell holds, and `record` stores a fresh one in the same cell.
-pub(crate) fn bind_witnessed<P: ImmutableProgram<Error = OwnerError>>(
+#[inline]
+pub(crate) fn bind_witnessed<P: ImmutableProgram>(
     storage: P,
     witness: Option<ProgramWitness>,
     budget: &mut Budget,
     record: impl FnOnce(ProgramWitness),
-) -> Result<BoundProgram<P>, EngineError> {
+) -> Result<BoundProgram<P>, EngineError>
+where
+    P::Error: super::perex_owner::HostResourceError,
+{
     let storage = match witness {
         Some(witness) => match BoundProgram::new_witnessed(storage, witness) {
             Ok(bound) => return Ok(bound),
@@ -158,7 +162,8 @@ pub(crate) fn bind_witnessed<P: ImmutableProgram<Error = OwnerError>>(
         },
         None => storage,
     };
-    let bound = BoundProgram::new(storage, budget).map_err(|e| EngineError::Program(e.error))?;
+    let bound = BoundProgram::new(storage, budget)
+        .map_err(|e| EngineError::Program(host::program_error(e.error)))?;
     if crate::hot_diag::regex_on() {
         crate::hot_diag::regex_with(|d| d.perex_validations += 1);
     }
@@ -217,12 +222,16 @@ pub(crate) fn bind_heap_subject_observed(
 /// decoding it, after which `mark` sets the flag if the decode found exactly
 /// `utf16_len` units. `mark` runs with no collecting action since the storage
 /// was read, so it may write through the same header.
-pub(crate) fn bind_counted<S: ImmutableSubject<Error = OwnerError>>(
+#[inline]
+pub(crate) fn bind_counted<S: ImmutableSubject>(
     storage: S,
     utf16_len: usize,
     validated: bool,
     mark: impl FnOnce(),
-) -> Result<BoundSubject<S>, EngineError> {
+) -> Result<BoundSubject<S>, EngineError>
+where
+    S::Error: super::perex_owner::HostResourceError,
+{
     let storage = if validated {
         match BoundSubject::new_counted(storage, utf16_len) {
             Ok(bound) => return Ok(bound),
@@ -231,10 +240,11 @@ pub(crate) fn bind_counted<S: ImmutableSubject<Error = OwnerError>>(
     } else {
         storage
     };
-    let bound = BoundSubject::new(storage).map_err(|e| EngineError::Subject(e.error))?;
+    let bound = BoundSubject::new(storage)
+        .map_err(|e| EngineError::Subject(host::subject_error(e.error)))?;
     let decoded = bound
         .with_view(|view| view.len_utf16())
-        .map_err(EngineError::Subject)?;
+        .map_err(|e| EngineError::Subject(host::subject_error(e)))?;
     // An empty string has nothing to decode.
     if decoded == utf16_len && utf16_len > 0 {
         mark();
@@ -365,7 +375,13 @@ pub(crate) fn test_window(
     let receiver = scope.root_nanbox_f64(receiver);
     let input = scope.root_string_ptr(input);
     let re = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as *const RegExpHeader;
-    let Some(data) = crate::regex::regexp_data_of(receiver.get_nanbox_f64()) else {
+    // Both Gets a segments-view test skips: `test` and `exec` are the
+    // builtins. The exec proof also brands the receiver and hands back its data.
+    if !crate::object::regex_read_sites::test(receiver.get_nanbox_f64()) {
+        return Ok(None);
+    }
+    let Some(data) = crate::object::regex_read_sites::builtin_exec_data(receiver.get_nanbox_f64())
+    else {
         return Ok(None);
     };
     let data = scope.root_raw_const_ptr(data);
@@ -375,7 +391,7 @@ pub(crate) fn test_window(
             // Only an already-Number permits omitting that observable step.
             && crate::value::JSValue::from_bits(crate::regex::get_last_index(re).to_bits()).is_number()
     });
-    if !admitted || !crate::object::regex_read_sites::test_exec(receiver.get_nanbox_f64()) {
+    if !admitted {
         return Ok(None);
     }
     let mut budget = Budget::new(WORK);
@@ -506,12 +522,9 @@ pub(crate) fn regexp(receiver: &RuntimeHandle<'_>) -> *mut RegExpHeader {
 /// receiver NaN-boxed (`root_nanbox_f64`, as RegExpExec roots it), the string
 /// with `root_string_ptr`. The receiver must be a valid RegExp.
 ///
-/// The search reads the program cell and the string in place
-/// (`host::find_in_place`) unless `reuse` holds bindings of both. Nothing here
-/// sets a JS trap unless user code can run: only a `lastIndex` that is not a
-/// Number (ToLength may call `valueOf`) and the materialisation of an exec
-/// result run under one. A non-writable `lastIndex` is returned as a
-/// TypeError rather than thrown, so the owners above unwind normally.
+/// The search is [`search_builtin`]'s, over the current addresses of the two
+/// roots, unless `reuse` holds bindings of both. Materialising an exec result
+/// reads through the roots again afterwards, under the only other JS trap.
 pub(crate) fn execute_rooted(
     receiver: &RuntimeHandle<'_>,
     input: &RuntimeHandle<'_>,
@@ -521,47 +534,28 @@ pub(crate) fn execute_rooted(
     poll: &mut impl FnMut() -> Result<(), EngineError>,
     reuse: Option<&Reuse<'_, '_>>,
 ) -> Result<Option<ExecMatch>, EngineError> {
-    let stored =
-        crate::value::JSValue::from_bits(super::get_last_index(regexp(receiver)).to_bits());
-    let (stateful, has_indices) = unsafe {
-        let data = &*super::regexp_data_ptr(regexp(receiver));
-        (data.global || data.sticky, data.has_indices)
-    };
-    // ToLength(Get(R, "lastIndex")) is observable only when it is not a
-    // Number (it may call `valueOf`); a Number matters only to g/y.
-    let start = if stored.is_number() {
-        if stateful {
-            stored
-                .as_number()
-                .max(0.0)
-                .floor()
-                .min(9_007_199_254_740_991.0) as usize
-        } else {
-            0
-        }
-    } else {
-        let last_index = caught(|| super::regex_last_index_offset(regexp(receiver)))?;
-        if stateful {
-            last_index
-        } else {
-            0
-        }
-    };
-    let length = input.with_const_ptr::<StringHeader, _>(|s| unsafe { (*s).utf16_len as usize });
-    if start > length {
-        if stateful {
-            store_last_index(receiver, 0)?;
-        }
-        return Ok(None);
-    }
+    let has_indices = unsafe { (*super::regexp_data_ptr(regexp(receiver))).has_indices };
     let mode = if matches!(output, ExecOutput::Test) {
         CaptureMode::Full
     } else {
         CaptureMode::All
     };
+    let stateful = unsafe {
+        let data = &*super::regexp_data_ptr(regexp(receiver));
+        data.global || data.sticky
+    };
+    let Some(start) = exec_start(
+        regexp(receiver),
+        input.with_const_ptr::<StringHeader, _>(|s| s),
+        stateful,
+    )?
+    .map(Start::at) else {
+        return Ok(None);
+    };
     let mut captures = None;
     // Bindings this operation already holds for this receiver's current
-    // program and this same string, if any.
+    // program and this same string, if any. Looked up after `lastIndex`,
+    // whose `valueOf` may have recompiled the receiver.
     let reused = reuse.and_then(|reuse| {
         Some((
             reuse,
@@ -569,7 +563,7 @@ pub(crate) fn execute_rooted(
             reuse.subject_for(input)?,
         ))
     });
-    let (found, position) = match reused {
+    let found = match reused {
         Some((reuse, program, subject)) => {
             let found = host::find_near_into(
                 program,
@@ -584,27 +578,25 @@ pub(crate) fn execute_rooted(
                 poll,
             )?;
             reuse.near.set(Some(found.1));
-            found
+            if stateful {
+                store_last_index(regexp(receiver), found.0.map_or(0, |full| full.end()))?;
+            }
+            found.0.map(|full| (full, found.1))
         }
-        None => host::find_in_place(
-            receiver,
-            input,
+        None => search_from(
+            regexp(receiver),
+            unsafe { (*super::regexp_data_ptr(regexp(receiver))).perex_program },
+            input.with_const_ptr::<StringHeader, _>(|s| s),
             start,
-            // Only g/y searches can start away from zero. A non-stateful
-            // call gains nothing from finding or recording a position.
             stateful,
             mode,
             budget,
             memory,
-            QUANTUM,
             &mut captures,
             poll,
         )?,
     };
-    if stateful {
-        store_last_index(receiver, found.map_or(0, |full| full.end()))?;
-    }
-    let Some(full) = found else {
+    let Some((full, position)) = found else {
         return Ok(None);
     };
     let (array, groups) = match output {
@@ -670,9 +662,164 @@ pub(crate) fn execute_rooted(
     }))
 }
 
+/// RegExpBuiltinExec steps 4-15 (and 18 for a match) without an exec result:
+/// the start from `lastIndex`, one search of the RegExp's program over the
+/// string's own bytes, and the `lastIndex` update of a g/y RegExp. Returns the
+/// full match and where the search stood, or `None` for no match.
+///
+/// `re` is a branded RegExp whose immutable data is `data`, and `input` a heap
+/// string, all at their current addresses: the caller runs nothing that can
+/// collect between reading them and this call. Nothing here roots, copies or
+/// marks anything unless a non-Number `lastIndex` runs user code or the
+/// search polls (`perex_owner::InPlace`), so a short `test` holds no handle at
+/// all. Any address the caller kept is stale afterwards. No JS trap is set
+/// unless user code can run (that `lastIndex`); a non-writable `lastIndex` is
+/// returned as a TypeError rather than thrown, so owners above unwind
+/// normally.
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+pub(crate) fn search_builtin<'mem>(
+    re: *mut RegExpHeader,
+    data: *const super::RegExpData,
+    input: *const StringHeader,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    captures: &mut Option<host::Captures<'mem>>,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<Option<(Span, Position)>, EngineError> {
+    let stateful = unsafe { (*data).global || (*data).sticky };
+    let Some(start) = exec_start(re, input, stateful)? else {
+        return Ok(None);
+    };
+    let (re, data, input) = match start {
+        Start::Number(_) => (re, data, input),
+        // `valueOf` ran: every address, and the receiver's data, may have
+        // changed (`compile` publishes new data).
+        Start::Coerced(_, re, input) => (re, super::regexp_data_ptr(re), input),
+    };
+    search_from(
+        re,
+        unsafe { (*data).perex_program },
+        input,
+        start.at(),
+        stateful,
+        mode,
+        budget,
+        memory,
+        captures,
+        poll,
+    )
+}
+
+/// [`search_builtin`] from a start [`exec_start`] established, over the
+/// RegExp's program cell `program`, with the same address contract. The one
+/// copy of the in-place search every builtin exec runs.
+#[allow(clippy::too_many_arguments)]
+#[inline(never)]
+fn search_from<'mem>(
+    re: *mut RegExpHeader,
+    program: *const u8,
+    input: *const StringHeader,
+    start: usize,
+    stateful: bool,
+    mode: CaptureMode,
+    budget: &mut Budget,
+    memory: &'mem MemoryBudget,
+    captures: &mut Option<host::Captures<'mem>>,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+) -> Result<Option<(Span, Position)>, EngineError> {
+    let (found, position, re) = host::find_in_place(
+        re, program, input, start,
+        // Only g/y searches can start away from zero. A non-stateful call
+        // gains nothing from finding or recording a position.
+        stateful, mode, budget, memory, QUANTUM, captures, poll,
+    )?;
+    if stateful {
+        store_last_index(re, found.map_or(0, |full| full.end()))?;
+    }
+    Ok(found.map(|full| (full, position)))
+}
+
+/// Where RegExpBuiltinExec starts.
+#[derive(Clone, Copy)]
+enum Start {
+    /// From a Number `lastIndex`: nothing ran, every address is unchanged.
+    Number(usize),
+    /// From a `lastIndex` whose ToLength ran user code, with the RegExp's and
+    /// the string's addresses after it.
+    Coerced(usize, *mut RegExpHeader, *const StringHeader),
+}
+
+impl Start {
+    fn at(self) -> usize {
+        match self {
+            Self::Number(at) | Self::Coerced(at, ..) => at,
+        }
+    }
+}
+
+/// RegExpBuiltinExec steps 4-12: the search's start. `None` when the start is
+/// past the end, after a g/y RegExp's `lastIndex` was reset to 0.
+#[inline(always)]
+fn exec_start(
+    re: *mut RegExpHeader,
+    input: *const StringHeader,
+    stateful: bool,
+) -> Result<Option<Start>, EngineError> {
+    let stored = crate::value::JSValue::from_bits(super::get_last_index(re).to_bits());
+    // ToLength(Get(R, "lastIndex")) is observable only when it is not a
+    // Number (it may call `valueOf`); a Number matters only to g/y.
+    let start = if stored.is_number() {
+        Start::Number(if stateful {
+            stored
+                .as_number()
+                .max(0.0)
+                .floor()
+                .min(9_007_199_254_740_991.0) as usize
+        } else {
+            0
+        })
+    } else {
+        coerced_start(re, input, stateful)?
+    };
+    let (re, input) = match start {
+        Start::Number(_) => (re, input),
+        Start::Coerced(_, re, input) => (re, input),
+    };
+    if start.at() > unsafe { (*input).utf16_len as usize } {
+        if stateful {
+            store_last_index(re, 0)?;
+        }
+        return Ok(None);
+    }
+    Ok(Some(start))
+}
+
+/// [`exec_start`] for a `lastIndex` that is not a Number, whose ToLength may
+/// run `valueOf` and so collect: the RegExp and the string are rooted across it.
+#[cold]
+#[inline(never)]
+fn coerced_start(
+    re: *mut RegExpHeader,
+    input: *const StringHeader,
+    stateful: bool,
+) -> Result<Start, EngineError> {
+    let scope = RuntimeHandleScope::new();
+    let receiver = scope.root_raw_mut_ptr(re);
+    let string = scope.root_string_ptr(input);
+    let last_index = caught(|| super::regex_last_index_offset(receiver.with_const_ptr(|re| re)))?;
+    Ok(Start::Coerced(
+        if stateful { last_index } else { 0 },
+        receiver.with_mut_ptr(|re| re),
+        string.with_const_ptr(|s| s),
+    ))
+}
+
 /// Spec `Set(R, "lastIndex", n, true)` (RegExpBuiltinExec steps 14/18), with
 /// the TypeError for a non-writable `lastIndex` returned instead of thrown.
 /// Neither branch runs user code.
-fn store_last_index(receiver: &RuntimeHandle<'_>, n: usize) -> Result<(), EngineError> {
-    super::set_last_index_caught(receiver.get_nanbox_f64(), n as f64).map_err(EngineError::Abrupt)
+fn store_last_index(re: *mut RegExpHeader, n: usize) -> Result<(), EngineError> {
+    super::set_last_index_caught(crate::value::js_nanbox_pointer(re as i64), n as f64)
+        .map_err(EngineError::Abrupt)
 }

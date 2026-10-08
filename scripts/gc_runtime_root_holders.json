@@ -1116,6 +1116,12 @@
     },
     {
       "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
+      "name": "OWNED_SEARCHES",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] Cell<usize> counting searches that took the owned-buffer path (search_owned), so a test can assert which path a program took. A count, never a pointer; absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
       "name": "PRE_SEARCH_POLLS_RUN",
       "verdict": "test_only",
       "why": "#[cfg(test)] Cell<usize> counting pre-search polls that actually ran, so a test can assert the stride took and skipped the poll path rather than infer it from a timing (#10166). A count, never a pointer; absent from shipped binaries."
