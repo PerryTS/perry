@@ -142,7 +142,8 @@ impl IteratorRecordPlan {
                     left: Box::new(Expr::LocalGet(use_iter)),
                     right: Box::new(Expr::Bool(true)),
                 }),
-                then_expr: Box::new(Expr::Array(
+                then_expr: Box::new(runtime(
+                    "arrayRecordLiteral",
                     scalars.iter().map(|id| Expr::LocalGet(*id)).collect(),
                 )),
                 else_expr: Box::new(Expr::Undefined),
@@ -207,7 +208,8 @@ impl IteratorRecordPlan {
             return Expr::Conditional {
                 condition: Box::new(runtime("arrayRecordCloseAbsent", vec![])),
                 then_expr: Box::new(Expr::Undefined),
-                else_expr: Box::new(Expr::Array(
+                else_expr: Box::new(runtime(
+                    "arrayRecordLiteral",
                     values.iter().map(|id| Expr::LocalGet(*id)).collect(),
                 )),
             };
@@ -646,13 +648,13 @@ mod tests {
         );
         assert!(
             matches!(&setup[3], Stmt::Let { init: Some(Expr::Conditional { then_expr, else_expr, .. }), .. }
-            if matches!(then_expr.as_ref(), Expr::Array(v) if v.len() == 2)
+            if matches!(then_expr.as_ref(), Expr::NativeMethodCall { method, args, .. } if method == "arrayRecordLiteral" && args.len() == 2)
                 && matches!(else_expr.as_ref(), Expr::Undefined))
         );
         assert!(
             matches!(plan.close_source(), Expr::Conditional { condition, else_expr, .. }
             if matches!(condition.as_ref(), Expr::NativeMethodCall { method, .. } if method == "arrayRecordCloseAbsent")
-                && matches!(else_expr.as_ref(), Expr::Array(v) if v.len() == 2))
+                && matches!(else_expr.as_ref(), Expr::NativeMethodCall { method, args, .. } if method == "arrayRecordLiteral" && args.len() == 2))
         );
         assert_eq!(
             plan.release(&[99, 100]).len(),
