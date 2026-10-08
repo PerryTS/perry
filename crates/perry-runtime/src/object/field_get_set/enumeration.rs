@@ -1694,13 +1694,6 @@ pub(crate) unsafe fn own_key_hidden_bytes(obj: *const ObjectHeader, key: &[u8]) 
 /// never installs it as private object storage. Without a hint, that spelling
 /// is ordinary user data and must remain visible to reflection.
 ///
-/// The one prefix family is `__perry_native_super__<method>` (#6316): the native
-/// base method a subclass override displaced. Its key set is parameterized by
-/// method name, so an exact allowlist cannot enumerate it. The prefix is a
-/// reserved, runtime-only spelling — narrow enough not to be a plausible user
-/// property, unlike a blanket `__perry_*` test. Hiding it also moves enumeration
-/// TOWARD Node: the displaced method previously sat on the instance under its
-/// plain name (`emit`), which `Object.keys` wrongly reported as an own key.
 #[inline]
 pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
     matches!(
@@ -1716,7 +1709,6 @@ pub(crate) fn is_internal_runtime_key_bytes(b: &[u8]) -> bool {
         || b == b"__perry_ctor_caps"
         || b == crate::native_payload::JS_STATE_KEY
         || is_class_capture_key(b)
-        || b.starts_with(crate::node_stream::NATIVE_BASE_SUPER_PREFIX)
         || b.starts_with(b"__perry_computed_field_key_")
         || b == b"#<perry:class-evaluation-prototype>"
         || b == super::CLASS_TEMPLATE_KEY

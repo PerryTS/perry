@@ -657,32 +657,6 @@ pub(crate) unsafe fn decl_prototype_relinked(cid: u32, decl_proto: *mut ObjectHe
     recorded != declared
 }
 
-/// `key` read on the rest of class `cid`'s instance chain past its declared
-/// prototype, with `receiver` as the accessor receiver: `None` while that
-/// prototype stands on its class default (the parent class id names the next
-/// hop), `Some(None)` when the recorded link ends without `key`.
-///
-/// This is `super.key` for a method whose home object is `cid`'s prototype:
-/// `super` is the home object's current `[[Prototype]]`.
-///
-/// # Safety
-/// `key` must be a live string header; `receiver` a value the caller roots.
-pub(crate) unsafe fn relinked_class_prototype_read(
-    cid: u32,
-    key: *const crate::StringHeader,
-    receiver: f64,
-) -> Option<Option<JSValue>> {
-    let decl_proto = class_decl_prototype_object(cid);
-    if decl_proto.is_null() {
-        return None;
-    }
-    match relinked_decl_prototype_field(cid, decl_proto, key, receiver) {
-        RelinkedRead::NotRelinked => None,
-        RelinkedRead::Answered(value) => Some(Some(value)),
-        RelinkedRead::Missed => Some(None),
-    }
-}
-
 /// What the rest of a declared prototype's chain answers once a user
 /// operation replaced that prototype's `[[Prototype]]`.
 enum RelinkedRead {

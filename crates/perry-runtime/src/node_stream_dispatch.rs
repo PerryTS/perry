@@ -68,121 +68,6 @@ pub(super) fn build_object(methods: &[(&str, StubFn)], shape_id: u32) -> *mut Ob
     obj.with_mut_ptr(|obj| obj)
 }
 
-/// #6316 — reserved own-key prefix for a native base method DISPLACED by a
-/// subclass override.
-///
-/// The native bases perry models by stamping their method surface onto the
-/// instance (every `node:stream` class; `EventEmitter`'s methods live on the
-/// shared `EventEmitter.prototype` instead, see
-/// `inherited_event_emitter_method`) install those methods as ORDINARY OWN
-/// PROPERTIES. Own properties legitimately shadow class methods, so
-/// perry's own-property-override probe (issue #620,
-/// `perry-codegen/src/lower_call/method_override.rs`) selected the native
-/// closure in preference to the user's `class Bus extends EventEmitter { emit()
-/// {…} }` override — inheritance ran BACKWARDS and the override never executed.
-///
-/// The fix installs a base method under its plain name only when the receiver's
-/// class chain does NOT declare it. When it does, the native closure is stashed
-/// under `__perry_native_super__<name>` instead: invisible to ordinary property
-/// lookup (so the class method wins), but still reachable from
-/// `js_super_method_call_dynamic` so `super.emit(…)` lands on the real base
-/// implementation. Hidden from own-key enumeration by
-/// `object::field_get_set::enumeration::is_internal_runtime_key_bytes`.
-pub(crate) const NATIVE_BASE_SUPER_PREFIX: &[u8] = b"__perry_native_super__";
-
-/// `__perry_native_super__<name>` as an interned string key.
-fn native_base_super_key(name: &str) -> *mut crate::string::StringHeader {
-    let mut buf = Vec::with_capacity(NATIVE_BASE_SUPER_PREFIX.len() + name.len());
-    buf.extend_from_slice(NATIVE_BASE_SUPER_PREFIX);
-    buf.extend_from_slice(name.as_bytes());
-    crate::string::js_string_from_bytes(buf.as_ptr(), buf.len() as u32)
-}
-
-/// The native base method that a subclass override displaced, if any (#6316).
-/// `js_super_method_call_dynamic` calls this after the class-vtable and
-/// prototype-method lookups on the parent chain have both missed — which is
-/// always, for a native base, since `EventEmitter`/`Readable`/… are not perry
-/// classes and own no registry entry to resolve against.
-///
-/// Returns `None` for a receiver that is not an object, or one carrying no
-/// displaced method of that name, so an ordinary `super.m()` miss still yields
-/// `undefined` (the #774 instance-field-shadow contract).
-pub(crate) fn displaced_native_base_method(this_value: f64, name: &str) -> Option<f64> {
-    unsafe {
-        let jsval = JSValue::from_bits(this_value.to_bits());
-        if !jsval.is_pointer() {
-            return None;
-        }
-        let raw = (this_value.to_bits() & crate::value::POINTER_MASK) as usize;
-        if raw == 0 || crate::value::addr_class::is_small_handle(raw) {
-            return None;
-        }
-        let header = crate::value::addr_class::try_read_gc_header(raw)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
-            return None;
-        }
-        let obj = raw as *const ObjectHeader;
-        let val = js_object_get_field_by_name_f64(obj, native_base_super_key(name));
-        if JSValue::from_bits(val.to_bits()).is_pointer() {
-            Some(val)
-        } else {
-            inherited_event_emitter_method(this_value, name)
-        }
-    }
-}
-
-/// `super.<name>` for a class whose chain bottoms out in `EventEmitter`: its
-/// methods are not stamped onto the instance but live on the shared
-/// `EventEmitter.prototype`, so walk the receiver's prototype chain to the
-/// first value of `name` that IS one of the native EventEmitter method bodies.
-/// The user's own overrides on the class prototypes in between are skipped by
-/// that identity test, so `super.emit` can never re-enter the override.
-fn inherited_event_emitter_method(this_value: f64, name: &str) -> Option<f64> {
-    // G1: the stream prototypes carry the readable/writable bodies too, so a
-    // `super.push(...)` / `super.write(...)` from a stream subclass override
-    // finds its base the same way `super.emit(...)` does.
-    let infos: Vec<StubFn> = super::emitter_methods()
-        .iter()
-        .chain(super::readable_methods().iter())
-        .chain(super::writable_methods().iter())
-        .filter(|(method, _)| *method == name)
-        .map(|(_, info)| *info)
-        .collect();
-    if infos.is_empty() {
-        return None;
-    }
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let mut current = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(this_value));
-    for _ in 0..64 {
-        let proto = current.get_nanbox_f64();
-        if object_ptr_from_value(proto).is_none() {
-            return None;
-        }
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        let value = unsafe {
-            crate::object::js_object_get_property_key(
-                current.get_nanbox_f64(),
-                f64::from_bits(JSValue::string_ptr(key).bits()),
-            )
-        };
-        let raw = raw_ptr_from_value(value);
-        if raw >= 0x10000 {
-            let func =
-                crate::closure::get_valid_func_ptr(raw as *const crate::closure::ClosureHeader);
-            if !func.is_null() {
-                let info = unsafe { (*(raw as *const crate::closure::ClosureHeader)).info };
-                if infos.iter().any(|candidate| std::ptr::eq(*candidate, info)) {
-                    return Some(value);
-                }
-            }
-        }
-        current = scope.root_nanbox_f64(crate::object::js_object_get_prototype_of(
-            current.get_nanbox_f64(),
-        ));
-    }
-    None
-}
-
 /// True when the receiver's class chain declares `name` as a real class method —
 /// i.e. the user OVERRODE this native base method (#6316). The class registry is
 /// populated at module init, long before any `new`, so the vtable is always
@@ -209,23 +94,28 @@ pub(crate) fn install_methods_on_existing_object(
     let this_handle = scope.root_nanbox_f64(this_value);
     let class_id = crate::object::js_object_get_class_id(obj);
 
-    let mut on_method: Option<f64> = None;
+    let mut on_method: Option<crate::gc::RuntimeHandle<'_>> = None;
     for (name, func) in methods {
         if skip_names.iter().any(|skip| skip == name) {
             continue;
         }
-        // #6316: the subclass declares this method — the native base version
-        // must NOT become an own property, or it would shadow the override.
-        // Stash it where only `super.<name>()` can find it.
-        let overridden = class_chain_overrides(class_id, name);
+        // A native own property would shadow the subclass override.
+        // `super` reads the native prototype directly.
+        if class_chain_overrides(class_id, name) {
+            continue;
+        }
 
         // `addListener` is an ALIAS of `EventEmitter.prototype.on` in Node, so
         // it reuses the base `on` closure even when the subclass overrides
         // `on` — `emitter.addListener(…)` must reach the base, not the override.
         if *name == "addListener" {
-            if let Some(val) = on_method {
-                let key = native_or_plain_key(name, overridden);
-                js_object_set_field_by_name(obj_handle.get_raw_mut_ptr::<ObjectHeader>(), key, val);
+            if let Some(val) = &on_method {
+                let key = hidden_key(name.as_bytes());
+                js_object_set_field_by_name(
+                    obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
+                    key,
+                    val.get_nanbox_f64(),
+                );
                 continue;
             }
         }
@@ -235,22 +125,18 @@ pub(crate) fn install_methods_on_existing_object(
             0,
             this_handle.get_nanbox_f64().to_bits() as i64,
         );
-        let val = f64::from_bits(JSValue::pointer(closure as *const u8).bits());
+        let val = scope.root_nanbox_f64(f64::from_bits(
+            JSValue::pointer(closure as *const u8).bits(),
+        ));
+        let key = hidden_key(name.as_bytes());
+        js_object_set_field_by_name(
+            obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
+            key,
+            val.get_nanbox_f64(),
+        );
         if *name == "on" {
             on_method = Some(val);
         }
-        let key = native_or_plain_key(name, overridden);
-        js_object_set_field_by_name(obj_handle.get_raw_mut_ptr::<ObjectHeader>(), key, val);
-    }
-}
-
-/// The key an installed base method lands on: its plain name normally, or the
-/// reserved super-only key when the subclass overrides it (#6316).
-fn native_or_plain_key(name: &'static str, overridden: bool) -> *mut crate::string::StringHeader {
-    if overridden {
-        native_base_super_key(name)
-    } else {
-        hidden_key(name.as_bytes())
     }
 }
 

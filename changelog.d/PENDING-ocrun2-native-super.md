@@ -1,0 +1,3 @@
+Fix non-spread native superclass method calls by sharing the accessor's actual-home-prototype lookup and receiver-aware Reflect.get. Remove the declared/relinked-chain latch, native-method stashes, and collection-specific super dispatch.
+
+When linking a class prototype, the evaluated superclass's own prototype now precedes the declared-id fallback. This preserves native function-valued heritage even when a reserved class id names other runtime metadata. The regression materializes an fs.Stats prototype before forwarding Stream.on; Node and Bun return the emitter and deliver the event, while the base fails.

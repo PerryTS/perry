@@ -347,166 +347,26 @@ pub unsafe extern "C" fn js_object_super_get(home: f64, key_value: f64, _receive
 /// the parent's constructor properties, including any relinked static chain.
 #[no_mangle]
 pub unsafe extern "C" fn js_super_accessor_get(home_class_id: u32, key: f64, receiver: f64) -> f64 {
-    let parent_class_id = if home_class_id == 0 {
-        0
-    } else {
-        crate::object::get_parent_class_id(home_class_id).unwrap_or(0)
-    };
-    // #6935: `js_string_coerce` on an object key runs a user `toString` /
-    // `valueOf` (and allocates even for primitive keys), so it can GC and
-    // evacuate. `receiver` is dereferenced far below (`class_ref_id`, the
-    // getter's `this`) and `key` is re-read at the prototype fallback, so both
-    // must survive the coercion through handles rather than as raw locals.
+    // ToPropertyKey can call user code and allocate. Resolve the home edge
+    // afterward and keep the key and original receiver live through both.
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_handle = scope.root_heap_word_u64(receiver.to_bits());
-    let key_handle = scope.root_nanbox_f64(key);
-    let key_hdr = crate::builtins::js_string_coerce(key_handle.get_nanbox_f64());
-    let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
-    let key_name: Option<String> = if key_hdr.is_null() {
-        None
-    } else {
-        let p = (key_hdr as *const u8).add(std::mem::size_of::<crate::StringHeader>());
-        let n = (*key_hdr).byte_len as usize;
-        std::str::from_utf8(std::slice::from_raw_parts(p, n))
-            .ok()
-            .map(|s| s.to_string())
-    };
-    let base = if super::prototype_chain::any_class_chain_relinked() {
-        super::class_super_chain::super_get_live_base(home_class_id, parent_class_id, receiver)
-    } else {
-        None
-    };
-    if let Some(base) = base {
-        let base_bits = crate::value::JSValue::from_bits(base.to_bits());
-        if base_bits.is_null() || base_bits.is_undefined() {
-            let name = key_name.as_deref().unwrap_or("").as_bytes();
-            crate::error::js_throw_type_error_property_access(
-                base_bits.is_null() as u32,
-                name.as_ptr(),
-                name.len(),
-            );
-        }
-        return crate::proxy::js_reflect_get(
-            base,
-            key_handle.get_nanbox_f64(),
-            f64::from_bits(receiver_handle.get_heap_word_u64()),
-        );
-    }
-    // `class_super_base` can allocate.
-    let receiver = f64::from_bits(receiver_handle.get_heap_word_u64());
-    // Static-context super (`super.x` inside a `static` method/getter): the
-    // receiver is the class constructor (a ClassRef), so resolve against the
-    // PARENT's static side — a static getter, then a static data field —
-    // rather than the parent prototype/instance vtable below. Refs
-    // class/super/in-static-{getter,methods,setter}.
-    if super::class_ref_id(receiver).is_some() {
-        if let Some(key_name) = key_name.as_ref() {
-            // (a) the parent's static accessor (an accessor property of its
-            // class function object), walking the class_id chain.
-            {
-                let mut cid = parent_class_id;
-                let mut depth = 0usize;
-                // Only a compiled class has a function object: a builtin parent
-                // (`extends Error`) ends the walk.
-                while cid != 0 && depth < 32 && crate::object::is_class_id_registered(cid) {
-                    if let Some((acc, _, _)) =
-                        crate::object::class_value::class_static_own_accessor(cid, key_name)
-                    {
-                        return crate::object::class_value::class_static_accessor_call_get(
-                            acc, receiver,
-                        );
-                    }
-                    match crate::object::get_parent_class_id(cid) {
-                        Some(p)
-                            if p != 0 && p != cid && crate::object::is_class_id_registered(p) =>
-                        {
-                            cid = p;
-                            depth += 1;
-                        }
-                        _ => break,
-                    }
-                }
-            }
-            let mut cid = parent_class_id;
-            let mut depth = 0usize;
-            while cid != 0 && depth < 32 {
-                if let Some(result) =
-                    crate::object::class_registry::class_dynamic_static_accessor_getter_value(
-                        cid, key_name, receiver,
-                    )
-                {
-                    return result;
-                }
-                match crate::object::get_parent_class_id(cid) {
-                    Some(parent) if parent != 0 && parent != cid => {
-                        cid = parent;
-                        depth += 1;
-                    }
-                    _ => break,
-                }
-            }
-            // (b) parent static data field (CLASS_DYNAMIC_PROPS), same walk.
-            let mut cid = parent_class_id;
-            let mut depth = 0usize;
-            while cid != 0 && depth < 32 {
-                if let Some(v) = crate::object::class_value::class_static_get(cid, key_name) {
-                    return v;
-                }
-                match crate::object::get_parent_class_id(cid) {
-                    Some(p) if p != 0 && p != cid => {
-                        cid = p;
-                        depth += 1;
-                    }
-                    _ => break,
-                }
-            }
-        }
-        // A function-valued superclass has no Perry class id, but its
-        // constructor value was captured by `js_register_class_parent_dynamic`
-        // under the child class id. Resolve `super.x` against that function's
-        // own properties with the child constructor as Receiver.
-        if let Some(child_id) = super::class_ref_id(receiver) {
-            let parent = crate::object::js_get_dynamic_parent_value(child_id);
-            let parent_handle = scope.root_heap_word_u64(parent.to_bits());
-            let pv = crate::value::JSValue::from_bits(parent.to_bits());
-            if !pv.is_undefined() && !pv.is_null() {
-                if let Some(key_name) = key_name.as_ref() {
-                    if pv.is_pointer() {
-                        let ptr = pv.as_pointer::<u8>() as usize;
-                        if crate::closure::is_closure_ptr(ptr) {
-                            let own = crate::closure::closure_get_dynamic_prop(ptr, key_name);
-                            if own.to_bits() != crate::value::TAG_UNDEFINED {
-                                return own;
-                            }
-                        }
-                    }
-                }
-                return crate::proxy::js_reflect_get(
-                    f64::from_bits(parent_handle.get_heap_word_u64()),
-                    key_handle.get_nanbox_f64(),
-                    f64::from_bits(receiver_handle.get_heap_word_u64()),
-                );
-            }
-        }
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    // Instance `super` starts at the home prototype's actual parent. Native
-    // parents have reserved class ids and no declared prototype entry; reading
-    // that entry loses their methods when a call is split before a spread.
-    // The home prototype's shape carries the same edge for native and compiled
-    // parents, including a per-evaluation class's pinned heritage.
-    let home = match super::class_super_chain::super_home_owner(home_class_id, receiver) {
-        Some(owner) if super::class_registry::is_class_object_value(owner) => {
-            let obj = crate::value::JSValue::from_bits(owner.to_bits())
-                .as_pointer::<super::ObjectHeader>();
-            f64::from_bits(super::field_get_set::class_object_prototype_value(obj).bits())
-        }
-        _ => super::class_registry::class_decl_prototype_value(home_class_id),
-    };
-    let base = super::js_object_get_prototype_of(home);
+    let key_handle = scope.root_nanbox_f64(js_to_property_key(key));
+    let base = super::class_super_chain::class_super_base(
+        home_class_id,
+        f64::from_bits(receiver_handle.get_heap_word_u64()),
+    );
     let base_value = crate::value::JSValue::from_bits(base.to_bits());
     if base_value.is_null() || base_value.is_undefined() {
-        let name = key_name.as_deref().unwrap_or("").as_bytes();
+        let key_hdr = crate::builtins::js_string_coerce(key_handle.get_nanbox_f64());
+        let name = if key_hdr.is_null() {
+            &[][..]
+        } else {
+            std::slice::from_raw_parts(
+                (key_hdr as *const u8).add(std::mem::size_of::<crate::StringHeader>()),
+                (*key_hdr).byte_len as usize,
+            )
+        };
         crate::error::js_throw_type_error_property_access(
             base_value.is_null() as u32,
             name.as_ptr(),
