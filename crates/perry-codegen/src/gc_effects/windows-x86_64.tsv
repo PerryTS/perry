@@ -592,6 +592,8 @@ js_class_env_register_state	Leaf
 js_class_env_set	Reenters
 js_class_env_stamp	AllocOnly
 js_class_evaluation_object	Reenters
+js_class_evaluation_object_with_prototype	Reenters
+js_class_evaluation_parent_prototype	Reenters
 js_class_field_add	Reenters
 js_class_field_get_ic	Reenters
 js_class_field_get_ic_fast	Leaf

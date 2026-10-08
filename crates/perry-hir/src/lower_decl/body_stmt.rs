@@ -355,19 +355,13 @@ fn lower_body_stmt_impl(
                 || ctx.classes_index.contains_key(&class_name);
             if !already_exists {
                 let (class, decl_self_binding) = lower_body_class_decl(ctx, class_decl)?;
-                if let Some(extends_expr) = &class.extends_expr {
-                    result.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
-                        class_name: class.name.clone(),
-                        parent_expr: extends_expr.clone(),
-                    }));
-                }
                 let (computed_name_evaluations, computed_keys) =
                     crate::lower_decl::prepare_ordered_class_computed_names(
                         &class_decl.class.body,
                         &class,
                         &class.name,
                     );
-                result.extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
+
                 // A function-nested class that captures enclosing locals
                 // (`const n = require('x'); class C { m() { n.f() } }` — the
                 // webpack/zod bundle pattern) snapshots the CURRENT capture
@@ -434,6 +428,19 @@ fn lower_body_stmt_impl(
                     || shares_first_evaluation
                     // #11157: members that captured the self-binding need it.
                     || decl_self_binding.is_some();
+                let dynamic_parent = class.extends_expr.clone();
+                let definition_steps = if fresh_binding && !shares_first_evaluation {
+                    computed_name_evaluations
+                } else {
+                    if let Some(parent_expr) = dynamic_parent.clone() {
+                        result.push(Stmt::Expr(Expr::RegisterClassParentDynamic {
+                            class_name: class.name.clone(),
+                            parent_expr,
+                        }));
+                    }
+                    result.extend(computed_name_evaluations.into_iter().map(Stmt::Expr));
+                    Vec::new()
+                };
                 let named_statics: Vec<(String, Expr)> = if fresh_binding {
                     class
                         .static_fields
@@ -566,10 +573,11 @@ fn lower_body_stmt_impl(
                         ctx.shared_first_class_bindings
                             .insert(class_local, (template_name.clone(), statics));
                     }
-                    let evaluated_parent = ctx
-                        .evaluated_parent_bindings
-                        .get(&template_name)
-                        .map(|id| Box::new(Expr::LocalGet(*id)));
+                    let evaluated_parent = dynamic_parent.or_else(|| {
+                        ctx.evaluated_parent_bindings
+                            .get(&template_name)
+                            .map(|id| Box::new(Expr::LocalGet(*id)))
+                    });
                     result.push(Stmt::Let {
                         id: class_local,
                         name: binding_name,
@@ -586,6 +594,7 @@ fn lower_body_stmt_impl(
                                 captured_args: captured_exprs,
                                 shared_first_evaluation,
                                 evaluated_parent,
+                                definition_steps,
                             },
                         )),
                         mutable: false,

@@ -910,6 +910,7 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             captured_args,
             shared_first_evaluation,
             evaluated_parent,
+            definition_steps,
             ..
         } => {
             if let Some(init) = shared_first_evaluation {
@@ -917,6 +918,9 @@ pub fn collect_ref_ids_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             }
             if let Some(parent) = evaluated_parent {
                 walk(parent, out);
+            }
+            for step in definition_steps {
+                walk(step, out);
             }
             for (_, v) in named_statics {
                 walk(v, out);

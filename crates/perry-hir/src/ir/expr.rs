@@ -691,6 +691,9 @@ pub enum Expr {
         /// the binding holds L's first evaluation, and every other
         /// evaluation pins the evaluated parent the binding holds.
         evaluated_parent: Option<Box<Expr>>,
+        /// Computed member-name registration, after superclass.prototype Get
+        /// and validation, before this evaluation's prototype is built.
+        definition_steps: Vec<Expr>,
     },
 
     /// #11759 (c′): is `value` (a class declaration's evaluated binding) the

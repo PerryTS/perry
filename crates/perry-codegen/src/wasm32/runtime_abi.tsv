@@ -600,6 +600,8 @@ js_class_env_register_state	void	i32u,ptr
 js_class_env_set	void	f64,i32u,i32u,f64
 js_class_env_stamp	f64	f64,i32u,f64
 js_class_evaluation_object	i64	i32u,i32u,i32u,ptr
+js_class_evaluation_object_with_prototype	i64	i32u,i32u,i32u,ptr,f64,f64
+js_class_evaluation_parent_prototype	f64	i32u,f64
 js_class_field_add	f64	f64,f64,f64
 js_class_field_get_ic	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
 js_class_field_get_ic_fast	f64	i64,f64,i32u,i32u,ptr,i32u,i32s,ptr
