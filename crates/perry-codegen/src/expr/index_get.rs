@@ -352,6 +352,37 @@ fn lower_class_method_bind(
 // counter), so the guard takes only `idx_i32` (no `f64` index) — keeping the
 // int→fp conversion out of the hot region. The boxed fallback still needs the
 // `f64` index, so it is materialized lazily inside the (cold) fallback block.
+/// A packed-f64 loop fact is a runtime proof: the versioned loop's guard
+/// admitted this receiver local's live layout and its matched body cannot
+/// replace the receiver or change its length. The declared type only chose
+/// the lowering, so an erased (`any`) receiver reads the same raw slot.
+fn lower_guard_proven_packed_read(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    index: &Expr,
+) -> Result<Option<String>> {
+    let Expr::LocalGet(arr_id) = object else {
+        return Ok(None);
+    };
+    if let Some((fact, idx_id, offset, needs_bounds_check)) =
+        packed_f64_loop_offset_read(ctx, *arr_id, index)
+    {
+        if let Some(i32_slot) = ctx.i32_counter_slots.get(&idx_id).cloned() {
+            let arr_box = lower_expr(ctx, object)?;
+            let idx_i32 = load_packed_loop_index_i32(ctx, &i32_slot, offset);
+            return Ok(Some(lower_packed_f64_loop_index_get(
+                ctx,
+                *arr_id,
+                &arr_box,
+                &idx_i32,
+                &fact,
+                needs_bounds_check,
+            )));
+        }
+    }
+    Ok(None)
+}
+
 /// Repsel 4a.2 (#6904): the receiver's repairable local slot, when it is a
 /// plain (non-boxed, non-captured) stack local. The guard tiers' COLD arm
 /// stores the chain-followed live array head back into it so a stale
@@ -396,7 +427,7 @@ pub(crate) fn lower_numeric_index_get_for_number_context(
         }
     }
     if !is_array_expr(ctx, object) || !expr_has_numeric_pointer_free_array_layout(ctx, object) {
-        return Ok(None);
+        return lower_guard_proven_packed_read(ctx, object, index);
     }
 
     // A scalar-replaced array has no heap allocation at all: its elements live
@@ -820,6 +851,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 crate::codegen::arguments::try_lower_elided_arguments_index_get(ctx, object, index)?
             {
                 return Ok(v);
+            }
+            // A declared array keeps its own tier order below.
+            if !is_array_expr(ctx, object) {
+                if let Some(value) = lower_guard_proven_packed_read(ctx, object, index)? {
+                    return Ok(value);
+                }
             }
             if let Some(value) =
                 crate::stmt::stable_packed_loop::try_lower_index_get(ctx, object, index)

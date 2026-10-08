@@ -189,7 +189,7 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         {
             if module == "__perry_runtime"
                 && method == "arrayRecordForBound"
-                && args.len() == 6
+                && args.len() == 5
                 && matches!((left.as_ref(), &args[2]), (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b)
             {
                 lower_expr(ctx, &args[4])?;
