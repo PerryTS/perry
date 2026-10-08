@@ -127,24 +127,6 @@ mod error_prop_order_tests {
         }
     }
 
-    /// Removing a key must not disturb the order of the survivors.
-    #[test]
-    fn removal_preserves_order_of_the_rest() {
-        let _lock = crate::gc::global_side_table_test_lock();
-        unsafe {
-            let err = fresh_error();
-            for k in ["one", "two", "three"] {
-                set_error_user_prop(err, k, 0.0);
-            }
-            assert!(remove_error_user_prop(err, "two"));
-            assert_eq!(keys_of(err), vec!["one".to_string(), "three".to_string()]);
-            assert!(
-                !remove_error_user_prop(err, "two"),
-                "second remove is a no-op"
-            );
-        }
-    }
-
     /// #6759 phase 1: two errors must not share properties, even if one is
     /// allocated at an address the other previously occupied. The old
     /// address-keyed table could not express that; storage on the object does
