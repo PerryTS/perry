@@ -166,10 +166,7 @@ fn is_private_key(key: *const crate::string::StringHeader) -> bool {
     unsafe {
         let len = (*key).byte_len as usize;
         len >= PRIVATE.len()
-            && std::slice::from_raw_parts(
-                (key as *const u8).add(std::mem::size_of::<crate::string::StringHeader>()),
-                PRIVATE.len(),
-            ) == PRIVATE
+            && std::slice::from_raw_parts(crate::string::string_data(key), PRIVATE.len()) == PRIVATE
     }
 }
 
@@ -331,11 +328,7 @@ pub(super) fn install_stream_state_layout(stream: f64) {
             crate::object::object_ops::own_key_present(o, key)
         });
         if !present {
-            define_internal_field(
-                obj.get_raw_mut_ptr::<ObjectHeader>(),
-                key,
-                f64::from_bits(TAG_UNDEFINED),
-            );
+            obj.with_mut_ptr(|o| define_internal_field(o, key, f64::from_bits(TAG_UNDEFINED)));
         }
     }
 }
@@ -376,18 +369,20 @@ fn define_internal_field(
     let key = scope.root_string_ptr(key);
     let value = scope.root_nanbox_f64(value);
     // SAFETY: both are rooted; each call re-reads them from the handles.
-    unsafe {
-        crate::object::object_ops::ensure_key_in_keys_array_with_entry(
-            obj.get_raw_mut_ptr::<ObjectHeader>(),
-            key.get_raw_const_ptr::<crate::StringHeader>(),
-            entry,
-        );
-        crate::object::object_ops::define_property_force_store_value(
-            obj.get_raw_mut_ptr::<ObjectHeader>(),
-            key.get_raw_const_ptr::<crate::StringHeader>(),
-            value.get_nanbox_f64(),
-        );
-    }
+    obj.with_mut_ptr(|o| {
+        key.with_const_ptr(|k| unsafe {
+            crate::object::object_ops::ensure_key_in_keys_array_with_entry(o, k, entry)
+        })
+    });
+    obj.with_mut_ptr(|o| {
+        key.with_const_ptr(|k| unsafe {
+            crate::object::object_ops::define_property_force_store_value(
+                o,
+                k,
+                value.get_nanbox_f64(),
+            )
+        })
+    });
 }
 
 pub(super) fn has_truthy_hidden(stream: f64, key: *mut crate::string::StringHeader) -> bool {
@@ -1557,7 +1552,7 @@ pub(super) fn uint8array_byte_chunks(raw: usize) -> f64 {
         let grown = out.with_mut_ptr(|arr| crate::array::js_array_push_f64(arr, byte as f64));
         out.set_raw_mut_ptr(grown);
     }
-    box_pointer(out.get_raw_const_ptr())
+    out.with_const_ptr(|arr: *const u8| box_pointer(arr))
 }
 
 fn typed_uint8array_byte_chunks(raw: usize) -> Option<f64> {

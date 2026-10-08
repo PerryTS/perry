@@ -153,6 +153,15 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
         }) {
             CLASS_EVALUATION_PROTOTYPES_MATERIALIZED
                 .store(true, std::sync::atomic::Ordering::Relaxed);
+            // The template shape carries the string-keyed members only: a
+            // symbol-keyed member lives in the symbol tables of this object.
+            let owner = class
+                .with_mut_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64));
+            proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+                super::super::class_registry::install_evaluation_prototype_symbol_members(
+                    proto, class_id, owner,
+                )
+            });
             let proto_value = proto
                 .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
             class.with_mut_ptr::<ObjectHeader, _>(|class| {
@@ -231,6 +240,14 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
             set_builtin_property_attrs(proto as usize, name, PropertyAttrs::new(true, false, true));
         });
     }
+
+    let owner =
+        class.with_mut_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64));
+    proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+        super::super::class_registry::install_evaluation_prototype_symbol_members(
+            proto, class_id, owner,
+        )
+    });
 
     if let Some(parent_proto) = &parent_proto {
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {

@@ -35,6 +35,7 @@ pub(crate) fn contains(addr: usize, len: usize) -> bool {
         .is_some_and(|(_, &region_end)| end <= region_end)
 }
 
+#[cfg(target_os = "linux")]
 pub(super) const ALIGN: usize = 2 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
@@ -54,6 +55,7 @@ pub(super) fn kind_for(generation: HeapGeneration, len: usize) -> Kind {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn mapped_len(len: usize) -> Option<usize> {
     if len == 0 || len % 4096 != 0 {
         return None;

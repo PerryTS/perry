@@ -747,7 +747,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     prepare = function_body(clean[instance_path], "prepare_shape")
     for body, pattern, label in (
         (instance, r"object_alloc_plain_born\s*\(\s*2\s*,\s*shape\s*\)", "single ordinary birth"),
-        (instance, r"prepare_shape\s*\(\s*scope\s*,\s*&receiver\s*\)", "canonical birth on miss"),
+        (instance, r"prepare_shape\s*\(\s*receiver\s*\)", "canonical birth on miss"),
         (prepare, r"MATCHER_READ\.with\(\|site\|\s*site\.birth_key\(\)\)", "qualified intrinsic matcher key"),
         (prepare, r"extend_key_with_entry\s*\(\s*&proof,\s*CanonicalKeys::EMPTY,\s*private_key,\s*PRIVATE_FIELD_ENTRY", "intrinsic private matcher entry"),
         (prepare, r"stamp_linked_final_shape\s*\([\s\S]*?proto_id", "ordinary prototype link"),

@@ -29,16 +29,17 @@ function inflate(source: AsyncIterable<Uint8Array>): AsyncIterable<Uint8Array> {
 }
 
 for (let round = 0; round < 3; round++) {
-  const raw = new Uint8Array(20000 + round * 3001);
-  for (let i = 0; i < raw.length; i++) raw[i] = (i * 31 + round + (i >> 7)) & 255;
+  // Built and sampled without a per-byte JS loop: at a collection per loop
+  // poll, a per-byte loop would spend the run's time budget outside the
+  // stream windows this test exercises.
+  const raw = Uint8Array.from({ length: 20000 + round * 3001 }, (_, i) => (i * 31 + round + (i >> 7)) & 255);
   let total = 0;
   let acc = 0;
   let off = 0;
   for await (const chunk of inflate(pieces(gzipSync(raw), 300 + round * 257))) {
     churn();
-    for (let i = 0; i < chunk.length; i++, off++) {
-      if (off % 97 === 0) acc = (acc * 33 + chunk[i]) >>> 0;
-    }
+    for (let i = (97 - (off % 97)) % 97; i < chunk.length; i += 97) acc = (acc * 33 + chunk[i]) >>> 0;
+    off += chunk.length;
     total += chunk.length;
   }
   console.log(round, total, acc);

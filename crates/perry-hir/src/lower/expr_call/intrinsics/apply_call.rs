@@ -531,6 +531,14 @@ pub(crate) fn try_builtin_prototype_method_apply_call(
         _ => return Ok(None),
     };
 
+    // `Function.prototype.{bind,call,apply}` run as values through their own
+    // thunks. If the call were folded to `thisArg.<m>(…)`, it would read `m`
+    // off the receiver again, so a program that replaced the prototype slot
+    // with a wrapper calling the saved original would recurse forever.
+    if is_function_prototype_intrinsic_name(method_prop.sym.as_ref()) {
+        return Ok(None);
+    }
+
     // `.call`/`.apply` need at least the `thisArg` (the new receiver). A
     // spread in the `thisArg` slot can't be statically resolved to a receiver.
     let Some(this_arg) = call.args.first() else {
@@ -807,6 +815,12 @@ pub(crate) fn as_builtin_proto_method_ref(
 /// array/string literal — the receiver shapes whose prototype-method *values*
 /// currently lower to `undefined`. `Object` is deliberately excluded; see
 /// `try_builtin_prototype_method_apply_call`.
+/// `Function.prototype`'s `bind`, `call` and `apply`: no Array or String
+/// prototype method has these names.
+fn is_function_prototype_intrinsic_name(name: &str) -> bool {
+    matches!(name, "bind" | "call" | "apply")
+}
+
 fn is_builtin_prototype_receiver(ctx: &LoweringContext, recv: &ast::Expr) -> bool {
     match recv {
         // `Array.prototype` / `String.prototype` / … (not `Object`).

@@ -155,6 +155,9 @@ const BUILD_CACHE_ENV_VARS: &[&str] = &[
     "PERRY_GC_SAFEPOINT_ONLY",
     "PERRY_DISABLE_BUFFER_FAST_PATH",
     "PERRY_VERIFY_NATIVE_REGIONS",
+    // Each sabotage mode omits a byte-cell owner hoist or a call-edge dirty
+    // mark, so the sabotaged object differs from the normal one.
+    "PERRY_B4_SABOTAGE",
     // #6125: the resolved CPU baseline (promoted from --march / perry.toml
     // [build] by promote_cpu_baseline_env before this probe runs). Flipping
     // it must invalidate the build-level no-op check, not just per-object

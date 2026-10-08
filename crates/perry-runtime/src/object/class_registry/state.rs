@@ -1146,6 +1146,15 @@ pub(super) fn install_class_decl_prototype_symbol_member(
     class_id: u32,
     sym_key: usize,
 ) {
+    install_prototype_symbol_member(proto, class_id, sym_key, None)
+}
+
+fn install_prototype_symbol_member(
+    proto: *mut ObjectHeader,
+    class_id: u32,
+    sym_key: usize,
+    private_brand: Option<f64>,
+) {
     if proto.is_null() || sym_key == 0 {
         return;
     }
@@ -1195,14 +1204,17 @@ pub(super) fn install_class_decl_prototype_symbol_member(
     } else if let Some((func_ptr, param_count, has_rest)) =
         super::class_own_symbol_method(class_id, sym_key, false)
     {
-        let value = scope.root_nanbox_f64(crate::object::build_symbol_bound_method_closure(
-            crate::object::class_prototype_ref_value(class_id),
-            func_ptr,
-            param_count,
-            has_rest,
-            false,
-            &display_name,
-        ));
+        let value = scope.root_nanbox_f64(
+            crate::object::native_module::build_symbol_bound_method_closure_with_brand(
+                crate::object::class_prototype_ref_value(class_id),
+                func_ptr,
+                param_count,
+                has_rest,
+                false,
+                &display_name,
+                private_brand,
+            ),
+        );
         let proto_value =
             proto_h.with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
         unsafe {
@@ -1221,11 +1233,36 @@ pub(super) fn install_class_decl_prototype_symbol_member(
 }
 
 fn install_class_decl_prototype_symbol_members(proto: *mut ObjectHeader, class_id: u32) {
+    install_prototype_symbol_members(proto, class_id, None)
+}
+
+/// Install the class's own symbol-keyed prototype members on `owner`'s
+/// prototype object `proto`, for one evaluation of a class expression: each
+/// method runs under that evaluation's private brand.
+pub(crate) fn install_evaluation_prototype_symbol_members(
+    proto: *mut ObjectHeader,
+    class_id: u32,
+    owner: f64,
+) {
+    install_prototype_symbol_members(proto, class_id, Some(owner))
+}
+
+fn install_prototype_symbol_members(
+    proto: *mut ObjectHeader,
+    class_id: u32,
+    private_brand: Option<f64>,
+) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto_h = scope.root_raw_mut_ptr(proto);
+    let brand = private_brand.map(|brand| scope.root_nanbox_f64(brand));
     for sym_key in super::class_own_symbol_member_keys(class_id, false) {
         proto_h.with_mut_ptr(|p: *mut ObjectHeader| {
-            install_class_decl_prototype_symbol_member(p, class_id, sym_key)
+            install_prototype_symbol_member(
+                p,
+                class_id,
+                sym_key,
+                brand.as_ref().map(|brand| brand.get_nanbox_f64()),
+            )
         });
     }
 }

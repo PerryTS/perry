@@ -98,7 +98,6 @@
 1 0 crates/perry-runtime/src/tui/state.rs
 1 0 crates/perry-runtime/src/tui/tree.rs
 1 0 crates/perry-runtime/src/weakref.rs
-1 0 crates/perry-runtime/src/weakref/index.rs
 2 0 crates/perry-runtime/src/webassembly.rs
 1 0 crates/perry-runtime/src/yoga.rs
 0 9 crates/perry-stdlib/src/cheerio.rs

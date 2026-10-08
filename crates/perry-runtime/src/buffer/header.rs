@@ -64,16 +64,17 @@ use std::sync::{Mutex, OnceLock};
 /// SharedArrayBuffer block) — proven before the header is read.
 #[inline]
 pub(crate) fn byte_word_address(bits: u64) -> Option<usize> {
-    if bits < 0x1000 {
+    let tagged = (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG;
+    if !tagged && (bits >> 48) != 0 {
         return None;
     }
-    if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
-        return Some((bits & crate::value::POINTER_MASK) as usize);
-    }
-    if (bits >> 48) != 0 {
+    let addr = (bits & crate::value::POINTER_MASK) as usize;
+    if crate::value::addr_class::is_handle_band(addr) {
         return None;
     }
-    let addr = bits as usize;
+    if tagged {
+        return Some(addr);
+    }
     raw_byte_word_is_owned(addr).then_some(addr)
 }
 
@@ -743,6 +744,8 @@ pub(crate) fn buffer_alloc_foreign(data: *mut u8, length: u32) -> *mut BufferHea
         (*ptr).header.capacity = length;
         (*ptr).header.link = 0;
         (*ptr).data = data;
+        // GC_STORE_AUDIT(INIT): the native backing owner of the cell allocated
+        // above, before it is published.
         std::ptr::write(&mut (*ptr).owned, None);
         #[cfg(feature = "node-api-host")]
         {
@@ -782,8 +785,10 @@ pub(crate) fn buffer_adopt_backing(
     // Pressure accounting may collect: publish a consistent cell and root it.
     let scope = crate::gc::RuntimeHandleScope::new();
     let root = scope.root_raw_mut_ptr(ptr);
-    crate::gc::gc_note_external_side_alloc(capacity as usize);
-    root.get_raw_mut_ptr()
+    let ((), ptr) = root.across_mut::<BufferHeader, _>(|| {
+        crate::gc::gc_note_external_side_alloc(capacity as usize)
+    });
+    ptr
 }
 
 /// Whether this foreign-shaped cell owns bytes whose release Perry controls.
@@ -977,6 +982,8 @@ pub(crate) unsafe fn externalize_on_attach_for_test(addr: usize) {
     };
     let backing = super::backing::Backing::copy(super::store::owner_data(addr), header.capacity);
     let data = backing.data();
+// GC_STORE_AUDIT(INIT): rewrites this buffer in place before it escapes;
+// the link is copied unchanged, so no new edge appears.
     std::ptr::write(
         addr as *mut ForeignBuffer,
         ForeignBuffer {

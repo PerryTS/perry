@@ -117,7 +117,7 @@ unsafe fn value_called_proto_method_name<'a>(
 /// An *ambiguous* pointer (e.g. a native-callable value that isn't a real
 /// closure) returns `false` so the caller keeps its prior conservative
 /// behavior, mirroring the additive collection-thunk approach in #3662.
-pub(super) unsafe fn fn_proto_receiver_not_callable(object: f64) -> bool {
+pub(crate) unsafe fn fn_proto_receiver_not_callable(object: f64) -> bool {
     let jsval = JSValue::from_bits(object.to_bits());
     if !jsval.is_pointer() {
         return true; // primitive — never callable
@@ -136,7 +136,7 @@ pub(super) unsafe fn fn_proto_receiver_not_callable(object: f64) -> bool {
 /// only the error *type*; the wording mirrors V8/Node (`bind` has its own
 /// distinct message). Never returns.
 #[cold]
-pub(super) fn throw_fn_proto_not_callable(method: &str) -> ! {
+pub(crate) fn throw_fn_proto_not_callable(method: &str) -> ! {
     let message = if method == "bind" {
         "Bind must be called on a function".to_string()
     } else {

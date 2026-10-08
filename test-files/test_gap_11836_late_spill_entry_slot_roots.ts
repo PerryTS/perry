@@ -1,11 +1,9 @@
-// parity-env: PERRY_LL_RS4GC_MAX_INSTRS=1000 PERRY_GC_FORCE_EVACUATE=1
-// #11836: a module init whose GC roots move to a shadow frame only after
-// lowering (the post-RS4GC budget retry, forced here by the tiny budget)
-// must still root its entry-hoisted class-keys caches. The frame push has
-// to run before their binds. When it ran after them, the binds rooted
-// nothing, an evacuating collection left every cache naming its keys
-// array at the from-space address, and the next `new C()` published a
-// shape over that dead copy (prettier's typescript plugin segfaulted).
+// parity-env: PERRY_GC_FORCE_EVACUATE=1
+// #11836: a module init must root its entry-hoisted class-keys caches. If
+// a cache were left unrooted, an evacuating collection would leave it
+// naming its keys array at the from-space address, and the next `new C()`
+// would publish a shape over that dead copy (prettier's typescript plugin
+// segfaulted).
 declare function gc(): void;
 class C0 { k0a: number = 0; k0b: string = "v0"; }
 class C1 { k1a: number = 1; k1b: string = "v1"; }

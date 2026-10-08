@@ -64,8 +64,8 @@ fn resolved_native_addon(
     Some((target, format!("{package}/{relative}")))
 }
 
-/// Is `name` a JS global-builtin VALUE (a constructor/namespace reachable as a
-/// bare identifier at runtime)? Used only to decide whether a CJS named export
+/// Is `name` a JS global-builtin VALUE (a constructor, namespace or value
+/// property reachable as a bare identifier at runtime)? Used only to decide whether a CJS named export
 /// whose KEY equals such a name (`module.exports = { Error: Error }`) needs the
 /// mangled-rebinding emission so a module-scope `export const <name>` doesn't
 /// shadow the global for free references in the IIFE body. Deliberately limited
@@ -125,6 +125,12 @@ fn is_global_value_builtin_name(name: &str) -> bool {
             // body, which all evaluate before the IIFE returns, so the
             // module read `undefined.atob` at init.
             | "globalThis"
+            // `exports.undefined = …`: an `export const undefined` binding
+            // would put every bare `undefined` in the body in its dead zone
+            // until the IIFE returns.
+            | "undefined"
+            | "NaN"
+            | "Infinity"
     )
 }
 

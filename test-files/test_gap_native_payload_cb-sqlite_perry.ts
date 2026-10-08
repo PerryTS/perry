@@ -141,7 +141,8 @@ try {
 console.log("t6 result calls after release", results, db.isOpen);
 
 // T10: databases whose UDF captures the database, never closed: the
-// owner <-> payload cycle is ordinary garbage, so RSS stays flat.
+// owner <-> payload cycle is ordinary garbage, so RSS stays flat. A leaked
+// database holds about 70 KB, so 20000 of them would grow RSS far past 64 MB.
 function rssMB(): number {
   return process.memoryUsage().rss / 1048576;
 }
@@ -153,8 +154,8 @@ function churn(n: number): void {
     sum += (d.prepare("select f(1) as v").get() as any).v;
   }
 }
-churn(20000);
+churn(2000);
 const before = rssMB();
-churn(200000);
+churn(20000);
 const grew = rssMB() - before;
 console.log("t10", sum, grew < 64 ? "flat" : "grew " + Math.round(grew) + "MB");

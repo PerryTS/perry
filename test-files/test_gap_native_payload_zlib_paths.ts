@@ -1,3 +1,5 @@
+// The gzip body is not compared: Perry deflates with miniz_oxide, not zlib,
+// so only the gzip magic and the decoded bytes are checked on each path.
 import { createGzip, gunzipSync, crc32 } from 'node:zlib';
 import { Readable, pipeline } from 'node:stream';
 
@@ -25,6 +27,6 @@ async function run(path: string) {
   await closed;
   const encoded = Buffer.concat(output);
   const decoded = gunzipSync(encoded);
-  console.log(path, encoded.length, crc32(encoded), decoded.equals(input), crc32(decoded), events.join(','));
+  console.log(path, encoded.subarray(0, 3).toString('hex'), decoded.equals(input), crc32(decoded), events.join(','));
 }
 for (const path of ['write', 'pipe', 'pipeline', 'iterator']) await run(path);

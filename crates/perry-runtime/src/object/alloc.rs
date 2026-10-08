@@ -638,8 +638,13 @@ pub extern "C" fn js_object_alloc_class_with_keys(
     let (keys_arr, runtime_shape_id) = if !cached.is_null() {
         (cached, cached_runtime_id)
     } else {
-        let keys_bytes =
-            unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
+        // A keyless shape may pass a null `packed_keys`, which
+        // `from_raw_parts` does not accept even for a length of zero.
+        let keys_bytes: &[u8] = if packed_keys_len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) }
+        };
         let keys: Vec<&[u8]> = crate::object::packed_key_names(keys_bytes);
         // Issue #179: shape-cache keys_array lives in the longlived arena
         // (see `js_build_class_keys_array` for the rationale).
@@ -850,8 +855,13 @@ pub extern "C" fn js_object_alloc_with_shape(
     let (keys_arr, runtime_shape_id) = if !cached.is_null() {
         (cached, cached_runtime_id)
     } else {
-        let keys_bytes =
-            unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) };
+        // A keyless shape may pass a null `packed_keys`, which
+        // `from_raw_parts` does not accept even for a length of zero.
+        let keys_bytes: &[u8] = if packed_keys_len == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(packed_keys, packed_keys_len as usize) }
+        };
         let keys: Vec<&[u8]> = crate::object::packed_key_names(keys_bytes);
         // Issue #179: shape-cache keys_array lives in the longlived arena.
         // The builder roots the unfinished array across its key allocations;
@@ -1074,6 +1084,17 @@ pub unsafe extern "C" fn js_object_clone_with_extra(
 /// `js_object_clone_with_extra`.
 #[no_mangle]
 pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
+    copy_own_fields(dst_i64, src_f64, false);
+}
+
+/// [`js_object_copy_own_fields`] with [[DefineOwnProperty]] for each key: an
+/// inherited accessor or read-only property of `dst` is not consulted, so a
+/// getter-only accessor on `dst`'s prototype cannot reject the copy.
+pub(crate) unsafe fn copy_own_fields_define(dst_i64: i64, src_f64: f64) {
+    copy_own_fields(dst_i64, src_f64, true);
+}
+
+unsafe fn copy_own_fields(dst_i64: i64, src_f64: f64, define: bool) {
     // Extract dst pointer (may be NaN-boxed or raw)
     let dst_bits = dst_i64 as u64;
     let dst_top16 = dst_bits >> 48;
@@ -1123,7 +1144,12 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
     if super::string_wrapper::length(src_raw).is_some()
         || super::key_attrs::object_summary(src) & super::key_attrs::SUMMARY_ACCESSOR != 0
     {
-        js_object_assign_one(crate::value::js_nanbox_pointer(dst as i64), src_f64);
+        let dst_value = crate::value::js_nanbox_pointer(dst as i64);
+        if define {
+            super::assign::js_object_literal_spread(dst_value, src_f64);
+        } else {
+            js_object_assign_one(dst_value, src_f64);
+        }
         return;
     }
 
@@ -1192,6 +1218,68 @@ pub unsafe extern "C" fn js_object_copy_own_fields(dst_i64: i64, src_f64: f64) {
             let v = js_object_get_field(src, i as u32);
             f64::from_bits(v.bits())
         };
-        js_object_set_field_by_name(dst, key_ptr, field_f64);
+        if define {
+            crate::object::field_get_set::js_class_field_add(
+                crate::value::js_nanbox_pointer(dst as i64),
+                crate::value::js_nanbox_string(key_ptr as i64),
+                field_f64,
+            );
+        } else {
+            js_object_set_field_by_name(dst, key_ptr, field_f64);
+        }
+    }
+}
+
+#[cfg(test)]
+mod copy_own_fields_define_tests {
+    use super::*;
+
+    /// The define copy creates the receiver's own data property even where
+    /// its prototype holds a getter-only accessor of that name, which a
+    /// [[Set]] would reject (an Intl subclass instance re-homing its bound
+    /// `format`).
+    #[test]
+    fn a_define_copy_ignores_an_inherited_getter_only_accessor() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let key = |name: &str| {
+            crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
+                name.as_ptr(),
+                name.len() as u32,
+            ) as i64)
+        };
+        let proto =
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_object_alloc(0, 1) as i64));
+        let getter = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(&crate::closure::BOUND_METHOD_INFO, 0) as i64,
+        ));
+        crate::object::js_object_define_getter(
+            proto.get_nanbox_f64(),
+            key("format"),
+            getter.get_nanbox_f64(),
+        );
+        let dst =
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_object_alloc(0, 1) as i64));
+        crate::object::js_object_set_prototype_of(dst.get_nanbox_f64(), proto.get_nanbox_f64());
+        let src =
+            scope.root_nanbox_f64(crate::value::js_nanbox_pointer(js_object_alloc(0, 1) as i64));
+        let format = key("format");
+        unsafe {
+            js_object_set_field_by_name(
+                crate::value::js_nanbox_get_pointer(src.get_nanbox_f64()) as *mut ObjectHeader,
+                crate::value::js_get_string_pointer_unified(format) as *const crate::StringHeader,
+                7.0,
+            );
+            copy_own_fields_define(
+                crate::value::js_nanbox_get_pointer(dst.get_nanbox_f64()),
+                src.get_nanbox_f64(),
+            );
+        }
+        let own = crate::object::js_object_get_own_field_or_undef(
+            dst.get_nanbox_f64(),
+            b"format".as_ptr(),
+            6,
+        );
+        assert_eq!(own, 7.0);
     }
 }

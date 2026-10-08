@@ -731,7 +731,7 @@ pub(crate) unsafe fn install_own_builtin_accessor(
     setter_bits: u64,
     attrs: PropertyAttrs,
 ) {
-    if obj.is_null() || (obj as usize) < 0x10000 || key_str.is_null() {
+    if crate::value::addr_class::is_handle_band(obj as usize) || key_str.is_null() {
         return;
     }
     let entry = crate::object::key_attrs::AttrsEdit::Data(&[], attrs.bits).apply(

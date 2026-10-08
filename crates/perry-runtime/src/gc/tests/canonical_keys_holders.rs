@@ -39,18 +39,6 @@ unsafe fn keys_of(handle: RuntimeHandle<'_>) -> *mut ArrayHeader {
     handle.with_const_ptr(|ptr: *const ObjectHeader| crate::object::object_keys(ptr).arr())
 }
 
-/// The production scanners for every table these scenarios touch. The
-/// copying-nursery guard takes the thread's registry away, and a missing
-/// rewrite would turn a hit into a miss (or a live array into a stale one)
-/// for a reason that has nothing to do with the code under test.
-fn register_object_model_scanners() {
-    register_runtime_handle_root_scanner_for_tests();
-    gc_register_mutable_root_scanner(crate::object::scan_object_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
-    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-}
-
 /// Pin the conservative native-stack scan off so an allocation-point minor
 /// may MOVE (see `AllocPointRelocationGuard` in
 /// `runtime_roots/generator_attach_prototype.rs` for why both this and
@@ -130,7 +118,7 @@ unsafe fn assert_slot_names_a_live_key(
 fn no_published_canonical_list_names_a_key_at_its_pre_move_address() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    register_object_model_scanners();
+    register_object_model_scanners_for_tests();
     canonical_keys::reset_for_test();
     let scope = RuntimeHandleScope::new();
     unsafe {
@@ -264,7 +252,7 @@ fn class_inline_keys_birth_follows_the_move(stamped: bool) {
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _scan = NoConservativeScan::new();
     let trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    register_object_model_scanners();
+    register_object_model_scanners_for_tests();
     canonical_keys::reset_for_test();
     let label = if stamped {
         "js_object_alloc_class_inline_keys_stamped"
@@ -333,7 +321,7 @@ fn dynamic_parent_birth_installs_the_live_merged_keys_when_its_allocation_collec
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _scan = NoConservativeScan::new();
     let trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    register_object_model_scanners();
+    register_object_model_scanners_for_tests();
     canonical_keys::reset_for_test();
     let scope = RuntimeHandleScope::new();
     for (phase, parent_cid, child_cid, names) in [
@@ -507,7 +495,7 @@ fn class_keys_memo_belongs_to_the_agent_that_built_it() {
 fn a_moved_backing_keeps_every_list_on_it() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    register_object_model_scanners();
+    register_object_model_scanners_for_tests();
     canonical_keys::reset_for_test();
     let scope = RuntimeHandleScope::new();
     unsafe {
@@ -582,7 +570,7 @@ fn a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused() {
     const DEAD_MEMO_CLASS_ID: u32 = 0x0C1_7762;
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    register_object_model_scanners();
+    register_object_model_scanners_for_tests();
     // The rewrite passes under test: each runs over the dead key before the
     // prune does, exactly as in production.
     gc_register_mutable_root_scanner(crate::object::canonical_keys::scan_canonical_keys_roots_mut);
@@ -683,7 +671,7 @@ fn atom_bits(atom: usize) -> u64 {
 fn an_atom_and_the_lists_holding_it_follow_a_moving_minor() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    register_object_model_scanners();
+    register_object_model_scanners_for_tests();
     gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     canonical_keys::reset_for_test();
     let scope = RuntimeHandleScope::new();
@@ -762,7 +750,7 @@ fn a_list_written_while_its_atom_moves_holds_the_live_atom() {
     let _pacing = crate::gc::policy::force_alloc_point_minor_pacing();
     let _scan = NoConservativeScan::new();
     let trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
-    register_object_model_scanners();
+    register_object_model_scanners_for_tests();
     gc_register_mutable_root_scanner(crate::string::scan_intern_table_roots_mut);
     canonical_keys::reset_for_test();
     let text = b"atom_during_kind";

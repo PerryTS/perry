@@ -274,6 +274,7 @@ pub unsafe extern "C" fn js_perry_bytes_borrow(value: f64, out: *mut PerryBytes)
     if out.is_null() {
         return -1;
     }
+    // GC_STORE_AUDIT(STACK): the caller-owned out-parameter, not GC memory.
     out.write(PerryBytes::default());
     match crate::buffer::bytes::span(value, false) {
         Ok(span) => {
@@ -294,6 +295,7 @@ pub unsafe extern "C" fn js_perry_bytes_pin(value: f64, out: *mut PerryBytes) ->
     if out.is_null() {
         return -1;
     }
+    // GC_STORE_AUDIT(STACK): the caller-owned out-parameter, not GC memory.
     out.write(PerryBytes::default());
     match crate::buffer::bytes::pin(value) {
         Ok(pin) => {
@@ -328,6 +330,7 @@ pub unsafe extern "C" fn js_perry_bytes_new(
     if out.is_null() {
         return bytes_undefined();
     }
+    // GC_STORE_AUDIT(STACK): the caller-owned out-parameter, not GC memory.
     out.write(PerryBytes::default());
     let Some(brand) = byte_brand(brand) else {
         return bytes_undefined();
@@ -338,6 +341,7 @@ pub unsafe extern "C" fn js_perry_bytes_new(
         _ => return bytes_undefined(),
     };
     let (value, pin) = crate::buffer::bytes::new_bytes(brand, len, init);
+    // GC_STORE_AUDIT(STACK): the caller-owned out-parameter, not GC memory.
     out.write(PerryBytes {
         ptr: pin.ptr,
         len: pin.len,
@@ -483,10 +487,10 @@ mod byte_keepalive {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    per_test_global! { static DROPS: AtomicUsize = AtomicUsize::new(0); }
+    per_test_global! { static PAYLOAD_DROPS: AtomicUsize = AtomicUsize::new(0); }
     unsafe extern "C" fn drop_bytes(resource: *mut c_void, _: *mut c_void) {
         drop(Box::from_raw(resource as *mut Vec<u8>));
-        DROPS.fetch_add(1, Ordering::SeqCst);
+        PAYLOAD_DROPS.fetch_add(1, Ordering::SeqCst);
     }
     static VTABLE: crate::native_payload::PayloadVTable = crate::native_payload::PayloadVTable {
         drop: drop_bytes,
@@ -494,7 +498,7 @@ mod tests {
     };
     #[test]
     fn external_family_uses_the_shared_cell_and_close_never_reopens() {
-        DROPS.store(0, Ordering::SeqCst);
+        PAYLOAD_DROPS.store(0, Ordering::SeqCst);
         let family = PerryPayloadFamily {
             abi: payload_abi_layout(),
             class_id: crate::native_class_ids::CRYPTO_HASH,
@@ -530,7 +534,7 @@ mod tests {
             );
             assert_eq!(js_perry_payload_close(obj.get_nanbox_f64(), &family), 0);
             assert_eq!((*cell).external_bytes, 0, "close releases bytes before GC");
-            assert_eq!(DROPS.load(Ordering::SeqCst), 1);
+            assert_eq!(PAYLOAD_DROPS.load(Ordering::SeqCst), 1);
             assert!(js_perry_payload_get(obj.get_nanbox_f64(), &family).is_null());
             assert_eq!(js_perry_payload_close(obj.get_nanbox_f64(), &family), 0);
             assert_eq!(
@@ -538,7 +542,7 @@ mod tests {
                 -1
             );
         }
-        assert_eq!(DROPS.load(Ordering::SeqCst), 1);
+        assert_eq!(PAYLOAD_DROPS.load(Ordering::SeqCst), 1);
     }
 }
 

@@ -388,20 +388,56 @@ pub(crate) unsafe fn js_object_default_to_locale_string(receiver: f64) -> f64 {
     // notably `%TypedArray%.prototype.toLocaleString()` invoked as a method ON
     // the prototype object itself must run the installed brand-check thunk
     // (which throws for the non-TypedArray receiver, test262
-    // toLocaleString/invoked-as-method).
+    // toLocaleString/invoked-as-method). So does one an ordinary object
+    // inherits (`Object.create(proto)`).
+    // The lookup can run an inherited getter, which can move the receiver.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(receiver);
+    let method =
+        JSValue::from_bits(receiver_to_locale_string_method(receiver.get_nanbox_f64()).to_bits());
+    if let Some(result) =
+        call_primitive_closure_value(receiver.get_nanbox_f64(), method, std::ptr::null(), 0)
     {
-        let own = crate::object::js_object_get_own_field_or_undef(
-            receiver,
-            b"toLocaleString".as_ptr(),
-            14,
-        );
-        let own_value = JSValue::from_bits(own.to_bits());
-        if let Some(result) = call_primitive_closure_value(receiver, own_value, std::ptr::null(), 0)
-        {
-            return result;
-        }
+        return result;
     }
-    invoke_receiver_to_string(receiver)
+    invoke_receiver_to_string(receiver.get_nanbox_f64())
+}
+
+/// The `toLocaleString` that `receiver` holds or an ordinary object inherits,
+/// or `undefined` when it is `Object.prototype`'s own: that one is the
+/// default rendering, and calling it would re-enter it.
+unsafe fn receiver_to_locale_string_method(receiver: f64) -> f64 {
+    const NAME: &[u8] = b"toLocaleString";
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let own = crate::object::js_object_get_own_field_or_undef(receiver, NAME.as_ptr(), NAME.len());
+    if !JSValue::from_bits(own.to_bits()).is_undefined() {
+        return own;
+    }
+    let value = JSValue::from_bits(receiver.to_bits());
+    if !value.is_pointer() {
+        return undefined;
+    }
+    let addr = value.as_pointer::<u8>() as usize;
+    let ordinary = crate::value::addr_class::try_read_gc_header(addr)
+        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT);
+    let object_prototype = crate::array::object_prototype_addr_if_resolved();
+    if !ordinary || object_prototype == 0 {
+        return undefined;
+    }
+    let inherited = crate::object::js_object_get_field_by_name_f64(
+        addr as *const crate::object::ObjectHeader,
+        crate::string::canonical_key(NAME),
+    );
+    let builtin = crate::object::js_object_get_own_field_or_undef(
+        crate::value::js_nanbox_pointer(object_prototype as i64),
+        NAME.as_ptr(),
+        NAME.len(),
+    );
+    if inherited.to_bits() == builtin.to_bits() {
+        undefined
+    } else {
+        inherited
+    }
 }
 
 /// #4546: codegen entry point for `value.toLocaleString()` when the
@@ -567,4 +603,43 @@ pub(crate) unsafe fn js_object_is_prototype_of_value(receiver: f64, target: f64)
     }
 
     false
+}
+
+#[cfg(test)]
+mod to_locale_string_tests {
+    use super::*;
+
+    extern "C" fn answer(
+        _closure: *const crate::closure::ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        42.0
+    }
+
+    /// The default `toLocaleString()` runs a `toLocaleString` the receiver
+    /// inherits from a user prototype (`Object.create(proto)`), not only an
+    /// own one. Sabotage: consulting the own property alone answers
+    /// `[object Object]`.
+    #[test]
+    fn an_inherited_to_locale_string_runs() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let method = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::closure::js_closure_alloc(crate::fn_info!(answer, 0), 0) as i64,
+        ));
+        let proto = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 1));
+        let key = crate::string::js_string_from_bytes(b"toLocaleString".as_ptr(), 14);
+        proto.with_mut_ptr(|p: *mut crate::object::ObjectHeader| {
+            crate::object::js_object_set_field_by_name(p, key, method.get_nanbox_f64())
+        });
+        let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 1) as i64,
+        ));
+        let proto_value = proto.with_mut_ptr(|p: *mut crate::object::ObjectHeader| {
+            crate::value::js_nanbox_pointer(p as i64)
+        });
+        crate::object::js_object_set_prototype_of(receiver.get_nanbox_f64(), proto_value);
+        let result = unsafe { js_object_default_to_locale_string(receiver.get_nanbox_f64()) };
+        assert_eq!(result, 42.0);
+    }
 }

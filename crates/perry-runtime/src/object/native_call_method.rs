@@ -63,7 +63,8 @@ pub(crate) use object_proto::{
     js_object_prototype_to_locale_string,
 };
 pub(crate) use proto_dispatch::{
-    is_self_redispatching_proto_method, try_dispatch_instance_method_value,
+    fn_proto_receiver_not_callable, is_self_redispatching_proto_method,
+    throw_fn_proto_not_callable, try_dispatch_instance_method_value,
     try_dispatch_value_called_proto_method,
 };
 pub(super) use typed_array::dispatch_typed_array_method;

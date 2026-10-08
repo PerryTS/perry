@@ -53,35 +53,26 @@ fn buffer(bytes: &[u8]) -> f64 {
     crate::node_stream::test_buffer_value_from_bytes(bytes)
 }
 
-/// Anonymous resident bytes: heap growth, not code-page residency. Total RSS
-/// also counts file-backed text pages, which fault in with whatever code
-/// first runs and differ between binaries by hundreds of KB with no heap
-/// meaning. `smaps_rollup` "Anonymous:" is the heap; where it is missing, Rss
-/// minus RssFile from `/proc/self/status`.
-fn anon_rss_bytes() -> usize {
-    fn kb(text: &str, key: &str) -> Option<usize> {
-        text.lines()
-            .find_map(|l| l.strip_prefix(key))
-            .and_then(|r| r.split_whitespace().next())
-            .and_then(|n| n.parse::<usize>().ok())
-            .map(|k| k * 1024)
-    }
-    if let Ok(t) = std::fs::read_to_string("/proc/self/smaps_rollup") {
-        if let Some(b) = kb(&t, "Anonymous:") {
-            return b;
-        }
-    }
-    let t = std::fs::read_to_string("/proc/self/status").unwrap_or_default();
-    match (kb(&t, "VmRSS:"), kb(&t, "RssFile:")) {
-        (Some(rss), Some(file)) => rss.saturating_sub(file),
-        _ => 0,
-    }
+/// What a full collection leaves of this thread's heap: live arena objects,
+/// malloc-backed objects with their backing, and the native side bytes that
+/// payload cells report (a codec's scratch). Exact and per thread, so the
+/// allocator's page retention and the heap left by earlier tests on this
+/// thread do not move it between batches. If the bound read process RSS
+/// instead, it would fail at random: in a test process that has already run
+/// thousands of tests, mimalloc commits and purges pages on its own schedule,
+/// so the resident set would step by several MiB with no object retained.
+fn retained_heap_bytes() -> usize {
+    let heap = crate::gc::heap_stats();
+    heap.arena_used as usize
+        + heap.external_bytes as usize
+        + super::super::policy::external_side_live_bytes()
 }
 
 /// Z8: churn. Every stream that completes releases its codec at autoDestroy
 /// (no GC needed), every destroyed one at destroy(), and once the objects are
 /// unreachable a full collection finalizes every cell: nothing keeps a
-/// finished stream alive (no static holds a step job).
+/// finished stream alive (no static holds a step job), and nothing a stream
+/// touched (a chunk, a listener, a codec's scratch) outlives it.
 #[test]
 fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
     // This churn can reach an automatic copying minor with either block size.
@@ -96,8 +87,7 @@ fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
     // #12136). Register the production set, exactly as an agent has it.
     let _auto_init = AutoGcInitRestore(crate::gc::set_auto_gc_init_suppressed(false));
     crate::gc::gc_init();
-    // Warm the larger backing before measuring six complete churn batches.
-    // Keep the RSS bound and all release/drop/finalization checks unchanged.
+    // Warm up for a block's worth of streams, then measure six batches.
     const BLOCK_SCALE: usize = crate::arena::BLOCK_SIZE / (1024 * 1024);
     const WARMUP_BATCHES: usize = 2 * BLOCK_SCALE;
     const BATCHES: usize = WARMUP_BATCHES + 6;
@@ -105,7 +95,7 @@ fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
     const N: usize = BATCHES * PER_BATCH;
     let input = vec![b'q'; 1024];
     let before_cells = finalized();
-    let mut rss = Vec::new();
+    let mut retained = Vec::new();
     for batch in 0..BATCHES {
         for _ in 0..PER_BATCH {
             let scope = crate::gc::RuntimeHandleScope::new();
@@ -127,8 +117,8 @@ fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
         // Measure what survives a full collection, not the garbage a run of
         // minors has not reclaimed yet.
         crate::gc::js_gc_collect();
-        rss.push(anon_rss_bytes());
-        eprintln!("z8 batch {batch}: anon_rss={}", rss[rss.len() - 1]);
+        retained.push(retained_heap_bytes());
+        eprintln!("z8 batch {batch}: retained={}", retained[batch]);
     }
     assert_eq!(CREATED.load(Ordering::SeqCst), N);
     assert_eq!(
@@ -151,25 +141,24 @@ fn z8_churn_releases_every_codec_at_completion_and_drops_every_payload() {
     crate::gc::js_gc_collect();
     let cells = finalized() - before_cells;
     eprintln!(
-        "z8: created={} released={} dropped={} cells finalized={cells} anon rss warm={} peak={} growth={}",
+        "z8: created={} released={} dropped={} cells finalized={cells}",
         CREATED.load(Ordering::SeqCst),
         RELEASED.load(Ordering::SeqCst),
         DROPPED.load(Ordering::SeqCst),
-        rss[WARMUP_BATCHES],
-        rss[WARMUP_BATCHES..].iter().max().unwrap(),
-        rss[WARMUP_BATCHES..].iter().max().unwrap() - rss[WARMUP_BATCHES..].iter().min().unwrap()
     );
     assert!(
         cells >= 2 * N - 16,
         "the dead streams' cells were swept: {cells} of {}",
         2 * N
     );
-    let warm = *rss[WARMUP_BATCHES..].iter().min().unwrap();
-    let peak = *rss[WARMUP_BATCHES..].iter().max().unwrap();
+    // The warmup batches settle the runtime's one-time state (prototype, side
+    // tables). After that, 6 * PER_BATCH more streams may leave less than
+    // 64 KiB, so a stream that retains 44 bytes fails.
+    let warm = retained[WARMUP_BATCHES];
+    let peak = *retained[WARMUP_BATCHES..].iter().max().unwrap();
     assert!(
-        peak - warm < 4 << 20,
-        "anonymous RSS flat after warmup: {}",
-        peak - warm
+        peak.saturating_sub(warm) < 64 << 10,
+        "the heap a full collection keeps is flat after warmup: {retained:?}"
     );
 }
 

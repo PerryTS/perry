@@ -1243,6 +1243,7 @@ include!("native_module/class_method_values.rs");
 ///   slot 3: resolved method func_ptr
 ///   slot 4: packed meta — bits 0..32 param_count, bit 32 has_rest,
 ///           bit 33 is_static
+///   slot 5: (optional) the private brand an instance method runs under
 ///
 /// Slots 1/2 deliberately remain a VALID `(ptr, len)` name pair pointing at
 /// this static byte string: every reader that interprets a BOUND_METHOD's
@@ -1266,13 +1267,37 @@ pub(crate) fn build_symbol_bound_method_closure(
     is_static: bool,
     display_name: &str,
 ) -> f64 {
+    build_symbol_bound_method_closure_with_brand(
+        receiver,
+        func_ptr,
+        param_count,
+        has_rest,
+        is_static,
+        display_name,
+        None,
+    )
+}
+
+/// [`build_symbol_bound_method_closure`] for a method of one evaluation of a
+/// class expression: slot 5 holds that evaluation's class object, the private
+/// brand its body runs under, so `this.#x` names that evaluation's field.
+pub(crate) fn build_symbol_bound_method_closure_with_brand(
+    receiver: f64,
+    func_ptr: usize,
+    param_count: u32,
+    has_rest: bool,
+    is_static: bool,
+    display_name: &str,
+    private_brand: Option<f64>,
+) -> f64 {
     // The allocation itself is a safepoint. Keep the receiver current before
     // storing it into the freshly allocated closure.
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver_handle = scope.root_nanbox_f64(receiver);
+    let brand_handle = private_brand.map(|brand| scope.root_nanbox_f64(brand));
     let closure_handle = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
         &crate::closure::BOUND_METHOD_INFO,
-        5,
+        if brand_handle.is_some() { 6 } else { 5 },
     ));
     if closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|c| c.is_null()) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -1293,6 +1318,9 @@ pub(crate) fn build_symbol_bound_method_closure(
         );
         crate::closure::js_closure_set_capture_ptr(closure, 3, func_ptr as i64);
         crate::closure::js_closure_set_capture_ptr(closure, 4, meta);
+        if let Some(brand) = &brand_handle {
+            crate::closure::js_closure_set_capture_f64(closure, 5, brand.get_nanbox_f64());
+        }
     });
     // Spec `.length` = declared params minus a trailing rest param.
     let spec_length = if has_rest {

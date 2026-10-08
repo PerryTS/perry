@@ -15,6 +15,7 @@ pub(crate) unsafe fn copy_lane(
     size: usize,
     _scope: &crate::buffer::bytes::NoGc<'_>,
 ) {
+// GC_STORE_AUDIT(POINTER_FREE): copies numeric lanes into private storage.
     match size {
         1 => dest.write((&*source.cast::<AtomicU8>()).load(Relaxed)),
         2 => dest
@@ -23,6 +24,7 @@ pub(crate) unsafe fn copy_lane(
         4 => dest
             .cast::<u32>()
             .write((&*source.cast::<AtomicU32>()).load(Relaxed)),
+// GC_STORE_AUDIT(POINTER_FREE): a 64-bit numeric lane, never a GC edge.
         8 => dest
             .cast::<u64>()
             .write((&*source.cast::<AtomicU64>()).load(Relaxed)),

@@ -189,6 +189,7 @@ unsafe fn allocate(capacity: u32) -> *mut WeakStorage {
     let size = std::mem::size_of::<WeakStorage>() + capacity as usize * 28;
     let storage =
         crate::arena::arena_alloc_gc(size, 8, crate::gc::GC_TYPE_WEAK_STORAGE) as *mut WeakStorage;
+// GC_STORE_AUDIT(INIT): fills the freshly allocated storage header.
     storage.write(WeakStorage {
         capacity,
         len: 0,

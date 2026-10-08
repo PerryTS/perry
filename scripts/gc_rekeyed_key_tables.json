@@ -270,6 +270,12 @@
       "table": "UTF16_INDEX_CACHE",
       "death": "dead_owner:prune_dead_utf16_indexes",
       "why": "Four weak string identities are rewritten after relocation and pruned by the registered dead-owner fan-out before copying or mark/sweep can reuse their addresses; pruning also drops the Rust-owned offset vectors."
+    },
+    {
+      "site": "crates/perry-runtime/src/gc/ephemeron.rs::scan_ephemeron_seeds_roots_mut",
+      "table": "EPHEMERON_SEEDS",
+      "death": "self_pruned:clear_seeds",
+      "why": "Holds only weak tables found live in the current cycle: the copying scan or the incremental weak-store barrier pushes them. `Ephemerons::absorb` drains the list during the fixed point, and `clear_mark_seeds` (gc/trace.rs) calls `clear_seeds` between cycles."
     }
   ]
 }

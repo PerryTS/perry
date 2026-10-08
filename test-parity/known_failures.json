@@ -64,12 +64,6 @@
       "linux"
     ]
   },
-  "test_gap_2159_defineproperty_class_prototype": {
-    "issue": "2159",
-    "added": "2026-07-04",
-    "category": "bug-stale",
-    "reason": "RE-TRIAGE: tracking issue #2159 is CLOSED but this still fails (audited 2026-08-07, #7582) — needs a new issue. defineProperty on class prototypes; standing gap, confirmed pre-dating v0.5.1205 in the #5917 parity diff."
-  },
   "test_gap_2514_settracesigint": {
     "issue": "2514",
     "added": "2026-07-04",
@@ -159,6 +153,12 @@
     "added": "2026-09-16",
     "category": "module-inventory",
     "reason": "node:http2 real transport (#10327). settings() applies immediately and fires its callback with no peer ACK and no third (duration) argument; no SETTINGS frame reaches the wire; no remoteSettings at connect; a peer SETTINGS frame mid-session is answered with GOAWAY(code=1) instead of an ACK. Re-measured on 8360231ec2, ubuntu-latest, run 35766723754: completes in ~8s with output mismatch only - the TIMEOUT recorded on 2026-09-16 (a run-phase kill at PERRY_RUN_TIMEOUT, which run_parity_tests.sh buckets as `crash` via perry_abnormal_exit) no longer reproduces. Retriaged crash -> parity_fail. Cause not bisected."
+  },
+  "test_gap_iterret_generator_prototype": {
+    "issue": "12148",
+    "added": "2026-10-07",
+    "category": "bug-open",
+    "reason": "Generator objects own next/return/throw, so a patched %GeneratorPrototype%.return is shadowed. Fix: move the methods onto %GeneratorPrototype% with hidden per-generator state. The test was added failing in #12101."
   },
   "test_gap_perfhooks_3088_3008_3010_3011": {
     "issue": "3088",

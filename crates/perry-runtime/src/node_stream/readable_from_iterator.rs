@@ -66,13 +66,18 @@ pub(super) fn pull(stream: f64) -> bool {
         crate::fn_info!(next_rejected, 1; with_declared(1)),
         1,
     ));
-    js_closure_set_capture_f64(fulfill.get_raw_mut_ptr(), 0, stream.get_nanbox_f64());
-    js_closure_set_capture_f64(reject.get_raw_mut_ptr(), 0, stream.get_nanbox_f64());
-    crate::promise::js_promise_attach_handlers(
-        promise.get_raw_mut_ptr(),
-        fulfill.get_raw_mut_ptr(),
-        reject.get_raw_mut_ptr(),
-    );
+    for callback in [&fulfill, &reject] {
+        callback.with_mut_ptr(|callback| {
+            js_closure_set_capture_f64(callback, 0, stream.get_nanbox_f64())
+        });
+    }
+    promise.with_mut_ptr(|promise| {
+        fulfill.with_const_ptr(|fulfill| {
+            reject.with_const_ptr(|reject| {
+                crate::promise::js_promise_attach_handlers(promise, fulfill, reject)
+            })
+        })
+    });
     true
 }
 
@@ -95,16 +100,20 @@ extern "C" fn next_fulfilled(
     let done_key = scope.root_string_ptr(hidden_key(b"done"));
     let value_key = scope.root_string_ptr(hidden_key(b"value"));
     let step = object_ptr_from_value(result.get_nanbox_f64()).map(|obj| {
-        let done = crate::object::js_object_get_field_by_name_f64(
-            obj as *const crate::object::ObjectHeader,
-            done_key.get_raw_const_ptr(),
-        );
+        let done = done_key.with_const_ptr(|key| {
+            crate::object::js_object_get_field_by_name_f64(
+                obj as *const crate::object::ObjectHeader,
+                key,
+            )
+        });
         let done = crate::value::js_is_truthy(done) != 0;
         let obj = object_ptr_from_value(result.get_nanbox_f64()).unwrap();
-        let value = crate::object::js_object_get_field_by_name_f64(
-            obj as *const crate::object::ObjectHeader,
-            value_key.get_raw_const_ptr(),
-        );
+        let value = value_key.with_const_ptr(|key| {
+            crate::object::js_object_get_field_by_name_f64(
+                obj as *const crate::object::ObjectHeader,
+                key,
+            )
+        });
         (done, value)
     });
     let Some((done, value)) = step else {
@@ -130,16 +139,13 @@ extern "C" fn next_fulfilled(
             raw_ptr_from_value(chunks.get_nanbox_f64()) as *mut crate::array::ArrayHeader,
             value.get_nanbox_f64(),
         );
-        let chunks = scope.root_raw_mut_ptr(chunks);
+        let chunks = scope.root_nanbox_f64(box_pointer(chunks as *const u8));
         set_hidden_value(
             stream.get_nanbox_f64(),
             hidden_chunks_key(),
-            box_pointer(chunks.get_raw_const_ptr()),
+            chunks.get_nanbox_f64(),
         );
-        initialize_readable_from_buffered_length(
-            stream.get_nanbox_f64(),
-            box_pointer(chunks.get_raw_const_ptr()),
-        );
+        initialize_readable_from_buffered_length(stream.get_nanbox_f64(), chunks.get_nanbox_f64());
     }
     if done && !readable_chunks_nonempty(stream.get_nanbox_f64()) {
         schedule_readable_end(stream.get_nanbox_f64());
@@ -172,10 +178,10 @@ extern "C" fn next_rejected(
 mod tests {
     use super::*;
     thread_local! {
-        static NEXTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static NEXT_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     }
     extern "C" fn next(_: *const ClosureHeader, _: crate::closure::JsThis) -> f64 {
-        let count = NEXTS.with(|n| {
+        let count = NEXT_CALLS.with(|n| {
             let count = n.get();
             n.set(count + 1);
             count
@@ -198,7 +204,7 @@ mod tests {
     }
     #[test]
     fn synchronous_iterator_is_lazy_and_stops_at_readable_credit() {
-        NEXTS.with(|n| n.set(0));
+        NEXT_CALLS.with(|n| n.set(0));
         let scope = crate::gc::RuntimeHandleScope::new();
         let source =
             scope.root_nanbox_f64(box_pointer(crate::object::js_object_alloc(0, 1).cast()));
@@ -225,7 +231,7 @@ mod tests {
             options.get_nanbox_f64(),
         ));
         assert_eq!(
-            NEXTS.with(std::cell::Cell::get),
+            NEXT_CALLS.with(std::cell::Cell::get),
             0,
             "construction must not exhaust the source"
         );
@@ -236,7 +242,7 @@ mod tests {
         }
         crate::promise::js_promise_run_microtasks();
         assert_eq!(
-            NEXTS.with(std::cell::Cell::get),
+            NEXT_CALLS.with(std::cell::Cell::get),
             1,
             "a paused source stops at its HWM"
         );
@@ -257,7 +263,7 @@ mod tests {
         });
         assert!(pull(stream.get_nanbox_f64()));
         crate::promise::js_promise_run_microtasks();
-        assert_eq!(NEXTS.with(std::cell::Cell::get), 2);
+        assert_eq!(NEXT_CALLS.with(std::cell::Cell::get), 2);
         destroy_stream(stream.get_nanbox_f64(), f64::from_bits(TAG_UNDEFINED));
         crate::promise::js_promise_run_microtasks();
     }

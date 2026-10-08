@@ -100,6 +100,7 @@ fn an_imported_fetch_result_keeps_userland_method_dispatch() {
 mod buffer_static_values;
 mod class_decl_self_binding;
 mod fresh_class_extends_renamed;
+mod function_proto_alias_call;
 mod instanceof_rhs;
 mod literal_shape;
 

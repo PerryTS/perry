@@ -166,7 +166,9 @@ pub(crate) unsafe fn intl_subclass_super(
     if (this_bits >> 48) == 0x7FFD {
         let dst = (this_bits & 0x0000_FFFF_FFFF_FFFF) as i64;
         if dst >= 0x10000 {
-            crate::object::js_object_copy_own_fields(dst, instance);
+            // A define: `this` inherits the Intl prototype's getter-only
+            // `format`, which a [[Set]] of the bound own `format` would hit.
+            crate::object::copy_own_fields_define(dst, instance);
         }
     }
     true

@@ -1690,6 +1690,17 @@ fn get_field_by_name_past_data_probe(
                             let bound = js_class_method_bind(boxed, heap_name, key_bytes.len());
                             return JSValue::from_bits(bound.to_bits());
                         }
+                        // Any other key (`constructor`, `Object.prototype`'s
+                        // members) is the prototype's: OrdinaryGet continues
+                        // up the chain.
+                        let proto = super::super::object_ops::get_prototype_of_resolved(boxed);
+                        let proto_value = JSValue::from_bits(proto.to_bits());
+                        if proto_value.is_pointer() && proto.to_bits() != boxed.to_bits() {
+                            return js_object_get_field_by_name(
+                                proto_value.as_pointer::<ObjectHeader>(),
+                                key,
+                            );
+                        }
                     }
                 }
                 return JSValue::undefined();

@@ -1516,6 +1516,25 @@ pub extern "C" fn js_console_clear() {
 ///
 /// `options_value` must be a valid NaN-boxed JSValue.
 pub(crate) unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize> {
+    decode_dir_depth_number(options_value).map(|n| {
+        if n.is_nan() || n <= 0.0 {
+            0
+        } else if n.is_infinite() {
+            usize::MAX
+        } else {
+            n as usize
+        }
+    })
+}
+
+/// The numeric `options.depth`: `null` reads as `+Infinity` (unlimited).
+/// `None` when the key is missing, the options arg is not an object, or the
+/// value is not a number.
+///
+/// # Safety
+///
+/// `options_value` must be a valid NaN-boxed JSValue.
+pub(crate) unsafe fn decode_dir_depth_number(options_value: f64) -> Option<f64> {
     let jsval = JSValue::from_bits(options_value.to_bits());
     if !jsval.is_pointer() {
         return None;
@@ -1554,22 +1573,13 @@ pub(crate) unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize
         let raw = crate::object::js_object_get_field_f64(obj_ptr, i as u32);
         let v = JSValue::from_bits(raw.to_bits());
         if v.is_null() {
-            return Some(usize::MAX);
+            return Some(f64::INFINITY);
         }
         if v.is_int32() {
-            let n = v.as_int32();
-            return Some(if n < 0 { 0 } else { n as usize });
+            return Some(f64::from(v.as_int32()));
         }
         if v.is_number() {
-            let n = v.as_number();
-            if n.is_nan() {
-                return Some(0);
-            }
-            if n.is_infinite() {
-                return if n > 0.0 { Some(usize::MAX) } else { Some(0) };
-            }
-            let n_i = n as i64;
-            return Some(if n_i < 0 { 0 } else { n_i as usize });
+            return Some(v.as_number());
         }
         return None;
     }

@@ -379,7 +379,7 @@ like coverage while doing it. Two rounds of this have now been measured:
    same commit.** Nothing will ask you to.
 
 `--audit-poll-capable` is the gate for rounds 1–2 and `--audit-poll-reach` is
-the gate for round 3; round 4 has no gate. `gc-root-dominance.yml` runs both
+the gate for round 3; round 4 has no gate. The `gc-root-dominance` job runs both
 alongside `--audit-alloc-re` before the build.
 
 **Those pre-build audits are also the job's single point of failure, and it has
@@ -713,8 +713,8 @@ superlinear, and 62 MB is 62 MB.
 
 ## The CI gate
 
-`.github/workflows/gc-root-dominance.yml` runs the checker on every PR over both
-corpora. The whole job is a few minutes plus the compiler build; the two gated
+The `gc-root-dominance` job in `.github/workflows/gc.yml` runs the checker over
+both corpora on `main` and on PRs labelled `run-extended-tests`. The whole job is a few minutes plus the compiler build; the two gated
 checks are about three seconds each over ~2000 and ~12900 functions.
 
 It is built to be able to fail, against all four hazards in CLAUDE.md:

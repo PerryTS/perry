@@ -1,5 +1,3 @@
-use super::*;
-
 #[test]
 fn synchronous_consumers_capture_next_and_write_native_step_values() {
     for source in [

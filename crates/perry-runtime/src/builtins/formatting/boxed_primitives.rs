@@ -263,24 +263,17 @@ pub(crate) fn boxed_primitive_json_value(value: f64) -> Option<f64> {
 
 #[inline]
 pub(crate) fn boxed_primitive_payload(value: f64) -> Option<(u32, f64)> {
-    let jv = crate::value::JSValue::from_bits(value.to_bits());
-    let bits = value.to_bits();
-    let ptr = if jv.is_pointer() {
-        jv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader
-    } else if (bits >> 48) == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
-        bits as *mut crate::object::ObjectHeader
-    } else {
+    // This is a defensive type-probe over arbitrary `f64` bits, so the word
+    // is classified by its tag before any header read: a subnormal double
+    // such as `1e-310` has its top 16 bits clear and decodes into the heap
+    // window, and only the allocator may vouch for such a raw word.
+    let ptr = crate::value::addr_class::object_ref_addr(value) as *mut crate::object::ObjectHeader;
+    if ptr.is_null() {
         return None;
-    };
-    // This is a defensive type-probe over arbitrary `f64` bits, so a candidate
-    // that isn't a real heap object must be rejected *before* the `class_id`
-    // read — otherwise a small subnormal double (e.g. raw bits `0x2800000207`)
-    // that slips through the raw-pointer heuristic above is dereferenced as an
-    // `ObjectHeader` and faults. `is_plausible_heap_addr` keeps the
-    // small-handle floor (the fetch/Headers id-space lives below it and
-    // `is_valid_obj_ptr`'s Linux `HEAP_MIN` of `0x1000` would otherwise let
-    // those handles through) and additionally gates on the real heap range
-    // (#4099).
+    }
+    // A POINTER payload is still only a candidate: `is_plausible_heap_addr`
+    // keeps the small-handle floor (the fetch/Headers id-space lives below
+    // it) and gates on the real heap range (#4099).
     if !crate::value::addr_class::is_plausible_heap_addr(ptr as usize) {
         return None;
     }
@@ -400,5 +393,21 @@ mod tests {
     fn boxed_primitive_probe_rejects_pointer_tagged_native_handles() {
         let fetch_family_handle = crate::value::js_nanbox_pointer(0x40001);
         assert!(boxed_primitive_payload(fetch_family_handle).is_none());
+    }
+}
+
+#[cfg(test)]
+mod payload_probe_tests {
+    use super::*;
+
+    /// A subnormal number has its top 16 bits clear and decodes into the heap
+    /// window, so only the allocator may vouch for such a word: the probe
+    /// answers `None` without reading a header. Sabotage: treating every
+    /// top-16-clear word above the handle band as a raw pointer faults here.
+    #[test]
+    fn subnormal_numbers_are_not_boxed_primitives() {
+        for value in [1e-310, 5e-324, f64::MIN_POSITIVE / 2.0] {
+            assert_eq!(boxed_primitive_payload(value), None, "{value:e}");
+        }
     }
 }

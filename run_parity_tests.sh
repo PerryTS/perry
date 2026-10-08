@@ -549,6 +549,11 @@ for raw in sys.stdin:
         # was the first to show it. Same reasoning, same treatment: instrument
         # noise, not program output.
         sed -E '/^\[object-dictionary\]/d' | \
+        # `PERRY_GC_PROTECT_OLD_SWEEP=1` announces its quarantine on stderr
+        # at the first sweep. The fixtures that carry it in their
+        # `parity-env:` line would otherwise diff on that line alone. Same
+        # treatment as the schedule banner.
+        sed -E '/^\[gc-sweep-quarantine\]/d' | \
         # Strip Node v22+ MODULE_TYPELESS_PACKAGE_JSON warnings (4 lines
         # printed to stderr when running .ts files without "type":
         # "module" in package.json — pure environmental noise that
@@ -1476,7 +1481,10 @@ for (( selected_i = 0; selected_i < JOURNAL_TOTAL; selected_i++ )); do
     rm -f "$node_tmp"
 
     node_crash=$(perry_abnormal_exit "$node_exit")
-    if [[ -n "$node_crash" ]]; then
+    # A fixture whose expected output is recorded is compared against that
+    # file, so a Node crash on it (a perry-only expectation, such as
+    # node:sqlite's close() inside a running UDF) is not a skip.
+    if [[ -n "$node_crash" ]] && ! has_expected_output "$test_name"; then
         echo -e "${YELLOW}SKIP${NC}  $test_id (Node.js $node_crash)"
         ((NODE_FAIL++))
         record_result "$test_id" "node_fail"

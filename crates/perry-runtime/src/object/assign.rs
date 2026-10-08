@@ -1040,11 +1040,10 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             );
             // Use the public [[Get]] path, not raw field slots, so accessors run
             // and abrupt completions propagate the way Object.assign requires.
-            // A class instance's runtime-internal keys are hidden by name. A
-            // private field (#11791) is a non-enumerable entry, so the
-            // enumerability check below drops it with the shape's own
-            // attributes; no other lookup is needed for it.
-            let hide_internal = (*src).class_id != 0;
+            // A private field (#11791) is an entry of its own namespace, which
+            // a property-attribute lookup by name never sees, so it is dropped
+            // by its position in the snapshot; a class instance's
+            // runtime-internal keys are hidden by name.
             for i in 0..key_count {
                 // Re-derive every raw address from its handle at the top of the
                 // iteration: the PREVIOUS iteration's getter may have moved all
@@ -1056,7 +1055,12 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
                 if !key_val.is_any_string() {
                     continue;
                 }
-                if hide_internal {
+                if crate::object::key_attrs::entry_is_private(crate::object::key_attrs::keys_entry(
+                    src_keys, i as u32,
+                )) {
+                    continue;
+                }
+                if (*src).class_id != 0 {
                     let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
                     if crate::string::js_string_key_bytes(key_val, &mut buf)
                         .is_some_and(crate::object::field_get_set::is_internal_runtime_key_bytes)
@@ -1177,4 +1181,51 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // chained `Object.assign(t, a, b)` threaded a from-space pointer into the
     // next link.
     tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64))
+}
+
+#[cfg(test)]
+mod private_field_spread_tests {
+    /// Object spread copies own enumerable properties only: a private field
+    /// of the source, an entry of its own namespace that a by-name attribute
+    /// lookup never sees, stays behind. Sabotage: filtering by the attribute
+    /// lookup alone copies `#value` as a public property.
+    #[test]
+    fn spread_leaves_private_fields_behind() {
+        const CID: u32 = 62_644;
+        let _lock = crate::gc::global_side_table_test_lock();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let src = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(CID, 2) as i64,
+        ));
+        let name = |s: &str| {
+            crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
+                s.as_ptr(),
+                s.len() as u32,
+            ) as i64)
+        };
+        crate::object::js_private_field_add(src.get_nanbox_f64(), CID, name("#value"), 5.0);
+        let public = name("label");
+        crate::object::js_object_set_field_by_name(
+            crate::value::js_nanbox_get_pointer(src.get_nanbox_f64())
+                as *mut crate::object::ObjectHeader,
+            crate::value::js_get_string_pointer_unified(public) as *const crate::StringHeader,
+            1.0,
+        );
+        let dst = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+            crate::object::js_object_alloc(0, 2) as i64,
+        ));
+        unsafe { super::js_object_literal_spread(dst.get_nanbox_f64(), src.get_nanbox_f64()) };
+        let keys = unsafe {
+            crate::object::object_keys(crate::value::js_nanbox_get_pointer(dst.get_nanbox_f64())
+                as *const crate::object::ObjectHeader)
+        };
+        let names: Vec<String> = (0..keys.count())
+            .filter_map(|i| {
+                let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+                unsafe { crate::string::js_string_key_bytes(keys.get(i), &mut buf) }
+                    .map(|b| String::from_utf8_lossy(b).into_owned())
+            })
+            .collect();
+        assert_eq!(names, vec!["label".to_string()]);
+    }
 }

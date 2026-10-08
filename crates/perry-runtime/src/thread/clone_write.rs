@@ -26,6 +26,9 @@ use crate::closure::{real_capture_count, ClosureHeader};
 use crate::gc;
 use crate::value::{JSValue, TAG_HOLE};
 
+/// End of the unmapped first page: a pointer payload below it is null-ish.
+const NULL_PAGE_END: usize = 0x1000;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum CloneMode {
     /// `perry/thread` captures and results.
@@ -249,7 +252,8 @@ impl Writer<'_> {
         }
         if tag == STRING_TAG {
             let ptr = (bits & POINTER_MASK) as *const crate::string::StringHeader;
-            if ptr.is_null() || (ptr as usize) < 0x1000 {
+            // A heap string never lives in the handle band; there is no header to read.
+            if crate::value::addr_class::is_handle_band(ptr as usize) {
                 return SerializedValue::String(Vec::new());
             }
             return SerializedValue::String(string_bytes(ptr));
@@ -270,12 +274,14 @@ impl Writer<'_> {
 
     unsafe fn pointer(&mut self, bits: u64) -> SerializedValue {
         let addr = (bits & POINTER_MASK) as usize;
-        if addr < 0x1000 {
-            return SerializedValue::Inline(TAG_UNDEFINED);
-        }
-        // A handle id (fetch, zlib, Proxy, …) is not heap memory.
-        if crate::value::addr_class::is_small_handle(addr) || addr < 0x10000 {
-            return SerializedValue::Unsupported("native handle");
+        if crate::value::addr_class::is_handle_band(addr) {
+            // A payload in the null page clones as `undefined`; the rest of
+            // the band is a handle id (fetch, zlib, Proxy, …), not heap memory.
+            return if addr < NULL_PAGE_END {
+                SerializedValue::Inline(TAG_UNDEFINED)
+            } else {
+                SerializedValue::Unsupported("native handle")
+            };
         }
         if let Some(refuse) = self.uncloneable {
             if refuse(bits) {
