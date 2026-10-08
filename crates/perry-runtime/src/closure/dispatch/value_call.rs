@@ -294,6 +294,10 @@ unsafe fn call_closure_body(
     // with the full slice up front. (The arity-specific `js_closure_callN`
     // helpers do their own rest check, but only see the truncated arg list.)
     if let Some((fixed_arity, synth)) = info.and_then(crate::closure::info_rest) {
+        if synth == crate::closure::RestDispatchKind::NativeArgs && !args_ptr.is_null() {
+            let args = std::slice::from_raw_parts(args_ptr, args_len);
+            return dispatch_rest_bundled(closure, func_ptr, this, args, fixed_arity, synth);
+        }
         let all: Vec<f64> = (0..args_len).map(arg_at).collect();
         return dispatch_rest_bundled(closure, func_ptr, this, &all, fixed_arity, synth);
     }

@@ -15,39 +15,92 @@ pub(crate) fn global_this_rest_array_values(rest: f64) -> Vec<f64> {
         .collect()
 }
 
-pub(crate) extern "C" fn function_prototype_call_thunk(
+/// The call's arguments as a slice (`FN_REST_NATIVE_ARGS` bodies).
+///
+/// # Safety
+/// `args` holds `len` values, or is null when `len` is 0.
+#[inline]
+unsafe fn native_args<'a>(args: *const f64, len: usize) -> &'a [f64] {
+    if args.is_null() || len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(args, len)
+    }
+}
+
+/// `Function.prototype.call`: forwards its arguments after `thisArg` to the
+/// target in place (`FN_REST_NATIVE_ARGS`) — no rest array is built for them.
+pub(crate) unsafe extern "C" fn function_prototype_call_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
-    this_arg: f64,
-    rest: f64,
+    args: *const f64,
+    len: usize,
 ) -> f64 {
+    let args = native_args(args, len);
     let target = f64::from_bits(this.bits());
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let (this_arg, rest) = match args.split_first() {
+        Some((first, rest)) => (*first, rest),
+        None => (undef, &[][..]),
+    };
     // The generic value-call bridge treats a proxy invocation as a bare
     // call. Preserve the explicit receiver of Function.prototype.call.
     if crate::proxy::js_proxy_is_proxy(target) == 1 {
         if !crate::proxy::is_callable_function(target) {
             crate::closure::throw_not_callable();
         }
-        return crate::proxy::js_proxy_apply(target, this_arg, rest);
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let target = scope.root_nanbox_f64(target);
+        let this_arg = scope.root_nanbox_f64(this_arg);
+        let rest = crate::closure::build_rest_array(rest, false);
+        return crate::proxy::js_proxy_apply(
+            target.get_nanbox_f64(),
+            this_arg.get_nanbox_f64(),
+            rest,
+        );
     }
-    let args = global_this_rest_array_values(rest);
-    let (args_ptr, args_len) = if args.is_empty() {
-        (std::ptr::null::<f64>(), 0)
-    } else {
-        (args.as_ptr(), args.len())
-    };
-    let this_arg = crate::closure::coerce_call_this(target, this_arg);
-    // Concise/object-literal methods read `this` from a baked capture slot, not
-    // the `this` argument; rebind so the explicit `.call(thisArg)` receiver is honored.
-    let target = crate::closure::rebind_explicit_this(target, this_arg);
-    unsafe {
-        crate::closure::native_call_value_this(
+    let this_jv = crate::value::JSValue::from_bits(this_arg.to_bits());
+    let this_may_box = !(this_jv.is_undefined() || this_jv.is_null() || this_jv.is_pointer());
+    if !this_may_box && !crate::closure::rebind_explicit_this_allocates(target) {
+        // Neither the receiver coercion nor the rebind below allocates for
+        // this shape, so the arguments go straight through.
+        let rest_ptr = if rest.is_empty() {
+            std::ptr::null()
+        } else {
+            rest.as_ptr()
+        };
+        return crate::closure::native_call_value_this(
             target,
             crate::closure::JsThis::from_f64(this_arg),
-            args_ptr,
-            args_len,
-        )
+            rest_ptr,
+            rest.len(),
+        );
     }
+    // Boxing a primitive receiver and cloning a `this`-capturing method can
+    // both collect: hold everything in handles across them.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let target = scope.root_nanbox_f64(target);
+    let rest = scope.root_nanbox_f64_slice(rest);
+    let this_arg = scope.root_nanbox_f64(crate::closure::coerce_call_this(
+        target.get_nanbox_f64(),
+        this_arg,
+    ));
+    // Concise/object-literal methods read `this` from a baked capture slot, not
+    // the `this` argument; rebind so the explicit `.call(thisArg)` receiver is honored.
+    let target =
+        crate::closure::rebind_explicit_this(target.get_nanbox_f64(), this_arg.get_nanbox_f64());
+    let args: Vec<f64> = rest.iter().map(|arg| arg.get_nanbox_f64()).collect();
+    let args_ptr = if args.is_empty() {
+        std::ptr::null()
+    } else {
+        args.as_ptr()
+    };
+    crate::closure::native_call_value_this(
+        target,
+        crate::closure::JsThis::from_f64(this_arg.get_nanbox_f64()),
+        args_ptr,
+        args.len(),
+    )
 }
 
 /// `Function.prototype.bind` as a real callable thunk. Reads the target
@@ -61,17 +114,21 @@ pub(crate) extern "C" fn function_prototype_call_thunk(
 /// bound function. The `Function.prototype.call.bind(method)` uncurry idiom in
 /// `call-bind-apply-helpers` (used by call-bound → side-channel → qs → Stripe)
 /// hit exactly this: `Reflect.apply(bind, call, [fn])` yielded `undefined`.
-pub(crate) extern "C" fn function_prototype_bind_thunk(
+pub(crate) unsafe extern "C" fn function_prototype_bind_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
-    this_arg: f64,
-    rest: f64,
+    args: *const f64,
+    len: usize,
 ) -> f64 {
     let target = f64::from_bits(this.bits());
-    let mut args: Vec<f64> = Vec::with_capacity(1);
-    args.push(this_arg);
-    args.extend(global_this_rest_array_values(rest));
-    unsafe { crate::closure::js_function_bind(target, args.as_ptr(), args.len()) }
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    // `(thisArg, ...boundArgs)` is exactly the call's own argument list; only
+    // an argument-less `bind()` needs its `undefined` thisArg supplied.
+    let args = native_args(args, len);
+    if args.is_empty() {
+        return crate::closure::js_function_bind(target, &undef, 1);
+    }
+    crate::closure::js_function_bind(target, args.as_ptr(), args.len())
 }
 
 pub(crate) extern "C" fn global_this_set_timeout_thunk(
@@ -1036,3 +1093,5 @@ pub(crate) extern "C" fn array_prototype_concat_thunk(
 
 #[cfg(test)]
 mod apply_args_tests;
+#[cfg(test)]
+mod native_args_tests;

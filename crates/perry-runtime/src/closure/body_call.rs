@@ -73,7 +73,9 @@ macro_rules! js_body_fn_ty {
 /// body is allocated from several places. A body declared `extern
 /// "C-unwind"` takes `fn_info!(unwind body, n; ...)`; one declared C-unwind
 /// only in unwinding (test) builds and plain C under `panic = "abort"` takes
-/// `fn_info!(unwind_in_tests body, n; ...)`.
+/// `fn_info!(unwind_in_tests body, n; ...)`. A runtime-native body taking
+/// its arguments in place (`JsNativeArgsBody`) takes
+/// `fn_info!(native_args body, declared; ...)`.
 #[macro_export]
 macro_rules! fn_info {
     (@ty 0) => { $crate::codegen_abi::JsBody0<$crate::closure::ClosureHeader> };
@@ -126,6 +128,15 @@ macro_rules! fn_info {
     (@uty 14) => { $crate::codegen_abi::JsBodyUnwind14<$crate::closure::ClosureHeader> };
     (@uty 15) => { $crate::codegen_abi::JsBodyUnwind15<$crate::closure::ClosureHeader> };
     (@uty 16) => { $crate::codegen_abi::JsBodyUnwind16<$crate::closure::ClosureHeader> };
+    (native_args $body:path, $declared:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
+        static INFO: $crate::closure::JsFunctionInfo =
+            $crate::closure::JsFunctionInfo::of_native_args(
+                $body as $crate::codegen_abi::JsNativeArgsBody<$crate::closure::ClosureHeader>,
+                $declared,
+            )
+                $($(.$m($($a),*))*)?;
+        &INFO as *const $crate::closure::JsFunctionInfo
+    }};
     (unwind_in_tests $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{
         #[cfg(panic = "abort")]
         let info = $crate::fn_info!($body, $n $(; $($m($($a),*)),*)?);

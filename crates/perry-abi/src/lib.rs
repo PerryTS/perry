@@ -344,9 +344,18 @@ pub const FN_REST_USER: u32 = 1 << 0;
 pub const FN_REST_SYNTHETIC_ARGUMENTS: u32 = 1 << 1;
 /// The body takes both a `...rest` array and a synthetic `arguments` array.
 pub const FN_REST_USER_AND_ARGUMENTS: u32 = 1 << 2;
+/// A runtime-native body that takes the call's arguments in place, as
+/// [`JsNativeArgsBody`] `(callee, this, args, len)`: no array is built for
+/// them. `rest_fixed` is its JS-visible declared count.
+pub const FN_REST_NATIVE_ARGS: u32 = 1 << 16;
 /// Any rest kind.
 pub const FN_REST_MASK: u32 =
-    FN_REST_USER | FN_REST_SYNTHETIC_ARGUMENTS | FN_REST_USER_AND_ARGUMENTS;
+    FN_REST_USER | FN_REST_SYNTHETIC_ARGUMENTS | FN_REST_USER_AND_ARGUMENTS | FN_REST_NATIVE_ARGS;
+
+/// The native type of an [`FN_REST_NATIVE_ARGS`] body: the callee, the
+/// receiver, and the call's `len` arguments at `args` (null when `len` is 0),
+/// valid for the duration of the call.
+pub type JsNativeArgsBody<C> = unsafe extern "C" fn(*const C, JsThis, *const f64, usize) -> f64;
 /// `length` is valid.
 pub const FN_HAS_LENGTH: u32 = 1 << 3;
 /// An arrow function: lexical `this`, not constructable.
@@ -432,6 +441,23 @@ impl JsFunctionInfo {
         let code = unsafe { Code { body }.code };
         // SAFETY: `code` is `body`, a JS body of `F::ARITY` parameters.
         unsafe { Self::from_code(code, F::ARITY as u16) }
+    }
+
+    /// The info of the native-arguments body `body` ([`FN_REST_NATIVE_ARGS`]),
+    /// declaring `declared` JS-visible parameters.
+    pub const fn of_native_args<C>(body: JsNativeArgsBody<C>, declared: u16) -> Self {
+        // SAFETY: `body` is a fn pointer, the same size and bits as a code
+        // pointer; the rest bit routes every call through the runtime's
+        // native-arguments arm, never the `f64`-per-parameter body ABI.
+        union Code<C> {
+            body: JsNativeArgsBody<C>,
+            code: *const u8,
+        }
+        let code = unsafe { Code { body }.code };
+        let mut info = unsafe { Self::from_code(code, 0) };
+        info.rest_fixed = declared;
+        info.flags = FN_REST_NATIVE_ARGS;
+        info
     }
 
     /// With `FN_*` bits set.
