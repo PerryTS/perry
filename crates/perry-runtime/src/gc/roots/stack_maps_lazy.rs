@@ -29,32 +29,24 @@ use super::{StackMapDerived, StackMapLocation, DWARF_REG_FP_AARCH64, DWARF_REG_S
 
 /// One function's position in the map, in the form the root scan needs.
 ///
-/// 32 bytes, one per function with records: 2.3 MB for claude-code's 72,669,
+/// 24 bytes, one per function with records: 1.7 MB for claude-code's 72,669,
 /// against the ~117 MB of materialised records it replaces. Byte offsets are
-/// section-relative `u32`s rather than pointers so the entry stays small and
-/// so a stale entry cannot be dereferenced without going through
-/// `sections[section]`.
+/// relative to the function's records blob rather than pointers, so the entry
+/// stays small and a stale entry cannot be dereferenced without going through
+/// `records[blob]`, whose length is also the bound every varint read in this
+/// function is checked against.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct FunctionEntry {
-    /// Relocated function address, from the map's function table.
+    /// Relocated function address, from the map's directory.
     pub(super) address: usize,
-    /// Section-relative offset of this function's first instruction offset in
-    /// the fixed-width `u32` array.
+    /// Offset of this function's first instruction offset in its records
+    /// blob's fixed-width `u32` array.
     pub(super) offsets_at: u32,
-    /// Section-relative offset of this function's first record header.
+    /// Offset of this function's first record header in its records blob.
     pub(super) stream_at: u32,
-    /// Section-relative end of the containing blob: the bound every varint
-    /// read in this function is checked against, so a corrupt length cannot
-    /// walk into the next blob.
-    pub(super) blob_end: u32,
     pub(super) record_count: u32,
-    /// Read because the map carries it and the decode tests pin the offset it
-    /// is read from. No walker builds a root's base out of it — that was
-    /// #7392.
-    #[allow(dead_code)]
-    pub(super) stack_size: u32,
-    /// Index into the index's section list.
-    pub(super) section: u16,
+    /// Index into the index's records-blob list.
+    pub(super) blob: u32,
 }
 
 /// Where one record's live set lives in the stream.
@@ -402,146 +394,47 @@ pub(super) fn unzigzag(value: u32) -> i32 {
     ((value >> 1) as i32) ^ -((value & 1) as i32)
 }
 
-/// Walk every blob's function table and append one [`FunctionEntry`] per
-/// function that has records.
+/// Walk every directory and append one [`FunctionEntry`] per function that
+/// has records, and one records blob per directory.
 ///
-/// This is the whole of what a lazy build reads: headers, function tables and
-/// the v5 stream-offset arrays — 1.45 MB of claude-code's 22.7 MB section,
-/// against the 22.7 MB read and ~117 MB written by the eager build.
+/// This is the whole of what a lazy build reads: v8 directories, 1.4 MB of
+/// claude-code's map, against the 22.7 MB read and ~117 MB written by the
+/// eager build. The records themselves are not touched until a walk names a
+/// frame of theirs.
 ///
 /// `origin` is the runtime address of `bytes[0]`; the v6 function fields are
 /// offsets from their blob, so the table cannot be read without it.
-pub(super) fn parse_function_table(
-    section: u16,
-    bytes: &[u8],
+pub(super) fn parse_function_table<'a>(
+    bytes: &'a [u8],
     origin: usize,
     out: &mut Vec<FunctionEntry>,
+    blobs: &mut Vec<&'a [u8]>,
 ) -> Option<()> {
-    let mut base = 0usize;
-    while base + 16 <= bytes.len() {
-        if bytes.get(base..base + 4)? != super::GC_MAP_MAGIC {
-            // Linkers pad between input sections; a zero tail is the end.
-            if bytes[base..].iter().all(|byte| *byte == 0) {
-                break;
-            }
-            base += 1;
-            continue;
-        }
-        if *bytes.get(base + 4)? != super::GC_MAP_VERSION {
-            return None;
-        }
-        // v6 defines no header flags; anything set is a layout this decoder
-        // does not know. Fail closed.
-        if super::decode::read_u16(bytes, base + 6)? != 0 {
-            return None;
-        }
-        let function_count = read_u32(bytes, base + 8)? as usize;
-        let total_len = read_u32(bytes, base + 12)? as usize;
-        let entry = super::decode::FUNCTION_ENTRY_BYTES;
-        // A blob must at least cover its header, function table and v5
-        // stream-offset array. Without this a `total_len` of 0 leaves `base`
-        // unchanged, and because the magic still matches at that offset the
-        // resynchronisation path above is never reached — a process hang.
-        let table_bytes = function_count.checked_mul(entry)?;
-        let offsets_bytes = function_count.checked_mul(4)?;
-        if total_len
-            < 16usize
-                .checked_add(table_bytes)?
-                .checked_add(offsets_bytes)?
-        {
-            return None;
-        }
-        let table = base.checked_add(16)?;
-        let stream_offsets = table.checked_add(table_bytes)?;
-        let instruction_offsets = stream_offsets.checked_add(offsets_bytes)?;
-        let blob_end = base.checked_add(total_len)?;
-        if blob_end > bytes.len() || instruction_offsets > blob_end {
-            return None;
-        }
-        let blob_end_u32 = u32::try_from(blob_end).ok()?;
-
-        // Prefix-sum the record counts to find each function's slice of the
-        // fixed-width instruction-offset array. Reading the counts is
-        // unavoidable, and it is also all this loop reads.
-        //
-        // `stream_at` is recorded stream-RELATIVE here and rebased below,
-        // because the stream's own start needs every function's record count.
-        let first = out.len();
-        let mut record_index = 0usize;
-        let mut previous_stream_offset = 0u32;
-        for index in 0..function_count {
-            let base_off = table + index * entry;
-            let address =
-                super::decode::function_address(origin, base, read_u32(bytes, base_off)?)?;
-            let stack_size = read_u32(bytes, base_off + 4)?;
-            let record_count = read_u32(bytes, base_off + 8)?;
-            let stream_offset = read_u32(bytes, stream_offsets + index * 4)?;
-
-            // The encoder emits these in stream order, so the first is 0 and
-            // the rest are non-decreasing. Checking it costs nothing — the
-            // values are already in hand — and it is the cheapest place to
-            // catch a map whose offsets do not describe the stream after them.
-            if index == 0 {
-                if stream_offset != 0 {
-                    return None;
-                }
-            } else if stream_offset < previous_stream_offset {
-                return None;
-            }
-            previous_stream_offset = stream_offset;
-
-            let offsets_at = instruction_offsets.checked_add(record_index.checked_mul(4)?)?;
-            record_index = record_index.checked_add(record_count as usize)?;
-            if instruction_offsets.checked_add(record_index.checked_mul(4)?)? > blob_end {
-                return None;
-            }
-
+    super::decode::for_each_directory(bytes, |directory| {
+        let blob = u32::try_from(blobs.len()).ok()?;
+        blobs.push(directory.records);
+        let stream_base = directory.stream_base();
+        for index in 0..directory.function_count {
+            let function = directory.function(bytes, origin, index)?;
             // A function with no records contributes nothing and MUST NOT
             // enter the table: it would sit between two real functions and
             // shadow the containing one for every `ip` inside it — a wrong
             // (empty) live set rather than a missing entry. The v4 index
             // derived its function list from records and so excluded these by
             // construction; excluding them here keeps that property.
-            if record_count == 0 {
+            if function.record_count == 0 {
                 continue;
             }
             out.push(FunctionEntry {
-                address,
-                offsets_at: u32::try_from(offsets_at).ok()?,
-                stream_at: stream_offset,
-                blob_end: blob_end_u32,
-                record_count,
-                stack_size,
-                section,
+                address: function.address,
+                offsets_at: u32::try_from(function.first_record.checked_mul(4)?).ok()?,
+                stream_at: u32::try_from(stream_base.checked_add(function.stream_offset)?).ok()?,
+                record_count: function.record_count,
+                blob,
             });
         }
-
-        // The varint stream begins after the whole instruction-offset array.
-        let stream_base = instruction_offsets.checked_add(record_index.checked_mul(4)?)?;
-        if stream_base > blob_end {
-            return None;
-        }
-        let stream_base_u32 = u32::try_from(stream_base).ok()?;
-        for entry in &mut out[first..] {
-            entry.stream_at = stream_base_u32.checked_add(entry.stream_at)?;
-            if entry.stream_at as usize > blob_end {
-                return None;
-            }
-        }
-
-        let next = align_up(blob_end, 8)?;
-        if next <= base {
-            return None;
-        }
-        base = next;
-    }
-    Some(())
-}
-
-fn align_up(value: usize, alignment: usize) -> Option<usize> {
-    value
-        .checked_add(alignment.checked_sub(1)?)
-        .map(|value| value & !(alignment - 1))
+        Some(())
+    })
 }
 
 /// One record's live set, as positions in the section rather than as a
@@ -640,7 +533,7 @@ pub(super) struct RecordMatch {
 /// to express.
 pub(super) fn match_records(
     functions: &[FunctionEntry],
-    sections: &[&'static [u8]],
+    blobs: &[&'static [u8]],
     ip: usize,
     max_delta: usize,
 ) -> Option<RecordMatch> {
@@ -654,7 +547,7 @@ pub(super) fn match_records(
 
     let mut best: Option<(u32, u32)> = None; // (distance, offset)
     for entry in &functions[start..end] {
-        let bytes = *sections.get(entry.section as usize)?;
+        let bytes = *blobs.get(entry.blob as usize)?;
         for index in 0..entry.record_count {
             let at = entry.offsets_at as usize + index as usize * 4;
             let Some(offset) = read_u32(bytes, at) else {
@@ -683,7 +576,7 @@ pub(super) fn match_records(
 /// inside it — without the borrow of the index outliving the body.
 pub(super) struct MatchedRecords<'a> {
     functions: &'a [FunctionEntry],
-    sections: &'a [&'static [u8]],
+    blobs: &'a [&'static [u8]],
     range: core::ops::Range<usize>,
     offset: u32,
     walk: Option<(usize, RecordWalk<'static>, u32)>,
@@ -692,12 +585,12 @@ pub(super) struct MatchedRecords<'a> {
 impl<'a> MatchedRecords<'a> {
     pub(super) fn new(
         functions: &'a [FunctionEntry],
-        sections: &'a [&'static [u8]],
+        blobs: &'a [&'static [u8]],
         matched: &RecordMatch,
     ) -> Self {
         Self {
             functions,
-            sections,
+            blobs,
             range: matched.functions.clone(),
             offset: matched.offset,
             walk: None,
@@ -710,12 +603,12 @@ impl<'a> MatchedRecords<'a> {
             if self.walk.is_none() {
                 let index = self.range.next()?;
                 let entry = self.functions.get(index)?;
-                let bytes = *self.sections.get(entry.section as usize)?;
+                let bytes = *self.blobs.get(entry.blob as usize)?;
                 self.walk = Some((
                     index,
                     RecordWalk::new(
                         bytes,
-                        entry.blob_end as usize,
+                        bytes.len(),
                         entry.stream_at as usize,
                         entry.record_count,
                     ),
@@ -724,7 +617,7 @@ impl<'a> MatchedRecords<'a> {
             }
             let (index, walk, record) = self.walk.as_mut()?;
             let entry = self.functions.get(*index)?;
-            let bytes = *self.sections.get(entry.section as usize)?;
+            let bytes = *self.blobs.get(entry.blob as usize)?;
             match walk.next() {
                 Step::Record(payload) => {
                     let at = entry.offsets_at as usize + *record as usize * 4;
@@ -733,7 +626,7 @@ impl<'a> MatchedRecords<'a> {
                     if offset == Some(self.offset) {
                         return Some(DecodedRecord {
                             bytes,
-                            blob_end: entry.blob_end as usize,
+                            blob_end: bytes.len(),
                             function_address: entry.address,
                             payload,
                         });
@@ -765,7 +658,7 @@ pub(super) fn malformed(function_address: usize) -> ! {
     );
 }
 
-/// Build a v6 blob, mirroring `perry-codegen/src/gc_map.rs`.
+/// Build a v8 blob, mirroring `perry-codegen/src/gc_map.rs`.
 ///
 /// Shared by every test that needs real section bytes rather than hand-made
 /// records — which, since the walkers decode from the section, is all of them.
@@ -831,25 +724,37 @@ pub(super) fn test_blob_multi_at(origin: u64, functions: &[TestFunction]) -> Vec
         }
     }
 
+    // v8, in the in-line form: the records follow the directory inside the
+    // blob's stride, so a test section stays one self-contained byte string
+    // that can be concatenated like linker input sections. The compiler puts
+    // them in a section of their own; the decoder reads both the same way,
+    // through the header's self-relative `records_offset`.
+    let header = super::decode::DIRECTORY_HEADER_BYTES;
     let entry = super::decode::FUNCTION_ENTRY_BYTES;
-    let total_len =
-        16 + functions.len() * entry + functions.len() * 4 + offsets.len() + stream.len();
+    let directory_len = header + functions.len() * entry;
+    let records_len = offsets.len() + stream.len();
+    let record_total = offsets.len() / 4;
     let mut bytes = Vec::new();
     bytes.extend_from_slice(super::GC_MAP_MAGIC);
     bytes.push(super::GC_MAP_VERSION);
     bytes.push(0);
     bytes.extend_from_slice(&0u16.to_le_bytes());
     bytes.extend_from_slice(&(functions.len() as u32).to_le_bytes());
-    bytes.extend_from_slice(&(total_len as u32).to_le_bytes());
-    for (address, stack_size, records) in functions {
+    bytes.extend_from_slice(&((directory_len + records_len) as u32).to_le_bytes());
+    bytes.extend_from_slice(&(directory_len as i32).to_le_bytes());
+    bytes.extend_from_slice(&(records_len as u32).to_le_bytes());
+    bytes.extend_from_slice(&(record_total as u32).to_le_bytes());
+    bytes.extend_from_slice(&0u32.to_le_bytes());
+    let mut first_record = 0u32;
+    for ((address, stack_size, records), stream_offset) in functions.iter().zip(&stream_offsets) {
         let offset = i32::try_from(address.wrapping_sub(origin) as i64)
             .expect("a test function must sit within +-2 GiB of its blob");
         bytes.extend_from_slice(&offset.to_le_bytes());
         bytes.extend_from_slice(&stack_size.to_le_bytes());
         bytes.extend_from_slice(&(records.len() as u32).to_le_bytes());
-    }
-    for offset in &stream_offsets {
-        bytes.extend_from_slice(&offset.to_le_bytes());
+        bytes.extend_from_slice(&first_record.to_le_bytes());
+        bytes.extend_from_slice(&stream_offset.to_le_bytes());
+        first_record += records.len() as u32;
     }
     bytes.extend_from_slice(&offsets);
     bytes.extend_from_slice(&stream);
